@@ -1,0 +1,23 @@
+{
+  "name": "harness-chat-chatgpt",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Local streaming chat using Sign in with ChatGPT and subscription plan usage.",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/cli.ts",
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "jose": "^6.2.12",
+    "openai": "7.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  }
+}
