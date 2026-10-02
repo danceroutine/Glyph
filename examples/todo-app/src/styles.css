@@ -1,0 +1,377 @@
+:root {
+  color: #292b27;
+  background: #f5efe4;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+.page-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 48px 20px;
+  background:
+    radial-gradient(circle at 18% 15%, rgb(255 255 255 / 76%) 0 11%, transparent 32%),
+    linear-gradient(135deg, #f8f2e8 0%, #eee4d2 100%);
+}
+
+.todo-card {
+  width: min(100%, 640px);
+  overflow: hidden;
+  background: rgb(255 253 248 / 92%);
+  border: 1px solid rgb(72 65 48 / 12%);
+  border-radius: 24px;
+  box-shadow: 0 28px 80px rgb(74 58 30 / 15%);
+}
+
+.card-header {
+  padding: 42px 42px 28px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #a75e45;
+  font-size: 0.73rem;
+  font-weight: 750;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(2.5rem, 9vw, 4rem);
+  font-weight: 500;
+  letter-spacing: -0.05em;
+  line-height: 1;
+}
+
+.intro {
+  max-width: 430px;
+  margin: 16px 0 0;
+  color: #6e6c64;
+  line-height: 1.55;
+}
+
+.add-form {
+  display: flex;
+  gap: 10px;
+  padding: 0 42px 30px;
+}
+
+.add-form input {
+  min-width: 0;
+  flex: 1;
+  padding: 13px 16px;
+  color: #292b27;
+  background: #fff;
+  border: 1px solid #d9d2c4;
+  border-radius: 12px;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.add-form input::placeholder {
+  color: #aaa69d;
+}
+
+.add-form input:focus {
+  border-color: #a75e45;
+  box-shadow: 0 0 0 3px rgb(167 94 69 / 13%);
+}
+
+.add-button {
+  padding: 0 18px;
+  color: #fffaf2;
+  font-weight: 700;
+  background: #36463b;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.add-button:hover:not(:disabled) {
+  background: #29382f;
+  transform: translateY(-1px);
+}
+
+.add-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.list-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 42px;
+  background: #f2ecdf;
+  border-block: 1px solid rgb(72 65 48 / 9%);
+}
+
+.filters {
+  display: flex;
+  gap: 4px;
+}
+
+.filter {
+  padding: 6px 10px;
+  color: #77736b;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: capitalize;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.filter:hover,
+.filter.active {
+  color: #36463b;
+  background: rgb(255 255 255 / 75%);
+}
+
+.task-count {
+  flex: none;
+  color: #858077;
+  font-size: 0.78rem;
+}
+
+.todo-list {
+  margin: 0;
+  padding: 8px 42px;
+  list-style: none;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgb(72 65 48 / 9%);
+}
+
+.todo-item:last-child {
+  border-bottom: 0;
+}
+
+.todo-label {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 13px;
+  padding: 17px 0;
+  cursor: pointer;
+}
+
+.todo-label input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.checkmark {
+  width: 21px;
+  height: 21px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid #c5bcad;
+  border-radius: 50%;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.todo-label input:focus-visible + .checkmark {
+  outline: 3px solid rgb(167 94 69 / 22%);
+  outline-offset: 2px;
+}
+
+.todo-label input:checked + .checkmark {
+  background: #6d806f;
+  border-color: #6d806f;
+}
+
+.todo-label input:checked + .checkmark::after {
+  width: 7px;
+  height: 4px;
+  content: "";
+  border-bottom: 2px solid white;
+  border-left: 2px solid white;
+  transform: translateY(-1px) rotate(-45deg);
+}
+
+.todo-title {
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.completed .todo-title {
+  color: #969187;
+  text-decoration: line-through;
+  text-decoration-color: #b3aea5;
+}
+
+.delete-button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: #aaa399;
+  font-size: 1.5rem;
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0;
+  transition: color 140ms ease, background 140ms ease, opacity 140ms ease;
+}
+
+.todo-item:hover .delete-button,
+.delete-button:focus-visible {
+  opacity: 1;
+}
+
+.delete-button:hover {
+  color: #a75e45;
+  background: #f5e7e0;
+}
+
+.empty-state {
+  min-height: 190px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 30px;
+  color: #888279;
+  text-align: center;
+}
+
+.empty-state span {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  color: #6d806f;
+  background: #edf0e9;
+  border-radius: 50%;
+}
+
+.empty-state p {
+  max-width: 310px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.card-footer {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 42px;
+  color: #918b82;
+  font-size: 0.78rem;
+  border-top: 1px solid rgb(72 65 48 / 9%);
+}
+
+.card-footer button {
+  padding: 5px;
+  color: #736f67;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.card-footer button:hover {
+  color: #a75e45;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 560px) {
+  .page-shell {
+    align-items: start;
+    padding: 18px 12px;
+  }
+
+  .todo-card {
+    border-radius: 18px;
+  }
+
+  .card-header,
+  .add-form,
+  .list-controls,
+  .todo-list,
+  .card-footer {
+    padding-inline: 22px;
+  }
+
+  .card-header {
+    padding-top: 30px;
+  }
+
+  .add-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .add-button {
+    min-height: 46px;
+  }
+
+  .list-controls {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .delete-button {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

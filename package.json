@@ -10,7 +10,10 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/cli.ts",
     "check": "tsc --noEmit",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "todo:dev": "pnpm --dir examples/todo-app dev",
+    "todo:build": "pnpm --dir examples/todo-app build",
+    "todo:preview": "pnpm --dir examples/todo-app preview"
   },
   "dependencies": {
     "jose": "^6.2.12",

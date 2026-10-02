@@ -2,6 +2,8 @@
 
 Version 0.2.0. This replaces the API-key prototype with direct OAuth-based ChatGPT plan usage. It is a local TypeScript terminal app with streaming chat, in-memory conversation history, account/model selection, token refresh, cancellation, and usage reporting.
 
+The repository also contains a small React TODO app in `examples/todo-app`. It is a standalone sample project for exercising future project-discovery and file-access tools; it is not coupled to the chat runtime.
+
 **No API key, API billing setup, client secret, or separate application registration is required by the documented dynamic-registration flow.** This build has no API-key authentication path. `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_BASE_URL` are not used for requests.
 
 ## Start
@@ -9,8 +11,8 @@ Version 0.2.0. This replaces the API-key prototype with direct OAuth-based ChatG
 Use Node 22.18+ (Node 24 recommended). Extract the archive and enter `harness-chat`:
 
 ```sh
-npm ci
-npm start
+pnpm install
+pnpm start
 ```
 
 No `.env` is required.
@@ -21,6 +23,17 @@ No `.env` is required.
 4. The browser returns to `127.0.0.1` on a temporary local port. Return to the terminal for identity verification.
 5. Acknowledge the first-use plan message, then select a model from the account-specific catalog.
 6. Start chatting.
+
+### Sample TODO app
+
+Install workspace dependencies, then run the Vite development server:
+
+```sh
+pnpm install
+pnpm todo:dev
+```
+
+The app supports adding, completing, filtering, and deleting tasks, and keeps its state in browser local storage. Use `pnpm todo:build` to produce a production build.
 
 On subsequent launches, choose the saved account number. The app refreshes expired tokens when possible. `/login` reauthorizes the selected registration; `/account` selects another saved registration or adds one. Account changes start a fresh conversation so context does not cross accounts.
 
