@@ -2,8 +2,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EditError } from '../../editing/EditError.ts';
-import { EditFailureReason } from '../../editing/EditFailureReason.ts';
+import { EditError } from '../../editing/errors/EditError.ts';
+import { EditFailureReason } from '../../editing/errors/EditFailureReason.ts';
 import { FileSystemWorkspaceTextStore } from '../FileSystemWorkspaceTextStore.ts';
 
 const directories: string[] = [];
@@ -14,7 +14,7 @@ afterEach(async () => {
 
 describe(FileSystemWorkspaceTextStore, () => {
 describe(FileSystemWorkspaceTextStore.prototype.read, () => {
-it('preserves UTF-8 BOM, mixed line endings, whitespace, and raw-byte revisions', async () => {
+it('preserves the UTF-8 byte order mark, mixed line endings, whitespace, and raw-byte revisions', async () => {
   const root = await mkdtemp(join(tmpdir(), 'workspace-store-'));
   directories.push(root);
   const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('a\r\nb\nc\r\t  ')]);
@@ -24,7 +24,7 @@ it('preserves UTF-8 BOM, mixed line endings, whitespace, and raw-byte revisions'
   const snapshot = await store.read('mixed.txt');
 
   expect(snapshot.text).toBe('a\r\nb\nc\r\t  ');
-  expect(snapshot.bom).toBe(true);
+  expect(snapshot.byteOrderMark).toBe(true);
   expect(snapshot.byteLength).toBe(bytes.length);
   expect(snapshot.revision).toMatch(/^[a-f0-9]{64}$/);
 });

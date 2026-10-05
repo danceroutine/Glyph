@@ -4,7 +4,17 @@ import { LogLevel } from './LogLevel.ts';
 import type { Logger } from './Logger.ts';
 
 export class FileLogger implements Logger {
-  constructor(readonly destination: string) {}
+  constructor(
+    readonly destination: string,
+    private readonly namespace?: string,
+  ) {}
+
+  forNamespace(namespace: string): Logger {
+    return new FileLogger(
+      this.destination,
+      this.namespace ? `${this.namespace}.${namespace}` : namespace,
+    );
+  }
 
   trace(message: string, data?: unknown): Promise<void> { return this.write(LogLevel.TRACE, message, data); }
   debug(message: string, data?: unknown): Promise<void> { return this.write(LogLevel.DEBUG, message, data); }
@@ -17,7 +27,7 @@ export class FileLogger implements Logger {
     const entry = {
       timestamp: new Date().toISOString(),
       level,
-      message,
+      message: this.namespace ? `${this.namespace}.${message}` : message,
       ...(data === undefined ? {} : { data }),
     };
     await appendFile(this.destination, `${JSON.stringify(entry)}\n`, { encoding: 'utf8', mode: 0o600 });

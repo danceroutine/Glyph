@@ -40,8 +40,8 @@ it('reads bounded line ranges with stable line numbers', async () => {
     totalLines: number;
     truncated: boolean;
     revision: string;
-    bom: boolean;
-    lines: { number: number; content: string; eol: string }[];
+    byteOrderMark: boolean;
+    lines: { number: number; content: string; lineEnding: string }[];
   };
 
   expect(result.content).toBe('2: two\n3: three');
@@ -50,10 +50,10 @@ it('reads bounded line ranges with stable line numbers', async () => {
   expect(result.totalLines).toBe(4);
   expect(result.truncated).toBe(true);
   expect(result.revision).toMatch(/^[a-f0-9]{64}$/);
-  expect(result.bom).toBe(false);
+  expect(result.byteOrderMark).toBe(false);
   expect(result.lines).toEqual([
-    { number: 2, content: 'two', eol: '\n' },
-    { number: 3, content: 'three', eol: '\n' },
+    { number: 2, content: 'two', lineEnding: '\n' },
+    { number: 3, content: 'three', lineEnding: '\n' },
   ]);
 });
 

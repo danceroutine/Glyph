@@ -21,9 +21,9 @@ describe(EnvironmentConfigurationProvider, () => {
       maxTotalHunks: 256,
       maxHunksPerFile: 64,
       diffBudgetMs: 1_000,
-      maxActiveSessions: 1,
-      newFileBom: false,
-      newFileEol: '\n',
+      maxActiveReviews: 1,
+      newFileByteOrderMark: false,
+      newFileLineEnding: '\n',
     }));
     expect(JSON.stringify(configuration)).not.toContain('ignored');
   });

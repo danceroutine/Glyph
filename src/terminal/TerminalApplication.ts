@@ -70,11 +70,11 @@ export class TerminalApplication {
             await this.reviewPending();
             break;
           case TerminalActionType.ACCEPT_ALL:
-            try { await this.harness.edits?.acceptAll(); }
+            try { await this.harness.proposalReviews?.acceptAll(); }
             catch (error) { this.ui.showError(this.harness.redact(describeError(error))); }
             break;
           case TerminalActionType.REJECT_ALL:
-            try { await this.harness.edits?.rejectAll(); }
+            try { await this.harness.proposalReviews?.rejectAll(); }
             catch (error) { this.ui.showError(this.harness.redact(describeError(error))); }
             break;
           case TerminalActionType.ACCOUNT:
@@ -154,7 +154,7 @@ export class TerminalApplication {
   }
 
   private async reviewPending(): Promise<void> {
-    if (this.harness.edits?.active && this.reviewer) await this.reviewer.review(this.harness.edits, this.shutdown);
+    if (this.harness.proposalReviews?.active && this.reviewer) await this.reviewer.review(this.harness.proposalReviews, this.shutdown);
   }
 
   private requireConversation(): ChatConversation {

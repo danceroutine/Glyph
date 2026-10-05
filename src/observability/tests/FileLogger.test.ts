@@ -12,7 +12,7 @@ describe(FileLogger, () => {
       const logger = new FileLogger(path);
 
       await logger.trace('provider.trace', { sequence: 1 });
-      await logger.info('application.ready');
+      await logger.forNamespace('application').info('ready');
 
       const entries = (await readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as {
         level: string; message: string;

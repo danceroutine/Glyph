@@ -8,6 +8,7 @@ function logger() {
   const debug = vi.fn<(message: string, data?: unknown) => void>();
   const error = vi.fn<(message: string, data?: unknown) => void>();
   const value = {
+    forNamespace() { return this; },
     trace: vi.fn(), debug, info: vi.fn(), warn: vi.fn(), error,
   } satisfies Logger;
   return { value, debug, error };

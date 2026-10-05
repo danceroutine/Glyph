@@ -2,13 +2,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { NullLogger } from '../../observability/NullLogger.ts';
-import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
-import type { EditingConfiguration } from '../EditingConfiguration.ts';
-import { EditFailureReason } from '../EditFailureReason.ts';
+import { NullLogger } from '../../../observability/NullLogger.ts';
+import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
+import type { EditingConfiguration } from '../../configuration/EditingConfiguration.ts';
+import { JsDiffTextDiffer } from '../../documents/JsDiffTextDiffer.ts';
+import { EditFailureReason } from '../../errors/EditFailureReason.ts';
 import { EditOperation } from '../EditOperation.ts';
 import { EditProposalService } from '../EditProposalService.ts';
-import { JsDiffTextDiffer } from '../JsDiffTextDiffer.ts';
 
 const directories: string[] = [];
 const configuration: EditingConfiguration = {
@@ -19,9 +19,9 @@ const configuration: EditingConfiguration = {
   maxTotalHunks: 256,
   maxHunksPerFile: 64,
   diffBudgetMs: 1_000,
-  maxActiveSessions: 1,
-  newFileBom: false,
-  newFileEol: '\n',
+  maxActiveReviews: 1,
+  newFileByteOrderMark: false,
+  newFileLineEnding: '\n',
 };
 
 afterEach(async () => {
@@ -40,7 +40,7 @@ it('applies zero-based UTF-16 edits in reverse source order without normalizing 
     new_path: null,
     base_revision: base.revision,
     content: null,
-    bom: null,
+    byte_order_mark: null,
     edits: [
       { range: { start: { line: 2, character: 4 }, end: { line: 2, character: 4 } }, expected_text: '', replacement_text: '!' },
       { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, expected_text: 'a', replacement_text: 'A' },
@@ -56,7 +56,7 @@ it('rejects a range that splits an emoji surrogate pair', async () => {
   const base = await workspace.read('file.txt');
   await expect(service.proposeStructured({ files: [{
     operation: EditOperation.UPDATE,
-    path: 'file.txt', new_path: null, base_revision: base.revision, content: null, bom: null,
+    path: 'file.txt', new_path: null, base_revision: base.revision, content: null, byte_order_mark: null,
     edits: [{ range: { start: { line: 0, character: 2 }, end: { line: 0, character: 2 } }, expected_text: '', replacement_text: 'x' }],
   }] })).rejects.toMatchObject({ reason: EditFailureReason.INCONSISTENT });
 });
@@ -65,7 +65,7 @@ it('rejects overlapping edits, duplicate insertions, no-ops, and stale revisions
   const { service, workspace } = await fixture('abcdef');
   const base = await workspace.read('file.txt');
   const file = {
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, bom: null,
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, byte_order_mark: null,
   };
   await expect(service.proposeStructured({ files: [{ ...file, edits: [
     { range: { start: { line: 0, character: 1 }, end: { line: 0, character: 4 } }, expected_text: 'bcd', replacement_text: 'x' },
@@ -79,7 +79,7 @@ it('enforces file, hunk, and changed-byte limits at their boundaries', async () 
   const exact = await fixture('one\nmiddle\nthree\n', { maxFiles: 1, maxHunksPerFile: 1, maxTotalHunks: 1, maxChangedBytes: 8 });
   const base = await exact.workspace.read('file.txt');
   const oneChange = { files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, bom: null,
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, byte_order_mark: null,
     edits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, expected_text: 'one', replacement_text: 'ONE' }],
   }] };
   await expect(exact.service.proposeStructured(oneChange)).resolves.toBeDefined();
@@ -102,8 +102,8 @@ it('enforces file, hunk, and changed-byte limits at their boundaries', async () 
   const fileExceeded = await fixture('one', { maxFiles: 1 });
   const fileBase = await fileExceeded.workspace.read('file.txt');
   await expect(fileExceeded.service.proposeStructured({ files: [
-    { operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: fileBase.revision, content: 'ONE', bom: null, edits: [] },
-    { operation: EditOperation.CREATE, path: 'new.txt', new_path: null, base_revision: null, content: 'new', bom: null, edits: [] },
+    { operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: fileBase.revision, content: 'ONE', byte_order_mark: null, edits: [] },
+    { operation: EditOperation.CREATE, path: 'new.txt', new_path: null, base_revision: null, content: 'new', byte_order_mark: null, edits: [] },
   ] })).rejects.toMatchObject({ reason: EditFailureReason.LIMIT_EXCEEDED });
 });
 });

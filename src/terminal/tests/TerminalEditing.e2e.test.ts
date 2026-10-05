@@ -3,12 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EditOperation } from '../../editing/EditOperation.ts';
-import { EditProposalService } from '../../editing/EditProposalService.ts';
-import { EditSessionManager } from '../../editing/EditSessionManager.ts';
-import { FileEditSessionStore } from '../../editing/FileEditSessionStore.ts';
-import { JsDiffTextDiffer } from '../../editing/JsDiffTextDiffer.ts';
-import type { EditingConfiguration } from '../../editing/EditingConfiguration.ts';
+import { EditOperation } from '../../editing/proposals/EditOperation.ts';
+import { EditProposalService } from '../../editing/proposals/EditProposalService.ts';
+import { ProposalReviewManager } from '../../editing/reviews/ProposalReviewManager.ts';
+import { FileProposalReviewStore } from '../../editing/reviews/persistence/FileProposalReviewStore.ts';
+import { JsDiffTextDiffer } from '../../editing/documents/JsDiffTextDiffer.ts';
+import type { EditingConfiguration } from '../../editing/configuration/EditingConfiguration.ts';
 import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
 import { TerminalEditReviewer } from '../TerminalEditReviewer.ts';
 import { TerminalInput } from '../TerminalInput.ts';
@@ -17,8 +17,8 @@ const paths: string[] = [];
 const originalFetch = globalThis.fetch;
 const configuration: EditingConfiguration = {
   maxRawProposalBytes: 1_048_576, maxChangedBytes: 1_048_576, maxResultingBytesPerFile: 1_048_576,
-  maxFiles: 64, maxTotalHunks: 256, maxHunksPerFile: 64, diffBudgetMs: 1_000, maxActiveSessions: 1,
-  newFileBom: false, newFileEol: '\n',
+  maxFiles: 64, maxTotalHunks: 256, maxHunksPerFile: 64, diffBudgetMs: 1_000, maxActiveReviews: 1,
+  newFileByteOrderMark: false, newFileLineEnding: '\n',
 };
 
 beforeEach(() => {
@@ -41,9 +41,9 @@ it('accepts with Y through a virtual TTY and always restores raw mode and the al
   const base = await workspace.read('file.txt');
   const proposals = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
   const proposal = await proposals.proposeStructured({ files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'changed\n', bom: null, edits: [],
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'changed\n', byte_order_mark: null, edits: [],
   }] });
-  const manager = new EditSessionManager(workspace, new FileEditSessionStore(state));
+  const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state));
   await manager.stage(proposal);
   const tty = new VirtualTTY();
   const output = new PassThrough() as PassThrough & { columns?: number; rows?: number };
@@ -75,10 +75,10 @@ it('supports scrolling, file navigation, defer, and reopening without resolving 
   const [a, b] = await Promise.all([workspace.read('a.txt'), workspace.read('b.txt')]);
   const proposals = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
   const proposal = await proposals.proposeStructured({ files: [
-    { operation: EditOperation.UPDATE, path: 'a.txt', new_path: null, base_revision: a.revision, content: 'A\nmiddle\nZ\n', bom: null, edits: [] },
-    { operation: EditOperation.UPDATE, path: 'b.txt', new_path: null, base_revision: b.revision, content: 'B\n', bom: null, edits: [] },
+    { operation: EditOperation.UPDATE, path: 'a.txt', new_path: null, base_revision: a.revision, content: 'A\nmiddle\nZ\n', byte_order_mark: null, edits: [] },
+    { operation: EditOperation.UPDATE, path: 'b.txt', new_path: null, base_revision: b.revision, content: 'B\n', byte_order_mark: null, edits: [] },
   ] });
-  const manager = new EditSessionManager(workspace, new FileEditSessionStore(state));
+  const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state));
   await manager.stage(proposal);
   const tty = new VirtualTTY();
   const output = terminalOutput();
@@ -106,9 +106,9 @@ it('restores the terminal when an acceptance detects a stale collaborator edit',
   const base = await workspace.read('file.txt');
   const proposals = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
   const proposal = await proposals.proposeStructured({ files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'agent', bom: null, edits: [],
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'agent', byte_order_mark: null, edits: [],
   }] });
-  const manager = new EditSessionManager(workspace, new FileEditSessionStore(state));
+  const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state));
   await manager.stage(proposal);
   await writeFile(join(root, 'file.txt'), 'collaborator');
   const tty = new VirtualTTY();

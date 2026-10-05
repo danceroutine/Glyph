@@ -6,7 +6,7 @@ import type { TurnResult } from '../chat/TurnResult.ts';
 import type { Usage } from '../chat/Usage.ts';
 import { AuthenticationError } from '../errors/AuthenticationError.ts';
 import type { Logger } from '../observability/Logger.ts';
-import type { EditSessionManager } from '../editing/EditSessionManager.ts';
+import type { ProposalReviewManager } from '../editing/reviews/ProposalReviewManager.ts';
 import type { OpenAIConfiguration } from '../providers/openai/OpenAIConfiguration.ts';
 import type { AuthorizationHandler } from '../providers/openai/auth/AuthorizationHandler.ts';
 import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
@@ -39,7 +39,7 @@ export class HarnessService {
     private readonly logger: Logger,
     private readonly openAI: OpenAIConfiguration,
     options: { traceEnabled?: boolean } = {},
-    readonly edits?: EditSessionManager,
+    readonly proposalReviews?: ProposalReviewManager,
   ) {
     this.traceEnabled = options.traceEnabled ?? true;
   }
@@ -54,7 +54,7 @@ export class HarnessService {
     await this.store.acquire();
     this.acquired = true;
     await this.store.load();
-    await this.edits?.initialize();
+    await this.proposalReviews?.initialize();
   }
 
   async dispose(): Promise<void> {

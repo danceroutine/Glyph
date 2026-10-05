@@ -3,8 +3,8 @@ import type { ToolDefinition } from '../tools/ToolDefinition.ts';
 import { ToolInputKind } from '../tools/ToolInputKind.ts';
 import { FileSystemWorkspaceTextStore } from '../workspace/FileSystemWorkspaceTextStore.ts';
 import type { WorkspaceTextStore } from '../workspace/WorkspaceTextStore.ts';
-import { EditError } from '../editing/EditError.ts';
-import { EditFailureReason } from '../editing/EditFailureReason.ts';
+import { EditError } from '../editing/errors/EditError.ts';
+import { EditFailureReason } from '../editing/errors/EditFailureReason.ts';
 import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 
@@ -64,7 +64,7 @@ const definitions: readonly ToolDefinition[] = [
   {
     namespace: ProjectToolNamespace.PROJECT,
     name: ProjectToolName.READ_FILE,
-    description: 'Read an exact UTF-8 text snapshot inside the project, including its revision, BOM state, and per-line EOL metadata. Paths are project-relative. Pass null for both line bounds to read from the beginning. Reuse the revision in edit proposals.',
+    description: 'Read an exact UTF-8 text snapshot inside the project, including its revision, byte-order-mark state, and per-line line-ending metadata. Paths are project-relative. Pass null for both line bounds to read from the beginning. Reuse the revision in edit proposals.',
     inputKind: ToolInputKind.JSON,
     parameters: jsonSchema(readProjectFileArguments),
   },
@@ -76,8 +76,14 @@ export class ProjectAccess {
   private readonly workspace: WorkspaceTextStore;
 
   constructor(root: string, options: ProjectAccessOptions = {}, workspace?: WorkspaceTextStore) {
-    this.options = projectAccessOptionsSchema.parse(options);
-    this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, this.options);
+    const {
+      maxFiles,
+      maxFileBytes,
+      maxLinesPerRead,
+      ...workspaceOptions
+    } = projectAccessOptionsSchema.parse(options);
+    this.options = { maxFiles, maxFileBytes, maxLinesPerRead, ...workspaceOptions };
+    this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, workspaceOptions);
   }
 
   async execute(name: string, rawArguments: string): Promise<string> {
@@ -119,8 +125,8 @@ export class ProjectAccess {
     truncated: boolean;
     content: string;
     revision: string;
-    bom: boolean;
-    lines: { number: number; content: string; eol: '' | '\n' | '\r\n' | '\r' }[];
+    byteOrderMark: boolean;
+    lines: { number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }[];
   }> {
     const startLine = requestedStart ?? 1;
     const snapshot = await this.workspace.read(path);
@@ -148,7 +154,7 @@ export class ProjectAccess {
       truncated: endLine < lines.length,
       content: numbered,
       revision: snapshot.revision,
-      bom: snapshot.bom,
+      byteOrderMark: snapshot.byteOrderMark,
       lines: selected,
     };
   }
@@ -159,18 +165,18 @@ function jsonSchema(schema: z.ZodType): Record<string, unknown> {
   return parameters;
 }
 
-function toLines(text: string): { number: number; content: string; eol: '' | '\n' | '\r\n' | '\r' }[] {
-  const lines: { number: number; content: string; eol: '' | '\n' | '\r\n' | '\r' }[] = [];
+function toLines(text: string): { number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }[] {
+  const lines: { number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }[] = [];
   let start = 0;
   let number = 1;
   for (let index = 0; index < text.length; index++) {
     const character = text[index];
     if (character !== '\n' && character !== '\r') continue;
-    const eol = character === '\r' && text[index + 1] === '\n' ? '\r\n' : character;
-    lines.push({ number: number++, content: text.slice(start, index), eol });
-    if (eol === '\r\n') index++;
+    const lineEnding = character === '\r' && text[index + 1] === '\n' ? '\r\n' : character;
+    lines.push({ number: number++, content: text.slice(start, index), lineEnding });
+    if (lineEnding === '\r\n') index++;
     start = index + 1;
   }
-  lines.push({ number, content: text.slice(start), eol: '' });
+  lines.push({ number, content: text.slice(start), lineEnding: '' });
   return lines;
 }

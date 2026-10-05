@@ -66,10 +66,12 @@ class FakeProvider implements ChatProvider {
 }
 
 function logger(trace: Logger['trace'] = async () => {}): Logger {
-  return {
+  const result: Logger = {
     destination: '/config/trace.log', trace,
+    forNamespace: () => result,
     debug: async () => {}, info: async () => {}, warn: async () => {}, error: async () => {},
   };
+  return result;
 }
 
 describe(HarnessService, () => {

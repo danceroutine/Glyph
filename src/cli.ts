@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { HarnessService } from './application/HarnessService.ts';
 import { EnvironmentConfigurationProvider } from './configuration/EnvironmentConfigurationProvider.ts';
-import { EditProposalService } from './editing/EditProposalService.ts';
-import { EditSessionManager } from './editing/EditSessionManager.ts';
-import { FileEditSessionStore } from './editing/FileEditSessionStore.ts';
-import { JsDiffTextDiffer } from './editing/JsDiffTextDiffer.ts';
+import { EditProposalService } from './editing/proposals/EditProposalService.ts';
+import { ProposalReviewManager } from './editing/reviews/ProposalReviewManager.ts';
+import { FileProposalReviewStore } from './editing/reviews/persistence/FileProposalReviewStore.ts';
+import { JsDiffTextDiffer } from './editing/documents/JsDiffTextDiffer.ts';
 import { describeError } from './describeError.ts';
 import { FetchHttpClient } from './http/FetchHttpClient.ts';
 import { FileLogger } from './observability/FileLogger.ts';
@@ -40,16 +40,16 @@ async function main(): Promise<void> {
   const authentication = new OpenAIAuthenticationClient(configuration.openAI, http);
   const session = new OpenAISession(store, authentication, configuration.openAI, shutdown.signal);
   const workspace = new FileSystemWorkspaceTextStore(process.cwd());
-  const editSessions = new EditSessionManager(
+  const proposalReviews = new ProposalReviewManager(
     workspace,
-    new FileEditSessionStore(configuration.stateDirectory),
+    new FileProposalReviewStore(configuration.stateDirectory),
     logger,
-    configuration.editing.maxActiveSessions,
+    configuration.editing.maxActiveReviews,
   );
   const projectTools = new ProjectToolRuntime(
     new ProjectAccess(process.cwd(), {}, workspace),
     new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
-    editSessions,
+    proposalReviews,
     logger,
   );
   const harness = new HarnessService(
@@ -60,7 +60,7 @@ async function main(): Promise<void> {
     logger,
     configuration.openAI,
     { traceEnabled: configuration.traceEnabled },
-    editSessions,
+    proposalReviews,
   );
   const application = new TerminalApplication(harness, ui, shutdown.signal, {
     projectRoot: process.cwd(),

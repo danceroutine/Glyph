@@ -1,4 +1,4 @@
-import { HarnessError } from '../errors/HarnessError.ts';
+import { HarnessError } from '../../errors/HarnessError.ts';
 import type { EditFailureReason } from './EditFailureReason.ts';
 
 interface EditErrorDetails {

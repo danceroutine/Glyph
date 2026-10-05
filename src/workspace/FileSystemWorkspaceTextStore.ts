@@ -1,42 +1,46 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { EditError } from '../editing/EditError.ts';
-import { EditFailureReason } from '../editing/EditFailureReason.ts';
+import { z } from 'zod';
+import { EditError } from '../editing/errors/EditError.ts';
+import { EditFailureReason } from '../editing/errors/EditFailureReason.ts';
 import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
 
-interface FileSystemWorkspaceTextStoreOptions {
-  caseSensitive?: boolean;
-  ignoredDirectories?: string[];
-  sensitiveFileNames?: string[];
-  sensitiveFilePrefixes?: string[];
-  sensitiveFileExtensions?: string[];
-  allowedFileNames?: string[];
-}
+const fileSystemWorkspaceTextStoreOptionsSchema = z.object({
+  caseSensitive: z.boolean().optional(),
+  ignoredDirectories: z.array(z.string()).default(['.git', '.next', 'coverage', 'dist', 'node_modules']),
+  sensitiveFileNames: z.array(z.string()).default(['.netrc', '.npmrc', '.pypirc']),
+  sensitiveFilePrefixes: z.array(z.string()).default(['.env']),
+  sensitiveFileExtensions: z.array(z.string()).default(['.key', '.pem', '.p12', '.pfx']),
+  allowedFileNames: z.array(z.string()).default(['.env.example']),
+}).strict();
 
-const defaults = {
-  ignoredDirectories: ['.git', '.next', 'coverage', 'dist', 'node_modules'],
-  sensitiveFileNames: ['.netrc', '.npmrc', '.pypirc'],
-  sensitiveFilePrefixes: ['.env'],
-  sensitiveFileExtensions: ['.key', '.pem', '.p12', '.pfx'],
-  allowedFileNames: ['.env.example'],
-} as const;
+type FileSystemWorkspaceTextStoreOptions = z.input<typeof fileSystemWorkspaceTextStoreOptionsSchema>;
+type ResolvedOptions = Omit<z.output<typeof fileSystemWorkspaceTextStoreOptionsSchema>, 'caseSensitive'>;
 
 export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   readonly root: string;
   readonly caseSensitive: boolean;
-  private readonly options: Required<Omit<FileSystemWorkspaceTextStoreOptions, 'caseSensitive'>>;
+  private readonly options: ResolvedOptions;
 
   constructor(root: string, options: FileSystemWorkspaceTextStoreOptions = {}) {
+    const {
+      caseSensitive,
+      ignoredDirectories,
+      sensitiveFileNames,
+      sensitiveFilePrefixes,
+      sensitiveFileExtensions,
+      allowedFileNames,
+    } = fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
     this.root = resolve(root);
-    this.caseSensitive = options.caseSensitive ?? (process.platform !== 'win32' && process.platform !== 'darwin');
+    this.caseSensitive = caseSensitive ?? (process.platform !== 'win32' && process.platform !== 'darwin');
     this.options = {
-      ignoredDirectories: options.ignoredDirectories ?? [...defaults.ignoredDirectories],
-      sensitiveFileNames: options.sensitiveFileNames ?? [...defaults.sensitiveFileNames],
-      sensitiveFilePrefixes: options.sensitiveFilePrefixes ?? [...defaults.sensitiveFilePrefixes],
-      sensitiveFileExtensions: options.sensitiveFileExtensions ?? [...defaults.sensitiveFileExtensions],
-      allowedFileNames: options.allowedFileNames ?? [...defaults.allowedFileNames],
+      ignoredDirectories,
+      sensitiveFileNames,
+      sensitiveFilePrefixes,
+      sensitiveFileExtensions,
+      allowedFileNames,
     };
   }
 
@@ -102,14 +106,14 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  async create(input: string, text: string, bom: boolean, mode = 0o644): Promise<WorkspaceTextSnapshot> {
+  async create(input: string, text: string, byteOrderMark: boolean, mode = 0o644): Promise<WorkspaceTextSnapshot> {
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const absolute = resolve(this.root, path);
     const created = await this.createParents(dirname(absolute));
     try {
       const handle = await open(absolute, 'wx', mode);
-      try { await handle.writeFile(toBytes(text, bom)); } finally { await handle.close(); }
+      try { await handle.writeFile(toBytes(text, byteOrderMark)); } finally { await handle.close(); }
       await chmod(absolute, mode);
       return this.read(path);
     } catch (error) {
@@ -121,13 +125,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  async replace(input: string, expectedRevision: string, text: string, bom: boolean): Promise<WorkspaceTextSnapshot> {
+  async replace(input: string, expectedRevision: string, text: string, byteOrderMark: boolean): Promise<WorkspaceTextSnapshot> {
     const path = this.normalizePath(input);
     const current = await this.assertRevision(path, expectedRevision);
     const absolute = resolve(this.root, path);
     const temporary = resolve(dirname(absolute), `.${randomUUID()}.harness.tmp`);
     try {
-      await writeFile(temporary, toBytes(text, bom), { flag: 'wx', mode: current.mode });
+      await writeFile(temporary, toBytes(text, byteOrderMark), { flag: 'wx', mode: current.mode });
       await chmod(temporary, current.mode);
       await this.assertRevision(path, expectedRevision);
       await rename(temporary, absolute);
@@ -222,15 +226,15 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 }
 
-function toBytes(text: string, bom: boolean): Buffer {
+function toBytes(text: string, byteOrderMark: boolean): Buffer {
   const content = Buffer.from(text, 'utf8');
-  return bom ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), content]) : content;
+  return byteOrderMark ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), content]) : content;
 }
 
 function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string): WorkspaceTextSnapshot {
   if (bytes.includes(0)) throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
-  const bom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
-  const content = bom ? bytes.subarray(3) : bytes;
+  const byteOrderMark = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+  const content = byteOrderMark ? bytes.subarray(3) : bytes;
   let text: string;
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(content); }
   catch (error) {
@@ -239,7 +243,7 @@ function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string)
   return {
     path,
     text,
-    bom,
+    byteOrderMark,
     revision: createHash('sha256').update(bytes).digest('hex'),
     byteLength: bytes.length,
     mode,

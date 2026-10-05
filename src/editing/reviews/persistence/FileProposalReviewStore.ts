@@ -1,26 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { EditError } from './EditError.ts';
-import { EditFailureReason } from './EditFailureReason.ts';
-import type { EditProposal } from './EditProposal.ts';
-import type { EditSessionStore } from './EditSessionStore.ts';
+import { EditError } from '../../errors/EditError.ts';
+import { EditFailureReason } from '../../errors/EditFailureReason.ts';
+import type { EditProposal } from '../../proposals/EditProposal.ts';
+import type { ProposalReviewStore } from './ProposalReviewStore.ts';
 
-export class FileEditSessionStore implements EditSessionStore {
+export class FileProposalReviewStore implements ProposalReviewStore {
   private readonly path: string;
 
   constructor(directory: string) {
-    this.path = join(directory, 'active-edit-session.json');
+    this.path = join(directory, 'active-proposal-review.json');
   }
 
   async load(): Promise<EditProposal | undefined> {
     try {
       const value = JSON.parse(await readFile(this.path, 'utf8')) as EditProposal;
-      if (value.schemaVersion !== 1 || !Array.isArray(value.files)) throw new Error('Unsupported edit-session checkpoint schema.');
+      if (value.schemaVersion !== 1 || !Array.isArray(value.files)) throw new Error('Unsupported proposal-review checkpoint schema.');
       return value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw new EditError(EditFailureReason.PERSISTENCE, 'Could not load the active edit session.', {}, { cause: error });
+      throw new EditError(EditFailureReason.PERSISTENCE, 'Could not load the active proposal review.', {}, { cause: error });
     }
   }
 
@@ -33,7 +33,7 @@ export class FileEditSessionStore implements EditSessionStore {
       await chmod(temporary, 0o600);
       await rename(temporary, this.path);
     } catch (error) {
-      throw new EditError(EditFailureReason.PERSISTENCE, 'Could not persist the active edit session.', {}, { cause: error });
+      throw new EditError(EditFailureReason.PERSISTENCE, 'Could not persist the active proposal review.', {}, { cause: error });
     } finally {
       await unlink(temporary).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
     }
@@ -43,7 +43,7 @@ export class FileEditSessionStore implements EditSessionStore {
     try { await unlink(this.path); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw new EditError(EditFailureReason.PERSISTENCE, 'Could not clear the settled edit session.', {}, { cause: error });
+        throw new EditError(EditFailureReason.PERSISTENCE, 'Could not clear the settled proposal review.', {}, { cause: error });
       }
     }
   }

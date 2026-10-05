@@ -11,7 +11,6 @@ import type {
 } from 'openai/resources/responses/responses';
 import type { ChatConfiguration } from '../../configuration/ChatConfiguration.ts';
 import { ProviderError } from '../../errors/ProviderError.ts';
-import { ProjectAccess } from '../../project/ProjectAccess.ts';
 import type { ToolRuntime } from '../../tools/ToolRuntime.ts';
 import { ToolInputKind } from '../../tools/ToolInputKind.ts';
 import type { ChatProvider } from '../../chat/ChatProvider.ts';
@@ -21,10 +20,6 @@ import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
 import type { TurnResult } from '../../chat/TurnResult.ts';
 
 const MAX_TOOL_ROUNDS = 8;
-const PROJECT_INSTRUCTIONS = `You have access to the current project through project tools.
-When a question depends on the codebase, inspect the relevant files before answering. Use project.list_project_files to discover paths you do not know. Do not claim to have inspected files you have not read.
-To change code, prefer project.propose_patch with the strict *** Begin Patch dialect. Use project.propose_edits for exact whitespace, EOL, or Unicode-sensitive edits. Proposals are staged for user review and do not modify the workspace until accepted.`;
-
 export class OpenAIProvider implements ChatProvider {
   private history: ResponseInputItem[] = [];
   private busy = false;
@@ -33,8 +28,8 @@ export class OpenAIProvider implements ChatProvider {
     private readonly modelName: string,
     private readonly configuration: ChatConfiguration,
     private readonly token: () => Promise<string>,
-    private readonly client?: OpenAI,
-    private readonly tools: ToolRuntime = new ProjectAccess(process.cwd()),
+    private readonly client: OpenAI | undefined,
+    private readonly tools: ToolRuntime,
   ) {}
 
   get model(): string { return this.modelName; }
@@ -102,7 +97,7 @@ export class OpenAIProvider implements ChatProvider {
         const round = toolRounds + 1;
         const request = {
           model: this.model,
-          instructions: `${this.configuration.instructions}\n\n${PROJECT_INSTRUCTIONS}`,
+          instructions: this.configuration.instructions,
           input,
           stream: true,
           // Keep state client-side; complete response items are replayed in `input`.

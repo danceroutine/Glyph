@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { ConfigurationError } from '../errors/ConfigurationError.ts';
 import type { OpenAIConfiguration } from '../providers/openai/OpenAIConfiguration.ts';
 import type { ChatConfiguration } from './ChatConfiguration.ts';
-import type { EditingConfiguration } from '../editing/EditingConfiguration.ts';
+import type { EditingConfiguration } from '../editing/configuration/EditingConfiguration.ts';
 import type { ConfigurationProvider } from './ConfigurationProvider.ts';
 
 const environmentConfigurationSchema = z.object({
@@ -25,7 +25,7 @@ const environmentConfigurationSchema = z.object({
   EDIT_MAX_TOTAL_HUNKS: z.coerce.number().int().positive().default(256),
   EDIT_MAX_HUNKS_PER_FILE: z.coerce.number().int().positive().default(64),
   EDIT_DIFF_BUDGET_MS: z.coerce.number().int().positive().default(1_000),
-  EDIT_MAX_ACTIVE_SESSIONS: z.coerce.number().int().min(1).max(1).default(1),
+  EDIT_MAX_ACTIVE_REVIEWS: z.coerce.number().int().min(1).max(1).default(1),
 }).transform(values => {
   const stateDirectory = values.HARNESS_CHAT_CONFIG_DIR;
   return {
@@ -43,9 +43,9 @@ const environmentConfigurationSchema = z.object({
       maxTotalHunks: values.EDIT_MAX_TOTAL_HUNKS,
       maxHunksPerFile: values.EDIT_MAX_HUNKS_PER_FILE,
       diffBudgetMs: values.EDIT_DIFF_BUDGET_MS,
-      maxActiveSessions: values.EDIT_MAX_ACTIVE_SESSIONS,
-      newFileBom: false,
-      newFileEol: '\n',
+      maxActiveReviews: values.EDIT_MAX_ACTIVE_REVIEWS,
+      newFileByteOrderMark: false,
+      newFileLineEnding: '\n',
     },
     openAI: {
       issuer: 'https://auth.openai.com',

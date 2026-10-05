@@ -6,7 +6,7 @@ export interface EditingConfiguration {
   readonly maxTotalHunks: number;
   readonly maxHunksPerFile: number;
   readonly diffBudgetMs: number;
-  readonly maxActiveSessions: number;
-  readonly newFileBom: boolean;
-  readonly newFileEol: '\n' | '\r\n' | '\r';
+  readonly maxActiveReviews: number;
+  readonly newFileByteOrderMark: boolean;
+  readonly newFileLineEnding: '\n' | '\r\n' | '\r';
 }

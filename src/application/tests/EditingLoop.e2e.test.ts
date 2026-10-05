@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EditDecisionState } from '../../editing/EditDecisionState.ts';
-import { EditFailureReason } from '../../editing/EditFailureReason.ts';
-import { EditOperation } from '../../editing/EditOperation.ts';
-import { EditSessionManager } from '../../editing/EditSessionManager.ts';
-import { FileEditSessionStore } from '../../editing/FileEditSessionStore.ts';
+import { EditDecisionState } from '../../editing/reviews/EditDecisionState.ts';
+import { EditFailureReason } from '../../editing/errors/EditFailureReason.ts';
+import { EditOperation } from '../../editing/proposals/EditOperation.ts';
+import { ProposalReviewManager } from '../../editing/reviews/ProposalReviewManager.ts';
+import { FileProposalReviewStore } from '../../editing/reviews/persistence/FileProposalReviewStore.ts';
 import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
 import { EditingE2EHarness } from './fixtures/EditingE2EHarness.ts';
 import { EditingE2ERequirement } from './fixtures/EditingE2ERequirement.ts';
@@ -38,13 +38,13 @@ it('runs a strict structured tool call through the real provider and applies mix
     callId: 'call-structured', namespace: 'project', name: 'propose_edits', inputKind: ToolInputKind.JSON,
     input: { files: [
       {
-        operation: EditOperation.UPDATE, path: 'a.txt', new_path: null, base_revision: revision, content: null, bom: null,
+        operation: EditOperation.UPDATE, path: 'a.txt', new_path: null, base_revision: revision, content: null, byte_order_mark: null,
         edits: [
           { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, expected_text: 'first', replacement_text: 'FIRST' },
           { range: { start: { line: 2, character: 0 }, end: { line: 2, character: 4 } }, expected_text: 'last', replacement_text: 'LAST' },
         ],
       },
-      { operation: EditOperation.CREATE, path: 'nested/new.txt', new_path: null, base_revision: null, content: 'created\n', bom: null, edits: [] },
+      { operation: EditOperation.CREATE, path: 'nested/new.txt', new_path: null, base_revision: null, content: 'created\n', byte_order_mark: null, edits: [] },
     ] },
   });
   const harness = await EditingE2EHarness.create({ 'a.txt': base }, [
@@ -60,15 +60,15 @@ it('runs a strict structured tool call through the real provider and applies mix
   ]);
   try {
     expect(await harness.send()).toBe('The edit is staged for your review.');
-    const proposal = harness.sessions.active!;
+    const proposal = harness.reviews.active!;
     expect(await readFile(join(harness.projectRoot, 'a.txt'), 'utf8')).toBe(base);
     const [first, last] = proposal.files[0]!.items;
     const create = proposal.files[1]!.items[0]!;
 
-    await harness.sessions.accept(last!.id);
+    await harness.reviews.accept(last!.id);
     expect(await readFile(join(harness.projectRoot, 'a.txt'), 'utf8')).toBe('first\nmiddle\nLAST\n');
-    await harness.sessions.reject(first!.id);
-    await harness.sessions.accept(create.id);
+    await harness.reviews.reject(first!.id);
+    await harness.reviews.accept(create.id);
 
     expect(await readFile(join(harness.projectRoot, 'a.txt'), 'utf8')).toBe('first\nmiddle\nLAST\n');
     expect(await readFile(join(harness.projectRoot, 'nested/new.txt'), 'utf8')).toBe('created\n');
@@ -76,14 +76,18 @@ it('runs a strict structured tool call through the real provider and applies mix
       EditDecisionState.REJECTED, EditDecisionState.ACCEPTED, EditDecisionState.ACCEPTED,
     ]);
     expect(harness.logger.entries.map(entry => entry.message)).toEqual(expect.arrayContaining([
-      'edit.proposal.validated', 'edit.session.staged', 'edit.item.accepted', 'edit.item.rejected', 'edit.session.settled',
+      'editing.proposal.validated',
+      'editing.review.staged',
+      'editing.review.item.accepted',
+      'editing.review.item.rejected',
+      'editing.review.settled',
     ]));
     expect(networkAttempts).toBe(0);
   } finally { await harness.dispose(); }
 });
 
 it('preserves exact bytes across the structured text, boundary, whitespace, and Unicode matrix', async () => {
-  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+  const byteOrderMark = Buffer.from([0xef, 0xbb, 0xbf]);
   const cases = [
     editCase('insert-begin.txt', 'bc', 'abc', [{ line: 0, character: 0, expected: '', replacement: 'a' }]),
     editCase('insert-middle.txt', 'ac', 'abc', [{ line: 0, character: 1, expected: '', replacement: 'b' }]),
@@ -111,7 +115,7 @@ it('preserves exact bytes across the structured text, boundary, whitespace, and 
     ]),
     editCase('repeated.txt', 'same\nsame\n', 'same\nchanged\n', [{ line: 1, character: 0, endCharacter: 4, expected: 'same', replacement: 'changed' }]),
     editCase('long-line.txt', 'x'.repeat(16_384), `${'x'.repeat(16_384)}!`, [{ line: 0, character: 16_384, expected: '', replacement: '!' }]),
-    editCase('bom.txt', Buffer.concat([bom, Buffer.from('old\n')]), Buffer.concat([bom, Buffer.from('new\n')]), [{ line: 0, character: 0, endCharacter: 3, expected: 'old', replacement: 'new' }]),
+    editCase('byteOrderMark.txt', Buffer.concat([byteOrderMark, Buffer.from('old\n')]), Buffer.concat([byteOrderMark, Buffer.from('new\n')]), [{ line: 0, character: 0, endCharacter: 3, expected: 'old', replacement: 'new' }]),
   ];
   const files = Object.fromEntries(cases.map(entry => [entry.path, entry.initial]));
   const call = ScriptedOpenAIResponsesFixture.encodeToolCall({
@@ -124,16 +128,16 @@ it('preserves exact bytes across the structured text, boundary, whitespace, and 
   ]);
   try {
     await harness.send();
-    await harness.sessions.acceptAll();
+    await harness.reviews.acceptAll();
     for (const entry of cases) expect(await readFile(join(harness.projectRoot, entry.path)), entry.path).toEqual(Buffer.from(entry.expected));
     expect(networkAttempts).toBe(0);
   } finally { await harness.dispose(); }
 });
 
-it('runs a free-form custom patch call, preserves CRLF/BOM, and validates custom output continuation', async () => {
+it('runs a free-form custom patch call, preserves carriage-return line-feed endings and the byte order mark, and validates custom output continuation', async () => {
   const raw = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('one\r\ntwo\r\nthree\r\n')]);
   const revision = sha256(raw);
-  const patch = `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${revision}\n*** BOM: true\n*** EOL: CRLF\n@@\n one\n-two\n+TWO\n three\n*** End Patch`;
+  const patch = `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${revision}\n*** Byte Order Mark: true\n*** Line Ending: CRLF\n@@\n one\n-two\n+TWO\n three\n*** End Patch`;
   const call = ScriptedOpenAIResponsesFixture.encodeToolCall({
     callId: 'call-patch', namespace: 'project', name: 'propose_patch', inputKind: ToolInputKind.TEXT, input: patch,
   });
@@ -143,7 +147,7 @@ it('runs a free-form custom patch call, preserves CRLF/BOM, and validates custom
   ]);
   try {
     await harness.send();
-    await harness.sessions.acceptAll();
+    await harness.reviews.acceptAll();
     expect(await readFile(join(harness.projectRoot, 'file.txt'))).toEqual(
       Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('one\r\nTWO\r\nthree\r\n')]),
     );
@@ -161,7 +165,7 @@ it('retains a staged proposal across final-model failure, restart, and same-file
   const call = ScriptedOpenAIResponsesFixture.encodeToolCall({
     callId: 'call-failure', namespace: 'project', name: 'propose_edits', inputKind: ToolInputKind.JSON,
     input: { files: [{
-      operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: sha256(Buffer.from(base)), content: 'agent\n', bom: null, edits: [],
+      operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: sha256(Buffer.from(base)), content: 'agent\n', byte_order_mark: null, edits: [],
     }] },
   });
   const harness = await EditingE2EHarness.create({ 'file.txt': base, 'unrelated.txt': 'keep\n' }, [
@@ -170,12 +174,12 @@ it('retains a staged proposal across final-model failure, restart, and same-file
   ]);
   try {
     await expect(harness.send()).rejects.toThrow(/model failed after staging/);
-    expect(harness.sessions.active).toBeDefined();
+    expect(harness.reviews.active).toBeDefined();
     await writeFile(join(harness.projectRoot, 'file.txt'), 'collaborator\n');
     await writeFile(join(harness.projectRoot, 'unrelated.txt'), 'collaborator unrelated\n');
-    const recovered = new EditSessionManager(
+    const recovered = new ProposalReviewManager(
       new FileSystemWorkspaceTextStore(harness.projectRoot),
-      new FileEditSessionStore(harness.stateRoot),
+      new FileProposalReviewStore(harness.stateRoot),
       harness.logger,
     );
     await recovered.initialize();
@@ -193,7 +197,7 @@ it('retains a staged proposal when the final model round is cancelled', async ()
   const call = ScriptedOpenAIResponsesFixture.encodeToolCall({
     callId: 'call-cancel', namespace: 'project', name: 'propose_edits', inputKind: ToolInputKind.JSON,
     input: { files: [{
-      operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: sha256(Buffer.from(base)), content: 'changed', bom: null, edits: [],
+      operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: sha256(Buffer.from(base)), content: 'changed', byte_order_mark: null, edits: [],
     }] },
   });
   const harness = await EditingE2EHarness.create({ 'file.txt': base }, [
@@ -202,7 +206,7 @@ it('retains a staged proposal when the final model round is cancelled', async ()
   ]);
   try {
     await expect(harness.sendWithSignal(controller.signal)).rejects.toThrow(/cancelled/i);
-    expect(harness.sessions.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
+    expect(harness.reviews.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
     expect(await readFile(join(harness.projectRoot, 'file.txt'), 'utf8')).toBe(base);
     expect(networkAttempts).toBe(0);
   } finally { await harness.dispose(); }
@@ -213,7 +217,7 @@ it('serializes concurrent opposing decisions so exactly one wins and the other i
   const call = ScriptedOpenAIResponsesFixture.encodeToolCall({
     callId: 'call-race', namespace: 'project', name: 'propose_edits', inputKind: ToolInputKind.JSON,
     input: { files: [{
-      operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: sha256(Buffer.from(base)), content: 'changed', bom: null, edits: [],
+      operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: sha256(Buffer.from(base)), content: 'changed', byte_order_mark: null, edits: [],
     }] },
   });
   const harness = await EditingE2EHarness.create({ 'file.txt': base }, [
@@ -222,8 +226,8 @@ it('serializes concurrent opposing decisions so exactly one wins and the other i
   ]);
   try {
     await harness.send();
-    const item = harness.sessions.active!.files[0]!.items[0]!;
-    const results = await Promise.allSettled([harness.sessions.accept(item.id), harness.sessions.reject(item.id)]);
+    const item = harness.reviews.active!.files[0]!.items[0]!;
+    const results = await Promise.allSettled([harness.reviews.accept(item.id), harness.reviews.reject(item.id)]);
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
     const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
     expect(rejected.reason).toMatchObject({ reason: EditFailureReason.DECISION_CONFLICT });
@@ -255,7 +259,7 @@ function editCase(path: string, initial: string | Uint8Array, expected: string |
       new_path: null,
       base_revision: sha256(bytes),
       content: null,
-      bom: null,
+      byte_order_mark: null,
       edits: edits.map(edit => ({
         range: {
           start: { line: edit.line, character: edit.character },

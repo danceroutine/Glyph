@@ -47,7 +47,13 @@ function harness(replies: (() => Response | Promise<Response>)[], project?: Proj
     return reply();
   } });
   return {
-    provider: new OpenAIProvider('test-model', configuration, async () => 'oauth-test-token', client, project),
+    provider: new OpenAIProvider(
+      'test-model',
+      configuration,
+      async () => 'oauth-test-token',
+      client,
+      project ?? new ProjectAccess(process.cwd()),
+    ),
     requests,
   };
 }

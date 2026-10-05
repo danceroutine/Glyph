@@ -1,11 +1,11 @@
 import { stripVTControlCharacters } from 'node:util';
 import wrapAnsi from 'wrap-ansi';
-import { EditDecisionState } from '../editing/EditDecisionState.ts';
-import type { EditProposal } from '../editing/EditProposal.ts';
-import type { EditReviewItem } from '../editing/EditReviewItem.ts';
-import { EditReviewItemKind } from '../editing/EditReviewItemKind.ts';
-import type { EditSessionManager } from '../editing/EditSessionManager.ts';
-import type { FileEditPlan } from '../editing/FileEditPlan.ts';
+import { EditDecisionState } from '../editing/reviews/EditDecisionState.ts';
+import type { EditProposal } from '../editing/proposals/EditProposal.ts';
+import type { EditReviewItem } from '../editing/reviews/EditReviewItem.ts';
+import { EditReviewItemKind } from '../editing/reviews/EditReviewItemKind.ts';
+import type { ProposalReviewManager } from '../editing/reviews/ProposalReviewManager.ts';
+import type { FileEditPlan } from '../editing/proposals/FileEditPlan.ts';
 import type { TerminalInput } from './TerminalInput.ts';
 
 export class TerminalEditReviewer {
@@ -20,7 +20,7 @@ export class TerminalEditReviewer {
     private readonly onInterrupt: () => void = () => {},
   ) {}
 
-  async review(manager: EditSessionManager, signal: AbortSignal): Promise<void> {
+  async review(manager: ProposalReviewManager, signal: AbortSignal): Promise<void> {
     if (!manager.active) return;
     if (!this.input.isTTY) return this.reviewFallback(manager, signal);
     this.output.write('\x1b[?1049h\x1b[?25l');
@@ -52,7 +52,7 @@ export class TerminalEditReviewer {
     }
   }
 
-  private async reviewFallback(manager: EditSessionManager, signal: AbortSignal): Promise<void> {
+  private async reviewFallback(manager: ProposalReviewManager, signal: AbortSignal): Promise<void> {
     while (manager.active) {
       const entry = pendingEntries(manager.active)[0];
       if (!entry) return;

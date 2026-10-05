@@ -2,34 +2,34 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { NullLogger } from '../../observability/NullLogger.ts';
-import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
+import { NullLogger } from '../../../observability/NullLogger.ts';
+import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
+import type { EditingConfiguration } from '../../configuration/EditingConfiguration.ts';
+import { JsDiffTextDiffer } from '../../documents/JsDiffTextDiffer.ts';
+import { EditFailureReason } from '../../errors/EditFailureReason.ts';
+import { EditOperation } from '../../proposals/EditOperation.ts';
+import { EditProposalService } from '../../proposals/EditProposalService.ts';
+import { FileProposalReviewStore } from '../persistence/FileProposalReviewStore.ts';
 import { EditDecisionState } from '../EditDecisionState.ts';
 import { EditApplicabilityState } from '../EditApplicabilityState.ts';
-import { EditFailureReason } from '../EditFailureReason.ts';
-import { EditOperation } from '../EditOperation.ts';
-import { EditProposalService } from '../EditProposalService.ts';
-import { EditSessionManager } from '../EditSessionManager.ts';
-import { FileEditSessionStore } from '../FileEditSessionStore.ts';
-import { JsDiffTextDiffer } from '../JsDiffTextDiffer.ts';
-import type { EditingConfiguration } from '../EditingConfiguration.ts';
+import { ProposalReviewManager } from '../ProposalReviewManager.ts';
 
 const directories: string[] = [];
 const configuration: EditingConfiguration = {
   maxRawProposalBytes: 1_048_576, maxChangedBytes: 1_048_576, maxResultingBytesPerFile: 1_048_576,
-  maxFiles: 64, maxTotalHunks: 256, maxHunksPerFile: 64, diffBudgetMs: 1_000, maxActiveSessions: 1,
-  newFileBom: false, newFileEol: '\n',
+  maxFiles: 64, maxTotalHunks: 256, maxHunksPerFile: 64, diffBudgetMs: 1_000, maxActiveReviews: 1,
+  newFileByteOrderMark: false, newFileLineEnding: '\n',
 };
 
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
 
-describe(EditSessionManager, () => {
-describe(EditSessionManager.prototype.accept, () => {
+describe(ProposalReviewManager, () => {
+describe(ProposalReviewManager.prototype.accept, () => {
 it('recomputes Current from Base so accepting hunks in reverse order is stable', async () => {
   const { root, manager, service, workspace } = await fixture('first\nmiddle\nlast\n');
   const base = await workspace.read('file.txt');
   const proposal = await service.proposeStructured({ files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, bom: null,
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, byte_order_mark: null,
     edits: [
       { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, expected_text: 'first', replacement_text: 'FIRST' },
       { range: { start: { line: 2, character: 0 }, end: { line: 2, character: 4 } }, expected_text: 'last', replacement_text: 'LAST' },
@@ -48,7 +48,7 @@ it('produces identical bytes for every A/B/C acceptance permutation', async () =
     const { root, manager, service, workspace } = await fixture('a\nkeep-1\nb\nkeep-2\nc\n');
     const base = await workspace.read('file.txt');
     const proposal = await service.proposeStructured({ files: [{
-      operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, bom: null,
+      operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, byte_order_mark: null,
       edits: [
         { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, expected_text: 'a', replacement_text: 'A' },
         { range: { start: { line: 2, character: 0 }, end: { line: 2, character: 1 } }, expected_text: 'b', replacement_text: 'B' },
@@ -65,7 +65,7 @@ it('supports mixed accept/reject decisions without applying rejected dependent t
   const { root, manager, service, workspace } = await fixture('const value = 1;\nkeep\nconsole.log(value);\n');
   const base = await workspace.read('file.txt');
   const proposal = await service.proposeStructured({ files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, bom: null,
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, byte_order_mark: null,
     edits: [
       { range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } }, expected_text: 'value', replacement_text: 'renamed' },
       { range: { start: { line: 2, character: 12 }, end: { line: 2, character: 17 } }, expected_text: 'value', replacement_text: 'renamed' },
@@ -80,7 +80,7 @@ it('supports mixed accept/reject decisions without applying rejected dependent t
 it('is idempotent for repeated decisions and returns a typed conflict for the opposite decision', async () => {
   const { manager, service } = await fixture('');
   const proposal = await service.proposeStructured({ files: [{
-    operation: EditOperation.CREATE, path: 'new.txt', new_path: null, base_revision: null, content: 'new', bom: null, edits: [],
+    operation: EditOperation.CREATE, path: 'new.txt', new_path: null, base_revision: null, content: 'new', byte_order_mark: null, edits: [],
   }] });
   await manager.stage(proposal);
   const item = proposal.files[0]!.items[0]!;
@@ -93,7 +93,7 @@ it('marks same-file collaborator changes stale without overwriting them', async 
   const { root, manager, service, workspace } = await fixture('base');
   const base = await workspace.read('file.txt');
   const proposal = await service.proposeStructured({ files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'agent', bom: null, edits: [],
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'agent', byte_order_mark: null, edits: [],
   }] });
   await manager.stage(proposal);
   await writeFile(join(root, 'file.txt'), 'collaborator');
@@ -107,7 +107,7 @@ it('keeps rename and text decisions independent, then deletes by revision', asyn
   const base = await workspace.read('file.txt');
   const rename = await service.proposeStructured({ files: [{
     operation: EditOperation.RENAME, path: 'file.txt', new_path: 'nested/renamed.txt', base_revision: base.revision,
-    content: 'changed\n', bom: null, edits: [],
+    content: 'changed\n', byte_order_mark: null, edits: [],
   }] });
   await manager.stage(rename);
   const [pathItem, textItem] = rename.files[0]!.items;
@@ -119,7 +119,7 @@ it('keeps rename and text decisions independent, then deletes by revision', asyn
   const renamed = await workspace.read('nested/renamed.txt');
   const deletion = await service.proposeStructured({ files: [{
     operation: EditOperation.DELETE, path: 'nested/renamed.txt', new_path: null, base_revision: renamed.revision,
-    content: null, bom: null, edits: [],
+    content: null, byte_order_mark: null, edits: [],
   }] });
   await manager.stage(deletion);
   await manager.accept(deletion.files[0]!.items[0]!.id);
@@ -127,18 +127,18 @@ it('keeps rename and text decisions independent, then deletes by revision', asyn
 });
 });
 
-describe(EditSessionManager.prototype.acceptAll, () => {
+describe(ProposalReviewManager.prototype.acceptAll, () => {
 it('preflights every pending file and performs zero writes when a later file is stale', async () => {
   const { root, state } = await fixture('ignored');
   await writeFile(join(root, 'a.txt'), 'a');
   await writeFile(join(root, 'b.txt'), 'b');
   const workspace = new FileSystemWorkspaceTextStore(root);
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
-  const manager = new EditSessionManager(workspace, new FileEditSessionStore(state));
+  const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state));
   const [a, b] = await Promise.all([workspace.read('a.txt'), workspace.read('b.txt')]);
   const proposal = await service.proposeStructured({ files: [
-    { operation: EditOperation.UPDATE, path: 'a.txt', new_path: null, base_revision: a.revision, content: 'A', bom: null, edits: [] },
-    { operation: EditOperation.UPDATE, path: 'b.txt', new_path: null, base_revision: b.revision, content: 'B', bom: null, edits: [] },
+    { operation: EditOperation.UPDATE, path: 'a.txt', new_path: null, base_revision: a.revision, content: 'A', byte_order_mark: null, edits: [] },
+    { operation: EditOperation.UPDATE, path: 'b.txt', new_path: null, base_revision: b.revision, content: 'B', byte_order_mark: null, edits: [] },
   ] });
   await manager.stage(proposal);
   await writeFile(join(root, 'b.txt'), 'collaborator');
@@ -149,12 +149,12 @@ it('preflights every pending file and performs zero writes when a later file is 
 });
 });
 
-describe(EditSessionManager.prototype.rejectAll, () => {
+describe(ProposalReviewManager.prototype.rejectAll, () => {
 it('settles every pending item without touching workspace bytes', async () => {
   const { root, manager, service, workspace } = await fixture('base\n');
   const base = await workspace.read('file.txt');
   const proposal = await service.proposeStructured({ files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'changed\n', bom: null, edits: [],
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'changed\n', byte_order_mark: null, edits: [],
   }] });
   await manager.stage(proposal);
   await manager.rejectAll();
@@ -163,32 +163,32 @@ it('settles every pending item without touching workspace bytes', async () => {
 });
 });
 
-describe(EditSessionManager.prototype.stage, () => {
+describe(ProposalReviewManager.prototype.stage, () => {
 it('rejects a second proposal while the configured active-session slot is occupied', async () => {
   const { manager, service } = await fixture('');
   const first = await service.proposeStructured({ files: [{
-    operation: EditOperation.CREATE, path: 'first.txt', new_path: null, base_revision: null, content: 'first', bom: null, edits: [],
+    operation: EditOperation.CREATE, path: 'first.txt', new_path: null, base_revision: null, content: 'first', byte_order_mark: null, edits: [],
   }] });
   const second = await service.proposeStructured({ files: [{
-    operation: EditOperation.CREATE, path: 'second.txt', new_path: null, base_revision: null, content: 'second', bom: null, edits: [],
+    operation: EditOperation.CREATE, path: 'second.txt', new_path: null, base_revision: null, content: 'second', byte_order_mark: null, edits: [],
   }] });
   await manager.stage(first);
-  await expect(manager.stage(second)).rejects.toMatchObject({ reason: EditFailureReason.ACTIVE_SESSION_LIMIT });
+  await expect(manager.stage(second)).rejects.toMatchObject({ reason: EditFailureReason.ACTIVE_REVIEW_LIMIT });
 });
 });
 
-describe(EditSessionManager.prototype.initialize, () => {
+describe(ProposalReviewManager.prototype.initialize, () => {
 it('recovers pending decisions and revisions from the persisted checkpoint', async () => {
   const { root, state, manager, service, workspace } = await fixture('base');
   const base = await workspace.read('file.txt');
   const proposal = await service.proposeStructured({ files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'next', bom: null, edits: [],
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: 'next', byte_order_mark: null, edits: [],
   }] });
   await manager.stage(proposal);
   if (process.platform !== 'win32') {
-    expect((await stat(join(state, 'active-edit-session.json'))).mode & 0o777).toBe(0o600);
+    expect((await stat(join(state, 'active-proposal-review.json'))).mode & 0o777).toBe(0o600);
   }
-  const recovered = new EditSessionManager(new FileSystemWorkspaceTextStore(root), new FileEditSessionStore(state));
+  const recovered = new ProposalReviewManager(new FileSystemWorkspaceTextStore(root), new FileProposalReviewStore(state));
   await recovered.initialize();
   expect(recovered.active?.id).toBe(proposal.id);
   expect(recovered.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
@@ -198,7 +198,7 @@ it('recovers a partially accepted multi-hunk session', async () => {
   const { root, state, manager, service, workspace } = await fixture('one\nmiddle\nthree\n');
   const base = await workspace.read('file.txt');
   const proposal = await service.proposeStructured({ files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, bom: null,
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, byte_order_mark: null,
     edits: [
       { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, expected_text: 'one', replacement_text: 'ONE' },
       { range: { start: { line: 2, character: 0 }, end: { line: 2, character: 5 } }, expected_text: 'three', replacement_text: 'THREE' },
@@ -206,7 +206,7 @@ it('recovers a partially accepted multi-hunk session', async () => {
   }] });
   await manager.stage(proposal);
   await manager.accept(proposal.files[0]!.items[0]!.id);
-  const recovered = new EditSessionManager(new FileSystemWorkspaceTextStore(root), new FileEditSessionStore(state));
+  const recovered = new ProposalReviewManager(new FileSystemWorkspaceTextStore(root), new FileProposalReviewStore(state));
   await recovered.initialize();
 
   expect(recovered.active?.files[0]?.items.map(item => item.decision)).toEqual([
@@ -219,7 +219,7 @@ it('reconciles an in-progress checkpoint whose atomic write completed before res
   const { root, state, service, workspace } = await fixture('one\nmiddle\nthree\n');
   const base = await workspace.read('file.txt');
   const proposal = await service.proposeStructured({ files: [{
-    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, bom: null,
+    operation: EditOperation.UPDATE, path: 'file.txt', new_path: null, base_revision: base.revision, content: null, byte_order_mark: null,
     edits: [
       { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, expected_text: 'one', replacement_text: 'ONE' },
       { range: { start: { line: 2, character: 0 }, end: { line: 2, character: 5 } }, expected_text: 'three', replacement_text: 'THREE' },
@@ -229,10 +229,10 @@ it('reconciles an in-progress checkpoint whose atomic write completed before res
   const applying = file.items[0]!;
   file.applyingItemId = applying.id;
   file.applicability = EditApplicabilityState.APPLYING;
-  await new FileEditSessionStore(state).save(proposal);
+  await new FileProposalReviewStore(state).save(proposal);
   await workspace.replace('file.txt', base.revision, 'ONE\nmiddle\nthree\n', false);
 
-  const recovered = new EditSessionManager(new FileSystemWorkspaceTextStore(root), new FileEditSessionStore(state));
+  const recovered = new ProposalReviewManager(new FileSystemWorkspaceTextStore(root), new FileProposalReviewStore(state));
   await recovered.initialize();
 
   expect(recovered.active?.files[0]?.items.map(item => item.decision)).toEqual([
@@ -250,6 +250,6 @@ async function fixture(text: string) {
   if (text !== '') await writeFile(join(root, 'file.txt'), text);
   const workspace = new FileSystemWorkspaceTextStore(root);
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
-  const manager = new EditSessionManager(workspace, new FileEditSessionStore(state));
+  const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state));
   return { root, state, workspace, service, manager };
 }

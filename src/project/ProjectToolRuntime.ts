@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { EditError } from '../editing/EditError.ts';
-import { EditProposalService } from '../editing/EditProposalService.ts';
-import type { EditSessionManager } from '../editing/EditSessionManager.ts';
+import { EditError } from '../editing/errors/EditError.ts';
+import { EditProposalService } from '../editing/proposals/EditProposalService.ts';
+import type { ProposalReviewManager } from '../editing/reviews/ProposalReviewManager.ts';
 import type { ToolRuntime } from '../tools/ToolRuntime.ts';
 import type { ToolDefinition } from '../tools/ToolDefinition.ts';
 import { ToolInputKind } from '../tools/ToolInputKind.ts';
@@ -22,8 +22,8 @@ const editDefinitions: readonly ToolDefinition[] = [
 *** Update File: path
 *** Revision: <revision returned by read_project_file>
 [*** Move to: new/path]
-[*** BOM: true|false]
-[*** EOL: LF|CRLF|CR]
+[*** Byte Order Mark: true|false]
+[*** Line Ending: LF|CRLF|CR]
 @@
  exact context
 -removed line
@@ -38,7 +38,7 @@ Every directive and context line is exact; no fuzzy matching occurs. Never claim
   {
     namespace: ProjectToolNamespace.PROJECT,
     name: ProjectToolName.PROPOSE_EDITS,
-    description: 'Stage exact UTF-16 range edits for user review. Use for whitespace, EOL, or Unicode-sensitive changes.',
+    description: 'Stage exact UTF-16 range edits for user review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
     inputKind: ToolInputKind.JSON,
     parameters: toJsonSchema(EditProposalService.structuredSchema),
   },
@@ -46,27 +46,38 @@ Every directive and context line is exact; no fuzzy matching occurs. Never claim
 
 export class ProjectToolRuntime implements ToolRuntime {
   readonly definitions: readonly ToolDefinition[];
+  private readonly logger: Logger;
 
   constructor(
     private readonly access: ProjectAccess,
     private readonly proposals: EditProposalService,
-    private readonly sessions: EditSessionManager,
-    private readonly logger: Logger = new NullLogger(),
+    private readonly reviews: ProposalReviewManager,
+    logger: Logger = new NullLogger(),
   ) {
     this.definitions = [...access.definitions, ...editDefinitions];
+    this.logger = logger.forNamespace('project.tool');
   }
 
   async execute(name: string, input: string): Promise<string> {
     try {
-      await this.logger.debug('tool.ingested', { name, inputBytes: Buffer.byteLength(input) });
-      if (name === ProjectToolName.LIST_FILES || name === ProjectToolName.READ_FILE) return this.access.execute(name, input);
-      const proposal = name === ProjectToolName.PROPOSE_PATCH
-        ? await this.proposals.proposePatch(input)
-        : name === ProjectToolName.PROPOSE_EDITS
-          ? await this.proposals.proposeStructured(EditProposalService.structuredSchema.parse(JSON.parse(input)))
-          : undefined;
-      if (!proposal) throw new Error(`Unknown project tool: ${name}`);
-      await this.sessions.stage(proposal);
+      await this.logger.debug('ingested', { name, inputBytes: Buffer.byteLength(input) });
+      let proposal;
+      switch (name) {
+        case ProjectToolName.LIST_FILES:
+        case ProjectToolName.READ_FILE:
+          return this.access.execute(name, input);
+        case ProjectToolName.PROPOSE_PATCH:
+          proposal = await this.proposals.proposePatch(input);
+          break;
+        case ProjectToolName.PROPOSE_EDITS:
+          proposal = await this.proposals.proposeStructured(
+            EditProposalService.structuredSchema.parse(JSON.parse(input)),
+          );
+          break;
+        default:
+          throw new Error(`Unknown project tool: ${name}`);
+      }
+      await this.reviews.stage(proposal);
       return JSON.stringify({
         proposal_id: proposal.id,
         status: 'STAGED_FOR_REVIEW',
@@ -75,7 +86,7 @@ export class ProjectToolRuntime implements ToolRuntime {
         message: 'The proposal is staged but no workspace changes have been written. The user must accept review items.',
       });
     } catch (error) {
-      await this.logger.error('tool.failed', {
+      await this.logger.error('failed', {
         name,
         error: error instanceof EditError
           ? error.toJSON()

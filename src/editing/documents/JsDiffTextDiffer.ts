@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { diffArrays } from 'diff';
-import { EditDecisionState } from './EditDecisionState.ts';
-import type { EditReviewItem } from './EditReviewItem.ts';
-import { EditReviewItemKind } from './EditReviewItemKind.ts';
+import { EditDecisionState } from '../reviews/EditDecisionState.ts';
+import type { EditReviewItem } from '../reviews/EditReviewItem.ts';
+import { EditReviewItemKind } from '../reviews/EditReviewItemKind.ts';
 import type { TextDiffer } from './TextDiffer.ts';
 
 const ALGORITHM_VERSION = 'jsdiff-9.0.0-exact-lines-v1';
