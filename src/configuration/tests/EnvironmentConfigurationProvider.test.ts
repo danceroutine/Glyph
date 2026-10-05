@@ -13,6 +13,18 @@ describe(EnvironmentConfigurationProvider, () => {
     expect(configuration.chat.timeoutMs).toBe(90_000);
     expect(configuration.traceEnabled).toBe(false);
     expect(configuration.stateDirectory).toBe('/tmp/harness-test');
+    expect(configuration.editing).toEqual(expect.objectContaining({
+      maxRawProposalBytes: 1024 * 1024,
+      maxChangedBytes: 1024 * 1024,
+      maxResultingBytesPerFile: 1024 * 1024,
+      maxFiles: 64,
+      maxTotalHunks: 256,
+      maxHunksPerFile: 64,
+      diffBudgetMs: 1_000,
+      maxActiveSessions: 1,
+      newFileBom: false,
+      newFileEol: '\n',
+    }));
     expect(JSON.stringify(configuration)).not.toContain('ignored');
   });
 

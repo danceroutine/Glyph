@@ -33,13 +33,28 @@ it('reads bounded line ranges with stable line numbers', async () => {
   const { access } = await fixture();
   const result = JSON.parse(await access.execute('read_project_file', JSON.stringify({
     path: 'src/app.ts', start_line: 2, end_line: 3,
-  }))) as { content: string; startLine: number; endLine: number; totalLines: number; truncated: boolean };
+  }))) as {
+    content: string;
+    startLine: number;
+    endLine: number;
+    totalLines: number;
+    truncated: boolean;
+    revision: string;
+    bom: boolean;
+    lines: { number: number; content: string; eol: string }[];
+  };
 
   expect(result.content).toBe('2: two\n3: three');
   expect(result.startLine).toBe(2);
   expect(result.endLine).toBe(3);
   expect(result.totalLines).toBe(4);
   expect(result.truncated).toBe(true);
+  expect(result.revision).toMatch(/^[a-f0-9]{64}$/);
+  expect(result.bom).toBe(false);
+  expect(result.lines).toEqual([
+    { number: 2, content: 'two', eol: '\n' },
+    { number: 3, content: 'three', eol: '\n' },
+  ]);
 });
 
 it('accepts project-specific discovery, read, and exclusion limits', async () => {
@@ -58,8 +73,8 @@ it('accepts project-specific discovery, read, and exclusion limits', async () =>
 
   const read = JSON.parse(await access.execute('read_project_file', JSON.stringify({
     path: 'src/app.ts', start_line: 1, end_line: 2,
-  }))) as { error?: string };
-  expect(read.error ?? '').toMatch(/at most 1 lines/);
+  }))) as { error?: { message?: string } };
+  expect(read.error?.message ?? '').toMatch(/at most 1 lines/);
 });
 
 it('rejects traversal, absolute paths, excluded paths, and symlink escapes', async () => {

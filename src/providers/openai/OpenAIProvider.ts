@@ -3,13 +3,17 @@ import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems';
 import type {
   Response,
   ResponseCreateParamsStreaming,
+  ResponseCustomToolCall,
   ResponseFunctionToolCall,
   ResponseInputItem,
   ResponseOutputItem,
+  NamespaceTool,
 } from 'openai/resources/responses/responses';
 import type { ChatConfiguration } from '../../configuration/ChatConfiguration.ts';
 import { ProviderError } from '../../errors/ProviderError.ts';
 import { ProjectAccess } from '../../project/ProjectAccess.ts';
+import type { ToolRuntime } from '../../tools/ToolRuntime.ts';
+import { ToolInputKind } from '../../tools/ToolInputKind.ts';
 import type { ChatProvider } from '../../chat/ChatProvider.ts';
 import type { ProviderTraceEntry } from '../../chat/ProviderTraceEntry.ts';
 import type { ToolActivity } from '../../chat/ToolActivity.ts';
@@ -17,8 +21,9 @@ import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
 import type { TurnResult } from '../../chat/TurnResult.ts';
 
 const MAX_TOOL_ROUNDS = 8;
-const PROJECT_INSTRUCTIONS = `You have read-only access to the current project through project tools.
-When a question depends on the codebase, inspect the relevant files before answering. Use project.list_project_files to discover paths you do not know. Do not claim to have inspected files you have not read.`;
+const PROJECT_INSTRUCTIONS = `You have access to the current project through project tools.
+When a question depends on the codebase, inspect the relevant files before answering. Use project.list_project_files to discover paths you do not know. Do not claim to have inspected files you have not read.
+To change code, prefer project.propose_patch with the strict *** Begin Patch dialect. Use project.propose_edits for exact whitespace, EOL, or Unicode-sensitive edits. Proposals are staged for user review and do not modify the workspace until accepted.`;
 
 export class OpenAIProvider implements ChatProvider {
   private history: ResponseInputItem[] = [];
@@ -29,7 +34,7 @@ export class OpenAIProvider implements ChatProvider {
     private readonly configuration: ChatConfiguration,
     private readonly token: () => Promise<string>,
     private readonly client?: OpenAI,
-    private readonly project = new ProjectAccess(process.cwd()),
+    private readonly tools: ToolRuntime = new ProjectAccess(process.cwd()),
   ) {}
 
   get model(): string { return this.modelName; }
@@ -102,8 +107,8 @@ export class OpenAIProvider implements ChatProvider {
           stream: true,
           // Keep state client-side; complete response items are replayed in `input`.
           store: false,
-          tools: this.project.tools,
-          parallel_tool_calls: true,
+          tools: toOpenAITools(this.tools),
+          parallel_tool_calls: false,
           // Preserve opaque reasoning state for stateless multi-turn reasoning models.
           include: ['reasoning.encrypted_content'],
         } satisfies ResponseCreateParamsStreaming;
@@ -155,14 +160,15 @@ export class OpenAIProvider implements ChatProvider {
           accumulatedUsage: totalUsage,
         }, round);
         input = [...input, ...toResponseInputItems(output)];
-        const calls = output.filter((item): item is ResponseFunctionToolCall => item.type === 'function_call');
+        const calls = output.filter((item): item is ResponseFunctionToolCall | ResponseCustomToolCall =>
+          item.type === 'function_call' || item.type === 'custom_tool_call');
         const completedText = visibleTextFrom(output);
         trace('response.interpreted', {
           terminalOutputTypes: response.output.map(item => item.type),
           collectedOutputTypes: output.map(item => item.type),
           streamedText,
           completedText,
-          functionCalls: calls,
+          toolCalls: calls,
         }, round);
         // Completed output items are authoritative. Some routes omit text
         // deltas even though the finished message item has visible content.
@@ -184,14 +190,15 @@ export class OpenAIProvider implements ChatProvider {
 
         const outputs = await Promise.all(calls.map(async call => {
           trace('tool.call', { call }, round);
+          const input = call.type === 'function_call' ? call.arguments : call.input;
           const activity = {
             ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
             name: call.name,
             callId: call.call_id,
-            arguments: call.arguments,
+            arguments: input,
           };
           reportToolActivity({ phase: ToolActivityPhase.STARTED, ...activity });
-          const output = await this.project.execute(call.name, call.arguments);
+          const output = await this.tools.execute(call.name, input);
           trace('tool.result', {
             namespace: call.namespace,
             name: call.name,
@@ -199,7 +206,9 @@ export class OpenAIProvider implements ChatProvider {
             output,
           }, round);
           reportToolActivity({ phase: ToolActivityPhase.COMPLETED, ...activity, output });
-          return { type: 'function_call_output' as const, call_id: call.call_id, output };
+          return call.type === 'function_call'
+            ? { type: 'function_call_output' as const, call_id: call.call_id, output }
+            : { type: 'custom_tool_call_output' as const, call_id: call.call_id, output };
         }));
         input = [...input, ...outputs];
       }
@@ -287,4 +296,30 @@ function addUsage(left: TurnResult['usage'], right: TurnResult['usage']): TurnRe
     reasoningTokens: left.reasoningTokens + right.reasoningTokens,
     totalTokens: left.totalTokens + right.totalTokens,
   };
+}
+
+function toOpenAITools(runtime: ToolRuntime): NamespaceTool[] {
+  const namespaces = new Map<string, NamespaceTool>();
+  for (const definition of runtime.definitions) {
+    let namespace = namespaces.get(definition.namespace);
+    if (!namespace) {
+      namespace = {
+        type: 'namespace',
+        name: definition.namespace,
+        description: `${definition.namespace} tools supplied by the host runtime.`,
+        tools: [],
+      };
+      namespaces.set(definition.namespace, namespace);
+    }
+    namespace.tools.push(definition.inputKind === ToolInputKind.TEXT
+      ? { type: 'custom', name: definition.name, description: definition.description }
+      : {
+        type: 'function',
+        name: definition.name,
+        description: definition.description,
+        strict: true,
+        parameters: definition.parameters ?? { type: 'object', properties: {}, required: [], additionalProperties: false },
+      });
+  }
+  return [...namespaces.values()];
 }

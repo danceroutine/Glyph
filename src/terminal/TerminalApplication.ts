@@ -5,6 +5,7 @@ import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
 import { AccountSelectionType } from './AccountSelectionType.ts';
 import { TerminalActionType } from './TerminalActionType.ts';
 import type { TerminalUI } from './TerminalUI.ts';
+import type { TerminalEditReviewer } from './TerminalEditReviewer.ts';
 
 interface TerminalApplicationOptions {
   projectRoot: string;
@@ -24,6 +25,7 @@ export class TerminalApplication {
     private readonly ui: TerminalUI,
     private readonly shutdown: AbortSignal,
     private readonly options: TerminalApplicationOptions,
+    private readonly reviewer?: TerminalEditReviewer,
   ) {}
 
   get active(): AbortController | undefined { return this.activeRequest; }
@@ -40,6 +42,7 @@ export class TerminalApplication {
 
       let account = await this.enablePlanIfNeeded(await this.chooseAccount());
       await this.selectModel(account);
+      await this.reviewPending();
 
       while (!this.shutdown.aborted) {
         const action = await this.ui.nextAction(this.shutdown);
@@ -63,6 +66,17 @@ export class TerminalApplication {
           case TerminalActionType.LOGOUT:
             this.ui.showLogout(await this.harness.logout(account));
             return 0;
+          case TerminalActionType.REVIEW:
+            await this.reviewPending();
+            break;
+          case TerminalActionType.ACCEPT_ALL:
+            try { await this.harness.edits?.acceptAll(); }
+            catch (error) { this.ui.showError(this.harness.redact(describeError(error))); }
+            break;
+          case TerminalActionType.REJECT_ALL:
+            try { await this.harness.edits?.rejectAll(); }
+            catch (error) { this.ui.showError(this.harness.redact(describeError(error))); }
+            break;
           case TerminalActionType.ACCOUNT:
           case TerminalActionType.LOGIN: {
             const next = action.type === TerminalActionType.ACCOUNT
@@ -136,6 +150,11 @@ export class TerminalApplication {
     } finally {
       this.activeRequest = undefined;
     }
+    await this.reviewPending();
+  }
+
+  private async reviewPending(): Promise<void> {
+    if (this.harness.edits?.active && this.reviewer) await this.reviewer.review(this.harness.edits, this.shutdown);
   }
 
   private requireConversation(): ChatConversation {

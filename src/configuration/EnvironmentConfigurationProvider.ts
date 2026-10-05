@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ConfigurationError } from '../errors/ConfigurationError.ts';
 import type { OpenAIConfiguration } from '../providers/openai/OpenAIConfiguration.ts';
 import type { ChatConfiguration } from './ChatConfiguration.ts';
+import type { EditingConfiguration } from '../editing/EditingConfiguration.ts';
 import type { ConfigurationProvider } from './ConfigurationProvider.ts';
 
 const environmentConfigurationSchema = z.object({
@@ -17,6 +18,14 @@ const environmentConfigurationSchema = z.object({
     falsy: ['0', 'false', 'off'],
   }).default(true),
   CHAT_TRACE_FILE: z.string().trim().optional().transform(value => value || undefined),
+  EDIT_MAX_RAW_PROPOSAL_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
+  EDIT_MAX_CHANGED_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
+  EDIT_MAX_RESULTING_BYTES_PER_FILE: z.coerce.number().int().positive().default(1024 * 1024),
+  EDIT_MAX_FILES: z.coerce.number().int().positive().default(64),
+  EDIT_MAX_TOTAL_HUNKS: z.coerce.number().int().positive().default(256),
+  EDIT_MAX_HUNKS_PER_FILE: z.coerce.number().int().positive().default(64),
+  EDIT_DIFF_BUDGET_MS: z.coerce.number().int().positive().default(1_000),
+  EDIT_MAX_ACTIVE_SESSIONS: z.coerce.number().int().min(1).max(1).default(1),
 }).transform(values => {
   const stateDirectory = values.HARNESS_CHAT_CONFIG_DIR;
   return {
@@ -25,6 +34,18 @@ const environmentConfigurationSchema = z.object({
     chat: {
       instructions: values.CHAT_INSTRUCTIONS,
       timeoutMs: values.CHAT_TIMEOUT_MS,
+    },
+    editing: {
+      maxRawProposalBytes: values.EDIT_MAX_RAW_PROPOSAL_BYTES,
+      maxChangedBytes: values.EDIT_MAX_CHANGED_BYTES,
+      maxResultingBytesPerFile: values.EDIT_MAX_RESULTING_BYTES_PER_FILE,
+      maxFiles: values.EDIT_MAX_FILES,
+      maxTotalHunks: values.EDIT_MAX_TOTAL_HUNKS,
+      maxHunksPerFile: values.EDIT_MAX_HUNKS_PER_FILE,
+      diffBudgetMs: values.EDIT_DIFF_BUDGET_MS,
+      maxActiveSessions: values.EDIT_MAX_ACTIVE_SESSIONS,
+      newFileBom: false,
+      newFileEol: '\n',
     },
     openAI: {
       issuer: 'https://auth.openai.com',
@@ -44,6 +65,7 @@ export class EnvironmentConfigurationProvider implements ConfigurationProvider {
   readonly stateDirectory: string;
   readonly configuredModel: string | undefined;
   readonly chat: ChatConfiguration;
+  readonly editing: EditingConfiguration;
   readonly openAI: OpenAIConfiguration;
   readonly traceEnabled: boolean;
   readonly traceFile: string;
@@ -56,6 +78,7 @@ export class EnvironmentConfigurationProvider implements ConfigurationProvider {
     this.stateDirectory = result.data.stateDirectory;
     this.configuredModel = result.data.configuredModel;
     this.chat = result.data.chat;
+    this.editing = result.data.editing;
     this.openAI = result.data.openAI;
     this.traceEnabled = result.data.traceEnabled;
     this.traceFile = result.data.traceFile;

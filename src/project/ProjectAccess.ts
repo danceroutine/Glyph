@@ -1,8 +1,10 @@
-import { readdir, readFile, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { zodResponsesFunction } from 'openai/helpers/zod';
-import type { NamespaceTool } from 'openai/resources/responses/responses';
 import { z } from 'zod';
+import type { ToolDefinition } from '../tools/ToolDefinition.ts';
+import { ToolInputKind } from '../tools/ToolInputKind.ts';
+import { FileSystemWorkspaceTextStore } from '../workspace/FileSystemWorkspaceTextStore.ts';
+import type { WorkspaceTextStore } from '../workspace/WorkspaceTextStore.ts';
+import { EditError } from '../editing/EditError.ts';
+import { EditFailureReason } from '../editing/EditFailureReason.ts';
 import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 
@@ -51,84 +53,58 @@ const readProjectFileArguments = z.object({
 
 type ReadArguments = z.infer<typeof readProjectFileArguments>;
 
-const listProjectFilesTool = zodResponsesFunction({
-  name: ProjectToolName.LIST_FILES,
-  description: 'List the files in the current project. Use this to discover relevant files before reading them.',
-  parameters: listProjectFilesArguments,
-});
-
-const readProjectFileTool = zodResponsesFunction({
-  name: ProjectToolName.READ_FILE,
-  description: 'Read a UTF-8 text file inside the current project. Paths are relative to the project root. Pass null for both line bounds to read from the beginning.',
-  parameters: readProjectFileArguments,
-});
-
-// ChatGPT-plan inference requires function tools to be grouped in a namespace
-// (or introduced through an additional_tools input item).
-const PROJECT_TOOLS: NamespaceTool[] = [{
-  type: 'namespace',
-  name: ProjectToolNamespace.PROJECT,
-  description: 'Read-only tools for discovering and reading files in the current project.',
-  tools: [listProjectFilesTool, readProjectFileTool],
-}];
+const definitions: readonly ToolDefinition[] = [
+  {
+    namespace: ProjectToolNamespace.PROJECT,
+    name: ProjectToolName.LIST_FILES,
+    description: 'List the files in the current project. Use this to discover relevant files before reading them.',
+    inputKind: ToolInputKind.JSON,
+    parameters: jsonSchema(listProjectFilesArguments),
+  },
+  {
+    namespace: ProjectToolNamespace.PROJECT,
+    name: ProjectToolName.READ_FILE,
+    description: 'Read an exact UTF-8 text snapshot inside the project, including its revision, BOM state, and per-line EOL metadata. Paths are project-relative. Pass null for both line bounds to read from the beginning. Reuse the revision in edit proposals.',
+    inputKind: ToolInputKind.JSON,
+    parameters: jsonSchema(readProjectFileArguments),
+  },
+];
 
 export class ProjectAccess {
-  readonly tools = PROJECT_TOOLS;
-  private readonly root: string;
+  readonly definitions = definitions;
   private readonly options: ResolvedProjectAccessOptions;
+  private readonly workspace: WorkspaceTextStore;
 
-  constructor(root: string, options: ProjectAccessOptions = {}) {
-    this.root = resolve(root);
+  constructor(root: string, options: ProjectAccessOptions = {}, workspace?: WorkspaceTextStore) {
     this.options = projectAccessOptionsSchema.parse(options);
+    this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, this.options);
   }
 
   async execute(name: string, rawArguments: string): Promise<string> {
     try {
       switch (name) {
         case ProjectToolName.LIST_FILES:
-          listProjectFilesTool.$parseRaw(rawArguments);
+          listProjectFilesArguments.parse(JSON.parse(rawArguments));
           return JSON.stringify(await this.listFiles());
         case ProjectToolName.READ_FILE:
-          return JSON.stringify(await this.readFile(readProjectFileTool.$parseRaw(rawArguments)));
+          return JSON.stringify(await this.readFile(readProjectFileArguments.parse(JSON.parse(rawArguments))));
         default:
           throw new Error(`Unknown project tool: ${name}`);
       }
     } catch (error) {
       return JSON.stringify({
-        error: error instanceof Error ? error.message : 'Project tool failed.',
+        error: error instanceof EditError
+          ? error.toJSON()
+          : {
+            code: error instanceof z.ZodError || error instanceof SyntaxError ? EditFailureReason.MALFORMED : 'PROJECT_ACCESS_FAILED',
+            message: error instanceof Error ? error.message : 'Project tool failed.',
+          },
       });
     }
   }
 
   private async listFiles(): Promise<{ files: string[]; truncated: boolean }> {
-    const root = await realpath(this.root);
-    const files: string[] = [];
-    let truncated = false;
-
-    const visit = async (directory: string): Promise<void> => {
-      const entries = await readdir(directory, { withFileTypes: true });
-      entries.sort((left, right) => left.name.localeCompare(right.name));
-
-      for (const entry of entries) {
-        if (files.length >= this.options.maxFiles) {
-          truncated = true;
-          return;
-        }
-        if (entry.isSymbolicLink()) continue;
-
-        const absolutePath = resolve(directory, entry.name);
-        if (entry.isDirectory()) {
-          if (!this.options.ignoredDirectories.includes(entry.name)) await visit(absolutePath);
-          if (truncated) return;
-        } else if (entry.isFile()) {
-          const relativePath = relative(root, absolutePath).split(sep).join('/');
-          if (!this.isExcludedFile(relativePath)) files.push(relativePath);
-        }
-      }
-    };
-
-    await visit(root);
-    return { files, truncated };
+    return this.workspace.list(this.options.maxFiles);
   }
 
   private async readFile({
@@ -142,20 +118,17 @@ export class ProjectAccess {
     totalLines: number;
     truncated: boolean;
     content: string;
+    revision: string;
+    bom: boolean;
+    lines: { number: number; content: string; eol: '' | '\n' | '\r\n' | '\r' }[];
   }> {
     const startLine = requestedStart ?? 1;
-    const { absolutePath, relativePath } = await this.resolveFile(path);
-    const file = await stat(absolutePath);
-    if (!file.isFile()) throw new Error('Path does not refer to a regular file.');
+    const snapshot = await this.workspace.read(path);
     // TODO: Read oversized files incrementally so line-range requests do not require loading the whole file.
-    if (file.size > this.options.maxFileBytes) {
+    if (snapshot.byteLength > this.options.maxFileBytes) {
       throw new Error(`File exceeds the ${this.options.maxFileBytes}-byte read limit.`);
     }
-
-    const content = await readFile(absolutePath, 'utf8');
-    if (content.includes('\0')) throw new Error('Binary files cannot be read.');
-
-    const lines = content.split(/\r?\n/);
+    const lines = toLines(snapshot.text);
     const endLineLimit = requestedEnd ?? startLine + this.options.maxLinesPerRead - 1;
     if (endLineLimit < startLine) throw new Error('end_line must be greater than or equal to start_line.');
     if (endLineLimit - startLine + 1 > this.options.maxLinesPerRead) {
@@ -165,47 +138,39 @@ export class ProjectAccess {
     const startIndex = startLine - 1;
     const endLine = Math.min(endLineLimit, lines.length);
     const selected = startIndex >= lines.length ? [] : lines.slice(startIndex, endLine);
-    const numbered = selected.map((line, index) => `${startLine + index}: ${line}`).join('\n');
+    const numbered = selected.map(line => `${line.number}: ${line.content}`).join('\n');
 
     return {
-      path: relativePath,
+      path: snapshot.path,
       startLine,
       endLine,
       totalLines: lines.length,
       truncated: endLine < lines.length,
       content: numbered,
+      revision: snapshot.revision,
+      bom: snapshot.bom,
+      lines: selected,
     };
-  }
-
-  private async resolveFile(input: string): Promise<{ absolutePath: string; relativePath: string }> {
-    if (isAbsolute(input)) throw new Error('Path must be relative to the project root.');
-
-    const root = await realpath(this.root);
-    const candidate = resolve(root, input);
-    assertInsideRoot(root, candidate);
-    const absolutePath = await realpath(candidate);
-    assertInsideRoot(root, absolutePath);
-
-    const relativePath = relative(root, absolutePath).split(sep).join('/');
-    if (relativePath.split('/').some(part => this.options.ignoredDirectories.includes(part))) {
-      throw new Error('That path is excluded from project access.');
-    }
-    if (this.isExcludedFile(relativePath)) throw new Error('That file is excluded from project access.');
-    return { absolutePath, relativePath };
-  }
-
-  private isExcludedFile(path: string): boolean {
-    const name = path.split('/').at(-1) ?? '';
-    if (this.options.allowedFileNames.includes(name)) return false;
-    if (this.options.sensitiveFileNames.includes(name)) return true;
-    if (this.options.sensitiveFilePrefixes.some(prefix => name.startsWith(prefix))) return true;
-    return this.options.sensitiveFileExtensions.some(extension => name.endsWith(extension));
   }
 }
 
-function assertInsideRoot(root: string, candidate: string): void {
-  const pathFromRoot = relative(root, candidate);
-  if (pathFromRoot === '..' || pathFromRoot.startsWith(`..${sep}`) || isAbsolute(pathFromRoot)) {
-    throw new Error('Path escapes the project root.');
+function jsonSchema(schema: z.ZodType): Record<string, unknown> {
+  const { $schema: _, ...parameters } = z.toJSONSchema(schema, { target: 'draft-7' });
+  return parameters;
+}
+
+function toLines(text: string): { number: number; content: string; eol: '' | '\n' | '\r\n' | '\r' }[] {
+  const lines: { number: number; content: string; eol: '' | '\n' | '\r\n' | '\r' }[] = [];
+  let start = 0;
+  let number = 1;
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (character !== '\n' && character !== '\r') continue;
+    const eol = character === '\r' && text[index + 1] === '\n' ? '\r\n' : character;
+    lines.push({ number: number++, content: text.slice(start, index), eol });
+    if (eol === '\r\n') index++;
+    start = index + 1;
   }
+  lines.push({ number, content: text.slice(start), eol: '' });
+  return lines;
 }

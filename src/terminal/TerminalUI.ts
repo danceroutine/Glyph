@@ -1,6 +1,4 @@
 import { spawn } from 'node:child_process';
-import { createInterface } from 'node:readline/promises';
-import type { Interface } from 'node:readline/promises';
 import { stripVTControlCharacters } from 'node:util';
 import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
 import type { AuthorizationRequest } from '../providers/openai/auth/AuthorizationRequest.ts';
@@ -13,8 +11,9 @@ import type { Usage } from '../chat/Usage.ts';
 import { ToolActivityPhase } from '../chat/ToolActivityPhase.ts';
 import { AccountSelectionType } from './AccountSelectionType.ts';
 import { TerminalActionType } from './TerminalActionType.ts';
+import { TerminalInput } from './TerminalInput.ts';
 
-const TERMINAL_HELP = `Commands: /help /reset /usage /trace [on|off] /account /login /logout /exit
+const TERMINAL_HELP = `Commands: /help /reset /usage /trace [on|off] /review /accept-all /reject-all /account /login /logout /exit
 Ctrl+C cancels a response; at a prompt it exits.
 Subscription authentication only. API-key environment variables are ignored.`;
 
@@ -28,6 +27,9 @@ type TerminalAction =
   | { type: TerminalActionType.ACCOUNT }
   | { type: TerminalActionType.LOGIN }
   | { type: TerminalActionType.LOGOUT }
+  | { type: TerminalActionType.REVIEW }
+  | { type: TerminalActionType.ACCEPT_ALL }
+  | { type: TerminalActionType.REJECT_ALL }
   | { type: TerminalActionType.UNKNOWN_COMMAND };
 
 type AccountSelection =
@@ -37,32 +39,30 @@ type AccountSelection =
 export class TerminalUI implements ChatResponseStream {
   static readonly help = TERMINAL_HELP;
 
-  private readonly reader: Interface;
-  private closed = false;
+  readonly input: TerminalInput;
 
   constructor(
-    input: NodeJS.ReadableStream = process.stdin,
+    input: TerminalInput | NodeJS.ReadableStream = process.stdin,
     private readonly output: NodeJS.WritableStream = process.stdout,
     private readonly errorOutput: NodeJS.WritableStream = process.stderr,
   ) {
-    this.reader = createInterface({ input, output });
-    this.reader.on('close', () => { this.closed = true; });
+    this.input = input instanceof TerminalInput ? input : new TerminalInput(input as NodeJS.ReadableStream & { resume(): void; pause(): void }, output);
   }
 
   on(event: 'SIGINT', listener: () => void): void {
-    this.reader.on(event, listener);
+    this.input.on(event, listener);
   }
 
   off(event: 'SIGINT', listener: () => void): void {
-    this.reader.off(event, listener);
+    this.input.off(event, listener);
   }
 
   onClose(listener: () => void): void {
-    this.reader.on('close', listener);
+    this.input.on('close', listener);
   }
 
   close(): void {
-    if (!this.closed) this.reader.close();
+    this.input.close();
   }
 
   showHelp(): void {
@@ -147,6 +147,9 @@ ${TERMINAL_HELP}`);
       case '/account': return { type: TerminalActionType.ACCOUNT };
       case '/login': return { type: TerminalActionType.LOGIN };
       case '/logout': return { type: TerminalActionType.LOGOUT };
+      case '/review': return { type: TerminalActionType.REVIEW };
+      case '/accept-all': return { type: TerminalActionType.ACCEPT_ALL };
+      case '/reject-all': return { type: TerminalActionType.REJECT_ALL };
       default: return input.startsWith('/')
         ? { type: TerminalActionType.UNKNOWN_COMMAND }
         : { type: TerminalActionType.SEND, prompt: input };
@@ -204,8 +207,7 @@ ${TERMINAL_HELP}`);
   }
 
   private async ask(prompt: string, signal: AbortSignal): Promise<string> {
-    if (this.closed) throw new Error('Session closed.');
-    return this.reader.question(prompt, { signal });
+    return this.input.question(prompt, signal);
   }
 
   private line(value: string): void {

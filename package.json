@@ -10,15 +10,19 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning --experimental-transform-types --env-file-if-exists=.env src/cli.ts",
     "check": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "pnpm test:unit && pnpm test:e2e",
+    "test:unit": "vitest run --exclude='**/*.e2e.test.ts'",
+    "test:e2e": "vitest run --pool=forks --maxWorkers=1 src/application/tests/EditingLoop.e2e.test.ts src/terminal/tests/TerminalEditing.e2e.test.ts",
     "test:watch": "vitest",
     "todo:dev": "pnpm --dir examples/todo-app dev",
     "todo:build": "pnpm --dir examples/todo-app build",
     "todo:preview": "pnpm --dir examples/todo-app preview"
   },
   "dependencies": {
+    "diff": "9.0.0",
     "jose": "^6.2.12",
     "openai": "7.23.0",
+    "wrap-ansi": "9.0.2",
     "zod": "^4.1.12"
   },
   "devDependencies": {

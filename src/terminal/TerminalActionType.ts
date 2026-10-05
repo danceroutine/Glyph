@@ -8,5 +8,8 @@ export enum TerminalActionType {
   ACCOUNT = 'account',
   LOGIN = 'login',
   LOGOUT = 'logout',
+  REVIEW = 'review',
+  ACCEPT_ALL = 'accept-all',
+  REJECT_ALL = 'reject-all',
   UNKNOWN_COMMAND = 'unknown-command',
 }
