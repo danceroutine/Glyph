@@ -117,6 +117,17 @@ it('compiles a strict contextual patch to the same proposed bytes as structured 
   expect(proposal.files[0]?.proposed.text).toBe('one\nTWO\nthree\n');
 });
 
+it('accepts one final line ending after the end delimiter', async () => {
+  const { service } = await fixture('base');
+
+  await expect(service.proposePatch('*** Begin Patch\n*** Add File: lf.txt\n+content\n*** End Patch\n'))
+    .resolves.toMatchObject({ files: [{ targetPath: 'lf.txt' }] });
+  await expect(service.proposePatch('*** Begin Patch\r\n*** Add File: crlf.txt\r\n+content\r\n*** End Patch\r\n'))
+    .resolves.toMatchObject({ files: [{ targetPath: 'crlf.txt' }] });
+  await expect(service.proposePatch('*** Begin Patch\n*** Add File: extra.txt\n+content\n*** End Patch\n\n'))
+    .rejects.toMatchObject({ reason: EditFailureReason.MALFORMED });
+});
+
 it('rejects repeated contextual matches as ambiguous and reports candidate lines', async () => {
   const { service, workspace } = await fixture('same\nsame\n');
   const base = await workspace.read('file.txt');

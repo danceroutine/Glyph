@@ -113,7 +113,10 @@ it('streams only the requested reasoning summary and not raw reasoning text', as
       output: [
         {
           type: 'reasoning', id: 'rs_summary', encrypted_content: 'opaque-summary-state',
-          summary: [{ type: 'summary_text', text: 'Inspected the project before answering.' }],
+          summary: [
+            { type: 'summary_text', text: 'Inspected the project.' },
+            { type: 'summary_text', text: 'Prepared the answer.' },
+          ],
         },
         completed.response.output[1],
       ],
@@ -126,11 +129,11 @@ it('streams only the requested reasoning summary and not raw reasoning text', as
     },
     {
       type: 'response.reasoning_summary_text.delta', item_id: 'rs_summary', output_index: 0,
-      summary_index: 0, delta: 'Inspected the project ', sequence_number: 2,
+      summary_index: 0, delta: 'Inspected the project.', sequence_number: 2,
     },
     {
       type: 'response.reasoning_summary_text.delta', item_id: 'rs_summary', output_index: 0,
-      summary_index: 0, delta: 'before answering.', sequence_number: 3,
+      summary_index: 1, delta: 'Prepared the answer.', sequence_number: 3,
     },
     summarized,
   ])]);
@@ -143,7 +146,7 @@ it('streams only the requested reasoning summary and not raw reasoning text', as
     onText: delta => { text += delta; },
   });
 
-  expect(summary).toBe('Inspected the project before answering.');
+  expect(summary).toBe('Inspected the project.\n\nPrepared the answer.');
   expect(summary).not.toContain('private reasoning');
   expect(text).toBe('Hello');
 });

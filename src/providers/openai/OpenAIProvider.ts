@@ -132,6 +132,18 @@ export class OpenAIProvider implements ChatProvider {
           reportedReasoningSummary += delta;
           options.onReasoningSummary?.(delta);
         };
+        const beginReasoningSummaryPart = (key: string): void => {
+          if (reasoningSummaryParts.has(key)) return;
+          if (reasoningSummaryParts.size > 0) reportReasoningSummary('\n\n');
+          reasoningSummaryParts.set(key, '');
+        };
+        const completeReasoningSummaryPart = (key: string, text: string): void => {
+          beginReasoningSummaryPart(key);
+          const streamedPart = reasoningSummaryParts.get(key) ?? '';
+          if (!text.startsWith(streamedPart)) return;
+          reasoningSummaryParts.set(key, text);
+          reportReasoningSummary(text.slice(streamedPart.length));
+        };
         for await (const event of stream) {
           trace('response.stream_event', event, round);
           switch (event.type) {
@@ -142,18 +154,16 @@ export class OpenAIProvider implements ChatProvider {
               break;
             case 'response.reasoning_summary_text.delta': {
               const key = `${event.item_id}:${event.summary_index}`;
+              beginReasoningSummaryPart(key);
               reasoningSummaryParts.set(key, `${reasoningSummaryParts.get(key) ?? ''}${event.delta}`);
               reportReasoningSummary(event.delta);
               break;
             }
+            case 'response.reasoning_summary_text.done':
+              completeReasoningSummaryPart(`${event.item_id}:${event.summary_index}`, event.text);
+              break;
             case 'response.reasoning_summary_part.done': {
-              const key = `${event.item_id}:${event.summary_index}`;
-              const streamedPart = reasoningSummaryParts.get(key) ?? '';
-              if (event.part.text.startsWith(streamedPart)) {
-                const missingSummary = event.part.text.slice(streamedPart.length);
-                reasoningSummaryParts.set(key, event.part.text);
-                reportReasoningSummary(missingSummary);
-              }
+              completeReasoningSummaryPart(`${event.item_id}:${event.summary_index}`, event.part.text);
               break;
             }
             case 'response.completed':
@@ -175,6 +185,12 @@ export class OpenAIProvider implements ChatProvider {
 
         totalUsage = addUsage(totalUsage, usageFrom(response));
         const output = mergeOutputItems(response.output, completedOutputItems);
+        for (const item of output) {
+          if (item.type !== 'reasoning') continue;
+          item.summary.forEach((part, index) => {
+            completeReasoningSummaryPart(`${item.id}:${index}`, part.text);
+          });
+        }
         trace('response.completed', {
           terminalResponse: response,
           collectedOutput: output,
@@ -194,11 +210,6 @@ export class OpenAIProvider implements ChatProvider {
           completedReasoningSummary,
           toolCalls: calls,
         }, round);
-        // A few compatible routes omit summary delta events but retain the
-        // requested summary on the completed reasoning item.
-        if (!reportedReasoningSummary && completedReasoningSummary) {
-          reportReasoningSummary(completedReasoningSummary);
-        }
         // Completed output items are authoritative. Some routes omit text
         // deltas even though the finished message item has visible content.
         if (completedText.startsWith(streamedText)) {

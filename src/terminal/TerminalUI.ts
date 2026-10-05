@@ -17,8 +17,20 @@ const TERMINAL_HELP = `Commands: /help /reset /usage /trace [on|off] /review /ac
 Ctrl+C cancels a response; at a prompt it exits.
 Subscription authentication only. API-key environment variables are ignored.`;
 
-const SUBDUED_TEXT = '\u001b[2;90m';
-const RESET_TEXT = '\u001b[0m';
+const TerminalColor = {
+  USER_PROMPT: '\u001b[1;36m',
+  ASSISTANT_LABEL: '\u001b[1;32m',
+  ASSISTANT_TEXT: '\u001b[32m',
+  THINKING: '\u001b[2;90m',
+  TOOL_STARTED: '\u001b[33m',
+  TOOL_COMPLETED: '\u001b[32m',
+  TOOL_FAILED: '\u001b[1;31m',
+  HEADING: '\u001b[1;36m',
+  METADATA: '\u001b[2m',
+  WARNING: '\u001b[33m',
+  ERROR: '\u001b[1;31m',
+  RESET: '\u001b[0m',
+} as const;
 
 type TerminalAction =
   | { type: TerminalActionType.SEND; prompt: string }
@@ -74,7 +86,7 @@ export class TerminalUI implements ChatResponseStream {
   }
 
   showWelcome(projectRoot: string, logPath: string | undefined, traceEnabled: boolean): void {
-    this.line(`Harness Chat | Continue with ChatGPT
+    this.line(`${this.styled('Harness Chat | Continue with ChatGPT', TerminalColor.HEADING)}
 Project: ${clean(projectRoot)}
 Uses your plan allowance and any credits you authorize in ChatGPT settings.
 Usage controls: https://chatgpt.com/settings/usage
@@ -89,7 +101,7 @@ ${TERMINAL_HELP}`);
 
   async chooseAccount(accounts: readonly OpenAIAccount[], signal: AbortSignal): Promise<AccountSelection> {
     for (;;) {
-      this.line('\nChatGPT accounts:');
+      this.line(`\n${this.styled('ChatGPT accounts', TerminalColor.HEADING)}`);
       accounts.forEach((account, index) => {
         this.line(`${index + 1}. ${clean(account.email)} [${clean(account.clientId)}]${account.tokens ? '' : ' (signed out)'}`);
       });
@@ -126,7 +138,7 @@ ${TERMINAL_HELP}`);
   }
 
   async authorize({ url }: AuthorizationRequest): Promise<void> {
-    this.line('\nContinue with ChatGPT\nAuthorize Harness Chat to use your ChatGPT plan.\n');
+    this.line(`\n${this.styled('Continue with ChatGPT', TerminalColor.HEADING)}\nAuthorize Harness Chat to use your ChatGPT plan.\n`);
     this.line(`If the browser does not open, visit:\n${clean(url)}\n`);
 
     if (process.platform === 'win32') return;
@@ -137,7 +149,7 @@ ${TERMINAL_HELP}`);
   }
 
   async nextAction(signal: AbortSignal): Promise<TerminalAction> {
-    const input = (await this.ask('you> ', signal)).trim();
+    const input = (await this.ask(this.styled('you> ', TerminalColor.USER_PROMPT), signal)).trim();
     switch (input) {
       case '': return this.nextAction(signal);
       case '/exit':
@@ -167,12 +179,12 @@ ${TERMINAL_HELP}`);
   push(part: ChatResponsePart): void {
     if (part.type === ChatResponsePartType.TEXT) {
       this.openResponseSection(ChatResponsePartType.TEXT, 'assistant> ');
-      this.output.write(clean(part.value));
+      this.output.write(this.styled(clean(part.value), TerminalColor.ASSISTANT_TEXT));
       return;
     }
     if (part.type === ChatResponsePartType.REASONING_SUMMARY) {
       this.openResponseSection(ChatResponsePartType.REASONING_SUMMARY, 'thinking> ');
-      this.output.write(this.subdued(clean(part.value)));
+      this.output.write(this.styled(clean(part.value), TerminalColor.THINKING));
       return;
     }
     if (part.type === ChatResponsePartType.DIAGNOSTIC) {
@@ -180,12 +192,13 @@ ${TERMINAL_HELP}`);
       this.errorLine(clean(part.message));
       return;
     }
-    this.output.write(`${this.responseSection === undefined ? '' : '\n'}${clean(formatToolActivity(part.activity))}\n`);
+    this.writeToolActivity(part.activity);
     this.responseSection = undefined;
   }
 
   showTurnCompleted(durationMs: number, usage: Usage | null): void {
-    this.line(`\n[${(durationMs / 1000).toFixed(1)}s | ${usage ? formatUsage(usage) : 'usage unavailable'}]\n`);
+    const summary = `[${(durationMs / 1000).toFixed(1)}s | ${usage ? formatUsage(usage) : 'usage unavailable'}]`;
+    this.line(`\n${this.styled(summary, TerminalColor.METADATA)}\n`);
     this.responseSection = undefined;
   }
 
@@ -195,19 +208,23 @@ ${TERMINAL_HELP}`);
   }
 
   showActive(account: OpenAIAccount, model: Model): void {
-    this.line(`\nActive: ${clean(account.email)} [${clean(account.clientId)}]\nModel: ${clean(model.slug)} | Billing: ChatGPT plan\n`);
+    this.line(`\n${this.styled('Active', TerminalColor.HEADING)}  ${clean(account.email)} [${clean(account.clientId)}]
+${this.styled('Model', TerminalColor.HEADING)}   ${clean(model.slug)}  ${this.styled('ChatGPT plan', TerminalColor.METADATA)}\n`);
   }
 
   showConversationReset(): void { this.line('Conversation cleared.'); }
   showConversationReplaced(): void { this.line('Started a new conversation for the selected account.'); }
-  showUnknownCommand(): void { this.line('Unknown command. Use /help.'); }
+  showUnknownCommand(): void { this.line(this.styled('Unknown command. Use /help.', TerminalColor.WARNING)); }
 
   showUsage(usage: Usage): void {
     this.line(`${formatUsage(usage)}\nCompleted requests only. Plan/credit limits: https://chatgpt.com/settings/usage`);
   }
 
   showTrace(enabled: boolean, path: string | undefined): void {
-    this.line(enabled ? `Full provider tracing is on: ${path ? clean(path) : 'logger destination unavailable'}` : 'Full provider tracing is off.');
+    const message = enabled
+      ? `Full provider tracing is on: ${path ? clean(path) : 'logger destination unavailable'}`
+      : 'Full provider tracing is off.';
+    this.line(this.styled(message, TerminalColor.METADATA));
   }
 
   showLogout(revoked: boolean): void {
@@ -229,7 +246,7 @@ ${TERMINAL_HELP}`);
   }
 
   private errorLine(value: string): void {
-    this.errorOutput.write(`${value}\n`);
+    this.errorOutput.write(`${this.styled(value, TerminalColor.ERROR, this.errorOutput)}\n`);
   }
 
   private openResponseSection(
@@ -237,15 +254,35 @@ ${TERMINAL_HELP}`);
     label: string,
   ): void {
     if (this.responseSection === section) return;
-    if (this.responseSection !== undefined) this.output.write('\n');
-    this.output.write(section === ChatResponsePartType.REASONING_SUMMARY ? this.subdued(label) : label);
+    if (this.responseSection !== undefined) this.output.write('\n\n');
+    const color = section === ChatResponsePartType.REASONING_SUMMARY
+      ? TerminalColor.THINKING
+      : TerminalColor.ASSISTANT_LABEL;
+    this.output.write(this.styled(label, color));
     this.responseSection = section;
   }
 
-  private subdued(value: string): string {
-    const terminal = this.output as NodeJS.WritableStream & { isTTY?: boolean };
+  private writeToolActivity(activity: ToolActivity): void {
+    const prefix = this.responseSection === undefined ? '' : '\n\n';
+    const name = activity.namespace ? `${activity.namespace}.${activity.name}` : activity.name;
+    if (activity.phase === ToolActivityPhase.STARTED) {
+      const label = this.styled(clean(`[tool> ${name}]`), TerminalColor.TOOL_STARTED);
+      const argumentsText = clean(activity.arguments).trimEnd();
+      const details = argumentsText.includes('\n')
+        ? `\n${this.styled(indent(argumentsText), TerminalColor.METADATA)}`
+        : argumentsText ? ` ${this.styled(argumentsText, TerminalColor.METADATA)}` : '';
+      this.output.write(`${prefix}${label}${details}\n`);
+      return;
+    }
+    const result = formatToolResult(activity);
+    const color = result.failed ? TerminalColor.TOOL_FAILED : TerminalColor.TOOL_COMPLETED;
+    this.output.write(`${prefix}${this.styled(clean(`[tool< ${name} ${result.message}]`), color)}\n`);
+  }
+
+  private styled(value: string, color: string, destination: NodeJS.WritableStream = this.output): string {
+    const terminal = destination as NodeJS.WritableStream & { isTTY?: boolean };
     return terminal.isTTY === true && process.env.NO_COLOR === undefined
-      ? `${SUBDUED_TEXT}${value}${RESET_TEXT}`
+      ? `${color}${value}${TerminalColor.RESET}`
       : value;
   }
 }
@@ -258,14 +295,39 @@ function formatUsage(usage: Usage): string {
   return `input ${usage.inputTokens} (cached ${usage.cachedInputTokens}) | output ${usage.outputTokens} (reasoning ${usage.reasoningTokens}) | total ${usage.totalTokens}`;
 }
 
-function formatToolActivity(activity: ToolActivity): string {
-  const name = activity.namespace ? `${activity.namespace}.${activity.name}` : activity.name;
-  if (activity.phase === ToolActivityPhase.STARTED) return `[tool> ${name} ${activity.arguments}]`;
+function formatToolResult(activity: ToolActivity): { message: string; failed: boolean } {
   try {
     const result: unknown = JSON.parse(activity.output ?? '');
     if (typeof result === 'object' && result !== null && 'error' in result) {
-      return `[tool< ${name} error: ${String((result as { error: unknown }).error)}]`;
+      return { message: `error: ${formatToolError((result as { error: unknown }).error)}`, failed: true };
     }
   } catch { /* Non-JSON output is still a successful tool result. */ }
-  return `[tool< ${name} completed]`;
+  return { message: 'completed', failed: false };
+}
+
+function indent(value: string): string {
+  return value.split('\n').map(line => `  ${line}`).join('\n');
+}
+
+function formatToolError(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (!error || typeof error !== 'object' || Array.isArray(error)) return formatToolErrorValue(error);
+  const details = error as Record<string, unknown>;
+  const code = typeof details.code === 'string' ? details.code : undefined;
+  const message = typeof details.message === 'string' ? details.message : undefined;
+  const context = Object.entries(details)
+    .filter(([key]) => key !== 'code' && key !== 'message')
+    .map(([key, value]) => `${key}=${formatToolErrorValue(value)}`);
+  const description = [code, message].filter(Boolean).join(': ') || formatToolErrorValue(error);
+  return context.length > 0 ? `${description} (${context.join('; ')})` : description;
+}
+
+function formatToolErrorValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(formatToolErrorValue).join(', ');
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return 'Unprintable error details';
+  }
 }

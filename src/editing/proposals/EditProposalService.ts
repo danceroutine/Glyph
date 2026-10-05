@@ -363,7 +363,8 @@ function validatePathGraph(files: StructuredFile[], caseSensitive: boolean): voi
 }
 
 function parsePatch(patch: string): PatchFile[] {
-  const lines = patch.replace(/\r\n/g, '\n').split('\n');
+  const lines = patch.replace(/\r\n|\r/g, '\n').split('\n');
+  if (lines.at(-1) === '') lines.pop();
   if (lines.shift() !== '*** Begin Patch' || lines.pop() !== '*** End Patch') {
     throw new EditError(EditFailureReason.MALFORMED, 'Patch must start with *** Begin Patch and end with *** End Patch.');
   }
