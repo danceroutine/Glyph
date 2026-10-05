@@ -43,6 +43,7 @@ export class ChatConversation {
       result = await this.provider.send(prompt, {
         signal,
         onText: value => response.push({ type: ChatResponsePartType.TEXT, value }),
+        onReasoningSummary: value => response.push({ type: ChatResponsePartType.REASONING_SUMMARY, value }),
         onToolActivity: activity => response.push({ type: ChatResponsePartType.TOOL, activity }),
         onTrace: entry => { if (this.traceEnabled) trace.push(entry); },
       });

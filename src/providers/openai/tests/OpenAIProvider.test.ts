@@ -77,6 +77,7 @@ it('streams split Unicode, reports usage, replays full state, and resets', async
   expect(requests[0]?.stream).toBe(true);
   expect('max_output_tokens' in (requests[0] ?? {})).toBe(false);
   expect(requests[0]?.include).toEqual(['reasoning.encrypted_content']);
+  expect(requests[0]?.reasoning).toEqual({ summary: 'auto' });
   expect(requests[0]?.tools).toEqual([
     expect.objectContaining({
       type: 'namespace',
@@ -102,6 +103,74 @@ it('falls back to completed output when the stream omits text deltas', async () 
   await provider.send('hello', { ...options(), onText: delta => { text += delta; } });
 
   expect(text).toBe('Hello');
+});
+
+it('streams only the requested reasoning summary and not raw reasoning text', async () => {
+  const summarized = {
+    type: 'response.completed',
+    response: {
+      ...completed.response,
+      output: [
+        {
+          type: 'reasoning', id: 'rs_summary', encrypted_content: 'opaque-summary-state',
+          summary: [{ type: 'summary_text', text: 'Inspected the project before answering.' }],
+        },
+        completed.response.output[1],
+      ],
+    },
+  };
+  const { provider } = harness([() => sse([
+    {
+      type: 'response.reasoning_text.delta', item_id: 'rs_summary', output_index: 0,
+      content_index: 0, delta: 'private reasoning', sequence_number: 1,
+    },
+    {
+      type: 'response.reasoning_summary_text.delta', item_id: 'rs_summary', output_index: 0,
+      summary_index: 0, delta: 'Inspected the project ', sequence_number: 2,
+    },
+    {
+      type: 'response.reasoning_summary_text.delta', item_id: 'rs_summary', output_index: 0,
+      summary_index: 0, delta: 'before answering.', sequence_number: 3,
+    },
+    summarized,
+  ])]);
+  let summary = '';
+  let text = '';
+
+  await provider.send('hello', {
+    ...options(),
+    onReasoningSummary: delta => { summary += delta; },
+    onText: delta => { text += delta; },
+  });
+
+  expect(summary).toBe('Inspected the project before answering.');
+  expect(summary).not.toContain('private reasoning');
+  expect(text).toBe('Hello');
+});
+
+it('falls back to the completed reasoning summary when summary deltas are omitted', async () => {
+  const summarized = {
+    type: 'response.completed',
+    response: {
+      ...completed.response,
+      output: [
+        {
+          type: 'reasoning', id: 'rs_summary', encrypted_content: 'opaque-summary-state',
+          summary: [{ type: 'summary_text', text: 'Used the completed summary.' }],
+        },
+        completed.response.output[1],
+      ],
+    },
+  };
+  const { provider } = harness([() => sse([summarized])]);
+  let summary = '';
+
+  await provider.send('hello', {
+    ...options(),
+    onReasoningSummary: delta => { summary += delta; },
+  });
+
+  expect(summary).toBe('Used the completed summary.');
 });
 
 it('traces the complete provider lifecycle without exposing the access token', async () => {

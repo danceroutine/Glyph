@@ -57,6 +57,7 @@ class FakeProvider implements ChatProvider {
       phase: ToolActivityPhase.STARTED, namespace: 'project', name: 'read_project_file',
       callId: 'call', arguments: '{}',
     });
+    options.onReasoningSummary?.('Looked up the relevant project context.');
     options.onText('answer');
     return {
       responseId: 'response',
@@ -103,6 +104,7 @@ describe(HarnessService, () => {
       expect(providers.create).toHaveBeenCalledWith('model-a', expect.any(Function));
       expect(parts).toEqual([
         expect.objectContaining({ type: ChatResponsePartType.TOOL }),
+        { type: ChatResponsePartType.REASONING_SUMMARY, value: 'Looked up the relevant project context.' },
         { type: ChatResponsePartType.TEXT, value: 'answer' },
       ]);
       expect(result.responseId).toBe('response');

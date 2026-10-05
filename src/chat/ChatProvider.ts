@@ -9,6 +9,8 @@ export interface ChatProvider {
   send(text: string, options: {
     signal: AbortSignal;
     onText: (delta: string) => void;
+    /** Receives provider-authored summaries, never a model's raw hidden reasoning. */
+    onReasoningSummary?: (delta: string) => void;
     onTrace?: (entry: ProviderTraceEntry) => void;
     onToolActivity?: (activity: ToolActivity) => void;
   }): Promise<TurnResult>;

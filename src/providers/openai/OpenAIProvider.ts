@@ -42,6 +42,7 @@ export class OpenAIProvider implements ChatProvider {
   async send(text: string, options: {
     signal: AbortSignal;
     onText: (delta: string) => void;
+    onReasoningSummary?: (delta: string) => void;
     onTrace?: (entry: ProviderTraceEntry) => void;
     onToolActivity?: (activity: ToolActivity) => void;
   }): Promise<TurnResult> {
@@ -104,6 +105,8 @@ export class OpenAIProvider implements ChatProvider {
           store: false,
           tools: toOpenAITools(this.tools),
           parallel_tool_calls: false,
+          // Reasoning summaries are model-authored explanations, not raw chain of thought.
+          reasoning: { summary: 'auto' },
           // Preserve opaque reasoning state for stateless multi-turn reasoning models.
           include: ['reasoning.encrypted_content'],
         } satisfies ResponseCreateParamsStreaming;
@@ -122,6 +125,13 @@ export class OpenAIProvider implements ChatProvider {
         let response: Response | undefined;
         const completedOutputItems = new Map<number, ResponseOutputItem>();
         let streamedText = '';
+        let reportedReasoningSummary = '';
+        const reasoningSummaryParts = new Map<string, string>();
+        const reportReasoningSummary = (delta: string): void => {
+          if (!delta) return;
+          reportedReasoningSummary += delta;
+          options.onReasoningSummary?.(delta);
+        };
         for await (const event of stream) {
           trace('response.stream_event', event, round);
           switch (event.type) {
@@ -130,6 +140,22 @@ export class OpenAIProvider implements ChatProvider {
               streamedText += event.delta;
               options.onText(event.delta);
               break;
+            case 'response.reasoning_summary_text.delta': {
+              const key = `${event.item_id}:${event.summary_index}`;
+              reasoningSummaryParts.set(key, `${reasoningSummaryParts.get(key) ?? ''}${event.delta}`);
+              reportReasoningSummary(event.delta);
+              break;
+            }
+            case 'response.reasoning_summary_part.done': {
+              const key = `${event.item_id}:${event.summary_index}`;
+              const streamedPart = reasoningSummaryParts.get(key) ?? '';
+              if (event.part.text.startsWith(streamedPart)) {
+                const missingSummary = event.part.text.slice(streamedPart.length);
+                reasoningSummaryParts.set(key, event.part.text);
+                reportReasoningSummary(missingSummary);
+              }
+              break;
+            }
             case 'response.completed':
               response = event.response;
               break;
@@ -158,13 +184,21 @@ export class OpenAIProvider implements ChatProvider {
         const calls = output.filter((item): item is ResponseFunctionToolCall | ResponseCustomToolCall =>
           item.type === 'function_call' || item.type === 'custom_tool_call');
         const completedText = visibleTextFrom(output);
+        const completedReasoningSummary = reasoningSummaryFrom(output);
         trace('response.interpreted', {
           terminalOutputTypes: response.output.map(item => item.type),
           collectedOutputTypes: output.map(item => item.type),
           streamedText,
           completedText,
+          reportedReasoningSummary,
+          completedReasoningSummary,
           toolCalls: calls,
         }, round);
+        // A few compatible routes omit summary delta events but retain the
+        // requested summary on the completed reasoning item.
+        if (!reportedReasoningSummary && completedReasoningSummary) {
+          reportReasoningSummary(completedReasoningSummary);
+        }
         // Completed output items are authoritative. Some routes omit text
         // deltas even though the finished message item has visible content.
         if (completedText.startsWith(streamedText)) {
@@ -267,6 +301,12 @@ function visibleTextFrom(output: ResponseOutputItem[]): string {
   return output.flatMap(item => item.type === 'message'
     ? item.content.map(part => part.type === 'output_text' ? part.text : part.refusal)
     : []).join('');
+}
+
+function reasoningSummaryFrom(output: ResponseOutputItem[]): string {
+  return output.flatMap(item => item.type === 'reasoning'
+    ? item.summary.map(part => part.text)
+    : []).join('\n\n');
 }
 
 function usageFrom(response: Response): TurnResult['usage'] {

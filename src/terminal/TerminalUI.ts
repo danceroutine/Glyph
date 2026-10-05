@@ -17,6 +17,9 @@ const TERMINAL_HELP = `Commands: /help /reset /usage /trace [on|off] /review /ac
 Ctrl+C cancels a response; at a prompt it exits.
 Subscription authentication only. API-key environment variables are ignored.`;
 
+const SUBDUED_TEXT = '\u001b[2;90m';
+const RESET_TEXT = '\u001b[0m';
+
 type TerminalAction =
   | { type: TerminalActionType.SEND; prompt: string }
   | { type: TerminalActionType.EXIT }
@@ -40,6 +43,7 @@ export class TerminalUI implements ChatResponseStream {
   static readonly help = TERMINAL_HELP;
 
   readonly input: TerminalInput;
+  private responseSection: ChatResponsePartType.TEXT | ChatResponsePartType.REASONING_SUMMARY | undefined;
 
   constructor(
     input: TerminalInput | NodeJS.ReadableStream = process.stdin,
@@ -157,27 +161,37 @@ ${TERMINAL_HELP}`);
   }
 
   beginAssistantResponse(): void {
-    this.output.write('assistant> ');
+    this.responseSection = undefined;
   }
 
   push(part: ChatResponsePart): void {
     if (part.type === ChatResponsePartType.TEXT) {
+      this.openResponseSection(ChatResponsePartType.TEXT, 'assistant> ');
       this.output.write(clean(part.value));
       return;
     }
+    if (part.type === ChatResponsePartType.REASONING_SUMMARY) {
+      this.openResponseSection(ChatResponsePartType.REASONING_SUMMARY, 'thinking> ');
+      this.output.write(this.subdued(clean(part.value)));
+      return;
+    }
     if (part.type === ChatResponsePartType.DIAGNOSTIC) {
+      this.responseSection = undefined;
       this.errorLine(clean(part.message));
       return;
     }
-    this.output.write(`\n${clean(formatToolActivity(part.activity))}\n`);
+    this.output.write(`${this.responseSection === undefined ? '' : '\n'}${clean(formatToolActivity(part.activity))}\n`);
+    this.responseSection = undefined;
   }
 
   showTurnCompleted(durationMs: number, usage: Usage | null): void {
     this.line(`\n[${(durationMs / 1000).toFixed(1)}s | ${usage ? formatUsage(usage) : 'usage unavailable'}]\n`);
+    this.responseSection = undefined;
   }
 
   showTurnFailed(message: string): void {
     this.errorLine(`\n${clean(message)}\nThis turn was not added to history.\n`);
+    this.responseSection = undefined;
   }
 
   showActive(account: OpenAIAccount, model: Model): void {
@@ -216,6 +230,23 @@ ${TERMINAL_HELP}`);
 
   private errorLine(value: string): void {
     this.errorOutput.write(`${value}\n`);
+  }
+
+  private openResponseSection(
+    section: ChatResponsePartType.TEXT | ChatResponsePartType.REASONING_SUMMARY,
+    label: string,
+  ): void {
+    if (this.responseSection === section) return;
+    if (this.responseSection !== undefined) this.output.write('\n');
+    this.output.write(section === ChatResponsePartType.REASONING_SUMMARY ? this.subdued(label) : label);
+    this.responseSection = section;
+  }
+
+  private subdued(value: string): string {
+    const terminal = this.output as NodeJS.WritableStream & { isTTY?: boolean };
+    return terminal.isTTY === true && process.env.NO_COLOR === undefined
+      ? `${SUBDUED_TEXT}${value}${RESET_TEXT}`
+      : value;
   }
 }
 
