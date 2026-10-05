@@ -8,19 +8,22 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "start": "node --env-file-if-exists=.env src/cli.ts",
+    "start": "node --disable-warning=ExperimentalWarning --experimental-transform-types --env-file-if-exists=.env src/cli.ts",
     "check": "tsc --noEmit",
-    "test": "node --test test/*.test.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "todo:dev": "pnpm --dir examples/todo-app dev",
     "todo:build": "pnpm --dir examples/todo-app build",
     "todo:preview": "pnpm --dir examples/todo-app preview"
   },
   "dependencies": {
     "jose": "^6.2.12",
-    "openai": "7.23.0"
+    "openai": "7.23.0",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
   }
 }
