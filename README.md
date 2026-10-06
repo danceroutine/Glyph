@@ -35,7 +35,7 @@ On first launch, choose the option to add an account, complete Continue with Cha
 - Fast fuzzy project-file search and `@` attachments from the terminal prompt.
 - Project-aware file discovery and exact, revision-pinned reads.
 - Staged create, update, rename, and delete proposals that never modify the workspace before review.
-- Per-change accept or reject decisions, accept-all and reject-all commands, persistent pending reviews, and stale-file protection when collaborators edit concurrently.
+- An arrival-ordered, multi-actor review queue with per-change decisions, accept-all and reject-all commands, durable recovery, and stale-file protection when actors or collaborators touch the same file.
 - Exact preservation of UTF-8 text, byte-order marks, line endings, final newlines, whitespace, Unicode, and file modes.
 - Full-screen terminal review with navigation across files and change blocks, plus a non-interactive fallback.
 - Provider tracing with credential redaction and configurable local state storage.

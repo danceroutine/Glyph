@@ -63,7 +63,7 @@ const environmentConfigurationSchema = z
     EDIT_MAX_TOTAL_HUNKS: z.coerce.number().int().positive().default(256),
     EDIT_MAX_HUNKS_PER_FILE: z.coerce.number().int().positive().default(64),
     EDIT_DIFF_BUDGET_MS: z.coerce.number().int().positive().default(1_000),
-    EDIT_MAX_ACTIVE_REVIEWS: z.coerce.number().int().min(1).max(1).default(1),
+    EDIT_MAX_ACTIVE_REVIEWS: z.coerce.number().int().min(1).max(64).default(8),
   })
   .transform(values => {
     const stateDirectory = values.GLYPH_CONFIG_DIR;

@@ -11,10 +11,11 @@ import { JsDiffTextDiffer } from '../../editing/documents/JsDiffTextDiffer.ts';
 import type { EditingConfiguration } from '../../editing/configuration/EditingConfiguration.ts';
 import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
 import { TerminalEditReviewer } from '../TerminalEditReviewer.ts';
-import { TerminalInput } from '../TerminalInput.ts';
+import { TerminalUI } from '../TerminalUI.tsx';
 
 const paths: string[] = [];
 const originalFetch = globalThis.fetch;
+const originalNoColor = process.env.NO_COLOR;
 const configuration: EditingConfiguration = {
   maxRawProposalBytes: 1_048_576,
   maxChangedBytes: 1_048_576,
@@ -29,6 +30,7 @@ const configuration: EditingConfiguration = {
 };
 
 beforeEach(() => {
+  delete process.env.NO_COLOR;
   globalThis.fetch = async () => {
     throw new Error('Network access is forbidden in terminal editing E2E tests.');
   };
@@ -36,27 +38,29 @@ beforeEach(() => {
 
 afterEach(async () => {
   globalThis.fetch = originalFetch;
+  if (originalNoColor === undefined) delete process.env.NO_COLOR;
+  else process.env.NO_COLOR = originalNoColor;
   await Promise.all(paths.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
 describe(TerminalEditReviewer, () => {
   describe(TerminalEditReviewer.prototype.review, () => {
-    it('accepts with Y through a virtual TTY and always restores raw mode and the alternate screen', async () => {
+    it('accepts with Y through Ink and always restores raw mode', async () => {
       const root = await mkdtemp(join(tmpdir(), 'terminal-review-root-'));
       const state = await mkdtemp(join(tmpdir(), 'terminal-review-state-'));
       paths.push(root, state);
-      await writeFile(join(root, 'file.txt'), 'base\n');
+      await writeFile(join(root, 'file.ts'), 'const answer: number = 1;\n');
       const workspace = new FileSystemWorkspaceTextStore(root);
-      const base = await workspace.read('file.txt');
+      const base = await workspace.read('file.ts');
       const proposals = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
       const proposal = await proposals.proposeStructured({
         files: [
           {
             operation: EditOperation.UPDATE,
-            path: 'file.txt',
+            path: 'file.ts',
             new_path: null,
             base_revision: base.revision,
-            content: 'changed\n',
+            content: 'const answer: number = 2;\n',
             byte_order_mark: null,
             edits: [],
           },
@@ -65,32 +69,38 @@ describe(TerminalEditReviewer, () => {
       const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state));
       await manager.stage(proposal);
       const tty = new VirtualTTY();
-      const output = new PassThrough() as PassThrough & { columns?: number; rows?: number };
+      const output = new PassThrough() as PassThrough & { columns?: number; rows?: number; isTTY?: boolean };
       output.columns = 80;
       output.rows = 24;
+      output.isTTY = true;
       let rendered = '';
       output.on('data', chunk => {
         rendered += String(chunk);
       });
-      const input = new TerminalInput(tty, output);
-      const reviewer = new TerminalEditReviewer(input, output);
+      const ui = new TerminalUI(tty, output, output);
+      const reviewer = new TerminalEditReviewer(ui);
 
       const reviewing = reviewer.review(manager, new AbortController().signal);
-      setImmediate(() => tty.push('Y'));
+      await waitUntil(() => tty.rawTransitions.at(-1) === true && rendered.includes('Y accept'));
+      tty.push('Y');
       await reviewing;
 
-      expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('changed\n');
+      expect(await readFile(join(root, 'file.ts'), 'utf8')).toBe('const answer: number = 2;\n');
       expect(tty.rawTransitions).toEqual([true, false]);
-      expect(rendered).toContain('\x1b[?1049h');
-      expect(rendered).toContain('\x1b[?1049l');
-      input.close();
+      expect(rendered).toContain('\x1b[48;5;52m');
+      expect(rendered).toContain('\x1b[48;5;22m');
+      expect(rendered).toContain('\x1b[35mconst\x1b[39m');
+      ui.close();
     });
 
-    it('supports scrolling, file navigation, defer, and reopening without resolving pending items', async () => {
+    it('appends multi-actor proposals to one navigable queue and can expand a change into full-file context', async () => {
       const root = await mkdtemp(join(tmpdir(), 'terminal-navigation-root-'));
       const state = await mkdtemp(join(tmpdir(), 'terminal-navigation-state-'));
       paths.push(root, state);
-      await writeFile(join(root, 'a.txt'), 'a\nmiddle\nz\n');
+      await writeFile(
+        join(root, 'a.txt'),
+        'a\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nfar-away-context\nline 9\nline 10\nz\n',
+      );
       await writeFile(join(root, 'b.txt'), 'b\n');
       const workspace = new FileSystemWorkspaceTextStore(root);
       const [a, b] = await Promise.all([workspace.read('a.txt'), workspace.read('b.txt')]);
@@ -102,7 +112,7 @@ describe(TerminalEditReviewer, () => {
             path: 'a.txt',
             new_path: null,
             base_revision: a.revision,
-            content: 'A\nmiddle\nZ\n',
+            content: 'A\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nfar-away-context\nline 9\nline 10\nZ\n',
             byte_order_mark: null,
             edits: [],
           },
@@ -119,25 +129,57 @@ describe(TerminalEditReviewer, () => {
       });
       const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state));
       await manager.stage(proposal);
+      const appendedProposal = await proposals.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'c.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'C\n',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      await manager.stage(appendedProposal);
       const tty = new VirtualTTY();
       const output = terminalOutput();
-      const input = new TerminalInput(tty, output);
-      const reviewer = new TerminalEditReviewer(input, output);
+      let rendered = '';
+      output.on('data', chunk => {
+        rendered += String(chunk);
+      });
+      const ui = new TerminalUI(tty, output, output);
+      const reviewer = new TerminalEditReviewer(ui);
 
-      driveOnRender(output, tty, ['j', 'l', 'h', ']', 'c', 'q']);
-      await reviewer.review(manager, new AbortController().signal);
+      const firstReview = reviewer.review(manager, new AbortController().signal);
+      await waitUntil(() => rendered.includes('Y accept'));
+      await sendKeys(tty, ['\x1b[B', '\x1b[C', '\x1b[D', 'F', '\x1b[6~', '\x1b[5~', '\x1b[F', '\x1b[H', 'q']);
+      await firstReview;
       expect(manager.active?.files.flatMap(file => file.items).every(item => item.decision === 'PENDING')).toBe(true);
+      expect(rendered).toContain('full file');
+      expect(rendered).toContain('far-away-context');
+      expect(rendered).toContain('File 1/3  change 1/2');
+      expect(rendered).toContain('←/→ previous/next change');
+      expect(rendered).not.toContain('j/k scroll');
+      expect(rendered).not.toContain('[c/]c change');
+      expect(rendered).not.toContain('gg/G ends');
 
-      driveOnRender(
-        output,
+      const secondReview = reviewer.review(manager, new AbortController().signal);
+      await waitUntil(() => tty.rawTransitions.at(-1) === true);
+      await sendKeys(
         tty,
-        manager.active!.files.flatMap(file => file.items).map(() => 'N'),
+        manager.activeReviews.flatMap(review => review.files.flatMap(file => file.items)).map(() => 'N'),
       );
-      await reviewer.review(manager, new AbortController().signal);
-      expect(manager.active).toBeUndefined();
-      expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('a\nmiddle\nz\n');
+      await secondReview;
+      expect(manager.activeReviews).toEqual([]);
+      expect(rendered).toContain('CREATE c.txt');
+      expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe(
+        'a\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nfar-away-context\nline 9\nline 10\nz\n',
+      );
       expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('b\n');
-      input.close();
+      await expect(readFile(join(root, 'c.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+      ui.close();
     });
 
     it('restores the terminal when an acceptance detects a stale collaborator edit', async () => {
@@ -170,15 +212,17 @@ describe(TerminalEditReviewer, () => {
       output.on('data', chunk => {
         rendered += String(chunk);
       });
-      const input = new TerminalInput(tty, output);
-      driveOnRender(output, tty, ['Y', 'Q']);
-
-      await new TerminalEditReviewer(input, output).review(manager, new AbortController().signal);
+      const ui = new TerminalUI(tty, output, output);
+      const review = new TerminalEditReviewer(ui).review(manager, new AbortController().signal);
+      await waitUntil(() => rendered.includes('Y accept'));
+      tty.push('Y');
+      await waitUntil(() => rendered.includes('Error: The file changed'));
+      tty.push('Q');
+      await review;
       expect(rendered).toMatch(/Error: The file changed/);
-      expect(rendered).toContain('\x1b[?1049l');
-      expect(tty.rawTransitions.at(-1)).toBe(false);
       expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('collaborator');
-      input.close();
+      ui.close();
+      expect(tty.rawTransitions.at(-1)).toBe(false);
     });
   });
 });
@@ -195,18 +239,25 @@ class VirtualTTY extends Duplex {
   }
 }
 
-function terminalOutput(): PassThrough & { columns?: number; rows?: number } {
-  const output = new PassThrough() as PassThrough & { columns?: number; rows?: number };
+function terminalOutput(): PassThrough & { columns?: number; rows?: number; isTTY?: boolean } {
+  const output = new PassThrough() as PassThrough & { columns?: number; rows?: number; isTTY?: boolean };
   output.columns = 80;
   output.rows = 24;
+  output.isTTY = true;
   return output;
 }
 
-function driveOnRender(output: PassThrough, tty: VirtualTTY, keys: string[]): void {
-  let index = 0;
-  output.on('data', chunk => {
-    if (!String(chunk).includes('Y accept') || index >= keys.length) return;
-    const key = keys[index++]!;
-    queueMicrotask(() => tty.push(key));
-  });
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (predicate()) return;
+    await new Promise<void>(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('Condition was not reached.');
+}
+
+async function sendKeys(tty: VirtualTTY, keys: readonly string[]): Promise<void> {
+  for (const key of keys) {
+    tty.push(key);
+    await new Promise<void>(resolve => setTimeout(resolve, 50));
+  }
 }

@@ -79,13 +79,16 @@ export class ProjectToolRuntime implements ToolRuntime {
           throw new Error(`Unknown project tool: ${name}`);
       }
       await this.reviews.stage(proposal);
+      const queuePosition = this.reviews.activeReviews.findIndex(review => review.id === proposal.id) + 1;
       return JSON.stringify({
         proposal_id: proposal.id,
         status: 'STAGED_FOR_REVIEW',
+        queue_position: queuePosition,
+        active_reviews: this.reviews.activeReviews.length,
         files: proposal.files.length,
         review_items: proposal.files.reduce((sum, file) => sum + file.items.length, 0),
         message:
-          'The proposal is staged but no workspace changes have been written. The user must accept review items.',
+          'The proposal was appended to the review queue, but no workspace changes have been written. The user must accept review items.',
       });
     } catch (error) {
       await this.logger.error('failed', {

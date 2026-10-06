@@ -8,9 +8,10 @@
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["node", "react"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

@@ -193,6 +193,48 @@ describe(ProposalReviewManager, () => {
       expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('collaborator');
     });
 
+    it('keeps a later actor proposal pending when an earlier actor changes the same file', async () => {
+      const { root, manager, service, workspace } = await fixture('base');
+      const base = await workspace.read('file.txt');
+      const first = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.UPDATE,
+            path: 'file.txt',
+            new_path: null,
+            base_revision: base.revision,
+            content: 'first actor',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      const second = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.UPDATE,
+            path: 'file.txt',
+            new_path: null,
+            base_revision: base.revision,
+            content: 'second actor',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      await manager.stage(first);
+      await manager.stage(second);
+
+      await manager.acceptInReview(first.id, first.files[0]!.items[0]!.id);
+      await expect(manager.acceptInReview(second.id, second.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+      });
+
+      expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('first actor');
+      expect(manager.activeReviews).toEqual([second]);
+      expect(second.files[0]!.applicability).toBe(EditApplicabilityState.STALE);
+    });
+
     it('keeps rename and text decisions independent, then deletes by revision', async () => {
       const { root, manager, service, workspace } = await fixture('base\n');
       const base = await workspace.read('file.txt');
@@ -274,6 +316,36 @@ describe(ProposalReviewManager, () => {
       expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('a');
       expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('collaborator');
     });
+
+    it('performs zero writes when queued actor proposals touch the same file', async () => {
+      const { root, manager, service, workspace } = await fixture('base');
+      const base = await workspace.read('file.txt');
+      const proposals = await Promise.all(
+        ['first actor', 'second actor'].map(content =>
+          service.proposeStructured({
+            files: [
+              {
+                operation: EditOperation.UPDATE,
+                path: 'file.txt',
+                new_path: null,
+                base_revision: base.revision,
+                content,
+                byte_order_mark: null,
+                edits: [],
+              },
+            ],
+          }),
+        ),
+      );
+      for (const proposal of proposals) await manager.stage(proposal);
+
+      await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.DECISION_CONFLICT });
+
+      expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('base');
+      expect(
+        manager.activeReviews.flatMap(review => review.files.flatMap(file => file.items.map(item => item.decision))),
+      ).toEqual([EditDecisionState.PENDING, EditDecisionState.PENDING]);
+    });
   });
 
   describe(ProposalReviewManager.prototype.rejectAll, () => {
@@ -301,8 +373,49 @@ describe(ProposalReviewManager, () => {
   });
 
   describe(ProposalReviewManager.prototype.stage, () => {
-    it('rejects a second proposal while the configured active-session slot is occupied', async () => {
+    it('queues proposals from multiple actors in arrival order', async () => {
       const { manager, service } = await fixture('');
+      const first = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'first.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'first',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      const second = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'second.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'second',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      await manager.stage(first);
+      await manager.stage(second);
+
+      expect(manager.activeReviews.map(review => review.id)).toEqual([first.id, second.id]);
+      expect(manager.active).toBe(first);
+      expect(manager.get(second.id)).toBe(second);
+
+      await manager.acceptInReview(first.id, first.files[0]!.items[0]!.id);
+      expect(manager.activeReviews).toEqual([second]);
+      await manager.rejectInReview(second.id, second.files[0]!.items[0]!.id);
+      expect(manager.activeReviews).toEqual([]);
+    });
+
+    it('rejects another proposal only when the configured review queue is full', async () => {
+      const { manager, service } = await fixture('', 1);
       const first = await service.proposeStructured({
         files: [
           {
@@ -335,6 +448,86 @@ describe(ProposalReviewManager, () => {
   });
 
   describe(ProposalReviewManager.prototype.initialize, () => {
+    it('loads a legacy single-review checkpoint and migrates it without losing the proposal', async () => {
+      const { root, state, service } = await fixture('');
+      const proposal = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'legacy.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'legacy',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      await writeFile(join(state, 'active-proposal-review.json'), JSON.stringify(proposal));
+
+      const recovered = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(root),
+        new FileProposalReviewStore(state),
+      );
+      await recovered.initialize();
+
+      expect(recovered.activeReviews).toEqual([proposal]);
+      const migrated = JSON.parse(await readFile(join(state, 'active-proposal-review.json'), 'utf8')) as {
+        schemaVersion: number;
+        proposals: { id: string }[];
+      };
+      expect(migrated).toMatchObject({ schemaVersion: 2, proposals: [{ id: proposal.id }] });
+    });
+
+    it('recovers multiple actor proposals in queue order', async () => {
+      const { root, state, manager, service } = await fixture('');
+      const first = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'first.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'first',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      const second = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'second.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'second',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      await manager.stage(first);
+      await manager.stage(second);
+
+      const checkpoint = JSON.parse(await readFile(join(state, 'active-proposal-review.json'), 'utf8')) as {
+        schemaVersion: number;
+        proposals: { id: string }[];
+      };
+      expect(checkpoint).toMatchObject({
+        schemaVersion: 2,
+        proposals: [{ id: first.id }, { id: second.id }],
+      });
+
+      const recovered = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(root),
+        new FileProposalReviewStore(state),
+      );
+      await recovered.initialize();
+
+      expect(recovered.activeReviews.map(review => review.id)).toEqual([first.id, second.id]);
+    });
+
     it('recovers pending decisions and revisions from the persisted checkpoint', async () => {
       const { root, state, manager, service, workspace } = await fixture('base');
       const base = await workspace.read('file.txt');
@@ -437,7 +630,7 @@ describe(ProposalReviewManager, () => {
       const applying = file.items[0]!;
       file.applyingItemId = applying.id;
       file.applicability = EditApplicabilityState.APPLYING;
-      await new FileProposalReviewStore(state).save(proposal);
+      await new FileProposalReviewStore(state).save([proposal]);
       await workspace.replace('file.txt', base.revision, 'ONE\nmiddle\nthree\n', false);
 
       const recovered = new ProposalReviewManager(
@@ -455,13 +648,18 @@ describe(ProposalReviewManager, () => {
   });
 });
 
-async function fixture(text: string) {
+async function fixture(text: string, maxActiveReviews = 8) {
   const root = await mkdtemp(join(tmpdir(), 'edit-session-root-'));
   const state = await mkdtemp(join(tmpdir(), 'edit-session-state-'));
   directories.push(root, state);
   if (text !== '') await writeFile(join(root, 'file.txt'), text);
   const workspace = new FileSystemWorkspaceTextStore(root);
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
-  const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state));
+  const manager = new ProposalReviewManager(
+    workspace,
+    new FileProposalReviewStore(state),
+    new NullLogger(),
+    maxActiveReviews,
+  );
   return { root, state, workspace, service, manager };
 }

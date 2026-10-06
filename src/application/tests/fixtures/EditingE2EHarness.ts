@@ -36,7 +36,7 @@ const editing: EditingConfiguration = {
   maxTotalHunks: 256,
   maxHunksPerFile: 64,
   diffBudgetMs: 1_000,
-  maxActiveReviews: 1,
+  maxActiveReviews: 8,
   newFileByteOrderMark: false,
   newFileLineEnding: '\n',
 };
@@ -57,7 +57,12 @@ export class EditingE2EHarness {
     rounds: readonly ScriptedResponseRound[],
   ) {
     this.workspace = new FileSystemWorkspaceTextStore(projectRoot);
-    this.reviews = new ProposalReviewManager(this.workspace, new FileProposalReviewStore(stateRoot), this.logger);
+    this.reviews = new ProposalReviewManager(
+      this.workspace,
+      new FileProposalReviewStore(stateRoot),
+      this.logger,
+      editing.maxActiveReviews,
+    );
     const proposals = new EditProposalService(
       this.workspace,
       new JsDiffTextDiffer(),

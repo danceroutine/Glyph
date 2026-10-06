@@ -14,56 +14,76 @@ import type { ProposalReviewStore } from './persistence/ProposalReviewStore.ts';
 /**
  * Owns the lifecycle of active proposal reviews: staging, durable decisions,
  * revision preconditions, accepted workspace mutations, and crash recovery.
- * It is addressed by review ID so storage can grow beyond one active review.
+ * Reviews remain independently addressable but retain arrival order so hosts
+ * can present every actor's work as one continuous queue.
  */
 export class ProposalReviewManager {
-  private review: EditProposal | undefined;
+  private reviews: EditProposal[] = [];
   private queue: Promise<void> = Promise.resolve();
-  private readonly settledDecisions = new Map<string, EditDecisionState>();
+  private readonly settledDecisions = new Map<
+    string,
+    { readonly reviewId: string; readonly decision: EditDecisionState }
+  >();
   private readonly logger: Logger;
 
   constructor(
     private readonly workspace: WorkspaceTextStore,
     private readonly store: ProposalReviewStore,
     logger: Logger = new NullLogger(),
-    private readonly maxActiveReviews = 1,
+    private readonly maxActiveReviews = 8,
   ) {
     this.logger = logger.forNamespace('editing.review');
   }
 
   get active(): EditProposal | undefined {
-    return this.review;
+    return this.reviews[0];
+  }
+  get activeReviews(): readonly EditProposal[] {
+    return [...this.reviews];
   }
   get(reviewId: string): EditProposal | undefined {
-    return this.review?.id === reviewId ? this.review : undefined;
+    return this.reviews.find(review => review.id === reviewId);
   }
 
   async initialize(): Promise<void> {
-    this.review = await this.store.load();
-    if (!this.review) return;
-    for (const file of this.review.files) await this.reconcile(file);
+    this.reviews = await this.store.load();
+    if (this.reviews.length === 0) return;
+    for (const review of this.reviews) {
+      for (const file of review.files) await this.reconcile(review, file);
+    }
+    const recoveredIds = this.reviews.map(review => review.id);
     await this.persist();
-    await this.logger.info('recovered', { proposalId: this.review?.id });
+    await this.logger.info('recovered', { proposalIds: recoveredIds, activeReviews: this.reviews.length });
   }
 
-  async stage(proposal: EditProposal): Promise<void> {
-    if (this.maxActiveReviews < 1 || this.review) {
-      throw new EditError(
-        EditFailureReason.ACTIVE_REVIEW_LIMIT,
-        'Finish or reject the active edit review before staging another proposal.',
-        {
-          retry: 'Open /review and settle the pending items.',
-        },
-      );
-    }
-    this.review = proposal;
-    try {
-      await this.store.save(proposal);
-    } catch (error) {
-      this.review = undefined;
-      throw error;
-    }
-    await this.logger.info('staged', { proposalId: proposal.id, files: proposal.files.length });
+  stage(proposal: EditProposal): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.reviews.length >= this.maxActiveReviews) {
+        throw new EditError(
+          EditFailureReason.ACTIVE_REVIEW_LIMIT,
+          `The ${this.maxActiveReviews}-review queue is full.`,
+          { retry: 'Open /review and settle queued items before staging another proposal.' },
+        );
+      }
+      if (this.get(proposal.id)) {
+        throw new EditError(EditFailureReason.INCONSISTENT, 'A proposal with this review ID is already queued.', {
+          source: proposal.id,
+        });
+      }
+      this.reviews.push(proposal);
+      try {
+        await this.store.save(this.reviews);
+      } catch (error) {
+        this.reviews.pop();
+        throw error;
+      }
+      await this.logger.info('staged', {
+        proposalId: proposal.id,
+        files: proposal.files.length,
+        queuePosition: this.reviews.length,
+        activeReviews: this.reviews.length,
+      });
+    });
   }
 
   accept(itemId: string): Promise<void> {
@@ -73,22 +93,22 @@ export class ProposalReviewManager {
     return this.decide(itemId, EditDecisionState.REJECTED);
   }
   acceptInReview(reviewId: string, itemId: string): Promise<void> {
-    this.requireReviewId(reviewId);
-    return this.accept(itemId);
+    return this.decide(itemId, EditDecisionState.ACCEPTED, reviewId);
   }
   rejectInReview(reviewId: string, itemId: string): Promise<void> {
-    this.requireReviewId(reviewId);
-    return this.reject(itemId);
+    return this.decide(itemId, EditDecisionState.REJECTED, reviewId);
   }
 
   async acceptAll(): Promise<void> {
     return this.enqueue(async () => {
-      const proposal = this.requireReview();
-      await this.preflight(proposal);
-      for (const file of proposal.files) {
-        for (const item of file.items) {
-          if (item.decision === EditDecisionState.PENDING)
-            await this.applyDecision(file, item.id, EditDecisionState.ACCEPTED);
+      const reviews = this.requireReviews();
+      await this.preflightAll(reviews);
+      for (const review of reviews) {
+        for (const file of review.files) {
+          for (const item of file.items) {
+            if (item.decision === EditDecisionState.PENDING)
+              await this.applyDecision(review, file, item.id, EditDecisionState.ACCEPTED);
+          }
         }
       }
     });
@@ -96,34 +116,47 @@ export class ProposalReviewManager {
 
   async rejectAll(): Promise<void> {
     return this.enqueue(async () => {
-      const proposal = this.requireReview();
-      for (const file of proposal.files) {
-        for (const item of file.items) {
-          if (item.decision === EditDecisionState.PENDING) item.decision = EditDecisionState.REJECTED;
+      const reviews = this.requireReviews();
+      for (const review of reviews) {
+        for (const file of review.files) {
+          for (const item of file.items) {
+            if (item.decision === EditDecisionState.PENDING) item.decision = EditDecisionState.REJECTED;
+          }
         }
       }
       await this.persist();
-      await this.logger.info('rejected_all', { proposalId: proposal.id });
+      await this.logger.info('rejected_all', { proposalIds: reviews.map(review => review.id) });
     });
   }
 
-  private decide(itemId: string, decision: EditDecisionState): Promise<void> {
+  private decide(itemId: string, decision: EditDecisionState, reviewId?: string): Promise<void> {
     return this.enqueue(async () => {
       const settled = this.settledDecisions.get(itemId);
-      if (settled === decision) return;
+      if (settled && reviewId && settled.reviewId !== reviewId) {
+        throw new EditError(EditFailureReason.INCONSISTENT, 'Unknown review item.', {
+          source: reviewId,
+          hunkId: itemId,
+        });
+      }
+      if (settled?.decision === decision) return;
       if (settled !== undefined) {
         throw new EditError(EditFailureReason.DECISION_CONFLICT, 'Review item already has the opposite decision.', {
           hunkId: itemId,
         });
       }
-      const proposal = this.requireReview();
-      const file = proposal.files.find(candidate => candidate.items.some(item => item.id === itemId));
+      const review = reviewId ? this.requireReviewId(reviewId) : this.findReviewForItem(itemId);
+      const file = review.files.find(candidate => candidate.items.some(item => item.id === itemId));
       if (!file) throw new EditError(EditFailureReason.INCONSISTENT, 'Unknown review item.', { hunkId: itemId });
-      await this.applyDecision(file, itemId, decision);
+      await this.applyDecision(review, file, itemId, decision);
     });
   }
 
-  private async applyDecision(file: FileEditPlan, itemId: string, decision: EditDecisionState): Promise<void> {
+  private async applyDecision(
+    review: EditProposal,
+    file: FileEditPlan,
+    itemId: string,
+    decision: EditDecisionState,
+  ): Promise<void> {
     const item = file.items.find(candidate => candidate.id === itemId)!;
     if (item.decision === decision) return;
     if (item.decision !== EditDecisionState.PENDING) {
@@ -135,7 +168,7 @@ export class ProposalReviewManager {
     if (decision === EditDecisionState.REJECTED) {
       item.decision = decision;
       await this.persist();
-      await this.logger.info('item.rejected', { proposalId: this.review?.id, fileId: file.id, itemId });
+      await this.logger.info('item.rejected', { proposalId: review.id, fileId: file.id, itemId });
       return;
     }
     file.applicability = EditApplicabilityState.APPLYING;
@@ -147,10 +180,10 @@ export class ProposalReviewManager {
       file.applyingItemId = null;
       throw error;
     }
-    const mutation = this.review ? { undoGroupId: this.review.id } : {};
+    const mutation = { undoGroupId: review.id };
     try {
       await this.logger.debug('revision.check', {
-        proposalId: this.review?.id,
+        proposalId: review.id,
         fileId: file.id,
         path: file.currentPath,
         expectedRevision: file.currentRevision,
@@ -205,7 +238,7 @@ export class ProposalReviewManager {
       file.applyingItemId = null;
       await this.persist();
       await this.logger.info('item.accepted', {
-        proposalId: this.review?.id,
+        proposalId: review.id,
         fileId: file.id,
         itemId,
         revision: file.currentRevision,
@@ -218,7 +251,7 @@ export class ProposalReviewManager {
       file.applyingItemId = null;
       await this.persist();
       await this.logger.error('item.failed', {
-        proposalId: this.review?.id,
+        proposalId: review.id,
         fileId: file.id,
         itemId,
         error:
@@ -248,11 +281,45 @@ export class ProposalReviewManager {
     await this.logger.forNamespace('accept_all').debug('preflight_passed', { proposalId: proposal.id });
   }
 
-  private async reconcile(file: FileEditPlan): Promise<void> {
+  private async preflightAll(reviews: readonly EditProposal[]): Promise<void> {
+    for (const review of reviews) await this.preflight(review);
+    const claimedPaths = new Map<string, { reviewId: string; fileId: string }>();
+    for (const review of reviews) {
+      for (const file of review.files) {
+        if (!file.items.some(item => item.decision === EditDecisionState.PENDING)) continue;
+        const pendingRename = file.items.some(
+          item => item.kind === EditReviewItemKind.RENAME && item.decision === EditDecisionState.PENDING,
+        );
+        const paths = pendingRename ? [file.currentPath, file.targetPath] : [file.currentPath];
+        for (const path of new Set(paths)) {
+          const key = path.normalize('NFC').toLocaleLowerCase('en-US');
+          const existing = claimedPaths.get(key);
+          if (existing && (existing.reviewId !== review.id || existing.fileId !== file.id)) {
+            throw new EditError(
+              EditFailureReason.DECISION_CONFLICT,
+              'Accept all cannot atomically apply multiple queued proposals that touch the same path.',
+              {
+                source: review.id,
+                fileId: file.id,
+                path,
+                retry: 'Review the conflicting proposals individually.',
+              },
+            );
+          }
+          claimedPaths.set(key, { reviewId: review.id, fileId: file.id });
+        }
+      }
+    }
+    await this.logger.forNamespace('accept_all').debug('queue_preflight_passed', {
+      proposalIds: reviews.map(review => review.id),
+    });
+  }
+
+  private async reconcile(review: EditProposal, file: FileEditPlan): Promise<void> {
     const current = await this.workspace.readOptional(file.currentPath);
     const applying = file.applyingItemId ? file.items.find(item => item.id === file.applyingItemId) : undefined;
     if (applying) {
-      const recovered = await this.reconcileApplying(file, applying, current);
+      const recovered = await this.reconcileApplying(review, file, applying, current);
       if (recovered) return;
     }
     if (file.currentRevision === null ? current !== undefined : current?.revision !== file.currentRevision)
@@ -265,6 +332,7 @@ export class ProposalReviewManager {
   }
 
   private async reconcileApplying(
+    review: EditProposal,
     file: FileEditPlan,
     item: FileEditPlan['items'][number],
     current: FileEditPlan['current'] | undefined,
@@ -273,11 +341,7 @@ export class ProposalReviewManager {
     if (item.kind === EditReviewItemKind.RENAME) {
       const target = (await this.workspace.readOptional(file.targetPath)) ?? null;
       if (current && target && current.identity === target.identity && current.revision === file.currentRevision) {
-        await this.workspace.delete(
-          file.currentPath,
-          current.revision,
-          this.review ? { undoGroupId: this.review.id } : {},
-        );
+        await this.workspace.delete(file.currentPath, current.revision, { undoGroupId: review.id });
         after = target;
       } else if (!current) after = target;
     }
@@ -300,15 +364,18 @@ export class ProposalReviewManager {
   }
 
   private async persist(): Promise<void> {
-    const review = this.review;
-    if (!review) return;
-    const settled = review.files.every(file => file.items.every(item => item.decision !== EditDecisionState.PENDING));
-    if (settled) {
-      for (const file of review.files) for (const item of file.items) this.settledDecisions.set(item.id, item.decision);
-      await this.store.clear();
-      this.review = undefined;
-      await this.logger.info('settled', { proposalId: review.id });
-    } else await this.store.save(review);
+    const settled = this.reviews.filter(isSettled);
+    const remaining = this.reviews.filter(review => !settled.includes(review));
+    await this.store.save(remaining);
+    this.reviews = remaining;
+    for (const review of settled) {
+      for (const file of review.files) {
+        for (const item of file.items) {
+          this.settledDecisions.set(item.id, { reviewId: review.id, decision: item.decision });
+        }
+      }
+      await this.logger.info('settled', { proposalId: review.id, activeReviews: remaining.length });
+    }
   }
 
   private stale(file: FileEditPlan, currentRevision?: string): EditError {
@@ -320,16 +387,29 @@ export class ProposalReviewManager {
     });
   }
 
-  private requireReview(): EditProposal {
-    if (!this.review) throw new EditError(EditFailureReason.INCONSISTENT, 'There is no active edit review.');
-    return this.review;
+  private requireReviews(): readonly EditProposal[] {
+    if (this.reviews.length === 0)
+      throw new EditError(EditFailureReason.INCONSISTENT, 'There are no active edit reviews.');
+    return [...this.reviews];
   }
 
   private requireReviewId(reviewId: string): EditProposal {
-    const review = this.requireReview();
-    if (review.id !== reviewId)
-      throw new EditError(EditFailureReason.INCONSISTENT, 'Unknown edit review.', { source: reviewId });
+    const review = this.get(reviewId);
+    if (!review) throw new EditError(EditFailureReason.INCONSISTENT, 'Unknown edit review.', { source: reviewId });
     return review;
+  }
+
+  private findReviewForItem(itemId: string): EditProposal {
+    const matches = this.reviews.filter(review =>
+      review.files.some(file => file.items.some(item => item.id === itemId)),
+    );
+    if (matches.length !== 1)
+      throw new EditError(
+        matches.length === 0 ? EditFailureReason.INCONSISTENT : EditFailureReason.AMBIGUOUS,
+        matches.length === 0 ? 'Unknown review item.' : 'Review item ID is not unique across active reviews.',
+        { hunkId: itemId },
+      );
+    return matches[0]!;
   }
 
   private enqueue(operation: () => Promise<void>): Promise<void> {
@@ -337,6 +417,10 @@ export class ProposalReviewManager {
     this.queue = result.catch(() => {});
     return result;
   }
+}
+
+function isSettled(review: EditProposal): boolean {
+  return review.files.every(file => file.items.every(item => item.decision !== EditDecisionState.PENDING));
 }
 
 function compose(file: FileEditPlan): string {

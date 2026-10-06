@@ -22,9 +22,8 @@ import { OpenAISession } from './providers/openai/auth/OpenAISession.ts';
 import { FileOpenAIAccountStore } from './providers/openai/auth/FileOpenAIAccountStore.ts';
 import { TerminalApplication } from './terminal/TerminalApplication.ts';
 import { TerminalEditReviewer } from './terminal/TerminalEditReviewer.ts';
-import { TerminalInput } from './terminal/TerminalInput.ts';
 import { ShutdownSignal } from './terminal/ShutdownSignal.ts';
-import { TerminalUI } from './terminal/TerminalUI.ts';
+import { TerminalUI } from './terminal/TerminalUI.tsx';
 import { installShutdownHandlers } from './terminal/installShutdownHandlers.ts';
 import { FileSystemWorkspaceTextStore } from './workspace/FileSystemWorkspaceTextStore.ts';
 
@@ -47,7 +46,6 @@ async function main(): Promise<void> {
   const logger = new FileLogger(configuration.traceFile);
   const http = new FetchHttpClient(logger);
   const store = new FileOpenAIAccountStore(configuration.stateDirectory);
-  const terminalInput = new TerminalInput();
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const indexExecutable = resolve(
     process.env.GLYPH_CONTEXT_INDEX_BINARY ??
@@ -73,7 +71,7 @@ async function main(): Promise<void> {
     cachePath: join(configuration.stateDirectory, 'context-index.bin'),
     excludedPaths,
   });
-  const ui = new TerminalUI(terminalInput, process.stdout, process.stderr, fileSearch);
+  const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, fileSearch);
   const authentication = new OpenAIAuthenticationClient(configuration.openAI, http);
   const session = new OpenAISession(store, authentication, configuration.openAI, shutdown.signal);
   const workspace = new FileSystemWorkspaceTextStore(projectRoot, { excludedPaths });
@@ -109,7 +107,7 @@ async function main(): Promise<void> {
       projectRoot,
       ...(configuration.configuredModel ? { configuredModel: configuration.configuredModel } : {}),
     },
-    new TerminalEditReviewer(terminalInput, process.stdout, () => {
+    new TerminalEditReviewer(ui, () => {
       process.exitCode = 130;
       shutdown.abort();
     }),

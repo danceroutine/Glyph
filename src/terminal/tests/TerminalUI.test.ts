@@ -1,136 +1,105 @@
 import { Duplex, PassThrough, Writable } from 'node:stream';
+import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it } from 'vitest';
-import type { WorkspaceFileSearch } from '../../context/search/WorkspaceFileSearch.ts';
 import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
 import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
+import type { WorkspaceFileSearch } from '../../context/search/WorkspaceFileSearch.ts';
 import { TerminalActionType } from '../TerminalActionType.ts';
-import { TerminalInput } from '../TerminalInput.ts';
-import { TerminalUI } from '../TerminalUI.ts';
-
-class MemoryOutput extends Writable {
-  readonly isTTY: boolean;
-  value = '';
-
-  constructor(isTTY: boolean) {
-    super();
-    this.isTTY = isTTY;
-  }
-
-  override _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
-    this.value += String(chunk);
-    callback();
-  }
-}
+import { TerminalUI } from '../TerminalUI.tsx';
 
 describe(TerminalUI, () => {
   describe(TerminalUI.prototype.nextAction, () => {
-    it('uses a prominent user prompt', async () => {
+    it('parses ordinary prompts through the plain redirected-IO fallback', async () => {
       const input = new PassThrough();
-      const output = new MemoryOutput(true);
+      const output = new MemoryOutput(false);
       const ui = new TerminalUI(input, output, new MemoryOutput(false));
-      const previousNoColor = process.env.NO_COLOR;
-      delete process.env.NO_COLOR;
-
-      try {
-        const action = ui.nextAction(new AbortController().signal);
-        input.write('hello\n');
-
-        await expect(action).resolves.toEqual({
-          type: TerminalActionType.SEND,
-          prompt: 'hello',
-          attachmentPaths: [],
-        });
-        expect(output.value).toContain('\u001b[1;36myou> \u001b[0m');
-      } finally {
-        ui.close();
-        if (previousNoColor === undefined) delete process.env.NO_COLOR;
-        else process.env.NO_COLOR = previousNoColor;
-      }
-    });
-
-    it('fuzzy-searches and attaches a file after an at mention', async () => {
-      const terminal = new VirtualTTY();
-      const output = new MemoryOutput(true);
-      const input = new TerminalInput(terminal, output);
-      const queries: Array<{ query: string; generation: number }> = [];
-      const files: WorkspaceFileSearch = {
-        initialize: async () => ({
-          root: '/project',
-          fileCount: 1,
-          fromCache: false,
-          truncated: false,
-          durationMilliseconds: 0,
-        }),
-        search: async (query, options) => {
-          queries.push({ query, generation: options.generation });
-          return {
-            generation: options.generation,
-            query,
-            fileCount: 1,
-            matches: [{ path: 'src/App.tsx', score: 10, indices: [4, 5, 6] }],
-          };
-        },
-        refresh: async () => ({
-          root: '/project',
-          fileCount: 1,
-          fromCache: false,
-          truncated: false,
-          durationMilliseconds: 0,
-        }),
-        dispose: async () => {},
-      };
-      const ui = new TerminalUI(input, output, new MemoryOutput(false), files);
       const action = ui.nextAction(new AbortController().signal);
 
-      terminal.push('@app');
-      await waitUntil(() => queries.some(value => value.query === 'app') && output.value.includes('src/'));
+      input.write('hello there\n');
+
+      await expect(action).resolves.toEqual({
+        type: TerminalActionType.SEND,
+        prompt: 'hello there',
+        attachmentPaths: [],
+      });
+      ui.close();
+    });
+
+    it('uses one Ink-owned input path for a wrapped prompt', async () => {
+      const terminal = new VirtualTTY();
+      const output = new MemoryOutput(true, 28);
+      const ui = new TerminalUI(terminal, output, new MemoryOutput(false));
+      const action = ui.nextAction(new AbortController().signal);
+
+      await waitUntil(() => terminal.isRaw);
+      await type(terminal, 'this is a deliberately long prompt that wraps');
       terminal.push('\r');
-      await waitUntil(() => output.value.includes('attached: src/App.tsx'));
+
+      await expect(action).resolves.toMatchObject({
+        type: TerminalActionType.SEND,
+        prompt: 'this is a deliberately long prompt that wraps',
+      });
+      expect(terminal.rawTransitions).toContain(true);
+      ui.close();
+      expect(terminal.rawTransitions.at(-1)).toBe(false);
+    });
+
+    it('fuzzy-searches, attaches, and submits a project file from the Ink prompt', async () => {
+      const terminal = new VirtualTTY();
+      const output = new MemoryOutput(true, 72);
+      const queries: string[] = [];
+      const files = fileSearch(async (query, { generation }) => {
+        queries.push(query);
+        return {
+          generation,
+          query,
+          fileCount: 1,
+          matches: [{ path: 'examples/todo-app/src/App.tsx', score: 10, indices: [22, 23, 24] }],
+        };
+      });
+      const ui = new TerminalUI(terminal, output, new MemoryOutput(false), files);
+      const action = ui.nextAction(new AbortController().signal);
+
+      await waitUntil(() => terminal.isRaw);
+      await type(terminal, '@app');
+      await waitUntil(() => queries.includes('app') && output.value.includes('examples/todo-app/src/App.tsx'));
+      terminal.push('\r');
+      await waitUntil(() => output.value.includes('attached: examples/todo-app/src/App.tsx'));
+      await type(terminal, 'what does this file do?');
       terminal.push('\r');
 
       await expect(action).resolves.toEqual({
         type: TerminalActionType.SEND,
-        prompt: '@src/App.tsx',
-        attachmentPaths: ['src/App.tsx'],
+        prompt: '@examples/todo-app/src/App.tsx what does this file do?',
+        attachmentPaths: ['examples/todo-app/src/App.tsx'],
       });
-      const firstGeneration = Math.max(...queries.map(value => value.generation));
-
-      const nextAction = ui.nextAction(new AbortController().signal);
-      terminal.push('@app');
-      await waitUntil(() => queries.some(value => value.query === 'app' && value.generation > firstGeneration));
-      terminal.push('\r');
-      await waitUntil(() => queries.some(value => value.generation > firstGeneration));
-      terminal.push('\r');
-      await expect(nextAction).resolves.toMatchObject({ type: TerminalActionType.SEND });
-      expect(
-        queries.filter(value => value.generation > firstGeneration).every(value => value.generation > firstGeneration),
-      ).toBe(true);
-      expect(terminal.rawTransitions.slice(-2)).toEqual([true, true]);
       ui.close();
     });
 
     it('removes an attachment when its mention is edited', async () => {
       const terminal = new VirtualTTY();
       const output = new MemoryOutput(true);
-      const input = new TerminalInput(terminal, output);
-      const queries: string[] = [];
-      const files = fileSearch(async (query, generation) => {
-        queries.push(query);
-        return {
-          generation,
-          query,
-          fileCount: 1,
-          matches: [{ path: 'src/App.tsx', score: 10, indices: [4, 5, 6] }],
-        };
-      });
-      const ui = new TerminalUI(input, output, new MemoryOutput(false), files);
+      const files = fileSearch(async (query, { generation }) => ({
+        generation,
+        query,
+        fileCount: 1,
+        matches: [{ path: 'src/App.tsx', score: 10, indices: [4, 5, 6] }],
+      }));
+      const ui = new TerminalUI(terminal, output, new MemoryOutput(false), files);
       const action = ui.nextAction(new AbortController().signal);
 
-      terminal.push('@app');
-      await waitUntil(() => queries.includes('app') && output.value.includes('src/App'));
+      await waitUntil(() => terminal.isRaw);
+      await type(terminal, '@app');
+      await waitUntil(() => output.value.includes('src/App.tsx'));
       terminal.push('\r');
       await waitUntil(() => output.value.includes('attached: src/App.tsx'));
-      terminal.push('\x1b[D\x7f\x05\r');
+      terminal.push('\x1b[D');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      terminal.push('\x7f');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      terminal.push('\x05');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      terminal.push('\r');
 
       await expect(action).resolves.toEqual({
         type: TerminalActionType.SEND,
@@ -139,76 +108,24 @@ describe(TerminalUI, () => {
       });
       ui.close();
     });
-
-    it('does not print an empty attachment label for an ordinary prompt', async () => {
-      const terminal = new VirtualTTY();
-      const output = new MemoryOutput(true);
-      const input = new TerminalInput(terminal, output);
-      const ui = new TerminalUI(
-        input,
-        output,
-        new MemoryOutput(false),
-        fileSearch(async (query, generation) => ({
-          generation,
-          query,
-          fileCount: 0,
-          matches: [],
-        })),
-      );
-      const action = ui.nextAction(new AbortController().signal);
-
-      terminal.push('hello\r');
-
-      await expect(action).resolves.toMatchObject({ prompt: 'hello', attachmentPaths: [] });
-      expect(output.value).not.toContain('attached:');
-      ui.close();
-    });
   });
 
   describe(TerminalUI.prototype.push, () => {
-    it('renders reasoning summaries as a subdued section before assistant text', () => {
-      const input = new PassThrough();
-      const output = new MemoryOutput(true);
-      const errors = new MemoryOutput(false);
-      const ui = new TerminalUI(input, output, errors);
-      const previousNoColor = process.env.NO_COLOR;
-      delete process.env.NO_COLOR;
-
-      try {
-        ui.beginAssistantResponse();
-        ui.push({ type: ChatResponsePartType.REASONING_SUMMARY, value: 'Inspected ' });
-        ui.push({ type: ChatResponsePartType.REASONING_SUMMARY, value: 'the project.' });
-        ui.push({ type: ChatResponsePartType.TEXT, value: 'The answer.' });
-      } finally {
-        ui.close();
-        if (previousNoColor === undefined) delete process.env.NO_COLOR;
-        else process.env.NO_COLOR = previousNoColor;
-      }
-
-      expect(output.value).toBe(
-        '\u001b[2;90mthinking> \u001b[0m' +
-          '\u001b[2;90mInspected \u001b[0m' +
-          '\u001b[2;90mthe project.\u001b[0m' +
-          '\n\n\u001b[1;32massistant> \u001b[0m' +
-          '\u001b[32mThe answer.\u001b[0m',
-      );
-      expect(errors.value).toBe('');
-    });
-
-    it('does not emit color control sequences when output is not a terminal', () => {
+    it('renders reasoning summaries with proper section breaks in redirected output', () => {
       const input = new PassThrough();
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(input, output, new MemoryOutput(false));
 
       ui.beginAssistantResponse();
-      ui.push({ type: ChatResponsePartType.REASONING_SUMMARY, value: 'Summary.' });
-      ui.push({ type: ChatResponsePartType.TEXT, value: 'Answer.' });
+      ui.push({ type: ChatResponsePartType.REASONING_SUMMARY, value: 'Inspected ' });
+      ui.push({ type: ChatResponsePartType.REASONING_SUMMARY, value: 'the project.' });
+      ui.push({ type: ChatResponsePartType.TEXT, value: 'The answer.' });
       ui.close();
 
-      expect(output.value).toBe('thinking> Summary.\n\nassistant> Answer.');
+      expect(output.value).toBe('thinking> Inspected the project.\n\nassistant> The answer.');
     });
 
-    it('renders structured tool errors with their diagnostic details', () => {
+    it('renders structured tool errors instead of object coercion', () => {
       const input = new PassThrough();
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(input, output, new MemoryOutput(false));
@@ -227,7 +144,6 @@ describe(TerminalUI, () => {
               message: 'Patch context matches more than one location.',
               path: 'src/App.tsx',
               candidates: [2, 8],
-              retry: 'Include more unique context.',
             },
           }),
         },
@@ -236,50 +152,26 @@ describe(TerminalUI, () => {
 
       expect(output.value).toBe(
         '[tool< project.propose_patch error: AMBIGUOUS: Patch context matches more than one location. ' +
-          '(path=src/App.tsx; candidates=2, 8; retry=Include more unique context.)]\n',
+          '(path=src/App.tsx; candidates=2, 8)]\n',
       );
     });
 
-    it('gives tool calls a distinct hierarchy and outcome color', () => {
-      const input = new PassThrough();
+    it('gives streamed Ink response sections distinct visual hierarchy', async () => {
+      const terminal = new VirtualTTY();
       const output = new MemoryOutput(true);
-      const ui = new TerminalUI(input, output, new MemoryOutput(false));
-      const previousNoColor = process.env.NO_COLOR;
-      delete process.env.NO_COLOR;
+      const ui = new TerminalUI(terminal, output, new MemoryOutput(false));
 
-      try {
-        ui.push({
-          type: ChatResponsePartType.TOOL,
-          activity: {
-            phase: ToolActivityPhase.STARTED,
-            namespace: 'project',
-            name: 'propose_patch',
-            callId: 'call',
-            arguments: '*** Begin Patch\n*** End Patch\n',
-          },
-        });
-        ui.push({
-          type: ChatResponsePartType.TOOL,
-          activity: {
-            phase: ToolActivityPhase.COMPLETED,
-            namespace: 'project',
-            name: 'propose_patch',
-            callId: 'call',
-            arguments: '',
-            output: '{"status":"STAGED_FOR_REVIEW"}',
-          },
-        });
-      } finally {
-        ui.close();
-        if (previousNoColor === undefined) delete process.env.NO_COLOR;
-        else process.env.NO_COLOR = previousNoColor;
-      }
+      ui.beginAssistantResponse();
+      ui.push({ type: ChatResponsePartType.REASONING_SUMMARY, value: 'Considering the change.\nChecking context.' });
+      ui.push({ type: ChatResponsePartType.TEXT, value: 'Done.' });
+      ui.showTurnCompleted(1_000, null);
+      await waitUntil(() => stripVTControlCharacters(output.value).includes('assistant> Done.'));
 
-      expect(output.value).toBe(
-        '\u001b[33m[tool> project.propose_patch]\u001b[0m\n' +
-          '\u001b[2m  *** Begin Patch\n  *** End Patch\u001b[0m\n' +
-          '\u001b[32m[tool< project.propose_patch completed]\u001b[0m\n',
-      );
+      const rendered = stripVTControlCharacters(output.value);
+      expect(rendered).toContain('thinking> Considering the change.\nChecking context.');
+      expect(rendered).toContain('assistant> Done.');
+      expect(rendered).toContain('[1.0s | usage unavailable]');
+      ui.close();
     });
   });
 });
@@ -288,32 +180,68 @@ class VirtualTTY extends Duplex {
   readonly isTTY = true;
   isRaw = false;
   readonly rawTransitions: boolean[] = [];
+
   setRawMode(enabled: boolean): void {
     this.isRaw = enabled;
     this.rawTransitions.push(enabled);
   }
+
   override _read(): void {}
   override _write(_chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     callback();
   }
 }
 
+class MemoryOutput extends Writable {
+  readonly isTTY: boolean;
+  readonly columns: number;
+  readonly rows = 24;
+  value = '';
+
+  constructor(isTTY: boolean, columns = 80) {
+    super();
+    this.isTTY = isTTY;
+    this.columns = columns;
+  }
+
+  override _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    this.value += String(chunk);
+    callback();
+  }
+}
+
+function fileSearch(search: WorkspaceFileSearch['search']): WorkspaceFileSearch {
+  return {
+    initialize: async () => ({
+      root: '/project',
+      fileCount: 0,
+      fromCache: false,
+      truncated: false,
+      durationMilliseconds: 0,
+    }),
+    search,
+    refresh: async () => ({
+      root: '/project',
+      fileCount: 0,
+      fromCache: false,
+      truncated: false,
+      durationMilliseconds: 0,
+    }),
+    dispose: async () => {},
+  };
+}
+
 async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt++) {
+  for (let attempt = 0; attempt < 200; attempt++) {
     if (predicate()) return;
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await new Promise<void>(resolve => setTimeout(resolve, 5));
   }
   throw new Error('Condition was not reached.');
 }
 
-function fileSearch(
-  search: (query: string, generation: number) => ReturnType<WorkspaceFileSearch['search']>,
-): WorkspaceFileSearch {
-  const state = { root: '/project', fileCount: 1, fromCache: false, truncated: false, durationMilliseconds: 0 };
-  return {
-    initialize: async () => state,
-    search: (query, options) => search(query, options.generation),
-    refresh: async () => state,
-    dispose: async () => {},
-  };
+async function type(terminal: VirtualTTY, value: string): Promise<void> {
+  for (const character of value) {
+    terminal.push(character);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
 }

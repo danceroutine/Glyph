@@ -4,7 +4,7 @@ import { describeError } from '../describeError.ts';
 import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
 import { AccountSelectionType } from './AccountSelectionType.ts';
 import { TerminalActionType } from './TerminalActionType.ts';
-import type { TerminalUI } from './TerminalUI.ts';
+import type { TerminalUI } from './TerminalUI.tsx';
 import type { TerminalEditReviewer } from './TerminalEditReviewer.ts';
 
 interface TerminalApplicationOptions {

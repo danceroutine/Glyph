@@ -132,6 +132,74 @@ describe('staged editing loop', () => {
     }
   });
 
+  it('appends proposals from successive actors to one durable review queue', async () => {
+    const firstCall = ScriptedOpenAIResponsesFixture.encodeToolCall({
+      callId: 'call-first-actor',
+      namespace: 'project',
+      name: 'propose_edits',
+      inputKind: ToolInputKind.JSON,
+      input: {
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'first.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'first actor\n',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      },
+    });
+    const secondCall = ScriptedOpenAIResponsesFixture.encodeToolCall({
+      callId: 'call-second-actor',
+      namespace: 'project',
+      name: 'propose_edits',
+      inputKind: ToolInputKind.JSON,
+      input: {
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'second.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'second actor\n',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      },
+    });
+    const harness = await EditingE2EHarness.create({}, [
+      { id: 'response-first-tool', output: [firstCall] },
+      { id: 'response-first-final', output: [EditingE2EHarness.finalMessage('First proposal staged.')] },
+      { id: 'response-second-tool', output: [secondCall] },
+      { id: 'response-second-final', output: [EditingE2EHarness.finalMessage('Second proposal staged.')] },
+    ]);
+    try {
+      await harness.send('First actor request.');
+      await harness.send('Second actor request.');
+
+      const [first, second] = harness.reviews.activeReviews;
+      expect(harness.reviews.activeReviews).toHaveLength(2);
+      expect(first?.files[0]?.sourcePath).toBe('first.txt');
+      expect(second?.files[0]?.sourcePath).toBe('second.txt');
+      await expect(readFile(join(harness.projectRoot, 'first.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(harness.projectRoot, 'second.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+      await harness.reviews.acceptInReview(first!.id, first!.files[0]!.items[0]!.id);
+      expect(harness.reviews.activeReviews).toEqual([second]);
+      await harness.reviews.acceptInReview(second!.id, second!.files[0]!.items[0]!.id);
+
+      expect(await readFile(join(harness.projectRoot, 'first.txt'), 'utf8')).toBe('first actor\n');
+      expect(await readFile(join(harness.projectRoot, 'second.txt'), 'utf8')).toBe('second actor\n');
+      expect(networkAttempts).toBe(0);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   it('preserves exact bytes across the structured text, boundary, whitespace, and Unicode matrix', async () => {
     const byteOrderMark = Buffer.from([0xef, 0xbb, 0xbf]);
     const cases = [

@@ -33,7 +33,7 @@ describe(EnvironmentConfigurationProvider, () => {
         maxTotalHunks: 256,
         maxHunksPerFile: 64,
         diffBudgetMs: 1_000,
-        maxActiveReviews: 1,
+        maxActiveReviews: 8,
         newFileByteOrderMark: false,
         newFileLineEnding: '\n',
       }),
