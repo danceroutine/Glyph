@@ -7,6 +7,7 @@ import type { ChatTurnResult } from './ChatTurnResult.ts';
 import { DiagnosticSeverity } from './DiagnosticSeverity.ts';
 import type { ProviderTraceEntry } from './ProviderTraceEntry.ts';
 import type { TurnResult } from './TurnResult.ts';
+import type { ChatRequestInput } from './ChatRequest.ts';
 
 /** Mutable history for one host-owned chat session. */
 export class ChatConversation {
@@ -22,8 +23,12 @@ export class ChatConversation {
     this.traceEnabled = traceEnabled;
   }
 
-  get model(): string { return this.provider.model; }
-  get isTraceEnabled(): boolean { return this.traceEnabled; }
+  get model(): string {
+    return this.provider.model;
+  }
+  get isTraceEnabled(): boolean {
+    return this.traceEnabled;
+  }
 
   reset(): void {
     this.provider.reset();
@@ -33,19 +38,21 @@ export class ChatConversation {
     this.traceEnabled = enabled;
   }
 
-  async send(prompt: string, response: ChatResponseStream, signal: AbortSignal): Promise<ChatTurnResult> {
+  async send(request: ChatRequestInput, response: ChatResponseStream, signal: AbortSignal): Promise<ChatTurnResult> {
     const trace: ProviderTraceEntry[] = [];
     const startedAt = performance.now();
     let result: TurnResult | undefined;
     let failure: unknown;
 
     try {
-      result = await this.provider.send(prompt, {
+      result = await this.provider.send(request, {
         signal,
         onText: value => response.push({ type: ChatResponsePartType.TEXT, value }),
         onReasoningSummary: value => response.push({ type: ChatResponsePartType.REASONING_SUMMARY, value }),
         onToolActivity: activity => response.push({ type: ChatResponsePartType.TOOL, activity }),
-        onTrace: entry => { if (this.traceEnabled) trace.push(entry); },
+        onTrace: entry => {
+          if (this.traceEnabled) trace.push(entry);
+        },
       });
     } catch (error) {
       failure = error;

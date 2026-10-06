@@ -27,7 +27,10 @@ export class JsDiffTextDiffer implements TextDiffer {
         const part = changes[index];
         if (!part || (!part.added && !part.removed)) break;
         const value = part.value.join('');
-        if (part.removed) { removedText += value; sourceOffset += value.length; }
+        if (part.removed) {
+          removedText += value;
+          sourceOffset += value.length;
+        }
         if (part.added) insertedText += value;
         index++;
       }

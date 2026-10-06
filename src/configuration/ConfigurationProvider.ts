@@ -1,12 +1,14 @@
 import type { OpenAIConfiguration } from '../providers/openai/OpenAIConfiguration.ts';
 import type { ChatConfiguration } from './ChatConfiguration.ts';
 import type { EditingConfiguration } from '../editing/configuration/EditingConfiguration.ts';
+import type { ContextAttachmentConfiguration } from '../context/attachments/ContextAttachmentConfiguration.ts';
 
 /** Host-facing configuration port. A VS Code adapter can read these values from WorkspaceConfiguration. */
 export interface ConfigurationProvider {
   readonly stateDirectory: string;
   readonly configuredModel: string | undefined;
   readonly chat: ChatConfiguration;
+  readonly contextAttachments: ContextAttachmentConfiguration;
   readonly editing: EditingConfiguration;
   readonly openAI: OpenAIConfiguration;
   readonly traceEnabled: boolean;

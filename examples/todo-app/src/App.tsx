@@ -45,7 +45,7 @@ export function App() {
 
   const visibleTodos = useMemo(
     () =>
-      todos.filter((todo) => {
+      todos.filter(todo => {
         if (filter === 'active') return !todo.completed;
         if (filter === 'completed') return todo.completed;
         return true;
@@ -53,7 +53,7 @@ export function App() {
     [filter, todos],
   );
 
-  const activeCount = todos.filter((todo) => !todo.completed).length;
+  const activeCount = todos.filter(todo => !todo.completed).length;
   const completedCount = todos.length - activeCount;
 
   function addTodo(event: FormEvent<HTMLFormElement>) {
@@ -61,27 +61,20 @@ export function App() {
     const title = draft.trim();
     if (!title) return;
 
-    setTodos((current) => [
-      ...current,
-      { id: crypto.randomUUID(), title, completed: false, createdAt: Date.now() },
-    ]);
+    setTodos(current => [...current, { id: crypto.randomUUID(), title, completed: false, createdAt: Date.now() }]);
     setDraft('');
   }
 
   function toggleTodo(id: string) {
-    setTodos((current) =>
-      current.map((todo) =>
-        todo.id === id ? { ...todo, completed: !todo.completed } : todo,
-      ),
-    );
+    setTodos(current => current.map(todo => (todo.id === id ? { ...todo, completed: !todo.completed } : todo)));
   }
 
   function removeTodo(id: string) {
-    setTodos((current) => current.filter((todo) => todo.id !== id));
+    setTodos(current => current.filter(todo => todo.id !== id));
   }
 
   function clearCompleted() {
-    setTodos((current) => current.filter((todo) => !todo.completed));
+    setTodos(current => current.filter(todo => !todo.completed));
   }
 
   return (
@@ -100,7 +93,7 @@ export function App() {
           <input
             id="new-todo"
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={event => setDraft(event.target.value)}
             placeholder="What needs doing?"
             autoComplete="off"
           />
@@ -111,7 +104,7 @@ export function App() {
 
         <div className="list-controls">
           <div className="filters" aria-label="Filter tasks">
-            {filters.map((name) => (
+            {filters.map(name => (
               <button
                 className={filter === name ? 'filter active' : 'filter'}
                 key={name}
@@ -130,14 +123,10 @@ export function App() {
 
         {visibleTodos.length > 0 ? (
           <ul className="todo-list">
-            {visibleTodos.map((todo) => (
+            {visibleTodos.map(todo => (
               <li className={todo.completed ? 'todo-item completed' : 'todo-item'} key={todo.id}>
                 <label className="todo-label">
-                  <input
-                    type="checkbox"
-                    checked={todo.completed}
-                    onChange={() => toggleTodo(todo.id)}
-                  />
+                  <input type="checkbox" checked={todo.completed} onChange={() => toggleTodo(todo.id)} />
                   <span className="checkmark" aria-hidden="true" />
                   <span className="todo-title">{todo.title}</span>
                 </label>

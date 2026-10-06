@@ -18,7 +18,9 @@ export class OpenAIModelCatalog implements ModelCatalog {
       timeoutMs: this.configuration.requestTimeoutMs,
     });
     if (!response.ok) {
-      throw new ProviderError(`Model discovery returned HTTP ${response.status}. Check ChatGPT plan permissions or try again later. No API-key fallback is available.`);
+      throw new ProviderError(
+        `Model discovery returned HTTP ${response.status}. Check ChatGPT plan permissions or try again later. No API-key fallback is available.`,
+      );
     }
     const body = toRecord(response.body);
     if (!Array.isArray(body.models)) {
@@ -26,9 +28,10 @@ export class OpenAIModelCatalog implements ModelCatalog {
     }
     const models = body.models
       .map(toRecord)
-      .filter(model => model.visibility === 'list'
-        && typeof model.slug === 'string'
-        && typeof model.display_name === 'string')
+      .filter(
+        model =>
+          model.visibility === 'list' && typeof model.slug === 'string' && typeof model.display_name === 'string',
+      )
       .map(model => ({ slug: String(model.slug), name: String(model.display_name) }));
     if (!models.length) throw new ProviderError('No selectable models are available to this ChatGPT account.');
     return models;

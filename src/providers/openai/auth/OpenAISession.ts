@@ -27,26 +27,17 @@ export class OpenAISession implements OpenAISessionService {
     return message.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED JWT]');
   }
 
-  async signIn(
-    existing?: OpenAIAccount,
-    consent = false,
-    authorize?: AuthorizationHandler,
-  ): Promise<OpenAIAccount> {
+  async signIn(existing?: OpenAIAccount, consent = false, authorize?: AuthorizationHandler): Promise<OpenAIAccount> {
     if (!authorize) throw new AuthenticationError('An authorization handler is required to sign in.');
-    const result = await this.authentication.signIn(
-      this.store.state.hostId,
-      existing,
-      consent,
-      this.signal,
-      authorize,
-    );
+    const result = await this.authentication.signIn(this.store.state.hostId, existing, consent, this.signal, authorize);
     this.remember(result.tokens);
     const account: OpenAIAccount = {
       ...result,
       planNoticeSeen: existing?.planNoticeSeen ?? false,
     };
-    const index = this.store.state.accounts.findIndex(candidate =>
-      candidate.clientId === account.clientId && candidate.subject === account.subject);
+    const index = this.store.state.accounts.findIndex(
+      candidate => candidate.clientId === account.clientId && candidate.subject === account.subject,
+    );
     if (index < 0) this.store.state.accounts.push(account);
     else this.store.state.accounts[index] = account;
     await this.store.save();
@@ -94,10 +85,9 @@ export class OpenAISession implements OpenAISessionService {
       if (error instanceof OpenAIOAuthError && terminalRefreshErrors.has(error.code)) {
         delete account.tokens;
         await this.store.save();
-        throw new AuthenticationError(
-          'The renewable session expired or was revoked. Use /login to sign in again.',
-          { cause: error },
-        );
+        throw new AuthenticationError('The renewable session expired or was revoked. Use /login to sign in again.', {
+          cause: error,
+        });
       }
       throw error;
     }

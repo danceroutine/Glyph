@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.88.0 --profile minimal --component clippy rustfmt
       - uses: pnpm/action-setup@v4
         with:
           version: 12.8.1
@@ -17,4 +18,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check && pnpm test
+      - name: Lint, format, type-check, and validate Rust
+        run: pnpm check
+      - name: Test
+        run: pnpm test

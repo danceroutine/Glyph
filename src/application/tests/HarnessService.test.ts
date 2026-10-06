@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatProvider } from '../../chat/ChatProvider.ts';
+import { toChatRequest } from '../../chat/ChatRequest.ts';
 import type { ChatProviderFactory } from '../../chat/ChatProviderFactory.ts';
+import type { WorkspaceFileSearch } from '../../context/search/WorkspaceFileSearch.ts';
 import type { ChatResponsePart } from '../../chat/ChatResponsePart.ts';
 import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
 import type { ModelCatalog } from '../../chat/ModelCatalog.ts';
@@ -23,10 +25,15 @@ const configuration: OpenAIConfiguration = {
 };
 
 const account: OpenAIAccount = {
-  clientId: 'client', subject: 'subject', email: 'developer@example.com',
+  clientId: 'client',
+  subject: 'subject',
+  email: 'developer@example.com',
   tokens: {
-    accessToken: 'access', refreshToken: 'refresh', idToken: 'id',
-    expiresAt: Number.MAX_SAFE_INTEGER, scopes: [configuration.planScope],
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    idToken: 'id',
+    expiresAt: Number.MAX_SAFE_INTEGER,
+    scopes: [configuration.planScope],
   },
 };
 
@@ -42,7 +49,9 @@ class FakeSession implements OpenAISessionService {
   readonly signIn = vi.fn(async () => account);
   readonly accessToken = vi.fn(async () => 'access');
   readonly logout = vi.fn(async () => true);
-  redact(message: string): string { return message.replaceAll('secret', '[REDACTED]'); }
+  redact(message: string): string {
+    return message.replaceAll('secret', '[REDACTED]');
+  }
 }
 
 class FakeProvider implements ChatProvider {
@@ -50,12 +59,19 @@ class FakeProvider implements ChatProvider {
   readonly reset = vi.fn();
   readonly prompts: string[] = [];
 
-  async send(text: string, options: Parameters<ChatProvider['send']>[1]): Promise<TurnResult> {
-    this.prompts.push(text);
-    options.onTrace?.({ sequence: 1, timestamp: 'now', kind: 'request', data: { text } });
+  async send(
+    input: Parameters<ChatProvider['send']>[0],
+    options: Parameters<ChatProvider['send']>[1],
+  ): Promise<TurnResult> {
+    const request = toChatRequest(input);
+    this.prompts.push(request.text);
+    options.onTrace?.({ sequence: 1, timestamp: 'now', kind: 'request', data: { text: request.text } });
     options.onToolActivity?.({
-      phase: ToolActivityPhase.STARTED, namespace: 'project', name: 'read_project_file',
-      callId: 'call', arguments: '{}',
+      phase: ToolActivityPhase.STARTED,
+      namespace: 'project',
+      name: 'read_project_file',
+      callId: 'call',
+      arguments: '{}',
     });
     options.onReasoningSummary?.('Looked up the relevant project context.');
     options.onText('answer');
@@ -68,14 +84,90 @@ class FakeProvider implements ChatProvider {
 
 function logger(trace: Logger['trace'] = async () => {}): Logger {
   const result: Logger = {
-    destination: '/config/trace.log', trace,
+    destination: '/config/trace.log',
+    trace,
     forNamespace: () => result,
-    debug: async () => {}, info: async () => {}, warn: async () => {}, error: async () => {},
+    debug: async () => {},
+    info: async () => {},
+    warn: async () => {},
+    error: async () => {},
   };
   return result;
 }
 
 describe(HarnessService, () => {
+  describe(HarnessService.prototype.initialize, () => {
+    it('initializes and disposes the resident file index with the account-store lifecycle', async () => {
+      const store = new MemoryStore();
+      const fileSearch: WorkspaceFileSearch = {
+        initialize: vi.fn(async () => ({
+          root: '/project',
+          fileCount: 1,
+          fromCache: false,
+          truncated: false,
+          durationMilliseconds: 1,
+        })),
+        search: vi.fn(),
+        refresh: vi.fn(),
+        dispose: vi.fn(async () => {}),
+      };
+      const harness = new HarnessService(
+        store,
+        new FakeSession(),
+        { list: async () => [] },
+        { create: () => new FakeProvider() },
+        logger(),
+        configuration,
+        {},
+        undefined,
+        undefined,
+        fileSearch,
+      );
+
+      await harness.initialize();
+      await harness.initialize();
+      await harness.dispose();
+      await harness.dispose();
+
+      expect(fileSearch.initialize).toHaveBeenCalledOnce();
+      expect(fileSearch.dispose).toHaveBeenCalledOnce();
+      expect(store.acquire).toHaveBeenCalledOnce();
+      expect(store.release).toHaveBeenCalledOnce();
+    });
+
+    it('disposes a failed file index and releases the account lock before surfacing startup failure', async () => {
+      const store = new MemoryStore();
+      const startupFailure = new Error('native index could not start');
+      const fileSearch: WorkspaceFileSearch = {
+        initialize: vi.fn(async () => {
+          throw startupFailure;
+        }),
+        search: vi.fn(),
+        refresh: vi.fn(),
+        dispose: vi.fn(async () => {}),
+      };
+      const harness = new HarnessService(
+        store,
+        new FakeSession(),
+        { list: async () => [] },
+        { create: () => new FakeProvider() },
+        logger(),
+        configuration,
+        {},
+        undefined,
+        undefined,
+        fileSearch,
+      );
+
+      await expect(harness.initialize()).rejects.toBe(startupFailure);
+
+      expect(fileSearch.dispose).toHaveBeenCalledOnce();
+      expect(store.release).toHaveBeenCalledOnce();
+      await harness.dispose();
+      expect(store.release).toHaveBeenCalledOnce();
+    });
+  });
+
   describe(HarnessService.prototype.createConversation, () => {
     it('exposes request-scoped response parts through injected lifecycle ports', async () => {
       const store = new MemoryStore();
@@ -85,15 +177,25 @@ describe(HarnessService, () => {
       const providers: ChatProviderFactory = { create: vi.fn(() => provider) };
       const traces: unknown[] = [];
       const harness = new HarnessService(
-        store, session, catalog, providers,
-        logger(async (_message, data) => { traces.push(data); }), configuration,
+        store,
+        session,
+        catalog,
+        providers,
+        logger(async (_message, data) => {
+          traces.push(data);
+        }),
+        configuration,
       );
       const parts: ChatResponsePart[] = [];
 
       await harness.initialize();
       expect(await harness.listModels(account)).toEqual([{ slug: 'model-a', name: 'Model A' }]);
       const conversation = harness.createConversation(account, { slug: 'model-a', name: 'Model A' });
-      const result = await conversation.send('question', { push: part => parts.push(part) }, new AbortController().signal);
+      const result = await conversation.send(
+        'question',
+        { push: part => parts.push(part) },
+        new AbortController().signal,
+      );
       conversation.reset();
       await harness.dispose();
 
@@ -115,30 +217,48 @@ describe(HarnessService, () => {
 
     it('reports logger failures without discarding a completed turn', async () => {
       const harness = new HarnessService(
-        new MemoryStore(), new FakeSession(),
+        new MemoryStore(),
+        new FakeSession(),
         { list: async () => [{ slug: 'model-a', name: 'Model A' }] },
         { create: () => new FakeProvider() },
-        logger(async () => { throw new Error('secret disk failure'); }), configuration,
+        logger(async () => {
+          throw new Error('secret disk failure');
+        }),
+        configuration,
       );
       const conversation = harness.createConversation(account, { slug: 'model-a', name: 'Model A' });
       const parts: ChatResponsePart[] = [];
 
-      const result = await conversation.send('question', { push: part => parts.push(part) }, new AbortController().signal);
+      const result = await conversation.send(
+        'question',
+        { push: part => parts.push(part) },
+        new AbortController().signal,
+      );
 
       expect(result.responseId).toBe('response');
-      expect(parts).toContainEqual(expect.objectContaining({
-        type: ChatResponsePartType.DIAGNOSTIC,
-        message: 'Trace log write failed: [REDACTED] disk failure',
-      }));
+      expect(parts).toContainEqual(
+        expect.objectContaining({
+          type: ChatResponsePartType.DIAGNOSTIC,
+          message: 'Trace log write failed: [REDACTED] disk failure',
+        }),
+      );
     });
 
     it('creates isolated provider history for each host-owned conversation', async () => {
       const created: FakeProvider[] = [];
       const harness = new HarnessService(
-        new MemoryStore(), new FakeSession(),
+        new MemoryStore(),
+        new FakeSession(),
         { list: async () => [{ slug: 'model-a', name: 'Model A' }] },
-        { create: () => { const provider = new FakeProvider(); created.push(provider); return provider; } },
-        logger(), configuration,
+        {
+          create: () => {
+            const provider = new FakeProvider();
+            created.push(provider);
+            return provider;
+          },
+        },
+        logger(),
+        configuration,
       );
       const first = harness.createConversation(account, { slug: 'model-a', name: 'Model A' });
       const second = harness.createConversation(account, { slug: 'model-a', name: 'Model A' });

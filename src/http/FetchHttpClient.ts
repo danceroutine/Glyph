@@ -20,7 +20,11 @@ export class FetchHttpClient implements HttpClient {
     return this.request('POST', url, options);
   }
 
-  private async request(method: string, url: string | URL, options: HttpRequestOptions): Promise<HttpResponse<unknown>> {
+  private async request(
+    method: string,
+    url: string | URL,
+    options: HttpRequestOptions,
+  ): Promise<HttpResponse<unknown>> {
     const startedAt = performance.now();
     const target = String(url);
     await this.safeLog('debug', 'http.request', { method, url: target });
@@ -82,8 +86,11 @@ function encodeBody(body: unknown, encoding: HttpBodyEncoding | undefined, heade
 
 async function decodeBody(response: Response, responseBody: HttpResponseBody): Promise<unknown> {
   switch (responseBody) {
-    case HttpResponseBody.JSON: return response.json();
-    case HttpResponseBody.TEXT: return response.text();
-    case HttpResponseBody.NONE: return undefined;
+    case HttpResponseBody.JSON:
+      return response.json();
+    case HttpResponseBody.TEXT:
+      return response.text();
+    case HttpResponseBody.NONE:
+      return undefined;
   }
 }

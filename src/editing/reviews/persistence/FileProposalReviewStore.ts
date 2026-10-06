@@ -16,11 +16,17 @@ export class FileProposalReviewStore implements ProposalReviewStore {
   async load(): Promise<EditProposal | undefined> {
     try {
       const value = JSON.parse(await readFile(this.path, 'utf8')) as EditProposal;
-      if (value.schemaVersion !== 1 || !Array.isArray(value.files)) throw new Error('Unsupported proposal-review checkpoint schema.');
+      if (value.schemaVersion !== 1 || !Array.isArray(value.files))
+        throw new Error('Unsupported proposal-review checkpoint schema.');
       return value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw new EditError(EditFailureReason.PERSISTENCE, 'Could not load the active proposal review.', {}, { cause: error });
+      throw new EditError(
+        EditFailureReason.PERSISTENCE,
+        'Could not load the active proposal review.',
+        {},
+        { cause: error },
+      );
     }
   }
 
@@ -33,17 +39,30 @@ export class FileProposalReviewStore implements ProposalReviewStore {
       await chmod(temporary, 0o600);
       await rename(temporary, this.path);
     } catch (error) {
-      throw new EditError(EditFailureReason.PERSISTENCE, 'Could not persist the active proposal review.', {}, { cause: error });
+      throw new EditError(
+        EditFailureReason.PERSISTENCE,
+        'Could not persist the active proposal review.',
+        {},
+        { cause: error },
+      );
     } finally {
-      await unlink(temporary).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; });
+      await unlink(temporary).catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      });
     }
   }
 
   async clear(): Promise<void> {
-    try { await unlink(this.path); }
-    catch (error) {
+    try {
+      await unlink(this.path);
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw new EditError(EditFailureReason.PERSISTENCE, 'Could not clear the settled proposal review.', {}, { cause: error });
+        throw new EditError(
+          EditFailureReason.PERSISTENCE,
+          'Could not clear the settled proposal review.',
+          {},
+          { cause: error },
+        );
       }
     }
   }

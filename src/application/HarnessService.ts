@@ -12,6 +12,10 @@ import type { AuthorizationHandler } from '../providers/openai/auth/Authorizatio
 import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
 import type { OpenAIAccountStore } from '../providers/openai/auth/OpenAIAccountStore.ts';
 import type { OpenAISessionService } from '../providers/openai/auth/OpenAISessionService.ts';
+import type { ChatRequest } from '../chat/ChatRequest.ts';
+import type { ContextAttachmentReference } from '../context/attachments/ContextAttachmentReference.ts';
+import type { ContextAttachmentService } from '../context/attachments/ContextAttachmentService.ts';
+import type { WorkspaceFileSearch } from '../context/search/WorkspaceFileSearch.ts';
 
 const emptyUsage = (): Usage => ({
   inputTokens: 0,
@@ -23,8 +27,9 @@ const emptyUsage = (): Usage => ({
 
 /**
  * Headless application service. It owns authentication/model/conversation
- * behavior, but knows nothing about readline, console output, commands, or VS
- * Code. Hosts drive it one operation and one request at a time.
+ * behavior plus shared workspace-context lifecycle, but knows nothing about
+ * readline, console output, commands, or VS Code. Hosts drive it one operation
+ * and one request at a time.
  */
 export class HarnessService {
   private readonly aggregateUsage = emptyUsage();
@@ -40,27 +45,68 @@ export class HarnessService {
     private readonly openAI: OpenAIConfiguration,
     options: { traceEnabled?: boolean } = {},
     readonly proposalReviews?: ProposalReviewManager,
+    private readonly contextAttachments?: ContextAttachmentService,
+    private readonly fileSearch?: WorkspaceFileSearch,
   ) {
     this.traceEnabled = options.traceEnabled ?? true;
   }
 
-  get accounts(): readonly OpenAIAccount[] { return this.store.state.accounts; }
-  get tracePath(): string | undefined { return this.logger.destination; }
-  get isTraceEnabled(): boolean { return this.traceEnabled; }
-  get usage(): Usage { return { ...this.aggregateUsage }; }
+  get accounts(): readonly OpenAIAccount[] {
+    return this.store.state.accounts;
+  }
+  get tracePath(): string | undefined {
+    return this.logger.destination;
+  }
+  get isTraceEnabled(): boolean {
+    return this.traceEnabled;
+  }
+  get usage(): Usage {
+    return { ...this.aggregateUsage };
+  }
 
   async initialize(): Promise<void> {
     if (this.acquired) return;
     await this.store.acquire();
     this.acquired = true;
-    await this.store.load();
-    await this.proposalReviews?.initialize();
+    let fileSearchStarted = false;
+    try {
+      await this.store.load();
+      await this.proposalReviews?.initialize();
+      fileSearchStarted = this.fileSearch !== undefined;
+      await this.fileSearch?.initialize();
+    } catch (error) {
+      this.acquired = false;
+      const cleanupFailures: unknown[] = [];
+      if (fileSearchStarted) {
+        try {
+          await this.fileSearch?.dispose();
+        } catch (cleanupError) {
+          cleanupFailures.push(cleanupError);
+        }
+      }
+      try {
+        await this.store.release();
+      } catch (cleanupError) {
+        cleanupFailures.push(cleanupError);
+      }
+      if (cleanupFailures.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupFailures],
+          'Harness initialization failed and resource cleanup was incomplete.',
+        );
+      }
+      throw error;
+    }
   }
 
   async dispose(): Promise<void> {
     if (!this.acquired) return;
     this.acquired = false;
-    await this.store.release();
+    try {
+      await this.fileSearch?.dispose();
+    } finally {
+      await this.store.release();
+    }
   }
 
   hasPlanAccess(account: OpenAIAccount): boolean {
@@ -93,6 +139,13 @@ export class HarnessService {
       result => this.recordUsage(result),
       this.traceEnabled,
     );
+  }
+
+  /** Resolves user-selected paths at send time so providers receive fresh, authorized snapshots. */
+  async resolveChatRequest(text: string, references: readonly ContextAttachmentReference[] = []): Promise<ChatRequest> {
+    if (references.length === 0) return { text, attachments: [] };
+    if (!this.contextAttachments) throw new Error('This host does not support workspace context attachments.');
+    return { text, attachments: await this.contextAttachments.resolve(references) };
   }
 
   setTraceEnabled(enabled: boolean): void {

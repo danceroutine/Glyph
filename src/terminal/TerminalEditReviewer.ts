@@ -32,16 +32,27 @@ export class TerminalEditReviewer {
         this.selection = Math.max(0, Math.min(this.selection, entries.length - 1));
         this.render(manager.active, entries);
         const key = await this.input.nextKey(signal);
-        if (key === '\x03') { this.onInterrupt(); return; }
+        if (key === '\x03') {
+          this.onInterrupt();
+          return;
+        }
         if (key === '\x1b' || key.toLowerCase() === 'q') return;
         if (key === 'Y' || key === 'y') {
-          try { await manager.accept(entries[this.selection]!.item.id); this.diagnostic = ''; }
-          catch (error) { this.diagnostic = error instanceof Error ? error.message : String(error); }
+          try {
+            await manager.accept(entries[this.selection]!.item.id);
+            this.diagnostic = '';
+          } catch (error) {
+            this.diagnostic = error instanceof Error ? error.message : String(error);
+          }
           continue;
         }
         if (key === 'N' || key === 'n') {
-          try { await manager.reject(entries[this.selection]!.item.id); this.diagnostic = ''; }
-          catch (error) { this.diagnostic = error instanceof Error ? error.message : String(error); }
+          try {
+            await manager.reject(entries[this.selection]!.item.id);
+            this.diagnostic = '';
+          } catch (error) {
+            this.diagnostic = error instanceof Error ? error.message : String(error);
+          }
           continue;
         }
         this.navigate(key, entries);
@@ -74,12 +85,18 @@ export class TerminalEditReviewer {
     const height = Math.max(12, (this.output as NodeJS.WriteStream).rows ?? 30);
     const body = wrapAnsi(renderEntry(entry.file, entry.item), width - 2, { hard: true, trim: false }).split('\n');
     const visible = body.slice(this.scroll, this.scroll + height - 5);
-    const accepted = proposal.files.flatMap(file => file.items).filter(item => item.decision === EditDecisionState.ACCEPTED).length;
-    const rejected = proposal.files.flatMap(file => file.items).filter(item => item.decision === EditDecisionState.REJECTED).length;
+    const accepted = proposal.files
+      .flatMap(file => file.items)
+      .filter(item => item.decision === EditDecisionState.ACCEPTED).length;
+    const rejected = proposal.files
+      .flatMap(file => file.items)
+      .filter(item => item.decision === EditDecisionState.REJECTED).length;
     const header = `Edit review ${this.selection + 1}/${entries.length}  accepted ${accepted}  rejected ${rejected}`;
     const footer = 'Y accept  N reject  j/k scroll  h/l file  [c/]c change  gg/G ends  Q/Esc defer';
     const diagnostic = this.diagnostic ? `\nError: ${sanitize(this.diagnostic)}` : '';
-    this.output.write(`\x1b[H\x1b[2J${sanitize(header)}${diagnostic}\n${visible.map(sanitize).join('\n')}\n${sanitize(footer)}`);
+    this.output.write(
+      `\x1b[H\x1b[2J${sanitize(header)}${diagnostic}\n${visible.map(sanitize).join('\n')}\n${sanitize(footer)}`,
+    );
   }
 
   private navigate(key: string, entries: ReturnType<typeof pendingEntries>): void {
@@ -87,16 +104,28 @@ export class TerminalEditReviewer {
     else if (key === 'k' || key === '\x1b[A') this.scroll = Math.max(0, this.scroll - 1);
     else if (key === '\x06' || key === '\x1b[6~') this.scroll += 10;
     else if (key === '\x02' || key === '\x1b[5~') this.scroll = Math.max(0, this.scroll - 10);
-    else if (key === ']c') { this.selection = Math.min(entries.length - 1, this.selection + 1); this.scroll = 0; }
-    else if (key === '[c') { this.selection = Math.max(0, this.selection - 1); this.scroll = 0; }
-    else if (key === 'G') { this.selection = entries.length - 1; this.scroll = 0; }
-    else if (key === 'g' && this.pendingPrefix === 'g') { this.selection = 0; this.scroll = 0; this.pendingPrefix = ''; }
-    else if (key === 'g') this.pendingPrefix = 'g';
+    else if (key === ']c') {
+      this.selection = Math.min(entries.length - 1, this.selection + 1);
+      this.scroll = 0;
+    } else if (key === '[c') {
+      this.selection = Math.max(0, this.selection - 1);
+      this.scroll = 0;
+    } else if (key === 'G') {
+      this.selection = entries.length - 1;
+      this.scroll = 0;
+    } else if (key === 'g' && this.pendingPrefix === 'g') {
+      this.selection = 0;
+      this.scroll = 0;
+      this.pendingPrefix = '';
+    } else if (key === 'g') this.pendingPrefix = 'g';
     else if (key === 'l' || key === '\x1b[C') this.selection = adjacentFile(entries, this.selection, 1);
     else if (key === 'h' || key === '\x1b[D') this.selection = adjacentFile(entries, this.selection, -1);
     else if (key === '[' || key === ']') this.pendingPrefix = key;
     else if (key === 'c' && (this.pendingPrefix === '[' || this.pendingPrefix === ']')) {
-      this.selection = Math.max(0, Math.min(entries.length - 1, this.selection + (this.pendingPrefix === ']' ? 1 : -1)));
+      this.selection = Math.max(
+        0,
+        Math.min(entries.length - 1, this.selection + (this.pendingPrefix === ']' ? 1 : -1)),
+      );
       this.pendingPrefix = '';
       this.scroll = 0;
     } else this.pendingPrefix = '';
@@ -104,9 +133,9 @@ export class TerminalEditReviewer {
 }
 
 function pendingEntries(proposal: EditProposal): { file: FileEditPlan; item: EditReviewItem }[] {
-  return proposal.files.flatMap(file => file.items
-    .filter(item => item.decision === EditDecisionState.PENDING)
-    .map(item => ({ file, item })));
+  return proposal.files.flatMap(file =>
+    file.items.filter(item => item.decision === EditDecisionState.PENDING).map(item => ({ file, item })),
+  );
 }
 
 function adjacentFile(entries: ReturnType<typeof pendingEntries>, current: number, direction: 1 | -1): number {
@@ -121,7 +150,8 @@ function renderEntry(file: FileEditPlan, item: EditReviewItem): string {
   const title = `${file.operation} ${file.sourcePath}${file.targetPath !== file.sourcePath ? ` -> ${file.targetPath}` : ''}`;
   if (item.kind === EditReviewItemKind.CREATE) return `${title}\n[create file]\n${visible(item.insertedText, '+')}`;
   if (item.kind === EditReviewItemKind.DELETE) return `${title}\n[delete file]\n${visible(item.removedText, '-')}`;
-  if (item.kind === EditReviewItemKind.RENAME) return `${title}\n[rename path]\n- ${file.sourcePath}\n+ ${file.targetPath}`;
+  if (item.kind === EditReviewItemKind.RENAME)
+    return `${title}\n[rename path]\n- ${file.sourcePath}\n+ ${file.targetPath}`;
   const context = surroundingContext(file.base?.text ?? '', item.sourceStart, item.sourceEnd);
   const before = context.before ? `${visible(context.before, ' ')}\n` : '';
   const after = context.after ? `\n${visible(context.after, ' ')}` : '';
@@ -142,12 +172,18 @@ function visible(text: string, prefix: string): string {
     .replace(/\r\n/g, '↵CRLF\n')
     .replace(/\r/g, '↵CR\n')
     .replace(/\n/g, '↵LF\n');
-  const lines = marked.split('\n').map(line => `${prefix} ${line}`).join('\n');
+  const lines = marked
+    .split('\n')
+    .map(line => `${prefix} ${line}`)
+    .join('\n');
   return /(?:\r\n|\r|\n)$/.test(text) ? lines : `${lines}\n${prefix} \\ No newline at end of file`;
 }
 
 function sanitize(value: string): string {
   return stripVTControlCharacters(value)
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
-    .replace(/[\u202a-\u202e\u2066-\u2069]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+    .replace(
+      /[\u202a-\u202e\u2066-\u2069]/g,
+      character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
+    );
 }

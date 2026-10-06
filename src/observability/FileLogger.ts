@@ -10,17 +10,24 @@ export class FileLogger implements Logger {
   ) {}
 
   forNamespace(namespace: string): Logger {
-    return new FileLogger(
-      this.destination,
-      this.namespace ? `${this.namespace}.${namespace}` : namespace,
-    );
+    return new FileLogger(this.destination, this.namespace ? `${this.namespace}.${namespace}` : namespace);
   }
 
-  trace(message: string, data?: unknown): Promise<void> { return this.write(LogLevel.TRACE, message, data); }
-  debug(message: string, data?: unknown): Promise<void> { return this.write(LogLevel.DEBUG, message, data); }
-  info(message: string, data?: unknown): Promise<void> { return this.write(LogLevel.INFO, message, data); }
-  warn(message: string, data?: unknown): Promise<void> { return this.write(LogLevel.WARNING, message, data); }
-  error(message: string, data?: unknown): Promise<void> { return this.write(LogLevel.ERROR, message, data); }
+  trace(message: string, data?: unknown): Promise<void> {
+    return this.write(LogLevel.TRACE, message, data);
+  }
+  debug(message: string, data?: unknown): Promise<void> {
+    return this.write(LogLevel.DEBUG, message, data);
+  }
+  info(message: string, data?: unknown): Promise<void> {
+    return this.write(LogLevel.INFO, message, data);
+  }
+  warn(message: string, data?: unknown): Promise<void> {
+    return this.write(LogLevel.WARNING, message, data);
+  }
+  error(message: string, data?: unknown): Promise<void> {
+    return this.write(LogLevel.ERROR, message, data);
+  }
 
   private async write(level: LogLevel, message: string, data?: unknown): Promise<void> {
     await mkdir(dirname(this.destination), { recursive: true, mode: 0o700 });

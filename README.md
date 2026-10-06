@@ -1,6 +1,10 @@
 # Harness Chat: Sign in with ChatGPT
 
-Version 0.2.0. This replaces the API-key prototype with direct OAuth-based ChatGPT plan usage. It is a local TypeScript terminal app with streaming chat, read-only project access, in-memory conversation history, account/model selection, token refresh, cancellation, and usage reporting.
+Version 0.2.0. This replaces the API-key prototype with direct OAuth-based
+ChatGPT plan usage. It is a local TypeScript terminal app with streaming chat,
+Rust-backed project-file search and context attachments, staged edit review,
+in-memory conversation history, account/model selection, token refresh,
+cancellation, and usage reporting.
 
 The repository also contains a small React TODO app in `examples/todo-app`. It is a standalone sample project for exercising project-discovery and file-access tools; it is not coupled to the chat runtime.
 
@@ -8,12 +12,15 @@ The repository also contains a small React TODO app in `examples/todo-app`. It i
 
 ## Start
 
-Use Node 22.18+ (Node 24 recommended). Extract the archive and enter `harness-chat`:
+Use Node 22.18+ (Node 24 recommended), pnpm, and Rust 1.88+. Extract the archive and enter `harness-chat`:
 
 ```sh
 pnpm install
 pnpm start
 ```
+
+`pnpm start` incrementally builds the resident Rust file indexer before starting
+the TypeScript CLI. Subsequent builds reuse Cargo's build cache.
 
 No `.env` is required.
 
@@ -23,6 +30,12 @@ No `.env` is required.
 4. The browser returns to `127.0.0.1` on a temporary local port. Return to the terminal for identity verification.
 5. Acknowledge the first-use plan message, then select a model from the account-specific catalog.
 6. Start chatting.
+
+At the chat prompt, type `@` followed by any part of a project path. Use Up and
+Down to choose a fuzzy match, then Enter or Tab to attach it. The selected path
+stays visible in the prompt; press Enter again to send. Attached files are read
+and authorized only when the message is sent, so the model receives the latest
+exact workspace snapshot rather than a stale search result.
 
 ### Sample TODO app
 
@@ -71,24 +84,49 @@ The agent should discover and read the relevant files before answering.
 
 ## Commands
 
-| Command | Behavior |
-| --- | --- |
-| `/help` | Commands |
-| `/reset` | Clear conversation; keep process-wide token totals |
-| `/usage` | Completed-request token totals and ChatGPT usage link |
-| `/trace [on\|off]` | Show or toggle complete provider trace logging |
-| `/account` | Choose a saved account or add one; clear conversation |
-| `/login` | Reauthorize the selected account; clear conversation |
-| `/logout` | Attempt refresh-token revocation, clear local tokens, exit |
-| `/exit` | Exit, retaining saved login |
-| Ctrl+C during generation | Cancel the response; discard the attempted turn |
-| Ctrl+C at a prompt or during sign-in | Exit/cancel |
+| Command                              | Behavior                                                   |
+| ------------------------------------ | ---------------------------------------------------------- |
+| `/help`                              | Commands                                                   |
+| `/reset`                             | Clear conversation; keep process-wide token totals         |
+| `/usage`                             | Completed-request token totals and ChatGPT usage link      |
+| `/trace [on\|off]`                   | Show or toggle complete provider trace logging             |
+| `/account`                           | Choose a saved account or add one; clear conversation      |
+| `/login`                             | Reauthorize the selected account; clear conversation       |
+| `/logout`                            | Attempt refresh-token revocation, clear local tokens, exit |
+| `/exit`                              | Exit, retaining saved login                                |
+| Ctrl+C during generation             | Cancel the response; discard the attempted turn            |
+| Ctrl+C at a prompt or during sign-in | Exit/cancel                                                |
 
-Single-line input only. Wait for a response to finish before entering the next message. No shell tools, write tools, editor integration, or disk transcript storage is included.
+Single-line input only. Wait for a response to finish before entering the next
+message. The terminal supports project-file attachments and staged, individually
+reviewable edits; it does not provide shell access or disk transcript storage.
 
 ## Project access
 
-The directory where `pnpm start` is launched is the project root. The model can call two read-only functions: one lists project files and one reads a UTF-8 file or line range. Every invocation is shown as a `[tool> ...]` line followed by its `[tool< ... completed]` or error status. Function calls and outputs are kept in the in-memory conversation so follow-up questions retain the evidence already gathered.
+The directory where `pnpm start` is launched is the project root. The model can
+discover and read project files through tools, and the user can inject selected
+files directly through the `@` picker. Every tool invocation is shown as a
+`[tool> ...]` line followed by its `[tool< ... completed]` or error status.
+Function calls, outputs, and attached snapshots are kept in the in-memory
+conversation so follow-up questions retain the evidence already gathered.
+
+The picker is backed by a long-lived Rust sidecar. It scans paths in parallel,
+uses Nucleo's path-oriented fuzzy matcher and incremental-query refinement, and
+caches a versioned path inventory under the configured state directory. A warm
+cache is usable immediately while Rust reconciles it in the background. Only a
+query and the top ranked paths cross the JSON Lines process boundary; the full
+index remains in Rust. A selected result is never trusted as authority—the
+TypeScript workspace adapter rechecks confinement, exclusions, symlinks,
+encoding, size, and current revision before inference.
+
+Run `pnpm context-index:bench` for the opt-in 500,000-path native performance
+harness. It is excluded from the normal test suite.
+
+If the configured state directory, trace file, or native-worker executable sits
+inside the project, the CLI excludes that exact file or subtree from both
+search and workspace reads. The state directory itself cannot be the project
+root, since it contains plaintext credentials and potentially full provider
+traces.
 
 Project access skips dependency, VCS, coverage, and build-output directories; symlinks; `.env` variants other than `.env.example`; common credential files; and private-key formats. Reads cannot escape the project root, default to at most 512 KiB files and 100 lines per call, and stop after eight consecutive tool rounds. The discovery, read, and exclusion defaults are private supporting details in `ProjectAccess.ts`; callers can override them through the constructor's options object. File contents returned by a tool are sent to OpenAI as conversation input.
 
@@ -101,6 +139,9 @@ Copy `.env.example` to `.env` only if you want overrides:
 # CHAT_MODEL=
 CHAT_TIMEOUT_MS=120000
 CHAT_INSTRUCTIONS="You are a helpful assistant. Be clear and concise."
+CONTEXT_MAX_FILES=32
+CONTEXT_MAX_FILE_BYTES=524288
+CONTEXT_MAX_TOTAL_BYTES=2097152
 CHAT_TRACE=1
 # CHAT_TRACE_FILE=/absolute/path/to/harness-trace.log
 ```
@@ -148,6 +189,8 @@ Source is organized by domain. A file has one primary exported symbol and its fi
 - `src/application/HarnessService.ts`: headless application facade for account lifecycle, model discovery, conversation creation, aggregate usage, and trace policy.
 - `src/chat/ChatConversation.ts`: mutable history and request handling for one host-owned chat session. Separate conversations do not share provider history.
 - `src/chat/`: host-neutral request/response, model catalog, provider factory, trace, tool-activity, and usage contracts.
+- `src/context/attachments/`: fresh, bounded workspace attachment resolution shared by terminal and future editor hosts.
+- `src/context/search/`: host-neutral file-search port plus the persistent Rust sidecar adapter.
 - `src/configuration/`: host-facing configuration contract plus the CLI environment adapter.
 - `src/http/FetchHttpClient.ts`: typed GET/POST transport, body encoding, timeouts, and telemetry-safe request instrumentation.
 - `src/observability/`: general-purpose logger contract plus file and no-op adapters.
@@ -157,6 +200,7 @@ Source is organized by domain. A file has one primary exported symbol and its fi
 - `src/providers/openai/auth/OpenAISession.ts`: OpenAI account/session lifecycle behind an application-facing port.
 - `src/shared/mappers/` and `src/shared/validators/`: genuinely shared `toX` mappers and `isX` validators.
 - `src/terminal/`: the terminal host adapter, including prompts, slash commands, rendering, browser launch, and signal handling.
+- `native/context-index/`: Rust path inventory, cache, fuzzy matcher, and versioned JSON Lines service.
 - `src/cli.ts`: composition root only; it creates concrete dependencies and owns process lifecycle.
 
 ### VS Code compatibility audit
@@ -188,10 +232,11 @@ Requests go to the documented public `https://api.openai.com/v1` route using the
 ## Validation
 
 ```sh
-pnpm run check
+pnpm check # Prettier, Oxlint, Rust formatting/lints, native build, and TypeScript
 pnpm test
 # During development:
-pnpm run test:watch
+pnpm fix # Apply safe Oxlint fixes, then format with Prettier
+pnpm test:watch
 ```
 
 Strict TypeScript and offline colocated Vitest tests cover PKCE and callback rejection, signed ID-token validation, token exchange parameters, restricted credential permissions, process locking, consent gating, serialized refresh/rotation, expired-session recovery, revocation, account model discovery, subscription request shape, project path confinement, function-call continuation, multi-turn history, usage, cancellation, and stream failure rollback. Tests generate their own signing keys and inject mock HTTP responses; no user credentials or paid requests are used.

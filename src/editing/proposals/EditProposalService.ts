@@ -16,26 +16,42 @@ import { EditOperation } from './EditOperation.ts';
 import type { EditProposal } from './EditProposal.ts';
 import type { FileEditPlan } from './FileEditPlan.ts';
 
-const positionSchema = z.object({
-  line: z.number().int().nonnegative().describe('Zero-based line number.'),
-  character: z.number().int().nonnegative().describe('Zero-based UTF-16 code-unit offset within the line.'),
-}).strict();
+const positionSchema = z
+  .object({
+    line: z.number().int().nonnegative().describe('Zero-based line number.'),
+    character: z.number().int().nonnegative().describe('Zero-based UTF-16 code-unit offset within the line.'),
+  })
+  .strict();
 
-const textEditSchema = z.object({
-  range: z.object({ start: positionSchema, end: positionSchema }).strict(),
-  expected_text: z.string().describe('Text that must exactly occupy the range in Base.'),
-  replacement_text: z.string().describe('Exact replacement text; an empty string deletes the range.'),
-}).strict();
+const textEditSchema = z
+  .object({
+    range: z.object({ start: positionSchema, end: positionSchema }).strict(),
+    expected_text: z.string().describe('Text that must exactly occupy the range in Base.'),
+    replacement_text: z.string().describe('Exact replacement text; an empty string deletes the range.'),
+  })
+  .strict();
 
-const structuredFileSchema = z.object({
-  operation: z.enum(EditOperation).describe('CREATE, UPDATE, RENAME, or DELETE.'),
-  path: z.string().min(1).describe('Project-relative source path.'),
-  new_path: z.string().min(1).nullable().describe('Project-relative target for RENAME; otherwise null.'),
-  base_revision: z.string().min(1).nullable().describe('Revision from read_project_file for existing files; null for CREATE.'),
-  content: z.string().nullable().describe('Complete content for CREATE or full replacement; otherwise null when edits are supplied.'),
-  byte_order_mark: z.boolean().nullable().describe('Whether to include a UTF-8 byte order mark, or null to preserve/use the default.'),
-  edits: z.array(textEditSchema).describe('Exact non-overlapping UTF-16 range edits.'),
-}).strict();
+const structuredFileSchema = z
+  .object({
+    operation: z.enum(EditOperation).describe('CREATE, UPDATE, RENAME, or DELETE.'),
+    path: z.string().min(1).describe('Project-relative source path.'),
+    new_path: z.string().min(1).nullable().describe('Project-relative target for RENAME; otherwise null.'),
+    base_revision: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe('Revision from read_project_file for existing files; null for CREATE.'),
+    content: z
+      .string()
+      .nullable()
+      .describe('Complete content for CREATE or full replacement; otherwise null when edits are supplied.'),
+    byte_order_mark: z
+      .boolean()
+      .nullable()
+      .describe('Whether to include a UTF-8 byte order mark, or null to preserve/use the default.'),
+    edits: z.array(textEditSchema).describe('Exact non-overlapping UTF-16 range edits.'),
+  })
+  .strict();
 
 const structuredEditProposalSchema = z.object({ files: z.array(structuredFileSchema) }).strict();
 
@@ -54,7 +70,9 @@ interface PatchFile {
   noFinalNewline?: boolean;
 }
 
-interface PatchHunk { lines: { prefix: ' ' | '+' | '-'; text: string }[]; }
+interface PatchHunk {
+  lines: { prefix: ' ' | '+' | '-'; text: string }[];
+}
 
 export class EditProposalService {
   static readonly structuredSchema = structuredEditProposalSchema;
@@ -76,7 +94,10 @@ export class EditProposalService {
     this.enforceRawLimit(rawBytes);
     const parsed = structuredEditProposalSchema.safeParse(raw);
     if (!parsed.success) {
-      throw new EditError(EditFailureReason.MALFORMED, `Malformed structured edit proposal:\n${z.prettifyError(parsed.error)}`);
+      throw new EditError(
+        EditFailureReason.MALFORMED,
+        `Malformed structured edit proposal:\n${z.prettifyError(parsed.error)}`,
+      );
     }
     return this.compile(parsed.data, 'structured');
   }
@@ -100,7 +121,12 @@ export class EditProposalService {
         continue;
       }
       const base = await this.workspace.read(file.path);
-      if (!file.revision) throw new EditError(EditFailureReason.MALFORMED, 'Update, rename, and delete patches require a Revision directive.', { path: file.path });
+      if (!file.revision)
+        throw new EditError(
+          EditFailureReason.MALFORMED,
+          'Update, rename, and delete patches require a Revision directive.',
+          { path: file.path },
+        );
       if (file.revision !== base.revision) {
         throw new EditError(EditFailureReason.STALE, 'Patch base revision does not match the current file.', {
           path: file.path,
@@ -109,7 +135,15 @@ export class EditProposalService {
         });
       }
       if (file.operation === EditOperation.DELETE) {
-        structured.files.push({ operation: file.operation, path: file.path, new_path: null, base_revision: file.revision, content: null, byte_order_mark: null, edits: [] });
+        structured.files.push({
+          operation: file.operation,
+          path: file.path,
+          new_path: null,
+          base_revision: file.revision,
+          content: null,
+          byte_order_mark: null,
+          edits: [],
+        });
         continue;
       }
       let proposed = base.text;
@@ -121,7 +155,9 @@ export class EditProposalService {
         const newText = newLogical.join(lineEnding);
         const candidates = indexesOf(proposed, oldText);
         if (candidates.length === 0) {
-          throw new EditError(EditFailureReason.INCONSISTENT, 'Patch context does not exactly match the base file.', { path: file.path });
+          throw new EditError(EditFailureReason.INCONSISTENT, 'Patch context does not exactly match the base file.', {
+            path: file.path,
+          });
         }
         if (candidates.length > 1) {
           throw new EditError(EditFailureReason.AMBIGUOUS, 'Patch context matches more than one location.', {
@@ -148,9 +184,13 @@ export class EditProposalService {
   }
 
   private async compile(input: StructuredProposal, source: EditProposal['source']): Promise<EditProposal> {
-    if (input.files.length === 0) throw new EditError(EditFailureReason.EMPTY, 'An edit proposal must contain at least one file.');
+    if (input.files.length === 0)
+      throw new EditError(EditFailureReason.EMPTY, 'An edit proposal must contain at least one file.');
     if (input.files.length > this.configuration.maxFiles) {
-      throw new EditError(EditFailureReason.LIMIT_EXCEEDED, `Proposal exceeds the ${this.configuration.maxFiles}-file limit.`);
+      throw new EditError(
+        EditFailureReason.LIMIT_EXCEEDED,
+        `Proposal exceeds the ${this.configuration.maxFiles}-file limit.`,
+      );
     }
     const normalized = input.files.map(file => ({
       ...file,
@@ -166,22 +206,36 @@ export class EditProposalService {
     for (const file of normalized) {
       const plan = await this.compileFile(file);
       if (plan.base && identities.has(plan.base.identity)) {
-        throw new EditError(EditFailureReason.AMBIGUOUS, 'Multiple proposal paths resolve to the same filesystem identity.', { path: plan.sourcePath });
+        throw new EditError(
+          EditFailureReason.AMBIGUOUS,
+          'Multiple proposal paths resolve to the same filesystem identity.',
+          { path: plan.sourcePath },
+        );
       }
       if (plan.base) identities.add(plan.base.identity);
       const changedItems = plan.items.filter(item => item.kind !== EditReviewItemKind.RENAME);
-      changedBytes += changedItems.reduce((sum, item) => sum + Buffer.byteLength(item.removedText) + Buffer.byteLength(item.insertedText), 0);
+      changedBytes += changedItems.reduce(
+        (sum, item) => sum + Buffer.byteLength(item.removedText) + Buffer.byteLength(item.insertedText),
+        0,
+      );
       totalHunks += plan.items.length;
       if (plan.proposed.byteLength > this.configuration.maxResultingBytesPerFile) {
-        throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'Resulting file exceeds the configured byte limit.', { path: plan.targetPath });
+        throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'Resulting file exceeds the configured byte limit.', {
+          path: plan.targetPath,
+        });
       }
       if (plan.items.length > this.configuration.maxHunksPerFile) {
-        throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'File exceeds the configured hunk limit.', { path: plan.sourcePath });
+        throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'File exceeds the configured hunk limit.', {
+          path: plan.sourcePath,
+        });
       }
       plans.push(plan);
     }
     if (changedBytes > this.configuration.maxChangedBytes || totalHunks > this.configuration.maxTotalHunks) {
-      throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'Proposal exceeds the configured changed-byte or hunk limit.');
+      throw new EditError(
+        EditFailureReason.LIMIT_EXCEEDED,
+        'Proposal exceeds the configured changed-byte or hunk limit.',
+      );
     }
     const proposal: EditProposal = {
       schemaVersion: 1,
@@ -190,7 +244,13 @@ export class EditProposalService {
       createdAt: this.now().toISOString(),
       files: plans,
     };
-    await this.logger.info('validated', { proposalId: proposal.id, source, files: plans.length, hunks: totalHunks, changedBytes });
+    await this.logger.info('validated', {
+      proposalId: proposal.id,
+      source,
+      files: plans.length,
+      hunks: totalHunks,
+      changedBytes,
+    });
     return proposal;
   }
 
@@ -208,9 +268,14 @@ export class EditProposalService {
   }
 
   private compileCreate(file: StructuredFile, existing: WorkspaceTextSnapshot | undefined): FileEditPlan {
-    if (existing) throw new EditError(EditFailureReason.INCONSISTENT, 'Create target already exists.', { path: file.path });
+    if (existing)
+      throw new EditError(EditFailureReason.INCONSISTENT, 'Create target already exists.', { path: file.path });
     if (file.base_revision !== null || file.new_path !== null || file.content === null || file.edits.length > 0) {
-      throw new EditError(EditFailureReason.MALFORMED, 'CREATE requires content and null revision/new_path with no edits.', { path: file.path });
+      throw new EditError(
+        EditFailureReason.MALFORMED,
+        'CREATE requires content and null revision/new_path with no edits.',
+        { path: file.path },
+      );
     }
     const proposed = toWorkspaceTextSnapshot(
       file.path,
@@ -227,17 +292,26 @@ export class EditProposalService {
     file: StructuredFile,
     existing: WorkspaceTextSnapshot | undefined,
   ): WorkspaceTextSnapshot {
-    if (!existing) throw new EditError(EditFailureReason.INCONSISTENT, 'Proposal source does not exist.', { path: file.path });
-    if (file.base_revision === null) throw new EditError(EditFailureReason.MALFORMED, 'Existing-file operations require base_revision.', { path: file.path });
+    if (!existing)
+      throw new EditError(EditFailureReason.INCONSISTENT, 'Proposal source does not exist.', { path: file.path });
+    if (file.base_revision === null)
+      throw new EditError(EditFailureReason.MALFORMED, 'Existing-file operations require base_revision.', {
+        path: file.path,
+      });
     if (file.base_revision !== existing.revision) {
-      throw new EditError(EditFailureReason.STALE, 'Base revision does not match the current file.', { path: file.path, currentRevision: existing.revision });
+      throw new EditError(EditFailureReason.STALE, 'Base revision does not match the current file.', {
+        path: file.path,
+        currentRevision: existing.revision,
+      });
     }
     return existing;
   }
 
   private compileDelete(file: StructuredFile, existing: WorkspaceTextSnapshot): FileEditPlan {
     if (file.new_path !== null || file.content !== null || file.edits.length > 0) {
-      throw new EditError(EditFailureReason.MALFORMED, 'DELETE accepts only path and base_revision.', { path: file.path });
+      throw new EditError(EditFailureReason.MALFORMED, 'DELETE accepts only path and base_revision.', {
+        path: file.path,
+      });
     }
     const fileId = this.createId();
     return toFileEditPlan(
@@ -257,23 +331,35 @@ export class EditProposalService {
       throw new EditError(EditFailureReason.EMPTY, 'RENAME requires a distinct new_path.', { path: file.path });
     }
     if (file.content !== null && file.edits.length > 0) {
-      throw new EditError(EditFailureReason.INCONSISTENT, 'A file cannot declare both full content and ranged edits.', { path: file.path });
+      throw new EditError(EditFailureReason.INCONSISTENT, 'A file cannot declare both full content and ranged edits.', {
+        path: file.path,
+      });
     }
     const proposedText = file.content ?? new TextDocument(file.path, existing.text).apply(file.edits);
     const target = file.new_path ?? file.path;
-    if (file.operation === EditOperation.RENAME && await this.workspace.readOptional(target)) {
+    if (file.operation === EditOperation.RENAME && (await this.workspace.readOptional(target))) {
       throw new EditError(EditFailureReason.INCONSISTENT, 'Rename target already exists.', { path: target });
     }
-    const proposed = toWorkspaceTextSnapshot(target, proposedText, file.byte_order_mark ?? existing.byteOrderMark, existing.mode);
+    const proposed = toWorkspaceTextSnapshot(
+      target,
+      proposedText,
+      file.byte_order_mark ?? existing.byteOrderMark,
+      existing.mode,
+    );
     const fileId = this.createId();
     const diffStarted = performance.now();
     const items = this.differ.createReviewItems(fileId, existing.text, proposedText);
     if (performance.now() - diffStarted > this.configuration.diffBudgetMs) {
-      throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'Diff computation exceeded the configured time budget.', { path: file.path });
+      throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'Diff computation exceeded the configured time budget.', {
+        path: file.path,
+      });
     }
-    if (file.operation === EditOperation.RENAME) items.unshift(toStructuralItem(fileId, EditReviewItemKind.RENAME, file.path, target));
+    if (file.operation === EditOperation.RENAME)
+      items.unshift(toStructuralItem(fileId, EditReviewItemKind.RENAME, file.path, target));
     if (items.length === 0 && proposed.byteOrderMark === existing.byteOrderMark) {
-      throw new EditError(EditFailureReason.EMPTY, 'Proposed replacement is identical to the base.', { path: file.path });
+      throw new EditError(EditFailureReason.EMPTY, 'Proposed replacement is identical to the base.', {
+        path: file.path,
+      });
     }
     if (items.length === 0) items.push(toStructuralItem(fileId, EditReviewItemKind.TEXT, existing.text, proposedText));
     return toFileEditPlan(fileId, file, existing, proposed, items);
@@ -281,7 +367,10 @@ export class EditProposalService {
 
   private enforceRawLimit(bytes: number): void {
     if (bytes > this.configuration.maxRawProposalBytes) {
-      throw new EditError(EditFailureReason.LIMIT_EXCEEDED, `Proposal exceeds the ${this.configuration.maxRawProposalBytes}-byte raw limit.`);
+      throw new EditError(
+        EditFailureReason.LIMIT_EXCEEDED,
+        `Proposal exceeds the ${this.configuration.maxRawProposalBytes}-byte raw limit.`,
+      );
     }
   }
 }
@@ -310,13 +399,31 @@ function toFileEditPlan(
   };
 }
 
-function toWorkspaceTextSnapshot(path: string, text: string, byteOrderMark: boolean, mode: number): WorkspaceTextSnapshot {
+function toWorkspaceTextSnapshot(
+  path: string,
+  text: string,
+  byteOrderMark: boolean,
+  mode: number,
+): WorkspaceTextSnapshot {
   const content = Buffer.from(text, 'utf8');
   const bytes = byteOrderMark ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), content]) : content;
-  return { path, text, byteOrderMark, mode, byteLength: bytes.length, revision: createHash('sha256').update(bytes).digest('hex'), identity: `proposed:${path}` };
+  return {
+    path,
+    text,
+    byteOrderMark,
+    mode,
+    byteLength: bytes.length,
+    revision: createHash('sha256').update(bytes).digest('hex'),
+    identity: `proposed:${path}`,
+  };
 }
 
-function toStructuralItem(fileId: string, kind: EditReviewItemKind, removedText: string, insertedText: string): FileEditPlan['items'][number] {
+function toStructuralItem(
+  fileId: string,
+  kind: EditReviewItemKind,
+  removedText: string,
+  insertedText: string,
+): FileEditPlan['items'][number] {
   return {
     id: createHash('sha256').update(`structure-v1\0${fileId}\0${kind}\0${removedText}\0${insertedText}`).digest('hex'),
     fileId,
@@ -341,15 +448,29 @@ function validatePathGraph(files: StructuredFile[], caseSensitive: boolean): voi
     const sourceKey = caseSensitive ? sourceNfc : foldedSource;
     const targetKey = caseSensitive ? targetNfc : foldedTarget;
     if (sources.has(sourceKey) || touched.has(sourceKey)) {
-      throw new EditError(EditFailureReason.AMBIGUOUS, 'Proposal contains duplicate or aliased file paths.', { path: file.path });
+      throw new EditError(EditFailureReason.AMBIGUOUS, 'Proposal contains duplicate or aliased file paths.', {
+        path: file.path,
+      });
     }
-    if (file.operation === EditOperation.RENAME && !caseSensitive && foldedSource === foldedTarget && file.path !== target) {
-      throw new EditError(EditFailureReason.UNSUPPORTED, 'Case-only renames are not portable across workspace filesystems.', { path: file.path });
+    if (
+      file.operation === EditOperation.RENAME &&
+      !caseSensitive &&
+      foldedSource === foldedTarget &&
+      file.path !== target
+    ) {
+      throw new EditError(
+        EditFailureReason.UNSUPPORTED,
+        'Case-only renames are not portable across workspace filesystems.',
+        { path: file.path },
+      );
     }
     sources.add(sourceKey);
     touched.add(sourceKey);
     if (targetKey !== sourceKey) {
-      if (touched.has(targetKey)) throw new EditError(EditFailureReason.AMBIGUOUS, 'Proposal contains duplicate or aliased file paths.', { path: target });
+      if (touched.has(targetKey))
+        throw new EditError(EditFailureReason.AMBIGUOUS, 'Proposal contains duplicate or aliased file paths.', {
+          path: target,
+        });
       touched.add(targetKey);
     }
   }
@@ -357,7 +478,9 @@ function validatePathGraph(files: StructuredFile[], caseSensitive: boolean): voi
     const target = (file.new_path ?? '').normalize('NFC');
     const targetKey = caseSensitive ? target : target.toLocaleLowerCase('en-US');
     if (file.operation === EditOperation.RENAME && sources.has(targetKey)) {
-      throw new EditError(EditFailureReason.AMBIGUOUS, 'Rename chains and swaps are not supported in one proposal.', { path: file.path });
+      throw new EditError(EditFailureReason.AMBIGUOUS, 'Rename chains and swaps are not supported in one proposal.', {
+        path: file.path,
+      });
     }
   }
 }
@@ -366,29 +489,54 @@ function parsePatch(patch: string): PatchFile[] {
   const lines = patch.replace(/\r\n|\r/g, '\n').split('\n');
   if (lines.at(-1) === '') lines.pop();
   if (lines.shift() !== '*** Begin Patch' || lines.pop() !== '*** End Patch') {
-    throw new EditError(EditFailureReason.MALFORMED, 'Patch must start with *** Begin Patch and end with *** End Patch.');
+    throw new EditError(
+      EditFailureReason.MALFORMED,
+      'Patch must start with *** Begin Patch and end with *** End Patch.',
+    );
   }
   const files: PatchFile[] = [];
   let current: PatchFile | undefined;
   let hunk: PatchHunk | undefined;
-  const finish = (): void => { if (current) files.push(current); current = undefined; hunk = undefined; };
+  const finish = (): void => {
+    if (current) files.push(current);
+    current = undefined;
+    hunk = undefined;
+  };
   for (const line of lines) {
     const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line);
     if (header) {
       finish();
-      current = { operation: header[1] === 'Add' ? EditOperation.CREATE : header[1] === 'Delete' ? EditOperation.DELETE : EditOperation.UPDATE, path: header[2]!, hunks: [] };
+      current = {
+        operation:
+          header[1] === 'Add'
+            ? EditOperation.CREATE
+            : header[1] === 'Delete'
+              ? EditOperation.DELETE
+              : EditOperation.UPDATE,
+        path: header[2]!,
+        hunks: [],
+      };
       continue;
     }
     if (!current) {
       if (line === '') continue;
       throw new EditError(EditFailureReason.MALFORMED, `Unrecognized patch directive: ${line}`);
     }
-    if (line.startsWith('*** Revision: ')) { current.revision = line.slice(14); continue; }
-    if (line.startsWith('*** Move to: ')) { current.operation = EditOperation.RENAME; current.targetPath = line.slice(13); continue; }
+    if (line.startsWith('*** Revision: ')) {
+      current.revision = line.slice(14);
+      continue;
+    }
+    if (line.startsWith('*** Move to: ')) {
+      current.operation = EditOperation.RENAME;
+      current.targetPath = line.slice(13);
+      continue;
+    }
     if (line.startsWith('*** Byte Order Mark: ')) {
       const value = line.slice(21);
-      if (!['true', 'false'].includes(value)) throw new EditError(EditFailureReason.MALFORMED, 'Byte Order Mark directive must be true or false.');
-      current.byteOrderMark = value === 'true'; continue;
+      if (!['true', 'false'].includes(value))
+        throw new EditError(EditFailureReason.MALFORMED, 'Byte Order Mark directive must be true or false.');
+      current.byteOrderMark = value === 'true';
+      continue;
     }
     if (line.startsWith('*** Line Ending: ')) {
       const value = line.slice(17);
@@ -398,13 +546,24 @@ function parsePatch(patch: string): PatchFile[] {
       else throw new EditError(EditFailureReason.MALFORMED, 'Line Ending directive must be LF, CRLF, or CR.');
       continue;
     }
-    if (line === '\\ No newline at end of file') { current.noFinalNewline = true; continue; }
-    if (line === '@@') { hunk = { lines: [] }; current.hunks.push(hunk); continue; }
+    if (line === '\\ No newline at end of file') {
+      current.noFinalNewline = true;
+      continue;
+    }
+    if (line === '@@') {
+      hunk = { lines: [] };
+      current.hunks.push(hunk);
+      continue;
+    }
     const prefix = line[0];
     if (prefix === '+' || prefix === '-' || prefix === ' ') {
-      if (current.operation === EditOperation.CREATE && !hunk) current.content = `${current.content ?? ''}${line.slice(1)}\n`;
+      if (current.operation === EditOperation.CREATE && !hunk)
+        current.content = `${current.content ?? ''}${line.slice(1)}\n`;
       else {
-        if (!hunk) throw new EditError(EditFailureReason.MALFORMED, 'Patch change lines require an @@ hunk marker.', { path: current.path });
+        if (!hunk)
+          throw new EditError(EditFailureReason.MALFORMED, 'Patch change lines require an @@ hunk marker.', {
+            path: current.path,
+          });
         hunk.lines.push({ prefix, text: line.slice(1) });
       }
       continue;
@@ -416,7 +575,10 @@ function parsePatch(patch: string): PatchFile[] {
   if (files.length === 0) throw new EditError(EditFailureReason.EMPTY, 'Patch contains no files.');
   for (const file of files) {
     if (file.operation === EditOperation.CREATE && file.content === undefined) file.content = '';
-    if ((file.operation === EditOperation.UPDATE || file.operation === EditOperation.RENAME) && file.hunks.length === 0) {
+    if (
+      (file.operation === EditOperation.UPDATE || file.operation === EditOperation.RENAME) &&
+      file.hunks.length === 0
+    ) {
       throw new EditError(EditFailureReason.EMPTY, 'Update patch contains no hunks.', { path: file.path });
     }
   }
@@ -437,7 +599,9 @@ function indexesOf(text: string, search: string): number[] {
   return result;
 }
 
-function lineAt(text: string, offset: number): number { return text.slice(0, offset).split(/\r\n|\r|\n/).length; }
+function lineAt(text: string, offset: number): number {
+  return text.slice(0, offset).split(/\r\n|\r|\n/).length;
+}
 
 function dominantLineEnding(text: string): '\n' | '\r\n' | '\r' {
   const matches = text.match(/\r\n|\r|\n/g) ?? [];

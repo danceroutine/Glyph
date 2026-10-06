@@ -1,0 +1,8 @@
+node_modules/
+target/
+dist/
+coverage/
+.next/
+pnpm-lock.yaml
+Cargo.lock
+

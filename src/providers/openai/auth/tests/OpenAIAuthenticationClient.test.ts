@@ -6,8 +6,11 @@ import type { OpenAIConfiguration } from '../../OpenAIConfiguration.ts';
 import { OpenAIAuthenticationClient } from '../OpenAIAuthenticationClient.ts';
 
 const configuration: OpenAIConfiguration = {
-  issuer: 'https://auth.example.test', resource: 'https://api.example.test/v1',
-  scopes: 'openid profile offline_access plan', planScope: 'plan', requestTimeoutMs: 30_000,
+  issuer: 'https://auth.example.test',
+  resource: 'https://api.example.test/v1',
+  scopes: 'openid profile offline_access plan',
+  planScope: 'plan',
+  requestTimeoutMs: 30_000,
 };
 
 function http(): HttpClient {
@@ -18,7 +21,8 @@ describe(OpenAIAuthenticationClient, () => {
   describe(OpenAIAuthenticationClient.prototype.createAuthorizationAttempt, () => {
     it('creates a PKCE authorization request for a dynamic client', () => {
       const attempt = new OpenAIAuthenticationClient(configuration, http()).createAuthorizationAttempt(
-        'urn:uuid:host', 'http://127.0.0.1/callback',
+        'urn:uuid:host',
+        'http://127.0.0.1/callback',
       );
       const url = new URL(attempt.url);
 
@@ -43,12 +47,17 @@ describe(OpenAIAuthenticationClient, () => {
     it('retains renewable credentials and scopes omitted by a refresh response', () => {
       const client = new OpenAIAuthenticationClient(configuration, http());
       const previous = client.toTokens({
-        access_token: 'access', refresh_token: 'refresh', id_token: 'id',
-        token_type: 'Bearer', expires_in: 3600, scope: 'openid plan',
+        access_token: 'access',
+        refresh_token: 'refresh',
+        id_token: 'id',
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: 'openid plan',
       });
 
-      expect(client.toTokens({ access_token: 'next', token_type: 'Bearer', expires_in: 3600 }, previous))
-        .toEqual(expect.objectContaining({ accessToken: 'next', refreshToken: 'refresh', scopes: ['openid', 'plan'] }));
+      expect(client.toTokens({ access_token: 'next', token_type: 'Bearer', expires_in: 3600 }, previous)).toEqual(
+        expect.objectContaining({ accessToken: 'next', refreshToken: 'refresh', scopes: ['openid', 'plan'] }),
+      );
     });
   });
 
@@ -58,12 +67,17 @@ describe(OpenAIAuthenticationClient, () => {
       const jwk = await exportJWK(publicKey);
       const token = await new SignJWT({ email: 'developer@example.com', nonce: 'nonce' })
         .setProtectedHeader({ alg: 'RS256', kid: 'test' })
-        .setIssuer(configuration.issuer).setAudience('client').setSubject('subject')
-        .setIssuedAt().setExpirationTime('5m').sign(privateKey);
+        .setIssuer(configuration.issuer)
+        .setAudience('client')
+        .setSubject('subject')
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(privateKey);
       const client = new OpenAIAuthenticationClient(configuration, http(), async () => publicKey);
 
       expect(await client.verifyIdentity(token, 'client', 'nonce', 'subject')).toEqual({
-        subject: 'subject', email: 'developer@example.com',
+        subject: 'subject',
+        email: 'developer@example.com',
       });
       expect(jwk.kty).toBe('RSA');
     });

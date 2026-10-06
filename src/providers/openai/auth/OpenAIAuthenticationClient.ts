@@ -24,8 +24,8 @@ export class OpenAIAuthenticationClient {
     private readonly http: HttpClient,
     verificationKey?: JWTVerifyGetKey,
   ) {
-    this.verificationKey = verificationKey
-      ?? createRemoteJWKSet(new URL(`${configuration.issuer}/.well-known/jwks.json`));
+    this.verificationKey =
+      verificationKey ?? createRemoteJWKSet(new URL(`${configuration.issuer}/.well-known/jwks.json`));
   }
 
   createAuthorizationAttempt(
@@ -55,16 +55,15 @@ export class OpenAIAuthenticationClient {
     return { state, nonce, verifier, url: url.toString(), redirectUri, clientId };
   }
 
-  validateAuthorizationCallback(
-    url: URL,
-    attempt: OpenAIAuthorizationAttempt,
-  ): { code: string; clientId: string } {
+  validateAuthorizationCallback(url: URL, attempt: OpenAIAuthorizationAttempt): { code: string; clientId: string } {
     for (const key of ['state', 'code', 'client_id', 'error']) {
       if (url.searchParams.getAll(key).length > 1) throw new ProtocolError('Duplicate OAuth callback parameter.');
     }
     const state = url.searchParams.get('state') ?? '';
-    if (Buffer.byteLength(state) !== Buffer.byteLength(attempt.state)
-      || !timingSafeEqual(Buffer.from(state), Buffer.from(attempt.state))) {
+    if (
+      Buffer.byteLength(state) !== Buffer.byteLength(attempt.state) ||
+      !timingSafeEqual(Buffer.from(state), Buffer.from(attempt.state))
+    ) {
       throw new AuthenticationError('OAuth state mismatch.');
     }
     if (url.searchParams.has('error')) throw new AuthenticationError('Sign-in was declined or could not be completed.');
@@ -191,21 +190,27 @@ export class OpenAIAuthenticationClient {
       existing?.clientId,
       consent,
     );
-    const timer = setTimeout(() => rejectCallback(new AuthenticationError('Sign-in timed out after five minutes.')), 300_000);
+    const timer = setTimeout(
+      () => rejectCallback(new AuthenticationError('Sign-in timed out after five minutes.')),
+      300_000,
+    );
     const cancel = () => rejectCallback(new AuthenticationError('Sign-in cancelled.'));
     if (signal?.aborted) cancel();
     else signal?.addEventListener('abort', cancel, { once: true });
     try {
       await authorize({ url: attempt.url });
       const { code, clientId } = await callback;
-      const body = await this.exchangeToken({
-        grant_type: 'authorization_code',
-        client_id: clientId,
-        code,
-        code_verifier: attempt.verifier,
-        redirect_uri: attempt.redirectUri,
-        resource: this.configuration.resource,
-      }, signal);
+      const body = await this.exchangeToken(
+        {
+          grant_type: 'authorization_code',
+          client_id: clientId,
+          code,
+          code_verifier: attempt.verifier,
+          redirect_uri: attempt.redirectUri,
+          resource: this.configuration.resource,
+        },
+        signal,
+      );
       const identity = await this.verifyIdentity(
         this.toRequiredString(body.id_token, 'id_token'),
         clientId,
@@ -224,12 +229,15 @@ export class OpenAIAuthenticationClient {
   async refresh(account: OpenAIAccount, signal?: AbortSignal): Promise<OpenAITokens> {
     const previous = account.tokens;
     if (!previous) throw new AuthenticationError('Sign in again.');
-    const body = await this.exchangeToken({
-      grant_type: 'refresh_token',
-      client_id: account.clientId,
-      refresh_token: previous.refreshToken,
-      resource: this.configuration.resource,
-    }, signal);
+    const body = await this.exchangeToken(
+      {
+        grant_type: 'refresh_token',
+        client_id: account.clientId,
+        refresh_token: previous.refreshToken,
+        resource: this.configuration.resource,
+      },
+      signal,
+    );
     if (body.id_token) {
       await this.verifyIdentity(
         this.toRequiredString(body.id_token, 'id_token'),
@@ -250,7 +258,9 @@ export class OpenAIAuthenticationClient {
         timeoutMs: 10_000,
       });
       if (!discovery.ok) return false;
-      const endpoint = new URL(this.toRequiredString(toRecord(discovery.body).revocation_endpoint, 'revocation_endpoint'));
+      const endpoint = new URL(
+        this.toRequiredString(toRecord(discovery.body).revocation_endpoint, 'revocation_endpoint'),
+      );
       if (endpoint.origin !== this.configuration.issuer) throw new ProtocolError('Unexpected revocation origin.');
       for (let attempt = 0; attempt < 2; attempt++) {
         try {

@@ -8,12 +8,16 @@ import type { ChatResponseStream } from '../chat/ChatResponseStream.ts';
 import type { Model } from '../chat/Model.ts';
 import type { ToolActivity } from '../chat/ToolActivity.ts';
 import type { Usage } from '../chat/Usage.ts';
+import type { WorkspaceFileSearch } from '../context/search/WorkspaceFileSearch.ts';
 import { ToolActivityPhase } from '../chat/ToolActivityPhase.ts';
 import { AccountSelectionType } from './AccountSelectionType.ts';
 import { TerminalActionType } from './TerminalActionType.ts';
 import { TerminalInput } from './TerminalInput.ts';
+import { TerminalPromptComposer } from './TerminalPromptComposer.ts';
+import type { UserPromptDraft } from './UserPromptDraft.ts';
 
 const TERMINAL_HELP = `Commands: /help /reset /usage /trace [on|off] /review /accept-all /reject-all /account /login /logout /exit
+Type @ at the chat prompt to fuzzy-search and attach project files.
 Ctrl+C cancels a response; at a prompt it exits.
 Subscription authentication only. API-key environment variables are ignored.`;
 
@@ -33,7 +37,7 @@ const TerminalColor = {
 } as const;
 
 type TerminalAction =
-  | { type: TerminalActionType.SEND; prompt: string }
+  | ({ type: TerminalActionType.SEND } & UserPromptDraft)
   | { type: TerminalActionType.EXIT }
   | { type: TerminalActionType.HELP }
   | { type: TerminalActionType.RESET }
@@ -48,21 +52,30 @@ type TerminalAction =
   | { type: TerminalActionType.UNKNOWN_COMMAND };
 
 type AccountSelection =
-  | { type: AccountSelectionType.ACCOUNT; account: OpenAIAccount }
-  | { type: AccountSelectionType.ADD };
+  { type: AccountSelectionType.ACCOUNT; account: OpenAIAccount } | { type: AccountSelectionType.ADD };
 
 export class TerminalUI implements ChatResponseStream {
   static readonly help = TERMINAL_HELP;
 
   readonly input: TerminalInput;
+  private readonly promptComposer: TerminalPromptComposer | undefined;
   private responseSection: ChatResponsePartType.TEXT | ChatResponsePartType.REASONING_SUMMARY | undefined;
 
   constructor(
     input: TerminalInput | NodeJS.ReadableStream = process.stdin,
     private readonly output: NodeJS.WritableStream = process.stdout,
     private readonly errorOutput: NodeJS.WritableStream = process.stderr,
+    files?: WorkspaceFileSearch,
   ) {
-    this.input = input instanceof TerminalInput ? input : new TerminalInput(input as NodeJS.ReadableStream & { resume(): void; pause(): void }, output);
+    this.input =
+      input instanceof TerminalInput
+        ? input
+        : new TerminalInput(input as NodeJS.ReadableStream & { resume(): void; pause(): void }, output);
+    const terminalOutput = output as NodeJS.WritableStream & { isTTY?: boolean };
+    this.promptComposer =
+      files && this.input.isTTY && terminalOutput.isTTY === true
+        ? new TerminalPromptComposer(this.input, output, files)
+        : undefined;
   }
 
   on(event: 'SIGINT', listener: () => void): void {
@@ -103,7 +116,9 @@ ${TERMINAL_HELP}`);
     for (;;) {
       this.line(`\n${this.styled('ChatGPT accounts', TerminalColor.HEADING)}`);
       accounts.forEach((account, index) => {
-        this.line(`${index + 1}. ${clean(account.email)} [${clean(account.clientId)}]${account.tokens ? '' : ' (signed out)'}`);
+        this.line(
+          `${index + 1}. ${clean(account.email)} [${clean(account.clientId)}]${account.tokens ? '' : ' (signed out)'}`,
+        );
       });
       this.line('a. Add another account/workspace');
       const onlyAccount = accounts.length === 1 ? '1' : undefined;
@@ -133,12 +148,16 @@ ${TERMINAL_HELP}`);
   }
 
   async acknowledgePlanUsage(signal: AbortSignal): Promise<void> {
-    this.line("You're using your ChatGPT plan. Manage this app's plan allowance and credit access at https://chatgpt.com/settings/usage");
+    this.line(
+      "You're using your ChatGPT plan. Manage this app's plan allowance and credit access at https://chatgpt.com/settings/usage",
+    );
     await this.ask('Got it [Enter]: ', signal);
   }
 
   async authorize({ url }: AuthorizationRequest): Promise<void> {
-    this.line(`\n${this.styled('Continue with ChatGPT', TerminalColor.HEADING)}\nAuthorize Harness Chat to use your ChatGPT plan.\n`);
+    this.line(
+      `\n${this.styled('Continue with ChatGPT', TerminalColor.HEADING)}\nAuthorize Harness Chat to use your ChatGPT plan.\n`,
+    );
     this.line(`If the browser does not open, visit:\n${clean(url)}\n`);
 
     if (process.platform === 'win32') return;
@@ -149,26 +168,47 @@ ${TERMINAL_HELP}`);
   }
 
   async nextAction(signal: AbortSignal): Promise<TerminalAction> {
-    const input = (await this.ask(this.styled('you> ', TerminalColor.USER_PROMPT), signal)).trim();
+    const draft = this.promptComposer
+      ? await this.promptComposer.compose(this.styled('you> ', TerminalColor.USER_PROMPT), signal)
+      : {
+          prompt: (await this.ask(this.styled('you> ', TerminalColor.USER_PROMPT), signal)).trim(),
+          attachmentPaths: [],
+        };
+    const input = draft.prompt.trim();
     switch (input) {
-      case '': return this.nextAction(signal);
+      case '':
+        return this.nextAction(signal);
       case '/exit':
-      case '/quit': return { type: TerminalActionType.EXIT };
-      case '/help': return { type: TerminalActionType.HELP };
-      case '/reset': return { type: TerminalActionType.RESET };
-      case '/usage': return { type: TerminalActionType.USAGE };
-      case '/trace': return { type: TerminalActionType.TRACE };
-      case '/trace on': return { type: TerminalActionType.TRACE, enabled: true };
-      case '/trace off': return { type: TerminalActionType.TRACE, enabled: false };
-      case '/account': return { type: TerminalActionType.ACCOUNT };
-      case '/login': return { type: TerminalActionType.LOGIN };
-      case '/logout': return { type: TerminalActionType.LOGOUT };
-      case '/review': return { type: TerminalActionType.REVIEW };
-      case '/accept-all': return { type: TerminalActionType.ACCEPT_ALL };
-      case '/reject-all': return { type: TerminalActionType.REJECT_ALL };
-      default: return input.startsWith('/')
-        ? { type: TerminalActionType.UNKNOWN_COMMAND }
-        : { type: TerminalActionType.SEND, prompt: input };
+      case '/quit':
+        return { type: TerminalActionType.EXIT };
+      case '/help':
+        return { type: TerminalActionType.HELP };
+      case '/reset':
+        return { type: TerminalActionType.RESET };
+      case '/usage':
+        return { type: TerminalActionType.USAGE };
+      case '/trace':
+        return { type: TerminalActionType.TRACE };
+      case '/trace on':
+        return { type: TerminalActionType.TRACE, enabled: true };
+      case '/trace off':
+        return { type: TerminalActionType.TRACE, enabled: false };
+      case '/account':
+        return { type: TerminalActionType.ACCOUNT };
+      case '/login':
+        return { type: TerminalActionType.LOGIN };
+      case '/logout':
+        return { type: TerminalActionType.LOGOUT };
+      case '/review':
+        return { type: TerminalActionType.REVIEW };
+      case '/accept-all':
+        return { type: TerminalActionType.ACCEPT_ALL };
+      case '/reject-all':
+        return { type: TerminalActionType.REJECT_ALL };
+      default:
+        return input.startsWith('/')
+          ? { type: TerminalActionType.UNKNOWN_COMMAND }
+          : { type: TerminalActionType.SEND, prompt: input, attachmentPaths: draft.attachmentPaths };
     }
   }
 
@@ -212,9 +252,15 @@ ${TERMINAL_HELP}`);
 ${this.styled('Model', TerminalColor.HEADING)}   ${clean(model.slug)}  ${this.styled('ChatGPT plan', TerminalColor.METADATA)}\n`);
   }
 
-  showConversationReset(): void { this.line('Conversation cleared.'); }
-  showConversationReplaced(): void { this.line('Started a new conversation for the selected account.'); }
-  showUnknownCommand(): void { this.line(this.styled('Unknown command. Use /help.', TerminalColor.WARNING)); }
+  showConversationReset(): void {
+    this.line('Conversation cleared.');
+  }
+  showConversationReplaced(): void {
+    this.line('Started a new conversation for the selected account.');
+  }
+  showUnknownCommand(): void {
+    this.line(this.styled('Unknown command. Use /help.', TerminalColor.WARNING));
+  }
 
   showUsage(usage: Usage): void {
     this.line(`${formatUsage(usage)}\nCompleted requests only. Plan/credit limits: https://chatgpt.com/settings/usage`);
@@ -228,9 +274,11 @@ ${this.styled('Model', TerminalColor.HEADING)}   ${clean(model.slug)}  ${this.st
   }
 
   showLogout(revoked: boolean): void {
-    this.line(revoked
-      ? 'Signed out. Renewable session revoked.'
-      : 'Local tokens cleared. Remote revocation was not confirmed; disconnect Harness Chat in ChatGPT settings.');
+    this.line(
+      revoked
+        ? 'Signed out. Renewable session revoked.'
+        : 'Local tokens cleared. Remote revocation was not confirmed; disconnect Harness Chat in ChatGPT settings.',
+    );
   }
 
   showError(message: string): void {
@@ -255,9 +303,8 @@ ${this.styled('Model', TerminalColor.HEADING)}   ${clean(model.slug)}  ${this.st
   ): void {
     if (this.responseSection === section) return;
     if (this.responseSection !== undefined) this.output.write('\n\n');
-    const color = section === ChatResponsePartType.REASONING_SUMMARY
-      ? TerminalColor.THINKING
-      : TerminalColor.ASSISTANT_LABEL;
+    const color =
+      section === ChatResponsePartType.REASONING_SUMMARY ? TerminalColor.THINKING : TerminalColor.ASSISTANT_LABEL;
     this.output.write(this.styled(label, color));
     this.responseSection = section;
   }
@@ -270,7 +317,9 @@ ${this.styled('Model', TerminalColor.HEADING)}   ${clean(model.slug)}  ${this.st
       const argumentsText = clean(activity.arguments).trimEnd();
       const details = argumentsText.includes('\n')
         ? `\n${this.styled(indent(argumentsText), TerminalColor.METADATA)}`
-        : argumentsText ? ` ${this.styled(argumentsText, TerminalColor.METADATA)}` : '';
+        : argumentsText
+          ? ` ${this.styled(argumentsText, TerminalColor.METADATA)}`
+          : '';
       this.output.write(`${prefix}${label}${details}\n`);
       return;
     }
@@ -301,12 +350,17 @@ function formatToolResult(activity: ToolActivity): { message: string; failed: bo
     if (typeof result === 'object' && result !== null && 'error' in result) {
       return { message: `error: ${formatToolError((result as { error: unknown }).error)}`, failed: true };
     }
-  } catch { /* Non-JSON output is still a successful tool result. */ }
+  } catch {
+    /* Non-JSON output is still a successful tool result. */
+  }
   return { message: 'completed', failed: false };
 }
 
 function indent(value: string): string {
-  return value.split('\n').map(line => `  ${line}`).join('\n');
+  return value
+    .split('\n')
+    .map(line => `  ${line}`)
+    .join('\n');
 }
 
 function formatToolError(error: unknown): string {

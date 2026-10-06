@@ -30,9 +30,12 @@ describe(OpenAIModelCatalog, () => {
       const catalog = new OpenAIModelCatalog(configuration, http);
 
       expect((await catalog.list('oauth-token')).map(model => model.slug)).toEqual(['a', 'b']);
-      expect(get).toHaveBeenCalledWith(`${configuration.resource}/models`, expect.objectContaining({
-        headers: { Authorization: 'Bearer oauth-token' },
-      }));
+      expect(get).toHaveBeenCalledWith(
+        `${configuration.resource}/models`,
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer oauth-token' },
+        }),
+      );
     });
   });
 });

@@ -9,16 +9,24 @@ import type { OpenAISavedState } from '../OpenAISavedState.ts';
 import { OpenAISession } from '../OpenAISession.ts';
 
 const configuration: OpenAIConfiguration = {
-  issuer: 'https://auth.example.test', resource: 'https://api.example.test/v1',
-  scopes: 'openid plan', planScope: 'plan', requestTimeoutMs: 30_000,
+  issuer: 'https://auth.example.test',
+  resource: 'https://api.example.test/v1',
+  scopes: 'openid plan',
+  planScope: 'plan',
+  requestTimeoutMs: 30_000,
 };
 
 function account(expiresAt = Number.MAX_SAFE_INTEGER): OpenAIAccount {
   return {
-    clientId: 'client', subject: 'subject', email: 'developer@example.com',
+    clientId: 'client',
+    subject: 'subject',
+    email: 'developer@example.com',
     tokens: {
-      accessToken: 'access-secret', refreshToken: 'refresh-secret', idToken: 'id-secret',
-      expiresAt, scopes: ['openid', configuration.planScope],
+      accessToken: 'access-secret',
+      refreshToken: 'refresh-secret',
+      idToken: 'id-secret',
+      expiresAt,
+      scopes: ['openid', configuration.planScope],
     },
   };
 }
@@ -27,8 +35,10 @@ function store(saved: OpenAIAccount): OpenAIAccountStore {
   const state: OpenAISavedState = { version: 1, hostId: 'urn:uuid:test', accounts: [saved] };
   return {
     state,
-    acquire: vi.fn(async () => {}), load: vi.fn(async () => {}),
-    save: vi.fn(async () => {}), release: vi.fn(async () => {}),
+    acquire: vi.fn(async () => {}),
+    load: vi.fn(async () => {}),
+    save: vi.fn(async () => {}),
+    release: vi.fn(async () => {}),
   };
 }
 
@@ -38,7 +48,9 @@ describe(OpenAISession, () => {
       const saved = account();
       saved.tokens!.scopes = ['openid'];
       const session = new OpenAISession(
-        store(saved), new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() }), configuration,
+        store(saved),
+        new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() }),
+        configuration,
       );
 
       await expect(session.accessToken(saved)).rejects.toBeInstanceOf(AuthenticationError);
@@ -49,15 +61,21 @@ describe(OpenAISession, () => {
       const saved = account(0);
       const savedStore = store(saved);
       const post = vi.fn<HttpClient['post']>(async () => ({
-        ok: true, status: 200, headers: new Headers(),
+        ok: true,
+        status: 200,
+        headers: new Headers(),
         body: { access_token: 'next-access', refresh_token: 'next-refresh', token_type: 'Bearer', expires_in: 3600 },
       }));
       const session = new OpenAISession(
-        savedStore, new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post }), configuration,
+        savedStore,
+        new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post }),
+        configuration,
       );
 
-      expect(await Promise.all([session.accessToken(saved), session.accessToken(saved)]))
-        .toEqual(['next-access', 'next-access']);
+      expect(await Promise.all([session.accessToken(saved), session.accessToken(saved)])).toEqual([
+        'next-access',
+        'next-access',
+      ]);
       expect(post).toHaveBeenCalledOnce();
       expect(saved.tokens?.refreshToken).toBe('next-refresh');
       expect(savedStore.save).toHaveBeenCalledOnce();
@@ -71,7 +89,10 @@ describe(OpenAISession, () => {
         new OpenAIAuthenticationClient(configuration, {
           get: vi.fn(),
           post: vi.fn(async () => ({
-            ok: false, status: 400, headers: new Headers(), body: { error: 'invalid_grant' },
+            ok: false,
+            status: 400,
+            headers: new Headers(),
+            body: { error: 'invalid_grant' },
           })),
         }),
         configuration,

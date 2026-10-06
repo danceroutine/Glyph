@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "env": {
+    "node": true
+  },
+  "ignorePatterns": ["target/**", "dist/**", "coverage/**", ".next/**"],
+  "options": {
+    "denyWarnings": true,
+    "reportUnusedDisableDirectives": "error"
+  },
+  "rules": {
+    "no-control-regex": "off"
+  },
+  "overrides": [
+    {
+      "files": ["examples/**/*.ts", "examples/**/*.tsx"],
+      "env": {
+        "browser": true,
+        "node": true
+      }
+    },
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "env": {
+        "node": true,
+        "vitest": true
+      }
+    }
+  ]
+}

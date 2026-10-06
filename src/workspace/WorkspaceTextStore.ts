@@ -13,8 +13,25 @@ export interface WorkspaceTextStore {
   normalizePath(path: string): string;
   read(path: string): Promise<WorkspaceTextSnapshot>;
   readOptional(path: string): Promise<WorkspaceTextSnapshot | undefined>;
-  create(path: string, text: string, byteOrderMark: boolean, mode?: number, options?: WorkspaceMutationOptions): Promise<WorkspaceTextSnapshot>;
-  replace(path: string, expectedRevision: string, text: string, byteOrderMark: boolean, options?: WorkspaceMutationOptions): Promise<WorkspaceTextSnapshot>;
-  rename(source: string, target: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<WorkspaceTextSnapshot>;
+  create(
+    path: string,
+    text: string,
+    byteOrderMark: boolean,
+    mode?: number,
+    options?: WorkspaceMutationOptions,
+  ): Promise<WorkspaceTextSnapshot>;
+  replace(
+    path: string,
+    expectedRevision: string,
+    text: string,
+    byteOrderMark: boolean,
+    options?: WorkspaceMutationOptions,
+  ): Promise<WorkspaceTextSnapshot>;
+  rename(
+    source: string,
+    target: string,
+    expectedRevision: string,
+    options?: WorkspaceMutationOptions,
+  ): Promise<WorkspaceTextSnapshot>;
   delete(path: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void>;
 }

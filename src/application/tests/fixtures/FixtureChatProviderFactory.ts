@@ -3,5 +3,7 @@ import type { ChatProviderFactory } from '../../../chat/ChatProviderFactory.ts';
 
 export class FixtureChatProviderFactory implements ChatProviderFactory {
   constructor(private readonly provider: ChatProvider) {}
-  create(): ChatProvider { return this.provider; }
+  create(): ChatProvider {
+    return this.provider;
+  }
 }

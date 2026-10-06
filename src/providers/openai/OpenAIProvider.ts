@@ -18,6 +18,8 @@ import type { ProviderTraceEntry } from '../../chat/ProviderTraceEntry.ts';
 import type { ToolActivity } from '../../chat/ToolActivity.ts';
 import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
 import type { TurnResult } from '../../chat/TurnResult.ts';
+import type { ChatRequest, ChatRequestInput } from '../../chat/ChatRequest.ts';
+import { toChatRequest } from '../../chat/ChatRequest.ts';
 
 const MAX_TOOL_ROUNDS = 8;
 export class OpenAIProvider implements ChatProvider {
@@ -32,26 +34,32 @@ export class OpenAIProvider implements ChatProvider {
     private readonly tools: ToolRuntime,
   ) {}
 
-  get model(): string { return this.modelName; }
+  get model(): string {
+    return this.modelName;
+  }
 
   reset(): void {
     if (this.busy) throw new ProviderError('Cannot reset during a response. Cancel it first.');
     this.history = [];
   }
 
-  async send(text: string, options: {
-    signal: AbortSignal;
-    onText: (delta: string) => void;
-    onReasoningSummary?: (delta: string) => void;
-    onTrace?: (entry: ProviderTraceEntry) => void;
-    onToolActivity?: (activity: ToolActivity) => void;
-  }): Promise<TurnResult> {
+  async send(
+    inputRequest: ChatRequestInput,
+    options: {
+      signal: AbortSignal;
+      onText: (delta: string) => void;
+      onReasoningSummary?: (delta: string) => void;
+      onTrace?: (entry: ProviderTraceEntry) => void;
+      onToolActivity?: (activity: ToolActivity) => void;
+    },
+  ): Promise<TurnResult> {
+    const request = toChatRequest(inputRequest);
     if (this.busy) throw new ProviderError('A response is already in progress.');
-    if (!text.trim()) throw new ProviderError('Message cannot be empty.');
+    if (!request.text.trim()) throw new ProviderError('Message cannot be empty.');
     this.busy = true;
     const timeout = AbortSignal.timeout(this.configuration.timeoutMs);
     const signal = AbortSignal.any([options.signal, timeout]);
-    let input: ResponseInputItem[] = [...this.history, { role: 'user', content: text }];
+    let input: ResponseInputItem[] = [...this.history, toUserInput(request)];
     let traceSequence = 0;
     const trace = (kind: string, data: unknown, round?: number): void => {
       try {
@@ -77,20 +85,30 @@ export class OpenAIProvider implements ChatProvider {
       model: this.model,
       timeoutMs: this.configuration.timeoutMs,
       committedHistory: this.history,
-      userInput: text,
+      userInput: {
+        text: request.text,
+        attachments: request.attachments.map(attachment => ({
+          path: attachment.path,
+          revision: attachment.revision,
+          byteLength: attachment.byteLength,
+          byteOrderMark: attachment.byteOrderMark,
+        })),
+      },
     });
     try {
       const accessToken = await this.token();
       trace('authentication.resolved', { accessToken: '[REDACTED]' });
       signal.throwIfAborted();
-      const client = this.client ?? new OpenAI({
-        apiKey: accessToken,
-        baseURL: 'https://api.openai.com/v1',
-        organization: null,
-        project: null,
-        maxRetries: 0,
-        logLevel: 'off',
-      });
+      const client =
+        this.client ??
+        new OpenAI({
+          apiKey: accessToken,
+          baseURL: 'https://api.openai.com/v1',
+          organization: null,
+          project: null,
+          maxRetries: 0,
+          logLevel: 'off',
+        });
       let totalUsage: TurnResult['usage'] = null;
       let toolRounds = 0;
 
@@ -116,12 +134,16 @@ export class OpenAIProvider implements ChatProvider {
           response: httpResponse,
           request_id: requestId,
         } = await client.responses.create(request, { signal }).withResponse();
-        trace('response.http', {
-          requestId,
-          status: httpResponse.status,
-          statusText: httpResponse.statusText,
-          headers: responseHeaders(httpResponse.headers),
-        }, round);
+        trace(
+          'response.http',
+          {
+            requestId,
+            status: httpResponse.status,
+            statusText: httpResponse.statusText,
+            headers: responseHeaders(httpResponse.headers),
+          },
+          round,
+        );
         let response: Response | undefined;
         const completedOutputItems = new Map<number, ResponseOutputItem>();
         let streamedText = '';
@@ -173,9 +195,13 @@ export class OpenAIProvider implements ChatProvider {
               completedOutputItems.set(event.output_index, event.item);
               break;
             case 'response.incomplete':
-              throw new ProviderError(`Response incomplete (${event.response.incomplete_details?.reason ?? 'unknown'}). Try a shorter request.`);
+              throw new ProviderError(
+                `Response incomplete (${event.response.incomplete_details?.reason ?? 'unknown'}). Try a shorter request.`,
+              );
             case 'response.failed':
-              throw new ProviderError(`Response failed: ${`${event.response.error?.code ?? 'unknown'}: ${event.response.error?.message ?? 'unknown error'}`}`);
+              throw new ProviderError(
+                `Response failed: ${`${event.response.error?.code ?? 'unknown'}: ${event.response.error?.message ?? 'unknown error'}`}`,
+              );
             case 'error':
               throw new ProviderError(`API stream error: ${event.message}`);
           }
@@ -191,25 +217,35 @@ export class OpenAIProvider implements ChatProvider {
             completeReasoningSummaryPart(`${item.id}:${index}`, part.text);
           });
         }
-        trace('response.completed', {
-          terminalResponse: response,
-          collectedOutput: output,
-          accumulatedUsage: totalUsage,
-        }, round);
+        trace(
+          'response.completed',
+          {
+            terminalResponse: response,
+            collectedOutput: output,
+            accumulatedUsage: totalUsage,
+          },
+          round,
+        );
         input = [...input, ...toResponseInputItems(output)];
-        const calls = output.filter((item): item is ResponseFunctionToolCall | ResponseCustomToolCall =>
-          item.type === 'function_call' || item.type === 'custom_tool_call');
+        const calls = output.filter(
+          (item): item is ResponseFunctionToolCall | ResponseCustomToolCall =>
+            item.type === 'function_call' || item.type === 'custom_tool_call',
+        );
         const completedText = visibleTextFrom(output);
         const completedReasoningSummary = reasoningSummaryFrom(output);
-        trace('response.interpreted', {
-          terminalOutputTypes: response.output.map(item => item.type),
-          collectedOutputTypes: output.map(item => item.type),
-          streamedText,
-          completedText,
-          reportedReasoningSummary,
-          completedReasoningSummary,
-          toolCalls: calls,
-        }, round);
+        trace(
+          'response.interpreted',
+          {
+            terminalOutputTypes: response.output.map(item => item.type),
+            collectedOutputTypes: output.map(item => item.type),
+            streamedText,
+            completedText,
+            reportedReasoningSummary,
+            completedReasoningSummary,
+            toolCalls: calls,
+          },
+          round,
+        );
         // Completed output items are authoritative. Some routes omit text
         // deltas even though the finished message item has visible content.
         if (completedText.startsWith(streamedText)) {
@@ -218,7 +254,9 @@ export class OpenAIProvider implements ChatProvider {
         }
         if (calls.length === 0) {
           if (!streamedText.trim() && !completedText.trim()) {
-            throw new ProviderError(`The model completed without returning text or a project tool call. Response ID: ${response.id}`);
+            throw new ProviderError(
+              `The model completed without returning text or a project tool call. Response ID: ${response.id}`,
+            );
           }
           // Only commit a complete turn. Failures/cancellation leave prior context intact.
           this.history = input;
@@ -226,30 +264,37 @@ export class OpenAIProvider implements ChatProvider {
           return { responseId: response.id, usage: totalUsage };
         }
         toolRounds += 1;
-        if (toolRounds > MAX_TOOL_ROUNDS) throw new ProviderError(`Stopped after ${MAX_TOOL_ROUNDS} project tool rounds.`);
+        if (toolRounds > MAX_TOOL_ROUNDS)
+          throw new ProviderError(`Stopped after ${MAX_TOOL_ROUNDS} project tool rounds.`);
 
-        const outputs = await Promise.all(calls.map(async call => {
-          trace('tool.call', { call }, round);
-          const input = call.type === 'function_call' ? call.arguments : call.input;
-          const activity = {
-            ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
-            name: call.name,
-            callId: call.call_id,
-            arguments: input,
-          };
-          reportToolActivity({ phase: ToolActivityPhase.STARTED, ...activity });
-          const output = await this.tools.execute(call.name, input);
-          trace('tool.result', {
-            namespace: call.namespace,
-            name: call.name,
-            callId: call.call_id,
-            output,
-          }, round);
-          reportToolActivity({ phase: ToolActivityPhase.COMPLETED, ...activity, output });
-          return call.type === 'function_call'
-            ? { type: 'function_call_output' as const, call_id: call.call_id, output }
-            : { type: 'custom_tool_call_output' as const, call_id: call.call_id, output };
-        }));
+        const outputs = await Promise.all(
+          calls.map(async call => {
+            trace('tool.call', { call }, round);
+            const input = call.type === 'function_call' ? call.arguments : call.input;
+            const activity = {
+              ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
+              name: call.name,
+              callId: call.call_id,
+              arguments: input,
+            };
+            reportToolActivity({ phase: ToolActivityPhase.STARTED, ...activity });
+            const output = await this.tools.execute(call.name, input);
+            trace(
+              'tool.result',
+              {
+                namespace: call.namespace,
+                name: call.name,
+                callId: call.call_id,
+                output,
+              },
+              round,
+            );
+            reportToolActivity({ phase: ToolActivityPhase.COMPLETED, ...activity, output });
+            return call.type === 'function_call'
+              ? { type: 'function_call_output' as const, call_id: call.call_id, output }
+              : { type: 'custom_tool_call_output' as const, call_id: call.call_id, output };
+          }),
+        );
         input = [...input, ...outputs];
       }
     } catch (error) {
@@ -272,12 +317,31 @@ export class OpenAIProvider implements ChatProvider {
   }
 }
 
+function toUserInput(request: ChatRequest): ResponseInputItem {
+  if (request.attachments.length === 0) return { role: 'user', content: request.text };
+  const context = JSON.stringify({
+    schema: 'harness-chat.workspace-context.v1',
+    files: request.attachments.map(attachment => ({
+      path: attachment.path,
+      revision: attachment.revision,
+      byteOrderMark: attachment.byteOrderMark,
+      text: attachment.text,
+    })),
+  });
+  return {
+    role: 'user',
+    content: [
+      { type: 'input_text', text: context },
+      { type: 'input_text', text: request.text },
+    ],
+  };
+}
+
 function responseHeaders(headers: Headers): Record<string, string> {
   const sensitive = new Set(['authorization', 'proxy-authenticate', 'set-cookie', 'www-authenticate']);
-  return Object.fromEntries([...headers].map(([name, value]) => [
-    name,
-    sensitive.has(name.toLowerCase()) ? '[REDACTED]' : value,
-  ]));
+  return Object.fromEntries(
+    [...headers].map(([name, value]) => [name, sensitive.has(name.toLowerCase()) ? '[REDACTED]' : value]),
+  );
 }
 
 function errorDetails(error: unknown): unknown {
@@ -290,11 +354,8 @@ function errorDetails(error: unknown): unknown {
   for (const name of Object.getOwnPropertyNames(error)) {
     if (name === 'name' || name === 'message' || name === 'stack') continue;
     const value: unknown = (error as unknown as Record<string, unknown>)[name];
-    details[name] = value instanceof Error
-      ? errorDetails(value)
-      : value instanceof Headers
-        ? responseHeaders(value)
-        : value;
+    details[name] =
+      value instanceof Error ? errorDetails(value) : value instanceof Headers ? responseHeaders(value) : value;
   }
   return details;
 }
@@ -309,15 +370,15 @@ function mergeOutputItems(
 }
 
 function visibleTextFrom(output: ResponseOutputItem[]): string {
-  return output.flatMap(item => item.type === 'message'
-    ? item.content.map(part => part.type === 'output_text' ? part.text : part.refusal)
-    : []).join('');
+  return output
+    .flatMap(item =>
+      item.type === 'message' ? item.content.map(part => (part.type === 'output_text' ? part.text : part.refusal)) : [],
+    )
+    .join('');
 }
 
 function reasoningSummaryFrom(output: ResponseOutputItem[]): string {
-  return output.flatMap(item => item.type === 'reasoning'
-    ? item.summary.map(part => part.text)
-    : []).join('\n\n');
+  return output.flatMap(item => (item.type === 'reasoning' ? item.summary.map(part => part.text) : [])).join('\n\n');
 }
 
 function usageFrom(response: Response): TurnResult['usage'] {
@@ -357,15 +418,22 @@ function toOpenAITools(runtime: ToolRuntime): NamespaceTool[] {
       };
       namespaces.set(definition.namespace, namespace);
     }
-    namespace.tools.push(definition.inputKind === ToolInputKind.TEXT
-      ? { type: 'custom', name: definition.name, description: definition.description }
-      : {
-        type: 'function',
-        name: definition.name,
-        description: definition.description,
-        strict: true,
-        parameters: definition.parameters ?? { type: 'object', properties: {}, required: [], additionalProperties: false },
-      });
+    namespace.tools.push(
+      definition.inputKind === ToolInputKind.TEXT
+        ? { type: 'custom', name: definition.name, description: definition.description }
+        : {
+            type: 'function',
+            name: definition.name,
+            description: definition.description,
+            strict: true,
+            parameters: definition.parameters ?? {
+              type: 'object',
+              properties: {},
+              required: [],
+              additionalProperties: false,
+            },
+          },
+    );
   }
   return [...namespaces.values()];
 }

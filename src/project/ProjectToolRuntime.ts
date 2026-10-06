@@ -38,7 +38,8 @@ Every directive and context line is exact; no fuzzy matching occurs. Never claim
   {
     namespace: ProjectToolNamespace.PROJECT,
     name: ProjectToolName.PROPOSE_EDITS,
-    description: 'Stage exact UTF-16 range edits for user review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
+    description:
+      'Stage exact UTF-16 range edits for user review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
     inputKind: ToolInputKind.JSON,
     parameters: toJsonSchema(EditProposalService.structuredSchema),
   },
@@ -83,19 +84,22 @@ export class ProjectToolRuntime implements ToolRuntime {
         status: 'STAGED_FOR_REVIEW',
         files: proposal.files.length,
         review_items: proposal.files.reduce((sum, file) => sum + file.items.length, 0),
-        message: 'The proposal is staged but no workspace changes have been written. The user must accept review items.',
+        message:
+          'The proposal is staged but no workspace changes have been written. The user must accept review items.',
       });
     } catch (error) {
       await this.logger.error('failed', {
         name,
-        error: error instanceof EditError
-          ? error.toJSON()
-          : { message: error instanceof Error ? error.message : String(error) },
+        error:
+          error instanceof EditError
+            ? error.toJSON()
+            : { message: error instanceof Error ? error.message : String(error) },
       });
       return JSON.stringify({
-        error: error instanceof EditError
-          ? error.toJSON()
-          : { code: 'TOOL_FAILED', message: error instanceof Error ? error.message : 'Project tool failed.' },
+        error:
+          error instanceof EditError
+            ? error.toJSON()
+            : { code: 'TOOL_FAILED', message: error instanceof Error ? error.message : 'Project tool failed.' },
       });
     }
   }

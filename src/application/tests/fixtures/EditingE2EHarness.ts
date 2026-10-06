@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import OpenAI from 'openai';
 import type { ResponseOutputItem } from 'openai/resources/responses/responses';
 import { HarnessService } from '../../HarnessService.ts';
+import { ContextAttachmentService } from '../../../context/attachments/ContextAttachmentService.ts';
 import type { ChatConversation } from '../../../chat/ChatConversation.ts';
 import type { ChatConfiguration } from '../../../configuration/ChatConfiguration.ts';
 import { EditProposalService } from '../../../editing/proposals/EditProposalService.ts';
@@ -28,9 +29,16 @@ import { FixtureOpenAISession } from './FixtureOpenAISession.ts';
 
 const chat: ChatConfiguration = { instructions: 'Edit the project when asked.', timeoutMs: 10_000 };
 const editing: EditingConfiguration = {
-  maxRawProposalBytes: 1_048_576, maxChangedBytes: 1_048_576, maxResultingBytesPerFile: 1_048_576,
-  maxFiles: 64, maxTotalHunks: 256, maxHunksPerFile: 64, diffBudgetMs: 1_000, maxActiveReviews: 1,
-  newFileByteOrderMark: false, newFileLineEnding: '\n',
+  maxRawProposalBytes: 1_048_576,
+  maxChangedBytes: 1_048_576,
+  maxResultingBytesPerFile: 1_048_576,
+  maxFiles: 64,
+  maxTotalHunks: 256,
+  maxHunksPerFile: 64,
+  diffBudgetMs: 1_000,
+  maxActiveReviews: 1,
+  newFileByteOrderMark: false,
+  newFileLineEnding: '\n',
 };
 
 export class EditingE2EHarness {
@@ -50,10 +58,27 @@ export class EditingE2EHarness {
   ) {
     this.workspace = new FileSystemWorkspaceTextStore(projectRoot);
     this.reviews = new ProposalReviewManager(this.workspace, new FileProposalReviewStore(stateRoot), this.logger);
-    const proposals = new EditProposalService(this.workspace, new JsDiffTextDiffer(), editing, this.logger, deterministicIds(), () => new Date(0));
-    const runtime = new ProjectToolRuntime(new ProjectAccess(projectRoot, {}, this.workspace), proposals, this.reviews, this.logger);
+    const proposals = new EditProposalService(
+      this.workspace,
+      new JsDiffTextDiffer(),
+      editing,
+      this.logger,
+      deterministicIds(),
+      () => new Date(0),
+    );
+    const runtime = new ProjectToolRuntime(
+      new ProjectAccess(projectRoot, {}, this.workspace),
+      proposals,
+      this.reviews,
+      this.logger,
+    );
     this.fixture = new ScriptedOpenAIResponsesFixture(rounds);
-    const client = new OpenAI({ apiKey: 'sentinel-not-a-real-token', baseURL: 'https://responses.fixture.invalid/v1', maxRetries: 0, fetch: this.fixture.fetch });
+    const client = new OpenAI({
+      apiKey: 'sentinel-not-a-real-token',
+      baseURL: 'https://responses.fixture.invalid/v1',
+      maxRetries: 0,
+      fetch: this.fixture.fetch,
+    });
     this.provider = new OpenAIProvider(
       'test-model',
       { ...chat, instructions: new ProjectAgentInstructions(chat.instructions).render() },
@@ -69,16 +94,26 @@ export class EditingE2EHarness {
       new FixtureChatProviderFactory(this.provider),
       this.logger,
       {
-        issuer: 'https://auth.fixture.invalid', resource: 'https://responses.fixture.invalid/v1',
-        scopes: 'openid chatgpt.tokens.use.direct', planScope: 'chatgpt.tokens.use.direct', requestTimeoutMs: 1_000,
+        issuer: 'https://auth.fixture.invalid',
+        resource: 'https://responses.fixture.invalid/v1',
+        scopes: 'openid chatgpt.tokens.use.direct',
+        planScope: 'chatgpt.tokens.use.direct',
+        requestTimeoutMs: 1_000,
       },
       { traceEnabled: true },
       this.reviews,
+      new ContextAttachmentService(this.workspace),
     );
-    this.conversation = this.application.createConversation(accountStore.state.accounts[0]!, { slug: 'test-model', name: 'Test Model' });
+    this.conversation = this.application.createConversation(accountStore.state.accounts[0]!, {
+      slug: 'test-model',
+      name: 'Test Model',
+    });
   }
 
-  static async create(files: Record<string, string | Uint8Array>, rounds: readonly ScriptedResponseRound[]): Promise<EditingE2EHarness> {
+  static async create(
+    files: Record<string, string | Uint8Array>,
+    rounds: readonly ScriptedResponseRound[],
+  ): Promise<EditingE2EHarness> {
     const project = await mkdtemp(join(tmpdir(), 'editing-e2e-project-'));
     const state = await mkdtemp(join(tmpdir(), 'editing-e2e-state-'));
     for (const [path, value] of Object.entries(files)) {
@@ -90,13 +125,21 @@ export class EditingE2EHarness {
     return harness;
   }
 
-  async send(prompt = 'Make the requested edit.'): Promise<string> {
-    return this.sendWithSignal(new AbortController().signal, prompt);
+  async send(prompt = 'Make the requested edit.', attachmentPaths: readonly string[] = []): Promise<string> {
+    return this.sendWithSignal(new AbortController().signal, prompt, attachmentPaths);
   }
 
-  async sendWithSignal(signal: AbortSignal, prompt = 'Make the requested edit.'): Promise<string> {
+  async sendWithSignal(
+    signal: AbortSignal,
+    prompt = 'Make the requested edit.',
+    attachmentPaths: readonly string[] = [],
+  ): Promise<string> {
     const response = new RecordingResponseStream();
-    await this.conversation.send(prompt, response, signal);
+    const request = await this.application.resolveChatRequest(
+      prompt,
+      attachmentPaths.map(path => ({ path })),
+    );
+    await this.conversation.send(request, response, signal);
     return response.text;
   }
 
@@ -110,7 +153,10 @@ export class EditingE2EHarness {
 
   static finalMessage(text = 'The edit is staged for your review.'): ResponseOutputItem {
     return {
-      type: 'message', id: 'message-final', role: 'assistant', status: 'completed',
+      type: 'message',
+      id: 'message-final',
+      role: 'assistant',
+      status: 'completed',
       content: [{ type: 'output_text', text, annotations: [], logprobs: [] }],
     } satisfies ResponseOutputItem;
   }

@@ -9,6 +9,8 @@ describe(ProjectAgentInstructions, () => {
       expect(instructions).toContain('# Identity\n\nYou are a careful software engineer.');
       expect(instructions).toContain('## Project discovery');
       expect(instructions).toContain('## Editing workflow');
+      expect(instructions).toContain('## Attached workspace context');
+      expect(instructions).toContain('harness-chat.workspace-context.v1');
       expect(instructions).toContain('project.propose_patch');
       expect(instructions).toContain('never claim that the files have already changed');
     });

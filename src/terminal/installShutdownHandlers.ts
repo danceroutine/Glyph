@@ -10,11 +10,14 @@ interface InterruptSource {
   off(signal: ShutdownSignal.SIGINT, listener: () => void): unknown;
 }
 
-export function installShutdownHandlers(options: {
-  active: () => AbortController | undefined;
-  shutdown: (signal: ShutdownSignal) => void;
-  interrupt?: InterruptSource;
-}, source: SignalSource = process): () => void {
+export function installShutdownHandlers(
+  options: {
+    active: () => AbortController | undefined;
+    shutdown: (signal: ShutdownSignal) => void;
+    interrupt?: InterruptSource;
+  },
+  source: SignalSource = process,
+): () => void {
   const handle = (signal: ShutdownSignal): void => {
     const active = options.active();
     if (signal === ShutdownSignal.SIGINT && active && !active.signal.aborted) {

@@ -1,6 +1,11 @@
 #!/usr/bin/env node
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { HarnessService } from './application/HarnessService.ts';
+import { ContextAttachmentService } from './context/attachments/ContextAttachmentService.ts';
+import { RustWorkspaceFileSearch } from './context/search/RustWorkspaceFileSearch.ts';
 import { EnvironmentConfigurationProvider } from './configuration/EnvironmentConfigurationProvider.ts';
+import { ConfigurationError } from './errors/ConfigurationError.ts';
 import { EditProposalService } from './editing/proposals/EditProposalService.ts';
 import { ProposalReviewManager } from './editing/reviews/ProposalReviewManager.ts';
 import { FileProposalReviewStore } from './editing/reviews/persistence/FileProposalReviewStore.ts';
@@ -28,18 +33,50 @@ async function main(): Promise<void> {
     process.stdout.write(`Harness Chat | Sign in with ChatGPT\n${TerminalUI.help}\n`);
     return;
   }
-  if (!process.stdin.isTTY) throw new Error('Run npm start in an interactive terminal for account and model selection.');
+  if (!process.stdin.isTTY)
+    throw new Error('Run npm start in an interactive terminal for account and model selection.');
 
   const shutdown = new AbortController();
   const configuration = new EnvironmentConfigurationProvider();
+  const projectRoot = process.cwd();
+  if (resolve(configuration.stateDirectory) === resolve(projectRoot)) {
+    throw new ConfigurationError(
+      'HARNESS_CHAT_CONFIG_DIR must not be the project root because harness state contains credentials and provider traces.',
+    );
+  }
   const logger = new FileLogger(configuration.traceFile);
   const http = new FetchHttpClient(logger);
   const store = new FileOpenAIAccountStore(configuration.stateDirectory);
   const terminalInput = new TerminalInput();
-  const ui = new TerminalUI(terminalInput);
+  const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const indexExecutable = resolve(
+    process.env.HARNESS_CHAT_CONTEXT_INDEX_BINARY ??
+      resolve(
+        packageRoot,
+        'target',
+        'release',
+        process.platform === 'win32' ? 'harness-context-index.exe' : 'harness-context-index',
+      ),
+  );
+  const excludedPaths = [
+    ...new Set(
+      [
+        projectRelativeExclusion(projectRoot, configuration.stateDirectory),
+        projectRelativeExclusion(projectRoot, configuration.traceFile),
+        projectRelativeExclusion(projectRoot, indexExecutable),
+      ].filter((path): path is string => path !== undefined),
+    ),
+  ];
+  const fileSearch = new RustWorkspaceFileSearch({
+    binaryPath: indexExecutable,
+    root: projectRoot,
+    cachePath: join(configuration.stateDirectory, 'context-index.bin'),
+    excludedPaths,
+  });
+  const ui = new TerminalUI(terminalInput, process.stdout, process.stderr, fileSearch);
   const authentication = new OpenAIAuthenticationClient(configuration.openAI, http);
   const session = new OpenAISession(store, authentication, configuration.openAI, shutdown.signal);
-  const workspace = new FileSystemWorkspaceTextStore(process.cwd());
+  const workspace = new FileSystemWorkspaceTextStore(projectRoot, { excludedPaths });
   const proposalReviews = new ProposalReviewManager(
     workspace,
     new FileProposalReviewStore(configuration.stateDirectory),
@@ -47,7 +84,7 @@ async function main(): Promise<void> {
     configuration.editing.maxActiveReviews,
   );
   const projectTools = new ProjectToolRuntime(
-    new ProjectAccess(process.cwd(), {}, workspace),
+    new ProjectAccess(projectRoot, {}, workspace),
     new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
     proposalReviews,
     logger,
@@ -56,19 +93,27 @@ async function main(): Promise<void> {
     store,
     session,
     new OpenAIModelCatalog(configuration.openAI, http),
-    new OpenAIProviderFactory(process.cwd(), configuration, projectTools),
+    new OpenAIProviderFactory(projectRoot, configuration, projectTools),
     logger,
     configuration.openAI,
     { traceEnabled: configuration.traceEnabled },
     proposalReviews,
+    new ContextAttachmentService(workspace, configuration.contextAttachments),
+    fileSearch,
   );
-  const application = new TerminalApplication(harness, ui, shutdown.signal, {
-    projectRoot: process.cwd(),
-    ...(configuration.configuredModel ? { configuredModel: configuration.configuredModel } : {}),
-  }, new TerminalEditReviewer(terminalInput, process.stdout, () => {
-    process.exitCode = 130;
-    shutdown.abort();
-  }));
+  const application = new TerminalApplication(
+    harness,
+    ui,
+    shutdown.signal,
+    {
+      projectRoot,
+      ...(configuration.configuredModel ? { configuredModel: configuration.configuredModel } : {}),
+    },
+    new TerminalEditReviewer(terminalInput, process.stdout, () => {
+      process.exitCode = 130;
+      shutdown.abort();
+    }),
+  );
 
   let closed = false;
   let shutdownKeepAlive: NodeJS.Timeout | undefined;
@@ -100,6 +145,15 @@ async function main(): Promise<void> {
     ui.close();
     if (shutdownKeepAlive) clearInterval(shutdownKeepAlive);
   }
+}
+
+function projectRelativeExclusion(root: string, target: string): string | undefined {
+  const fromRoot = relative(resolve(root), resolve(target));
+  if (!fromRoot) {
+    throw new ConfigurationError('Harness state, trace, and native-worker paths must not be the project root.');
+  }
+  if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) return undefined;
+  return fromRoot.split(sep).join('/');
 }
 
 main().catch(error => {

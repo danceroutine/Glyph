@@ -78,21 +78,24 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
 function isOpenAISavedState(raw: unknown): raw is OpenAISavedState {
   if (!raw || typeof raw !== 'object') return false;
   const state = raw as Partial<OpenAISavedState>;
-  return state.version === 1
-    && typeof state.hostId === 'string'
-    && state.hostId.startsWith('urn:uuid:')
-    && Array.isArray(state.accounts)
-    && state.accounts.every(account =>
-      typeof account.clientId === 'string'
-      && account.clientId !== 'dynamic_agent_client'
-      && typeof account.subject === 'string'
-      && typeof account.email === 'string'
-      && (!account.tokens || (
-        typeof account.tokens.accessToken === 'string'
-        && typeof account.tokens.refreshToken === 'string'
-        && typeof account.tokens.idToken === 'string'
-        && Number.isFinite(account.tokens.expiresAt)
-        && Array.isArray(account.tokens.scopes)
-        && account.tokens.scopes.every((scope: unknown) => typeof scope === 'string')
-      )));
+  return (
+    state.version === 1 &&
+    typeof state.hostId === 'string' &&
+    state.hostId.startsWith('urn:uuid:') &&
+    Array.isArray(state.accounts) &&
+    state.accounts.every(
+      account =>
+        typeof account.clientId === 'string' &&
+        account.clientId !== 'dynamic_agent_client' &&
+        typeof account.subject === 'string' &&
+        typeof account.email === 'string' &&
+        (!account.tokens ||
+          (typeof account.tokens.accessToken === 'string' &&
+            typeof account.tokens.refreshToken === 'string' &&
+            typeof account.tokens.idToken === 'string' &&
+            Number.isFinite(account.tokens.expiresAt) &&
+            Array.isArray(account.tokens.scopes) &&
+            account.tokens.scopes.every((scope: unknown) => typeof scope === 'string'))),
+    )
+  );
 }

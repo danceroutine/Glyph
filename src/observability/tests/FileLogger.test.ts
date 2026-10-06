@@ -14,9 +14,16 @@ describe(FileLogger, () => {
       await logger.trace('provider.trace', { sequence: 1 });
       await logger.forNamespace('application').info('ready');
 
-      const entries = (await readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as {
-        level: string; message: string;
-      });
+      const entries = (await readFile(path, 'utf8'))
+        .trim()
+        .split('\n')
+        .map(
+          line =>
+            JSON.parse(line) as {
+              level: string;
+              message: string;
+            },
+        );
       expect(entries).toEqual([
         expect.objectContaining({ level: 'trace', message: 'provider.trace' }),
         expect.objectContaining({ level: 'info', message: 'application.ready' }),

@@ -8,8 +8,14 @@ function logger() {
   const debug = vi.fn<(message: string, data?: unknown) => void>();
   const error = vi.fn<(message: string, data?: unknown) => void>();
   const value = {
-    forNamespace() { return this; },
-    trace: vi.fn(), debug, info: vi.fn(), warn: vi.fn(), error,
+    forNamespace() {
+      return this;
+    },
+    trace: vi.fn(),
+    debug,
+    info: vi.fn(),
+    warn: vi.fn(),
+    error,
   } satisfies Logger;
   return { value, debug, error };
 }
@@ -25,10 +31,14 @@ describe(FetchHttpClient, () => {
       });
       const client = new FetchHttpClient(log.value, transport);
 
-      expect((await client.post('https://example.test/token', {
-        body: { client_id: 'client', refresh_token: 'secret' },
-        bodyEncoding: HttpBodyEncoding.FORM,
-      })).body).toEqual({ access_token: 'access' });
+      expect(
+        (
+          await client.post('https://example.test/token', {
+            body: { client_id: 'client', refresh_token: 'secret' },
+            bodyEncoding: HttpBodyEncoding.FORM,
+          })
+        ).body,
+      ).toEqual({ access_token: 'access' });
 
       expect(log.debug).toHaveBeenCalledTimes(2);
       expect(JSON.stringify(log.debug.mock.calls)).not.toContain('secret');
@@ -36,9 +46,12 @@ describe(FetchHttpClient, () => {
 
     it('wraps transport failures in a typed HTTP error and records the failure', async () => {
       const log = logger();
-      const client = new FetchHttpClient(log.value, vi.fn<typeof fetch>(async () => {
-        throw new Error('offline');
-      }));
+      const client = new FetchHttpClient(
+        log.value,
+        vi.fn<typeof fetch>(async () => {
+          throw new Error('offline');
+        }),
+      );
 
       await expect(client.post('https://example.test/token')).rejects.toBeInstanceOf(HttpError);
       expect(log.error).toHaveBeenCalledWith('http.failure', expect.objectContaining({ error: 'offline' }));

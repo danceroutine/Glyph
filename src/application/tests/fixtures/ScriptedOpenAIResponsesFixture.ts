@@ -16,14 +16,23 @@ export class ScriptedOpenAIResponsesFixture {
 
   static encodeToolCall(invocation: ScriptedToolInvocation): ResponseOutputItem {
     return invocation.inputKind === ToolInputKind.TEXT
-      ? {
-        type: 'custom_tool_call', id: `item-${invocation.callId}`, call_id: invocation.callId,
-        namespace: invocation.namespace, name: invocation.name, input: String(invocation.input),
-      } satisfies ResponseOutputItem
-      : {
-        type: 'function_call', id: `item-${invocation.callId}`, call_id: invocation.callId, status: 'completed',
-        namespace: invocation.namespace, name: invocation.name, arguments: JSON.stringify(invocation.input),
-      } satisfies ResponseOutputItem;
+      ? ({
+          type: 'custom_tool_call',
+          id: `item-${invocation.callId}`,
+          call_id: invocation.callId,
+          namespace: invocation.namespace,
+          name: invocation.name,
+          input: String(invocation.input),
+        } satisfies ResponseOutputItem)
+      : ({
+          type: 'function_call',
+          id: `item-${invocation.callId}`,
+          call_id: invocation.callId,
+          status: 'completed',
+          namespace: invocation.namespace,
+          name: invocation.name,
+          arguments: JSON.stringify(invocation.input),
+        } satisfies ResponseOutputItem);
   }
 
   readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<globalThis.Response> => {
@@ -38,14 +47,16 @@ export class ScriptedOpenAIResponsesFixture {
     this.previousCalls = round.output.filter(item => item.type === 'function_call' || item.type === 'custom_tool_call');
     if (round.status === 'cancelled') return cancelledSse(init?.signal ?? undefined);
     const response = makeResponse(round);
-    const event = round.status === 'failed'
-      ? ({ type: 'response.failed', sequence_number: 1, response } satisfies ResponseStreamEvent)
-      : ({ type: 'response.completed', sequence_number: 1, response } satisfies ResponseStreamEvent);
+    const event =
+      round.status === 'failed'
+        ? ({ type: 'response.failed', sequence_number: 1, response } satisfies ResponseStreamEvent)
+        : ({ type: 'response.completed', sequence_number: 1, response } satisfies ResponseStreamEvent);
     return sse([event]);
   };
 
   assertConsumed(): void {
-    if (this.index !== this.rounds.length) throw new Error(`Only ${this.index}/${this.rounds.length} scripted Responses rounds were consumed.`);
+    if (this.index !== this.rounds.length)
+      throw new Error(`Only ${this.index}/${this.rounds.length} scripted Responses rounds were consumed.`);
   }
 }
 
@@ -84,24 +95,37 @@ function validateContinuation(request: Record<string, unknown>, calls: ResponseO
     if (call.type !== 'function_call' && call.type !== 'custom_tool_call') continue;
     const callType = call.type;
     const outputType = callType === 'function_call' ? 'function_call_output' : 'custom_tool_call_output';
-    if (!input.some(item => item.type === callType && item.call_id === call.call_id)) throw new Error(`Missing replayed ${callType} ${call.call_id}.`);
-    if (!input.some(item => item.type === outputType && item.call_id === call.call_id)) throw new Error(`Missing ${outputType} ${call.call_id}.`);
+    if (!input.some(item => item.type === callType && item.call_id === call.call_id))
+      throw new Error(`Missing replayed ${callType} ${call.call_id}.`);
+    if (!input.some(item => item.type === outputType && item.call_id === call.call_id))
+      throw new Error(`Missing ${outputType} ${call.call_id}.`);
   }
 }
 
 function sse(events: ResponseStreamEvent[]): globalThis.Response {
   const bytes = new TextEncoder().encode(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
-  return new globalThis.Response(new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } }), {
-    headers: { 'content-type': 'text/event-stream', 'x-request-id': 'fixture-request' },
-  });
+  return new globalThis.Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
+    {
+      headers: { 'content-type': 'text/event-stream', 'x-request-id': 'fixture-request' },
+    },
+  );
 }
 
 function cancelledSse(signal: AbortSignal | null | undefined): globalThis.Response {
-  return new globalThis.Response(new ReadableStream({
-    start(controller) {
-      const cancel = (): void => controller.error(signal?.reason ?? new Error('Fixture request cancelled.'));
-      if (signal?.aborted) cancel();
-      else signal?.addEventListener('abort', cancel, { once: true });
-    },
-  }), { headers: { 'content-type': 'text/event-stream' } });
+  return new globalThis.Response(
+    new ReadableStream({
+      start(controller) {
+        const cancel = (): void => controller.error(signal?.reason ?? new Error('Fixture request cancelled.'));
+        if (signal?.aborted) cancel();
+        else signal?.addEventListener('abort', cancel, { once: true });
+      },
+    }),
+    { headers: { 'content-type': 'text/event-stream' } },
+  );
 }

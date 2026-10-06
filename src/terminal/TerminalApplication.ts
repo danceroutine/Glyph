@@ -28,17 +28,15 @@ export class TerminalApplication {
     private readonly reviewer?: TerminalEditReviewer,
   ) {}
 
-  get active(): AbortController | undefined { return this.activeRequest; }
+  get active(): AbortController | undefined {
+    return this.activeRequest;
+  }
 
   async run(): Promise<number> {
     try {
       await this.harness.initialize();
       if (this.shutdown.aborted) return 0;
-      this.ui.showWelcome(
-        this.options.projectRoot,
-        this.harness.tracePath,
-        this.harness.isTraceEnabled,
-      );
+      this.ui.showWelcome(this.options.projectRoot, this.harness.tracePath, this.harness.isTraceEnabled);
 
       let account = await this.enablePlanIfNeeded(await this.chooseAccount());
       await this.selectModel(account);
@@ -47,8 +45,11 @@ export class TerminalApplication {
       while (!this.shutdown.aborted) {
         const action = await this.ui.nextAction(this.shutdown);
         switch (action.type) {
-          case TerminalActionType.EXIT: return 0;
-          case TerminalActionType.HELP: this.ui.showHelp(); break;
+          case TerminalActionType.EXIT:
+            return 0;
+          case TerminalActionType.HELP:
+            this.ui.showHelp();
+            break;
           case TerminalActionType.RESET:
             this.requireConversation().reset();
             this.ui.showConversationReset();
@@ -70,22 +71,27 @@ export class TerminalApplication {
             await this.reviewPending();
             break;
           case TerminalActionType.ACCEPT_ALL:
-            try { await this.harness.proposalReviews?.acceptAll(); }
-            catch (error) { this.ui.showError(this.harness.redact(describeError(error))); }
+            try {
+              await this.harness.proposalReviews?.acceptAll();
+            } catch (error) {
+              this.ui.showError(this.harness.redact(describeError(error)));
+            }
             break;
           case TerminalActionType.REJECT_ALL:
-            try { await this.harness.proposalReviews?.rejectAll(); }
-            catch (error) { this.ui.showError(this.harness.redact(describeError(error))); }
+            try {
+              await this.harness.proposalReviews?.rejectAll();
+            } catch (error) {
+              this.ui.showError(this.harness.redact(describeError(error)));
+            }
             break;
           case TerminalActionType.ACCOUNT:
           case TerminalActionType.LOGIN: {
-            const next = action.type === TerminalActionType.ACCOUNT
-              ? await this.chooseAccount()
-              : await this.harness.signIn(
-                account,
-                !this.harness.hasPlanAccess(account),
-                request => this.ui.authorize(request),
-              );
+            const next =
+              action.type === TerminalActionType.ACCOUNT
+                ? await this.chooseAccount()
+                : await this.harness.signIn(account, !this.harness.hasPlanAccess(account), request =>
+                    this.ui.authorize(request),
+                  );
             account = await this.enablePlanIfNeeded(next);
             await this.selectModel(account);
             this.ui.showConversationReplaced();
@@ -95,7 +101,7 @@ export class TerminalApplication {
             this.ui.showUnknownCommand();
             break;
           case TerminalActionType.SEND:
-            await this.send(action.prompt);
+            await this.send(action.prompt, action.attachmentPaths);
             break;
         }
       }
@@ -120,7 +126,7 @@ export class TerminalApplication {
 
   private async enablePlanIfNeeded(account: OpenAIAccount): Promise<OpenAIAccount> {
     if (this.harness.hasPlanAccess(account)) return account;
-    if (!await this.ui.confirmPlanUsage(this.shutdown)) {
+    if (!(await this.ui.confirmPlanUsage(this.shutdown))) {
       throw new Error('Plan usage remains disabled. No inference was sent.');
     }
     return this.harness.signIn(account, true, request => this.ui.authorize(request));
@@ -137,11 +143,15 @@ export class TerminalApplication {
     this.ui.showActive(account, model);
   }
 
-  private async send(prompt: string): Promise<void> {
+  private async send(prompt: string, attachmentPaths: readonly string[]): Promise<void> {
     this.activeRequest = new AbortController();
     this.ui.beginAssistantResponse();
     try {
-      const result = await this.requireConversation().send(prompt, this.ui, this.activeRequest.signal);
+      const request = await this.harness.resolveChatRequest(
+        prompt,
+        attachmentPaths.map(path => ({ path })),
+      );
+      const result = await this.requireConversation().send(request, this.ui, this.activeRequest.signal);
       this.ui.showTurnCompleted(result.durationMs, result.usage);
     } catch (error) {
       if (!this.shutdown.aborted) {
@@ -154,7 +164,8 @@ export class TerminalApplication {
   }
 
   private async reviewPending(): Promise<void> {
-    if (this.harness.proposalReviews?.active && this.reviewer) await this.reviewer.review(this.harness.proposalReviews, this.shutdown);
+    if (this.harness.proposalReviews?.active && this.reviewer)
+      await this.reviewer.review(this.harness.proposalReviews, this.shutdown);
   }
 
   private requireConversation(): ChatConversation {
