@@ -162,7 +162,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-context-index"
+name = "glyph-context-index"
 version = "0.1.0"
 dependencies = [
  "ignore",

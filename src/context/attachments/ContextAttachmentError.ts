@@ -1,4 +1,4 @@
-import { HarnessError } from '../../errors/HarnessError.ts';
+import { GlyphError } from '../../errors/GlyphError.ts';
 import type { ContextAttachmentFailureReason } from './ContextAttachmentFailureReason.ts';
 
 interface ContextAttachmentErrorDetails {
@@ -8,7 +8,7 @@ interface ContextAttachmentErrorDetails {
 }
 
 /** Typed failure raised while validating or resolving prompt attachments. */
-export class ContextAttachmentError extends HarnessError {
+export class ContextAttachmentError extends GlyphError {
   constructor(
     readonly reason: ContextAttachmentFailureReason,
     message: string,

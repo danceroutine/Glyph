@@ -165,7 +165,7 @@ describe(OpenAIProvider, () => {
       const content = input[0]?.content as Array<{ type: string; text: string }>;
       expect(content[1]).toEqual({ type: 'input_text', text: 'Explain this component.' });
       expect(JSON.parse(content[0]!.text)).toEqual({
-        schema: 'harness-chat.workspace-context.v1',
+        schema: 'glyph.workspace-context.v1',
         files: [
           {
             path: 'src/App.tsx',
@@ -336,7 +336,7 @@ describe(OpenAIProvider, () => {
     });
 
     it('executes project tools and continues until the model answers', async () => {
-      const root = await mkdtemp(join(tmpdir(), 'harness-chat-provider-'));
+      const root = await mkdtemp(join(tmpdir(), 'glyph-provider-'));
       await writeFile(join(root, 'answer.ts'), 'export const answer = 42;\n');
       const toolResponse = {
         type: 'response.completed',
@@ -391,7 +391,7 @@ describe(OpenAIProvider, () => {
     });
 
     it('collects output-item events when the terminal response output is empty', async () => {
-      const root = await mkdtemp(join(tmpdir(), 'harness-chat-buffered-provider-'));
+      const root = await mkdtemp(join(tmpdir(), 'glyph-buffered-provider-'));
       await writeFile(join(root, 'answer.ts'), 'export const answer = 42;\n');
       const reasoning = { type: 'reasoning', id: 'rs_buffered', summary: [], encrypted_content: 'buffered-state' };
       const call = {

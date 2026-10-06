@@ -1,3 +1,3 @@
-import { HarnessError } from './HarnessError.ts';
+import { GlyphError } from './GlyphError.ts';
 
-export class PersistenceError extends HarnessError {}
+export class PersistenceError extends GlyphError {}

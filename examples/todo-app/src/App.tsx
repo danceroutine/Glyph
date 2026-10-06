@@ -9,7 +9,7 @@ interface Todo {
   createdAt: number;
 }
 
-const STORAGE_KEY = 'harness-chat.todo-app.todos';
+const STORAGE_KEY = 'glyph.todo-app.todos';
 const filters: Filter[] = ['all', 'active', 'completed'];
 
 function loadTodos(): Todo[] {

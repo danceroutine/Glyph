@@ -166,7 +166,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const path = this.normalizePath(input);
     const current = await this.assertRevision(path, expectedRevision);
     const absolute = resolve(this.root, path);
-    const temporary = resolve(dirname(absolute), `.${randomUUID()}.harness.tmp`);
+    const temporary = resolve(dirname(absolute), `.${randomUUID()}.glyph.tmp`);
     try {
       await writeFile(temporary, toBytes(text, byteOrderMark), { flag: 'wx', mode: current.mode });
       await chmod(temporary, current.mode);

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import OpenAI from 'openai';
 import type { ResponseOutputItem } from 'openai/resources/responses/responses';
-import { HarnessService } from '../../HarnessService.ts';
+import { GlyphService } from '../../GlyphService.ts';
 import { ContextAttachmentService } from '../../../context/attachments/ContextAttachmentService.ts';
 import type { ChatConversation } from '../../../chat/ChatConversation.ts';
 import type { ChatConfiguration } from '../../../configuration/ChatConfiguration.ts';
@@ -48,7 +48,7 @@ export class EditingE2EHarness {
   readonly fixture: ScriptedOpenAIResponsesFixture;
   readonly provider: OpenAIProvider;
   readonly http = new DenyNetworkHttpClient();
-  readonly application: HarnessService;
+  readonly application: GlyphService;
   private readonly conversation: ChatConversation;
 
   private constructor(
@@ -87,7 +87,7 @@ export class EditingE2EHarness {
       runtime,
     );
     const accountStore = new FixtureOpenAIAccountStore();
-    this.application = new HarnessService(
+    this.application = new GlyphService(
       accountStore,
       new FixtureOpenAISession(accountStore.state.accounts[0]!),
       new FixtureModelCatalog(),

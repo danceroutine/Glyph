@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HarnessService } from './application/HarnessService.ts';
+import { GlyphService } from './application/GlyphService.ts';
 import { ContextAttachmentService } from './context/attachments/ContextAttachmentService.ts';
 import { RustWorkspaceFileSearch } from './context/search/RustWorkspaceFileSearch.ts';
 import { EnvironmentConfigurationProvider } from './configuration/EnvironmentConfigurationProvider.ts';
@@ -30,18 +30,18 @@ import { FileSystemWorkspaceTextStore } from './workspace/FileSystemWorkspaceTex
 
 async function main(): Promise<void> {
   if (process.argv.includes('--help')) {
-    process.stdout.write(`Harness Chat | Sign in with ChatGPT\n${TerminalUI.help}\n`);
+    process.stdout.write(`Glyph | Sign in with ChatGPT\n${TerminalUI.help}\n`);
     return;
   }
   if (!process.stdin.isTTY)
-    throw new Error('Run npm start in an interactive terminal for account and model selection.');
+    throw new Error('Run pnpm start in an interactive terminal for account and model selection.');
 
   const shutdown = new AbortController();
   const configuration = new EnvironmentConfigurationProvider();
   const projectRoot = process.cwd();
   if (resolve(configuration.stateDirectory) === resolve(projectRoot)) {
     throw new ConfigurationError(
-      'HARNESS_CHAT_CONFIG_DIR must not be the project root because harness state contains credentials and provider traces.',
+      'GLYPH_CONFIG_DIR must not be the project root because Glyph state contains credentials and provider traces.',
     );
   }
   const logger = new FileLogger(configuration.traceFile);
@@ -50,12 +50,12 @@ async function main(): Promise<void> {
   const terminalInput = new TerminalInput();
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const indexExecutable = resolve(
-    process.env.HARNESS_CHAT_CONTEXT_INDEX_BINARY ??
+    process.env.GLYPH_CONTEXT_INDEX_BINARY ??
       resolve(
         packageRoot,
         'target',
         'release',
-        process.platform === 'win32' ? 'harness-context-index.exe' : 'harness-context-index',
+        process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
       ),
   );
   const excludedPaths = [
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
     proposalReviews,
     logger,
   );
-  const harness = new HarnessService(
+  const glyph = new GlyphService(
     store,
     session,
     new OpenAIModelCatalog(configuration.openAI, http),
@@ -102,7 +102,7 @@ async function main(): Promise<void> {
     fileSearch,
   );
   const application = new TerminalApplication(
-    harness,
+    glyph,
     ui,
     shutdown.signal,
     {
@@ -150,7 +150,7 @@ async function main(): Promise<void> {
 function projectRelativeExclusion(root: string, target: string): string | undefined {
   const fromRoot = relative(resolve(root), resolve(target));
   if (!fromRoot) {
-    throw new ConfigurationError('Harness state, trace, and native-worker paths must not be the project root.');
+    throw new ConfigurationError('Glyph state, trace, and native-worker paths must not be the project root.');
   }
   if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) return undefined;
   return fromRoot.split(sep).join('/');

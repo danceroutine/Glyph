@@ -31,7 +31,7 @@ const emptyUsage = (): Usage => ({
  * readline, console output, commands, or VS Code. Hosts drive it one operation
  * and one request at a time.
  */
-export class HarnessService {
+export class GlyphService {
   private readonly aggregateUsage = emptyUsage();
   private acquired = false;
   private traceEnabled: boolean;
@@ -92,7 +92,7 @@ export class HarnessService {
       if (cleanupFailures.length > 0) {
         throw new AggregateError(
           [error, ...cleanupFailures],
-          'Harness initialization failed and resource cleanup was incomplete.',
+          'Glyph initialization failed and resource cleanup was incomplete.',
         );
       }
       throw error;

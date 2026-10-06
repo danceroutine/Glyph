@@ -41,10 +41,10 @@ describe(RustWorkspaceFileSearch, () => {
       });
       const search = new RustWorkspaceFileSearch(
         {
-          binaryPath: '/bin/harness-context-index',
+          binaryPath: '/bin/glyph-context-index',
           root: '/project',
           cachePath: '/cache/index.bin',
-          excludedPaths: ['.harness-state', 'logs/provider.jsonl'],
+          excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
           respectGitIgnore: true,
         },
         () => worker,
@@ -66,7 +66,7 @@ describe(RustWorkspaceFileSearch, () => {
           params: {
             root: '/project',
             cachePath: '/cache/index.bin',
-            excludedPaths: ['.harness-state', 'logs/provider.jsonl'],
+            excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
             respectGitIgnore: true,
           },
         },

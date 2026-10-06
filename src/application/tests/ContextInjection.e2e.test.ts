@@ -25,7 +25,7 @@ describe(EditingE2EHarness, () => {
                 text: 'Explain the selected component.',
               });
               expect(JSON.parse(input[0]!.content[0]!.text)).toEqual({
-                schema: 'harness-chat.workspace-context.v1',
+                schema: 'glyph.workspace-context.v1',
                 files: [
                   {
                     path: 'src/App.tsx',

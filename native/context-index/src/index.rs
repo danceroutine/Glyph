@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn ranks_and_highlights_fuzzy_path_matches() {
         let mut index = SearchIndex::from_paths(vec![
-            "src/application/HarnessService.ts".to_owned(),
+            "src/application/GlyphService.ts".to_owned(),
             "src/chat/ChatProvider.ts".to_owned(),
             "examples/todo-app/src/App.tsx".to_owned(),
         ])
@@ -188,7 +188,7 @@ mod tests {
     fn an_appended_query_matches_a_subset_of_the_previous_query() {
         let paths = vec![
             "src/App.tsx".to_owned(),
-            "src/application/HarnessService.ts".to_owned(),
+            "src/application/GlyphService.ts".to_owned(),
             "src/chat/ChatProvider.ts".to_owned(),
         ];
         let mut incremental = SearchIndex::from_paths(paths.clone()).expect("index should build");

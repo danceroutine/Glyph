@@ -10,11 +10,11 @@ import type { ConfigurationProvider } from './ConfigurationProvider.ts';
 
 const environmentConfigurationSchema = z
   .object({
-    HARNESS_CHAT_CONFIG_DIR: z
+    GLYPH_CONFIG_DIR: z
       .string()
       .trim()
       .optional()
-      .transform(value => value || join(homedir(), '.config', 'harness-chat-chatgpt')),
+      .transform(value => value || join(homedir(), '.config', 'glyph')),
     CHAT_MODEL: z
       .string()
       .trim()
@@ -66,7 +66,7 @@ const environmentConfigurationSchema = z
     EDIT_MAX_ACTIVE_REVIEWS: z.coerce.number().int().min(1).max(1).default(1),
   })
   .transform(values => {
-    const stateDirectory = values.HARNESS_CHAT_CONFIG_DIR;
+    const stateDirectory = values.GLYPH_CONFIG_DIR;
     return {
       stateDirectory,
       configuredModel: values.CHAT_MODEL,
@@ -99,7 +99,7 @@ const environmentConfigurationSchema = z
         requestTimeoutMs: 30_000,
       },
       traceEnabled: values.CHAT_TRACE,
-      traceFile: values.CHAT_TRACE_FILE ? resolve(values.CHAT_TRACE_FILE) : join(stateDirectory, 'harness-trace.log'),
+      traceFile: values.CHAT_TRACE_FILE ? resolve(values.CHAT_TRACE_FILE) : join(stateDirectory, 'glyph-trace.log'),
     } satisfies ConfigurationProvider;
   });
 

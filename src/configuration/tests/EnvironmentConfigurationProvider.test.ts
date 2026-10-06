@@ -12,13 +12,13 @@ describe(EnvironmentConfigurationProvider, () => {
       CONTEXT_MAX_FILE_BYTES: '4096',
       CONTEXT_MAX_TOTAL_BYTES: '16384',
       OPENAI_API_KEY: 'ignored',
-      HARNESS_CHAT_CONFIG_DIR: '/tmp/harness-test',
+      GLYPH_CONFIG_DIR: '/tmp/glyph-test',
     });
 
     expect(configuration.configuredModel).toBe('model-a');
     expect(configuration.chat.timeoutMs).toBe(90_000);
     expect(configuration.traceEnabled).toBe(false);
-    expect(configuration.stateDirectory).toBe('/tmp/harness-test');
+    expect(configuration.stateDirectory).toBe('/tmp/glyph-test');
     expect(configuration.contextAttachments).toEqual({
       maxFiles: 12,
       maxFileBytes: 4_096,

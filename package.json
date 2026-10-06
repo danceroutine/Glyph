@@ -1,18 +1,18 @@
 {
-  "name": "harness-chat-chatgpt",
+  "name": "glyph",
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Local streaming chat using Sign in with ChatGPT and subscription plan usage.",
+  "description": "A local-first terminal coding agent with ChatGPT authentication and reviewable workspace edits.",
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
     "start": "pnpm context-index:build && node --disable-warning=ExperimentalWarning --experimental-transform-types --env-file-if-exists=.env src/cli.ts",
-    "context-index:build": "cargo build --release --package harness-context-index",
-    "context-index:bench": "cargo test --release --package harness-context-index index::tests::measures_cold_build_and_incremental_refinement_on_half_a_million_paths -- --ignored --nocapture",
-    "context-index:check": "cargo fmt --all --check && cargo clippy --package harness-context-index --all-targets -- -D warnings",
-    "context-index:test": "cargo test --package harness-context-index",
+    "context-index:build": "cargo build --release --package glyph-context-index",
+    "context-index:bench": "cargo test --release --package glyph-context-index index::tests::measures_cold_build_and_incremental_refinement_on_half_a_million_paths -- --ignored --nocapture",
+    "context-index:check": "cargo fmt --all --check && cargo clippy --package glyph-context-index --all-targets -- -D warnings",
+    "context-index:test": "cargo test --package glyph-context-index",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "oxlint .",

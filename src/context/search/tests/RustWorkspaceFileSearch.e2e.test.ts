@@ -12,18 +12,18 @@ describe(RustWorkspaceFileSearch, () => {
       const binaryPath = resolve(
         'target',
         'release',
-        process.platform === 'win32' ? 'harness-context-index.exe' : 'harness-context-index',
+        process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
       );
       await mkdir(join(project, 'src'), { recursive: true });
-      await mkdir(join(project, '.harness-state'), { recursive: true });
+      await mkdir(join(project, '.glyph-state'), { recursive: true });
       await writeFile(join(project, 'src', 'App.tsx'), 'export function App() {}\n');
       await writeFile(join(project, '.env'), 'SECRET=never-index-this\n');
-      await writeFile(join(project, '.harness-state', 'accounts.json'), '{"refreshToken":"never-index-this"}\n');
+      await writeFile(join(project, '.glyph-state', 'accounts.json'), '{"refreshToken":"never-index-this"}\n');
       let search = new RustWorkspaceFileSearch({
         binaryPath,
         root: project,
         cachePath: join(state, 'paths.bin'),
-        excludedPaths: ['.harness-state'],
+        excludedPaths: ['.glyph-state'],
       });
 
       try {
@@ -46,7 +46,7 @@ describe(RustWorkspaceFileSearch, () => {
           binaryPath,
           root: project,
           cachePath: join(state, 'paths.bin'),
-          excludedPaths: ['.harness-state'],
+          excludedPaths: ['.glyph-state'],
         });
         await expect(search.initialize()).resolves.toMatchObject({ fromCache: true, fileCount: 2 });
       } finally {

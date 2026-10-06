@@ -6,7 +6,7 @@ import { EditFailureReason } from '../../editing/errors/EditFailureReason.ts';
 import { ProjectAccess } from '../ProjectAccess.ts';
 
 async function fixture(): Promise<{ access: ProjectAccess; root: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'harness-chat-project-'));
+  const root = await mkdtemp(join(tmpdir(), 'glyph-project-'));
   await mkdir(join(root, 'src'));
   await mkdir(join(root, 'node_modules'));
   await mkdir(join(root, 'target'));

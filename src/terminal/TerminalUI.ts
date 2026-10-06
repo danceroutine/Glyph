@@ -99,7 +99,7 @@ export class TerminalUI implements ChatResponseStream {
   }
 
   showWelcome(projectRoot: string, logPath: string | undefined, traceEnabled: boolean): void {
-    this.line(`${this.styled('Harness Chat | Continue with ChatGPT', TerminalColor.HEADING)}
+    this.line(`${this.styled('Glyph | Continue with ChatGPT', TerminalColor.HEADING)}
 Project: ${clean(projectRoot)}
 Uses your plan allowance and any credits you authorize in ChatGPT settings.
 Usage controls: https://chatgpt.com/settings/usage
@@ -156,7 +156,7 @@ ${TERMINAL_HELP}`);
 
   async authorize({ url }: AuthorizationRequest): Promise<void> {
     this.line(
-      `\n${this.styled('Continue with ChatGPT', TerminalColor.HEADING)}\nAuthorize Harness Chat to use your ChatGPT plan.\n`,
+      `\n${this.styled('Continue with ChatGPT', TerminalColor.HEADING)}\nAuthorize Glyph to use your ChatGPT plan.\n`,
     );
     this.line(`If the browser does not open, visit:\n${clean(url)}\n`);
 
@@ -277,7 +277,7 @@ ${this.styled('Model', TerminalColor.HEADING)}   ${clean(model.slug)}  ${this.st
     this.line(
       revoked
         ? 'Signed out. Renewable session revoked.'
-        : 'Local tokens cleared. Remote revocation was not confirmed; disconnect Harness Chat in ChatGPT settings.',
+        : 'Local tokens cleared. Remote revocation was not confirmed; disconnect Glyph in ChatGPT settings.',
     );
   }
 

@@ -1,4 +1,4 @@
-import type { HarnessService } from '../application/HarnessService.ts';
+import type { GlyphService } from '../application/GlyphService.ts';
 import type { ChatConversation } from '../chat/ChatConversation.ts';
 import { describeError } from '../describeError.ts';
 import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
@@ -14,14 +14,14 @@ interface TerminalApplicationOptions {
 
 /**
  * Terminal host adapter. Slash commands, sequential prompts, and terminal
- * rendering live here rather than in the headless HarnessService.
+ * rendering live here rather than in the headless GlyphService.
  */
 export class TerminalApplication {
   private activeRequest: AbortController | undefined;
   private conversation: ChatConversation | undefined;
 
   constructor(
-    private readonly harness: HarnessService,
+    private readonly glyph: GlyphService,
     private readonly ui: TerminalUI,
     private readonly shutdown: AbortSignal,
     private readonly options: TerminalApplicationOptions,
@@ -34,9 +34,9 @@ export class TerminalApplication {
 
   async run(): Promise<number> {
     try {
-      await this.harness.initialize();
+      await this.glyph.initialize();
       if (this.shutdown.aborted) return 0;
-      this.ui.showWelcome(this.options.projectRoot, this.harness.tracePath, this.harness.isTraceEnabled);
+      this.ui.showWelcome(this.options.projectRoot, this.glyph.tracePath, this.glyph.isTraceEnabled);
 
       let account = await this.enablePlanIfNeeded(await this.chooseAccount());
       await this.selectModel(account);
@@ -55,33 +55,33 @@ export class TerminalApplication {
             this.ui.showConversationReset();
             break;
           case TerminalActionType.USAGE:
-            this.ui.showUsage(this.harness.usage);
+            this.ui.showUsage(this.glyph.usage);
             break;
           case TerminalActionType.TRACE: {
-            const enabled = action.enabled ?? this.harness.isTraceEnabled;
-            this.harness.setTraceEnabled(enabled);
+            const enabled = action.enabled ?? this.glyph.isTraceEnabled;
+            this.glyph.setTraceEnabled(enabled);
             this.requireConversation().setTraceEnabled(enabled);
-            this.ui.showTrace(enabled, this.harness.tracePath);
+            this.ui.showTrace(enabled, this.glyph.tracePath);
             break;
           }
           case TerminalActionType.LOGOUT:
-            this.ui.showLogout(await this.harness.logout(account));
+            this.ui.showLogout(await this.glyph.logout(account));
             return 0;
           case TerminalActionType.REVIEW:
             await this.reviewPending();
             break;
           case TerminalActionType.ACCEPT_ALL:
             try {
-              await this.harness.proposalReviews?.acceptAll();
+              await this.glyph.proposalReviews?.acceptAll();
             } catch (error) {
-              this.ui.showError(this.harness.redact(describeError(error)));
+              this.ui.showError(this.glyph.redact(describeError(error)));
             }
             break;
           case TerminalActionType.REJECT_ALL:
             try {
-              await this.harness.proposalReviews?.rejectAll();
+              await this.glyph.proposalReviews?.rejectAll();
             } catch (error) {
-              this.ui.showError(this.harness.redact(describeError(error)));
+              this.ui.showError(this.glyph.redact(describeError(error)));
             }
             break;
           case TerminalActionType.ACCOUNT:
@@ -89,7 +89,7 @@ export class TerminalApplication {
             const next =
               action.type === TerminalActionType.ACCOUNT
                 ? await this.chooseAccount()
-                : await this.harness.signIn(account, !this.harness.hasPlanAccess(account), request =>
+                : await this.glyph.signIn(account, !this.glyph.hasPlanAccess(account), request =>
                     this.ui.authorize(request),
                   );
             account = await this.enablePlanIfNeeded(next);
@@ -107,39 +107,39 @@ export class TerminalApplication {
       }
       return 0;
     } catch (error) {
-      if (!this.shutdown.aborted) this.ui.showError(this.harness.redact(describeError(error)));
+      if (!this.shutdown.aborted) this.ui.showError(this.glyph.redact(describeError(error)));
       return this.shutdown.aborted ? 0 : 1;
     } finally {
-      await this.harness.dispose();
+      await this.glyph.dispose();
     }
   }
 
   private async chooseAccount(): Promise<OpenAIAccount> {
-    const selection = await this.ui.chooseAccount(this.harness.accounts, this.shutdown);
+    const selection = await this.ui.chooseAccount(this.glyph.accounts, this.shutdown);
     if (selection.type === AccountSelectionType.ADD) {
-      return this.harness.signIn(undefined, false, request => this.ui.authorize(request));
+      return this.glyph.signIn(undefined, false, request => this.ui.authorize(request));
     }
     return selection.account.tokens
       ? selection.account
-      : this.harness.signIn(selection.account, false, request => this.ui.authorize(request));
+      : this.glyph.signIn(selection.account, false, request => this.ui.authorize(request));
   }
 
   private async enablePlanIfNeeded(account: OpenAIAccount): Promise<OpenAIAccount> {
-    if (this.harness.hasPlanAccess(account)) return account;
+    if (this.glyph.hasPlanAccess(account)) return account;
     if (!(await this.ui.confirmPlanUsage(this.shutdown))) {
       throw new Error('Plan usage remains disabled. No inference was sent.');
     }
-    return this.harness.signIn(account, true, request => this.ui.authorize(request));
+    return this.glyph.signIn(account, true, request => this.ui.authorize(request));
   }
 
   private async selectModel(account: OpenAIAccount): Promise<void> {
     if (!account.planNoticeSeen) {
       await this.ui.acknowledgePlanUsage(this.shutdown);
-      await this.harness.acknowledgePlanNotice(account);
+      await this.glyph.acknowledgePlanNotice(account);
     }
-    const models = await this.harness.listModels(account);
+    const models = await this.glyph.listModels(account);
     const model = await this.ui.chooseModel(models, this.options.configuredModel, this.shutdown);
-    this.conversation = this.harness.createConversation(account, model);
+    this.conversation = this.glyph.createConversation(account, model);
     this.ui.showActive(account, model);
   }
 
@@ -147,7 +147,7 @@ export class TerminalApplication {
     this.activeRequest = new AbortController();
     this.ui.beginAssistantResponse();
     try {
-      const request = await this.harness.resolveChatRequest(
+      const request = await this.glyph.resolveChatRequest(
         prompt,
         attachmentPaths.map(path => ({ path })),
       );
@@ -155,7 +155,7 @@ export class TerminalApplication {
       this.ui.showTurnCompleted(result.durationMs, result.usage);
     } catch (error) {
       if (!this.shutdown.aborted) {
-        this.ui.showTurnFailed(this.harness.redact(describeError(error)));
+        this.ui.showTurnFailed(this.glyph.redact(describeError(error)));
       }
     } finally {
       this.activeRequest = undefined;
@@ -164,8 +164,8 @@ export class TerminalApplication {
   }
 
   private async reviewPending(): Promise<void> {
-    if (this.harness.proposalReviews?.active && this.reviewer)
-      await this.reviewer.review(this.harness.proposalReviews, this.shutdown);
+    if (this.glyph.proposalReviews?.active && this.reviewer)
+      await this.reviewer.review(this.glyph.proposalReviews, this.shutdown);
   }
 
   private requireConversation(): ChatConversation {

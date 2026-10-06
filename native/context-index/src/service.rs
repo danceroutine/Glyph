@@ -323,7 +323,7 @@ impl ContextIndexService {
             match cache::load(path, &root_text, &policy_hash, policy.max_files as usize) {
                 Ok(value) => value,
                 Err(error) => {
-                    eprintln!("harness-context-index: ignoring unusable cache: {error}");
+                    eprintln!("glyph-context-index: ignoring unusable cache: {error}");
                     None
                 }
             }
@@ -343,7 +343,7 @@ impl ContextIndexService {
                         &scan.paths,
                         scan.truncated,
                     ) {
-                        eprintln!("harness-context-index: cache write failed: {error}");
+                        eprintln!("glyph-context-index: cache write failed: {error}");
                     }
                 }
                 (scan.paths, scan.truncated, false)
@@ -457,7 +457,7 @@ impl ContextIndexService {
                 &scan.paths,
                 scan.truncated,
             ) {
-                eprintln!("harness-context-index: cache write failed: {error}");
+                eprintln!("glyph-context-index: cache write failed: {error}");
             }
         }
         let known_paths: HashSet<_> = scan.paths.iter().cloned().collect();
@@ -532,14 +532,14 @@ fn start_watcher(root: &Path) -> Option<FilesystemWatcher> {
         Ok(watcher) => watcher,
         Err(error) => {
             eprintln!(
-                "harness-context-index: filesystem watch unavailable; using periodic reconciliation: {error}"
+                "glyph-context-index: filesystem watch unavailable; using periodic reconciliation: {error}"
             );
             return None;
         }
     };
     if let Err(error) = watcher.watch(root, RecursiveMode::Recursive) {
         eprintln!(
-            "harness-context-index: filesystem watch unavailable; using periodic reconciliation: {error}"
+            "glyph-context-index: filesystem watch unavailable; using periodic reconciliation: {error}"
         );
         return None;
     }
@@ -591,7 +591,7 @@ fn spawn_monitor(
                             }
                         }
                         Ok(Err(error)) => {
-                            eprintln!("harness-context-index: filesystem watch error: {error}");
+                            eprintln!("glyph-context-index: filesystem watch error: {error}");
                             let now = Instant::now();
                             dirty_since.get_or_insert(now);
                             last_dirty = Some(now);
@@ -599,7 +599,7 @@ fn spawn_monitor(
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
                             eprintln!(
-                                "harness-context-index: filesystem watch stopped; using periodic reconciliation"
+                                "glyph-context-index: filesystem watch stopped; using periodic reconciliation"
                             );
                             watcher_disconnected = true;
                             next_safety_reconcile =
@@ -655,7 +655,7 @@ fn reconcile_shared(state: &MonitorState) {
         Err(error) => {
             if !state.stop.load(Ordering::Acquire) {
                 eprintln!(
-                    "harness-context-index: background reconcile failed: {}",
+                    "glyph-context-index: background reconcile failed: {}",
                     error.message
                 );
             }
@@ -669,7 +669,7 @@ fn reconcile_shared(state: &MonitorState) {
     let index = match SearchIndex::from_paths(scan.paths.clone()) {
         Ok(index) => index,
         Err(error) => {
-            eprintln!("harness-context-index: background index build failed: {error}");
+            eprintln!("glyph-context-index: background index build failed: {error}");
             return;
         }
     };
@@ -681,7 +681,7 @@ fn reconcile_shared(state: &MonitorState) {
             &scan.paths,
             scan.truncated,
         ) {
-            eprintln!("harness-context-index: cache write failed: {error}");
+            eprintln!("glyph-context-index: cache write failed: {error}");
         }
     }
     if state.stop.load(Ordering::Acquire) {
@@ -690,14 +690,14 @@ fn reconcile_shared(state: &MonitorState) {
     match state.index.lock() {
         Ok(mut current) => *current = index,
         Err(_) => {
-            eprintln!("harness-context-index: background index lock is poisoned");
+            eprintln!("glyph-context-index: background index lock is poisoned");
             return;
         }
     }
     match state.known_paths.write() {
         Ok(mut current) => *current = known_paths,
         Err(_) => {
-            eprintln!("harness-context-index: background known-path lock is poisoned");
+            eprintln!("glyph-context-index: background known-path lock is poisoned");
             return;
         }
     }

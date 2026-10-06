@@ -44,24 +44,24 @@ describe(FileSystemWorkspaceTextStore, () => {
     it('excludes exact files and directory subtrees before allowed-file exceptions', async () => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-store-excluded-'));
       directories.push(root);
-      await mkdir(join(root, '.harness-state'));
+      await mkdir(join(root, '.glyph-state'));
       await mkdir(join(root, 'logs'));
-      await writeFile(join(root, '.harness-state', 'accounts.json'), '{"refreshToken":"secret"}');
-      await writeFile(join(root, '.harness-state', '.env.example'), 'SECRET=still-private');
+      await writeFile(join(root, '.glyph-state', 'accounts.json'), '{"refreshToken":"secret"}');
+      await writeFile(join(root, '.glyph-state', '.env.example'), 'SECRET=still-private');
       await writeFile(join(root, 'logs', 'provider.jsonl'), '{"project":"content"}\n');
       await writeFile(join(root, 'logs', 'provider.jsonl.backup'), 'kept\n');
       const store = new FileSystemWorkspaceTextStore(root, {
-        excludedPaths: ['.harness-state', 'logs/provider.jsonl'],
+        excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
       });
 
       await expect(store.list(20)).resolves.toEqual({
         files: ['logs/provider.jsonl.backup'],
         truncated: false,
       });
-      await expect(store.read('.harness-state/accounts.json')).rejects.toMatchObject({
+      await expect(store.read('.glyph-state/accounts.json')).rejects.toMatchObject({
         reason: EditFailureReason.UNSUPPORTED,
       });
-      await expect(store.read('.harness-state/.env.example')).rejects.toMatchObject({
+      await expect(store.read('.glyph-state/.env.example')).rejects.toMatchObject({
         reason: EditFailureReason.UNSUPPORTED,
       });
       await expect(store.read('logs/provider.jsonl')).rejects.toMatchObject({

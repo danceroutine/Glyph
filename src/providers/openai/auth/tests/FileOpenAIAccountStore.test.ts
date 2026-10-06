@@ -8,7 +8,7 @@ import { FileOpenAIAccountStore } from '../FileOpenAIAccountStore.ts';
 describe(FileOpenAIAccountStore, () => {
   describe(FileOpenAIAccountStore.prototype.acquire, () => {
     it('persists a stable host, restricts permissions, and excludes concurrent instances', async () => {
-      const directory = await mkdtemp(join(tmpdir(), 'harness-auth-'));
+      const directory = await mkdtemp(join(tmpdir(), 'glyph-auth-'));
       const store = new FileOpenAIAccountStore(directory);
       try {
         await store.acquire();

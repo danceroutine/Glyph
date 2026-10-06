@@ -7,8 +7,8 @@ import { FileLogger } from '../FileLogger.ts';
 describe(FileLogger, () => {
   describe(FileLogger.prototype.trace, () => {
     it('appends structured entries to a private log file', async () => {
-      const directory = await mkdtemp(join(tmpdir(), 'harness-chat-log-'));
-      const path = join(directory, 'nested', 'harness.log');
+      const directory = await mkdtemp(join(tmpdir(), 'glyph-log-'));
+      const path = join(directory, 'nested', 'glyph.log');
       const logger = new FileLogger(path);
 
       await logger.trace('provider.trace', { sequence: 1 });

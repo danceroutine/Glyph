@@ -29,7 +29,7 @@ describe(OpenAIAuthenticationClient, () => {
       expect(url.origin).toBe(configuration.issuer);
       expect(url.searchParams.get('client_id')).toBe('dynamic_agent_client');
       expect(url.searchParams.get('code_challenge_method')).toBe('S256');
-      expect(url.searchParams.get('agent_name_hint')).toBe('Harness Chat');
+      expect(url.searchParams.get('agent_name_hint')).toBe('Glyph');
     });
   });
 

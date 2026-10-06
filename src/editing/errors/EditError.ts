@@ -1,4 +1,4 @@
-import { HarnessError } from '../../errors/HarnessError.ts';
+import { GlyphError } from '../../errors/GlyphError.ts';
 import type { EditFailureReason } from './EditFailureReason.ts';
 
 interface EditErrorDetails {
@@ -11,7 +11,7 @@ interface EditErrorDetails {
   candidates?: number[];
 }
 
-export class EditError extends HarnessError {
+export class EditError extends GlyphError {
   constructor(
     readonly reason: EditFailureReason,
     message: string,

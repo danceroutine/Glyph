@@ -320,7 +320,7 @@ export class OpenAIProvider implements ChatProvider {
 function toUserInput(request: ChatRequest): ResponseInputItem {
   if (request.attachments.length === 0) return { role: 'user', content: request.text };
   const context = JSON.stringify({
-    schema: 'harness-chat.workspace-context.v1',
+    schema: 'glyph.workspace-context.v1',
     files: request.attachments.map(attachment => ({
       path: attachment.path,
       revision: attachment.revision,

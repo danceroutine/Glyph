@@ -14,7 +14,7 @@ import type { OpenAIAccount } from '../../providers/openai/auth/OpenAIAccount.ts
 import type { OpenAIAccountStore } from '../../providers/openai/auth/OpenAIAccountStore.ts';
 import type { OpenAISavedState } from '../../providers/openai/auth/OpenAISavedState.ts';
 import type { OpenAISessionService } from '../../providers/openai/auth/OpenAISessionService.ts';
-import { HarnessService } from '../HarnessService.ts';
+import { GlyphService } from '../GlyphService.ts';
 
 const configuration: OpenAIConfiguration = {
   issuer: 'https://auth.example.test',
@@ -95,8 +95,8 @@ function logger(trace: Logger['trace'] = async () => {}): Logger {
   return result;
 }
 
-describe(HarnessService, () => {
-  describe(HarnessService.prototype.initialize, () => {
+describe(GlyphService, () => {
+  describe(GlyphService.prototype.initialize, () => {
     it('initializes and disposes the resident file index with the account-store lifecycle', async () => {
       const store = new MemoryStore();
       const fileSearch: WorkspaceFileSearch = {
@@ -111,7 +111,7 @@ describe(HarnessService, () => {
         refresh: vi.fn(),
         dispose: vi.fn(async () => {}),
       };
-      const harness = new HarnessService(
+      const service = new GlyphService(
         store,
         new FakeSession(),
         { list: async () => [] },
@@ -124,10 +124,10 @@ describe(HarnessService, () => {
         fileSearch,
       );
 
-      await harness.initialize();
-      await harness.initialize();
-      await harness.dispose();
-      await harness.dispose();
+      await service.initialize();
+      await service.initialize();
+      await service.dispose();
+      await service.dispose();
 
       expect(fileSearch.initialize).toHaveBeenCalledOnce();
       expect(fileSearch.dispose).toHaveBeenCalledOnce();
@@ -146,7 +146,7 @@ describe(HarnessService, () => {
         refresh: vi.fn(),
         dispose: vi.fn(async () => {}),
       };
-      const harness = new HarnessService(
+      const service = new GlyphService(
         store,
         new FakeSession(),
         { list: async () => [] },
@@ -159,16 +159,16 @@ describe(HarnessService, () => {
         fileSearch,
       );
 
-      await expect(harness.initialize()).rejects.toBe(startupFailure);
+      await expect(service.initialize()).rejects.toBe(startupFailure);
 
       expect(fileSearch.dispose).toHaveBeenCalledOnce();
       expect(store.release).toHaveBeenCalledOnce();
-      await harness.dispose();
+      await service.dispose();
       expect(store.release).toHaveBeenCalledOnce();
     });
   });
 
-  describe(HarnessService.prototype.createConversation, () => {
+  describe(GlyphService.prototype.createConversation, () => {
     it('exposes request-scoped response parts through injected lifecycle ports', async () => {
       const store = new MemoryStore();
       const session = new FakeSession();
@@ -176,7 +176,7 @@ describe(HarnessService, () => {
       const catalog: ModelCatalog = { list: vi.fn(async () => [{ slug: 'model-a', name: 'Model A' }]) };
       const providers: ChatProviderFactory = { create: vi.fn(() => provider) };
       const traces: unknown[] = [];
-      const harness = new HarnessService(
+      const service = new GlyphService(
         store,
         session,
         catalog,
@@ -188,16 +188,16 @@ describe(HarnessService, () => {
       );
       const parts: ChatResponsePart[] = [];
 
-      await harness.initialize();
-      expect(await harness.listModels(account)).toEqual([{ slug: 'model-a', name: 'Model A' }]);
-      const conversation = harness.createConversation(account, { slug: 'model-a', name: 'Model A' });
+      await service.initialize();
+      expect(await service.listModels(account)).toEqual([{ slug: 'model-a', name: 'Model A' }]);
+      const conversation = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
       const result = await conversation.send(
         'question',
         { push: part => parts.push(part) },
         new AbortController().signal,
       );
       conversation.reset();
-      await harness.dispose();
+      await service.dispose();
 
       expect(store.acquire).toHaveBeenCalledOnce();
       expect(store.load).toHaveBeenCalledOnce();
@@ -210,13 +210,13 @@ describe(HarnessService, () => {
         { type: ChatResponsePartType.TEXT, value: 'answer' },
       ]);
       expect(result.responseId).toBe('response');
-      expect(harness.usage.totalTokens).toBe(5);
+      expect(service.usage.totalTokens).toBe(5);
       expect(traces[0]).toEqual([expect.objectContaining({ kind: 'request' })]);
       expect(provider.reset).toHaveBeenCalledOnce();
     });
 
     it('reports logger failures without discarding a completed turn', async () => {
-      const harness = new HarnessService(
+      const service = new GlyphService(
         new MemoryStore(),
         new FakeSession(),
         { list: async () => [{ slug: 'model-a', name: 'Model A' }] },
@@ -226,7 +226,7 @@ describe(HarnessService, () => {
         }),
         configuration,
       );
-      const conversation = harness.createConversation(account, { slug: 'model-a', name: 'Model A' });
+      const conversation = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
       const parts: ChatResponsePart[] = [];
 
       const result = await conversation.send(
@@ -246,7 +246,7 @@ describe(HarnessService, () => {
 
     it('creates isolated provider history for each host-owned conversation', async () => {
       const created: FakeProvider[] = [];
-      const harness = new HarnessService(
+      const service = new GlyphService(
         new MemoryStore(),
         new FakeSession(),
         { list: async () => [{ slug: 'model-a', name: 'Model A' }] },
@@ -260,8 +260,8 @@ describe(HarnessService, () => {
         logger(),
         configuration,
       );
-      const first = harness.createConversation(account, { slug: 'model-a', name: 'Model A' });
-      const second = harness.createConversation(account, { slug: 'model-a', name: 'Model A' });
+      const first = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
+      const second = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
 
       await first.send('first-session', { push: () => {} }, new AbortController().signal);
       await second.send('second-session', { push: () => {} }, new AbortController().signal);

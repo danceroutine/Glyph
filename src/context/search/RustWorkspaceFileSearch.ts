@@ -66,7 +66,7 @@ interface PendingRequest {
 
 type ProcessFactory = (binaryPath: string) => SidecarProcess;
 
-/** Persistent JSONL transport for the native `harness-context-index` worker. */
+/** Persistent JSONL transport for the native `glyph-context-index` worker. */
 export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
   private readonly processFactory: ProcessFactory;
   private process: SidecarProcess | undefined;

@@ -3,7 +3,7 @@ import type { ToolActivity } from './ToolActivity.ts';
 import type { TurnResult } from './TurnResult.ts';
 import type { ChatRequestInput } from './ChatRequest.ts';
 
-/** Low-level model/agent adapter. Hosts consume HarnessService instead. */
+/** Low-level model/agent adapter. Hosts consume GlyphService instead. */
 export interface ChatProvider {
   readonly model: string;
   reset(): void;

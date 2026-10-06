@@ -49,7 +49,7 @@ export class OpenAIAuthenticationClient {
       nonce,
       code_challenge_method: 'S256',
       code_challenge: createHash('sha256').update(verifier).digest('base64url'),
-      ...(!clientId ? { agent_name_hint: 'Harness Chat' } : {}),
+      ...(!clientId ? { agent_name_hint: 'Glyph' } : {}),
       ...(consent ? { prompt: 'consent' } : {}),
     }).toString();
     return { state, nonce, verifier, url: url.toString(), redirectUri, clientId };
