@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useInput, useWindowSize } from 'ink';
 import { EditDecisionState } from '../../editing/reviews/EditDecisionState.ts';
 import {
   clamp,
-  pendingEntries,
+  mergeReviewEntries,
+  pendingReviewEntries,
   renderEntry,
   ReviewViewMode,
   sanitizeText,
@@ -23,7 +24,11 @@ export interface ProposalReviewState {
 }
 
 export function useProposalReviewState(request: ProposalReviewRequest): ProposalReviewState {
-  const entries = pendingEntries(request.manager.activeReviews);
+  const queue = useRef<ReturnType<typeof mergeReviewEntries>>([]);
+  queue.current = mergeReviewEntries(queue.current, request.manager.activeReviews);
+  const entries = pendingReviewEntries(queue.current);
+  const totals = useRef(countDecisions(request.manager.activeReviews));
+  const completionSent = useRef(false);
   const [selection, setSelection] = useState(0);
   const [scroll, setScroll] = useState(0);
   const [viewMode, setViewMode] = useState(ReviewViewMode.FOCUSED);
@@ -42,10 +47,15 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
   const pageSize = Math.max(3, rows - 4 - diagnosticLines);
   const maxScroll = Math.max(0, rendered.lines.length - pageSize);
   const visibleScroll = clamp(scroll, 0, maxScroll);
+  const completeReview = useCallback((): void => {
+    if (completionSent.current) return;
+    completionSent.current = true;
+    request.complete({ ...totals.current });
+  }, [request]);
 
   useEffect(() => {
-    if (entries.length === 0) request.complete();
-  }, [entries.length, request]);
+    if (!busy && entries.length === 0) completeReview();
+  }, [busy, completeReview, entries.length]);
 
   useEffect(() => {
     setSelection(value => clamp(value, 0, Math.max(0, entries.length - 1)));
@@ -65,9 +75,11 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
     void operation
       .then(() => {
         setDiagnostic('');
-        if (request.manager.activeReviews.length === 0) request.complete();
+        if (decision === EditDecisionState.ACCEPTED) totals.current.accepted++;
+        else totals.current.rejected++;
+        if (request.manager.activeReviews.length === 0) completeReview();
         else {
-          setSelection(value => Math.min(value, Math.max(0, pendingEntries(request.manager.activeReviews).length - 1)));
+          setSelection(value => Math.min(value, Math.max(0, pendingReviewEntries(queue.current).length - 1)));
         }
       })
       .catch((error: unknown) => setDiagnostic(error instanceof Error ? error.message : String(error)))
@@ -109,7 +121,7 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
   if (!entry) {
     return {
       rows,
-      header: 'Review complete.',
+      header: `Review complete — ${totals.current.accepted} accepted, ${totals.current.rejected} rejected`,
       diagnostic: '',
       visibleLines: [],
       navigationHelp: '',
@@ -118,9 +130,7 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
     };
   }
 
-  const reviewItems = request.manager.activeReviews.flatMap(review => review.files).flatMap(file => file.items);
-  const accepted = reviewItems.filter(item => item.decision === EditDecisionState.ACCEPTED).length;
-  const rejected = reviewItems.filter(item => item.decision === EditDecisionState.REJECTED).length;
+  const { accepted, rejected } = totals.current;
   const mode = viewMode === ReviewViewMode.FULL_FILE ? 'full file' : 'focused diff';
   const firstVisibleLine = visibleScroll + 1;
   const lastVisibleLine = Math.min(rendered.lines.length, visibleScroll + pageSize);
@@ -134,5 +144,16 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
     navigationHelp: `↑/↓ scroll  PgUp/PgDn page  Home/End top/bottom  F ${viewAction}`,
     decisionHelp: `←/→ previous/next change  Y accept  N reject  Esc/Q defer${busy ? '  applying…' : ''}`,
     complete: false,
+  };
+}
+
+function countDecisions(reviews: ProposalReviewRequest['manager']['activeReviews']): {
+  accepted: number;
+  rejected: number;
+} {
+  const items = reviews.flatMap(review => review.files).flatMap(file => file.items);
+  return {
+    accepted: items.filter(item => item.decision === EditDecisionState.ACCEPTED).length,
+    rejected: items.filter(item => item.decision === EditDecisionState.REJECTED).length,
   };
 }

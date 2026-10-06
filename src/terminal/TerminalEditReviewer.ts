@@ -78,24 +78,66 @@ export class TerminalEditReviewer {
   }
 }
 
-export function pendingEntries(proposals: readonly EditProposal[]): ReviewEntry[] {
-  const pendingFiles = proposals.flatMap(review =>
-    review.files
-      .filter(file => file.items.some(item => item.decision === EditDecisionState.PENDING))
-      .map(file => ({ review, file })),
-  );
-  return pendingFiles.flatMap(({ review, file }, fileIndex) => {
-    const pendingItems = file.items.filter(item => item.decision === EditDecisionState.PENDING);
-    return pendingItems.map((item, changeIndex) => ({
+export function reviewEntries(proposals: readonly EditProposal[]): ReviewEntry[] {
+  const files = proposals.flatMap(review => review.files.map(file => ({ review, file })));
+  return files.flatMap(({ review, file }, fileIndex) =>
+    file.items.map((item, changeIndex) => ({
       review,
       file,
       item,
       fileNumber: fileIndex + 1,
-      fileCount: pendingFiles.length,
+      fileCount: files.length,
       changeNumber: changeIndex + 1,
-      changeCount: pendingItems.length,
-    }));
+      changeCount: file.items.length,
+    })),
+  );
+}
+
+export function mergeReviewEntries(
+  existing: readonly ReviewEntry[],
+  proposals: readonly EditProposal[],
+): ReviewEntry[] {
+  const known = new Set(existing.map(entry => reviewItemKey(entry.review.id, entry.item.id)));
+  const additions = reviewEntries(proposals).filter(entry => !known.has(reviewItemKey(entry.review.id, entry.item.id)));
+  return numberReviewEntries([...existing, ...additions]);
+}
+
+export function pendingEntries(proposals: readonly EditProposal[]): ReviewEntry[] {
+  return pendingReviewEntries(reviewEntries(proposals));
+}
+
+export function pendingReviewEntries(entries: readonly ReviewEntry[]): ReviewEntry[] {
+  return entries.filter(entry => entry.item.decision === EditDecisionState.PENDING);
+}
+
+function numberReviewEntries(entries: readonly ReviewEntry[]): ReviewEntry[] {
+  const fileKeys = [...new Set(entries.map(entry => reviewFileKey(entry.review.id, entry.file.id)))];
+  const changeCounts = new Map<string, number>();
+  const changeNumbers = new Map<string, number>();
+  for (const entry of entries) {
+    const key = reviewFileKey(entry.review.id, entry.file.id);
+    changeCounts.set(key, (changeCounts.get(key) ?? 0) + 1);
+  }
+  return entries.map(entry => {
+    const key = reviewFileKey(entry.review.id, entry.file.id);
+    const changeNumber = (changeNumbers.get(key) ?? 0) + 1;
+    changeNumbers.set(key, changeNumber);
+    return {
+      ...entry,
+      fileNumber: fileKeys.indexOf(key) + 1,
+      fileCount: fileKeys.length,
+      changeNumber,
+      changeCount: changeCounts.get(key)!,
+    };
   });
+}
+
+function reviewFileKey(reviewId: string, fileId: string): string {
+  return `${reviewId}\u0000${fileId}`;
+}
+
+function reviewItemKey(reviewId: string, itemId: string): string {
+  return `${reviewId}\u0000${itemId}`;
 }
 
 export function renderEntry(

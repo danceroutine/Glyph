@@ -2,7 +2,7 @@ import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
 import { FileSearchError } from '../../../context/search/FileSearchError.ts';
 import { FileSearchFailureReason } from '../../../context/search/FileSearchFailureReason.ts';
-import type { WorkspaceFileSearch } from '../../../context/search/WorkspaceFileSearch.ts';
+import type { WorkspacePathIndex } from '../../../context/search/WorkspacePathIndex.ts';
 import { WiredPromptEditor } from '../PromptEditor.wired.tsx';
 
 describe(WiredPromptEditor, () => {
@@ -22,7 +22,7 @@ describe(WiredPromptEditor, () => {
 
     it('searches, navigates, and attaches safe matches with Tab', async () => {
       const complete = vi.fn();
-      const search = vi.fn<WorkspaceFileSearch['search']>(async (query, { generation }) => ({
+      const search = vi.fn<WorkspacePathIndex['search']>(async (query, { generation }) => ({
         generation,
         query,
         fileCount: 3,
@@ -46,7 +46,12 @@ describe(WiredPromptEditor, () => {
       view.stdin.write('\x1b[A');
       await tick();
       view.stdin.write('\t');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('attached: src/first.ts'));
+      await waitUntil(() => (view.lastFrame() ?? '').includes('@first.ts'));
+      expect(view.lastFrame()).not.toContain('src/first.ts');
+      await write(view, '\x1b[D');
+      expect(view.lastFrame()).toContain('@src/first.ts');
+      await write(view, '\x1b[C');
+      expect(view.lastFrame()).not.toContain('@src/first.ts');
       view.stdin.write('\r');
       await waitUntil(() => complete.mock.calls.length === 1);
 
@@ -61,7 +66,7 @@ describe(WiredPromptEditor, () => {
 
     it('preserves one attachment when the same path is attached twice', async () => {
       const complete = vi.fn();
-      const search = vi.fn<WorkspaceFileSearch['search']>(async (query, { generation }) => ({
+      const search = vi.fn<WorkspacePathIndex['search']>(async (query, { generation }) => ({
         generation,
         query,
         fileCount: 1,
@@ -88,7 +93,7 @@ describe(WiredPromptEditor, () => {
     });
 
     it('dismisses an active mention and ignores Escape without one', async () => {
-      const search = vi.fn<WorkspaceFileSearch['search']>(async (query, { generation }) => ({
+      const search = vi.fn<WorkspacePathIndex['search']>(async (query, { generation }) => ({
         generation,
         query,
         fileCount: 1,
@@ -228,7 +233,7 @@ describe(WiredPromptEditor, () => {
 
     it('ignores a stale search generation', async () => {
       const pending: Array<(generation: number) => void> = [];
-      const search = vi.fn<WorkspaceFileSearch['search']>(
+      const search = vi.fn<WorkspacePathIndex['search']>(
         query =>
           new Promise(resolve => {
             pending.push(resultGeneration =>
@@ -263,7 +268,7 @@ describe(WiredPromptEditor, () => {
   });
 });
 
-function fileSearch(search: WorkspaceFileSearch['search']): WorkspaceFileSearch {
+function fileSearch(search: WorkspacePathIndex['search']): WorkspacePathIndex {
   return {
     initialize: async () => ({
       root: '/project',
@@ -273,6 +278,7 @@ function fileSearch(search: WorkspaceFileSearch['search']): WorkspaceFileSearch 
       durationMilliseconds: 0,
     }),
     search,
+    glob: async () => ({ files: [], truncated: false }),
     refresh: async () => ({
       root: '/project',
       fileCount: 0,

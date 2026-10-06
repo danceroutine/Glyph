@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
 import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
-import type { WorkspaceFileSearch } from '../../context/search/WorkspaceFileSearch.ts';
+import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
 import { TerminalActionType } from '../TerminalActionType.ts';
 import { TerminalUI } from '../TerminalUI.tsx';
 
@@ -64,7 +64,7 @@ describe(TerminalUI, () => {
       await type(terminal, '@app');
       await waitUntil(() => queries.includes('app') && output.value.includes('examples/todo-app/src/App.tsx'));
       terminal.push('\r');
-      await waitUntil(() => output.value.includes('attached: examples/todo-app/src/App.tsx'));
+      await waitUntil(() => output.value.includes('@App.tsx'));
       await type(terminal, 'what does this file do?');
       terminal.push('\r');
 
@@ -92,7 +92,7 @@ describe(TerminalUI, () => {
       await type(terminal, '@app');
       await waitUntil(() => output.value.includes('src/App.tsx'));
       terminal.push('\r');
-      await waitUntil(() => output.value.includes('attached: src/App.tsx'));
+      await waitUntil(() => output.value.includes('@App.tsx'));
       terminal.push('\x1b[D');
       await new Promise<void>(resolve => setImmediate(resolve));
       terminal.push('\x7f');
@@ -125,6 +125,18 @@ describe(TerminalUI, () => {
       expect(output.value).toBe('thinking> Inspected the project.\n\nassistant> The answer.');
     });
 
+    it('removes strong-emphasis delimiters from redirected reasoning summaries', () => {
+      const input = new PassThrough();
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(input, output, new MemoryOutput(false));
+
+      ui.beginAssistantResponse();
+      ui.push({ type: ChatResponsePartType.REASONING_SUMMARY, value: '**Planning** the edit.' });
+      ui.close();
+
+      expect(output.value).toBe('thinking> Planning the edit.');
+    });
+
     it('renders structured tool errors instead of object coercion', () => {
       const input = new PassThrough();
       const output = new MemoryOutput(false);
@@ -151,9 +163,29 @@ describe(TerminalUI, () => {
       ui.close();
 
       expect(output.value).toBe(
-        '[tool< project.propose_patch error: AMBIGUOUS: Patch context matches more than one location. ' +
-          '(path=src/App.tsx; candidates=2, 8)]\n',
+        '[project.propose_patch ×]\n  patch\n  Error: AMBIGUOUS: Patch context matches more than one location. ' +
+          '(path=src/App.tsx; candidates=2, 8)\n',
       );
+    });
+
+    it('hides successful tool arguments and output in redirected output', () => {
+      const input = new PassThrough();
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(input, output, new MemoryOutput(false));
+
+      ui.push({
+        type: ChatResponsePartType.TOOL,
+        activity: {
+          phase: ToolActivityPhase.COMPLETED,
+          name: 'read',
+          callId: 'call',
+          arguments: 'secret input',
+          output: 'large successful result',
+        },
+      });
+      ui.close();
+
+      expect(output.value).toBe('[read ✓]\n');
     });
 
     it('gives streamed Ink response sections distinct visual hierarchy', async () => {
@@ -163,13 +195,15 @@ describe(TerminalUI, () => {
 
       ui.beginAssistantResponse();
       ui.push({ type: ChatResponsePartType.REASONING_SUMMARY, value: 'Considering the change.\nChecking context.' });
+      await waitUntil(() => stripVTControlCharacters(output.value).includes('Considering the change.'));
       ui.push({ type: ChatResponsePartType.TEXT, value: 'Done.' });
+      await waitUntil(() => stripVTControlCharacters(output.value).includes('Done.'));
       ui.showTurnCompleted(1_000, null);
-      await waitUntil(() => stripVTControlCharacters(output.value).includes('assistant> Done.'));
+      await waitUntil(() => stripVTControlCharacters(output.value).includes('[1.0s | usage unavailable]'));
 
       const rendered = stripVTControlCharacters(output.value);
       expect(rendered).toContain('thinking> Considering the change.\nChecking context.');
-      expect(rendered).toContain('assistant> Done.');
+      expect(rendered).toContain('Done.');
       expect(rendered).toContain('[1.0s | usage unavailable]');
       ui.close();
     });
@@ -210,7 +244,7 @@ class MemoryOutput extends Writable {
   }
 }
 
-function fileSearch(search: WorkspaceFileSearch['search']): WorkspaceFileSearch {
+function fileSearch(search: WorkspacePathIndex['search']): WorkspacePathIndex {
   return {
     initialize: async () => ({
       root: '/project',
@@ -220,6 +254,7 @@ function fileSearch(search: WorkspaceFileSearch['search']): WorkspaceFileSearch 
       durationMilliseconds: 0,
     }),
     search,
+    glob: async () => ({ files: [], truncated: false }),
     refresh: async () => ({
       root: '/project',
       fileCount: 0,

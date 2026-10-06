@@ -84,12 +84,16 @@ describe(TerminalEditReviewer, () => {
       await waitUntil(() => tty.rawTransitions.at(-1) === true && rendered.includes('Y accept'));
       tty.push('Y');
       await reviewing;
+      await waitUntil(() => rendered.includes('Review complete'));
 
       expect(await readFile(join(root, 'file.ts'), 'utf8')).toBe('const answer: number = 2;\n');
       expect(tty.rawTransitions).toEqual([true, false]);
       expect(rendered).toContain('\x1b[48;5;52m');
       expect(rendered).toContain('\x1b[48;5;22m');
       expect(rendered).toContain('\x1b[35mconst\x1b[39m');
+      expect(rendered).toContain('Review complete');
+      expect(rendered).toContain('1 accepted');
+      expect(rendered).toContain('0 rejected');
       ui.close();
     });
 
@@ -174,6 +178,9 @@ describe(TerminalEditReviewer, () => {
       await secondReview;
       expect(manager.activeReviews).toEqual([]);
       expect(rendered).toContain('CREATE c.txt');
+      expect(rendered).toContain('2/2  accepted 0  rejected 1');
+      expect(rendered).toContain('2/3  change 1/1');
+      expect(rendered).toContain('3/3  change 1/1');
       expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe(
         'a\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nfar-away-context\nline 9\nline 10\nz\n',
       );

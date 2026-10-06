@@ -43,7 +43,7 @@ export class TerminalApplication {
       await this.reviewPending();
 
       while (!this.shutdown.aborted) {
-        const action = await this.ui.nextAction(this.shutdown);
+        const action = await this.ui.nextAction(this.shutdown, this.glyph.proposalReviews?.pendingChangeCount ?? 0);
         switch (action.type) {
           case TerminalActionType.EXIT:
             return 0;

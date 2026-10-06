@@ -12,16 +12,23 @@ import type { ChatResponseStream } from '../chat/ChatResponseStream.ts';
 import type { Model } from '../chat/Model.ts';
 import type { ToolActivity } from '../chat/ToolActivity.ts';
 import type { Usage } from '../chat/Usage.ts';
-import type { WorkspaceFileSearch } from '../context/search/WorkspaceFileSearch.ts';
+import type { WorkspacePathIndex } from '../context/search/WorkspacePathIndex.ts';
 import { ToolActivityPhase } from '../chat/ToolActivityPhase.ts';
 import type { ProposalReviewManager } from '../editing/reviews/ProposalReviewManager.ts';
 import { AccountSelectionType } from './AccountSelectionType.ts';
-import { pendingEntries, renderEntry, ReviewViewMode, sanitizeText } from './TerminalEditReviewer.ts';
+import {
+  mergeReviewEntries,
+  pendingReviewEntries,
+  renderEntry,
+  ReviewViewMode,
+  sanitizeText,
+} from './TerminalEditReviewer.ts';
 import { TerminalActionType } from './TerminalActionType.ts';
 import { TerminalInkRenderer } from './ui/TerminalInkRenderer.tsx';
 import type { TerminalInputStream } from './ui/TerminalInputStream.ts';
 import type { TerminalOutputStream } from './ui/TerminalOutputStream.ts';
 import type { UserPromptDraft } from './UserPromptDraft.ts';
+import { inlineMarkdownText } from './ui/InlineMarkdown.ts';
 
 const TERMINAL_HELP = `Commands: /help /reset /usage /trace [on|off] /review /accept-all /reject-all /account /login /logout /exit
 Type @ at the chat prompt to fuzzy-search and attach project files.
@@ -60,7 +67,7 @@ export class TerminalUI implements ChatResponseStream {
     private readonly input: TerminalInputStream = process.stdin,
     private readonly output: TerminalOutputStream = process.stdout,
     private readonly errorOutput: NodeJS.WritableStream = process.stderr,
-    private readonly files?: WorkspaceFileSearch,
+    private readonly files?: WorkspacePathIndex,
   ) {
     if (input.isTTY === true && typeof input.setRawMode === 'function' && output.isTTY === true) {
       this.renderer = new TerminalInkRenderer(input, output, errorOutput);
@@ -220,14 +227,14 @@ ${TERMINAL_HELP}`);
     child.unref();
   }
 
-  async nextAction(signal: AbortSignal): Promise<TerminalAction> {
+  async nextAction(signal: AbortSignal, pendingChanges = 0): Promise<TerminalAction> {
     const draft = this.renderer
-      ? await this.renderer.prompt('you> ', signal, this.files)
+      ? await this.renderer.prompt('you> ', signal, this.files, pendingChanges)
       : { prompt: (await this.ask('you> ', signal)).trim(), attachmentPaths: [] };
     const input = draft.prompt.trim();
     switch (input) {
       case '':
-        return this.nextAction(signal);
+        return this.nextAction(signal, pendingChanges);
       case '/exit':
       case '/quit':
         return { type: TerminalActionType.EXIT };
@@ -279,7 +286,7 @@ ${TERMINAL_HELP}`);
     }
     if (part.type === ChatResponsePartType.REASONING_SUMMARY) {
       this.openResponseSection(ChatResponsePartType.REASONING_SUMMARY, 'thinking> ');
-      this.output.write(clean(part.value));
+      this.output.write(clean(inlineMarkdownText(part.value)));
       return;
     }
     if (part.type === ChatResponsePartType.DIAGNOSTIC) {
@@ -377,8 +384,10 @@ ${TERMINAL_HELP}`);
   async reviewProposals(manager: ProposalReviewManager, signal: AbortSignal, onInterrupt: () => void): Promise<void> {
     if (manager.activeReviews.length === 0) return;
     if (this.renderer) return this.renderer.review(manager, signal, onInterrupt);
+    let queue = mergeReviewEntries([], manager.activeReviews);
     while (manager.activeReviews.length > 0) {
-      const entry = pendingEntries(manager.activeReviews)[0];
+      queue = mergeReviewEntries(queue, manager.activeReviews);
+      const entry = pendingReviewEntries(queue)[0];
       if (!entry) return;
       this.line(renderEntry(entry.file, entry.item, ReviewViewMode.FOCUSED, false).lines.join('\n'));
       const answer = (await this.ask('Accept? [y/n/q]: ', signal)).trim().toLowerCase();
@@ -438,17 +447,17 @@ ${TERMINAL_HELP}`);
     const prefix = this.responseSection === undefined ? '' : '\n\n';
     const name = activity.namespace ? `${activity.namespace}.${activity.name}` : activity.name;
     if (activity.phase === ToolActivityPhase.STARTED) {
-      const argumentsText = clean(activity.arguments).trimEnd();
-      const details = argumentsText.includes('\n')
-        ? `\n${indent(argumentsText)}`
-        : argumentsText
-          ? ` ${argumentsText}`
-          : '';
-      this.output.write(`${prefix}[tool> ${name}]${details}\n`);
+      this.output.write(`${prefix}[${name} …]\n`);
       return;
     }
     const result = formatToolResult(activity);
-    this.output.write(`${prefix}[tool< ${name} ${result.message}]\n`);
+    if (!result.failed) {
+      this.output.write(`${prefix}[${name} ✓]\n`);
+      return;
+    }
+    const argumentsText = clean(activity.arguments).trimEnd();
+    const details = argumentsText ? `\n${indent(argumentsText)}` : '';
+    this.output.write(`${prefix}[${name} ×]${details}\n  ${result.message}\n`);
   }
 
   private readonly forwardInterrupt = (): void => {
@@ -476,7 +485,7 @@ function formatToolResult(activity: ToolActivity): { message: string; failed: bo
   try {
     const result: unknown = JSON.parse(activity.output ?? '');
     if (typeof result === 'object' && result !== null && 'error' in result) {
-      return { message: `error: ${formatToolError((result as { error: unknown }).error)}`, failed: true };
+      return { message: `Error: ${formatToolError((result as { error: unknown }).error)}`, failed: true };
     }
   } catch {
     // Non-JSON output is still a successful tool result.

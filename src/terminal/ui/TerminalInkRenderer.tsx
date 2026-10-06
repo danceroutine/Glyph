@@ -3,13 +3,15 @@ import type { ReactNode } from 'react';
 import { render } from 'ink';
 import type { Instance } from 'ink';
 import type { ChatResponsePart } from '../../chat/ChatResponsePart.ts';
-import type { WorkspaceFileSearch } from '../../context/search/WorkspaceFileSearch.ts';
+import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
 import type { ProposalReviewManager } from '../../editing/reviews/ProposalReviewManager.ts';
 import type { UserPromptDraft } from '../UserPromptDraft.ts';
 import { Deferred } from './Deferred.ts';
 import { PromptRecord } from './PromptRecord.presentational.tsx';
 import type { PromptRequest } from './PromptRequest.ts';
 import type { ProposalReviewRequest } from './ProposalReviewRequest.ts';
+import { ProposalReviewReceipt } from './ProposalReviewReceipt.presentational.tsx';
+import type { ProposalReviewSummary } from './ProposalReviewSummary.ts';
 import type { TerminalInputStream } from './TerminalInputStream.ts';
 import type { TerminalOutputStream } from './TerminalOutputStream.ts';
 import type { TerminalRendererSnapshot } from './TerminalRendererSnapshot.ts';
@@ -91,7 +93,12 @@ export class TerminalInkRenderer {
     this.refresh();
   }
 
-  async prompt(label: string, signal: AbortSignal, files?: WorkspaceFileSearch): Promise<UserPromptDraft> {
+  async prompt(
+    label: string,
+    signal: AbortSignal,
+    files?: WorkspacePathIndex,
+    pendingChanges = 0,
+  ): Promise<UserPromptDraft> {
     this.assertAvailable();
     signal.throwIfAborted();
     const result = new Deferred<UserPromptDraft>();
@@ -109,13 +116,23 @@ export class TerminalInkRenderer {
     this.promptRequest = {
       id,
       label,
+      pendingChanges,
       ...(files ? { files } : {}),
       complete: draft => {
         if (this.promptRequest?.id !== id) return;
         this.promptRequest = undefined;
         this.promptResult = undefined;
         cleanup();
-        this.entries.push({ id, content: <PromptRecord label={label} draft={draft} /> });
+        this.entries.push({
+          id,
+          content: (
+            <PromptRecord
+              label={label}
+              draft={draft}
+              maxWidth={Math.max(3, Math.floor((this.output.columns ?? 80) * 0.8))}
+            />
+          ),
+        });
         this.refresh();
         result.resolve(draft);
       },
@@ -133,11 +150,12 @@ export class TerminalInkRenderer {
     this.reviewResult = result;
     const id = this.nextId++;
     const cleanup = (): void => signal.removeEventListener('abort', abort);
-    const complete = (): void => {
+    const complete = (summary?: ProposalReviewSummary): void => {
       if (this.reviewRequest?.id !== id) return;
       this.reviewRequest = undefined;
       this.reviewResult = undefined;
       cleanup();
+      if (summary) this.entries.push({ id, content: <ProposalReviewReceipt {...summary} /> });
       this.refresh();
       result.resolve();
     };

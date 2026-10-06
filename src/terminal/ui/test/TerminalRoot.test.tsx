@@ -12,12 +12,32 @@ describe(TerminalRoot, () => {
       const view = render(
         <TerminalRoot
           entries={[{ id: 1, content: <Text>history</Text> }]}
+          height={5}
           response={<Text>response</Text>}
           interaction={<Text>prompt</Text>}
         />,
       );
 
-      expect(view.lastFrame()).toBe('history\nresponse\nprompt');
+      expect(view.lastFrame()).toBe('history\nresponse\n\n\nprompt');
+      view.unmount();
+    });
+
+    it('keeps the newest transcript content visible when it exceeds the viewport', async () => {
+      const view = render(
+        <TerminalRoot
+          entries={[
+            { id: 1, content: <Text>oldest</Text> },
+            { id: 2, content: <Text>{'middle one\nmiddle two'}</Text> },
+            { id: 3, content: <Text>newest</Text> },
+          ]}
+          height={4}
+          response={<Text>response</Text>}
+          interaction={<Text>prompt</Text>}
+        />,
+      );
+
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(view.lastFrame()).toBe('middle two\nnewest\nresponse\nprompt');
       view.unmount();
     });
   });
@@ -38,7 +58,7 @@ describe(WiredTerminalRoot, () => {
         />,
       );
 
-      expect(view.lastFrame()?.trimStart()).toBe('assistant> answer');
+      expect(view.lastFrame()).toContain('answer');
       view.unmount();
     });
 

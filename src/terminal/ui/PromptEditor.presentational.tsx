@@ -1,30 +1,56 @@
-import type { ReactElement, ReactNode } from 'react';
-import { Box, Text } from 'ink';
+import type { ReactElement, ReactNode, Ref } from 'react';
+import { Box, Text, type DOMElement } from 'ink';
 import type { FileSearchMatch } from '../../context/search/FileSearchMatch.ts';
 import { sanitizeText } from '../TerminalEditReviewer.ts';
 import type { PromptEditorState } from './usePromptEditorState.ts';
+import { PROMPT_RAIL_HORIZONTAL_PADDING, PROMPT_RAIL_TOP_MARGIN } from './PromptLayout.ts';
+import { formatPromptText } from './PromptText.ts';
 
-export type PromptEditorProps = PromptEditorState;
+export type PromptEditorProps = PromptEditorState & {
+  rootRef?: Ref<DOMElement>;
+};
 
 export function PromptEditor({
   label,
+  pendingChanges,
   text,
+  cursor,
   attachments,
   matches,
   selectedMatch,
   searchError,
+  rootRef,
 }: PromptEditorProps): ReactElement {
+  const promptText = formatPromptText(text, attachments, cursor);
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text>
+    <Box
+      ref={rootRef}
+      backgroundColor="#20242c"
+      borderBottom={false}
+      borderColor="gray"
+      borderLeft={false}
+      borderRight={false}
+      borderStyle="single"
+      flexDirection="column"
+      marginTop={PROMPT_RAIL_TOP_MARGIN}
+      paddingX={PROMPT_RAIL_HORIZONTAL_PADDING}
+      width="100%"
+    >
+      {pendingChanges > 0 ? <PendingReviewEyebrow count={pendingChanges} /> : null}
+      <Text wrap="hard">
         <Text bold color="cyan">
           {label}
         </Text>
-        {sanitizeText(text)}
+        {promptText.segments.map((segment, index) =>
+          segment.type === 'attachment' && segment.collapsed ? (
+            <Text key={index} bold color="cyan">
+              {sanitizeText(segment.value)}
+            </Text>
+          ) : (
+            sanitizeText(segment.value)
+          ),
+        )}
       </Text>
-      {attachments.length > 0 ? (
-        <Text dimColor>{`  attached: ${attachments.map(sanitizeText).join(', ')}`}</Text>
-      ) : null}
       {matches.map((match, index) => (
         <Text key={match.path}>
           {index === selectedMatch ? <Text color="cyan">{'  › '}</Text> : '    '}
@@ -33,6 +59,19 @@ export function PromptEditor({
       ))}
       {searchError ? <Text color="red">{`  File search: ${sanitizeText(searchError)}`}</Text> : null}
     </Box>
+  );
+}
+
+function PendingReviewEyebrow({ count }: { count: number }): ReactElement {
+  return (
+    <Text>
+      <Text bold color="magentaBright">{`${count} pending ${count === 1 ? 'change' : 'changes'}`}</Text>
+      <Text dimColor>{' · '}</Text>
+      <Text bold color="cyan">
+        /review
+      </Text>
+      <Text dimColor> to resume</Text>
+    </Text>
   );
 }
 

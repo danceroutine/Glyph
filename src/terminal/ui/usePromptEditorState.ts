@@ -6,13 +6,17 @@ import { FileSearchFailureReason } from '../../context/search/FileSearchFailureR
 import type { FileSearchMatch } from '../../context/search/FileSearchMatch.ts';
 import { sanitizeText } from '../TerminalEditReviewer.ts';
 import type { PromptRequest } from './PromptRequest.ts';
+import { PROMPT_RAIL_HORIZONTAL_PADDING, promptRailCursorY } from './PromptLayout.ts';
+import { formatPromptText } from './PromptText.ts';
 
 const SEARCH_LIMIT = 10;
 
 /** Complete rendering contract produced by the prompt's interactive state hook. */
 export interface PromptEditorState {
   label: string;
+  pendingChanges: number;
   text: string;
+  cursor: number;
   attachments: readonly string[];
   matches: readonly FileSearchMatch[];
   selectedMatch: number;
@@ -22,9 +26,11 @@ export interface PromptEditorState {
 export interface UsePromptEditorStateOptions {
   request: PromptRequest;
   interrupt: () => void;
+  railTop: number;
 }
 
-export function usePromptEditorState({ request, interrupt }: UsePromptEditorStateOptions): PromptEditorState {
+export function usePromptEditorState({ request, interrupt, railTop }: UsePromptEditorStateOptions): PromptEditorState {
+  const pendingChanges = request.pendingChanges ?? 0;
   const [text, setText] = useState('');
   const [cursor, setCursor] = useState(0);
   const [matches, setMatches] = useState<readonly FileSearchMatch[]>([]);
@@ -33,7 +39,8 @@ export function usePromptEditorState({ request, interrupt }: UsePromptEditorStat
   const [dismissedMention, setDismissedMention] = useState<string>();
   const [searchError, setSearchError] = useState('');
   const generation = useRef(0);
-  const mention = activeMention(text, cursor);
+  const promptText = formatPromptText(text, attachments, cursor);
+  const mention = promptText.cursorTouchesAttachment ? undefined : activeMention(text, cursor);
   const mentionSignature = mention?.signature;
   const { columns } = useWindowSize();
   const { setCursorPosition } = useCursor();
@@ -65,10 +72,13 @@ export function usePromptEditorState({ request, interrupt }: UsePromptEditorStat
     return () => controller.abort();
   }, [dismissedMention, mentionSignature, request.files]);
 
-  const visiblePrefix = `${request.label}${sanitizeText(text.slice(0, cursor))}`;
-  const width = Math.max(1, columns);
+  const visiblePrefix = `${request.label}${sanitizeText(promptText.cursorPrefix)}`;
+  const width = Math.max(1, columns - PROMPT_RAIL_HORIZONTAL_PADDING * 2);
   const cursorWidth = stringWidth(visiblePrefix);
-  setCursorPosition({ x: cursorWidth % width, y: Math.floor(cursorWidth / width) });
+  setCursorPosition({
+    x: PROMPT_RAIL_HORIZONTAL_PADDING + (cursorWidth % width),
+    y: promptRailCursorY(railTop, pendingChanges) + Math.floor(cursorWidth / width),
+  });
 
   const updateText = (next: string, nextCursor: number): void => {
     setText(next);
@@ -149,7 +159,16 @@ export function usePromptEditorState({ request, interrupt }: UsePromptEditorStat
     }
   });
 
-  return { label: request.label, text, attachments, matches, selectedMatch, searchError };
+  return {
+    label: request.label,
+    pendingChanges,
+    text,
+    cursor,
+    attachments,
+    matches,
+    selectedMatch,
+    searchError,
+  };
 }
 
 function activeMention(

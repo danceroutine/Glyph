@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
 import { ProposalReview } from '../ProposalReview.presentational.tsx';
+import { ProposalReviewReceipt } from '../ProposalReviewReceipt.presentational.tsx';
 
 describe(ProposalReview, () => {
   describe('rendering', () => {
@@ -8,7 +9,7 @@ describe(ProposalReview, () => {
       const view = render(
         <ProposalReview
           rows={10}
-          header="Review complete."
+          header="Review complete — 2 accepted, 1 rejected"
           diagnostic=""
           visibleLines={[]}
           navigationHelp=""
@@ -17,7 +18,7 @@ describe(ProposalReview, () => {
         />,
       );
 
-      expect(view.lastFrame()).toBe('Review complete.');
+      expect(view.lastFrame()).toBe('Review complete — 2 accepted, 1 rejected');
       view.unmount();
     });
 
@@ -52,6 +53,20 @@ describe(ProposalReview, () => {
       );
 
       expect(view.lastFrame()).toBe('File 1/1\ncontent\narrows\naccept');
+      view.unmount();
+    });
+  });
+});
+
+describe(ProposalReviewReceipt, () => {
+  describe('rendering', () => {
+    it.each([
+      [2, 0, '✓ Review complete — 2 accepted, 0 rejected'],
+      [1, 3, '✓ Review complete — 1 accepted, 3 rejected'],
+    ])('renders %i accepted and %i rejected decisions', (accepted, rejected, expected) => {
+      const view = render(<ProposalReviewReceipt accepted={accepted} rejected={rejected} />);
+
+      expect(view.lastFrame()?.trimStart()).toBe(expected);
       view.unmount();
     });
   });

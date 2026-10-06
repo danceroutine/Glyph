@@ -11,12 +11,15 @@ describe(WiredProposalReview, () => {
       const complete = vi.fn();
       const fixture = createProposalReviewFixture();
       fixture.proposal.files[0]!.items[0]!.decision = EditDecisionState.REJECTED;
-      const view = render(
-        <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete, interrupt: vi.fn() }} />,
-      );
+      const request = { id: 1, manager: fixture.manager, complete, interrupt: vi.fn() };
+      const view = render(<WiredProposalReview request={request} />);
 
       await waitUntil(() => complete.mock.calls.length === 1);
-      expect(view.lastFrame()).toBe('Review complete.');
+      expect(complete).toHaveBeenCalledWith({ accepted: 0, rejected: 1 });
+      expect(view.lastFrame()).toBe('Review complete — 0 accepted, 1 rejected');
+      view.rerender(<WiredProposalReview request={{ ...request }} />);
+      await tick();
+      expect(complete).toHaveBeenCalledOnce();
       view.unmount();
     });
 
@@ -57,7 +60,7 @@ describe(WiredProposalReview, () => {
       view.stdin.write('y');
       await waitUntil(() => complete.mock.calls.length > 0);
 
-      expect(complete).toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledWith({ accepted: 1, rejected: 0 });
       view.unmount();
     });
 
@@ -73,6 +76,46 @@ describe(WiredProposalReview, () => {
       await tick();
 
       expect(view.lastFrame()).toContain('File 1/1');
+      view.unmount();
+    });
+
+    it('keeps the original progress denominator and advances the numerator', async () => {
+      const fixture = createProposalReviewFixture();
+      const first = fixture.proposal.files[0]!.items[0]!;
+      const second = { ...first, id: 'item-2', sourceStart: 4, sourceEnd: 7 };
+      fixture.proposal.files[0]!.items.push(second);
+      fixture.accept.mockImplementation(async (_reviewId, itemId) => {
+        fixture.proposal.files[0]!.items.find(item => item.id === itemId)!.decision = EditDecisionState.ACCEPTED;
+      });
+      const view = render(
+        <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
+      );
+
+      expect(view.lastFrame()).toContain('change 1/2');
+      view.stdin.write('y');
+      await waitUntil(() => (view.lastFrame() ?? '').includes('change 2/2'));
+
+      expect(view.lastFrame()).not.toContain('change 1/1');
+      const additionalProposal: EditProposal = {
+        ...fixture.proposal,
+        id: 'proposal-2',
+        files: [
+          {
+            ...fixture.proposal.files[0]!,
+            id: 'file-2',
+            sourcePath: 'src/Other.tsx',
+            targetPath: 'src/Other.tsx',
+            items: [{ ...second, id: 'item-3', fileId: 'file-2', decision: EditDecisionState.PENDING }],
+          },
+        ],
+      };
+      (fixture.manager.activeReviews as EditProposal[]).push(additionalProposal);
+      view.rerender(
+        <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
+      );
+      await waitUntil(() => (view.lastFrame() ?? '').includes('File 1/2  change 2/2'));
+      view.stdin.write('\x1b[C');
+      await waitUntil(() => (view.lastFrame() ?? '').includes('File 2/2  change 1/1'));
       view.unmount();
     });
 

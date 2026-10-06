@@ -26,17 +26,62 @@ describe(TerminalInkRenderer, () => {
       terminal.push('\r');
 
       await expect(prompt).resolves.toEqual({ prompt: 'hello', attachmentPaths: [] });
+      await waitUntil(() => output.value.includes('history') && output.value.includes('answer'));
       expect(output.value).toContain('history');
-      expect(output.value).toContain('assistant> answer');
+      expect(output.value).toContain('answer');
       renderer.close();
       renderer.close();
       expect(terminal.rawTransitions.at(-1)).toBe(false);
+    });
+
+    it('places the cursor on the prompt row below its top margin', async () => {
+      const terminal = new TestTerminal();
+      const output = new TestOutput();
+      const renderer = new TerminalInkRenderer(terminal, output, output);
+
+      const prompt = renderer.prompt('you> ', new AbortController().signal);
+      await waitUntil(() => output.value.includes('\u001B[7G\u001B[?25h'));
+
+      expect(output.value).not.toContain('\u001B[1A\u001B[7G\u001B[?25h');
+      renderer.close();
+      await expect(prompt).rejects.toThrow('Session closed.');
+    });
+
+    it('renders a pending-review eyebrow and positions the cursor beneath it', async () => {
+      const terminal = new TestTerminal();
+      const output = new TestOutput();
+      const renderer = new TerminalInkRenderer(terminal, output, output);
+
+      const prompt = renderer.prompt('you> ', new AbortController().signal, undefined, 3);
+      await waitUntil(() => output.value.includes('3 pending changes'));
+      await waitUntil(() => output.value.includes('\u001B[7G\u001B[?25h'));
+
+      expect(output.value).toContain('/review');
+      expect(output.value).toContain('to resume');
+      renderer.close();
+      await expect(prompt).rejects.toThrow('Session closed.');
     });
 
     it('supports responses completed without streamed parts', () => {
       const renderer = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
 
       renderer.completeResponse(<Text>footer</Text>);
+      renderer.close();
+    });
+
+    it('uses the default terminal width when output columns are unavailable', async () => {
+      const terminal = new TestTerminal();
+      const output = new TestOutput();
+      Object.defineProperty(output, 'columns', { value: undefined });
+      const renderer = new TerminalInkRenderer(terminal, output, output);
+      const prompt = renderer.prompt('you> ', new AbortController().signal);
+
+      await waitUntil(() => terminal.isRaw);
+      terminal.push('hello');
+      await tick();
+      terminal.push('\r');
+
+      await expect(prompt).resolves.toMatchObject({ prompt: 'hello' });
       renderer.close();
     });
 
@@ -162,6 +207,24 @@ describe(TerminalInkRenderer, () => {
       renderer.close();
     });
 
+    it('commits a review completion receipt to the transcript', async () => {
+      const terminal = new TestTerminal();
+      const output = new TestOutput();
+      const renderer = new TerminalInkRenderer(terminal, output, output);
+      const fixture = createProposalReviewFixture();
+      const review = renderer.review(fixture.manager, new AbortController().signal, vi.fn());
+
+      await waitUntil(() => terminal.isRaw);
+      terminal.push('y');
+      await review;
+      await waitUntil(() => output.value.includes('1 accepted'));
+
+      expect(output.value).toContain('Review complete');
+      expect(output.value).toContain('1 accepted');
+      expect(output.value).toContain('0 rejected');
+      renderer.close();
+    });
+
     it('rejects reviews aborted with and without an explicit reason', async () => {
       const renderer = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
       const explicitFixture = createProposalReviewFixture();
@@ -256,7 +319,7 @@ class TestOutput extends Writable {
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (predicate()) return;
-    await tick();
+    await new Promise<void>(resolve => setTimeout(resolve, 1));
   }
   throw new Error('Condition was not reached.');
 }

@@ -2,24 +2,31 @@ import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
 import type { UserPromptDraft } from '../UserPromptDraft.ts';
 import { sanitizeText } from '../TerminalEditReviewer.ts';
+import { formatPromptText } from './PromptText.ts';
 
 export interface PromptRecordProps {
   label: string;
   draft: UserPromptDraft;
+  maxWidth?: number;
 }
 
-export function PromptRecord({ label, draft }: PromptRecordProps): ReactElement {
+export function PromptRecord({ draft, maxWidth = 64 }: PromptRecordProps): ReactElement {
+  const promptText = formatPromptText(draft.prompt, draft.attachmentPaths);
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text>
-        <Text bold color="cyan">
-          {label}
+    <Box alignSelf="flex-end" marginTop={1} maxWidth={maxWidth}>
+      <Box backgroundColor="blue" borderColor="blue" borderStyle="round" paddingX={2}>
+        <Text color="whiteBright">
+          {promptText.segments.map((segment, index) =>
+            segment.type === 'attachment' ? (
+              <Text key={index} bold color="cyan">
+                {sanitizeText(segment.value)}
+              </Text>
+            ) : (
+              sanitizeText(segment.value)
+            ),
+          )}
         </Text>
-        {sanitizeText(draft.prompt)}
-      </Text>
-      {draft.attachmentPaths.length > 0 ? (
-        <Text dimColor>{`  attached: ${draft.attachmentPaths.map(sanitizeText).join(', ')}`}</Text>
-      ) : null}
+      </Box>
     </Box>
   );
 }

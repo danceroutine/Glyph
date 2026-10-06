@@ -6,24 +6,57 @@ import { sanitizeText } from '../TerminalEditReviewer.ts';
 
 export interface ToolActivityProps {
   activity: ToolActivityModel;
+  frame?: number;
 }
 
-export function ToolActivity({ activity }: ToolActivityProps): ReactElement {
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
+const TOOL_TAG_BACKGROUND = '#c4a7e7';
+const TOOL_TAG_FOREGROUND = '#211d2e';
+const TOOL_STATUS_RUNNING_BACKGROUND = '#f6c177';
+const TOOL_STATUS_SUCCESS_BACKGROUND = '#9ece6a';
+const TOOL_STATUS_ERROR_BACKGROUND = '#eb6f92';
+
+export function ToolActivity({ activity, frame = 0 }: ToolActivityProps): ReactElement {
   const name = activity.namespace ? `${activity.namespace}.${activity.name}` : activity.name;
   if (activity.phase === ToolActivityPhase.STARTED) {
-    const argumentsText = sanitizeText(activity.arguments).trimEnd();
-    return (
-      <Box flexDirection="column">
-        <Text color="yellow">{`[tool> ${name}]`}</Text>
-        {argumentsText ? <Text dimColor>{indent(argumentsText)}</Text> : null}
-      </Box>
-    );
+    const icon = SPINNER_FRAMES[frame % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0];
+    return <ToolTag name={name} icon={icon} statusBackground={TOOL_STATUS_RUNNING_BACKGROUND} />;
   }
   const result = formatToolResult(activity);
+  if (!result.failed) {
+    return <ToolTag name={name} icon="✓" statusBackground={TOOL_STATUS_SUCCESS_BACKGROUND} />;
+  }
+  const argumentsText = sanitizeText(activity.arguments).trimEnd();
   return (
-    <Text bold={result.failed} color={result.failed ? 'red' : 'green'}>
-      {`[tool< ${name} ${result.message}]`}
-    </Text>
+    <Box flexDirection="column">
+      <ToolTag name={name} icon="×" statusBackground={TOOL_STATUS_ERROR_BACKGROUND} statusForeground="whiteBright" />
+      {argumentsText ? <Text dimColor>{indent(argumentsText)}</Text> : null}
+      <Text color="red">{`  ${result.message}`}</Text>
+    </Box>
+  );
+}
+
+interface ToolTagProps {
+  name: string;
+  icon: string;
+  statusBackground: string;
+  statusForeground?: string;
+}
+
+function ToolTag({ name, icon, statusBackground, statusForeground = TOOL_TAG_FOREGROUND }: ToolTagProps): ReactElement {
+  return (
+    <Box>
+      <Box backgroundColor={TOOL_TAG_BACKGROUND} paddingX={1}>
+        <Text bold color={TOOL_TAG_FOREGROUND}>
+          {name}
+        </Text>
+      </Box>
+      <Box backgroundColor={statusBackground} paddingX={1}>
+        <Text bold color={statusForeground}>
+          {icon}
+        </Text>
+      </Box>
+    </Box>
   );
 }
 
@@ -38,7 +71,7 @@ function formatToolResult(activity: ToolActivityModel): { message: string; faile
   try {
     const result: unknown = JSON.parse(activity.output ?? '');
     if (typeof result === 'object' && result !== null && 'error' in result) {
-      return { message: `error: ${formatToolError((result as { error: unknown }).error)}`, failed: true };
+      return { message: `Error: ${formatToolError((result as { error: unknown }).error)}`, failed: true };
     }
   } catch {
     // Non-JSON output is still a successful tool result.
@@ -62,5 +95,9 @@ function formatToolError(error: unknown): string {
 function formatToolErrorValue(value: unknown): string {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) return value.map(formatToolErrorValue).join(', ');
-  return JSON.stringify(value) ?? String(value);
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return 'Unprintable error details';
+  }
 }

@@ -9,6 +9,6 @@ export interface WiredResponseProps {
 }
 
 export function WiredResponse({ parts, footer }: WiredResponseProps): ReactElement {
-  const state = useResponseState(parts);
+  const state = useResponseState(parts, footer === undefined);
   return <Response {...state} footer={footer} />;
 }
