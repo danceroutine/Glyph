@@ -7,8 +7,8 @@ import type { FileSearchMatch } from '../../../context/search/FileSearchMatch.ts
 import { searchTerminalCommands, type TerminalCommand } from '../../TerminalCommand.ts';
 import { sanitizeText } from '../shared/sanitizeText.ts';
 import type { PromptRequest } from './PromptRequest.ts';
-import { PROMPT_RAIL_HORIZONTAL_PADDING, promptRailCursorY } from './PromptLayout.ts';
-import { formatPromptText } from './PromptText.ts';
+import { formatPromptText } from './formatPromptText.ts';
+import { PromptLayout } from './PromptLayout.ts';
 
 const SEARCH_LIMIT = 10;
 
@@ -78,11 +78,11 @@ export function usePromptEditorState({ request, interrupt, railTop }: UsePromptE
   }, [dismissedCompletion, mentionSignature, request.files]);
 
   const visiblePrefix = `${request.label}${sanitizeText(promptText.cursorPrefix)}`;
-  const width = Math.max(1, columns - PROMPT_RAIL_HORIZONTAL_PADDING * 2);
+  const width = Math.max(1, columns - PromptLayout.railHorizontalPadding * 2);
   const cursorWidth = stringWidth(visiblePrefix);
   setCursorPosition({
-    x: PROMPT_RAIL_HORIZONTAL_PADDING + (cursorWidth % width),
-    y: promptRailCursorY(railTop, pendingChanges) + Math.floor(cursorWidth / width),
+    x: PromptLayout.railHorizontalPadding + (cursorWidth % width),
+    y: PromptLayout.railCursorY(railTop, pendingChanges) + Math.floor(cursorWidth / width),
   });
 
   const updateText = (next: string, nextCursor: number): void => {

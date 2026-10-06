@@ -113,9 +113,16 @@ describe(RustWorkspacePathIndex, () => {
           params: {
             root: '/project',
             cachePath: '/cache/index.bin',
+            ignoredDirectories: ['.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
             excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
+            sensitiveFileNames: ['.netrc', '.npmrc', '.pypirc'],
+            sensitiveFilePrefixes: ['.env'],
+            sensitiveFileExtensions: ['.key', '.pem', '.p12', '.pfx'],
+            allowedFileNames: ['.env.example'],
             respectGitIgnore: true,
+            maxFiles: 2_000_000,
             maxContentSearchFileBytes: 9_000_000,
+            caseSensitive: process.platform !== 'darwin' && process.platform !== 'win32',
           },
         },
         { version: 1, id: 2, method: 'search', params: { query: 'app', generation: 7, limit: 20 } },
@@ -163,6 +170,51 @@ describe(RustWorkspacePathIndex, () => {
         code: WorkspacePathIndexFailureReason.SUPERSEDED,
         message: 'A newer generation replaced this search.',
       } satisfies Partial<WorkspacePathIndexError>);
+      await search.dispose();
+    });
+
+    it('resolves content-search defaults before crossing the native boundary', async () => {
+      const worker = new FakeWorker(request => {
+        if (request.method === 'initialize') {
+          return { root: '/project', fileCount: 1, fromCache: false, truncated: false, durationMilliseconds: 1 };
+        }
+        if (request.method === 'contentSearch') {
+          return {
+            outputMode: 'content',
+            matches: [],
+            searchedFiles: 1,
+            skippedFiles: 0,
+            indexTruncated: false,
+            truncated: false,
+            nextOffset: null,
+          };
+        }
+        if (request.method === 'shutdown') return { shutdown: true };
+        throw new Error(`Unexpected method ${request.method}`);
+      });
+      const search = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+
+      await search.searchContents('needle', {});
+
+      expect(worker.requests[1]).toEqual({
+        version: 1,
+        id: 2,
+        method: 'contentSearch',
+        params: {
+          pattern: 'needle',
+          patternKind: 'regular_expression',
+          path: null,
+          fileGlob: null,
+          fileType: null,
+          outputMode: 'content',
+          linesBefore: 0,
+          linesAfter: 0,
+          caseSensitive: true,
+          multiline: false,
+          limit: 100,
+          offset: 0,
+        },
+      });
       await search.dispose();
     });
 

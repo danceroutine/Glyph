@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Logger } from '../../observability/Logger.ts';
 import { NullLogger } from '../../observability/NullLogger.ts';
 import type { WorkspaceTextStore } from '../../workspace/WorkspaceTextStore.ts';
-import { transformTextEditRanges } from '../documents/TextEditTransformer.ts';
+import { transformTextEditRanges } from '../documents/transformTextEditRanges.ts';
 import { EditError } from '../errors/EditError.ts';
 import { EditFailureReason } from '../errors/EditFailureReason.ts';
 import { EditOperation } from '../proposals/EditOperation.ts';

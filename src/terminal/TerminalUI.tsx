@@ -28,7 +28,7 @@ import { TerminalInkRenderer } from './ui/runtime/TerminalInkRenderer.tsx';
 import type { TerminalInputStream } from './ui/runtime/TerminalInputStream.ts';
 import type { TerminalOutputStream } from './ui/runtime/TerminalOutputStream.ts';
 import type { UserPromptDraft } from './ui/prompt/UserPromptDraft.ts';
-import { inlineMarkdownText } from './ui/response/InlineMarkdown.ts';
+import { inlineMarkdownText } from './ui/response/parseInlineMarkdown.ts';
 import { sanitizeText } from './ui/shared/sanitizeText.ts';
 
 const TERMINAL_HELP = `Commands: ${TERMINAL_COMMANDS.map(command => command.value).join(' ')}

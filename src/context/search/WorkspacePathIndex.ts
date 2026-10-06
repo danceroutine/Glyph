@@ -1,7 +1,8 @@
 import type { FileSearchResult } from './FileSearchResult.ts';
+import type { WorkspaceContentSearchOptions } from './WorkspaceContentSearchOptions.ts';
+import type { WorkspaceContentSearchResult } from './WorkspaceContentSearchResult.ts';
 import type { WorkspacePathGlobResult } from './WorkspacePathGlobResult.ts';
 import type { WorkspacePathIndexState } from './WorkspacePathIndexState.ts';
-import type { WorkspaceContentSearchOptions, WorkspaceContentSearchResult } from './WorkspaceContentSearch.ts';
 
 /**
  * Host-neutral port for the long-lived workspace path catalog. Agent-facing

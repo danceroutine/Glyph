@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import { ChatResponsePartType } from '../../../chat/ChatResponsePartType.ts';
-import { parseInlineMarkdown } from './InlineMarkdown.ts';
+import { parseInlineMarkdown } from './parseInlineMarkdown.ts';
 import { ToolActivity } from './ToolActivity.presentational.tsx';
 import type { ResponseState } from './useResponseState.ts';
 

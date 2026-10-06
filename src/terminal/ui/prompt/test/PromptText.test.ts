@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatPromptText } from '../PromptText.ts';
+import { formatPromptText } from '../formatPromptText.ts';
 
 describe(formatPromptText, () => {
   it('returns plain text without cursor metadata when no cursor is supplied', () => {

@@ -3,8 +3,8 @@ import { Box, Text, type DOMElement } from 'ink';
 import type { FileSearchMatch } from '../../../context/search/FileSearchMatch.ts';
 import { sanitizeText } from '../shared/sanitizeText.ts';
 import type { PromptEditorState } from './usePromptEditorState.ts';
-import { PROMPT_RAIL_HORIZONTAL_PADDING, PROMPT_RAIL_TOP_MARGIN } from './PromptLayout.ts';
-import { formatPromptText } from './PromptText.ts';
+import { formatPromptText } from './formatPromptText.ts';
+import { PromptLayout } from './PromptLayout.ts';
 
 export type PromptEditorProps = PromptEditorState & {
   rootRef?: Ref<DOMElement>;
@@ -33,8 +33,8 @@ export function PromptEditor({
       borderRight={false}
       borderStyle="single"
       flexDirection="column"
-      marginTop={PROMPT_RAIL_TOP_MARGIN}
-      paddingX={PROMPT_RAIL_HORIZONTAL_PADDING}
+      marginTop={PromptLayout.railTopMargin}
+      paddingX={PromptLayout.railHorizontalPadding}
       width="100%"
     >
       {pendingChanges > 0 ? <PendingReviewEyebrow count={pendingChanges} /> : null}

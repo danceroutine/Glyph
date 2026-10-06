@@ -102,6 +102,37 @@ const searchProjectContentsArguments = z
     offset: z.number().int().min(0).max(100_000),
   })
   .strict();
+const resolvedSearchProjectContentsArguments = searchProjectContentsArguments.transform(
+  ({
+    pattern,
+    pattern_kind: patternKind,
+    path,
+    file_glob: fileGlob,
+    file_type: fileType,
+    output_mode: outputMode,
+    lines_before: linesBefore,
+    lines_after: linesAfter,
+    case_sensitive: caseSensitive,
+    multiline,
+    limit,
+    offset,
+  }) => ({
+    pattern,
+    options: {
+      patternKind,
+      path,
+      fileGlob,
+      fileType,
+      outputMode,
+      linesBefore,
+      linesAfter,
+      caseSensitive,
+      multiline,
+      limit,
+      offset,
+    },
+  }),
+);
 
 type ReadArguments = z.infer<typeof readProjectFileArguments>;
 
@@ -159,7 +190,7 @@ export class ProjectAccess {
           return JSON.stringify(await this.readFile(readProjectFileArguments.parse(JSON.parse(rawArguments))));
         case ProjectToolName.SEARCH_CONTENTS:
           return JSON.stringify(
-            await this.searchContents(searchProjectContentsArguments.parse(JSON.parse(rawArguments)), signal),
+            await this.searchContents(resolvedSearchProjectContentsArguments.parse(JSON.parse(rawArguments)), signal),
           );
         default:
           throw new Error(`Unknown project tool: ${name}`);
@@ -185,37 +216,15 @@ export class ProjectAccess {
   }
 
   private async searchContents(
-    {
-      pattern,
-      pattern_kind: patternKind,
-      path,
-      file_glob: fileGlob,
-      file_type: fileType,
-      output_mode: outputMode,
-      lines_before: linesBefore,
-      lines_after: linesAfter,
-      case_sensitive: caseSensitive,
-      multiline,
-      limit,
-      offset,
-    }: z.infer<typeof searchProjectContentsArguments>,
+    { pattern, options }: z.output<typeof resolvedSearchProjectContentsArguments>,
     signal?: AbortSignal,
   ) {
     const pathIndex = this.pathIndex;
     if (!pathIndex?.searchContents) throw new Error('Native project content search is unavailable.');
     return pathIndex.searchContents(pattern, {
-      patternKind,
-      ...(path === null ? {} : { path: this.workspace.normalizePath(path) }),
-      ...(fileGlob === null ? {} : { fileGlob }),
-      ...(fileType === null ? {} : { fileType }),
-      outputMode,
-      linesBefore,
-      linesAfter,
-      caseSensitive,
-      multiline,
-      limit,
-      offset,
-      ...(signal ? { signal } : {}),
+      ...options,
+      path: options.path === null ? null : this.workspace.normalizePath(options.path),
+      signal,
     });
   }
 

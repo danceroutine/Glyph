@@ -1,6 +1,10 @@
 import { diffChars } from 'diff';
 import { describe, expect, it } from 'vitest';
-import { transformTextEditRanges, type TextEditRange, type TransformedTextEditRange } from '../TextEditTransformer.ts';
+import {
+  transformTextEditRanges,
+  type TextEditRange,
+  type TransformedTextEditRange,
+} from '../transformTextEditRanges.ts';
 
 describe('TextEditTransformer adversarial behavior', () => {
   describe('ambiguous and repeated text', () => {

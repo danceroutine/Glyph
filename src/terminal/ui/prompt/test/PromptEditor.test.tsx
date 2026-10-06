@@ -4,7 +4,7 @@ import { render } from 'ink-testing-library';
 import { TerminalActionType } from '../../../TerminalActionType.ts';
 import { PromptEditor } from '../PromptEditor.presentational.tsx';
 import { PromptRecord } from '../PromptRecord.presentational.tsx';
-import { formatPromptText } from '../PromptText.ts';
+import { formatPromptText } from '../formatPromptText.ts';
 
 describe(PromptEditor, () => {
   describe('rendering', () => {

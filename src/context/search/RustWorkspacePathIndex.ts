@@ -3,13 +3,21 @@ import type { Readable, Writable } from 'node:stream';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import type { FileSearchResult } from './FileSearchResult.ts';
-import type { RustWorkspacePathIndexOptions } from './RustWorkspacePathIndexOptions.ts';
+import {
+  rustWorkspacePathIndexOptionsSchema,
+  type ResolvedRustWorkspacePathIndexOptions,
+  type RustWorkspacePathIndexOptions,
+} from './RustWorkspacePathIndexOptions.ts';
+import {
+  workspaceContentSearchOptionsSchema,
+  type WorkspaceContentSearchOptions,
+} from './WorkspaceContentSearchOptions.ts';
+import type { WorkspaceContentSearchResult } from './WorkspaceContentSearchResult.ts';
 import type { WorkspacePathGlobResult } from './WorkspacePathGlobResult.ts';
 import type { WorkspacePathIndex } from './WorkspacePathIndex.ts';
 import { WorkspacePathIndexError } from './WorkspacePathIndexError.ts';
 import { WorkspacePathIndexFailureReason } from './WorkspacePathIndexFailureReason.ts';
 import type { WorkspacePathIndexState } from './WorkspacePathIndexState.ts';
-import type { WorkspaceContentSearchOptions, WorkspaceContentSearchResult } from './WorkspaceContentSearch.ts';
 
 const PROTOCOL_VERSION = 1;
 const MAXIMUM_ERROR_OUTPUT = 8_192;
@@ -125,6 +133,7 @@ type ProcessFactory = (binaryPath: string) => SidecarProcess;
 
 /** Persistent JSONL transport for the native cached workspace path index. */
 export class RustWorkspacePathIndex implements WorkspacePathIndex {
+  private readonly options: ResolvedRustWorkspacePathIndexOptions;
   private readonly processFactory: ProcessFactory;
   private process: SidecarProcess | undefined;
   private readonly pending = new Map<number, PendingRequest>();
@@ -136,42 +145,22 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   private disposing: Promise<void> | undefined;
   private disposed = false;
 
-  constructor(
-    private readonly options: RustWorkspacePathIndexOptions,
-    processFactory: ProcessFactory = startProcess,
-  ) {
+  constructor(options: RustWorkspacePathIndexOptions, processFactory: ProcessFactory = startProcess) {
+    const parsed = rustWorkspacePathIndexOptionsSchema.parse(options);
+    this.options = {
+      ...parsed,
+      binaryPath: resolve(parsed.binaryPath),
+      root: resolve(parsed.root),
+      cachePath: parsed.cachePath === null ? null : resolve(parsed.cachePath),
+    };
     this.processFactory = processFactory;
   }
 
   async initialize(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
     if (this.initialized) return this.initialized;
     if (!this.initializing) {
-      this.initializing = this.request(PathIndexMethod.INITIALIZE, {
-        root: resolve(this.options.root),
-        ...(this.options.cachePath === undefined ? {} : { cachePath: resolve(this.options.cachePath) }),
-        ...(this.options.ignoredDirectories === undefined
-          ? {}
-          : { ignoredDirectories: [...this.options.ignoredDirectories] }),
-        ...(this.options.excludedPaths === undefined ? {} : { excludedPaths: [...this.options.excludedPaths] }),
-        ...(this.options.sensitiveFileNames === undefined
-          ? {}
-          : { sensitiveFileNames: [...this.options.sensitiveFileNames] }),
-        ...(this.options.sensitiveFilePrefixes === undefined
-          ? {}
-          : { sensitiveFilePrefixes: [...this.options.sensitiveFilePrefixes] }),
-        ...(this.options.sensitiveFileExtensions === undefined
-          ? {}
-          : { sensitiveFileExtensions: [...this.options.sensitiveFileExtensions] }),
-        ...(this.options.allowedFileNames === undefined
-          ? {}
-          : { allowedFileNames: [...this.options.allowedFileNames] }),
-        ...(this.options.respectGitIgnore === undefined ? {} : { respectGitIgnore: this.options.respectGitIgnore }),
-        ...(this.options.maxFiles === undefined ? {} : { maxFiles: this.options.maxFiles }),
-        ...(this.options.maxContentSearchFileBytes === undefined
-          ? {}
-          : { maxContentSearchFileBytes: this.options.maxContentSearchFileBytes }),
-        ...(this.options.caseSensitive === undefined ? {} : { caseSensitive: this.options.caseSensitive }),
-      })
+      const { binaryPath: _, ...configuration } = this.options;
+      this.initializing = this.request(PathIndexMethod.INITIALIZE, configuration)
         .then(value => {
           const result = indexStateSchema.parse(value);
           this.initialized = result;
@@ -195,7 +184,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
         {
           query,
           generation: options.generation,
-          ...(options.limit === undefined ? {} : { limit: options.limit }),
+          limit: options.limit,
         },
         options.signal,
       ),
@@ -212,7 +201,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
         PathIndexMethod.GLOB,
         {
           pattern,
-          ...(options.targetDirectory === undefined ? {} : { targetDirectory: options.targetDirectory }),
+          targetDirectory: options.targetDirectory,
           limit: options.limit,
         },
         options.signal,
@@ -221,26 +210,11 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
-    if (!this.initialized) await this.initialize(options.signal);
+    const { signal, ...serializableOptions } = options;
+    const resolvedOptions = workspaceContentSearchOptionsSchema.parse(serializableOptions);
+    if (!this.initialized) await this.initialize(signal);
     return contentSearchResultSchema.parse(
-      await this.request(
-        PathIndexMethod.CONTENT_SEARCH,
-        {
-          pattern,
-          patternKind: options.patternKind,
-          ...(options.path === undefined ? {} : { path: options.path }),
-          ...(options.fileGlob === undefined ? {} : { fileGlob: options.fileGlob }),
-          ...(options.fileType === undefined ? {} : { fileType: options.fileType }),
-          outputMode: options.outputMode,
-          linesBefore: options.linesBefore,
-          linesAfter: options.linesAfter,
-          caseSensitive: options.caseSensitive,
-          multiline: options.multiline,
-          limit: options.limit,
-          offset: options.offset,
-        },
-        options.signal,
-      ),
+      await this.request(PathIndexMethod.CONTENT_SEARCH, { pattern, ...resolvedOptions }, signal),
     );
   }
 
@@ -313,7 +287,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 
   private ensureProcess(): SidecarProcess {
     if (this.process) return this.process;
-    const process = this.processFactory(resolve(this.options.binaryPath));
+    const process = this.processFactory(this.options.binaryPath);
     this.process = process;
     process.stdout.setEncoding('utf8');
     process.stdout.on('data', chunk => this.receive(String(chunk)));

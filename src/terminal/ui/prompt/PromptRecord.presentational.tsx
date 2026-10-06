@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
 import type { UserPromptDraft } from './UserPromptDraft.ts';
 import { sanitizeText } from '../shared/sanitizeText.ts';
-import { formatPromptText } from './PromptText.ts';
+import { formatPromptText } from './formatPromptText.ts';
 
 export interface PromptRecordProps {
   label: string;
