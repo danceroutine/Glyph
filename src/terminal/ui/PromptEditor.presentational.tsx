@@ -4,16 +4,16 @@ import type { FileSearchMatch } from '../../context/search/FileSearchMatch.ts';
 import { sanitizeText } from '../TerminalEditReviewer.ts';
 import type { PromptEditorState } from './usePromptEditorState.ts';
 
-export type PromptEditorPresentationalProps = PromptEditorState;
+export type PromptEditorProps = PromptEditorState;
 
-export function PromptEditorPresentational({
+export function PromptEditor({
   label,
   text,
   attachments,
   matches,
   selectedMatch,
   searchError,
-}: PromptEditorPresentationalProps): ReactElement {
+}: PromptEditorProps): ReactElement {
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text>

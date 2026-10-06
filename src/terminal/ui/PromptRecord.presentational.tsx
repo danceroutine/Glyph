@@ -3,12 +3,12 @@ import { Box, Text } from 'ink';
 import type { UserPromptDraft } from '../UserPromptDraft.ts';
 import { sanitizeText } from '../TerminalEditReviewer.ts';
 
-export interface PromptRecordPresentationalProps {
+export interface PromptRecordProps {
   label: string;
   draft: UserPromptDraft;
 }
 
-export function PromptRecordPresentational({ label, draft }: PromptRecordPresentationalProps): ReactElement {
+export function PromptRecord({ label, draft }: PromptRecordProps): ReactElement {
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text>

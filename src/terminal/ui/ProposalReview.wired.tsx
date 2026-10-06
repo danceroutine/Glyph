@@ -1,13 +1,13 @@
 import type { ReactElement } from 'react';
-import { ProposalReviewPresentational } from './ProposalReview.presentational.tsx';
+import { ProposalReview } from './ProposalReview.presentational.tsx';
 import type { ProposalReviewRequest } from './ProposalReviewRequest.ts';
 import { useProposalReviewState } from './useProposalReviewState.ts';
 
-export interface ProposalReviewWiredProps {
+export interface WiredProposalReviewProps {
   request: ProposalReviewRequest;
 }
 
-export function ProposalReviewWired({ request }: ProposalReviewWiredProps): ReactElement {
+export function WiredProposalReview({ request }: WiredProposalReviewProps): ReactElement {
   const state = useProposalReviewState(request);
-  return <ProposalReviewPresentational {...state} />;
+  return <ProposalReview {...state} />;
 }

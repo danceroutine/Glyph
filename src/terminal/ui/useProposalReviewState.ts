@@ -122,7 +122,7 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
   const accepted = reviewItems.filter(item => item.decision === EditDecisionState.ACCEPTED).length;
   const rejected = reviewItems.filter(item => item.decision === EditDecisionState.REJECTED).length;
   const mode = viewMode === ReviewViewMode.FULL_FILE ? 'full file' : 'focused diff';
-  const firstVisibleLine = rendered.lines.length === 0 ? 0 : visibleScroll + 1;
+  const firstVisibleLine = visibleScroll + 1;
   const lastVisibleLine = Math.min(rendered.lines.length, visibleScroll + pageSize);
   const viewAction = viewMode === ReviewViewMode.FULL_FILE ? 'focused diff' : 'full file';
 

@@ -2,9 +2,9 @@ import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
 import type { ProposalReviewState } from './useProposalReviewState.ts';
 
-export type ProposalReviewPresentationalProps = ProposalReviewState;
+export type ProposalReviewProps = ProposalReviewState;
 
-export function ProposalReviewPresentational({
+export function ProposalReview({
   rows,
   header,
   diagnostic,
@@ -12,7 +12,7 @@ export function ProposalReviewPresentational({
   navigationHelp,
   decisionHelp,
   complete,
-}: ProposalReviewPresentationalProps): ReactElement {
+}: ProposalReviewProps): ReactElement {
   if (complete) return <Text dimColor>{header}</Text>;
   return (
     <Box flexDirection="column" height={rows}>

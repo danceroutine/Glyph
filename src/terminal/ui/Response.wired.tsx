@@ -1,14 +1,14 @@
 import type { ReactElement, ReactNode } from 'react';
 import type { ChatResponsePart } from '../../chat/ChatResponsePart.ts';
-import { ResponsePresentational } from './Response.presentational.tsx';
+import { Response } from './Response.presentational.tsx';
 import { useResponseState } from './useResponseState.ts';
 
-export interface ResponseWiredProps {
+export interface WiredResponseProps {
   parts: readonly ChatResponsePart[];
   footer?: ReactNode;
 }
 
-export function ResponseWired({ parts, footer }: ResponseWiredProps): ReactElement {
+export function WiredResponse({ parts, footer }: WiredResponseProps): ReactElement {
   const state = useResponseState(parts);
-  return <ResponsePresentational {...state} footer={footer} />;
+  return <Response {...state} footer={footer} />;
 }

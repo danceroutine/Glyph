@@ -7,15 +7,15 @@ import type { WorkspaceFileSearch } from '../../context/search/WorkspaceFileSear
 import type { ProposalReviewManager } from '../../editing/reviews/ProposalReviewManager.ts';
 import type { UserPromptDraft } from '../UserPromptDraft.ts';
 import { Deferred } from './Deferred.ts';
-import { PromptRecordPresentational } from './PromptRecord.presentational.tsx';
+import { PromptRecord } from './PromptRecord.presentational.tsx';
 import type { PromptRequest } from './PromptRequest.ts';
 import type { ProposalReviewRequest } from './ProposalReviewRequest.ts';
 import type { TerminalInputStream } from './TerminalInputStream.ts';
 import type { TerminalOutputStream } from './TerminalOutputStream.ts';
 import type { TerminalRendererSnapshot } from './TerminalRendererSnapshot.ts';
-import { TerminalRootWired } from './TerminalRoot.wired.tsx';
+import { WiredTerminalRoot } from './TerminalRoot.wired.tsx';
 import type { TranscriptEntry } from './TranscriptEntry.ts';
-import { ResponseWired } from './Response.wired.tsx';
+import { WiredResponse } from './Response.wired.tsx';
 
 /**
  * Owns the single interactive Ink tree for the terminal host. All prompt,
@@ -29,6 +29,8 @@ export class TerminalInkRenderer {
   private responseParts: ChatResponsePart[] | undefined;
   private promptRequest: PromptRequest | undefined;
   private reviewRequest: ProposalReviewRequest | undefined;
+  private promptResult: Deferred<UserPromptDraft> | undefined;
+  private reviewResult: Deferred<void> | undefined;
   private nextId = 1;
   private closed = false;
 
@@ -41,7 +43,7 @@ export class TerminalInkRenderer {
     private readonly output: TerminalOutputStream,
     private readonly errorOutput: NodeJS.WritableStream,
   ) {
-    this.instance = render(<TerminalRootWired snapshot={this.snapshot()} />, {
+    this.instance = render(<WiredTerminalRoot snapshot={this.snapshot()} />, {
       stdin: input,
       stdout: output,
       stderr: errorOutput,
@@ -84,7 +86,7 @@ export class TerminalInkRenderer {
     this.responseParts = undefined;
     this.entries.push({
       id: this.nextId++,
-      content: <ResponseWired parts={parts} footer={footer} />,
+      content: <WiredResponse parts={parts} footer={footer} />,
     });
     this.refresh();
   }
@@ -93,11 +95,13 @@ export class TerminalInkRenderer {
     this.assertAvailable();
     signal.throwIfAborted();
     const result = new Deferred<UserPromptDraft>();
+    this.promptResult = result;
     const id = this.nextId++;
     const cleanup = (): void => signal.removeEventListener('abort', abort);
     const abort = (): void => {
       if (this.promptRequest?.id !== id) return;
       this.promptRequest = undefined;
+      this.promptResult = undefined;
       cleanup();
       this.refresh();
       result.reject(signal.reason ?? new Error('Input cancelled.'));
@@ -109,8 +113,9 @@ export class TerminalInkRenderer {
       complete: draft => {
         if (this.promptRequest?.id !== id) return;
         this.promptRequest = undefined;
+        this.promptResult = undefined;
         cleanup();
-        this.entries.push({ id, content: <PromptRecordPresentational label={label} draft={draft} /> });
+        this.entries.push({ id, content: <PromptRecord label={label} draft={draft} /> });
         this.refresh();
         result.resolve(draft);
       },
@@ -125,11 +130,13 @@ export class TerminalInkRenderer {
     this.assertAvailable();
     signal.throwIfAborted();
     const result = new Deferred<void>();
+    this.reviewResult = result;
     const id = this.nextId++;
     const cleanup = (): void => signal.removeEventListener('abort', abort);
     const complete = (): void => {
       if (this.reviewRequest?.id !== id) return;
       this.reviewRequest = undefined;
+      this.reviewResult = undefined;
       cleanup();
       this.refresh();
       result.resolve();
@@ -137,6 +144,7 @@ export class TerminalInkRenderer {
     const abort = (): void => {
       if (this.reviewRequest?.id !== id) return;
       this.reviewRequest = undefined;
+      this.reviewResult = undefined;
       cleanup();
       this.refresh();
       result.reject(signal.reason ?? new Error('Review cancelled.'));
@@ -154,6 +162,13 @@ export class TerminalInkRenderer {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    const cancellation = new Error('Session closed.');
+    this.promptResult?.reject(cancellation);
+    this.reviewResult?.reject(cancellation);
+    this.promptResult = undefined;
+    this.reviewResult = undefined;
+    this.promptRequest = undefined;
+    this.reviewRequest = undefined;
     this.input.off('end', this.handleInputClosed);
     this.input.off('close', this.handleInputClosed);
     this.instance.cleanup();
@@ -166,7 +181,7 @@ export class TerminalInkRenderer {
 
   private refresh(): void {
     if (this.closed) return;
-    this.instance.rerender(<TerminalRootWired snapshot={this.snapshot()} />);
+    this.instance.rerender(<WiredTerminalRoot snapshot={this.snapshot()} />);
   }
 
   private snapshot(): TerminalRendererSnapshot {

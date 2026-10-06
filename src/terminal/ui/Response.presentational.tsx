@@ -1,40 +1,49 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
-import { ToolActivityPresentational } from './ToolActivity.presentational.tsx';
+import { ToolActivity } from './ToolActivity.presentational.tsx';
 import type { ResponseState } from './useResponseState.ts';
 
-export interface ResponsePresentationalProps extends ResponseState {
+export interface ResponseProps extends ResponseState {
   footer?: ReactNode;
 }
 
-export function ResponsePresentational({ sections, footer }: ResponsePresentationalProps): ReactElement {
+export function Response({ sections, footer }: ResponseProps): ReactElement {
   return (
     <Box flexDirection="column" marginTop={1}>
       {sections.map((section, index) => {
-        switch (section.type) {
-          case ChatResponsePartType.TEXT:
+        const { type } = section;
+        switch (type) {
+          case ChatResponsePartType.TEXT: {
+            const { value } = section;
             return (
               <Text key={index} color="green">
                 <Text bold>{'assistant> '}</Text>
-                {section.value}
+                {value}
               </Text>
             );
-          case ChatResponsePartType.REASONING_SUMMARY:
+          }
+          case ChatResponsePartType.REASONING_SUMMARY: {
+            const { value } = section;
             return (
               <Text key={index} dimColor>
                 <Text bold>{'thinking> '}</Text>
-                {section.value}
+                {value}
               </Text>
             );
-          case ChatResponsePartType.DIAGNOSTIC:
+          }
+          case ChatResponsePartType.DIAGNOSTIC: {
+            const { message } = section;
             return (
               <Text key={index} bold color="red">
-                {section.message}
+                {message}
               </Text>
             );
-          case ChatResponsePartType.TOOL:
-            return <ToolActivityPresentational key={index} activity={section.activity} />;
+          }
+          case ChatResponsePartType.TOOL: {
+            const { activity } = section;
+            return <ToolActivity key={index} activity={activity} />;
+          }
         }
       })}
       {footer}

@@ -1,14 +1,14 @@
 import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
-import type { ToolActivity } from '../../chat/ToolActivity.ts';
+import type { ToolActivity as ToolActivityModel } from '../../chat/ToolActivity.ts';
 import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
 import { sanitizeText } from '../TerminalEditReviewer.ts';
 
-export interface ToolActivityPresentationalProps {
-  activity: ToolActivity;
+export interface ToolActivityProps {
+  activity: ToolActivityModel;
 }
 
-export function ToolActivityPresentational({ activity }: ToolActivityPresentationalProps): ReactElement {
+export function ToolActivity({ activity }: ToolActivityProps): ReactElement {
   const name = activity.namespace ? `${activity.namespace}.${activity.name}` : activity.name;
   if (activity.phase === ToolActivityPhase.STARTED) {
     const argumentsText = sanitizeText(activity.arguments).trimEnd();
@@ -34,7 +34,7 @@ function indent(value: string): string {
     .join('\n');
 }
 
-function formatToolResult(activity: ToolActivity): { message: string; failed: boolean } {
+function formatToolResult(activity: ToolActivityModel): { message: string; failed: boolean } {
   try {
     const result: unknown = JSON.parse(activity.output ?? '');
     if (typeof result === 'object' && result !== null && 'error' in result) {
@@ -62,9 +62,5 @@ function formatToolError(error: unknown): string {
 function formatToolErrorValue(value: unknown): string {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) return value.map(formatToolErrorValue).join(', ');
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return 'Unprintable error details';
-  }
+  return JSON.stringify(value) ?? String(value);
 }

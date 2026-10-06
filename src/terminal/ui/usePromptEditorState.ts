@@ -159,7 +159,7 @@ function activeMention(
   const beforeCursor = text.slice(0, cursor);
   const match = /(?:^|\s)@([^\s@]*)$/u.exec(beforeCursor);
   if (!match) return undefined;
-  const query = match[1] ?? '';
+  const query = match[1]!;
   const start = cursor - query.length - 1;
   return { start, end: cursor, query, signature: `${start}:${query}` };
 }

@@ -170,7 +170,7 @@ function createFileDiffLines(file: FileEditPlan, selectedItem: EditReviewItem): 
 
   const base = file.base?.text ?? '';
   const textItems = file.items
-    .filter(candidate => candidate.kind === EditReviewItemKind.TEXT)
+    .filter(candidate => candidate.kind === EditReviewItemKind.TEXT && candidate.decision === EditDecisionState.PENDING)
     .sort((left, right) => left.sourceStart - right.sourceStart);
   const lineNumbers = { old: 1, proposed: 1 };
   const result: DiffDisplayLine[] = [];
