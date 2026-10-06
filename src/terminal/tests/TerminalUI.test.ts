@@ -271,6 +271,15 @@ function fileSearch(search: WorkspacePathIndex['search']): WorkspacePathIndex {
     }),
     search,
     glob: async () => ({ files: [], truncated: false }),
+    searchContents: async () => ({
+      outputMode: 'files_with_matches',
+      files: [],
+      searchedFiles: 0,
+      skippedFiles: 0,
+      indexTruncated: false,
+      truncated: false,
+      nextOffset: null,
+    }),
     refresh: async () => ({
       root: '/project',
       fileCount: 0,

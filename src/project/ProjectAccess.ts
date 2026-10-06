@@ -53,6 +53,7 @@ const listProjectFilesArguments = z
     glob_pattern: z
       .string()
       .min(1)
+      .max(4_096)
       .describe('Glob pattern for file paths. Patterns without a **/ prefix match at any depth.'),
     target_directory: z
       .string()
@@ -71,6 +72,34 @@ const readProjectFileArguments = z
       .positive()
       .nullable()
       .describe('Last line to return, inclusive, or null for the end of the file.'),
+  })
+  .strict();
+const searchProjectContentsArguments = z
+  .object({
+    pattern: z.string().min(1).max(4_096).describe('Text or Rust/ripgrep regular expression to find.'),
+    pattern_kind: z
+      .enum(['regular_expression', 'literal'])
+      .describe('Whether pattern is a regular expression or exact literal text.'),
+    path: z.string().min(1).nullable().describe('Project-relative file or directory, or null for the project root.'),
+    file_glob: z
+      .string()
+      .min(1)
+      .max(4_096)
+      .nullable()
+      .describe('Optional glob filter such as *.{ts,tsx}; unprefixed patterns match at any depth.'),
+    file_type: z
+      .string()
+      .max(64)
+      .regex(/^[A-Za-z0-9_-]+$/)
+      .nullable()
+      .describe('Optional ripgrep file type such as ts or py.'),
+    output_mode: z.enum(['content', 'files_with_matches', 'count']),
+    lines_before: z.number().int().min(0).max(20),
+    lines_after: z.number().int().min(0).max(20),
+    case_sensitive: z.boolean(),
+    multiline: z.boolean().describe('Allow matches to span lines and make dot match line endings.'),
+    limit: z.number().int().min(1).max(1_000),
+    offset: z.number().int().min(0).max(100_000),
   })
   .strict();
 
@@ -95,8 +124,17 @@ const definitions: readonly ToolDefinition[] = [
   },
 ];
 
+const searchDefinition: ToolDefinition = {
+  namespace: ProjectToolNamespace.PROJECT,
+  name: ProjectToolName.SEARCH_CONTENTS,
+  description:
+    'Search current project file contents with the native ripgrep engine. Scope by project-relative path, glob, or file type. Prefer literal patterns unless regular-expression behavior is needed. Results preserve project access exclusions.',
+  inputKind: ToolInputKind.JSON,
+  parameters: jsonSchema(searchProjectContentsArguments),
+};
+
 export class ProjectAccess {
-  readonly definitions = definitions;
+  readonly definitions: readonly ToolDefinition[];
   private readonly options: ResolvedProjectAccessOptions;
   private readonly workspace: WorkspaceTextStore;
 
@@ -104,24 +142,30 @@ export class ProjectAccess {
     root: string,
     options: ProjectAccessOptions = {},
     workspace?: WorkspaceTextStore,
-    private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'>,
+    private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
   ) {
     const { maxFiles, maxFileBytes, ...workspaceOptions } = projectAccessOptionsSchema.parse(options);
     this.options = { maxFiles, maxFileBytes, ...workspaceOptions };
     this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, workspaceOptions);
+    this.definitions = this.pathIndex?.searchContents ? [...definitions, searchDefinition] : definitions;
   }
 
-  async execute(name: string, rawArguments: string): Promise<string> {
+  async execute(name: string, rawArguments: string, signal?: AbortSignal): Promise<string> {
     try {
       switch (name) {
         case ProjectToolName.LIST_FILES:
           return JSON.stringify(await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments))));
         case ProjectToolName.READ_FILE:
           return JSON.stringify(await this.readFile(readProjectFileArguments.parse(JSON.parse(rawArguments))));
+        case ProjectToolName.SEARCH_CONTENTS:
+          return JSON.stringify(
+            await this.searchContents(searchProjectContentsArguments.parse(JSON.parse(rawArguments)), signal),
+          );
         default:
           throw new Error(`Unknown project tool: ${name}`);
       }
     } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
       return JSON.stringify({
         error:
           error instanceof EditError
@@ -138,6 +182,41 @@ export class ProjectAccess {
               },
       });
     }
+  }
+
+  private async searchContents(
+    {
+      pattern,
+      pattern_kind: patternKind,
+      path,
+      file_glob: fileGlob,
+      file_type: fileType,
+      output_mode: outputMode,
+      lines_before: linesBefore,
+      lines_after: linesAfter,
+      case_sensitive: caseSensitive,
+      multiline,
+      limit,
+      offset,
+    }: z.infer<typeof searchProjectContentsArguments>,
+    signal?: AbortSignal,
+  ) {
+    const pathIndex = this.pathIndex;
+    if (!pathIndex?.searchContents) throw new Error('Native project content search is unavailable.');
+    return pathIndex.searchContents(pattern, {
+      patternKind,
+      ...(path === null ? {} : { path: this.workspace.normalizePath(path) }),
+      ...(fileGlob === null ? {} : { fileGlob }),
+      ...(fileType === null ? {} : { fileType }),
+      outputMode,
+      linesBefore,
+      linesAfter,
+      caseSensitive,
+      multiline,
+      limit,
+      offset,
+      ...(signal ? { signal } : {}),
+    });
   }
 
   private async listFiles({

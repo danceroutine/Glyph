@@ -84,6 +84,93 @@ describe(ProjectAccess, () => {
       expect(glob).toHaveBeenCalledWith('*.ts', { targetDirectory: 'src', limit: 37 });
     });
 
+    it('exposes structured native content search with readable filters and pagination', async () => {
+      const { root } = await fixture();
+      const workspace = new FileSystemWorkspaceTextStore(root);
+      const searchContents = vi.fn(async () => ({
+        outputMode: 'content' as const,
+        matches: [
+          {
+            path: 'src/app.ts',
+            line: 2,
+            column: 1,
+            endLine: 2,
+            endColumn: 4,
+            lineText: 'two',
+            matchedText: 'two',
+            linesBefore: [{ number: 1, content: 'one' }],
+            linesAfter: [{ number: 3, content: 'three' }],
+          },
+        ],
+        searchedFiles: 1,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: false,
+        nextOffset: null,
+      }));
+      const access = new ProjectAccess(root, {}, workspace, {
+        glob: async () => ({ files: [], truncated: false }),
+        searchContents,
+      });
+      const controller = new AbortController();
+
+      const result = JSON.parse(
+        await access.execute(
+          'search_project_contents',
+          JSON.stringify({
+            pattern: 'two',
+            pattern_kind: 'literal',
+            path: 'src',
+            file_glob: '*.ts',
+            file_type: 'ts',
+            output_mode: 'content',
+            lines_before: 1,
+            lines_after: 1,
+            case_sensitive: true,
+            multiline: false,
+            limit: 50,
+            offset: 0,
+          }),
+          controller.signal,
+        ),
+      );
+
+      const definition = access.definitions.find(candidate => candidate.name === 'search_project_contents');
+      expect(definition?.parameters).toMatchObject({
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'pattern',
+          'pattern_kind',
+          'path',
+          'file_glob',
+          'file_type',
+          'output_mode',
+          'lines_before',
+          'lines_after',
+          'case_sensitive',
+          'multiline',
+          'limit',
+          'offset',
+        ],
+      });
+      expect(result.matches).toEqual([expect.objectContaining({ path: 'src/app.ts', matchedText: 'two' })]);
+      expect(searchContents).toHaveBeenCalledWith('two', {
+        patternKind: 'literal',
+        path: 'src',
+        fileGlob: '*.ts',
+        fileType: 'ts',
+        outputMode: 'content',
+        linesBefore: 1,
+        linesAfter: 1,
+        caseSensitive: true,
+        multiline: false,
+        limit: 50,
+        offset: 0,
+        signal: controller.signal,
+      });
+    });
+
     it('returns malformed tool output when the native index rejects a glob pattern', async () => {
       const { root } = await fixture();
       const workspace = new FileSystemWorkspaceTextStore(root);

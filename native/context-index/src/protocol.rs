@@ -1,22 +1,25 @@
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::content_search::ContentSearchParams;
 use crate::service::{
-    ContextIndexService, GlobParams, InitializeParams, SearchParams, ServiceError,
+    content_search_error, ContextIndexService, GlobParams, InitializeParams, SearchParams,
+    ServiceError,
 };
 
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const CHANNEL_CAPACITY: usize = 64;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(untagged)]
 enum RequestId {
     Number(serde_json::Number),
@@ -37,6 +40,8 @@ enum Request {
     Initialize(InitializeParams),
     Search(SearchParams),
     Glob(GlobParams),
+    ContentSearch(ContentSearchParams),
+    Cancel(CancelParams),
     Refresh,
     Shutdown,
 }
@@ -45,6 +50,7 @@ enum Request {
 struct DecodedRequest {
     id: RequestId,
     request: Request,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug)]
@@ -81,6 +87,19 @@ enum Response {
 #[serde(deny_unknown_fields)]
 struct EmptyParams {}
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CancelParams {
+    request_id: RequestId,
+}
+
+#[derive(Debug, Serialize)]
+struct CancelResult {
+    cancelled: bool,
+}
+
+type CancellationRegistry = Arc<Mutex<HashMap<RequestId, Arc<AtomicBool>>>>;
+
 enum ProtocolLine {
     EndOfFile,
     Line(Vec<u8>),
@@ -93,6 +112,7 @@ enum ProtocolLine {
 /// diagnostics are emitted by the service on standard error.
 pub fn run() -> Result<(), String> {
     let latest_generation = Arc::new(AtomicU64::new(0));
+    let cancellations: CancellationRegistry = Arc::new(Mutex::new(HashMap::new()));
     let (work_sender, work_receiver) = mpsc::sync_channel(CHANNEL_CAPACITY);
     let (response_sender, response_receiver) = mpsc::sync_channel(CHANNEL_CAPACITY);
 
@@ -107,10 +127,17 @@ pub fn run() -> Result<(), String> {
         .map_err(|error| format!("could not start the protocol writer: {error}"))?;
 
     let worker_latest_generation = Arc::clone(&latest_generation);
+    let worker_cancellations = Arc::clone(&cancellations);
     let worker = match thread::Builder::new()
         .name("context-index-service".to_owned())
-        .spawn(move || service_loop(work_receiver, response_sender, &worker_latest_generation))
-    {
+        .spawn(move || {
+            service_loop(
+                work_receiver,
+                response_sender,
+                &worker_latest_generation,
+                worker_cancellations,
+            )
+        }) {
         Ok(worker) => worker,
         Err(error) => {
             drop(work_sender);
@@ -125,6 +152,7 @@ pub fn run() -> Result<(), String> {
         BufReader::new(io::stdin().lock()),
         &work_sender,
         &latest_generation,
+        &cancellations,
     );
     drop(work_sender);
 
@@ -144,6 +172,7 @@ fn read_requests<R: BufRead>(
     mut input: R,
     sender: &SyncSender<WorkItem>,
     latest_generation: &AtomicU64,
+    cancellations: &CancellationRegistry,
 ) -> Result<(), String> {
     loop {
         let item = match read_protocol_line(&mut input)
@@ -157,9 +186,29 @@ fn read_requests<R: BufRead>(
                 )),
             },
             ProtocolLine::Line(line) => match decode_request(&line) {
-                Ok(decoded) => {
+                Ok(mut decoded) => {
                     if let Request::Search(params) = &decoded.request {
                         latest_generation.fetch_max(params.generation, Ordering::AcqRel);
+                    }
+                    match &decoded.request {
+                        Request::ContentSearch(_) => {
+                            let cancellation = Arc::new(AtomicBool::new(false));
+                            cancellations
+                                .lock()
+                                .map_err(|_| "The cancellation registry is poisoned.".to_owned())?
+                                .insert(decoded.id.clone(), Arc::clone(&cancellation));
+                            decoded.cancellation = Some(cancellation);
+                        }
+                        Request::Cancel(params) => {
+                            if let Some(cancellation) = cancellations
+                                .lock()
+                                .map_err(|_| "The cancellation registry is poisoned.".to_owned())?
+                                .get(&params.request_id)
+                            {
+                                cancellation.store(true, Ordering::Release);
+                            }
+                        }
+                        _ => {}
                     }
                     WorkItem::Request(decoded)
                 }
@@ -187,14 +236,27 @@ fn service_loop(
     receiver: Receiver<WorkItem>,
     sender: SyncSender<Response>,
     latest_generation: &AtomicU64,
+    cancellations: CancellationRegistry,
 ) -> Result<(), String> {
     let mut service = ContextIndexService::new();
+    let mut searches: Vec<thread::JoinHandle<()>> = Vec::new();
 
     for item in receiver {
+        let mut active_searches = Vec::with_capacity(searches.len());
+        for search in searches.drain(..) {
+            if search.is_finished() {
+                search
+                    .join()
+                    .map_err(|_| "A project content search thread panicked.".to_owned())?;
+            } else {
+                active_searches.push(search);
+            }
+        }
+        searches = active_searches;
         let (response, shutdown) = match item {
             WorkItem::Invalid { id, error } => (error_response(id, error), false),
             WorkItem::Request(decoded) => {
-                let id = Some(decoded.id);
+                let id = Some(decoded.id.clone());
                 match decoded.request {
                     Request::Initialize(params) => {
                         (result_response(id, service.initialize(params)), false)
@@ -204,8 +266,55 @@ fn service_loop(
                         false,
                     ),
                     Request::Glob(params) => (result_response(id, service.glob(params)), false),
+                    Request::ContentSearch(params) => {
+                        let context = match service.content_search_context() {
+                            Ok(context) => context,
+                            Err(error) => {
+                                sender.send(error_response(id, error)).map_err(|_| {
+                                    "the protocol response writer stopped accepting output"
+                                        .to_owned()
+                                })?;
+                                continue;
+                            }
+                        };
+                        let cancellation = decoded
+                            .cancellation
+                            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+                        let response_sender = sender.clone();
+                        let search_cancellations = Arc::clone(&cancellations);
+                        let request_id = decoded.id;
+                        searches.push(thread::spawn(move || {
+                            let result = context
+                                .search(params, &cancellation)
+                                .map_err(content_search_error);
+                            if let Ok(mut registry) = search_cancellations.lock() {
+                                registry.remove(&request_id);
+                            }
+                            let _ = response_sender.send(result_response(Some(request_id), result));
+                        }));
+                        continue;
+                    }
+                    Request::Cancel(params) => {
+                        let cancelled = cancellations
+                            .lock()
+                            .map_err(|_| "The cancellation registry is poisoned.".to_owned())?
+                            .contains_key(&params.request_id);
+                        (success_response(id, CancelResult { cancelled }), false)
+                    }
                     Request::Refresh => (result_response(id, service.refresh()), false),
-                    Request::Shutdown => (success_response(id, service.shutdown()), true),
+                    Request::Shutdown => {
+                        if let Ok(registry) = cancellations.lock() {
+                            for cancellation in registry.values() {
+                                cancellation.store(true, Ordering::Release);
+                            }
+                        }
+                        for search in searches.drain(..) {
+                            search.join().map_err(|_| {
+                                "A project content search thread panicked.".to_owned()
+                            })?;
+                        }
+                        (success_response(id, service.shutdown()), true)
+                    }
                 }
             }
         };
@@ -218,6 +327,16 @@ fn service_loop(
         }
     }
 
+    if let Ok(registry) = cancellations.lock() {
+        for cancellation in registry.values() {
+            cancellation.store(true, Ordering::Release);
+        }
+    }
+    for search in searches {
+        search
+            .join()
+            .map_err(|_| "A project content search thread panicked.".to_owned())?;
+    }
     Ok(())
 }
 
@@ -262,6 +381,16 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
             envelope.params,
             Some(envelope.id.clone()),
         )?),
+        "contentSearch" => Request::ContentSearch(decode_params(
+            "contentSearch",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
+        "cancel" => Request::Cancel(decode_params(
+            "cancel",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
         "refresh" => {
             let _: EmptyParams =
                 decode_params("refresh", envelope.params, Some(envelope.id.clone()))?;
@@ -283,6 +412,7 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
     Ok(DecodedRequest {
         id: envelope.id,
         request,
+        cancellation: None,
     })
 }
 
@@ -503,8 +633,15 @@ mod tests {
         let (work_sender, work_receiver) = mpsc::sync_channel(1);
         let (response_sender, response_receiver) = mpsc::sync_channel(1);
         let worker_latest = Arc::clone(&latest);
-        let worker =
-            thread::spawn(move || service_loop(work_receiver, response_sender, &worker_latest));
+        let cancellations = Arc::new(Mutex::new(HashMap::new()));
+        let worker = thread::spawn(move || {
+            service_loop(
+                work_receiver,
+                response_sender,
+                &worker_latest,
+                cancellations,
+            )
+        });
 
         work_sender
             .send(WorkItem::Request(DecodedRequest {
@@ -514,6 +651,7 @@ mod tests {
                     limit: 20,
                     generation: 1,
                 }),
+                cancellation: None,
             }))
             .expect("work should send");
         drop(work_sender);
@@ -536,9 +674,11 @@ mod tests {
             "{\"version\":1,\"id\":3,\"method\":\"shutdown\",\"params\":{}}\n",
         ));
         let latest = AtomicU64::new(0);
+        let cancellations = Arc::new(Mutex::new(HashMap::new()));
         let (sender, receiver) = mpsc::sync_channel(3);
 
-        read_requests(input, &sender, &latest).expect("reader should finish at shutdown");
+        read_requests(input, &sender, &latest, &cancellations)
+            .expect("reader should finish at shutdown");
 
         assert_eq!(latest.load(Ordering::Acquire), 9);
         assert!(matches!(
@@ -559,6 +699,37 @@ mod tests {
             receiver.recv().expect("shutdown should arrive"),
             WorkItem::Request(DecodedRequest {
                 request: Request::Shutdown,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reader_cancels_a_content_search_before_queued_work_handles_the_cancel_request() {
+        let input = Cursor::new(concat!(
+            "{\"version\":1,\"id\":7,\"method\":\"contentSearch\",\"params\":{\"pattern\":\"needle\",\"patternKind\":\"literal\",\"path\":null,\"fileGlob\":null,\"fileType\":null,\"outputMode\":\"content\",\"linesBefore\":0,\"linesAfter\":0,\"caseSensitive\":true,\"multiline\":false,\"limit\":20,\"offset\":0}}\n",
+            "{\"version\":1,\"id\":8,\"method\":\"cancel\",\"params\":{\"requestId\":7}}\n",
+            "{\"version\":1,\"id\":9,\"method\":\"shutdown\",\"params\":{}}\n",
+        ));
+        let latest = AtomicU64::new(0);
+        let cancellations = Arc::new(Mutex::new(HashMap::new()));
+        let (sender, receiver) = mpsc::sync_channel(3);
+
+        read_requests(input, &sender, &latest, &cancellations)
+            .expect("reader should finish at shutdown");
+
+        let WorkItem::Request(search) = receiver.recv().expect("search should arrive") else {
+            panic!("expected content search");
+        };
+        assert!(matches!(search.request, Request::ContentSearch(_)));
+        assert!(search
+            .cancellation
+            .expect("search should have a cancellation flag")
+            .load(Ordering::Acquire));
+        assert!(matches!(
+            receiver.recv().expect("cancel should arrive"),
+            WorkItem::Request(DecodedRequest {
+                request: Request::Cancel(_),
                 ..
             })
         ));

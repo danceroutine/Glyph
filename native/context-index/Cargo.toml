@@ -7,6 +7,8 @@ publish = false
 
 [dependencies]
 globset = "0.4.20"
+grep-matcher = "0.1.9"
+grep-regex = "0.1.14"
 ignore = "0.4.33"
 notify = "8.2.0"
 nucleo = "0.5.0"

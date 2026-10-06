@@ -2,6 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ProjectAccess } from '../../../project/ProjectAccess.ts';
+import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
 import { RustWorkspacePathIndex } from '../RustWorkspacePathIndex.ts';
 
 describe(RustWorkspacePathIndex, () => {
@@ -42,6 +44,58 @@ describe(RustWorkspacePathIndex, () => {
           files: [],
           truncated: false,
         });
+        await expect(
+          search.searchContents('App', {
+            patternKind: 'literal',
+            path: 'src',
+            fileGlob: '*.tsx',
+            fileType: 'ts',
+            outputMode: 'content',
+            linesBefore: 0,
+            linesAfter: 0,
+            caseSensitive: true,
+            multiline: false,
+            limit: 20,
+            offset: 0,
+          }),
+        ).resolves.toMatchObject({
+          outputMode: 'content',
+          matches: [expect.objectContaining({ path: 'src/App.tsx', line: 1, matchedText: 'App' })],
+          truncated: false,
+        });
+        await expect(
+          search.searchContents('never-index-this', {
+            patternKind: 'literal',
+            outputMode: 'files_with_matches',
+            linesBefore: 0,
+            linesAfter: 0,
+            caseSensitive: true,
+            multiline: false,
+            limit: 20,
+            offset: 0,
+          }),
+        ).resolves.toMatchObject({ files: [] });
+        const access = new ProjectAccess(project, {}, new FileSystemWorkspaceTextStore(project), search);
+        const toolResult = JSON.parse(
+          await access.execute(
+            'search_project_contents',
+            JSON.stringify({
+              pattern: 'App',
+              pattern_kind: 'literal',
+              path: 'src',
+              file_glob: '*.tsx',
+              file_type: 'ts',
+              output_mode: 'files_with_matches',
+              lines_before: 0,
+              lines_after: 0,
+              case_sensitive: true,
+              multiline: false,
+              limit: 20,
+              offset: 0,
+            }),
+          ),
+        ) as { files: string[] };
+        expect(toolResult.files).toEqual(['src/App.tsx']);
 
         await writeFile(join(project, 'src', 'ApplicationState.ts'), 'export const state = {};\n');
         await search.refresh();
@@ -51,6 +105,23 @@ describe(RustWorkspacePathIndex, () => {
         await expect(search.glob('*.ts', { targetDirectory: 'src', limit: 2_000 })).resolves.toEqual({
           files: ['src/ApplicationState.ts'],
           truncated: false,
+        });
+        await writeFile(join(project, 'src', 'ApplicationState.ts'), 'export const updatedState = {};\n');
+        await expect(
+          search.searchContents('updatedState', {
+            patternKind: 'literal',
+            path: 'src/ApplicationState.ts',
+            outputMode: 'count',
+            linesBefore: 0,
+            linesAfter: 0,
+            caseSensitive: true,
+            multiline: false,
+            limit: 20,
+            offset: 0,
+          }),
+        ).resolves.toMatchObject({
+          outputMode: 'count',
+          counts: [{ path: 'src/ApplicationState.ts', count: 1 }],
         });
         await search.dispose();
 

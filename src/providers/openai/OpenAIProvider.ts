@@ -273,7 +273,7 @@ export class OpenAIProvider implements ChatProvider {
               arguments: input,
             };
             reportToolActivity({ phase: ToolActivityPhase.STARTED, ...activity });
-            const output = await this.tools.execute(call.name, input);
+            const output = await this.tools.execute(call.name, input, signal);
             trace(
               'tool.result',
               {

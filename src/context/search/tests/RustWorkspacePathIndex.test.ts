@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RustWorkspacePathIndex } from '../RustWorkspacePathIndex.ts';
 import { WorkspacePathIndexError } from '../WorkspacePathIndexError.ts';
 import { WorkspacePathIndexFailureReason } from '../WorkspacePathIndexFailureReason.ts';
@@ -27,6 +27,28 @@ describe(RustWorkspacePathIndex, () => {
             };
           case 'glob':
             return { files: ['src/App.tsx'], truncated: false };
+          case 'contentSearch':
+            return {
+              outputMode: 'content',
+              matches: [
+                {
+                  path: 'src/App.tsx',
+                  line: 1,
+                  column: 8,
+                  endLine: 1,
+                  endColumn: 11,
+                  lineText: 'export App',
+                  matchedText: 'App',
+                  linesBefore: [],
+                  linesAfter: [],
+                },
+              ],
+              searchedFiles: 1,
+              skippedFiles: 0,
+              indexTruncated: false,
+              truncated: false,
+              nextOffset: null,
+            };
           case 'refresh':
             return {
               root: '/project',
@@ -48,6 +70,7 @@ describe(RustWorkspacePathIndex, () => {
           cachePath: '/cache/index.bin',
           excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
           respectGitIgnore: true,
+          maxContentSearchFileBytes: 9_000_000,
         },
         () => worker,
       );
@@ -60,6 +83,24 @@ describe(RustWorkspacePathIndex, () => {
       await expect(search.glob('*.tsx', { targetDirectory: 'src', limit: 2_000 })).resolves.toEqual({
         files: ['src/App.tsx'],
         truncated: false,
+      });
+      await expect(
+        search.searchContents('App', {
+          patternKind: 'literal',
+          path: 'src',
+          fileGlob: '*.tsx',
+          fileType: 'ts',
+          outputMode: 'content',
+          linesBefore: 1,
+          linesAfter: 2,
+          caseSensitive: true,
+          multiline: false,
+          limit: 50,
+          offset: 0,
+        }),
+      ).resolves.toMatchObject({
+        outputMode: 'content',
+        matches: [{ path: 'src/App.tsx', matchedText: 'App' }],
       });
       await expect(search.refresh()).resolves.toMatchObject({ fileCount: 3, fromCache: false });
       await Promise.all([search.dispose(), search.dispose()]);
@@ -74,6 +115,7 @@ describe(RustWorkspacePathIndex, () => {
             cachePath: '/cache/index.bin',
             excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
             respectGitIgnore: true,
+            maxContentSearchFileBytes: 9_000_000,
           },
         },
         { version: 1, id: 2, method: 'search', params: { query: 'app', generation: 7, limit: 20 } },
@@ -83,8 +125,27 @@ describe(RustWorkspacePathIndex, () => {
           method: 'glob',
           params: { pattern: '*.tsx', targetDirectory: 'src', limit: 2_000 },
         },
-        { version: 1, id: 4, method: 'refresh', params: {} },
-        { version: 1, id: 5, method: 'shutdown', params: {} },
+        {
+          version: 1,
+          id: 4,
+          method: 'contentSearch',
+          params: {
+            pattern: 'App',
+            patternKind: 'literal',
+            path: 'src',
+            fileGlob: '*.tsx',
+            fileType: 'ts',
+            outputMode: 'content',
+            linesBefore: 1,
+            linesAfter: 2,
+            caseSensitive: true,
+            multiline: false,
+            limit: 50,
+            offset: 0,
+          },
+        },
+        { version: 1, id: 5, method: 'refresh', params: {} },
+        { version: 1, id: 6, method: 'shutdown', params: {} },
       ]);
     });
 
@@ -104,6 +165,46 @@ describe(RustWorkspacePathIndex, () => {
       } satisfies Partial<WorkspacePathIndexError>);
       await search.dispose();
     });
+
+    it('cancels an in-flight native content search when its abort signal fires', async () => {
+      const worker = new FakeWorker(request => {
+        if (request.method === 'initialize') {
+          return { root: '/project', fileCount: 1, fromCache: false, truncated: false, durationMilliseconds: 1 };
+        }
+        if (request.method === 'contentSearch') return NO_RESPONSE;
+        if (request.method === 'cancel') return { cancelled: true };
+        if (request.method === 'shutdown') return { shutdown: true };
+        throw new Error(`Unexpected method ${request.method}`);
+      });
+      const search = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      await search.initialize();
+      const controller = new AbortController();
+      const pending = search.searchContents('needle', {
+        patternKind: 'literal',
+        outputMode: 'files_with_matches',
+        linesBefore: 0,
+        linesAfter: 0,
+        caseSensitive: true,
+        multiline: false,
+        limit: 20,
+        offset: 0,
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(worker.requests.some(request => request.method === 'contentSearch')).toBe(true));
+
+      controller.abort(new Error('stop now'));
+
+      await expect(pending).rejects.toThrow('stop now');
+      await vi.waitFor(() =>
+        expect(worker.requests).toContainEqual({
+          version: 1,
+          id: 3,
+          method: 'cancel',
+          params: { requestId: 2 },
+        }),
+      );
+      await search.dispose();
+    });
   });
 });
 
@@ -120,6 +221,8 @@ class NativeFailure {
     readonly message: string,
   ) {}
 }
+
+const NO_RESPONSE = Symbol('NO_RESPONSE');
 
 class FakeWorker extends EventEmitter {
   readonly stdout = new PassThrough();
@@ -140,6 +243,7 @@ class FakeWorker extends EventEmitter {
           this.input = this.input.slice(end + 1);
           this.requests.push(request);
           const result = this.respond(request);
+          if (result === NO_RESPONSE) continue;
           const response =
             result instanceof NativeFailure
               ? { version: 1, id: request.id, error: { code: result.code, message: result.message } }

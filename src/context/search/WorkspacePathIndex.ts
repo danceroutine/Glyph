@@ -1,6 +1,7 @@
 import type { FileSearchResult } from './FileSearchResult.ts';
 import type { WorkspacePathGlobResult } from './WorkspacePathGlobResult.ts';
 import type { WorkspacePathIndexState } from './WorkspacePathIndexState.ts';
+import type { WorkspaceContentSearchOptions, WorkspaceContentSearchResult } from './WorkspaceContentSearch.ts';
 
 /**
  * Host-neutral port for the long-lived workspace path catalog. Agent-facing
@@ -24,6 +25,8 @@ export interface WorkspacePathIndex {
     pattern: string,
     options: { targetDirectory?: string; limit: number; signal?: AbortSignal },
   ): Promise<WorkspacePathGlobResult>;
+  /** Searches current file contents across paths selected from the resident catalog. */
+  searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult>;
   refresh(signal?: AbortSignal): Promise<WorkspacePathIndexState>;
   dispose(): Promise<void>;
 }

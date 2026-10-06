@@ -109,6 +109,7 @@ describe(GlyphService, () => {
         })),
         search: vi.fn(),
         glob: vi.fn(),
+        searchContents: vi.fn(),
         refresh: vi.fn(),
         dispose: vi.fn(async () => {}),
       };
@@ -145,6 +146,7 @@ describe(GlyphService, () => {
         }),
         search: vi.fn(),
         glob: vi.fn(),
+        searchContents: vi.fn(),
         refresh: vi.fn(),
         dispose: vi.fn(async () => {}),
       };

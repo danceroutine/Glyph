@@ -11,6 +11,7 @@ use notify::{Event, EventKind, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::{self, CachedPaths};
+use crate::content_search::{ContentSearchContext, ContentSearchError};
 use crate::index::{SearchFailure, SearchIndex, SearchResult};
 use crate::path_glob::{find_matches, GlobResult};
 
@@ -20,6 +21,7 @@ const MAX_SEARCH_LIMIT: u32 = 100;
 const DEFAULT_GLOB_LIMIT: u32 = 2_000;
 const MAX_GLOB_LIMIT: u32 = 10_000;
 const MAX_QUERY_CHARS: usize = 4_096;
+const DEFAULT_MAX_CONTENT_SEARCH_FILE_BYTES: u64 = 8 * 1_024 * 1_024;
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 const WATCH_MAX_DEBOUNCE: Duration = Duration::from_secs(2);
@@ -52,6 +54,8 @@ pub(crate) struct InitializeParams {
     pub(crate) max_files: u32,
     #[serde(default = "default_case_sensitive")]
     pub(crate) case_sensitive: bool,
+    #[serde(default = "default_max_content_search_file_bytes")]
+    pub(crate) max_content_search_file_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -272,6 +276,7 @@ struct InitializedIndex {
     index: Arc<Mutex<SearchIndex>>,
     known_paths: Arc<RwLock<BTreeSet<String>>>,
     truncated: Arc<AtomicBool>,
+    max_content_search_file_bytes: u64,
 }
 
 pub(crate) struct ContextIndexService {
@@ -301,6 +306,11 @@ impl ContextIndexService {
         let started = Instant::now();
         let policy = IndexPolicy::from(&params);
         policy.validate()?;
+        if params.max_content_search_file_bytes == 0 {
+            return Err(ServiceError::invalid_request(
+                "maxContentSearchFileBytes must be positive.",
+            ));
+        }
         let root_input = Path::new(&params.root);
         if !root_input.is_absolute() {
             return Err(ServiceError::invalid_request(
@@ -381,6 +391,7 @@ impl ContextIndexService {
             index: Arc::clone(&shared),
             known_paths: Arc::clone(&known_paths),
             truncated: Arc::clone(&truncated_state),
+            max_content_search_file_bytes: params.max_content_search_file_bytes,
         };
         // Some watcher backends report successful registration just before
         // their event stream becomes active. Tiny repositories can finish the
@@ -452,6 +463,20 @@ impl ContextIndexService {
             .map_err(|failure| match failure {
                 SearchFailure::Superseded => ServiceError::superseded(),
             })
+    }
+
+    pub(crate) fn content_search_context(&self) -> Result<ContentSearchContext, ServiceError> {
+        let initialized = self
+            .initialized
+            .as_ref()
+            .ok_or_else(ServiceError::not_initialized)?;
+        Ok(ContentSearchContext::new(
+            initialized.root.clone(),
+            Arc::clone(&initialized.known_paths),
+            Arc::clone(&initialized.truncated),
+            initialized.policy.case_sensitive,
+            initialized.max_content_search_file_bytes,
+        ))
     }
 
     pub(crate) fn glob(&self, params: GlobParams) -> Result<GlobResult, ServiceError> {
@@ -1004,6 +1029,21 @@ fn default_case_sensitive() -> bool {
     !cfg!(any(target_os = "windows", target_os = "macos"))
 }
 
+fn default_max_content_search_file_bytes() -> u64 {
+    DEFAULT_MAX_CONTENT_SEARCH_FILE_BYTES
+}
+
+pub(crate) fn content_search_error(error: ContentSearchError) -> ServiceError {
+    match error {
+        ContentSearchError::InvalidRequest(message) => ServiceError::invalid_request(message),
+        ContentSearchError::Cancelled => ServiceError {
+            code: "CANCELLED",
+            message: "The project content search was cancelled.".to_owned(),
+        },
+        ContentSearchError::Internal(message) => ServiceError::internal(message),
+    }
+}
+
 fn default_search_limit() -> u32 {
     DEFAULT_SEARCH_LIMIT
 }
@@ -1031,6 +1071,7 @@ mod tests {
             respect_git_ignore: true,
             max_files: DEFAULT_MAX_FILES,
             case_sensitive: default_case_sensitive(),
+            max_content_search_file_bytes: DEFAULT_MAX_CONTENT_SEARCH_FILE_BYTES,
         }
     }
 

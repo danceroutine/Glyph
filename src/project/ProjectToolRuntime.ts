@@ -59,14 +59,15 @@ export class ProjectToolRuntime implements ToolRuntime {
     this.logger = logger.forNamespace('project.tool');
   }
 
-  async execute(name: string, input: string): Promise<string> {
+  async execute(name: string, input: string, signal?: AbortSignal): Promise<string> {
     try {
       await this.logger.debug('ingested', { name, inputBytes: Buffer.byteLength(input) });
       let proposal;
       switch (name) {
         case ProjectToolName.LIST_FILES:
         case ProjectToolName.READ_FILE:
-          return this.access.execute(name, input);
+        case ProjectToolName.SEARCH_CONTENTS:
+          return this.access.execute(name, input, signal);
         case ProjectToolName.PROPOSE_PATCH:
           proposal = await this.proposals.proposePatch(input);
           break;
@@ -91,6 +92,7 @@ export class ProjectToolRuntime implements ToolRuntime {
           'The proposal was appended to the review queue, but no workspace changes have been written. The user must accept review items.',
       });
     } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
       await this.logger.error('failed', {
         name,
         error:

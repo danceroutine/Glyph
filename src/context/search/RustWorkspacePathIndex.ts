@@ -9,6 +9,7 @@ import type { WorkspacePathIndex } from './WorkspacePathIndex.ts';
 import { WorkspacePathIndexError } from './WorkspacePathIndexError.ts';
 import { WorkspacePathIndexFailureReason } from './WorkspacePathIndexFailureReason.ts';
 import type { WorkspacePathIndexState } from './WorkspacePathIndexState.ts';
+import type { WorkspaceContentSearchOptions, WorkspaceContentSearchResult } from './WorkspaceContentSearch.ts';
 
 const PROTOCOL_VERSION = 1;
 const MAXIMUM_ERROR_OUTPUT = 8_192;
@@ -17,6 +18,8 @@ enum PathIndexMethod {
   INITIALIZE = 'initialize',
   SEARCH = 'search',
   GLOB = 'glob',
+  CONTENT_SEARCH = 'contentSearch',
+  CANCEL = 'cancel',
   REFRESH = 'refresh',
   SHUTDOWN = 'shutdown',
 }
@@ -54,6 +57,51 @@ const globResultSchema = z
     truncated: z.boolean(),
   })
   .strict();
+
+const contentSearchMetadataSchema = {
+  searchedFiles: z.number().int().nonnegative(),
+  skippedFiles: z.number().int().nonnegative(),
+  indexTruncated: z.boolean(),
+  truncated: z.boolean(),
+  nextOffset: z.number().int().nonnegative().nullable(),
+};
+const contentSearchResultSchema = z.discriminatedUnion('outputMode', [
+  z
+    .object({
+      outputMode: z.literal('content'),
+      matches: z.array(
+        z
+          .object({
+            path: z.string().min(1),
+            line: z.number().int().positive(),
+            column: z.number().int().positive(),
+            endLine: z.number().int().positive(),
+            endColumn: z.number().int().positive(),
+            lineText: z.string(),
+            matchedText: z.string(),
+            linesBefore: z.array(z.object({ number: z.number().int().positive(), content: z.string() }).strict()),
+            linesAfter: z.array(z.object({ number: z.number().int().positive(), content: z.string() }).strict()),
+          })
+          .strict(),
+      ),
+      ...contentSearchMetadataSchema,
+    })
+    .strict(),
+  z
+    .object({
+      outputMode: z.literal('files_with_matches'),
+      files: z.array(z.string().min(1)),
+      ...contentSearchMetadataSchema,
+    })
+    .strict(),
+  z
+    .object({
+      outputMode: z.literal('count'),
+      counts: z.array(z.object({ path: z.string().min(1), count: z.number().int().nonnegative() }).strict()),
+      ...contentSearchMetadataSchema,
+    })
+    .strict(),
+]);
 
 const shutdownResultSchema = z.object({ shutdown: z.literal(true) }).strict();
 const failureReasonSchema = z.enum(WorkspacePathIndexFailureReason);
@@ -119,6 +167,9 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
           : { allowedFileNames: [...this.options.allowedFileNames] }),
         ...(this.options.respectGitIgnore === undefined ? {} : { respectGitIgnore: this.options.respectGitIgnore }),
         ...(this.options.maxFiles === undefined ? {} : { maxFiles: this.options.maxFiles }),
+        ...(this.options.maxContentSearchFileBytes === undefined
+          ? {}
+          : { maxContentSearchFileBytes: this.options.maxContentSearchFileBytes }),
         ...(this.options.caseSensitive === undefined ? {} : { caseSensitive: this.options.caseSensitive }),
       })
         .then(value => {
@@ -163,6 +214,30 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
           pattern,
           ...(options.targetDirectory === undefined ? {} : { targetDirectory: options.targetDirectory }),
           limit: options.limit,
+        },
+        options.signal,
+      ),
+    );
+  }
+
+  async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
+    if (!this.initialized) await this.initialize(options.signal);
+    return contentSearchResultSchema.parse(
+      await this.request(
+        PathIndexMethod.CONTENT_SEARCH,
+        {
+          pattern,
+          patternKind: options.patternKind,
+          ...(options.path === undefined ? {} : { path: options.path }),
+          ...(options.fileGlob === undefined ? {} : { fileGlob: options.fileGlob }),
+          ...(options.fileType === undefined ? {} : { fileType: options.fileType }),
+          outputMode: options.outputMode,
+          linesBefore: options.linesBefore,
+          linesAfter: options.linesAfter,
+          caseSensitive: options.caseSensitive,
+          multiline: options.multiline,
+          limit: options.limit,
+          offset: options.offset,
         },
         options.signal,
       ),
@@ -214,6 +289,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     return new Promise((resolveRequest, rejectRequest) => {
       const onAbort = (): void => {
         this.pending.delete(id);
+        if (method === PathIndexMethod.CONTENT_SEARCH) this.cancelNativeRequest(id);
         rejectRequest(toAbortError(signal));
       };
       signal?.addEventListener('abort', onAbort, { once: true });
@@ -228,6 +304,11 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
         pending.reject(error);
       });
     });
+  }
+
+  private cancelNativeRequest(requestId: number): void {
+    if (this.disposed || this.disposing || !this.process) return;
+    void this.request(PathIndexMethod.CANCEL, { requestId }).catch(() => {});
   }
 
   private ensureProcess(): SidecarProcess {

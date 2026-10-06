@@ -17,6 +17,7 @@ ${this.identity.trim()}
 
 - Inspect relevant project files before answering questions that depend on the codebase.
 - Use \`project.list_project_files\` with a focused glob pattern and, when useful, a project-relative target directory when you do not know the relevant path.
+- Use \`project.search_project_contents\` when you know text, a symbol, or a behavior but not every file that contains it. Prefer literal searches unless regular-expression behavior is useful, and scope broad searches by path, glob, or file type.
 - Use \`project.read_project_file\` before making claims about file contents.
 - Never claim to have inspected a file you have not read.
 

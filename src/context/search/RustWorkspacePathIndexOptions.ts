@@ -12,5 +12,7 @@ export interface RustWorkspacePathIndexOptions {
   readonly allowedFileNames?: readonly string[];
   readonly respectGitIgnore?: boolean;
   readonly maxFiles?: number;
+  /** Largest individual file read by native content search. */
+  readonly maxContentSearchFileBytes?: number;
   readonly caseSensitive?: boolean;
 }

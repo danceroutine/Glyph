@@ -11,6 +11,7 @@ describe(ProjectAgentInstructions, () => {
       expect(instructions).toContain('## Editing workflow');
       expect(instructions).toContain('## Attached workspace context');
       expect(instructions).toContain('glyph.workspace-context.v1');
+      expect(instructions).toContain('project.search_project_contents');
       expect(instructions).toContain('project.propose_patch');
       expect(instructions).toContain('never claim that the files have already changed');
     });
