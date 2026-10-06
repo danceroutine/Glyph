@@ -5,6 +5,7 @@ import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
 import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
 import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
 import { TerminalActionType } from '../TerminalActionType.ts';
+import { TERMINAL_COMMANDS } from '../TerminalCommand.ts';
 import { TerminalUI } from '../TerminalUI.tsx';
 
 describe(TerminalUI, () => {
@@ -23,6 +24,21 @@ describe(TerminalUI, () => {
         attachmentPaths: [],
       });
       ui.close();
+    });
+
+    it.each(TERMINAL_COMMANDS)('parses $value from the shared command catalog', async command => {
+      const input = new PassThrough();
+      const ui = new TerminalUI(input, new MemoryOutput(false), new MemoryOutput(false));
+      const action = ui.nextAction(new AbortController().signal);
+
+      input.write(`${command.value}\n`);
+
+      await expect(action).resolves.toEqual(command.action);
+      ui.close();
+    });
+
+    it('uses the shared command catalog in help output', () => {
+      for (const command of TERMINAL_COMMANDS) expect(TerminalUI.help).toContain(command.value);
     });
 
     it('uses one Ink-owned input path for a wrapped prompt', async () => {

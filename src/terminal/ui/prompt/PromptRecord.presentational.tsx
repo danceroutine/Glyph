@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
-import type { UserPromptDraft } from '../UserPromptDraft.ts';
-import { sanitizeText } from '../TerminalEditReviewer.ts';
+import type { UserPromptDraft } from './UserPromptDraft.ts';
+import { sanitizeText } from '../shared/sanitizeText.ts';
 import { formatPromptText } from './PromptText.ts';
 
 export interface PromptRecordProps {

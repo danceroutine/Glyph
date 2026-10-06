@@ -1,6 +1,6 @@
-import type { ChatResponsePart } from '../../chat/ChatResponsePart.ts';
-import type { PromptRequest } from './PromptRequest.ts';
-import type { ProposalReviewRequest } from './ProposalReviewRequest.ts';
+import type { ChatResponsePart } from '../../../chat/ChatResponsePart.ts';
+import type { PromptRequest } from '../prompt/PromptRequest.ts';
+import type { ProposalReviewRequest } from '../proposal/ProposalReviewRequest.ts';
 import type { TranscriptEntry } from './TranscriptEntry.ts';
 
 /** Immutable view of renderer-owned state supplied to the React tree. */

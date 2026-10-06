@@ -1,8 +1,8 @@
 import type { ReactElement } from 'react';
 import { useWindowSize } from 'ink';
-import { WiredPromptEditor } from './PromptEditor.wired.tsx';
-import { WiredProposalReview } from './ProposalReview.wired.tsx';
-import { WiredResponse } from './Response.wired.tsx';
+import { WiredPromptEditor } from '../prompt/PromptEditor.wired.tsx';
+import { WiredProposalReview } from '../proposal/ProposalReview.wired.tsx';
+import { WiredResponse } from '../response/Response.wired.tsx';
 import { TerminalRoot } from './TerminalRoot.presentational.tsx';
 import type { TerminalRendererSnapshot } from './TerminalRendererSnapshot.ts';
 import { useTerminalRootState } from './useTerminalRootState.ts';

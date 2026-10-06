@@ -21,33 +21,25 @@ import {
   pendingReviewEntries,
   renderEntry,
   ReviewViewMode,
-  sanitizeText,
-} from './TerminalEditReviewer.ts';
+} from './ui/proposal/TerminalEditReviewer.ts';
 import { TerminalActionType } from './TerminalActionType.ts';
-import { TerminalInkRenderer } from './ui/TerminalInkRenderer.tsx';
-import type { TerminalInputStream } from './ui/TerminalInputStream.ts';
-import type { TerminalOutputStream } from './ui/TerminalOutputStream.ts';
-import type { UserPromptDraft } from './UserPromptDraft.ts';
-import { inlineMarkdownText } from './ui/InlineMarkdown.ts';
+import { resolveTerminalCommand, TERMINAL_COMMANDS, type TerminalCommandAction } from './TerminalCommand.ts';
+import { TerminalInkRenderer } from './ui/runtime/TerminalInkRenderer.tsx';
+import type { TerminalInputStream } from './ui/runtime/TerminalInputStream.ts';
+import type { TerminalOutputStream } from './ui/runtime/TerminalOutputStream.ts';
+import type { UserPromptDraft } from './ui/prompt/UserPromptDraft.ts';
+import { inlineMarkdownText } from './ui/response/InlineMarkdown.ts';
+import { sanitizeText } from './ui/shared/sanitizeText.ts';
 
-const TERMINAL_HELP = `Commands: /help /reset /usage /trace [on|off] /review /accept-all /reject-all /account /login /logout /exit
+const TERMINAL_HELP = `Commands: ${TERMINAL_COMMANDS.map(command => command.value).join(' ')}
 Type @ at the chat prompt to fuzzy-search and attach project files.
+Type / at the chat prompt to search commands.
 Ctrl+C cancels a response; at a prompt it exits.
 Subscription authentication only. API-key environment variables are ignored.`;
 
 type TerminalAction =
   | ({ type: TerminalActionType.SEND } & UserPromptDraft)
-  | { type: TerminalActionType.EXIT }
-  | { type: TerminalActionType.HELP }
-  | { type: TerminalActionType.RESET }
-  | { type: TerminalActionType.USAGE }
-  | { type: TerminalActionType.TRACE; enabled?: boolean }
-  | { type: TerminalActionType.ACCOUNT }
-  | { type: TerminalActionType.LOGIN }
-  | { type: TerminalActionType.LOGOUT }
-  | { type: TerminalActionType.REVIEW }
-  | { type: TerminalActionType.ACCEPT_ALL }
-  | { type: TerminalActionType.REJECT_ALL }
+  | TerminalCommandAction
   | { type: TerminalActionType.UNKNOWN_COMMAND };
 
 type AccountSelection =
@@ -232,41 +224,12 @@ ${TERMINAL_HELP}`);
       ? await this.renderer.prompt('you> ', signal, this.files, pendingChanges)
       : { prompt: (await this.ask('you> ', signal)).trim(), attachmentPaths: [] };
     const input = draft.prompt.trim();
-    switch (input) {
-      case '':
-        return this.nextAction(signal, pendingChanges);
-      case '/exit':
-      case '/quit':
-        return { type: TerminalActionType.EXIT };
-      case '/help':
-        return { type: TerminalActionType.HELP };
-      case '/reset':
-        return { type: TerminalActionType.RESET };
-      case '/usage':
-        return { type: TerminalActionType.USAGE };
-      case '/trace':
-        return { type: TerminalActionType.TRACE };
-      case '/trace on':
-        return { type: TerminalActionType.TRACE, enabled: true };
-      case '/trace off':
-        return { type: TerminalActionType.TRACE, enabled: false };
-      case '/account':
-        return { type: TerminalActionType.ACCOUNT };
-      case '/login':
-        return { type: TerminalActionType.LOGIN };
-      case '/logout':
-        return { type: TerminalActionType.LOGOUT };
-      case '/review':
-        return { type: TerminalActionType.REVIEW };
-      case '/accept-all':
-        return { type: TerminalActionType.ACCEPT_ALL };
-      case '/reject-all':
-        return { type: TerminalActionType.REJECT_ALL };
-      default:
-        return input.startsWith('/')
-          ? { type: TerminalActionType.UNKNOWN_COMMAND }
-          : { type: TerminalActionType.SEND, prompt: input, attachmentPaths: draft.attachmentPaths };
-    }
+    if (input === '') return this.nextAction(signal, pendingChanges);
+    const command = resolveTerminalCommand(input);
+    if (command) return command;
+    return input.startsWith('/')
+      ? { type: TerminalActionType.UNKNOWN_COMMAND }
+      : { type: TerminalActionType.SEND, prompt: input, attachmentPaths: draft.attachmentPaths };
   }
 
   beginAssistantResponse(): void {

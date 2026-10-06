@@ -1,10 +1,10 @@
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
-import { ChatResponsePartType } from '../../../chat/ChatResponsePartType.ts';
+import { ChatResponsePartType } from '../../../../chat/ChatResponsePartType.ts';
 import { TerminalRoot } from '../TerminalRoot.presentational.tsx';
 import { WiredTerminalRoot } from '../TerminalRoot.wired.tsx';
-import { createProposalReviewFixture } from './ProposalReviewFixture.ts';
+import { createProposalReviewFixture } from '../../proposal/test/ProposalReviewFixture.ts';
 
 describe(TerminalRoot, () => {
   describe('rendering', () => {

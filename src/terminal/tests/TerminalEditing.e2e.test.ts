@@ -10,7 +10,7 @@ import { FileProposalReviewStore } from '../../editing/reviews/persistence/FileP
 import { JsDiffTextDiffer } from '../../editing/documents/JsDiffTextDiffer.ts';
 import type { EditingConfiguration } from '../../editing/configuration/EditingConfiguration.ts';
 import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
-import { TerminalEditReviewer } from '../TerminalEditReviewer.ts';
+import { TerminalEditReviewer } from '../ui/proposal/TerminalEditReviewer.ts';
 import { TerminalUI } from '../TerminalUI.tsx';
 
 const paths: string[] = [];

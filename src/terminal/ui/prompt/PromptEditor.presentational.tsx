@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode, Ref } from 'react';
 import { Box, Text, type DOMElement } from 'ink';
-import type { FileSearchMatch } from '../../context/search/FileSearchMatch.ts';
-import { sanitizeText } from '../TerminalEditReviewer.ts';
+import type { FileSearchMatch } from '../../../context/search/FileSearchMatch.ts';
+import { sanitizeText } from '../shared/sanitizeText.ts';
 import type { PromptEditorState } from './usePromptEditorState.ts';
 import { PROMPT_RAIL_HORIZONTAL_PADDING, PROMPT_RAIL_TOP_MARGIN } from './PromptLayout.ts';
 import { formatPromptText } from './PromptText.ts';
@@ -17,6 +17,7 @@ export function PromptEditor({
   cursor,
   attachments,
   matches,
+  commandMatches,
   selectedMatch,
   searchError,
   rootRef,
@@ -55,6 +56,15 @@ export function PromptEditor({
         <Text key={match.path}>
           {index === selectedMatch ? <Text color="cyan">{'  › '}</Text> : '    '}
           {highlightMatch(match)}
+        </Text>
+      ))}
+      {commandMatches.map((command, index) => (
+        <Text key={command.value}>
+          {index === selectedMatch ? <Text color="cyan">{'  › '}</Text> : '    '}
+          <Text bold color="magentaBright">
+            {command.value}
+          </Text>
+          <Text dimColor>{`  ${command.description}`}</Text>
         </Text>
       ))}
       {searchError ? <Text color="red">{`  File search: ${sanitizeText(searchError)}`}</Text> : null}

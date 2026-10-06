@@ -1,8 +1,9 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
-import { FileSearchError } from '../../../context/search/FileSearchError.ts';
-import { FileSearchFailureReason } from '../../../context/search/FileSearchFailureReason.ts';
-import type { WorkspacePathIndex } from '../../../context/search/WorkspacePathIndex.ts';
+import type { WorkspacePathIndex } from '../../../../context/search/WorkspacePathIndex.ts';
+import { WorkspacePathIndexError } from '../../../../context/search/WorkspacePathIndexError.ts';
+import { WorkspacePathIndexFailureReason } from '../../../../context/search/WorkspacePathIndexFailureReason.ts';
+import { TERMINAL_COMMANDS } from '../../../TerminalCommand.ts';
 import { WiredPromptEditor } from '../PromptEditor.wired.tsx';
 
 describe(WiredPromptEditor, () => {
@@ -17,6 +18,55 @@ describe(WiredPromptEditor, () => {
       await waitUntil(() => complete.mock.calls.length === 1);
 
       expect(complete).toHaveBeenCalledWith({ prompt: 'hello world again', attachmentPaths: [] });
+      view.unmount();
+    });
+
+    it('lists every slash command, filters, navigates, and completes with Tab', async () => {
+      const complete = vi.fn();
+      const view = render(<WiredPromptEditor request={{ id: 1, label: 'you> ', complete }} interrupt={vi.fn()} />);
+
+      await write(view, '/');
+      for (const command of TERMINAL_COMMANDS) expect(view.lastFrame()).toContain(command.value);
+
+      await write(view, 'tr');
+      expect(view.lastFrame()).toContain('/trace off');
+      expect(view.lastFrame()).not.toContain('/help');
+      await write(view, '\x1b[B');
+      await write(view, '\t');
+      expect(view.lastFrame()).toContain('you> /trace on');
+      expect(view.lastFrame()).not.toContain('Enable full provider tracing');
+      view.stdin.write('\r');
+      await waitUntil(() => complete.mock.calls.length === 1);
+
+      expect(complete).toHaveBeenCalledWith({ prompt: '/trace on', attachmentPaths: [] });
+      view.unmount();
+    });
+
+    it('executes the selected slash command with Enter', async () => {
+      const complete = vi.fn();
+      const view = render(<WiredPromptEditor request={{ id: 1, label: 'you> ', complete }} interrupt={vi.fn()} />);
+
+      await write(view, '/rev');
+      expect(view.lastFrame()).toContain('Resume pending edit review');
+      view.stdin.write('\r');
+      await waitUntil(() => complete.mock.calls.length === 1);
+
+      expect(complete).toHaveBeenCalledWith({ prompt: '/review', attachmentPaths: [] });
+      view.unmount();
+    });
+
+    it('dismisses slash completion with Escape and reopens it when typing resumes', async () => {
+      const view = render(
+        <WiredPromptEditor request={{ id: 1, label: 'you> ', complete: vi.fn() }} interrupt={vi.fn()} />,
+      );
+
+      await write(view, '/');
+      expect(view.lastFrame()).toContain('Show commands and keyboard help');
+      await writeEscape(view);
+      expect(view.lastFrame()).not.toContain('Show commands and keyboard help');
+      await write(view, 'r');
+      expect(view.lastFrame()).toContain('Clear the current conversation');
+      expect(view.lastFrame()).not.toContain('/help');
       view.unmount();
     });
 
@@ -195,7 +245,7 @@ describe(WiredPromptEditor, () => {
       errorFailure.unmount();
 
       for (const error of [
-        new FileSearchError(FileSearchFailureReason.SUPERSEDED, 'old'),
+        new WorkspacePathIndexError(WorkspacePathIndexFailureReason.SUPERSEDED, 'old'),
         Object.assign(new Error('aborted'), { name: 'AbortError' }),
       ]) {
         const cancelled = render(

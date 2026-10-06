@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
+import { TerminalActionType } from '../../../TerminalActionType.ts';
 import { PromptEditor } from '../PromptEditor.presentational.tsx';
 import { PromptRecord } from '../PromptRecord.presentational.tsx';
 import { formatPromptText } from '../PromptText.ts';
@@ -19,6 +20,7 @@ describe(PromptEditor, () => {
             { path: 'src/App.tsx', score: 10, indices: [4, 5, 6] },
             { path: 'src/api.ts', score: 5, indices: [] },
           ]}
+          commandMatches={[]}
           selectedMatch={0}
           searchError={'bad\u001b[31m'}
         />,
@@ -41,6 +43,7 @@ describe(PromptEditor, () => {
           cursor={mentionEnd}
           attachments={['examples/todo-app/src/App.tsx']}
           matches={[]}
+          commandMatches={[]}
           selectedMatch={0}
           searchError=""
         />,
@@ -59,6 +62,7 @@ describe(PromptEditor, () => {
           cursor={5}
           attachments={[]}
           matches={[]}
+          commandMatches={[]}
           selectedMatch={0}
           searchError=""
         />,
@@ -78,6 +82,7 @@ describe(PromptEditor, () => {
           cursor={text.length}
           attachments={[]}
           matches={[]}
+          commandMatches={[]}
           selectedMatch={0}
           searchError=""
         />,
@@ -101,12 +106,41 @@ describe(PromptEditor, () => {
           cursor={0}
           attachments={[]}
           matches={[]}
+          commandMatches={[]}
           selectedMatch={0}
           searchError=""
         />,
       );
 
       expect(stripVTControlCharacters(view.lastFrame() ?? '')).toContain(expected);
+      view.unmount();
+    });
+
+    it('renders slash commands with descriptions and selection', () => {
+      const view = render(
+        <PromptEditor
+          label="you> "
+          pendingChanges={0}
+          text="/tr"
+          cursor={3}
+          attachments={[]}
+          matches={[]}
+          commandMatches={[
+            { value: '/trace', description: 'Show tracing', action: { type: TerminalActionType.TRACE } },
+            {
+              value: '/trace on',
+              description: 'Enable tracing',
+              action: { type: TerminalActionType.TRACE, enabled: true },
+            },
+          ]}
+          selectedMatch={1}
+          searchError=""
+        />,
+      );
+
+      expect(promptRailContent(view.lastFrame())).toBe(
+        'you> /tr\n    /trace  Show tracing\n  › /trace on  Enable tracing',
+      );
       view.unmount();
     });
   });

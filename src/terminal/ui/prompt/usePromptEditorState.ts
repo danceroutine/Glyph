@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCursor, useInput, usePaste, useWindowSize } from 'ink';
 import stringWidth from 'string-width';
-import { FileSearchError } from '../../context/search/FileSearchError.ts';
-import { FileSearchFailureReason } from '../../context/search/FileSearchFailureReason.ts';
-import type { FileSearchMatch } from '../../context/search/FileSearchMatch.ts';
-import { sanitizeText } from '../TerminalEditReviewer.ts';
+import { WorkspacePathIndexError } from '../../../context/search/WorkspacePathIndexError.ts';
+import { WorkspacePathIndexFailureReason } from '../../../context/search/WorkspacePathIndexFailureReason.ts';
+import type { FileSearchMatch } from '../../../context/search/FileSearchMatch.ts';
+import { searchTerminalCommands, type TerminalCommand } from '../../TerminalCommand.ts';
+import { sanitizeText } from '../shared/sanitizeText.ts';
 import type { PromptRequest } from './PromptRequest.ts';
 import { PROMPT_RAIL_HORIZONTAL_PADDING, promptRailCursorY } from './PromptLayout.ts';
 import { formatPromptText } from './PromptText.ts';
@@ -19,6 +20,7 @@ export interface PromptEditorState {
   cursor: number;
   attachments: readonly string[];
   matches: readonly FileSearchMatch[];
+  commandMatches: readonly TerminalCommand[];
   selectedMatch: number;
   searchError: string;
 }
@@ -36,18 +38,21 @@ export function usePromptEditorState({ request, interrupt, railTop }: UsePromptE
   const [matches, setMatches] = useState<readonly FileSearchMatch[]>([]);
   const [selectedMatch, setSelectedMatch] = useState(0);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
-  const [dismissedMention, setDismissedMention] = useState<string>();
+  const [dismissedCompletion, setDismissedCompletion] = useState<string>();
   const [searchError, setSearchError] = useState('');
   const generation = useRef(0);
   const promptText = formatPromptText(text, attachments, cursor);
   const mention = promptText.cursorTouchesAttachment ? undefined : activeMention(text, cursor);
   const mentionSignature = mention?.signature;
+  const commandQuery = activeSlashCommand(text, cursor);
+  const commandMatches =
+    commandQuery && commandQuery.signature !== dismissedCompletion ? searchTerminalCommands(commandQuery.query) : [];
   const { columns } = useWindowSize();
   const { setCursorPosition } = useCursor();
 
   useEffect(() => {
     const files = request.files;
-    if (!files || !mention || mention.signature === dismissedMention) {
+    if (!files || !mention || mention.signature === dismissedCompletion) {
       setMatches([]);
       setSelectedMatch(0);
       setSearchError('');
@@ -70,7 +75,7 @@ export function usePromptEditorState({ request, interrupt, railTop }: UsePromptE
         setSearchError(error instanceof Error ? error.message : 'File search failed.');
       });
     return () => controller.abort();
-  }, [dismissedMention, mentionSignature, request.files]);
+  }, [dismissedCompletion, mentionSignature, request.files]);
 
   const visiblePrefix = `${request.label}${sanitizeText(promptText.cursorPrefix)}`;
   const width = Math.max(1, columns - PROMPT_RAIL_HORIZONTAL_PADDING * 2);
@@ -84,7 +89,16 @@ export function usePromptEditorState({ request, interrupt, railTop }: UsePromptE
     setText(next);
     setCursor(nextCursor);
     setAttachments(current => current.filter(path => containsAttachment(next, path)));
-    setDismissedMention(undefined);
+    setDismissedCompletion(undefined);
+    setSelectedMatch(0);
+  };
+
+  const acceptSelectedCommand = (submit: boolean): boolean => {
+    const candidate = commandMatches[selectedMatch];
+    if (!candidate) return false;
+    if (submit) request.complete({ prompt: candidate.value, attachmentPaths: [] });
+    else updateText(`${candidate.value} `, candidate.value.length + 1);
+    return true;
   };
 
   const attachSelected = (): boolean => {
@@ -109,23 +123,27 @@ export function usePromptEditorState({ request, interrupt, railTop }: UsePromptE
       return;
     }
     if (key.escape) {
-      if (mention) {
-        setDismissedMention(mention.signature);
+      const completion = commandQuery ?? mention;
+      if (completion) {
+        setDismissedCompletion(completion.signature);
         setMatches([]);
       }
       return;
     }
+    if (key.return && acceptSelectedCommand(true)) return;
+    if (key.tab && acceptSelectedCommand(false)) return;
     if ((key.return || key.tab) && attachSelected()) return;
     if (key.return) {
       request.complete({ prompt: text.trim(), attachmentPaths: [...attachments] });
       return;
     }
-    if (key.upArrow && matches.length > 0) {
+    const completionCount = commandQuery ? commandMatches.length : matches.length;
+    if (key.upArrow && completionCount > 0) {
       setSelectedMatch(value => Math.max(0, value - 1));
       return;
     }
-    if (key.downArrow && matches.length > 0) {
-      setSelectedMatch(value => Math.min(matches.length - 1, value + 1));
+    if (key.downArrow && completionCount > 0) {
+      setSelectedMatch(value => Math.min(completionCount - 1, value + 1));
       return;
     }
     if (key.leftArrow) {
@@ -165,10 +183,17 @@ export function usePromptEditorState({ request, interrupt, railTop }: UsePromptE
     text,
     cursor,
     attachments,
-    matches,
+    matches: commandQuery ? [] : matches,
+    commandMatches,
     selectedMatch,
     searchError,
   };
+}
+
+function activeSlashCommand(text: string, cursor: number): { query: string; signature: string } | undefined {
+  if (!text.startsWith('/')) return undefined;
+  const query = text.slice(0, cursor);
+  return { query, signature: `command:${query}` };
 }
 
 function activeMention(
@@ -189,7 +214,7 @@ function isPrintableInput(input: string, control: boolean, meta: boolean): boole
 
 function isSilentSearchCancellation(error: unknown): boolean {
   return (
-    (error instanceof FileSearchError && error.code === FileSearchFailureReason.SUPERSEDED) ||
+    (error instanceof WorkspacePathIndexError && error.code === WorkspacePathIndexFailureReason.SUPERSEDED) ||
     (error instanceof Error && error.name === 'AbortError')
   );
 }

@@ -2,22 +2,22 @@ import { EventEmitter } from 'node:events';
 import type { ReactNode } from 'react';
 import { render } from 'ink';
 import type { Instance } from 'ink';
-import type { ChatResponsePart } from '../../chat/ChatResponsePart.ts';
-import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
-import type { ProposalReviewManager } from '../../editing/reviews/ProposalReviewManager.ts';
-import type { UserPromptDraft } from '../UserPromptDraft.ts';
+import type { ChatResponsePart } from '../../../chat/ChatResponsePart.ts';
+import type { WorkspacePathIndex } from '../../../context/search/WorkspacePathIndex.ts';
+import type { ProposalReviewManager } from '../../../editing/reviews/ProposalReviewManager.ts';
 import { Deferred } from './Deferred.ts';
-import { PromptRecord } from './PromptRecord.presentational.tsx';
-import type { PromptRequest } from './PromptRequest.ts';
-import type { ProposalReviewRequest } from './ProposalReviewRequest.ts';
-import { ProposalReviewReceipt } from './ProposalReviewReceipt.presentational.tsx';
-import type { ProposalReviewSummary } from './ProposalReviewSummary.ts';
+import { PromptRecord } from '../prompt/PromptRecord.presentational.tsx';
+import type { PromptRequest } from '../prompt/PromptRequest.ts';
+import type { UserPromptDraft } from '../prompt/UserPromptDraft.ts';
+import type { ProposalReviewRequest } from '../proposal/ProposalReviewRequest.ts';
+import { ProposalReviewReceipt } from '../proposal/ProposalReviewReceipt.presentational.tsx';
+import type { ProposalReviewSummary } from '../proposal/ProposalReviewSummary.ts';
 import type { TerminalInputStream } from './TerminalInputStream.ts';
 import type { TerminalOutputStream } from './TerminalOutputStream.ts';
-import type { TerminalRendererSnapshot } from './TerminalRendererSnapshot.ts';
-import { WiredTerminalRoot } from './TerminalRoot.wired.tsx';
-import type { TranscriptEntry } from './TranscriptEntry.ts';
-import { WiredResponse } from './Response.wired.tsx';
+import type { TerminalRendererSnapshot } from '../shell/TerminalRendererSnapshot.ts';
+import { WiredTerminalRoot } from '../shell/TerminalRoot.wired.tsx';
+import type { TranscriptEntry } from '../shell/TranscriptEntry.ts';
+import { WiredResponse } from '../response/Response.wired.tsx';
 
 /**
  * Owns the single interactive Ink tree for the terminal host. All prompt,

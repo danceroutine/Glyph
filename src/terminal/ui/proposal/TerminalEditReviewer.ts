@@ -1,15 +1,15 @@
 import { extname } from 'node:path';
-import { stripVTControlCharacters } from 'node:util';
 import { highlight, supportsLanguage } from 'cli-highlight';
 import type { Theme } from 'cli-highlight';
 import wrapAnsi from 'wrap-ansi';
-import type { EditProposal } from '../editing/proposals/EditProposal.ts';
-import type { FileEditPlan } from '../editing/proposals/FileEditPlan.ts';
-import { EditDecisionState } from '../editing/reviews/EditDecisionState.ts';
-import type { EditReviewItem } from '../editing/reviews/EditReviewItem.ts';
-import { EditReviewItemKind } from '../editing/reviews/EditReviewItemKind.ts';
-import type { ProposalReviewManager } from '../editing/reviews/ProposalReviewManager.ts';
-import type { TerminalUI } from './TerminalUI.tsx';
+import type { EditProposal } from '../../../editing/proposals/EditProposal.ts';
+import type { FileEditPlan } from '../../../editing/proposals/FileEditPlan.ts';
+import { EditDecisionState } from '../../../editing/reviews/EditDecisionState.ts';
+import type { EditReviewItem } from '../../../editing/reviews/EditReviewItem.ts';
+import { EditReviewItemKind } from '../../../editing/reviews/EditReviewItemKind.ts';
+import type { ProposalReviewManager } from '../../../editing/reviews/ProposalReviewManager.ts';
+import type { TerminalUI } from '../../TerminalUI.tsx';
+import { sanitizeText } from '../shared/sanitizeText.ts';
 
 const FOCUSED_CONTEXT_LINES = 4;
 
@@ -281,13 +281,9 @@ function renderDiffLine(line: DiffDisplayLine, path: string, lineNumberWidth: nu
   const newLine = line.newLine?.toString().padStart(lineNumberWidth) ?? ' '.repeat(lineNumberWidth);
   const indicator = line.selected
     ? style('›', TerminalReviewColor.SELECTED, colors)
-    : line.decision === EditDecisionState.ACCEPTED
-      ? style('✓', TerminalReviewColor.ADDITION, colors)
-      : line.decision === EditDecisionState.REJECTED
-        ? style('×', TerminalReviewColor.DELETION, colors)
-        : line.kind === DiffLineKind.CONTEXT
-          ? ' '
-          : style('·', TerminalReviewColor.DIM, colors);
+    : line.kind === DiffLineKind.CONTEXT
+      ? ' '
+      : style('·', TerminalReviewColor.DIM, colors);
   const marker =
     line.kind === DiffLineKind.ADDITION
       ? style('+', TerminalReviewColor.ADDITION, colors)
@@ -340,7 +336,7 @@ function renderLineEnding(lineEnding: string, colors: boolean): string {
 }
 
 function languageForPath(path: string): string | undefined {
-  const fileName = path.split('/').at(-1)?.toLowerCase() ?? '';
+  const fileName = path.split('/').at(-1)!.toLowerCase();
   if (fileName === 'dockerfile') return 'dockerfile';
   if (fileName === 'makefile') return 'makefile';
   const language = LANGUAGE_BY_EXTENSION[extname(fileName)] ?? extname(fileName).slice(1);
@@ -410,15 +406,6 @@ export function wrapReviewLines(rendered: RenderedEntry, width: number): Rendere
 
 function style(value: string, color: string, enabled: boolean): string {
   return enabled ? `${color}${value}\x1b[0m` : value;
-}
-
-export function sanitizeText(value: string): string {
-  return stripVTControlCharacters(value)
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
-    .replace(
-      /[\u202a-\u202e\u2066-\u2069]/g,
-      character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
-    );
 }
 
 export function clamp(value: number, minimum: number, maximum: number): number {

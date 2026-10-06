@@ -1,12 +1,12 @@
 import { Duplex, Writable } from 'node:stream';
 import { Text } from 'ink';
 import { describe, expect, it, vi } from 'vitest';
-import { ChatResponsePartType } from '../../../chat/ChatResponsePartType.ts';
-import type { ProposalReviewManager } from '../../../editing/reviews/ProposalReviewManager.ts';
-import type { PromptRequest } from '../PromptRequest.ts';
-import type { ProposalReviewRequest } from '../ProposalReviewRequest.ts';
+import { ChatResponsePartType } from '../../../../chat/ChatResponsePartType.ts';
+import type { ProposalReviewManager } from '../../../../editing/reviews/ProposalReviewManager.ts';
+import type { PromptRequest } from '../../prompt/PromptRequest.ts';
+import type { ProposalReviewRequest } from '../../proposal/ProposalReviewRequest.ts';
 import { TerminalInkRenderer } from '../TerminalInkRenderer.tsx';
-import { createProposalReviewFixture } from './ProposalReviewFixture.ts';
+import { createProposalReviewFixture } from '../../proposal/test/ProposalReviewFixture.ts';
 
 describe(TerminalInkRenderer, () => {
   describe('lifecycle', () => {
