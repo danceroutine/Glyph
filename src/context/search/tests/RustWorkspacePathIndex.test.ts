@@ -1,12 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { FileSearchError } from '../FileSearchError.ts';
-import { FileSearchFailureReason } from '../FileSearchFailureReason.ts';
-import { RustWorkspaceFileSearch } from '../RustWorkspaceFileSearch.ts';
+import { RustWorkspacePathIndex } from '../RustWorkspacePathIndex.ts';
+import { WorkspacePathIndexError } from '../WorkspacePathIndexError.ts';
+import { WorkspacePathIndexFailureReason } from '../WorkspacePathIndexFailureReason.ts';
 
-describe(RustWorkspaceFileSearch, () => {
-  describe(RustWorkspaceFileSearch.prototype.search, () => {
+describe(RustWorkspacePathIndex, () => {
+  describe('protocol', () => {
     it('uses the versioned JSONL protocol over one persistent worker', async () => {
       const worker = new FakeWorker(request => {
         switch (request.method) {
@@ -25,6 +25,8 @@ describe(RustWorkspaceFileSearch, () => {
               fileCount: 2,
               matches: [{ path: 'src/App.tsx', score: 211, indices: [4, 5, 6] }],
             };
+          case 'glob':
+            return { files: ['src/App.tsx'], truncated: false };
           case 'refresh':
             return {
               root: '/project',
@@ -39,7 +41,7 @@ describe(RustWorkspaceFileSearch, () => {
             throw new Error(`Unexpected method ${request.method}`);
         }
       });
-      const search = new RustWorkspaceFileSearch(
+      const search = new RustWorkspacePathIndex(
         {
           binaryPath: '/bin/glyph-context-index',
           root: '/project',
@@ -54,6 +56,10 @@ describe(RustWorkspaceFileSearch, () => {
       await expect(search.search('app', { generation: 7, limit: 20 })).resolves.toMatchObject({
         generation: 7,
         matches: [{ path: 'src/App.tsx', indices: [4, 5, 6] }],
+      });
+      await expect(search.glob('*.tsx', { targetDirectory: 'src', limit: 2_000 })).resolves.toEqual({
+        files: ['src/App.tsx'],
+        truncated: false,
       });
       await expect(search.refresh()).resolves.toMatchObject({ fileCount: 3, fromCache: false });
       await Promise.all([search.dispose(), search.dispose()]);
@@ -71,8 +77,14 @@ describe(RustWorkspaceFileSearch, () => {
           },
         },
         { version: 1, id: 2, method: 'search', params: { query: 'app', generation: 7, limit: 20 } },
-        { version: 1, id: 3, method: 'refresh', params: {} },
-        { version: 1, id: 4, method: 'shutdown', params: {} },
+        {
+          version: 1,
+          id: 3,
+          method: 'glob',
+          params: { pattern: '*.tsx', targetDirectory: 'src', limit: 2_000 },
+        },
+        { version: 1, id: 4, method: 'refresh', params: {} },
+        { version: 1, id: 5, method: 'shutdown', params: {} },
       ]);
     });
 
@@ -84,12 +96,12 @@ describe(RustWorkspaceFileSearch, () => {
         if (request.method === 'shutdown') return { shutdown: true };
         return new NativeFailure('SUPERSEDED', 'A newer generation replaced this search.');
       });
-      const search = new RustWorkspaceFileSearch({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+      const search = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
 
       await expect(search.search('old', { generation: 1 })).rejects.toMatchObject({
-        code: FileSearchFailureReason.SUPERSEDED,
+        code: WorkspacePathIndexFailureReason.SUPERSEDED,
         message: 'A newer generation replaced this search.',
-      } satisfies Partial<FileSearchError>);
+      } satisfies Partial<WorkspacePathIndexError>);
       await search.dispose();
     });
   });

@@ -8,7 +8,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::service::{ContextIndexService, InitializeParams, SearchParams, ServiceError};
+use crate::service::{
+    ContextIndexService, GlobParams, InitializeParams, SearchParams, ServiceError,
+};
 
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -34,6 +36,7 @@ struct RequestEnvelope {
 enum Request {
     Initialize(InitializeParams),
     Search(SearchParams),
+    Glob(GlobParams),
     Refresh,
     Shutdown,
 }
@@ -200,6 +203,7 @@ fn service_loop(
                         result_response(id, service.search(params, latest_generation)),
                         false,
                     ),
+                    Request::Glob(params) => (result_response(id, service.glob(params)), false),
                     Request::Refresh => (result_response(id, service.refresh()), false),
                     Request::Shutdown => (success_response(id, service.shutdown()), true),
                 }
@@ -250,6 +254,11 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
         )?),
         "search" => Request::Search(decode_params(
             "search",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
+        "glob" => Request::Glob(decode_params(
+            "glob",
             envelope.params,
             Some(envelope.id.clone()),
         )?),
@@ -406,6 +415,21 @@ mod tests {
         assert_eq!(params.query, "chat");
         assert_eq!(params.limit, 12);
         assert_eq!(params.generation, 7);
+    }
+
+    #[test]
+    fn decodes_a_glob_request_with_an_optional_target_directory() {
+        let decoded = decode_request(
+            br#"{"version":1,"id":8,"method":"glob","params":{"pattern":"*.tsx","targetDirectory":"src","limit":2000}}"#,
+        )
+        .expect("request should decode");
+
+        let Request::Glob(params) = decoded.request else {
+            panic!("expected a glob request");
+        };
+        assert_eq!(params.pattern, "*.tsx");
+        assert_eq!(params.target_directory.as_deref(), Some("src"));
+        assert_eq!(params.limit, 2_000);
     }
 
     #[test]

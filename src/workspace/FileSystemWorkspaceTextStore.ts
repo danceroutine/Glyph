@@ -14,7 +14,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, matchesGlob, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { EditError } from '../editing/errors/EditError.ts';
 import { EditFailureReason } from '../editing/errors/EditFailureReason.ts';
@@ -76,18 +76,29 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return normalized;
   }
 
-  async list(maxFiles: number): Promise<{ files: string[]; truncated: boolean }> {
+  async list(
+    maxFiles: number,
+    globPattern = '**/*',
+    targetDirectory?: string,
+  ): Promise<{ files: string[]; truncated: boolean }> {
     const root = await realpath(this.root);
+    const normalizedTarget = targetDirectory === undefined ? undefined : this.normalizePath(targetDirectory);
+    if (normalizedTarget) await this.assertNoSymlinkSegments(normalizedTarget, false);
+    const searchRoot = normalizedTarget ? resolve(root, normalizedTarget) : root;
+    const searchRootInfo = await lstat(searchRoot);
+    if (!searchRootInfo.isDirectory()) {
+      throw new EditError(EditFailureReason.UNSUPPORTED, 'The target directory is not a directory.', {
+        path: normalizedTarget ?? '.',
+      });
+    }
+    const normalizedPattern = globPattern.startsWith('**/') ? globPattern : `**/${globPattern}`;
+    const matchPattern = this.caseSensitive ? normalizedPattern : normalizedPattern.toLowerCase();
     const files: string[] = [];
     let truncated = false;
     const visit = async (directory: string): Promise<void> => {
       const entries = await readdir(directory, { withFileTypes: true });
       entries.sort((left, right) => left.name.localeCompare(right.name));
       for (const entry of entries) {
-        if (files.length >= maxFiles) {
-          truncated = true;
-          return;
-        }
         if (entry.isSymbolicLink()) continue;
         const absolute = resolve(directory, entry.name);
         const path = relative(root, absolute).split(sep).join('/');
@@ -96,11 +107,19 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
             await visit(absolute);
           if (truncated) return;
         } else if (entry.isFile()) {
-          if (!this.isExcluded(path)) files.push(path);
+          const pathWithinTarget = relative(searchRoot, absolute).split(sep).join('/');
+          const matchCandidate = this.caseSensitive ? pathWithinTarget : pathWithinTarget.toLowerCase();
+          if (!this.isExcluded(path) && matchesGlob(matchCandidate, matchPattern)) {
+            if (files.length === maxFiles) {
+              truncated = true;
+              return;
+            }
+            files.push(path);
+          }
         }
       }
     };
-    await visit(root);
+    await visit(searchRoot);
     return { files, truncated };
   }
 

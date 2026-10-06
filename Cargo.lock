@@ -165,6 +165,7 @@ dependencies = [
 name = "glyph-context-index"
 version = "0.1.0"
 dependencies = [
+ "globset",
  "ignore",
  "notify",
  "nucleo",

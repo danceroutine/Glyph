@@ -2,19 +2,21 @@ import { spawn } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { FileSearchError } from './FileSearchError.ts';
-import { FileSearchFailureReason } from './FileSearchFailureReason.ts';
-import type { FileSearchIndexState } from './FileSearchIndexState.ts';
 import type { FileSearchResult } from './FileSearchResult.ts';
-import type { RustWorkspaceFileSearchOptions } from './RustWorkspaceFileSearchOptions.ts';
-import type { WorkspaceFileSearch } from './WorkspaceFileSearch.ts';
+import type { RustWorkspacePathIndexOptions } from './RustWorkspacePathIndexOptions.ts';
+import type { WorkspacePathGlobResult } from './WorkspacePathGlobResult.ts';
+import type { WorkspacePathIndex } from './WorkspacePathIndex.ts';
+import { WorkspacePathIndexError } from './WorkspacePathIndexError.ts';
+import { WorkspacePathIndexFailureReason } from './WorkspacePathIndexFailureReason.ts';
+import type { WorkspacePathIndexState } from './WorkspacePathIndexState.ts';
 
 const PROTOCOL_VERSION = 1;
 const MAXIMUM_ERROR_OUTPUT = 8_192;
 
-enum FileSearchMethod {
+enum PathIndexMethod {
   INITIALIZE = 'initialize',
   SEARCH = 'search',
+  GLOB = 'glob',
   REFRESH = 'refresh',
   SHUTDOWN = 'shutdown',
 }
@@ -46,8 +48,15 @@ const searchResultSchema = z
   })
   .strict();
 
+const globResultSchema = z
+  .object({
+    files: z.array(z.string().min(1)),
+    truncated: z.boolean(),
+  })
+  .strict();
+
 const shutdownResultSchema = z.object({ shutdown: z.literal(true) }).strict();
-const failureReasonSchema = z.enum(FileSearchFailureReason);
+const failureReasonSchema = z.enum(WorkspacePathIndexFailureReason);
 
 interface SidecarProcess {
   readonly stdin: Writable;
@@ -66,30 +75,30 @@ interface PendingRequest {
 
 type ProcessFactory = (binaryPath: string) => SidecarProcess;
 
-/** Persistent JSONL transport for the native `glyph-context-index` worker. */
-export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
+/** Persistent JSONL transport for the native cached workspace path index. */
+export class RustWorkspacePathIndex implements WorkspacePathIndex {
   private readonly processFactory: ProcessFactory;
   private process: SidecarProcess | undefined;
   private readonly pending = new Map<number, PendingRequest>();
   private nextRequestId = 1;
   private outputBuffer = '';
   private errorOutput = '';
-  private initialized: FileSearchIndexState | undefined;
-  private initializing: Promise<FileSearchIndexState> | undefined;
+  private initialized: WorkspacePathIndexState | undefined;
+  private initializing: Promise<WorkspacePathIndexState> | undefined;
   private disposing: Promise<void> | undefined;
   private disposed = false;
 
   constructor(
-    private readonly options: RustWorkspaceFileSearchOptions,
+    private readonly options: RustWorkspacePathIndexOptions,
     processFactory: ProcessFactory = startProcess,
   ) {
     this.processFactory = processFactory;
   }
 
-  async initialize(signal?: AbortSignal): Promise<FileSearchIndexState> {
+  async initialize(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
     if (this.initialized) return this.initialized;
     if (!this.initializing) {
-      this.initializing = this.request(FileSearchMethod.INITIALIZE, {
+      this.initializing = this.request(PathIndexMethod.INITIALIZE, {
         root: resolve(this.options.root),
         ...(this.options.cachePath === undefined ? {} : { cachePath: resolve(this.options.cachePath) }),
         ...(this.options.ignoredDirectories === undefined
@@ -110,6 +119,7 @@ export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
           : { allowedFileNames: [...this.options.allowedFileNames] }),
         ...(this.options.respectGitIgnore === undefined ? {} : { respectGitIgnore: this.options.respectGitIgnore }),
         ...(this.options.maxFiles === undefined ? {} : { maxFiles: this.options.maxFiles }),
+        ...(this.options.caseSensitive === undefined ? {} : { caseSensitive: this.options.caseSensitive }),
       })
         .then(value => {
           const result = indexStateSchema.parse(value);
@@ -130,7 +140,7 @@ export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
     if (!this.initialized) await this.initialize(options.signal);
     return searchResultSchema.parse(
       await this.request(
-        FileSearchMethod.SEARCH,
+        PathIndexMethod.SEARCH,
         {
           query,
           generation: options.generation,
@@ -141,9 +151,27 @@ export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
     );
   }
 
-  async refresh(signal?: AbortSignal): Promise<FileSearchIndexState> {
+  async glob(
+    pattern: string,
+    options: { targetDirectory?: string; limit: number; signal?: AbortSignal },
+  ): Promise<WorkspacePathGlobResult> {
+    if (!this.initialized) await this.initialize(options.signal);
+    return globResultSchema.parse(
+      await this.request(
+        PathIndexMethod.GLOB,
+        {
+          pattern,
+          ...(options.targetDirectory === undefined ? {} : { targetDirectory: options.targetDirectory }),
+          limit: options.limit,
+        },
+        options.signal,
+      ),
+    );
+  }
+
+  async refresh(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
     if (!this.initialized) return this.initialize(signal);
-    const result = indexStateSchema.parse(await this.request(FileSearchMethod.REFRESH, {}, signal));
+    const result = indexStateSchema.parse(await this.request(PathIndexMethod.REFRESH, {}, signal));
     this.initialized = result;
     return result;
   }
@@ -161,7 +189,7 @@ export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
       return;
     }
     try {
-      shutdownResultSchema.parse(await this.request(FileSearchMethod.SHUTDOWN, {}));
+      shutdownResultSchema.parse(await this.request(PathIndexMethod.SHUTDOWN, {}));
       process.stdin.end();
     } catch (error) {
       process.kill('SIGTERM');
@@ -175,10 +203,10 @@ export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
     }
   }
 
-  private request(method: FileSearchMethod, params: unknown, signal?: AbortSignal): Promise<unknown> {
-    if (this.disposed) return Promise.reject(new Error('The workspace file search has been disposed.'));
-    if (this.disposing && method !== FileSearchMethod.SHUTDOWN) {
-      return Promise.reject(new Error('The workspace file search is shutting down.'));
+  private request(method: PathIndexMethod, params: unknown, signal?: AbortSignal): Promise<unknown> {
+    if (this.disposed) return Promise.reject(new Error('The workspace path index has been disposed.'));
+    if (this.disposing && method !== PathIndexMethod.SHUTDOWN) {
+      return Promise.reject(new Error('The workspace path index is shutting down.'));
     }
     if (signal?.aborted) return Promise.reject(toAbortError(signal));
     const process = this.ensureProcess();
@@ -219,7 +247,7 @@ export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
       if (this.process !== process) return;
       if (this.disposed && this.pending.size === 0) return;
       const detail = this.errorOutput.trim();
-      this.fail(new Error(`File-search worker exited (${signal ?? code ?? 'unknown'}).${detail ? ` ${detail}` : ''}`));
+      this.fail(new Error(`Path-index worker exited (${signal ?? code ?? 'unknown'}).${detail ? ` ${detail}` : ''}`));
     });
     return process;
   }
@@ -237,7 +265,7 @@ export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
       } catch (error) {
         this.fail(
           new Error(
-            `Invalid response from file-search worker: ${error instanceof Error ? error.message : String(error)}`,
+            `Invalid response from path-index worker: ${error instanceof Error ? error.message : String(error)}`,
           ),
         );
       }
@@ -258,9 +286,9 @@ export class RustWorkspaceFileSearch implements WorkspaceFileSearch {
       pending.removeAbortListener();
       const error = response.error as Record<string, unknown>;
       const parsedCode = failureReasonSchema.safeParse(error?.code);
-      const code = parsedCode.success ? parsedCode.data : FileSearchFailureReason.INTERNAL;
-      const message = typeof error?.message === 'string' ? error.message : 'Native file search failed.';
-      pending.reject(new FileSearchError(code, message));
+      const code = parsedCode.success ? parsedCode.data : WorkspacePathIndexFailureReason.INTERNAL;
+      const message = typeof error?.message === 'string' ? error.message : 'Native path index failed.';
+      pending.reject(new WorkspacePathIndexError(code, message));
       return;
     }
     if (!Object.hasOwn(response, 'result')) {

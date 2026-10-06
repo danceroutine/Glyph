@@ -1,4 +1,4 @@
-export enum FileSearchFailureReason {
+export enum WorkspacePathIndexFailureReason {
   INVALID_REQUEST = 'INVALID_REQUEST',
   INITIALIZATION_FAILED = 'INITIALIZATION_FAILED',
   NOT_INITIALIZED = 'NOT_INITIALIZED',

@@ -2,8 +2,10 @@ import { createHash } from 'node:crypto';
 import type { Logger } from '../../observability/Logger.ts';
 import { NullLogger } from '../../observability/NullLogger.ts';
 import type { WorkspaceTextStore } from '../../workspace/WorkspaceTextStore.ts';
+import { transformTextEditRanges } from '../documents/TextEditTransformer.ts';
 import { EditError } from '../errors/EditError.ts';
 import { EditFailureReason } from '../errors/EditFailureReason.ts';
+import { EditOperation } from '../proposals/EditOperation.ts';
 import type { EditProposal } from '../proposals/EditProposal.ts';
 import type { FileEditPlan } from '../proposals/FileEditPlan.ts';
 import { EditApplicabilityState } from './EditApplicabilityState.ts';
@@ -40,6 +42,18 @@ export class ProposalReviewManager {
   }
   get activeReviews(): readonly EditProposal[] {
     return [...this.reviews];
+  }
+  get pendingChangeCount(): number {
+    return this.reviews.reduce(
+      (count, review) =>
+        count +
+        review.files.reduce(
+          (fileCount, file) =>
+            fileCount + file.items.filter(item => item.decision === EditDecisionState.PENDING).length,
+          0,
+        ),
+      0,
+    );
   }
   get(reviewId: string): EditProposal | undefined {
     return this.reviews.find(review => review.id === reviewId);
@@ -117,6 +131,9 @@ export class ProposalReviewManager {
   async rejectAll(): Promise<void> {
     return this.enqueue(async () => {
       const reviews = this.requireReviews();
+      const pendingItems = reviews.flatMap(review =>
+        review.files.flatMap(file => file.items.filter(item => item.decision === EditDecisionState.PENDING)),
+      );
       for (const review of reviews) {
         for (const file of review.files) {
           for (const item of file.items) {
@@ -124,7 +141,12 @@ export class ProposalReviewManager {
           }
         }
       }
-      await this.persist();
+      try {
+        await this.persist();
+      } catch (error) {
+        for (const item of pendingItems) item.decision = EditDecisionState.PENDING;
+        throw error;
+      }
       await this.logger.info('rejected_all', { proposalIds: reviews.map(review => review.id) });
     });
   }
@@ -158,6 +180,10 @@ export class ProposalReviewManager {
     decision: EditDecisionState,
   ): Promise<void> {
     const item = file.items.find(candidate => candidate.id === itemId)!;
+    if (file.applyingItemId) {
+      await this.reconcile(review, file);
+      await this.persist();
+    }
     if (item.decision === decision) return;
     if (item.decision !== EditDecisionState.PENDING) {
       throw new EditError(EditFailureReason.DECISION_CONFLICT, 'Review item already has the opposite decision.', {
@@ -167,10 +193,16 @@ export class ProposalReviewManager {
     }
     if (decision === EditDecisionState.REJECTED) {
       item.decision = decision;
-      await this.persist();
+      try {
+        await this.persist();
+      } catch (error) {
+        item.decision = EditDecisionState.PENDING;
+        throw error;
+      }
       await this.logger.info('item.rejected', { proposalId: review.id, fileId: file.id, itemId });
       return;
     }
+    await this.synchronize(file);
     file.applicability = EditApplicabilityState.APPLYING;
     file.applyingItemId = item.id;
     try {
@@ -180,6 +212,7 @@ export class ProposalReviewManager {
       file.applyingItemId = null;
       throw error;
     }
+    const applyingState = captureFileState(file);
     const mutation = { undoGroupId: review.id };
     try {
       await this.logger.debug('revision.check', {
@@ -213,23 +246,23 @@ export class ProposalReviewManager {
           if (!file.currentRevision) throw this.stale(file);
           const result = await this.workspace.rename(file.currentPath, file.targetPath, file.currentRevision, mutation);
           file.currentPath = result.path;
-          file.currentRevision = result.revision;
-          file.current = result;
+          updateBaseline(file, result);
           break;
         }
         case EditReviewItemKind.TEXT: {
-          if (!file.base || !file.currentRevision) throw this.stale(file);
+          if (!file.base || !file.current || !file.currentRevision) throw this.stale(file);
+          const textChange = planTextAcceptance(file, item);
+          if (!textChange) throw this.stale(file, file.currentRevision);
           item.decision = EditDecisionState.ACCEPTED;
-          const text = compose(file);
           const result = await this.workspace.replace(
             file.currentPath,
             file.currentRevision,
-            text,
+            textChange.text,
             file.proposed.byteOrderMark,
             mutation,
           );
-          file.currentRevision = result.revision;
-          file.current = result;
+          applyTransformedRanges(textChange.transformedItems);
+          updateBaseline(file, result);
           break;
         }
       }
@@ -237,19 +270,14 @@ export class ProposalReviewManager {
       file.applicability = EditApplicabilityState.READY;
       file.applyingItemId = null;
       await this.persist();
-      await this.logger.info('item.accepted', {
-        proposalId: review.id,
-        fileId: file.id,
-        itemId,
-        revision: file.currentRevision,
-      });
     } catch (error) {
-      if (error instanceof EditError && error.reason === EditFailureReason.STALE)
-        file.applicability = EditApplicabilityState.STALE;
-      else file.applicability = EditApplicabilityState.FAILED_RETRYABLE;
-      if (item.kind === EditReviewItemKind.TEXT) item.decision = EditDecisionState.PENDING;
-      file.applyingItemId = null;
-      await this.persist();
+      restoreFileState(file, applyingState);
+      try {
+        await this.reconcile(review, file);
+        await this.persist();
+      } catch {
+        restoreFileState(file, applyingState);
+      }
       await this.logger.error('item.failed', {
         proposalId: review.id,
         fileId: file.id,
@@ -261,18 +289,22 @@ export class ProposalReviewManager {
       });
       throw error;
     }
+    await this.logger.info('item.accepted', {
+      proposalId: review.id,
+      fileId: file.id,
+      itemId,
+      revision: file.currentRevision,
+    });
   }
 
   private async preflight(proposal: EditProposal): Promise<void> {
     for (const file of proposal.files) {
-      if (!file.items.some(item => item.decision === EditDecisionState.PENDING)) continue;
-      if (file.applicability === EditApplicabilityState.STALE) throw this.stale(file);
-      const current = await this.workspace.readOptional(file.currentPath);
-      if (file.currentRevision === null ? current !== undefined : current?.revision !== file.currentRevision) {
-        file.applicability = EditApplicabilityState.STALE;
+      if (file.applyingItemId) {
+        await this.reconcile(proposal, file);
         await this.persist();
-        throw this.stale(file, current?.revision);
       }
+      if (!file.items.some(item => item.decision === EditDecisionState.PENDING)) continue;
+      await this.synchronize(file);
       const rename = file.items.find(
         item => item.kind === EditReviewItemKind.RENAME && item.decision === EditDecisionState.PENDING,
       );
@@ -283,7 +315,15 @@ export class ProposalReviewManager {
 
   private async preflightAll(reviews: readonly EditProposal[]): Promise<void> {
     for (const review of reviews) await this.preflight(review);
-    const claimedPaths = new Map<string, { reviewId: string; fileId: string }>();
+    const claimedPaths = new Map<
+      string,
+      {
+        readonly reviewId: string;
+        readonly fileId: string;
+        readonly file: FileEditPlan;
+        virtual: FileEditPlan['current'];
+      }
+    >();
     for (const review of reviews) {
       for (const file of review.files) {
         if (!file.items.some(item => item.decision === EditDecisionState.PENDING)) continue;
@@ -295,18 +335,27 @@ export class ProposalReviewManager {
           const key = path.normalize('NFC').toLocaleLowerCase('en-US');
           const existing = claimedPaths.get(key);
           if (existing && (existing.reviewId !== review.id || existing.fileId !== file.id)) {
-            throw new EditError(
-              EditFailureReason.DECISION_CONFLICT,
-              'Accept all cannot atomically apply multiple queued proposals that touch the same path.',
-              {
-                source: review.id,
-                fileId: file.id,
-                path,
-                retry: 'Review the conflicting proposals individually.',
-              },
-            );
+            if (
+              path === file.currentPath &&
+              path === existing.file.currentPath &&
+              existing.virtual &&
+              canBatchTextChanges(existing.file, file)
+            ) {
+              const transformedFile = cloneFileForTransform(file);
+              if (!rebaseFileToSnapshot(transformedFile, existing.virtual)) {
+                throw queuedPathConflict(review.id, file, path);
+              }
+              existing.virtual = simulatePendingTextChanges(transformedFile);
+              continue;
+            }
+            throw queuedPathConflict(review.id, file, path);
           }
-          claimedPaths.set(key, { reviewId: review.id, fileId: file.id });
+          claimedPaths.set(key, {
+            reviewId: review.id,
+            fileId: file.id,
+            file,
+            virtual: canBatchTextChanges(file) ? simulatePendingTextChanges(file) : file.current,
+          });
         }
       }
     }
@@ -322,13 +371,9 @@ export class ProposalReviewManager {
       const recovered = await this.reconcileApplying(review, file, applying, current);
       if (recovered) return;
     }
-    if (file.currentRevision === null ? current !== undefined : current?.revision !== file.currentRevision)
-      file.applicability = EditApplicabilityState.STALE;
-    else {
-      file.current = current ?? null;
-      file.applicability = EditApplicabilityState.READY;
-      file.applyingItemId = null;
-    }
+    if (this.synchronizeSnapshot(file, current)) return;
+    file.applicability = EditApplicabilityState.STALE;
+    file.applyingItemId = null;
   }
 
   private async reconcileApplying(
@@ -355,9 +400,53 @@ export class ProposalReviewManager {
             : after?.revision === revisionOf(composeWith(file, item.id), file.proposed.byteOrderMark);
     if (!applied) return false;
     item.decision = EditDecisionState.ACCEPTED;
-    file.current = after;
-    file.currentPath = after?.path ?? file.currentPath;
-    file.currentRevision = after?.revision ?? null;
+    if (item.kind === EditReviewItemKind.TEXT && after) {
+      const textChange = planTextAcceptance(file, item);
+      if (!textChange) return false;
+      applyTransformedRanges(textChange.transformedItems);
+      updateBaseline(file, after);
+    } else {
+      file.current = after;
+      file.currentPath = after?.path ?? file.currentPath;
+      file.currentRevision = after?.revision ?? null;
+      if (item.kind === EditReviewItemKind.RENAME && after) updateBaseline(file, after);
+    }
+    file.applicability = EditApplicabilityState.READY;
+    file.applyingItemId = null;
+    return true;
+  }
+
+  private async synchronize(file: FileEditPlan): Promise<void> {
+    const current = await this.workspace.readOptional(file.currentPath);
+    if (this.synchronizeSnapshot(file, current)) {
+      await this.persist();
+      return;
+    }
+    file.applicability = EditApplicabilityState.STALE;
+    await this.persist();
+    throw this.stale(file, current?.revision);
+  }
+
+  private synchronizeSnapshot(file: FileEditPlan, current: FileEditPlan['current'] | undefined): boolean {
+    if (file.currentRevision === null) {
+      if (current !== undefined) return false;
+      file.current = null;
+      file.applicability = EditApplicabilityState.READY;
+      file.applyingItemId = null;
+      return true;
+    }
+    if (!current || !file.current) return false;
+
+    if (file.base && file.base.revision !== file.current.revision) {
+      if (!rebasePendingTextItems(file, file.base.text, file.current.text)) return false;
+      updateBaseline(file, file.current);
+    }
+    if (current.revision !== file.currentRevision) {
+      if (!canRebase(file) || !rebasePendingTextItems(file, file.current.text, current.text)) return false;
+      updateBaseline(file, current);
+    } else {
+      updateBaseline(file, current);
+    }
     file.applicability = EditApplicabilityState.READY;
     file.applyingItemId = null;
     return true;
@@ -423,26 +512,209 @@ function isSettled(review: EditProposal): boolean {
   return review.files.every(file => file.items.every(item => item.decision !== EditDecisionState.PENDING));
 }
 
-function compose(file: FileEditPlan): string {
-  if (!file.base) return file.proposed.text;
-  let text = file.base.text;
-  const accepted = file.items
-    .filter(item => item.kind === EditReviewItemKind.TEXT && item.decision === EditDecisionState.ACCEPTED)
+function composeWith(file: FileEditPlan, itemId: string): string {
+  const item = file.items.find(candidate => candidate.id === itemId);
+  if (!item || item.kind !== EditReviewItemKind.TEXT || !file.current) return file.current?.text ?? '';
+  return applyTextItem(file.current.text, item);
+}
+
+function canRebase(file: FileEditPlan): boolean {
+  return file.operation === EditOperation.UPDATE || file.operation === EditOperation.RENAME;
+}
+
+function canBatchTextChanges(...files: FileEditPlan[]): boolean {
+  return files.every(
+    file =>
+      file.operation === EditOperation.UPDATE &&
+      file.items.some(item => item.decision === EditDecisionState.PENDING) &&
+      file.items
+        .filter(item => item.decision === EditDecisionState.PENDING)
+        .every(item => item.kind === EditReviewItemKind.TEXT),
+  );
+}
+
+function cloneFileForTransform(file: FileEditPlan): FileEditPlan {
+  return { ...file, items: file.items.map(item => ({ ...item })) };
+}
+
+function queuedPathConflict(reviewId: string, file: FileEditPlan, path: string): EditError {
+  return new EditError(
+    EditFailureReason.DECISION_CONFLICT,
+    'Accept all cannot safely merge multiple queued proposals that touch the same path.',
+    {
+      source: reviewId,
+      fileId: file.id,
+      path,
+      retry: 'Review the conflicting proposals individually.',
+    },
+  );
+}
+
+function rebaseFileToSnapshot(file: FileEditPlan, current: NonNullable<FileEditPlan['current']>): boolean {
+  if (!file.current || !rebasePendingTextItems(file, file.current.text, current.text)) return false;
+  updateBaseline(file, current);
+  return true;
+}
+
+function simulatePendingTextChanges(file: FileEditPlan): NonNullable<FileEditPlan['current']> {
+  if (!file.current) throw new Error('Cannot simulate text changes without a current document.');
+  const text = composePendingText(file, file.current.text);
+  return snapshotForProposal(file, file.current, text, file.proposed.byteOrderMark);
+}
+
+function rebasePendingTextItems(file: FileEditPlan, previousText: string, currentText: string): boolean {
+  const items = file.items.filter(
+    item => item.kind === EditReviewItemKind.TEXT && item.decision === EditDecisionState.PENDING,
+  );
+  const ranges = transformTextEditRanges(previousText, currentText, items);
+  if (!ranges) return false;
+  applyTransformedRanges(items.map((item, index) => ({ item, range: ranges[index]! })));
+  return true;
+}
+
+function planTextAcceptance(
+  file: FileEditPlan,
+  item: FileEditPlan['items'][number],
+):
+  | {
+      readonly text: string;
+      readonly transformedItems: readonly TransformedItem[];
+    }
+  | undefined {
+  if (!file.current || item.kind !== EditReviewItemKind.TEXT) return undefined;
+  let text: string;
+  try {
+    text = applyTextItem(file.current.text, item);
+  } catch {
+    return undefined;
+  }
+  const remaining = file.items.filter(
+    candidate =>
+      candidate.id !== item.id &&
+      candidate.kind === EditReviewItemKind.TEXT &&
+      candidate.decision === EditDecisionState.PENDING,
+  );
+  const ranges = transformTextEditRanges(file.current.text, text, remaining);
+  if (!ranges) return undefined;
+  return {
+    text,
+    transformedItems: remaining.map((candidate, index) => ({ item: candidate, range: ranges[index]! })),
+  };
+}
+
+interface TransformedItem {
+  readonly item: FileEditPlan['items'][number];
+  readonly range: { readonly sourceStart: number; readonly sourceEnd: number };
+}
+
+interface FileEditPlanState {
+  readonly base: FileEditPlan['base'];
+  readonly proposed: FileEditPlan['proposed'];
+  readonly current: FileEditPlan['current'];
+  readonly applyingItemId: string | null;
+  readonly createdDirectories: readonly string[];
+  readonly applicability: EditApplicabilityState;
+  readonly currentPath: string;
+  readonly currentRevision: string | null;
+  readonly items: readonly {
+    readonly id: string;
+    readonly sourceStart: number;
+    readonly sourceEnd: number;
+    readonly decision: EditDecisionState;
+  }[];
+}
+
+function captureFileState(file: FileEditPlan): FileEditPlanState {
+  return {
+    base: file.base,
+    proposed: file.proposed,
+    current: file.current,
+    applyingItemId: file.applyingItemId,
+    createdDirectories: [...file.createdDirectories],
+    applicability: file.applicability,
+    currentPath: file.currentPath,
+    currentRevision: file.currentRevision,
+    items: file.items.map(item => ({
+      id: item.id,
+      sourceStart: item.sourceStart,
+      sourceEnd: item.sourceEnd,
+      decision: item.decision,
+    })),
+  };
+}
+
+function restoreFileState(file: FileEditPlan, state: FileEditPlanState): void {
+  file.base = state.base;
+  file.proposed = state.proposed;
+  file.current = state.current;
+  file.applyingItemId = state.applyingItemId;
+  file.createdDirectories = [...state.createdDirectories];
+  file.applicability = state.applicability;
+  file.currentPath = state.currentPath;
+  file.currentRevision = state.currentRevision;
+  for (const itemState of state.items) {
+    const item = file.items.find(candidate => candidate.id === itemState.id);
+    if (!item) continue;
+    item.sourceStart = itemState.sourceStart;
+    item.sourceEnd = itemState.sourceEnd;
+    item.decision = itemState.decision;
+  }
+}
+
+function applyTransformedRanges(items: readonly TransformedItem[]): void {
+  for (const { item, range } of items) {
+    item.sourceStart = range.sourceStart;
+    item.sourceEnd = range.sourceEnd;
+  }
+}
+
+function applyTextItem(text: string, item: FileEditPlan['items'][number]): string {
+  if (text.slice(item.sourceStart, item.sourceEnd) !== item.removedText) {
+    throw new Error('The transformed edit no longer matches its expected text.');
+  }
+  return text.slice(0, item.sourceStart) + item.insertedText + text.slice(item.sourceEnd);
+}
+
+function updateBaseline(file: FileEditPlan, current: NonNullable<FileEditPlan['current']>): void {
+  const previous = file.base ?? file.current;
+  const changesByteOrderMark = previous
+    ? file.proposed.byteOrderMark !== previous.byteOrderMark
+    : file.proposed.byteOrderMark !== current.byteOrderMark;
+  const byteOrderMark = changesByteOrderMark ? file.proposed.byteOrderMark : current.byteOrderMark;
+  file.base = current;
+  file.current = current;
+  file.currentPath = current.path;
+  file.currentRevision = current.revision;
+  const proposedText = composePendingText(file, current.text);
+  file.proposed = snapshotForProposal(file, current, proposedText, byteOrderMark);
+}
+
+function composePendingText(file: FileEditPlan, baseText: string): string {
+  let text = baseText;
+  const pending = file.items
+    .filter(item => item.kind === EditReviewItemKind.TEXT && item.decision === EditDecisionState.PENDING)
     .sort((left, right) => right.sourceStart - left.sourceStart);
-  for (const item of accepted) text = text.slice(0, item.sourceStart) + item.insertedText + text.slice(item.sourceEnd);
+  for (const item of pending) text = applyTextItem(text, item);
   return text;
 }
 
-function composeWith(file: FileEditPlan, itemId: string): string {
-  const item = file.items.find(candidate => candidate.id === itemId);
-  if (!item) return compose(file);
-  const previous = item.decision;
-  item.decision = EditDecisionState.ACCEPTED;
-  try {
-    return compose(file);
-  } finally {
-    item.decision = previous;
-  }
+function snapshotForProposal(
+  file: FileEditPlan,
+  current: NonNullable<FileEditPlan['current']>,
+  text: string,
+  byteOrderMark: boolean,
+): NonNullable<FileEditPlan['current']> {
+  const bytes = Buffer.from(text, 'utf8');
+  const encoded = byteOrderMark ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes]) : bytes;
+  return {
+    path: file.targetPath,
+    text,
+    byteOrderMark,
+    revision: createHash('sha256').update(encoded).digest('hex'),
+    byteLength: encoded.length,
+    mode: current.mode,
+    identity: file.proposed.identity,
+  };
 }
 
 function revisionOf(text: string, byteOrderMark: boolean): string {

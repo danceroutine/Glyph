@@ -1,15 +1,87 @@
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { z } from 'zod';
 import { EditError } from '../../errors/EditError.ts';
 import { EditFailureReason } from '../../errors/EditFailureReason.ts';
+import { EditOperation } from '../../proposals/EditOperation.ts';
 import type { EditProposal } from '../../proposals/EditProposal.ts';
+import { EditApplicabilityState } from '../EditApplicabilityState.ts';
+import { EditDecisionState } from '../EditDecisionState.ts';
+import { EditReviewItemKind } from '../EditReviewItemKind.ts';
 import type { ProposalReviewStore } from './ProposalReviewStore.ts';
 
 interface ProposalReviewCheckpoint {
   readonly schemaVersion: 2;
   readonly proposals: readonly EditProposal[];
 }
+
+const snapshotSchema = z
+  .object({
+    path: z.string().min(1),
+    text: z.string(),
+    byteOrderMark: z.boolean(),
+    revision: z.string().min(1),
+    byteLength: z.number().int().nonnegative(),
+    mode: z.number().int().nonnegative(),
+    identity: z.string().min(1).optional(),
+  })
+  .strict()
+  .transform(snapshot => ({ ...snapshot, identity: snapshot.identity ?? `legacy:${snapshot.path}` }));
+
+const reviewItemSchema = z
+  .object({
+    id: z.string().min(1),
+    fileId: z.string().min(1),
+    kind: z.enum(EditReviewItemKind),
+    sourceStart: z.number().int().nonnegative(),
+    sourceEnd: z.number().int().nonnegative(),
+    removedText: z.string(),
+    insertedText: z.string(),
+    decision: z.enum(EditDecisionState),
+  })
+  .strict();
+
+const fileEditPlanSchema = z
+  .object({
+    id: z.string().min(1),
+    operation: z.enum(EditOperation),
+    sourcePath: z.string().min(1),
+    targetPath: z.string().min(1),
+    base: snapshotSchema.nullable(),
+    proposed: snapshotSchema,
+    items: z.array(reviewItemSchema),
+    current: snapshotSchema.nullable().optional(),
+    applyingItemId: z.string().min(1).nullable().optional(),
+    createdDirectories: z.array(z.string()).optional(),
+    applicability: z.enum(EditApplicabilityState),
+    currentPath: z.string().min(1),
+    currentRevision: z.string().min(1).nullable(),
+  })
+  .strict()
+  .transform(file => ({
+    ...file,
+    current: file.current === undefined ? file.base : file.current,
+    applyingItemId: file.applyingItemId ?? null,
+    createdDirectories: file.createdDirectories ?? [],
+  }));
+
+const editProposalSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    id: z.string().min(1),
+    source: z.enum(['patch', 'structured']),
+    createdAt: z.string().min(1),
+    files: z.array(fileEditPlanSchema),
+  })
+  .strict();
+
+const checkpointSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    proposals: z.array(editProposalSchema),
+  })
+  .strict();
 
 /** Filesystem-backed, atomic checkpoint storage for active proposal reviews. */
 export class FileProposalReviewStore implements ProposalReviewStore {
@@ -22,9 +94,11 @@ export class FileProposalReviewStore implements ProposalReviewStore {
   async load(): Promise<EditProposal[]> {
     try {
       const value: unknown = JSON.parse(await readFile(this.path, 'utf8'));
-      if (isLegacyProposal(value)) return [value];
-      if (!isCheckpoint(value)) throw new Error('Unsupported proposal-review checkpoint schema.');
-      return [...value.proposals];
+      const legacy = editProposalSchema.safeParse(value);
+      if (legacy.success) return [legacy.data];
+      const checkpoint = checkpointSchema.safeParse(value);
+      if (!checkpoint.success) throw new Error('Unsupported proposal-review checkpoint schema.');
+      return [...checkpoint.data.proposals];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw new EditError(
@@ -74,20 +148,4 @@ export class FileProposalReviewStore implements ProposalReviewStore {
       }
     }
   }
-}
-
-function isLegacyProposal(value: unknown): value is EditProposal {
-  if (!value || typeof value !== 'object') return false;
-  const proposal = value as Partial<EditProposal>;
-  return proposal.schemaVersion === 1 && typeof proposal.id === 'string' && Array.isArray(proposal.files);
-}
-
-function isCheckpoint(value: unknown): value is ProposalReviewCheckpoint {
-  if (!value || typeof value !== 'object') return false;
-  const checkpoint = value as Partial<ProposalReviewCheckpoint>;
-  return (
-    checkpoint.schemaVersion === 2 &&
-    Array.isArray(checkpoint.proposals) &&
-    checkpoint.proposals.every(isLegacyProposal)
-  );
 }

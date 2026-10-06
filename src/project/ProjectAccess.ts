@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { WorkspacePathIndexError } from '../context/search/WorkspacePathIndexError.ts';
+import { WorkspacePathIndexFailureReason } from '../context/search/WorkspacePathIndexFailureReason.ts';
+import type { WorkspacePathIndex } from '../context/search/WorkspacePathIndex.ts';
 import type { ToolDefinition } from '../tools/ToolDefinition.ts';
 import { ToolInputKind } from '../tools/ToolInputKind.ts';
 import { FileSystemWorkspaceTextStore } from '../workspace/FileSystemWorkspaceTextStore.ts';
@@ -11,7 +14,6 @@ import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 interface ProjectAccessOptions {
   maxFiles?: number;
   maxFileBytes?: number;
-  maxLinesPerRead?: number;
   ignoredDirectories?: string[];
   excludedPaths?: string[];
   sensitiveFileNames?: string[];
@@ -23,8 +25,6 @@ interface ProjectAccessOptions {
 const defaults = {
   maxFiles: 2_000,
   maxFileBytes: 512 * 1024,
-  // Matches the model-facing read pagination default in LangChain Deep Agents.
-  maxLinesPerRead: 100,
   ignoredDirectories: ['.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
   excludedPaths: [],
   sensitiveFileNames: ['.netrc', '.npmrc', '.pypirc'],
@@ -37,7 +37,6 @@ const projectAccessOptionsSchema = z
   .object({
     maxFiles: z.number().int().positive().default(defaults.maxFiles),
     maxFileBytes: z.number().int().positive().default(defaults.maxFileBytes),
-    maxLinesPerRead: z.number().int().positive().default(defaults.maxLinesPerRead),
     ignoredDirectories: z.array(z.string().min(1)).default([...defaults.ignoredDirectories]),
     excludedPaths: z.array(z.string().min(1)).default([...defaults.excludedPaths]),
     sensitiveFileNames: z.array(z.string().min(1)).default([...defaults.sensitiveFileNames]),
@@ -49,7 +48,19 @@ const projectAccessOptionsSchema = z
 
 type ResolvedProjectAccessOptions = z.output<typeof projectAccessOptionsSchema>;
 
-const listProjectFilesArguments = z.object({}).strict();
+const listProjectFilesArguments = z
+  .object({
+    glob_pattern: z
+      .string()
+      .min(1)
+      .describe('Glob pattern for file paths. Patterns without a **/ prefix match at any depth.'),
+    target_directory: z
+      .string()
+      .min(1)
+      .nullable()
+      .describe('Project-relative directory to search, or null for the project root.'),
+  })
+  .strict();
 const readProjectFileArguments = z
   .object({
     path: z.string().min(1).describe('Project-relative file path returned by list_project_files.'),
@@ -59,7 +70,7 @@ const readProjectFileArguments = z
       .int()
       .positive()
       .nullable()
-      .describe('Last line to return, inclusive, or null for the configured maximum.'),
+      .describe('Last line to return, inclusive, or null for the end of the file.'),
   })
   .strict();
 
@@ -69,7 +80,8 @@ const definitions: readonly ToolDefinition[] = [
   {
     namespace: ProjectToolNamespace.PROJECT,
     name: ProjectToolName.LIST_FILES,
-    description: 'List the files in the current project. Use this to discover relevant files before reading them.',
+    description:
+      'Find project files by glob pattern within an optional project-relative directory. Patterns without a **/ prefix match at any depth. Results preserve project access exclusions.',
     inputKind: ToolInputKind.JSON,
     parameters: jsonSchema(listProjectFilesArguments),
   },
@@ -77,7 +89,7 @@ const definitions: readonly ToolDefinition[] = [
     namespace: ProjectToolNamespace.PROJECT,
     name: ProjectToolName.READ_FILE,
     description:
-      'Read an exact UTF-8 text snapshot inside the project, including its revision, byte-order-mark state, and per-line line-ending metadata. Paths are project-relative. Pass null for both line bounds to read from the beginning. Reuse the revision in edit proposals.',
+      'Read an exact UTF-8 text snapshot inside the project, including its revision, byte-order-mark state, and per-line line-ending metadata. Paths are project-relative. Pass null for both line bounds to read the entire file. Reuse the revision in edit proposals.',
     inputKind: ToolInputKind.JSON,
     parameters: jsonSchema(readProjectFileArguments),
   },
@@ -88,9 +100,14 @@ export class ProjectAccess {
   private readonly options: ResolvedProjectAccessOptions;
   private readonly workspace: WorkspaceTextStore;
 
-  constructor(root: string, options: ProjectAccessOptions = {}, workspace?: WorkspaceTextStore) {
-    const { maxFiles, maxFileBytes, maxLinesPerRead, ...workspaceOptions } = projectAccessOptionsSchema.parse(options);
-    this.options = { maxFiles, maxFileBytes, maxLinesPerRead, ...workspaceOptions };
+  constructor(
+    root: string,
+    options: ProjectAccessOptions = {},
+    workspace?: WorkspaceTextStore,
+    private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'>,
+  ) {
+    const { maxFiles, maxFileBytes, ...workspaceOptions } = projectAccessOptionsSchema.parse(options);
+    this.options = { maxFiles, maxFileBytes, ...workspaceOptions };
     this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, workspaceOptions);
   }
 
@@ -98,8 +115,7 @@ export class ProjectAccess {
     try {
       switch (name) {
         case ProjectToolName.LIST_FILES:
-          listProjectFilesArguments.parse(JSON.parse(rawArguments));
-          return JSON.stringify(await this.listFiles());
+          return JSON.stringify(await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments))));
         case ProjectToolName.READ_FILE:
           return JSON.stringify(await this.readFile(readProjectFileArguments.parse(JSON.parse(rawArguments))));
         default:
@@ -112,7 +128,10 @@ export class ProjectAccess {
             ? error.toJSON()
             : {
                 code:
-                  error instanceof z.ZodError || error instanceof SyntaxError
+                  error instanceof z.ZodError ||
+                  error instanceof SyntaxError ||
+                  (error instanceof WorkspacePathIndexError &&
+                    error.code === WorkspacePathIndexFailureReason.INVALID_REQUEST)
                     ? EditFailureReason.MALFORMED
                     : 'PROJECT_ACCESS_FAILED',
                 message: error instanceof Error ? error.message : 'Project tool failed.',
@@ -121,8 +140,18 @@ export class ProjectAccess {
     }
   }
 
-  private async listFiles(): Promise<{ files: string[]; truncated: boolean }> {
-    return this.workspace.list(this.options.maxFiles);
+  private async listFiles({
+    glob_pattern: globPattern,
+    target_directory: targetDirectory,
+  }: z.infer<typeof listProjectFilesArguments>): Promise<{ files: string[]; truncated: boolean }> {
+    const normalizedTarget = targetDirectory === null ? undefined : this.workspace.normalizePath(targetDirectory);
+    if (this.pathIndex) {
+      return this.pathIndex.glob(globPattern, {
+        ...(normalizedTarget === undefined ? {} : { targetDirectory: normalizedTarget }),
+        limit: this.options.maxFiles,
+      });
+    }
+    return this.workspace.list(this.options.maxFiles, globPattern, normalizedTarget);
   }
 
   private async readFile({ path, start_line: requestedStart, end_line: requestedEnd }: ReadArguments): Promise<{
@@ -143,11 +172,8 @@ export class ProjectAccess {
       throw new Error(`File exceeds the ${this.options.maxFileBytes}-byte read limit.`);
     }
     const lines = toLines(snapshot.text);
-    const endLineLimit = requestedEnd ?? startLine + this.options.maxLinesPerRead - 1;
+    const endLineLimit = requestedEnd ?? lines.length;
     if (endLineLimit < startLine) throw new Error('end_line must be greater than or equal to start_line.');
-    if (endLineLimit - startLine + 1 > this.options.maxLinesPerRead) {
-      throw new Error(`A single read may include at most ${this.options.maxLinesPerRead} lines.`);
-    }
 
     const startIndex = startLine - 1;
     const endLine = Math.min(endLineLimit, lines.length);

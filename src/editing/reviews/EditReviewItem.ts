@@ -5,8 +5,8 @@ export interface EditReviewItem {
   readonly id: string;
   readonly fileId: string;
   readonly kind: EditReviewItemKind;
-  readonly sourceStart: number;
-  readonly sourceEnd: number;
+  sourceStart: number;
+  sourceEnd: number;
   readonly removedText: string;
   readonly insertedText: string;
   decision: EditDecisionState;

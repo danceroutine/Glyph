@@ -1,5 +1,5 @@
 /** Metadata reported after starting or refreshing the native file index. */
-export interface FileSearchIndexState {
+export interface WorkspacePathIndexState {
   readonly root: string;
   readonly fileCount: number;
   readonly fromCache: boolean;

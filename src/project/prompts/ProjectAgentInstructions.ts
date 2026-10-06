@@ -16,7 +16,7 @@ ${this.identity.trim()}
 ## Project discovery
 
 - Inspect relevant project files before answering questions that depend on the codebase.
-- Use \`project.list_project_files\` when you do not know the relevant path.
+- Use \`project.list_project_files\` with a focused glob pattern and, when useful, a project-relative target directory when you do not know the relevant path.
 - Use \`project.read_project_file\` before making claims about file contents.
 - Never claim to have inspected a file you have not read.
 

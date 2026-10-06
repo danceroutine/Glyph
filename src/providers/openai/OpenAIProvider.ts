@@ -21,7 +21,6 @@ import type { TurnResult } from '../../chat/TurnResult.ts';
 import type { ChatRequest, ChatRequestInput } from '../../chat/ChatRequest.ts';
 import { toChatRequest } from '../../chat/ChatRequest.ts';
 
-const MAX_TOOL_ROUNDS = 8;
 export class OpenAIProvider implements ChatProvider {
   private history: ResponseInputItem[] = [];
   private busy = false;
@@ -110,10 +109,10 @@ export class OpenAIProvider implements ChatProvider {
           logLevel: 'off',
         });
       let totalUsage: TurnResult['usage'] = null;
-      let toolRounds = 0;
+      let round = 0;
 
       for (;;) {
-        const round = toolRounds + 1;
+        round += 1;
         const request = {
           model: this.model,
           instructions: this.configuration.instructions,
@@ -263,10 +262,6 @@ export class OpenAIProvider implements ChatProvider {
           trace('history.committed', { history: this.history }, round);
           return { responseId: response.id, usage: totalUsage };
         }
-        toolRounds += 1;
-        if (toolRounds > MAX_TOOL_ROUNDS)
-          throw new ProviderError(`Stopped after ${MAX_TOOL_ROUNDS} project tool rounds.`);
-
         const outputs = await Promise.all(
           calls.map(async call => {
             trace('tool.call', { call }, round);

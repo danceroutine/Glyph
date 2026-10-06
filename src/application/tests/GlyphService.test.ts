@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChatProvider } from '../../chat/ChatProvider.ts';
 import { toChatRequest } from '../../chat/ChatRequest.ts';
 import type { ChatProviderFactory } from '../../chat/ChatProviderFactory.ts';
-import type { WorkspaceFileSearch } from '../../context/search/WorkspaceFileSearch.ts';
+import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
 import type { ChatResponsePart } from '../../chat/ChatResponsePart.ts';
 import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
 import type { ModelCatalog } from '../../chat/ModelCatalog.ts';
@@ -99,7 +99,7 @@ describe(GlyphService, () => {
   describe(GlyphService.prototype.initialize, () => {
     it('initializes and disposes the resident file index with the account-store lifecycle', async () => {
       const store = new MemoryStore();
-      const fileSearch: WorkspaceFileSearch = {
+      const fileSearch: WorkspacePathIndex = {
         initialize: vi.fn(async () => ({
           root: '/project',
           fileCount: 1,
@@ -108,6 +108,7 @@ describe(GlyphService, () => {
           durationMilliseconds: 1,
         })),
         search: vi.fn(),
+        glob: vi.fn(),
         refresh: vi.fn(),
         dispose: vi.fn(async () => {}),
       };
@@ -138,11 +139,12 @@ describe(GlyphService, () => {
     it('disposes a failed file index and releases the account lock before surfacing startup failure', async () => {
       const store = new MemoryStore();
       const startupFailure = new Error('native index could not start');
-      const fileSearch: WorkspaceFileSearch = {
+      const fileSearch: WorkspacePathIndex = {
         initialize: vi.fn(async () => {
           throw startupFailure;
         }),
         search: vi.fn(),
+        glob: vi.fn(),
         refresh: vi.fn(),
         dispose: vi.fn(async () => {}),
       };

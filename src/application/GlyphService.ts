@@ -15,7 +15,7 @@ import type { OpenAISessionService } from '../providers/openai/auth/OpenAISessio
 import type { ChatRequest } from '../chat/ChatRequest.ts';
 import type { ContextAttachmentReference } from '../context/attachments/ContextAttachmentReference.ts';
 import type { ContextAttachmentService } from '../context/attachments/ContextAttachmentService.ts';
-import type { WorkspaceFileSearch } from '../context/search/WorkspaceFileSearch.ts';
+import type { WorkspacePathIndex } from '../context/search/WorkspacePathIndex.ts';
 
 const emptyUsage = (): Usage => ({
   inputTokens: 0,
@@ -46,7 +46,7 @@ export class GlyphService {
     options: { traceEnabled?: boolean } = {},
     readonly proposalReviews?: ProposalReviewManager,
     private readonly contextAttachments?: ContextAttachmentService,
-    private readonly fileSearch?: WorkspaceFileSearch,
+    private readonly pathIndex?: WorkspacePathIndex,
   ) {
     this.traceEnabled = options.traceEnabled ?? true;
   }
@@ -68,18 +68,18 @@ export class GlyphService {
     if (this.acquired) return;
     await this.store.acquire();
     this.acquired = true;
-    let fileSearchStarted = false;
+    let pathIndexStarted = false;
     try {
       await this.store.load();
       await this.proposalReviews?.initialize();
-      fileSearchStarted = this.fileSearch !== undefined;
-      await this.fileSearch?.initialize();
+      pathIndexStarted = this.pathIndex !== undefined;
+      await this.pathIndex?.initialize();
     } catch (error) {
       this.acquired = false;
       const cleanupFailures: unknown[] = [];
-      if (fileSearchStarted) {
+      if (pathIndexStarted) {
         try {
-          await this.fileSearch?.dispose();
+          await this.pathIndex?.dispose();
         } catch (cleanupError) {
           cleanupFailures.push(cleanupError);
         }
@@ -103,7 +103,7 @@ export class GlyphService {
     if (!this.acquired) return;
     this.acquired = false;
     try {
-      await this.fileSearch?.dispose();
+      await this.pathIndex?.dispose();
     } finally {
       await this.store.release();
     }

@@ -9,7 +9,11 @@ import type { WorkspaceMutationOptions } from './WorkspaceMutationOptions.ts';
 export interface WorkspaceTextStore {
   readonly root: string;
   readonly caseSensitive: boolean;
-  list(maxFiles: number): Promise<{ files: string[]; truncated: boolean }>;
+  list(
+    maxFiles: number,
+    globPattern?: string,
+    targetDirectory?: string,
+  ): Promise<{ files: string[]; truncated: boolean }>;
   normalizePath(path: string): string;
   read(path: string): Promise<WorkspaceTextSnapshot>;
   readOptional(path: string): Promise<WorkspaceTextSnapshot | undefined>;

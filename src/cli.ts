@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GlyphService } from './application/GlyphService.ts';
 import { ContextAttachmentService } from './context/attachments/ContextAttachmentService.ts';
-import { RustWorkspaceFileSearch } from './context/search/RustWorkspaceFileSearch.ts';
+import { RustWorkspacePathIndex } from './context/search/RustWorkspacePathIndex.ts';
 import { EnvironmentConfigurationProvider } from './configuration/EnvironmentConfigurationProvider.ts';
 import { ConfigurationError } from './errors/ConfigurationError.ts';
 import { EditProposalService } from './editing/proposals/EditProposalService.ts';
@@ -21,7 +21,7 @@ import { OpenAIAuthenticationClient } from './providers/openai/auth/OpenAIAuthen
 import { OpenAISession } from './providers/openai/auth/OpenAISession.ts';
 import { FileOpenAIAccountStore } from './providers/openai/auth/FileOpenAIAccountStore.ts';
 import { TerminalApplication } from './terminal/TerminalApplication.ts';
-import { TerminalEditReviewer } from './terminal/TerminalEditReviewer.ts';
+import { TerminalEditReviewer } from './terminal/ui/proposal/TerminalEditReviewer.ts';
 import { ShutdownSignal } from './terminal/ShutdownSignal.ts';
 import { TerminalUI } from './terminal/TerminalUI.tsx';
 import { installShutdownHandlers } from './terminal/installShutdownHandlers.ts';
@@ -65,16 +65,17 @@ async function main(): Promise<void> {
       ].filter((path): path is string => path !== undefined),
     ),
   ];
-  const fileSearch = new RustWorkspaceFileSearch({
+  const workspace = new FileSystemWorkspaceTextStore(projectRoot, { excludedPaths });
+  const pathIndex = new RustWorkspacePathIndex({
     binaryPath: indexExecutable,
     root: projectRoot,
     cachePath: join(configuration.stateDirectory, 'context-index.bin'),
     excludedPaths,
+    caseSensitive: workspace.caseSensitive,
   });
-  const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, fileSearch);
+  const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, pathIndex);
   const authentication = new OpenAIAuthenticationClient(configuration.openAI, http);
   const session = new OpenAISession(store, authentication, configuration.openAI, shutdown.signal);
-  const workspace = new FileSystemWorkspaceTextStore(projectRoot, { excludedPaths });
   const proposalReviews = new ProposalReviewManager(
     workspace,
     new FileProposalReviewStore(configuration.stateDirectory),
@@ -82,7 +83,7 @@ async function main(): Promise<void> {
     configuration.editing.maxActiveReviews,
   );
   const projectTools = new ProjectToolRuntime(
-    new ProjectAccess(projectRoot, {}, workspace),
+    new ProjectAccess(projectRoot, {}, workspace, pathIndex),
     new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
     proposalReviews,
     logger,
@@ -97,7 +98,7 @@ async function main(): Promise<void> {
     { traceEnabled: configuration.traceEnabled },
     proposalReviews,
     new ContextAttachmentService(workspace, configuration.contextAttachments),
-    fileSearch,
+    pathIndex,
   );
   const application = new TerminalApplication(
     glyph,

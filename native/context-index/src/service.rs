@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -12,10 +12,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::cache::{self, CachedPaths};
 use crate::index::{SearchFailure, SearchIndex, SearchResult};
+use crate::path_glob::{find_matches, GlobResult};
 
 const DEFAULT_MAX_FILES: u32 = 2_000_000;
 const DEFAULT_SEARCH_LIMIT: u32 = 20;
 const MAX_SEARCH_LIMIT: u32 = 100;
+const DEFAULT_GLOB_LIMIT: u32 = 2_000;
+const MAX_GLOB_LIMIT: u32 = 10_000;
 const MAX_QUERY_CHARS: usize = 4_096;
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -47,6 +50,8 @@ pub(crate) struct InitializeParams {
     pub(crate) respect_git_ignore: bool,
     #[serde(default = "default_max_files")]
     pub(crate) max_files: u32,
+    #[serde(default = "default_case_sensitive")]
+    pub(crate) case_sensitive: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -60,6 +65,7 @@ struct IndexPolicy {
     excluded_paths: Vec<String>,
     respect_git_ignore: bool,
     max_files: u32,
+    case_sensitive: bool,
 }
 
 impl From<&InitializeParams> for IndexPolicy {
@@ -73,6 +79,7 @@ impl From<&InitializeParams> for IndexPolicy {
             excluded_paths: params.excluded_paths.clone(),
             respect_git_ignore: params.respect_git_ignore,
             max_files: params.max_files,
+            case_sensitive: params.case_sensitive,
         }
     }
 }
@@ -182,6 +189,16 @@ pub(crate) struct SearchParams {
     pub(crate) generation: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct GlobParams {
+    pub(crate) pattern: String,
+    #[serde(default)]
+    pub(crate) target_directory: Option<String>,
+    #[serde(default = "default_glob_limit")]
+    pub(crate) limit: u32,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct IndexStatus {
@@ -253,7 +270,7 @@ struct InitializedIndex {
     policy_hash: [u8; 32],
     cache_path: Option<PathBuf>,
     index: Arc<Mutex<SearchIndex>>,
-    known_paths: Arc<RwLock<HashSet<String>>>,
+    known_paths: Arc<RwLock<BTreeSet<String>>>,
     truncated: Arc<AtomicBool>,
 }
 
@@ -437,6 +454,40 @@ impl ContextIndexService {
             })
     }
 
+    pub(crate) fn glob(&self, params: GlobParams) -> Result<GlobResult, ServiceError> {
+        if params.limit == 0 || params.limit > MAX_GLOB_LIMIT {
+            return Err(ServiceError::invalid_request(format!(
+                "limit must be between 1 and {MAX_GLOB_LIMIT}."
+            )));
+        }
+        if params
+            .target_directory
+            .as_deref()
+            .is_some_and(|directory| !is_normalized_project_relative_path(directory))
+        {
+            return Err(ServiceError::invalid_request(
+                "targetDirectory must be a normalized project-relative directory.",
+            ));
+        }
+        let initialized = self
+            .initialized
+            .as_ref()
+            .ok_or_else(ServiceError::not_initialized)?;
+        let paths = initialized
+            .known_paths
+            .read()
+            .map_err(|_| ServiceError::internal("The known-path set lock is poisoned."))?;
+        find_matches(
+            &paths,
+            &params.pattern,
+            params.target_directory.as_deref(),
+            params.limit as usize,
+            initialized.policy.case_sensitive,
+            initialized.truncated.load(Ordering::Acquire),
+        )
+        .map_err(ServiceError::invalid_request)
+    }
+
     pub(crate) fn refresh(&mut self) -> Result<IndexStatus, ServiceError> {
         let initialized = self
             .initialized
@@ -460,7 +511,7 @@ impl ContextIndexService {
                 eprintln!("glyph-context-index: cache write failed: {error}");
             }
         }
-        let known_paths: HashSet<_> = scan.paths.iter().cloned().collect();
+        let known_paths: BTreeSet<_> = scan.paths.iter().cloned().collect();
         let index = SearchIndex::from_paths(scan.paths).map_err(ServiceError::internal)?;
         let file_count = index.file_count();
         *initialized
@@ -511,7 +562,7 @@ struct MonitorState {
     policy_hash: [u8; 32],
     cache_path: Option<PathBuf>,
     index: Arc<Mutex<SearchIndex>>,
-    known_paths: Arc<RwLock<HashSet<String>>>,
+    known_paths: Arc<RwLock<BTreeSet<String>>>,
     truncated: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     reconcile_immediately: bool,
@@ -665,7 +716,7 @@ fn reconcile_shared(state: &MonitorState) {
     if state.stop.load(Ordering::Acquire) {
         return;
     }
-    let known_paths: HashSet<_> = scan.paths.iter().cloned().collect();
+    let known_paths: BTreeSet<_> = scan.paths.iter().cloned().collect();
     let index = match SearchIndex::from_paths(scan.paths.clone()) {
         Ok(index) => index,
         Err(error) => {
@@ -709,7 +760,7 @@ fn event_requires_reconcile(
     root: &Path,
     policy: &IndexPolicy,
     cache_path: Option<&Path>,
-    known_paths: &RwLock<HashSet<String>>,
+    known_paths: &RwLock<BTreeSet<String>>,
 ) -> bool {
     if matches!(event.kind, EventKind::Access(_)) {
         return false;
@@ -945,6 +996,14 @@ fn default_max_files() -> u32 {
     DEFAULT_MAX_FILES
 }
 
+fn default_glob_limit() -> u32 {
+    DEFAULT_GLOB_LIMIT
+}
+
+fn default_case_sensitive() -> bool {
+    !cfg!(any(target_os = "windows", target_os = "macos"))
+}
+
 fn default_search_limit() -> u32 {
     DEFAULT_SEARCH_LIMIT
 }
@@ -971,6 +1030,7 @@ mod tests {
             excluded_paths: Vec::new(),
             respect_git_ignore: true,
             max_files: DEFAULT_MAX_FILES,
+            case_sensitive: default_case_sensitive(),
         }
     }
 
@@ -1073,7 +1133,7 @@ mod tests {
             .expect("excluded directory should exist");
         let path = directory.path().join("src/generated/new.ts");
         write(&path, "").expect("excluded fixture should write");
-        let known = RwLock::new(HashSet::new());
+        let known = RwLock::new(BTreeSet::new());
         let mut configuration = params(directory.path());
         configuration.excluded_paths = vec!["src/generated".to_owned()];
         let policy = IndexPolicy::from(&configuration);
@@ -1195,11 +1255,83 @@ mod tests {
     }
 
     #[test]
+    fn service_glob_uses_the_shared_filtered_path_catalog() {
+        let directory = tempdir().expect("temporary directory should exist");
+        create_dir_all(directory.path().join("src/nested")).expect("source directory should exist");
+        create_dir_all(directory.path().join("tests")).expect("test directory should exist");
+        write(directory.path().join("src/App.tsx"), "").expect("fixture should write");
+        write(directory.path().join("src/nested/Card.tsx"), "").expect("fixture should write");
+        write(directory.path().join("tests/App.test.tsx"), "").expect("fixture should write");
+        write(directory.path().join(".env.local"), "SECRET=1")
+            .expect("sensitive fixture should write");
+        let mut configuration = params(directory.path());
+        configuration.case_sensitive = true;
+        let mut service = ContextIndexService::new();
+        service
+            .initialize(configuration)
+            .expect("initialization should work");
+
+        let result = service
+            .glob(GlobParams {
+                pattern: "*.tsx".to_owned(),
+                target_directory: Some("src".to_owned()),
+                limit: 20,
+            })
+            .expect("glob should work");
+        let secrets = service
+            .glob(GlobParams {
+                pattern: ".env*".to_owned(),
+                target_directory: None,
+                limit: 20,
+            })
+            .expect("glob should work");
+
+        assert_eq!(
+            result.files,
+            ["src/App.tsx".to_owned(), "src/nested/Card.tsx".to_owned()]
+        );
+        assert!(!result.truncated);
+        assert!(secrets.files.is_empty());
+        let _ = service.shutdown();
+    }
+
+    #[test]
+    fn service_glob_rejects_unsafe_target_directories_and_limits() {
+        let directory = tempdir().expect("temporary directory should exist");
+        let mut service = ContextIndexService::new();
+        service
+            .initialize(params(directory.path()))
+            .expect("initialization should work");
+
+        for params in [
+            GlobParams {
+                pattern: "*.ts".to_owned(),
+                target_directory: Some("../outside".to_owned()),
+                limit: 20,
+            },
+            GlobParams {
+                pattern: "*.ts".to_owned(),
+                target_directory: None,
+                limit: 0,
+            },
+        ] {
+            assert_eq!(
+                service
+                    .glob(params)
+                    .expect_err("invalid glob request should fail")
+                    .code,
+                "INVALID_REQUEST"
+            );
+        }
+        let _ = service.shutdown();
+    }
+
+    #[test]
     fn content_changes_do_not_require_a_path_reconcile() {
         let directory = tempdir().expect("temporary directory should exist");
         let path = directory.path().join("src.ts");
         write(&path, "before").expect("fixture should write");
-        let known = RwLock::new(HashSet::from(["src.ts".to_owned()]));
+        let known = RwLock::new(BTreeSet::from(["src.ts".to_owned()]));
         let policy = IndexPolicy::from(&params(directory.path()));
         let event = Event {
             kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
@@ -1221,7 +1353,7 @@ mod tests {
         let directory = tempdir().expect("temporary directory should exist");
         let path = directory.path().join(".gitignore");
         write(&path, "generated/\n").expect("fixture should write");
-        let known = RwLock::new(HashSet::new());
+        let known = RwLock::new(BTreeSet::new());
         let policy = IndexPolicy::from(&params(directory.path()));
         let event = Event {
             kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),

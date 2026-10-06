@@ -310,14 +310,14 @@ describe(ProposalReviewManager, () => {
         ],
       });
       await manager.stage(proposal);
-      await writeFile(join(root, 'b.txt'), 'collaborator');
+      await writeFile(join(root, 'b.txt'), 'human');
 
       await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.STALE });
       expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('a');
-      expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('collaborator');
+      expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('human');
     });
 
-    it('performs zero writes when queued actor proposals touch the same file', async () => {
+    it('performs zero writes when queued actor proposals overlap on the same file', async () => {
       const { root, manager, service, workspace } = await fixture('base');
       const base = await workspace.read('file.txt');
       const proposals = await Promise.all(
@@ -407,11 +407,14 @@ describe(ProposalReviewManager, () => {
       expect(manager.activeReviews.map(review => review.id)).toEqual([first.id, second.id]);
       expect(manager.active).toBe(first);
       expect(manager.get(second.id)).toBe(second);
+      expect(manager.pendingChangeCount).toBe(2);
 
       await manager.acceptInReview(first.id, first.files[0]!.items[0]!.id);
       expect(manager.activeReviews).toEqual([second]);
+      expect(manager.pendingChangeCount).toBe(1);
       await manager.rejectInReview(second.id, second.files[0]!.items[0]!.id);
       expect(manager.activeReviews).toEqual([]);
+      expect(manager.pendingChangeCount).toBe(0);
     });
 
     it('rejects another proposal only when the configured review queue is full', async () => {

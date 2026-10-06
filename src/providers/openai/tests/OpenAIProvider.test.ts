@@ -116,6 +116,19 @@ describe(OpenAIProvider, () => {
           ],
         }),
       ]);
+      const projectNamespace = (
+        requests[0]?.tools as
+          { tools?: { name?: string; strict?: boolean; parameters?: Record<string, unknown> }[] }[] | undefined
+      )?.[0];
+      const listFilesTool = projectNamespace?.tools?.find(tool => tool.name === 'list_project_files');
+      expect(listFilesTool).toMatchObject({
+        strict: true,
+        parameters: {
+          type: 'object',
+          required: ['glob_pattern', 'target_directory'],
+          additionalProperties: false,
+        },
+      });
       expect(requests[1]?.input).toEqual([
         { role: 'user', content: 'first' },
         ...completed.response.output,
@@ -388,6 +401,45 @@ describe(OpenAIProvider, () => {
       expect(
         (requests[2]!.input as { type?: string }[]).filter(item => item.type === 'function_call_output'),
       ).toHaveLength(1);
+    });
+
+    it('continues through more than eight project tool rounds until the model answers', async () => {
+      const toolRounds = Array.from({ length: 12 }, (_, index) => ({
+        type: 'response.completed',
+        response: {
+          id: `resp_tool_round_${index}`,
+          status: 'completed',
+          output: [
+            {
+              type: 'reasoning',
+              id: `rs_tool_round_${index}`,
+              summary: [],
+              encrypted_content: `tool-reasoning-${index}`,
+            },
+            {
+              type: 'function_call',
+              id: `fc_list_${index}`,
+              call_id: `call_list_${index}`,
+              status: 'completed',
+              namespace: 'project',
+              name: 'list_project_files',
+              arguments: JSON.stringify({ glob_pattern: '**/*', target_directory: null }),
+            },
+          ],
+          usage: null,
+        },
+      }));
+      const { provider, requests } = harness([
+        ...toolRounds.map(response => () => sse([response])),
+        () => sse([completed]),
+      ]);
+
+      const result = await provider.send('Inspect as much as necessary.', options());
+
+      expect(result.responseId).toBe('resp_test');
+      expect(requests).toHaveLength(13);
+      const finalInput = requests.at(-1)?.input as { type?: string }[];
+      expect(finalInput.filter(item => item.type === 'function_call_output')).toHaveLength(12);
     });
 
     it('collects output-item events when the terminal response output is empty', async () => {

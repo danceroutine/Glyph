@@ -1,5 +1,5 @@
 /** Initialization options understood by the version-one Rust index protocol. */
-export interface RustWorkspaceFileSearchOptions {
+export interface RustWorkspacePathIndexOptions {
   readonly binaryPath: string;
   readonly root: string;
   readonly cachePath?: string;
@@ -12,4 +12,5 @@ export interface RustWorkspaceFileSearchOptions {
   readonly allowedFileNames?: readonly string[];
   readonly respectGitIgnore?: boolean;
   readonly maxFiles?: number;
+  readonly caseSensitive?: boolean;
 }
