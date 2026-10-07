@@ -4,8 +4,9 @@ import { createInterface } from 'node:readline/promises';
 import type { Interface } from 'node:readline/promises';
 import { stripVTControlCharacters } from 'node:util';
 import { Box, Text } from 'ink';
-import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
-import type { AuthorizationRequest } from '../providers/openai/auth/AuthorizationRequest.ts';
+import type { ChatAccount, ChatAccountNotice } from '../chat/ChatAccount.ts';
+import type { ChatAuthorizationRequest } from '../chat/ChatAuthorizationRequest.ts';
+import type { ChatBackendPresentation } from '../chat/ChatBackend.ts';
 import type { ChatResponsePart } from '../chat/ChatResponsePart.ts';
 import { ChatResponsePartType } from '../chat/ChatResponsePartType.ts';
 import type { ChatResponseStream } from '../chat/ChatResponseStream.ts';
@@ -42,8 +43,7 @@ import { ChatHistory } from './ui/chat/ChatHistory.presentational.tsx';
 const TERMINAL_HELP = `Commands: ${TERMINAL_COMMANDS.map(command => command.value).join(' ')}
 Type @ at the chat prompt to fuzzy-search and attach project files.
 Type / at the chat prompt to search commands.
-Ctrl+C cancels a response; at a prompt it exits.
-Subscription authentication only. API-key environment variables are ignored.`;
+Ctrl+C cancels a response; at a prompt it exits.`;
 
 type TerminalAction =
   | ({ type: TerminalActionType.SEND } & UserPromptDraft)
@@ -51,7 +51,7 @@ type TerminalAction =
   | { type: TerminalActionType.UNKNOWN_COMMAND };
 
 type AccountSelection =
-  { type: AccountSelectionType.ACCOUNT; account: OpenAIAccount } | { type: AccountSelectionType.ADD };
+  { type: AccountSelectionType.ACCOUNT; account: ChatAccount } | { type: AccountSelectionType.ADD };
 
 /** Ink-backed terminal host with a plain readline fallback for redirected IO. */
 export class TerminalUI implements ChatResponseStream, QuestionPresenter {
@@ -103,20 +103,26 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter {
     this.appendText(TERMINAL_HELP);
   }
 
-  showWelcome(project: ProjectContext, logPath: string | undefined, traceEnabled: boolean): void {
+  showWelcome(
+    project: ProjectContext,
+    logPath: string | undefined,
+    traceEnabled: boolean,
+    provider?: ChatBackendPresentation,
+  ): void {
     const roots = project.roots.map(root => `${root.name}: ${clean(root.path)}`);
+    const welcome = provider?.welcome ?? 'Glyph';
+    const usageDescription = provider?.usageDescription;
     if (this.renderer) {
       this.renderer.append(
         <Box flexDirection="column">
           <Text bold color="cyan">
-            Glyph | Continue with ChatGPT
+            {welcome}
           </Text>
           <Text>{`Project: ${clean(project.name)} (${project.kind})`}</Text>
           {roots.map(root => (
             <Text key={root}>{`  ${root}`}</Text>
           ))}
-          <Text>Uses your plan allowance and any credits you authorize in ChatGPT settings.</Text>
-          <Text dimColor>Usage controls: https://chatgpt.com/settings/usage</Text>
+          {usageDescription ? <Text>{usageDescription}</Text> : null}
           <Text dimColor>{`Log: ${logPath ? clean(logPath) : 'off'}`}</Text>
           <Text dimColor>{`Full provider tracing: ${traceEnabled ? 'on' : 'off'}`}</Text>
           <Text>{TERMINAL_HELP}</Text>
@@ -124,12 +130,10 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter {
       );
       return;
     }
-    this.line(`Glyph | Continue with ChatGPT
+    this.line(`${welcome}
 Project: ${clean(project.name)} (${project.kind})
 ${roots.map(root => `  ${root}`).join('\n')}
-Uses your plan allowance and any credits you authorize in ChatGPT settings.
-Usage controls: https://chatgpt.com/settings/usage
-Log: ${logPath ? clean(logPath) : 'off'}
+${usageDescription ? `${usageDescription}\n` : ''}Log: ${logPath ? clean(logPath) : 'off'}
 Full provider tracing: ${traceEnabled ? 'on' : 'off'}
 ${TERMINAL_HELP}`);
   }
@@ -138,30 +142,34 @@ ${TERMINAL_HELP}`);
     return clean(text);
   }
 
-  async chooseAccount(accounts: readonly OpenAIAccount[], signal: AbortSignal): Promise<AccountSelection> {
+  async chooseAccount(
+    accounts: readonly ChatAccount[],
+    provider: ChatBackendPresentation,
+    signal: AbortSignal,
+  ): Promise<AccountSelection> {
     for (;;) {
       if (this.renderer) {
         this.renderer.append(
           <Box flexDirection="column" marginTop={1}>
             <Text bold color="cyan">
-              ChatGPT accounts
+              {provider.accountsHeading}
             </Text>
             {accounts.map((account, index) => (
-              <Text key={account.subject}>
-                {`${index + 1}. ${clean(account.email)} [${clean(account.clientId)}]${account.tokens ? '' : ' (signed out)'}`}
+              <Text key={`${account.provider}:${account.id}`}>
+                {`${index + 1}. ${clean(account.label)}${account.detail ? ` [${clean(account.detail)}]` : ''}${account.connected ? '' : ' (signed out)'}`}
               </Text>
             ))}
-            <Text>a. Add another account/workspace</Text>
+            <Text>{`a. ${provider.addAccountLabel}`}</Text>
           </Box>,
         );
       } else {
-        this.line('\nChatGPT accounts');
+        this.line(`\n${provider.accountsHeading}`);
         accounts.forEach((account, index) => {
           this.line(
-            `${index + 1}. ${clean(account.email)} [${clean(account.clientId)}]${account.tokens ? '' : ' (signed out)'}`,
+            `${index + 1}. ${clean(account.label)}${account.detail ? ` [${clean(account.detail)}]` : ''}${account.connected ? '' : ' (signed out)'}`,
           );
         });
-        this.line('a. Add another account/workspace');
+        this.line(`a. ${provider.addAccountLabel}`);
       }
       const onlyAccount = accounts.length === 1 ? '1' : undefined;
       const label = onlyAccount ? 'Account number [1], or a to add: ' : 'Account number, or a to add: ';
@@ -197,32 +205,30 @@ ${TERMINAL_HELP}`);
     return model;
   }
 
-  async confirmPlanUsage(signal: AbortSignal): Promise<boolean> {
-    return (await this.ask('Enable ChatGPT plan usage for this account? [y/N]: ', signal)).trim().toLowerCase() === 'y';
+  async confirmInferenceAccess(prompt: string, signal: AbortSignal): Promise<boolean> {
+    return (await this.ask(`${prompt} [y/N]: `, signal)).trim().toLowerCase() === 'y';
   }
 
-  async acknowledgePlanUsage(signal: AbortSignal): Promise<void> {
-    this.appendText(
-      "You're using your ChatGPT plan. Manage this app's plan allowance and credit access at https://chatgpt.com/settings/usage",
-    );
-    await this.ask('Got it [Enter]: ', signal);
+  async acknowledgeAccountNotice(notice: ChatAccountNotice, signal: AbortSignal): Promise<void> {
+    this.appendText(notice.message);
+    await this.ask(notice.acknowledgementPrompt, signal);
   }
 
-  async authorize({ url }: AuthorizationRequest): Promise<void> {
+  async authorize({ url, title, message }: ChatAuthorizationRequest): Promise<void> {
     if (this.renderer) {
       this.renderer.append(
         <Box flexDirection="column" marginTop={1}>
           <Text bold color="cyan">
-            Continue with ChatGPT
+            {title}
           </Text>
-          <Text>Authorize Glyph to use your ChatGPT plan.</Text>
+          <Text>{message}</Text>
           <Text>If the browser does not open, visit:</Text>
           <Text underline>{clean(url)}</Text>
         </Box>,
       );
     } else
       this.line(
-        `\nContinue with ChatGPT\nAuthorize Glyph to use your ChatGPT plan.\n\nIf the browser does not open, visit:\n${clean(url)}\n`,
+        `\n${clean(title)}\n${clean(message)}\n\nIf the browser does not open, visit:\n${clean(url)}\n`,
       );
 
     if (process.platform === 'win32') return;
@@ -295,7 +301,7 @@ ${TERMINAL_HELP}`);
     this.responseSection = undefined;
   }
 
-  showActive(account: OpenAIAccount, model: Model): void {
+  showActive(account: ChatAccount, model: Model, provider: ChatBackendPresentation): void {
     if (this.renderer) {
       this.renderer.append(
         <Box flexDirection="column" marginY={1}>
@@ -303,20 +309,20 @@ ${TERMINAL_HELP}`);
             <Text bold color="cyan">
               {'Active  '}
             </Text>
-            {`${clean(account.email)} [${clean(account.clientId)}]`}
+            {`${clean(account.label)}${account.detail ? ` [${clean(account.detail)}]` : ''}`}
           </Text>
           <Text>
             <Text bold color="cyan">
               {'Model   '}
             </Text>
             {`${clean(model.slug)}  `}
-            <Text dimColor>ChatGPT plan</Text>
+            <Text dimColor>{provider.activeAccessLabel}</Text>
           </Text>
         </Box>,
       );
     } else
       this.line(
-        `\nActive  ${clean(account.email)} [${clean(account.clientId)}]\nModel   ${clean(model.slug)}  ChatGPT plan\n`,
+        `\nActive  ${clean(account.label)}${account.detail ? ` [${clean(account.detail)}]` : ''}\nModel   ${clean(model.slug)}  ${clean(provider.activeAccessLabel)}\n`,
       );
   }
 

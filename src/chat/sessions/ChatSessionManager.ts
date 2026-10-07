@@ -9,8 +9,8 @@ import type { ChatTitleGenerator } from './ChatTitleGenerator.ts';
 import { ExtractiveChatTitleGenerator } from './ExtractiveChatTitleGenerator.ts';
 
 export interface CreateChatSessionInput {
-  readonly accountClientId: string;
-  readonly accountSubject: string;
+  readonly accountProvider: string;
+  readonly accountId: string;
   readonly modelSlug: string;
   readonly modelName: string;
 }
@@ -39,12 +39,12 @@ export class ChatSessionManager {
     this.initialized = true;
   }
 
-  list(account?: { clientId: string; subject: string }): readonly ChatSessionSummary[] {
+  list(account?: { provider: string; id: string }): readonly ChatSessionSummary[] {
     this.requireInitialized();
     return [...this.records.values()]
       .filter(
         record =>
-          !account || (record.accountClientId === account.clientId && record.accountSubject === account.subject),
+          !account || (record.accountProvider === account.provider && record.accountId === account.id),
       )
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .map(toSummary);
@@ -54,13 +54,13 @@ export class ChatSessionManager {
     this.requireInitialized();
     const timestamp = this.now().toISOString();
     const record: ChatSessionRecord = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       id: this.createId(),
       title: 'New chat',
       titleOrigin: 'placeholder',
       projectContextId: this.projectContext.id,
-      accountClientId: input.accountClientId,
-      accountSubject: input.accountSubject,
+      accountProvider: input.accountProvider,
+      accountId: input.accountId,
       modelSlug: input.modelSlug,
       modelName: input.modelName,
       createdAt: timestamp,

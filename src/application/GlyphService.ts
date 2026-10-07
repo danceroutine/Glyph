@@ -1,17 +1,12 @@
 import { ChatConversation } from '../chat/ChatConversation.ts';
-import type { ChatProviderFactory } from '../chat/ChatProviderFactory.ts';
+import type { ChatAccount } from '../chat/ChatAccount.ts';
+import type { ChatAuthorizationHandler } from '../chat/ChatAuthorizationRequest.ts';
+import type { ChatBackend, ChatBackendPresentation } from '../chat/ChatBackend.ts';
 import type { Model } from '../chat/Model.ts';
-import type { ModelCatalog } from '../chat/ModelCatalog.ts';
 import type { TurnResult } from '../chat/TurnResult.ts';
 import type { Usage } from '../chat/Usage.ts';
-import { AuthenticationError } from '../errors/AuthenticationError.ts';
 import type { Logger } from '../observability/Logger.ts';
 import type { ProposalReviewManager } from '../editing/reviews/ProposalReviewManager.ts';
-import type { OpenAIConfiguration } from '../providers/openai/OpenAIConfiguration.ts';
-import type { AuthorizationHandler } from '../providers/openai/auth/AuthorizationHandler.ts';
-import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
-import type { OpenAIAccountStore } from '../providers/openai/auth/OpenAIAccountStore.ts';
-import type { OpenAISessionService } from '../providers/openai/auth/OpenAISessionService.ts';
 import type { ChatRequest } from '../chat/ChatRequest.ts';
 import type { ContextAttachmentReference } from '../context/attachments/ContextAttachmentReference.ts';
 import type { ContextAttachmentService } from '../context/attachments/ContextAttachmentService.ts';
@@ -42,12 +37,8 @@ export class GlyphService {
   private traceEnabled: boolean;
 
   constructor(
-    private readonly store: OpenAIAccountStore,
-    private readonly session: OpenAISessionService,
-    private readonly models: ModelCatalog,
-    private readonly providers: ChatProviderFactory,
+    private readonly backend: ChatBackend,
     private readonly logger: Logger,
-    private readonly openAI: OpenAIConfiguration,
     options: { traceEnabled?: boolean } = {},
     readonly proposalReviews?: ProposalReviewManager,
     private readonly contextAttachments?: ContextAttachmentService,
@@ -57,8 +48,11 @@ export class GlyphService {
     this.traceEnabled = options.traceEnabled ?? true;
   }
 
-  get accounts(): readonly OpenAIAccount[] {
-    return this.store.state.accounts;
+  get accounts(): readonly ChatAccount[] {
+    return this.backend.accounts;
+  }
+  get providerPresentation(): ChatBackendPresentation {
+    return this.backend.presentation;
   }
   get tracePath(): string | undefined {
     return this.logger.destination;
@@ -72,12 +66,11 @@ export class GlyphService {
 
   async initialize(): Promise<void> {
     if (this.acquired) return;
-    await this.store.acquire();
+    await this.backend.initialize();
     this.acquired = true;
     let pathIndexStarted = false;
     let chatSessionsStarted = false;
     try {
-      await this.store.load();
       chatSessionsStarted = this.chatSessions !== undefined;
       await this.chatSessions?.initialize();
       await this.proposalReviews?.initialize();
@@ -101,7 +94,7 @@ export class GlyphService {
         }
       }
       try {
-        await this.store.release();
+        await this.backend.dispose();
       } catch (cleanupError) {
         cleanupFailures.push(cleanupError);
       }
@@ -124,33 +117,32 @@ export class GlyphService {
       try {
         await this.chatSessions?.dispose();
       } finally {
-        await this.store.release();
+        await this.backend.dispose();
       }
     }
   }
 
-  hasPlanAccess(account: OpenAIAccount): boolean {
-    return account.tokens?.scopes.includes(this.openAI.planScope) ?? false;
+  hasInferenceAccess(account: ChatAccount): boolean {
+    return account.inferenceAccess;
   }
 
-  async signIn(existing?: OpenAIAccount, consent = false, authorize?: AuthorizationHandler): Promise<OpenAIAccount> {
-    return this.session.signIn(existing, consent, authorize);
+  async signIn(
+    existing?: ChatAccount,
+    requestInferenceAccess = false,
+    authorize?: ChatAuthorizationHandler,
+  ): Promise<ChatAccount> {
+    return this.backend.signIn(existing, { requestInferenceAccess }, authorize);
   }
 
-  async acknowledgePlanNotice(account: OpenAIAccount): Promise<void> {
-    if (account.planNoticeSeen) return;
-    account.planNoticeSeen = true;
-    await this.store.save();
+  async acknowledgeAccountNotice(account: ChatAccount): Promise<void> {
+    await this.backend.acknowledgeNotice(account);
   }
 
-  async listModels(account: OpenAIAccount): Promise<Model[]> {
-    if (!this.hasPlanAccess(account)) {
-      throw new AuthenticationError('Sign-in completed, but ChatGPT plan usage was not granted.');
-    }
-    return this.models.list(await this.session.accessToken(account));
+  async listModels(account: ChatAccount): Promise<Model[]> {
+    return this.backend.listModels(account);
   }
 
-  createConversation(account: OpenAIAccount, model: Model): ChatConversation {
+  createConversation(account: ChatAccount, model: Model): ChatConversation {
     return this.instantiateConversation(account, model);
   }
 
@@ -170,16 +162,16 @@ export class GlyphService {
     await this.proposalReviews.acknowledgeResults(results.map(result => result.id));
   }
 
-  listChats(account?: OpenAIAccount): readonly ChatSessionSummary[] {
+  listChats(account?: ChatAccount): readonly ChatSessionSummary[] {
     return this.requireChatSessions().list(account);
   }
 
-  async createChat(account: OpenAIAccount, model: Model): Promise<ChatSession> {
+  async createChat(account: ChatAccount, model: Model): Promise<ChatSession> {
     const conversation = this.instantiateConversation(account, model);
     return this.requireChatSessions().create(
       {
-        accountClientId: account.clientId,
-        accountSubject: account.subject,
+        accountProvider: account.provider,
+        accountId: account.id,
         modelSlug: model.slug,
         modelName: model.name,
       },
@@ -187,10 +179,10 @@ export class GlyphService {
     );
   }
 
-  openChat(identifier: string, account: OpenAIAccount): ChatSession {
+  openChat(identifier: string, account: ChatAccount): ChatSession {
     return this.requireChatSessions().open(identifier, record => {
-      if (record.accountClientId !== account.clientId || record.accountSubject !== account.subject) {
-        throw new Error('That chat belongs to a different ChatGPT account or workspace.');
+      if (record.accountProvider !== account.provider || record.accountId !== account.id) {
+        throw new Error('That chat belongs to a different provider account or workspace.');
       }
       return this.instantiateConversation(
         account,
@@ -204,13 +196,12 @@ export class GlyphService {
     return this.requireChatSessions().rename(identifier, title);
   }
 
-  private instantiateConversation(account: OpenAIAccount, model: Model, state?: ChatProviderState): ChatConversation {
-    const token = (): Promise<string> => this.session.accessToken(account);
-    const provider = state ? this.providers.create(model.slug, token, state) : this.providers.create(model.slug, token);
+  private instantiateConversation(account: ChatAccount, model: Model, state?: ChatProviderState): ChatConversation {
+    const provider = this.backend.createProvider(account, model, state);
     return new ChatConversation(
       provider,
       this.logger,
-      value => this.session.redact(value),
+      value => this.backend.redact(value),
       result => this.recordUsage(result),
       this.traceEnabled,
     );
@@ -227,12 +218,12 @@ export class GlyphService {
     this.traceEnabled = enabled;
   }
 
-  async logout(account: OpenAIAccount): Promise<boolean> {
-    return this.session.logout(account);
+  async logout(account: ChatAccount): Promise<boolean> {
+    return this.backend.logout(account);
   }
 
   redact(message: string): string {
-    return this.session.redact(message);
+    return this.backend.redact(message);
   }
 
   private recordUsage(result: TurnResult): void {

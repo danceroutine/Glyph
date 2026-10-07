@@ -25,6 +25,7 @@ import { ProjectContextKind } from './project/context/ProjectContextKind.ts';
 import { ProjectContextResolver } from './project/context/ProjectContextResolver.ts';
 import { ProjectToolRuntime } from './project/ProjectToolRuntime.ts';
 import { OpenAIModelCatalog } from './providers/openai/OpenAIModelCatalog.ts';
+import { OpenAIBackend } from './providers/openai/OpenAIBackend.ts';
 import { OpenAIProviderFactory } from './providers/openai/OpenAIProviderFactory.ts';
 import { OpenAIAuthenticationClient } from './providers/openai/auth/OpenAIAuthenticationClient.ts';
 import { OpenAISession } from './providers/openai/auth/OpenAISession.ts';
@@ -96,13 +97,16 @@ async function main(): Promise<void> {
     logger,
   );
   const tools = new CompositeToolRuntime([projectTools, new ProposeQuestionToolRuntime(ui)]);
-  const glyph = new GlyphService(
+  const backend = new OpenAIBackend(
     store,
     session,
     new OpenAIModelCatalog(configuration.openAI, http),
     new OpenAIProviderFactory(projectContext.roots[0]!.path, configuration, tools),
-    logger,
     configuration.openAI,
+  );
+  const glyph = new GlyphService(
+    backend,
+    logger,
     { traceEnabled: configuration.traceEnabled },
     proposalReviews,
     new ContextAttachmentService(workspace, configuration.contextAttachments),

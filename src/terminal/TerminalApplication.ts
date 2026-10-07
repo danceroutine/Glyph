@@ -1,8 +1,8 @@
 import type { GlyphService } from '../application/GlyphService.ts';
 import type { ChatSession } from '../chat/sessions/ChatSession.ts';
+import type { ChatAccount } from '../chat/ChatAccount.ts';
 import type { Model } from '../chat/Model.ts';
 import { describeError } from '../describeError.ts';
-import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
 import { AccountSelectionType } from './AccountSelectionType.ts';
 import { TerminalActionType } from './TerminalActionType.ts';
 import type { TerminalUI } from './TerminalUI.tsx';
@@ -39,9 +39,14 @@ export class TerminalApplication {
     try {
       await this.glyph.initialize();
       if (this.shutdown.aborted) return 0;
-      this.ui.showWelcome(this.options.projectContext, this.glyph.tracePath, this.glyph.isTraceEnabled);
+      this.ui.showWelcome(
+        this.options.projectContext,
+        this.glyph.tracePath,
+        this.glyph.isTraceEnabled,
+        this.glyph.providerPresentation,
+      );
 
-      let account = await this.enablePlanIfNeeded(await this.chooseAccount());
+      let account = await this.enableInferenceIfNeeded(await this.chooseAccount());
       await this.selectModel(account);
       await this.reviewPending();
 
@@ -122,10 +127,10 @@ export class TerminalApplication {
             const next =
               action.type === TerminalActionType.ACCOUNT
                 ? await this.chooseAccount()
-                : await this.glyph.signIn(account, !this.glyph.hasPlanAccess(account), request =>
+                : await this.glyph.signIn(account, !this.glyph.hasInferenceAccess(account), request =>
                     this.ui.authorize(request),
                   );
-            account = await this.enablePlanIfNeeded(next);
+            account = await this.enableInferenceIfNeeded(next);
             await this.selectModel(account);
             break;
           }
@@ -146,28 +151,32 @@ export class TerminalApplication {
     }
   }
 
-  private async chooseAccount(): Promise<OpenAIAccount> {
-    const selection = await this.ui.chooseAccount(this.glyph.accounts, this.shutdown);
+  private async chooseAccount(): Promise<ChatAccount> {
+    const selection = await this.ui.chooseAccount(
+      this.glyph.accounts,
+      this.glyph.providerPresentation,
+      this.shutdown,
+    );
     if (selection.type === AccountSelectionType.ADD) {
       return this.glyph.signIn(undefined, false, request => this.ui.authorize(request));
     }
-    return selection.account.tokens
+    return selection.account.connected
       ? selection.account
       : this.glyph.signIn(selection.account, false, request => this.ui.authorize(request));
   }
 
-  private async enablePlanIfNeeded(account: OpenAIAccount): Promise<OpenAIAccount> {
-    if (this.glyph.hasPlanAccess(account)) return account;
-    if (!(await this.ui.confirmPlanUsage(this.shutdown))) {
-      throw new Error('Plan usage remains disabled. No inference was sent.');
+  private async enableInferenceIfNeeded(account: ChatAccount): Promise<ChatAccount> {
+    if (this.glyph.hasInferenceAccess(account)) return account;
+    if (!(await this.ui.confirmInferenceAccess(account.accessPrompt ?? 'Enable model access?', this.shutdown))) {
+      throw new Error('Model access remains disabled. No inference was sent.');
     }
     return this.glyph.signIn(account, true, request => this.ui.authorize(request));
   }
 
-  private async selectModel(account: OpenAIAccount): Promise<void> {
-    if (!account.planNoticeSeen) {
-      await this.ui.acknowledgePlanUsage(this.shutdown);
-      await this.glyph.acknowledgePlanNotice(account);
+  private async selectModel(account: ChatAccount): Promise<void> {
+    if (account.notice) {
+      await this.ui.acknowledgeAccountNotice(account.notice, this.shutdown);
+      await this.glyph.acknowledgeAccountNotice(account);
     }
     const models = await this.glyph.listModels(account);
     const model = await this.ui.chooseModel(models, this.options.configuredModel, this.shutdown);
@@ -176,7 +185,7 @@ export class TerminalApplication {
     const conversation = existing
       ? this.glyph.openChat(existing.id, account)
       : await this.glyph.createChat(account, model);
-    this.ui.showActive(account, model);
+    this.ui.showActive(account, model, this.glyph.providerPresentation);
     this.activateChat(conversation);
   }
 

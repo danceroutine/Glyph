@@ -10,13 +10,13 @@ export interface ChatTranscriptTurn {
 
 /** Durable state required to discover and resume one conversation. */
 export interface ChatSessionRecord {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly id: string;
   readonly title: string;
   readonly titleOrigin: 'placeholder' | 'generated' | 'human';
   readonly projectContextId: string;
-  readonly accountClientId: string;
-  readonly accountSubject: string;
+  readonly accountProvider: string;
+  readonly accountId: string;
   readonly modelSlug: string;
   readonly modelName: string;
   readonly createdAt: string;

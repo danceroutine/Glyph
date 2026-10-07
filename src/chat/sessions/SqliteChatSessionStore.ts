@@ -59,13 +59,13 @@ const legacyCatalogSchema = z
 
 const storedRecordSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     id: z.string().min(1),
     title: z.string().min(1),
     titleOrigin: z.enum(['placeholder', 'generated', 'human']),
     projectContextId: z.string().min(1),
-    accountClientId: z.string().min(1),
-    accountSubject: z.string().min(1),
+    accountProvider: z.string().min(1),
+    accountId: z.string().min(1),
     modelSlug: z.string().min(1),
     modelName: z.string().min(1),
     createdAt: z.iso.datetime(),
@@ -231,13 +231,13 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         const context = legacyContext(legacy.scope.root, authority);
         registerContext(database, context);
         saveRecord(database, {
-          schemaVersion: 2,
+          schemaVersion: 3,
           id: legacy.id,
           title: legacy.title,
           titleOrigin: legacy.titleOrigin,
           projectContextId: context.id,
-          accountClientId: legacy.accountClientId,
-          accountSubject: legacy.accountSubject,
+          accountProvider: 'openai',
+          accountId: legacyAccountId(legacy.accountClientId, legacy.accountSubject),
           modelSlug: legacy.modelSlug,
           modelName: legacy.modelName,
           createdAt: legacy.createdAt,
@@ -307,8 +307,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         record.projectContextId,
         record.title,
         record.titleOrigin,
-        record.accountClientId,
-        record.accountSubject,
+        record.accountProvider,
+        record.accountId,
         record.modelSlug,
         record.modelName,
         record.createdAt,
@@ -337,13 +337,16 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
 
 function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
   return storedRecordSchema.parse({
-    schemaVersion: row.schema_version,
+    schemaVersion: 3,
     id: row.id,
     title: row.title,
     titleOrigin: row.title_origin,
     projectContextId: row.project_context_id,
-    accountClientId: row.account_client_id,
-    accountSubject: row.account_subject,
+    accountProvider: row.schema_version >= 3 ? row.account_client_id : 'openai',
+    accountId:
+      row.schema_version >= 3
+        ? row.account_subject
+        : legacyAccountId(row.account_client_id, row.account_subject),
     modelSlug: row.model_slug,
     modelName: row.model_name,
     createdAt: row.created_at,
@@ -357,6 +360,10 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
       createdAt: turn.created_at,
     })),
   });
+}
+
+function legacyAccountId(clientId: string, subject: string): string {
+  return JSON.stringify([clientId, subject]);
 }
 
 function legacyContext(root: string, authority: string): ProjectContext {
