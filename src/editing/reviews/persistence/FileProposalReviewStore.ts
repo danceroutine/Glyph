@@ -74,8 +74,22 @@ const editProposalSchema = z
     source: z.enum(['patch', 'structured']),
     createdAt: z.string().min(1),
     files: z.array(fileEditPlanSchema),
+    origin: z
+      .object({
+        chatId: z.string().min(1),
+        accountProvider: z.string().min(1),
+        accountId: z.string().min(1),
+      })
+      .strict()
+      .optional(),
+    acknowledgedResultIds: z.array(z.string().min(1)).optional(),
   })
-  .strict();
+  .strict()
+  .transform(({ origin, acknowledgedResultIds, ...proposal }) => ({
+    ...proposal,
+    ...(origin ? { origin } : {}),
+    acknowledgedResultIds: acknowledgedResultIds ?? [],
+  }));
 
 const checkpointSchema = z
   .object({

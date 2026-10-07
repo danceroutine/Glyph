@@ -37,6 +37,7 @@ describe(ProjectAccess, () => {
     );
     const context: ProjectContext = {
       id: 'multi-root-context',
+      mutationIdentity: 'multi-root-context-roots',
       kind: ProjectContextKind.WORKSPACE,
       name: 'product',
       authority: 'local',

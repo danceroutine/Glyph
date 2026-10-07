@@ -4,6 +4,7 @@ import type { TurnResult } from './TurnResult.ts';
 import type { ChatRequestInput } from './ChatRequest.ts';
 import type { ChatProviderState } from './ChatProviderState.ts';
 import type { ChatContextEvent } from './ChatContextEvent.ts';
+import type { ToolExecutionContext } from '../tools/ToolExecutionContext.ts';
 
 /** Low-level model/agent adapter. Hosts consume GlyphService instead. */
 export interface ChatProvider {
@@ -22,6 +23,9 @@ export interface ChatProvider {
       onReasoningSummary?: (delta: string) => void;
       onTrace?: (entry: ProviderTraceEntry) => void;
       onToolActivity?: (activity: ToolActivity) => void;
+      /** Persists side-effecting tool rounds before the model is allowed to continue. */
+      onStateCheckpoint?: (state: ChatProviderState) => void | Promise<void>;
+      toolContext?: ToolExecutionContext;
     },
   ): Promise<TurnResult>;
 }

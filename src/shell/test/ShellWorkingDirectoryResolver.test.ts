@@ -18,6 +18,7 @@ describe(ShellWorkingDirectoryResolver, () => {
       await mkdir(join(root, 'packages', 'app'), { recursive: true });
       const folder = new ShellWorkingDirectoryResolver({
         id: 'folder',
+        mutationIdentity: 'folder-root',
         kind: ProjectContextKind.FOLDER,
         name: 'Project',
         authority: 'local',
@@ -25,6 +26,7 @@ describe(ShellWorkingDirectoryResolver, () => {
       });
       const workspace = new ShellWorkingDirectoryResolver({
         id: 'workspace',
+        mutationIdentity: 'workspace-root',
         kind: ProjectContextKind.WORKSPACE,
         name: 'Workspace',
         authority: 'local',
@@ -44,6 +46,7 @@ describe(ShellWorkingDirectoryResolver, () => {
       await symlink(outside, join(root, 'escape'));
       const folder = new ShellWorkingDirectoryResolver({
         id: 'folder',
+        mutationIdentity: 'folder-root',
         kind: ProjectContextKind.FOLDER,
         name: 'Project',
         authority: 'local',
@@ -51,6 +54,7 @@ describe(ShellWorkingDirectoryResolver, () => {
       });
       const workspace = new ShellWorkingDirectoryResolver({
         id: 'workspace',
+        mutationIdentity: 'workspace-root',
         kind: ProjectContextKind.WORKSPACE,
         name: 'Workspace',
         authority: 'local',

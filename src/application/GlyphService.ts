@@ -147,19 +147,38 @@ export class GlyphService {
   }
 
   async commitReviewResults(conversation: {
+    readonly id?: string;
     recordContext(events: readonly ChatContextEvent[]): void | Promise<void>;
   }): Promise<void> {
     if (!this.proposalReviews || this.proposalReviews.pendingResults.length === 0) return;
     const results = this.proposalReviews.pendingResults;
-    await conversation.recordContext(
-      results.map(result => ({
-        schemaVersion: 1,
-        id: result.id,
-        type: 'edit_review_result',
-        payload: result,
-      })),
-    );
-    await this.proposalReviews.acknowledgeResults(results.map(result => result.id));
+    const groups = new Map<string, typeof results>();
+    for (const result of results) {
+      const key = result.origin
+        ? JSON.stringify([result.origin.accountProvider, result.origin.accountId, result.origin.chatId])
+        : 'legacy';
+      groups.set(key, [...(groups.get(key) ?? []), result]);
+    }
+    for (const group of groups.values()) {
+      const origin = group[0]?.origin;
+      let destination = conversation;
+      if (origin && conversation.id !== origin.chatId) {
+        const account = this.backend.accounts.find(
+          candidate => candidate.provider === origin.accountProvider && candidate.id === origin.accountId,
+        );
+        if (!account) throw new Error('The proposal owner account is no longer available.');
+        destination = this.openChat(origin.chatId, account);
+      }
+      await destination.recordContext(
+        group.map(result => ({
+          schemaVersion: 1,
+          id: result.id,
+          type: 'edit_review_result',
+          payload: result,
+        })),
+      );
+      await this.proposalReviews.acknowledgeResults(group.map(result => result.id));
+    }
   }
 
   listChats(account?: ChatAccount): readonly ChatSessionSummary[] {

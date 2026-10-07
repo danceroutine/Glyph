@@ -58,6 +58,10 @@ describe(ProjectContextResolver, () => {
     });
     expect(second.id).toBe(first.id);
 
+    await writeFile(manifest, JSON.stringify({ folders: [{ path: 'web' }, { name: 'backend', path: 'api' }] }));
+    const reordered = await ProjectContextResolver.workspace(manifest, root, 'test');
+    expect(reordered.mutationIdentity).toBe(first.mutationIdentity);
+
     await mkdir(join(root, 'docs'));
     await writeFile(
       manifest,
@@ -65,6 +69,7 @@ describe(ProjectContextResolver, () => {
     );
     const expanded = await ProjectContextResolver.workspace(manifest, root, 'test');
     expect(expanded.id).toBe(first.id);
+    expect(expanded.mutationIdentity).not.toBe(first.mutationIdentity);
     expect(expanded.roots).toHaveLength(3);
   });
 

@@ -4,6 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SandboxProfile {
     ReadOnly,
@@ -29,7 +31,37 @@ pub struct SandboxRequest {
     pub state_directory: PathBuf,
     pub workspace_roots: Vec<PathBuf>,
     pub protected_paths: Vec<PathBuf>,
+    pub workspace_policy: WorkspaceAccessPolicy,
     pub command: Vec<OsString>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceAccessPolicy {
+    pub ignored_directories: Vec<String>,
+    pub sensitive_file_names: Vec<String>,
+    pub sensitive_file_prefixes: Vec<String>,
+    pub sensitive_file_extensions: Vec<String>,
+    pub allowed_file_names: Vec<String>,
+}
+
+impl Default for WorkspaceAccessPolicy {
+    fn default() -> Self {
+        Self {
+            ignored_directories: strings(&[
+                ".git",
+                ".next",
+                "coverage",
+                "dist",
+                "node_modules",
+                "target",
+            ]),
+            sensitive_file_names: strings(&[".git-credentials", ".netrc", ".npmrc", ".pypirc"]),
+            sensitive_file_prefixes: strings(&[".env"]),
+            sensitive_file_extensions: strings(&[".key", ".pem", ".p12", ".pfx"]),
+            allowed_file_names: strings(&[".env.example"]),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -76,6 +108,7 @@ where
     let mut state_directory = None;
     let mut workspace_roots = Vec::new();
     let mut protected_paths = Vec::new();
+    let mut workspace_policy = None;
     let mut index = 0;
 
     while index < arguments.len() {
@@ -103,7 +136,19 @@ where
             }
             "--workspace-root" => workspace_roots.push(PathBuf::from(value)),
             "--protected-path" => protected_paths.push(PathBuf::from(value)),
-            "--profile" | "--working-directory" | "--state-directory" => {
+            "--workspace-policy" if workspace_policy.is_none() => {
+                workspace_policy = Some(
+                    serde_json::from_str(value.to_str().ok_or_else(|| {
+                        SandboxError::Usage(
+                            "--workspace-policy must be valid UTF-8 JSON".to_owned(),
+                        )
+                    })?)
+                    .map_err(|error| {
+                        SandboxError::Usage(format!("invalid --workspace-policy JSON: {error}"))
+                    })?,
+                )
+            }
+            "--profile" | "--working-directory" | "--state-directory" | "--workspace-policy" => {
                 return Err(SandboxError::Usage(format!(
                     "{option} may only be provided once"
                 )))
@@ -136,6 +181,8 @@ where
             .ok_or_else(|| SandboxError::Usage("--state-directory is required".to_owned()))?,
         workspace_roots,
         protected_paths,
+        workspace_policy: workspace_policy
+            .ok_or_else(|| SandboxError::Usage("--workspace-policy is required".to_owned()))?,
         command,
     })
 }
@@ -232,12 +279,15 @@ fn canonical_path(path: &Path, label: &str) -> Result<PathBuf, SandboxError> {
     })
 }
 
-fn repository_metadata_paths(root: &Path) -> Result<Vec<PathBuf>, SandboxError> {
+fn repository_metadata_paths(
+    root: &Path,
+    policy: &WorkspaceAccessPolicy,
+) -> Result<Vec<PathBuf>, SandboxError> {
     let mut paths = Vec::new();
     if !root.exists() {
         return Ok(paths);
     }
-    visit_workspace(root, &mut |path, file_type| {
+    visit_workspace(root, policy, &mut |path, file_type| {
         if path.file_name() != Some(OsStr::new(".git")) {
             return Ok(file_type.is_dir());
         }
@@ -263,14 +313,14 @@ fn repository_metadata_paths(root: &Path) -> Result<Vec<PathBuf>, SandboxError> 
     Ok(paths)
 }
 
-fn workspace_sensitive_paths(roots: &[PathBuf]) -> Result<Vec<PathBuf>, SandboxError> {
+fn workspace_sensitive_paths(request: &SandboxRequest) -> Result<Vec<PathBuf>, SandboxError> {
     let mut paths = Vec::new();
-    for root in roots {
+    for root in &request.workspace_roots {
         if !root.exists() {
             continue;
         }
-        visit_workspace(root, &mut |path, file_type| {
-            if file_type.is_file() && is_sensitive_workspace_file(path) {
+        visit_workspace(root, &request.workspace_policy, &mut |path, file_type| {
+            if file_type.is_file() && is_sensitive_workspace_file(path, &request.workspace_policy) {
                 paths.push(path.to_owned());
             }
             Ok(file_type.is_dir())
@@ -283,6 +333,7 @@ fn workspace_sensitive_paths(roots: &[PathBuf]) -> Result<Vec<PathBuf>, SandboxE
 
 fn visit_workspace(
     directory: &Path,
+    policy: &WorkspaceAccessPolicy,
     visitor: &mut impl FnMut(&Path, fs::FileType) -> Result<bool, SandboxError>,
 ) -> Result<(), SandboxError> {
     for entry in fs::read_dir(directory)? {
@@ -293,36 +344,51 @@ fn visit_workspace(
         }
         let path = entry.path();
         let descend = visitor(&path, file_type)?;
-        if descend && !is_ignored_directory(&path) {
-            visit_workspace(&path, visitor)?;
+        if descend && !is_ignored_directory(&path, policy) {
+            visit_workspace(&path, policy, visitor)?;
         }
     }
     Ok(())
 }
 
-fn is_ignored_directory(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(OsStr::to_str),
-        Some(".git" | ".next" | "coverage" | "dist" | "node_modules")
-    )
+fn is_ignored_directory(path: &Path, policy: &WorkspaceAccessPolicy) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| {
+            policy
+                .ignored_directories
+                .iter()
+                .any(|ignored| ignored == name)
+        })
 }
 
-fn is_sensitive_workspace_file(path: &Path) -> bool {
+fn is_sensitive_workspace_file(path: &Path, policy: &WorkspaceAccessPolicy) -> bool {
     let Some(name) = path.file_name().and_then(OsStr::to_str) else {
         return false;
     };
-    if name == ".env.example" {
+    if policy
+        .allowed_file_names
+        .iter()
+        .any(|allowed| allowed == name)
+    {
         return false;
     }
-    if matches!(name, ".netrc" | ".npmrc" | ".pypirc" | ".git-credentials")
-        || name.starts_with(".env")
-    {
-        return true;
-    }
-    matches!(
-        path.extension().and_then(OsStr::to_str),
-        Some("key" | "pem" | "p12" | "pfx")
-    )
+    policy
+        .sensitive_file_names
+        .iter()
+        .any(|sensitive| sensitive == name)
+        || policy
+            .sensitive_file_prefixes
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        || policy
+            .sensitive_file_extensions
+            .iter()
+            .any(|extension| name.ends_with(extension))
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
 }
 
 fn protected_executable() -> Result<PathBuf, SandboxError> {
@@ -362,7 +428,7 @@ pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
 pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
     let home_directory = std::env::var_os("HOME").and_then(|path| fs::canonicalize(path).ok());
     let arguments = linux::bubblewrap_arguments(request, home_directory.as_deref())?;
-    Command::new("bwrap")
+    Command::new(linux::bubblewrap_executable()?)
         .args(arguments)
         .args(&request.command)
         .current_dir(&request.working_directory)
@@ -434,7 +500,7 @@ pub mod macos {
                 seatbelt_string(&path)
             ));
         }
-        for path in super::workspace_sensitive_paths(&request.workspace_roots)? {
+        for path in super::workspace_sensitive_paths(request)? {
             policy.push_str(&format!(
                 "(deny file-read* file-write* (literal {}))\n",
                 seatbelt_string(&path)
@@ -456,7 +522,7 @@ pub mod macos {
         policy.push_str("(deny file-write* (regex #\"/\\.git(?:/|$)\"))\n");
 
         for root in &request.workspace_roots {
-            for metadata in super::repository_metadata_paths(root)? {
+            for metadata in super::repository_metadata_paths(root, &request.workspace_policy)? {
                 policy.push_str(&format!(
                     "(deny file-write* (subpath {}) (literal {}))\n",
                     seatbelt_string(&metadata),
@@ -551,6 +617,24 @@ pub mod linux {
     use std::ffi::OsString;
     use std::path::Path;
 
+    const BUBBLEWRAP_EXECUTABLES: [&str; 2] = ["/usr/bin/bwrap", "/bin/bwrap"];
+
+    pub fn bubblewrap_executable() -> Result<std::path::PathBuf, SandboxError> {
+        for candidate in BUBBLEWRAP_EXECUTABLES.map(Path::new) {
+            if candidate.is_file() {
+                return std::fs::canonicalize(candidate).map_err(SandboxError::from);
+            }
+        }
+        Err(SandboxError::Backend(
+            "could not find Bubblewrap at a trusted system path; install it as /usr/bin/bwrap or /bin/bwrap"
+                .to_owned(),
+        ))
+    }
+
+    pub fn bubblewrap_executable_candidates() -> &'static [&'static str] {
+        &BUBBLEWRAP_EXECUTABLES
+    }
+
     pub fn bubblewrap_arguments(
         request: &SandboxRequest,
         home_directory: Option<&Path>,
@@ -601,14 +685,14 @@ pub mod linux {
         }
 
         for root in &request.workspace_roots {
-            for metadata in super::repository_metadata_paths(root)? {
+            for metadata in super::repository_metadata_paths(root, &request.workspace_policy)? {
                 push_path_mount(&mut arguments, "--ro-bind", &metadata, &metadata);
             }
         }
         for path in super::protected_paths(request)? {
             push_path_mount(&mut arguments, "--ro-bind", &path, &path);
         }
-        for path in super::workspace_sensitive_paths(&request.workspace_roots)? {
+        for path in super::workspace_sensitive_paths(request)? {
             push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), &path);
         }
 
@@ -699,7 +783,7 @@ fn home_sensitive_paths(home_directory: Option<&Path>) -> Vec<PathBuf> {
 }
 
 pub fn usage() -> &'static str {
-    "Usage: glyph-shell-sandbox --profile <read-only|workspace-write> --working-directory <path> --state-directory <path> --workspace-root <path> [--workspace-root <path> ...] [--protected-path <path> ...] -- <command> [arguments ...]"
+    "Usage: glyph-shell-sandbox --profile <read-only|workspace-write> --working-directory <path> --state-directory <path> --workspace-root <path> [--workspace-root <path> ...] [--protected-path <path> ...] --workspace-policy <json> -- <command> [arguments ...]"
 }
 
 #[cfg(test)]
@@ -715,6 +799,7 @@ mod tests {
             state_directory: state.to_owned(),
             workspace_roots: vec![root.to_owned()],
             protected_paths: Vec::new(),
+            workspace_policy: WorkspaceAccessPolicy::default(),
             command: vec!["sh".into(), "-c".into(), "pwd".into()],
         }
     }
@@ -735,6 +820,8 @@ mod tests {
                 "/other",
                 "--protected-path",
                 "/workspace/worker",
+                "--workspace-policy",
+                r#"{"ignoredDirectories":[".git"],"sensitiveFileNames":[".git-credentials"],"sensitiveFilePrefixes":[".env"],"sensitiveFileExtensions":[".pem"],"allowedFileNames":[".env.example"]}"#,
                 "--",
                 "sh",
                 "-c",
@@ -850,6 +937,7 @@ mod tests {
         create_dir(&home).expect("home");
         create_dir(root.join(".git")).expect("git metadata");
         write(root.join(".env"), "synthetic canary").expect("workspace secret");
+        write(root.join(".git-credentials"), "synthetic canary").expect("workspace credentials");
         create_dir(root.join("nested")).expect("nested directory");
         create_dir(root.join("nested/.git")).expect("nested git metadata");
         let policy = macos::seatbelt_policy(
@@ -940,6 +1028,7 @@ mod tests {
             state_directory: PathBuf::from("/tmp/state\"quoted"),
             workspace_roots: vec![PathBuf::from("/tmp/project\\root")],
             protected_paths: Vec::new(),
+            workspace_policy: WorkspaceAccessPolicy::default(),
             command: vec!["true".into()],
         };
         let policy =
@@ -961,6 +1050,7 @@ mod tests {
         write(home.join(".netrc"), "synthetic fixture").expect("netrc fixture");
         create_dir(root.join(".git")).expect("git metadata");
         write(root.join(".env"), "synthetic canary").expect("workspace secret");
+        write(root.join(".git-credentials"), "synthetic canary").expect("workspace credentials");
 
         let read_only = linux::bubblewrap_arguments(
             &request(SandboxProfile::ReadOnly, &root, &state),
@@ -982,6 +1072,11 @@ mod tests {
         .expect("arguments");
         assert!(writable.windows(3).any(|values| {
             values[0] == "--bind" && values[1] == root.as_os_str() && values[2] == root.as_os_str()
+        }));
+        assert!(writable.windows(3).any(|values| {
+            values[0] == "--ro-bind"
+                && values[1] == Path::new("/dev/null").as_os_str()
+                && values[2] == root.join(".git-credentials").as_os_str()
         }));
         assert!(writable.windows(3).any(|values| {
             values[0] == "--ro-bind"
@@ -1015,6 +1110,7 @@ mod tests {
             state_directory: state.clone(),
             workspace_roots: vec![config_root, docker_root],
             protected_paths: Vec::new(),
+            workspace_policy: WorkspaceAccessPolicy::default(),
             command: vec!["true".into()],
         };
         let sensitive = linux::bubblewrap_arguments(&sensitive_request, Some(&home))
@@ -1027,5 +1123,16 @@ mod tests {
                 && values[1] == Path::new("/dev/null").as_os_str()
                 && values[2] == home.join(".docker/config.json").as_os_str()
         }));
+    }
+
+    #[test]
+    fn bubblewrap_backend_lookup_never_uses_the_command_path() {
+        assert_eq!(
+            linux::bubblewrap_executable_candidates(),
+            &["/usr/bin/bwrap", "/bin/bwrap"]
+        );
+        assert!(linux::bubblewrap_executable_candidates()
+            .iter()
+            .all(|candidate| Path::new(candidate).is_absolute()));
     }
 }

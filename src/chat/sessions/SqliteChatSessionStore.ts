@@ -369,6 +369,7 @@ function legacyContext(root: string, authority: string): ProjectContext {
   const roots = [{ name: basename(path), path }];
   return {
     id: ProjectContextIdentity.create(ProjectContextKind.FOLDER, authority, path),
+    mutationIdentity: ProjectContextIdentity.createMutationScope(ProjectContextKind.FOLDER, authority, roots),
     kind: ProjectContextKind.FOLDER,
     name: basename(path),
     authority,

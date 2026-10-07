@@ -168,17 +168,23 @@ describe('staged editing loop', () => {
         id: 'response-after-restart',
         output: [EditingE2EHarness.finalMessage('The accepted change is present and the rejected change is absent.')],
         validate: request => {
-          const developer = (request.input as { role?: string; content?: string }[]).find(
+          const developers = (request.input as { role?: string; content?: string }[]).filter(
             item => item.role === 'developer',
           );
-          expect(developer).toBeDefined();
-          const context = JSON.parse(developer!.content!) as {
-            schema: string;
-            event: { type: string; payload: typeof observedResult };
+          expect(developers).toHaveLength(2);
+          const contexts = developers.map(
+            item =>
+              JSON.parse(item.content!) as {
+                schema: string;
+                event: { type: string; payload: NonNullable<typeof observedResult> };
+              },
+          );
+          expect(contexts.every(context => context.schema === 'glyph.context-event.v1')).toBe(true);
+          expect(contexts.every(context => context.event.type === 'edit_review_result')).toBe(true);
+          observedResult = {
+            reviewId: contexts[0]!.event.payload.reviewId,
+            items: contexts.flatMap(context => context.event.payload.items),
           };
-          expect(context.schema).toBe('glyph.context-event.v1');
-          expect(context.event.type).toBe('edit_review_result');
-          observedResult = context.event.payload;
         },
       },
     ]);
@@ -189,7 +195,7 @@ describe('staged editing loop', () => {
       await harness.reviews.accept(first!.id);
       await harness.reviews.reject(last!.id);
 
-      expect(harness.reviews.pendingResults).toHaveLength(1);
+      expect(harness.reviews.pendingResults).toHaveLength(2);
       await harness.commitReviewResults();
       harness.restartConversationFromCheckpoint();
       const response = await harness.send('Continue based on my review decisions.');

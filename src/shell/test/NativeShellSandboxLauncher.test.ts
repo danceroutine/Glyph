@@ -48,6 +48,10 @@ describe(NativeShellSandboxLauncher, () => {
         ]),
       );
       expect(arguments_.slice(-3)).toEqual(['/bin/sh', '-c', 'rg needle']);
+      const policyIndex = arguments_.indexOf('--workspace-policy');
+      expect(JSON.parse(arguments_[policyIndex + 1]!)).toMatchObject({
+        sensitiveFileNames: expect.arrayContaining(['.git-credentials']),
+      });
       expect(options.cwd).toBe('/project/src');
       expect(options.env).not.toHaveProperty('OPENAI_API_KEY');
       expect(options.env).toMatchObject({ HOME: '/home/person', SHELL: '/bin/sh' });

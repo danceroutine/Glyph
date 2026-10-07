@@ -20,6 +20,7 @@ describe(RustWorkspacePathIndex, () => {
       await mkdir(join(project, '.glyph-state'), { recursive: true });
       await writeFile(join(project, 'src', 'App.tsx'), 'export function App() {}\n');
       await writeFile(join(project, '.env'), 'SECRET=never-index-this\n');
+      await writeFile(join(project, '.git-credentials'), 'https://user:never-index-this@example.test\n');
       await writeFile(join(project, '.glyph-state', 'accounts.json'), '{"refreshToken":"never-index-this"}\n');
       let search = new RustWorkspacePathIndex({
         binaryPath,

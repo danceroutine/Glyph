@@ -39,6 +39,7 @@ import { CompositeToolRuntime } from './tools/CompositeToolRuntime.ts';
 import { FileSystemWorkspaceTextStore } from './workspace/FileSystemWorkspaceTextStore.ts';
 import { MultiRootWorkspaceTextStore } from './workspace/MultiRootWorkspaceTextStore.ts';
 import type { WorkspaceTextStore } from './workspace/WorkspaceTextStore.ts';
+import { WorkspaceAccessPolicy } from './workspace/policy/WorkspaceAccessPolicy.ts';
 import { FileShellPermissionStore } from './shell/FileShellPermissionStore.ts';
 import { NativeShellSandboxLauncher } from './shell/NativeShellSandboxLauncher.ts';
 import { ShellCommandAuthorizer } from './shell/ShellCommandAuthorizer.ts';
@@ -89,12 +90,14 @@ async function main(): Promise<void> {
         process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
       ),
   );
+  const accessPolicy = new WorkspaceAccessPolicy();
   const { workspace, pathIndex } = createProjectRuntime(
     projectContext,
     configuration.stateDirectory,
     configuration.traceFile,
     indexExecutable,
     shellSandboxExecutable,
+    accessPolicy,
   );
   const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, pathIndex);
   const shellAuthorizer = new ShellCommandAuthorizer(
@@ -110,6 +113,7 @@ async function main(): Promise<void> {
       workspaceRoots: projectContext.roots.map(root => root.path),
       stateDirectory: configuration.stateDirectory,
       protectedPaths: [indexExecutable, shellSandboxExecutable],
+      accessPolicy,
     }),
   );
   ui.connectShellSessions(shellSessions);
@@ -120,7 +124,7 @@ async function main(): Promise<void> {
     new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', projectContext.id)),
     logger,
     configuration.editing.maxActiveReviews,
-    projectContext.id,
+    projectContext.mutationIdentity,
   );
   const projectTools = new ProjectToolRuntime(
     new ProjectAccess(projectContext.roots[0]!.path, {}, workspace, pathIndex),
@@ -213,6 +217,7 @@ function createProjectRuntime(
   traceFile: string,
   indexExecutable: string,
   shellSandboxExecutable: string,
+  accessPolicy: WorkspaceAccessPolicy,
 ): { workspace: WorkspaceTextStore; pathIndex: WorkspacePathIndex } {
   const roots = context.roots.map(root => {
     const excludedPaths = [
@@ -225,13 +230,14 @@ function createProjectRuntime(
         ].filter((path): path is string => path !== undefined),
       ),
     ];
-    const workspace = new FileSystemWorkspaceTextStore(root.path, { excludedPaths });
+    const workspace = new FileSystemWorkspaceTextStore(root.path, { excludedPaths, accessPolicy });
     const cacheName = createHash('sha256').update(`${context.id}\0${root.name}\0${root.path}`).digest('hex');
     const pathIndex = new RustWorkspacePathIndex({
       binaryPath: indexExecutable,
       root: root.path,
       cachePath: join(stateDirectory, `context-index-${cacheName}.bin`),
       excludedPaths,
+      accessPolicy,
       caseSensitive: workspace.caseSensitive,
     });
     return { name: root.name, workspace, pathIndex };

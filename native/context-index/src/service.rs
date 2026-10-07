@@ -992,7 +992,7 @@ fn default_ignored_directories() -> Vec<String> {
 }
 
 fn default_sensitive_file_names() -> Vec<String> {
-    [".netrc", ".npmrc", ".pypirc"]
+    [".git-credentials", ".netrc", ".npmrc", ".pypirc"]
         .into_iter()
         .map(str::to_owned)
         .collect()

@@ -47,7 +47,7 @@ export class ProposalReviewManager {
     return [...this.reviews];
   }
   get pendingResults(): readonly EditReviewResult[] {
-    return this.completedReviews.map(toReviewResult);
+    return [...this.reviews, ...this.completedReviews].flatMap(review => pendingReviewResults(review));
   }
   get pendingChangeCount(): number {
     return this.reviews.reduce(
@@ -164,14 +164,31 @@ export class ProposalReviewManager {
     return this.enqueue(async () => {
       const acknowledged = new Set(resultIds);
       if (acknowledged.size === 0) return;
-      const previous = this.completedReviews;
-      const remaining = previous.filter(review => !acknowledged.has(reviewResultId(review.id)));
-      if (remaining.length === previous.length) return;
-      this.completedReviews = remaining;
+      const proposals = [...this.reviews, ...this.completedReviews];
+      const previousAcknowledgements = new Map(
+        proposals.map(review => [review.id, [...(review.acknowledgedResultIds ?? [])]]),
+      );
+      const previousCompleted = this.completedReviews;
+      let changed = false;
+      for (const review of proposals) {
+        const current = new Set(review.acknowledgedResultIds ?? []);
+        for (const result of reviewResults(review)) {
+          if (acknowledged.has(result.id) && !current.has(result.id)) {
+            current.add(result.id);
+            changed = true;
+          }
+        }
+        review.acknowledgedResultIds = [...current];
+      }
+      if (!changed) return;
+      this.completedReviews = previousCompleted.filter(review => pendingReviewResults(review).length > 0);
       try {
         await this.saveCheckpoint();
       } catch (error) {
-        this.completedReviews = previous;
+        for (const review of proposals) {
+          review.acknowledgedResultIds = previousAcknowledgements.get(review.id) ?? [];
+        }
+        this.completedReviews = previousCompleted;
         throw error;
       }
     });
@@ -566,26 +583,36 @@ function isSettled(review: EditProposal): boolean {
   return review.files.every(file => file.items.every(item => item.decision !== EditDecisionState.PENDING));
 }
 
-function reviewResultId(reviewId: string): string {
-  return `edit-review-result:${reviewId}`;
+function reviewResultId(reviewId: string, itemId: string): string {
+  return `edit-review-result:${reviewId}:${itemId}`;
 }
 
-function toReviewResult(review: EditProposal): EditReviewResult {
-  return {
-    schemaVersion: 1,
-    id: reviewResultId(review.id),
-    reviewId: review.id,
-    items: review.files.flatMap(file =>
-      file.items.map(item => ({
-        itemId: item.id,
-        fileId: file.id,
-        kind: item.kind,
-        decision: item.decision as Exclude<EditDecisionState, EditDecisionState.PENDING>,
-        affectedPaths: [...new Set([file.sourcePath, file.targetPath, file.currentPath])],
-        resultingRevision: file.currentRevision,
+function reviewResults(review: EditProposal): EditReviewResult[] {
+  return review.files.flatMap(file =>
+    file.items
+      .filter(item => item.decision !== EditDecisionState.PENDING)
+      .map(item => ({
+        schemaVersion: 1 as const,
+        id: reviewResultId(review.id, item.id),
+        reviewId: review.id,
+        ...(review.origin ? { origin: review.origin } : {}),
+        items: [
+          {
+            itemId: item.id,
+            fileId: file.id,
+            kind: item.kind,
+            decision: item.decision as Exclude<EditDecisionState, EditDecisionState.PENDING>,
+            affectedPaths: [...new Set([file.sourcePath, file.targetPath, file.currentPath])],
+            resultingRevision: file.currentRevision,
+          },
+        ],
       })),
-    ),
-  };
+  );
+}
+
+function pendingReviewResults(review: EditProposal): EditReviewResult[] {
+  const acknowledged = new Set(review.acknowledgedResultIds ?? []);
+  return reviewResults(review).filter(result => !acknowledged.has(result.id));
 }
 
 function composeWith(file: FileEditPlan, itemId: string): string {

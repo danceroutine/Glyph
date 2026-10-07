@@ -7,6 +7,8 @@ import type { ProjectRoot } from './ProjectRoot.ts';
  */
 export interface ProjectContext {
   readonly id: string;
+  /** Changes whenever the canonical root mapping changes, even if the container ID remains stable. */
+  readonly mutationIdentity: string;
   readonly kind: ProjectContextKind;
   readonly name: string;
   readonly authority: string;

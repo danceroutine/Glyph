@@ -10,6 +10,7 @@ import { ProjectContextKind } from '../../project/context/ProjectContextKind.ts'
 
 const projectContext = {
   id: 'project',
+  mutationIdentity: 'project-root',
   kind: ProjectContextKind.FOLDER,
   name: 'Project',
   authority: 'local',

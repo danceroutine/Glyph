@@ -21,16 +21,13 @@ import { EditFailureReason } from '../editing/errors/EditFailureReason.ts';
 import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
 import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';
+import { WorkspaceAccessPolicy } from './policy/WorkspaceAccessPolicy.ts';
 
 const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
     caseSensitive: z.boolean().optional(),
-    ignoredDirectories: z.array(z.string()).default(['.git', '.next', 'coverage', 'dist', 'node_modules', 'target']),
     excludedPaths: z.array(z.string().min(1)).default([]),
-    sensitiveFileNames: z.array(z.string()).default(['.netrc', '.npmrc', '.pypirc']),
-    sensitiveFilePrefixes: z.array(z.string()).default(['.env']),
-    sensitiveFileExtensions: z.array(z.string()).default(['.key', '.pem', '.p12', '.pfx']),
-    allowedFileNames: z.array(z.string()).default(['.env.example']),
+    accessPolicy: z.instanceof(WorkspaceAccessPolicy).default(() => new WorkspaceAccessPolicy()),
   })
   .strict();
 
@@ -44,31 +41,19 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   private readonly options: ResolvedOptions;
 
   constructor(root: string, options: FileSystemWorkspaceTextStoreOptions = {}) {
-    const {
-      caseSensitive,
-      ignoredDirectories,
-      excludedPaths,
-      sensitiveFileNames,
-      sensitiveFilePrefixes,
-      sensitiveFileExtensions,
-      allowedFileNames,
-    } = fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
+    const { caseSensitive, excludedPaths, accessPolicy } = fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
     this.root = resolve(root);
     this.caseSensitive = caseSensitive ?? (process.platform !== 'win32' && process.platform !== 'darwin');
     this.options = {
-      ignoredDirectories,
       excludedPaths: [...new Set(excludedPaths.map(path => normalizeProjectPath(this.root, path)))],
-      sensitiveFileNames,
-      sensitiveFilePrefixes,
-      sensitiveFileExtensions,
-      allowedFileNames,
+      accessPolicy,
     };
   }
 
   normalizePath(input: string): string {
     const normalized = normalizeProjectPath(this.root, input);
     if (
-      normalized.split('/').some(part => this.options.ignoredDirectories.includes(part)) ||
+      normalized.split('/').some(part => this.options.accessPolicy.ignoredDirectories.includes(part)) ||
       this.isExcluded(normalized)
     ) {
       throw new EditError(EditFailureReason.UNSUPPORTED, 'That path is excluded from project access.', {
@@ -105,7 +90,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         const absolute = resolve(directory, entry.name);
         const path = relative(root, absolute).split(sep).join('/');
         if (entry.isDirectory()) {
-          if (!this.options.ignoredDirectories.includes(entry.name) && !this.isExcludedPath(path))
+          if (!this.options.accessPolicy.ignoredDirectories.includes(entry.name) && !this.isExcludedPath(path))
             await visit(absolute);
           if (truncated) return;
         } else if (entry.isFile()) {
@@ -291,13 +276,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
 
   private isExcluded(path: string): boolean {
     if (this.isExcludedPath(path)) return true;
-    const name = path.split('/').at(-1) ?? '';
-    if (this.options.allowedFileNames.includes(name)) return false;
-    return (
-      this.options.sensitiveFileNames.includes(name) ||
-      this.options.sensitiveFilePrefixes.some(prefix => name.startsWith(prefix)) ||
-      this.options.sensitiveFileExtensions.some(extension => name.endsWith(extension))
-    );
+    return this.options.accessPolicy.isSensitiveFileName(path.split('/').at(-1) ?? '');
   }
 
   private isExcludedPath(path: string): boolean {

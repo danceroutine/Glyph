@@ -75,6 +75,7 @@ export class ChatSession {
   ): Promise<ChatTurnResult> {
     const request = toChatRequest(requestInput);
     const previousState = this.conversation.exportState();
+    let durableState = previousState;
     let assistantText = '';
     let reasoningSummary = '';
     const recordingResponse: ChatResponseStream = {
@@ -84,7 +85,26 @@ export class ChatSession {
         response.push(part);
       },
     };
-    const result = await this.conversation.send(request, recordingResponse, signal);
+    const currentRecord = this.record();
+    let result: ChatTurnResult;
+    try {
+      result = await this.conversation.send(request, recordingResponse, signal, {
+        onStateCheckpoint: async state => {
+          await this.checkpoint(state, undefined, true);
+          durableState = state;
+        },
+        toolContext: {
+          chat: {
+            id: currentRecord.id,
+            accountProvider: currentRecord.accountProvider,
+            accountId: currentRecord.accountId,
+          },
+        },
+      });
+    } catch (error) {
+      this.conversation.restoreState(durableState);
+      throw error;
+    }
     try {
       await this.checkpoint(this.conversation.exportState(), {
         userText: request.text,
@@ -95,7 +115,7 @@ export class ChatSession {
       });
       return result;
     } catch (error) {
-      this.conversation.restoreState(previousState);
+      this.conversation.restoreState(durableState);
       throw error;
     }
   }

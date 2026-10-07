@@ -6,8 +6,9 @@ import type { FileSearchResult } from './FileSearchResult.ts';
 import {
   rustWorkspacePathIndexOptionsSchema,
   type ResolvedRustWorkspacePathIndexOptions,
-  type RustWorkspacePathIndexOptions,
+  type RustWorkspacePathIndexConfiguration,
 } from './RustWorkspacePathIndexOptions.ts';
+import { WorkspaceAccessPolicy } from '../../workspace/policy/WorkspaceAccessPolicy.ts';
 import {
   workspaceContentSearchOptionsSchema,
   type WorkspaceContentSearchOptions,
@@ -145,10 +146,12 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   private disposing: Promise<void> | undefined;
   private disposed = false;
 
-  constructor(options: RustWorkspacePathIndexOptions, processFactory: ProcessFactory = startProcess) {
-    const parsed = rustWorkspacePathIndexOptionsSchema.parse(options);
+  constructor(options: RustWorkspacePathIndexConfiguration, processFactory: ProcessFactory = startProcess) {
+    const { accessPolicy = new WorkspaceAccessPolicy(), ...rawOptions } = options;
+    const parsed = rustWorkspacePathIndexOptionsSchema.parse(rawOptions);
     this.options = {
       ...parsed,
+      ...accessPolicy.toJSON(),
       binaryPath: resolve(parsed.binaryPath),
       root: resolve(parsed.root),
       cachePath: parsed.cachePath === null ? null : resolve(parsed.cachePath),

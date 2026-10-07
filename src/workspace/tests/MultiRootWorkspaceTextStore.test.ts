@@ -63,6 +63,7 @@ describe(MultiRootWorkspaceTextStore, () => {
 function workspaceStore(root: string, api: string, web: string): MultiRootWorkspaceTextStore {
   const context: ProjectContext = {
     id: 'workspace',
+    mutationIdentity: 'workspace-roots',
     kind: ProjectContextKind.WORKSPACE,
     name: 'product',
     authority: 'local',

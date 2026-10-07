@@ -43,6 +43,7 @@ export class ProjectContextResolver {
     const roots = [{ name: basename(root), path: root }];
     return {
       id: ProjectContextIdentity.create(ProjectContextKind.FOLDER, authority, root),
+      mutationIdentity: ProjectContextIdentity.createMutationScope(ProjectContextKind.FOLDER, authority, roots),
       kind: ProjectContextKind.FOLDER,
       name: basename(root),
       authority,
@@ -77,6 +78,7 @@ export class ProjectContextResolver {
     const name = basename(manifest, extname(manifest));
     return {
       id: ProjectContextIdentity.create(ProjectContextKind.WORKSPACE, authority, manifest),
+      mutationIdentity: ProjectContextIdentity.createMutationScope(ProjectContextKind.WORKSPACE, authority, roots),
       kind: ProjectContextKind.WORKSPACE,
       name,
       authority,

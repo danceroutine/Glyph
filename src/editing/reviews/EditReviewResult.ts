@@ -1,5 +1,6 @@
 import type { EditDecisionState } from './EditDecisionState.ts';
 import type { EditReviewItemKind } from './EditReviewItemKind.ts';
+import type { EditProposalOrigin } from '../proposals/EditProposalOrigin.ts';
 
 export interface EditReviewResultItem {
   readonly itemId: string;
@@ -10,10 +11,11 @@ export interface EditReviewResultItem {
   readonly resultingRevision: string | null;
 }
 
-/** Durable, model-facing receipt for one fully settled proposal review. */
+/** Durable, model-facing receipt for one review decision. */
 export interface EditReviewResult {
   readonly schemaVersion: 1;
   readonly id: string;
   readonly reviewId: string;
+  readonly origin?: EditProposalOrigin;
   readonly items: readonly EditReviewResultItem[];
 }

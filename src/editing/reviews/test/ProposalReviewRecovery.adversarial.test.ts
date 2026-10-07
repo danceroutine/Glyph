@@ -219,16 +219,28 @@ describe(ProposalReviewManager, () => {
     it('retains accepted and rejected item receipts across restart until the host acknowledges them', async () => {
       const fixture = await createFixture();
       await writeFile(join(fixture.root, 'file.txt'), 'one\nmiddle\nthree\n');
-      const proposal = await proposeTwoReplacements(fixture.service, fixture.workspace);
+      const proposal = {
+        ...(await proposeTwoReplacements(fixture.service, fixture.workspace)),
+        origin: { chatId: 'chat-1', accountProvider: 'fixture', accountId: 'account-1' },
+      };
       const [first, second] = proposal.files[0]!.items;
       await fixture.manager.stage(proposal);
       await fixture.manager.accept(first!.id);
+
+      expect(fixture.manager.activeReviews).toHaveLength(1);
+      expect(fixture.manager.pendingResults).toEqual([
+        expect.objectContaining({
+          id: `edit-review-result:${proposal.id}:${first!.id}`,
+          origin: proposal.origin,
+        }),
+      ]);
+
       await fixture.manager.reject(second!.id);
 
       expect(fixture.manager.activeReviews).toStrictEqual([]);
       expect(fixture.manager.pendingResults).toEqual([
         expect.objectContaining({
-          id: `edit-review-result:${proposal.id}`,
+          id: `edit-review-result:${proposal.id}:${first!.id}`,
           reviewId: proposal.id,
           items: [
             expect.objectContaining({
@@ -237,6 +249,12 @@ describe(ProposalReviewManager, () => {
               affectedPaths: ['file.txt'],
               resultingRevision: expect.any(String),
             }),
+          ],
+        }),
+        expect.objectContaining({
+          id: `edit-review-result:${proposal.id}:${second!.id}`,
+          reviewId: proposal.id,
+          items: [
             expect.objectContaining({
               itemId: second!.id,
               decision: EditDecisionState.REJECTED,

@@ -1,4 +1,7 @@
 import { posix } from 'node:path';
+import { join } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { ConfigurationError } from '../../../errors/ConfigurationError.ts';
 import type { WorkspaceMutationOptions } from '../../../workspace/WorkspaceMutationOptions.ts';
@@ -8,6 +11,7 @@ import { WorkspaceMutationConsistency } from '../../../workspace/WorkspaceMutati
 import { ContextAttachmentError } from '../ContextAttachmentError.ts';
 import { ContextAttachmentFailureReason } from '../ContextAttachmentFailureReason.ts';
 import { ContextAttachmentService } from '../ContextAttachmentService.ts';
+import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
 
 class MutableWorkspaceTextStore implements WorkspaceTextStore {
   readonly root = '/workspace';
@@ -196,6 +200,20 @@ describe(ContextAttachmentService, () => {
         reason: ContextAttachmentFailureReason.READ_FAILED,
         details: { path: 'missing.ts' },
       });
+    });
+
+    it('applies the shared workspace access policy to attachment paths', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'glyph-attachment-policy-'));
+      try {
+        await writeFile(join(root, '.git-credentials'), 'https://user:synthetic@example.test');
+        const service = new ContextAttachmentService(new FileSystemWorkspaceTextStore(root));
+
+        await expect(service.resolve([{ path: '.git-credentials' }])).rejects.toMatchObject({
+          reason: ContextAttachmentFailureReason.INVALID_REFERENCE,
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     });
   });
 });

@@ -10,6 +10,7 @@ import { NullLogger } from '../observability/NullLogger.ts';
 import type { ProjectAccess } from './ProjectAccess.ts';
 import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
+import type { ToolExecutionContext } from '../tools/ToolExecutionContext.ts';
 
 const editDefinitions: readonly ToolDefinition[] = [
   {
@@ -59,7 +60,7 @@ export class ProjectToolRuntime implements ToolRuntime {
     this.logger = logger.forNamespace('project.tool');
   }
 
-  async execute(name: string, input: string, signal?: AbortSignal): Promise<string> {
+  async execute(name: string, input: string, signal?: AbortSignal, context?: ToolExecutionContext): Promise<string> {
     try {
       await this.logger.debug('ingested', { name, inputBytes: Buffer.byteLength(input) });
       let proposal;
@@ -79,8 +80,18 @@ export class ProjectToolRuntime implements ToolRuntime {
         default:
           throw new Error(`Unknown project tool: ${name}`);
       }
-      await this.reviews.stage(proposal);
-      const queuePosition = this.reviews.activeReviews.findIndex(review => review.id === proposal.id) + 1;
+      const stagedProposal = context?.chat
+        ? {
+            ...proposal,
+            origin: {
+              chatId: context.chat.id,
+              accountProvider: context.chat.accountProvider,
+              accountId: context.chat.accountId,
+            },
+          }
+        : proposal;
+      await this.reviews.stage(stagedProposal);
+      const queuePosition = this.reviews.activeReviews.findIndex(review => review.id === stagedProposal.id) + 1;
       return JSON.stringify({
         proposal_id: proposal.id,
         status: 'STAGED_FOR_REVIEW',

@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './ToolDefinition.ts';
 import type { ToolRuntime } from './ToolRuntime.ts';
+import type { ToolExecutionContext } from './ToolExecutionContext.ts';
 
 /** Combines independent tool domains while preserving provider-neutral dispatch. */
 export class CompositeToolRuntime implements ToolRuntime {
@@ -18,9 +19,9 @@ export class CompositeToolRuntime implements ToolRuntime {
     }
   }
 
-  async execute(name: string, input: string, signal?: AbortSignal): Promise<string> {
+  async execute(name: string, input: string, signal?: AbortSignal, context?: ToolExecutionContext): Promise<string> {
     const runtime = this.runtimesByName.get(name);
     if (!runtime) throw new Error(`Unknown tool: ${name}`);
-    return runtime.execute(name, input, signal);
+    return context ? runtime.execute(name, input, signal, context) : runtime.execute(name, input, signal);
   }
 }

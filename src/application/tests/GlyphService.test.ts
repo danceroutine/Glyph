@@ -19,6 +19,9 @@ import type { Logger } from '../../observability/Logger.ts';
 import type { ProjectContext } from '../../project/context/ProjectContext.ts';
 import { ProjectContextResolver } from '../../project/context/ProjectContextResolver.ts';
 import { GlyphService } from '../GlyphService.ts';
+import type { ProposalReviewManager } from '../../editing/reviews/ProposalReviewManager.ts';
+import { EditDecisionState } from '../../editing/reviews/EditDecisionState.ts';
+import { EditReviewItemKind } from '../../editing/reviews/EditReviewItemKind.ts';
 
 const account: ChatAccount = {
   provider: 'fixture',
@@ -281,6 +284,60 @@ describe(GlyphService, () => {
           { slug: 'model-a', name: 'Model A' },
           expect.any(Object),
         );
+        await service.dispose();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('routes each durable review decision to the chat that staged the proposal', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'glyph-service-review-owner-'));
+      try {
+        const chatStore = new MemoryChatSessionStore();
+        const ids = ['owner-chat', 'current-chat'];
+        const sessions = new ChatSessionManager(chatStore, await ProjectContextResolver.folder(root), () =>
+          ids.shift()!,
+        );
+        const providers: FakeProvider[] = [];
+        const backend = new FakeBackend(() => {
+          const provider = new FakeProvider();
+          providers.push(provider);
+          return provider;
+        });
+        const result = {
+          schemaVersion: 1 as const,
+          id: 'edit-review-result:proposal:item',
+          reviewId: 'proposal',
+          origin: { chatId: 'owner-chat', accountProvider: account.provider, accountId: account.id },
+          items: [
+            {
+              itemId: 'item',
+              fileId: 'file',
+              kind: EditReviewItemKind.TEXT,
+              decision: EditDecisionState.ACCEPTED,
+              affectedPaths: ['src/App.tsx'],
+              resultingRevision: 'revision-2',
+            },
+          ],
+        };
+        const reviews = {
+          pendingResults: [result],
+          initialize: vi.fn(async () => {}),
+          acknowledgeResults: vi.fn(async () => {}),
+        } as unknown as ProposalReviewManager;
+        const service = new GlyphService(backend, logger(), {}, reviews, undefined, undefined, sessions);
+        await service.initialize();
+        await service.createChat(account, { slug: 'model-a', name: 'Model A' });
+        const current = await service.createChat(account, { slug: 'model-a', name: 'Model A' });
+
+        await service.commitReviewResults(current);
+
+        expect(providers).toHaveLength(3);
+        expect(providers[1]!.recordContext).not.toHaveBeenCalled();
+        expect(providers[2]!.recordContext).toHaveBeenCalledWith([
+          expect.objectContaining({ id: result.id, payload: result }),
+        ]);
+        expect(reviews.acknowledgeResults).toHaveBeenCalledWith([result.id]);
         await service.dispose();
       } finally {
         await rm(root, { recursive: true, force: true });

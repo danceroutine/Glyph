@@ -123,6 +123,20 @@ describe(ChatSessionManager, () => {
     expect(session.transcript).toEqual([expect.objectContaining({ userText: 'keep me' })]);
   });
 
+  it('retains a durable tool checkpoint when a later provider round fails', async () => {
+    const store = new MemoryChatSessionStore();
+    const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+    await manager.initialize();
+    const session = await manager.create(input(), conversation());
+
+    await expect(session.send('tool then fail', { push: () => {} }, new AbortController().signal)).rejects.toThrow(
+      'provider failed after tool execution',
+    );
+
+    expect(providerMessages(store.records[0]!)).toEqual(['tool then fail', 'tool-result:mutation-complete']);
+    expect(session.transcript).toEqual([]);
+  });
+
   it('checkpoints host context without changing the visible transcript and rolls it back on failure', async () => {
     const store = new MemoryChatSessionStore();
     const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
@@ -205,6 +219,11 @@ class StatefulProvider implements ChatProvider {
   async send(input: ChatRequestInput, options: Parameters<ChatProvider['send']>[1]): Promise<TurnResult> {
     const text = typeof input === 'string' ? input : input.text;
     this.messages.push(text);
+    if (text === 'tool then fail') {
+      this.messages.push('tool-result:mutation-complete');
+      await options.onStateCheckpoint?.(this.exportState());
+      throw new Error('provider failed after tool execution');
+    }
     options.onReasoningSummary?.('thinking');
     options.onText('answer');
     return { responseId: 'response', usage: null };

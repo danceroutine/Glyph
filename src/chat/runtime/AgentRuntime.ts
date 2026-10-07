@@ -11,6 +11,7 @@ import { ToolActivityPhase } from '../ToolActivityPhase.ts';
 import type { TurnResult } from '../TurnResult.ts';
 import type { Usage } from '../Usage.ts';
 import type { AgentModelAdapter, AgentToolResult, AgentTurnContext } from './AgentModelAdapter.ts';
+import type { ToolExecutionContext } from '../../tools/ToolExecutionContext.ts';
 
 interface AgentRuntimeConfiguration {
   readonly timeoutMs: number;
@@ -61,6 +62,8 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       onReasoningSummary?: (delta: string) => void;
       onTrace?: (entry: ProviderTraceEntry) => void;
       onToolActivity?: (activity: ToolActivity) => void;
+      onStateCheckpoint?: (state: ChatProviderState) => void | Promise<void>;
+      toolContext?: ToolExecutionContext;
     },
   ): Promise<TurnResult> {
     const request = toChatRequest(inputRequest);
@@ -112,6 +115,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       },
     });
     let turn: TTurn | undefined;
+    let hasToolCheckpoint = false;
     try {
       turn = await this.adapter.beginTurn(this.state, request, context(0));
       let totalUsage: Usage | null = null;
@@ -141,7 +145,9 @@ export class AgentRuntime<TTurn> implements ChatProvider {
               arguments: call.input,
             };
             reportToolActivity({ phase: ToolActivityPhase.STARTED, ...activity });
-            const output = await this.tools.execute(call.name, call.input, signal);
+            const output = options.toolContext
+              ? await this.tools.execute(call.name, call.input, signal, options.toolContext)
+              : await this.tools.execute(call.name, call.input, signal);
             trace(
               'tool.result',
               {
@@ -157,6 +163,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           }),
         );
         turn = this.adapter.appendToolResults(turn, results);
+        this.state = this.adapter.commit(turn);
+        hasToolCheckpoint = true;
+        await options.onStateCheckpoint?.(structuredClone(this.state));
+        trace('history.checkpointed', { state: this.state }, round);
       }
     } catch (error) {
       const reportedError = options.signal.aborted
@@ -166,7 +176,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           : error instanceof ProviderError
             ? error
             : new ProviderError(error instanceof Error ? error.message : 'Model provider failed.', { cause: error });
-      trace('history.rolled_back', {
+      trace(hasToolCheckpoint ? 'history.preserved_after_tool' : 'history.rolled_back', {
         committedState: this.state,
         hadUncommittedTurn: turn !== undefined,
       });

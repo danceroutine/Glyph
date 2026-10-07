@@ -115,7 +115,7 @@ describe(RustWorkspacePathIndex, () => {
             cachePath: '/cache/index.bin',
             ignoredDirectories: ['.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
             excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
-            sensitiveFileNames: ['.netrc', '.npmrc', '.pypirc'],
+            sensitiveFileNames: ['.git-credentials', '.netrc', '.npmrc', '.pypirc'],
             sensitiveFilePrefixes: ['.env'],
             sensitiveFileExtensions: ['.key', '.pem', '.p12', '.pfx'],
             allowedFileNames: ['.env.example'],

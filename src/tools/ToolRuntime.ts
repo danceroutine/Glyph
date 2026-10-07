@@ -1,4 +1,5 @@
 import type { ToolDefinition } from './ToolDefinition.ts';
+import type { ToolExecutionContext } from './ToolExecutionContext.ts';
 
 /**
  * Provider-neutral tool registry and dispatcher. Provider adapters translate
@@ -6,5 +7,5 @@ import type { ToolDefinition } from './ToolDefinition.ts';
  */
 export interface ToolRuntime {
   readonly definitions: readonly ToolDefinition[];
-  execute(name: string, input: string, signal?: AbortSignal): Promise<string>;
+  execute(name: string, input: string, signal?: AbortSignal, context?: ToolExecutionContext): Promise<string>;
 }

@@ -10,6 +10,12 @@ import type { TurnResult } from './TurnResult.ts';
 import type { ChatRequestInput } from './ChatRequest.ts';
 import type { ChatProviderState } from './ChatProviderState.ts';
 import type { ChatContextEvent } from './ChatContextEvent.ts';
+import type { ToolExecutionContext } from '../tools/ToolExecutionContext.ts';
+
+export interface ChatConversationSendOptions {
+  readonly onStateCheckpoint?: (state: ChatProviderState) => void | Promise<void>;
+  readonly toolContext?: ToolExecutionContext;
+}
 
 /** Mutable history for one host-owned chat session. */
 export class ChatConversation {
@@ -52,7 +58,12 @@ export class ChatConversation {
     this.traceEnabled = enabled;
   }
 
-  async send(request: ChatRequestInput, response: ChatResponseStream, signal: AbortSignal): Promise<ChatTurnResult> {
+  async send(
+    request: ChatRequestInput,
+    response: ChatResponseStream,
+    signal: AbortSignal,
+    options: ChatConversationSendOptions = {},
+  ): Promise<ChatTurnResult> {
     const trace: ProviderTraceEntry[] = [];
     const startedAt = performance.now();
     let result: TurnResult | undefined;
@@ -67,6 +78,8 @@ export class ChatConversation {
         onTrace: entry => {
           if (this.traceEnabled) trace.push(entry);
         },
+        ...(options.onStateCheckpoint ? { onStateCheckpoint: options.onStateCheckpoint } : {}),
+        ...(options.toolContext ? { toolContext: options.toolContext } : {}),
       });
     } catch (error) {
       failure = error;

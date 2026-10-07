@@ -6,6 +6,7 @@ import type { ToolDefinition } from '../tools/ToolDefinition.ts';
 import { ToolInputKind } from '../tools/ToolInputKind.ts';
 import { FileSystemWorkspaceTextStore } from '../workspace/FileSystemWorkspaceTextStore.ts';
 import type { WorkspaceTextStore } from '../workspace/WorkspaceTextStore.ts';
+import { WorkspaceAccessPolicy } from '../workspace/policy/WorkspaceAccessPolicy.ts';
 import { EditError } from '../editing/errors/EditError.ts';
 import { EditFailureReason } from '../editing/errors/EditFailureReason.ts';
 import { ProjectToolName } from './ProjectToolName.ts';
@@ -14,35 +15,22 @@ import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 interface ProjectAccessOptions {
   maxFiles?: number;
   maxFileBytes?: number;
-  ignoredDirectories?: string[];
   excludedPaths?: string[];
-  sensitiveFileNames?: string[];
-  sensitiveFilePrefixes?: string[];
-  sensitiveFileExtensions?: string[];
-  allowedFileNames?: string[];
+  accessPolicy?: WorkspaceAccessPolicy;
 }
 
 const defaults = {
   maxFiles: 2_000,
   maxFileBytes: 512 * 1024,
-  ignoredDirectories: ['.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
   excludedPaths: [],
-  sensitiveFileNames: ['.netrc', '.npmrc', '.pypirc'],
-  sensitiveFilePrefixes: ['.env'],
-  sensitiveFileExtensions: ['.key', '.pem', '.p12', '.pfx'],
-  allowedFileNames: ['.env.example'],
 } as const;
 
 const projectAccessOptionsSchema = z
   .object({
     maxFiles: z.number().int().positive().default(defaults.maxFiles),
     maxFileBytes: z.number().int().positive().default(defaults.maxFileBytes),
-    ignoredDirectories: z.array(z.string().min(1)).default([...defaults.ignoredDirectories]),
     excludedPaths: z.array(z.string().min(1)).default([...defaults.excludedPaths]),
-    sensitiveFileNames: z.array(z.string().min(1)).default([...defaults.sensitiveFileNames]),
-    sensitiveFilePrefixes: z.array(z.string().min(1)).default([...defaults.sensitiveFilePrefixes]),
-    sensitiveFileExtensions: z.array(z.string().regex(/^\.[^.]+$/)).default([...defaults.sensitiveFileExtensions]),
-    allowedFileNames: z.array(z.string().min(1)).default([...defaults.allowedFileNames]),
+    accessPolicy: z.instanceof(WorkspaceAccessPolicy).default(() => new WorkspaceAccessPolicy()),
   })
   .strict();
 
@@ -175,9 +163,9 @@ export class ProjectAccess {
     workspace?: WorkspaceTextStore,
     private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
   ) {
-    const { maxFiles, maxFileBytes, ...workspaceOptions } = projectAccessOptionsSchema.parse(options);
-    this.options = { maxFiles, maxFileBytes, ...workspaceOptions };
-    this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, workspaceOptions);
+    const { maxFiles, maxFileBytes, excludedPaths, accessPolicy } = projectAccessOptionsSchema.parse(options);
+    this.options = { maxFiles, maxFileBytes, excludedPaths, accessPolicy };
+    this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, { excludedPaths, accessPolicy });
     this.definitions = this.pathIndex?.searchContents ? [...definitions, searchDefinition] : definitions;
   }
 

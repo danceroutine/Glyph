@@ -6,6 +6,7 @@ import { WorkspacePathIndexError } from '../../context/search/WorkspacePathIndex
 import { WorkspacePathIndexFailureReason } from '../../context/search/WorkspacePathIndexFailureReason.ts';
 import { EditFailureReason } from '../../editing/errors/EditFailureReason.ts';
 import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
+import { WorkspaceAccessPolicy } from '../../workspace/policy/WorkspaceAccessPolicy.ts';
 import { ProjectAccess } from '../ProjectAccess.ts';
 
 async function fixture(): Promise<{ access: ProjectAccess; root: string }> {
@@ -15,6 +16,7 @@ async function fixture(): Promise<{ access: ProjectAccess; root: string }> {
   await mkdir(join(root, 'target'));
   await writeFile(join(root, 'README.md'), '# Sample\n');
   await writeFile(join(root, '.env'), 'SECRET=hidden');
+  await writeFile(join(root, '.git-credentials'), 'https://user:token@example.test');
   await writeFile(join(root, '.env.example'), 'SECRET=');
   await writeFile(join(root, 'src', 'app.ts'), ['one', 'two', 'three', 'four'].join('\n'));
   await writeFile(join(root, 'node_modules', 'dependency.js'), 'ignored');
@@ -229,7 +231,7 @@ describe(ProjectAccess, () => {
       const { root } = await fixture();
       const access = new ProjectAccess(root, {
         maxFiles: 1,
-        sensitiveFilePrefixes: [],
+        accessPolicy: new WorkspaceAccessPolicy({ sensitiveFilePrefixes: [] }),
       });
 
       const listed = JSON.parse(
@@ -332,6 +334,7 @@ describe(ProjectAccess, () => {
         'node_modules/dependency.js',
         'target/native-artifact',
         '.env',
+        '.git-credentials',
         'outside-link',
       ]) {
         const result = JSON.parse(

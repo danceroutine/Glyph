@@ -160,6 +160,10 @@ impl Fixture {
             .arg(&self.state)
             .arg("--workspace-root")
             .arg(&self.workspace)
+            .args([
+                "--workspace-policy",
+                r#"{"ignoredDirectories":[".git",".next","coverage","dist","node_modules","target"],"sensitiveFileNames":[".git-credentials",".netrc",".npmrc",".pypirc"],"sensitiveFilePrefixes":[".env"],"sensitiveFileExtensions":[".key",".pem",".p12",".pfx"],"allowedFileNames":[".env.example"]}"#,
+            ])
             .args(["--", "/bin/sh", "-c", script])
             .env_clear()
             .env("HOME", &self.home)

@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ChatContextEvent } from '../../ChatContextEvent.ts';
 import type { ChatProviderState } from '../../ChatProviderState.ts';
 import type { ChatRequest } from '../../ChatRequest.ts';
@@ -143,6 +146,45 @@ describe(AgentRuntime, () => {
       role: 'assistant',
       content: [{ type: 'text', text: 'Done.' }],
     });
+  });
+
+  it('commits tool results before a later model round fails', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'glyph-tool-checkpoint-'));
+    const marker = join(directory, 'marker.txt');
+    const adapter = new ClaudeShapedAdapter();
+    const originalStreamStep = adapter.streamStep.bind(adapter);
+    adapter.streamStep = async (turn, context) => {
+      if (turn.round > 0) throw new Error('provider failed after mutation');
+      return originalStreamStep(turn, context);
+    };
+    const tools: ToolRuntime = {
+      definitions: [],
+      execute: vi.fn(async () => {
+        await writeFile(marker, 'I win');
+        return 'workspace mutation receipt';
+      }),
+    };
+    const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, tools);
+    const checkpoints: ChatProviderState[] = [];
+
+    await expect(
+      runtime.send('Change the file.', {
+        signal: new AbortController().signal,
+        onText: () => {},
+        onStateCheckpoint: state => {
+          checkpoints.push(state);
+        },
+      }),
+    ).rejects.toThrow('provider failed after mutation');
+
+    expect(checkpoints).toHaveLength(1);
+    expect(messagesFrom(checkpoints[0]!).at(-1)).toEqual({
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'workspace mutation receipt' }],
+    });
+    expect(runtime.exportState()).toEqual(checkpoints[0]);
+    await expect(readFile(marker, 'utf8')).resolves.toBe('I win');
+    await rm(directory, { recursive: true, force: true });
   });
 });
 
