@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCursor, useInput, usePaste, useWindowSize } from 'ink';
 import stringWidth from 'string-width';
-import { WorkspacePathIndexError } from '../../../context/search/WorkspacePathIndexError.ts';
-import { WorkspacePathIndexFailureReason } from '../../../context/search/WorkspacePathIndexFailureReason.ts';
-import type { FileSearchMatch } from '../../../context/search/FileSearchMatch.ts';
+import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.ts';
+import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.ts';
+import type { FileSearchMatch } from '#src/context/search/FileSearchMatch.ts';
 import { searchTerminalCommands, type TerminalCommand } from '../../TerminalCommand.ts';
 import { sanitizeText } from '../shared/sanitizeText.ts';
 import type { PromptRequest } from './PromptRequest.ts';
+import { editPrompt } from './PromptEditing.ts';
 import { formatPromptText } from './formatPromptText.ts';
 import { PromptLayout } from './PromptLayout.ts';
 
@@ -130,6 +131,7 @@ export function usePromptEditorState({
 
   useInput(
     (input, key) => {
+      if (key.eventType === 'release') return;
       if (key.ctrl && input.toLowerCase() === 'c') {
         interrupt();
         return;
@@ -155,39 +157,19 @@ export function usePromptEditorState({
       }
       if (key.tab && completeSelectedCommand()) return;
       if (key.tab && attachSelected()) return;
+      const edit = editPrompt(input, key, text, cursor);
+      if (edit) {
+        if (edit.text === text) setCursor(edit.cursor);
+        else updateText(edit.text, edit.cursor);
+        return;
+      }
       const completionCount = commandQuery ? commandMatches.length : matches.length;
-      if (key.upArrow && completionCount > 0) {
+      if (key.upArrow && !key.ctrl && !key.meta && !key.super && completionCount > 0) {
         setSelectedMatch(value => Math.max(0, value - 1));
         return;
       }
-      if (key.downArrow && completionCount > 0) {
+      if (key.downArrow && !key.ctrl && !key.meta && !key.super && completionCount > 0) {
         setSelectedMatch(value => Math.min(completionCount - 1, value + 1));
-        return;
-      }
-      if (key.leftArrow) {
-        setCursor(previousCharacterOffset(text, cursor));
-        return;
-      }
-      if (key.rightArrow) {
-        setCursor(nextCharacterOffset(text, cursor));
-        return;
-      }
-      if (key.home || (key.ctrl && input.toLowerCase() === 'a')) {
-        setCursor(0);
-        return;
-      }
-      if (key.end || (key.ctrl && input.toLowerCase() === 'e')) {
-        setCursor(text.length);
-        return;
-      }
-      if (key.backspace) {
-        const previous = previousCharacterOffset(text, cursor);
-        if (previous !== cursor) updateText(text.slice(0, previous) + text.slice(cursor), previous);
-        return;
-      }
-      if (key.delete) {
-        const next = nextCharacterOffset(text, cursor);
-        if (next !== cursor) updateText(text.slice(0, cursor) + text.slice(next), cursor);
         return;
       }
       if (isPrintableInput(input, key.ctrl, key.meta)) {
@@ -252,27 +234,4 @@ function containsAttachment(text: string, path: string): boolean {
 
 function isSafeAttachmentPath(path: string): boolean {
   return !/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/u.test(path);
-}
-
-function previousCharacterOffset(text: string, offset: number): number {
-  if (offset <= 0) return 0;
-  const previous = text.charCodeAt(offset - 1);
-  return previous >= 0xdc00 &&
-    previous <= 0xdfff &&
-    offset > 1 &&
-    text.charCodeAt(offset - 2) >= 0xd800 &&
-    text.charCodeAt(offset - 2) <= 0xdbff
-    ? offset - 2
-    : offset - 1;
-}
-
-function nextCharacterOffset(text: string, offset: number): number {
-  if (offset >= text.length) return text.length;
-  const current = text.charCodeAt(offset);
-  return current >= 0xd800 &&
-    current <= 0xdbff &&
-    text.charCodeAt(offset + 1) >= 0xdc00 &&
-    text.charCodeAt(offset + 1) <= 0xdfff
-    ? offset + 2
-    : offset + 1;
 }

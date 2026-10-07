@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
-import type { ChatSessionSummary, ChatTranscriptTurn } from '../../../chat/sessions/ChatSessionRecord.ts';
-import { ChatResponsePartType } from '../../../chat/ChatResponsePartType.ts';
+import type { ChatSessionSummary, ChatTranscriptTurn } from '#src/chat/sessions/ChatSessionRecord.ts';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.ts';
 import { PromptRecord } from '../prompt/PromptRecord.presentational.tsx';
 import { WiredResponse } from '../response/Response.wired.tsx';
 import { sanitizeText } from '../shared/sanitizeText.ts';

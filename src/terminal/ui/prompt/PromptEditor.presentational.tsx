@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode, Ref } from 'react';
 import { Box, Text, type DOMElement } from 'ink';
-import type { FileSearchMatch } from '../../../context/search/FileSearchMatch.ts';
+import type { FileSearchMatch } from '#src/context/search/FileSearchMatch.ts';
 import { sanitizeText } from '../shared/sanitizeText.ts';
 import type { PromptEditorState } from './usePromptEditorState.ts';
 import { formatPromptText } from './formatPromptText.ts';

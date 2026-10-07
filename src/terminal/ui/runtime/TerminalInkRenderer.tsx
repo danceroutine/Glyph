@@ -2,11 +2,11 @@ import { EventEmitter } from 'node:events';
 import type { ReactNode } from 'react';
 import { render } from 'ink';
 import type { Instance } from 'ink';
-import type { ChatResponsePart } from '../../../chat/ChatResponsePart.ts';
-import type { WorkspacePathIndex } from '../../../context/search/WorkspacePathIndex.ts';
-import type { ProposalReviewManager } from '../../../editing/reviews/ProposalReviewManager.ts';
-import type { QuestionForm } from '../../../interaction/questions/QuestionForm.ts';
-import type { QuestionFormResult } from '../../../interaction/questions/QuestionFormResult.ts';
+import type { ChatResponsePart } from '#src/chat/ChatResponsePart.ts';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.ts';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.ts';
+import type { QuestionForm } from '#src/interaction/questions/QuestionForm.ts';
+import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.ts';
 import { Deferred } from './Deferred.ts';
 import { PromptRecord } from '../prompt/PromptRecord.presentational.tsx';
 import type { PromptRequest } from '../prompt/PromptRequest.ts';
@@ -22,6 +22,10 @@ import type { TranscriptEntry } from '../shell/TranscriptEntry.ts';
 import { WiredResponse } from '../response/Response.wired.tsx';
 import type { QuestionFormRequest } from '../question/QuestionFormRequest.ts';
 import { QuestionFormReceipt } from '../question/QuestionFormReceipt.presentational.tsx';
+import type { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.ts';
+import type { ShellPermissionRequest } from '#src/shell/ShellPermissionRequest.ts';
+import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.ts';
+import type { TerminalShellPermissionRequest } from '../shell-permission/ShellPermissionRequest.ts';
 
 /**
  * Owns the single interactive Ink tree for the terminal host. All prompt,
@@ -35,10 +39,13 @@ export class TerminalInkRenderer {
   private responseParts: ChatResponsePart[] | undefined;
   private promptRequest: PromptRequest | undefined;
   private questionRequest: QuestionFormRequest | undefined;
+  private shellPermissionRequest: TerminalShellPermissionRequest | undefined;
   private reviewRequest: ProposalReviewRequest | undefined;
   private promptResult: Deferred<UserPromptDraft> | undefined;
   private questionResult: Deferred<QuestionFormResult> | undefined;
+  private shellPermissionResult: Deferred<ShellPermissionDecision> | undefined;
   private reviewResult: Deferred<void> | undefined;
+  private backgroundShells: readonly ShellSessionSnapshot[] = [];
   private chatPromptContext: {
     label: string;
     files?: WorkspacePathIndex;
@@ -95,7 +102,7 @@ export class TerminalInkRenderer {
 
   beginResponse(): void {
     this.responseParts = [];
-    if (!this.promptRequest && !this.questionRequest && !this.reviewRequest) {
+    if (!this.promptRequest && !this.questionRequest && !this.shellPermissionRequest && !this.reviewRequest) {
       this.promptRequest = {
         id: this.nextId++,
         label: this.chatPromptContext.label,
@@ -144,7 +151,7 @@ export class TerminalInkRenderer {
     const cleanup = (): void => signal.removeEventListener('abort', abort);
     const abort = (): void => {
       if (this.promptRequest?.id !== id) return;
-      this.promptRequest = undefined;
+      if (this.promptRequest.acceptsSubmission) this.promptRequest = undefined;
       this.promptResult = undefined;
       cleanup();
       this.refresh();
@@ -247,8 +254,60 @@ export class TerminalInkRenderer {
     return result.promise;
   }
 
+  async presentShellPermission(
+    permission: ShellPermissionRequest,
+    signal: AbortSignal,
+    interrupt: () => void,
+  ): Promise<ShellPermissionDecision> {
+    const draftRequest = this.promptRequest?.acceptsSubmission === false ? this.promptRequest : undefined;
+    this.assertAvailable(draftRequest);
+    signal.throwIfAborted();
+    const result = new Deferred<ShellPermissionDecision>();
+    this.shellPermissionResult = result;
+    const id = this.nextId++;
+    const cleanup = (): void => signal.removeEventListener('abort', abort);
+    const complete = (decision: ShellPermissionDecision): void => {
+      if (this.shellPermissionRequest?.id !== id) return;
+      this.shellPermissionRequest = undefined;
+      this.shellPermissionResult = undefined;
+      cleanup();
+      this.refresh();
+      result.resolve(decision);
+    };
+    const abort = (): void => {
+      if (this.shellPermissionRequest?.id !== id) return;
+      this.shellPermissionRequest = undefined;
+      this.shellPermissionResult = undefined;
+      cleanup();
+      this.refresh();
+      result.reject(signal.reason ?? new Error('Shell permission cancelled.'));
+    };
+    this.shellPermissionRequest = { id, permission, complete, interrupt };
+    signal.addEventListener('abort', abort, { once: true });
+    this.refresh();
+    return result.promise;
+  }
+
+  setBackgroundShells(sessions: readonly ShellSessionSnapshot[]): void {
+    this.backgroundShells = [...sessions];
+    this.refresh();
+  }
+
   requestInterrupt(): void {
     this.events.emit('SIGINT');
+  }
+
+  preservePromptDraft(): void {
+    const request = this.promptRequest;
+    if (!request?.acceptsSubmission) return;
+    this.promptRequest = {
+      id: request.id,
+      label: request.label,
+      acceptsSubmission: false,
+      pendingChanges: request.pendingChanges as number,
+      ...(request.files ? { files: request.files } : {}),
+    };
+    this.refresh();
   }
 
   close(): void {
@@ -257,12 +316,15 @@ export class TerminalInkRenderer {
     const cancellation = new Error('Session closed.');
     this.promptResult?.reject(cancellation);
     this.questionResult?.reject(cancellation);
+    this.shellPermissionResult?.reject(cancellation);
     this.reviewResult?.reject(cancellation);
     this.promptResult = undefined;
     this.questionResult = undefined;
+    this.shellPermissionResult = undefined;
     this.reviewResult = undefined;
     this.promptRequest = undefined;
     this.questionRequest = undefined;
+    this.shellPermissionRequest = undefined;
     this.reviewRequest = undefined;
     this.input.off('end', this.handleInputClosed);
     this.input.off('close', this.handleInputClosed);
@@ -271,7 +333,12 @@ export class TerminalInkRenderer {
 
   private assertAvailable(reusablePrompt?: PromptRequest): void {
     if (this.closed) throw new Error('Session closed.');
-    if ((this.promptRequest && this.promptRequest !== reusablePrompt) || this.questionRequest || this.reviewRequest) {
+    if (
+      (this.promptRequest && this.promptRequest !== reusablePrompt) ||
+      this.questionRequest ||
+      this.shellPermissionRequest ||
+      this.reviewRequest
+    ) {
       throw new Error('The terminal is already waiting for input.');
     }
   }
@@ -287,6 +354,8 @@ export class TerminalInkRenderer {
       responseParts: this.responseParts ? [...this.responseParts] : undefined,
       prompt: this.promptRequest,
       ...(this.questionRequest ? { question: this.questionRequest } : {}),
+      ...(this.shellPermissionRequest ? { shellPermission: this.shellPermissionRequest } : {}),
+      backgroundShells: this.backgroundShells,
       review: this.reviewRequest,
       interrupt: () => this.requestInterrupt(),
     };

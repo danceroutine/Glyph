@@ -8,6 +8,8 @@ import { TerminalActionType } from './TerminalActionType.ts';
 import type { TerminalUI } from './TerminalUI.tsx';
 import type { TerminalEditReviewer } from './ui/proposal/TerminalEditReviewer.ts';
 import type { ProjectContext } from '../project/context/ProjectContext.ts';
+import type { ShellSessionManager } from '../shell/ShellSessionManager.ts';
+import type { ShellWakeEvent } from '../shell/ShellWakeEvent.ts';
 
 interface TerminalApplicationOptions {
   projectContext: ProjectContext;
@@ -29,6 +31,7 @@ export class TerminalApplication {
     private readonly shutdown: AbortSignal,
     private readonly options: TerminalApplicationOptions,
     private readonly reviewer?: TerminalEditReviewer,
+    private readonly shellSessions?: ShellSessionManager,
   ) {}
 
   get active(): AbortController | undefined {
@@ -51,7 +54,12 @@ export class TerminalApplication {
       await this.reviewPending();
 
       while (!this.shutdown.aborted) {
-        const action = await this.ui.nextAction(this.shutdown, this.glyph.proposalReviews?.pendingChangeCount ?? 0);
+        const activity = await this.nextActivity();
+        if ('wake' in activity) {
+          await this.resumeFromShellWake(activity.wake, account);
+          continue;
+        }
+        const action = activity.action;
         switch (action.type) {
           case TerminalActionType.EXIT:
             return 0;
@@ -147,16 +155,16 @@ export class TerminalApplication {
       if (!this.shutdown.aborted) this.ui.showError(this.glyph.redact(describeError(error)));
       return this.shutdown.aborted ? 0 : 1;
     } finally {
-      await this.glyph.dispose();
+      try {
+        await this.shellSessions?.dispose();
+      } finally {
+        await this.glyph.dispose();
+      }
     }
   }
 
   private async chooseAccount(): Promise<ChatAccount> {
-    const selection = await this.ui.chooseAccount(
-      this.glyph.accounts,
-      this.glyph.providerPresentation,
-      this.shutdown,
-    );
+    const selection = await this.ui.chooseAccount(this.glyph.accounts, this.glyph.providerPresentation, this.shutdown);
     if (selection.type === AccountSelectionType.ADD) {
       return this.glyph.signIn(undefined, false, request => this.ui.authorize(request));
     }
@@ -196,6 +204,7 @@ export class TerminalApplication {
   }
 
   private async send(prompt: string, attachmentPaths: readonly string[]): Promise<void> {
+    this.shellSessions?.setOwnerChat(this.requireConversation().id);
     this.activeRequest = new AbortController();
     this.ui.beginAssistantResponse();
     try {
@@ -213,6 +222,60 @@ export class TerminalApplication {
       this.activeRequest = undefined;
     }
     await this.reviewPending();
+  }
+
+  private async nextActivity(): Promise<
+    { action: Awaited<ReturnType<TerminalUI['nextAction']>> } | { wake: ShellWakeEvent }
+  > {
+    const pending = this.shellSessions?.takePendingWake();
+    if (pending) return { wake: pending };
+    if (!this.shellSessions) {
+      return {
+        action: await this.ui.nextAction(this.shutdown, this.glyph.proposalReviews?.pendingChangeCount ?? 0),
+      };
+    }
+    const controller = new AbortController();
+    let wake: ShellWakeEvent | undefined;
+    const stop = this.shellSessions.onDidWake(event => {
+      wake ??= event;
+      this.ui.preservePromptDraft();
+      controller.abort(new Error('Background shell awakened the agent.'));
+    });
+    try {
+      const action = await this.ui.nextAction(
+        AbortSignal.any([this.shutdown, controller.signal]),
+        this.glyph.proposalReviews?.pendingChangeCount ?? 0,
+      );
+      return { action };
+    } catch (error) {
+      if (!wake) throw error;
+      this.shellSessions.takePendingWake(wake.id);
+      return { wake };
+    } finally {
+      stop();
+    }
+  }
+
+  private async resumeFromShellWake(wake: ShellWakeEvent, account: ChatAccount): Promise<void> {
+    if (wake.ownerChatId && wake.ownerChatId !== this.conversation?.id) {
+      try {
+        this.activateChat(this.glyph.openChat(wake.ownerChatId, account));
+      } catch (error) {
+        this.ui.showError(this.glyph.redact(describeError(error)));
+        return;
+      }
+    }
+    const conversation = this.requireConversation();
+    await conversation.recordContext([
+      {
+        schemaVersion: 1,
+        id: wake.id,
+        type: 'shell_wake',
+        payload: wake,
+      },
+    ]);
+    this.ui.showShellWake(wake);
+    await this.send('A background shell wake condition matched. Continue from the shell_wake context event.', []);
   }
 
   private async reviewPending(): Promise<void> {

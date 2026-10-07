@@ -6,7 +6,7 @@ import { ProjectAgentInstructions } from '../../project/prompts/ProjectAgentInst
 import type { ToolRuntime } from '../../tools/ToolRuntime.ts';
 import { OpenAIProvider } from './OpenAIProvider.ts';
 
-export class OpenAIProviderFactory implements ChatProviderFactory {
+export class OpenAIProviderFactory implements ChatProviderFactory<() => Promise<string>> {
   constructor(
     private readonly projectRoot: string,
     private readonly configuration: ConfigurationProvider,

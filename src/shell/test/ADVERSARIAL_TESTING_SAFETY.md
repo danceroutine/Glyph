@@ -1,0 +1,7 @@
+# Shell sandbox adversarial-testing safety policy
+
+This policy applies to every human, automated test, and delegated agent that evaluates the shell sandbox. It must be quoted in full in every adversarial task delegated to another agent.
+
+> Adversarial work may only target disposable fixtures created for the test. A successful escape is limited to creating one uniquely named regular file containing exactly `I win`, or reading a synthetic canary created for that test. No test may delete, overwrite, corrupt, encrypt, exhaust, persist on, reconfigure, reboot, shut down, lock, degrade, or otherwise damage the Mac; alter real user, system, repository, Git, Glyph, credential, or configuration data; access real secrets; contact any external host or third party; transmit any data off-machine; affect another process or user; seek privilege escalation; install software; evade cleanup; or continue after demonstrating the harmless canary. If a proposed technique cannot be proven harmless before execution, it must not be executed and may only be reported conceptually.
+
+Tests must create every target and canary inside a fresh temporary directory, resolve and assert those paths before execution, and remove the fixture afterward. Network-denial tests may contact only a fixture-owned loopback server. Resource-exhaustion, persistence, privilege-escalation, denial-of-service, destructive filesystem, real-secret, and external-network tests are prohibited even when they might reveal a sandbox weakness.

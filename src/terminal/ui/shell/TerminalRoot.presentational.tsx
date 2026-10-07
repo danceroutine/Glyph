@@ -7,6 +7,7 @@ export interface TerminalRootProps {
   display?: 'flex' | 'none';
   height: number;
   response: ReactNode;
+  backgroundShells?: ReactNode;
   interaction: ReactNode;
 }
 
@@ -49,11 +50,13 @@ export function TerminalRoot({
   display = 'flex',
   height,
   response,
+  backgroundShells,
   interaction,
 }: TerminalRootProps): ReactElement {
   return (
     <Box display={display} flexDirection="column" height={height} overflow="hidden" width="100%">
       <TranscriptViewport entries={entries} response={response} />
+      {backgroundShells}
       {interaction}
     </Box>
   );

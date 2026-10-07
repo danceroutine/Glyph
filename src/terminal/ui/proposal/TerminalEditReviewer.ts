@@ -2,12 +2,12 @@ import { extname } from 'node:path';
 import { highlight, supportsLanguage } from 'cli-highlight';
 import type { Theme } from 'cli-highlight';
 import wrapAnsi from 'wrap-ansi';
-import type { EditProposal } from '../../../editing/proposals/EditProposal.ts';
-import type { FileEditPlan } from '../../../editing/proposals/FileEditPlan.ts';
-import { EditDecisionState } from '../../../editing/reviews/EditDecisionState.ts';
-import type { EditReviewItem } from '../../../editing/reviews/EditReviewItem.ts';
-import { EditReviewItemKind } from '../../../editing/reviews/EditReviewItemKind.ts';
-import type { ProposalReviewManager } from '../../../editing/reviews/ProposalReviewManager.ts';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.ts';
+import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.ts';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.ts';
+import type { EditReviewItem } from '#src/editing/reviews/EditReviewItem.ts';
+import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.ts';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.ts';
 import type { TerminalUI } from '../../TerminalUI.tsx';
 import { sanitizeText } from '../shared/sanitizeText.ts';
 

@@ -42,10 +42,7 @@ export class ChatSessionManager {
   list(account?: { provider: string; id: string }): readonly ChatSessionSummary[] {
     this.requireInitialized();
     return [...this.records.values()]
-      .filter(
-        record =>
-          !account || (record.accountProvider === account.provider && record.accountId === account.id),
-      )
+      .filter(record => !account || (record.accountProvider === account.provider && record.accountId === account.id))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .map(toSummary);
   }

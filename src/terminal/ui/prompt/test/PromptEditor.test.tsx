@@ -1,7 +1,7 @@
 import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
-import { TerminalActionType } from '../../../TerminalActionType.ts';
+import { TerminalActionType } from '#src/terminal/TerminalActionType.ts';
 import { PromptEditor } from '../PromptEditor.presentational.tsx';
 import { PromptRecord } from '../PromptRecord.presentational.tsx';
 import { formatPromptText } from '../formatPromptText.ts';

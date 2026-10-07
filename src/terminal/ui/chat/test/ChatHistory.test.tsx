@@ -8,13 +8,13 @@ describe(ChatHistory, () => {
     const view = render(
       <ChatHistory
         summary={{
-          schemaVersion: 2,
+          schemaVersion: 3,
           id: 'chat-123456',
           title: 'Saved work',
           titleOrigin: 'human',
           projectContextId: 'project',
-          accountClientId: 'client',
-          accountSubject: 'subject',
+          accountProvider: 'fixture',
+          accountId: 'account',
           modelSlug: 'model',
           modelName: 'Model',
           createdAt: '2026-10-06T00:00:00.000Z',

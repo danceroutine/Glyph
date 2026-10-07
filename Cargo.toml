@@ -1,5 +1,5 @@
 [workspace]
-members = ["native/context-index"]
+members = ["native/context-index", "native/shell-sandbox"]
 resolver = "2"
 
 [workspace.package]
@@ -10,4 +10,3 @@ rust-version = "1.88"
 codegen-units = 1
 lto = "thin"
 strip = "symbols"
-

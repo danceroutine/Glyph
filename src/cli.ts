@@ -39,6 +39,12 @@ import { CompositeToolRuntime } from './tools/CompositeToolRuntime.ts';
 import { FileSystemWorkspaceTextStore } from './workspace/FileSystemWorkspaceTextStore.ts';
 import { MultiRootWorkspaceTextStore } from './workspace/MultiRootWorkspaceTextStore.ts';
 import type { WorkspaceTextStore } from './workspace/WorkspaceTextStore.ts';
+import { FileShellPermissionStore } from './shell/FileShellPermissionStore.ts';
+import { NativeShellSandboxLauncher } from './shell/NativeShellSandboxLauncher.ts';
+import { ShellCommandAuthorizer } from './shell/ShellCommandAuthorizer.ts';
+import { ShellSessionManager } from './shell/ShellSessionManager.ts';
+import { ShellToolRuntime } from './shell/ShellToolRuntime.ts';
+import { ShellWorkingDirectoryResolver } from './shell/ShellWorkingDirectoryResolver.ts';
 
 async function main(): Promise<void> {
   if (process.argv.includes('--help')) {
@@ -56,9 +62,9 @@ async function main(): Promise<void> {
     currentDirectory: process.cwd(),
     ...workspaceArgument(process.argv.slice(2)),
   });
-  if (projectContext.roots.some(root => resolve(configuration.stateDirectory) === root.path)) {
+  if (projectContext.roots.some(root => pathsOverlap(configuration.stateDirectory, root.path))) {
     throw new ConfigurationError(
-      'GLYPH_CONFIG_DIR must not be the project root because Glyph state contains credentials and provider traces.',
+      'GLYPH_CONFIG_DIR must be outside every project root because Glyph state contains credentials and provider traces.',
     );
   }
   const logger = new FileLogger(configuration.traceFile);
@@ -74,13 +80,39 @@ async function main(): Promise<void> {
         process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
       ),
   );
+  const shellSandboxExecutable = resolve(
+    process.env.GLYPH_SHELL_SANDBOX_BINARY ??
+      resolve(
+        packageRoot,
+        'target',
+        'release',
+        process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
+      ),
+  );
   const { workspace, pathIndex } = createProjectRuntime(
     projectContext,
     configuration.stateDirectory,
     configuration.traceFile,
     indexExecutable,
+    shellSandboxExecutable,
   );
   const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, pathIndex);
+  const shellAuthorizer = new ShellCommandAuthorizer(
+    projectContext.id,
+    new FileShellPermissionStore(join(configuration.stateDirectory, 'projects', projectContext.id)),
+    ui,
+  );
+  const shellSessions = new ShellSessionManager(
+    shellAuthorizer,
+    new ShellWorkingDirectoryResolver(projectContext),
+    new NativeShellSandboxLauncher({
+      binaryPath: shellSandboxExecutable,
+      workspaceRoots: projectContext.roots.map(root => root.path),
+      stateDirectory: configuration.stateDirectory,
+      protectedPaths: [indexExecutable, shellSandboxExecutable],
+    }),
+  );
+  ui.connectShellSessions(shellSessions);
   const authentication = new OpenAIAuthenticationClient(configuration.openAI, http);
   const session = new OpenAISession(store, authentication, configuration.openAI, shutdown.signal);
   const proposalReviews = new ProposalReviewManager(
@@ -96,7 +128,11 @@ async function main(): Promise<void> {
     proposalReviews,
     logger,
   );
-  const tools = new CompositeToolRuntime([projectTools, new ProposeQuestionToolRuntime(ui)]);
+  const tools = new CompositeToolRuntime([
+    projectTools,
+    new ProposeQuestionToolRuntime(ui),
+    new ShellToolRuntime(shellSessions),
+  ]);
   const backend = new OpenAIBackend(
     store,
     session,
@@ -125,6 +161,7 @@ async function main(): Promise<void> {
       process.exitCode = 130;
       shutdown.abort();
     }),
+    shellSessions,
   );
 
   let closed = false;
@@ -175,6 +212,7 @@ function createProjectRuntime(
   stateDirectory: string,
   traceFile: string,
   indexExecutable: string,
+  shellSandboxExecutable: string,
 ): { workspace: WorkspaceTextStore; pathIndex: WorkspacePathIndex } {
   const roots = context.roots.map(root => {
     const excludedPaths = [
@@ -183,6 +221,7 @@ function createProjectRuntime(
           projectRelativeExclusion(root.path, stateDirectory),
           projectRelativeExclusion(root.path, traceFile),
           projectRelativeExclusion(root.path, indexExecutable),
+          projectRelativeExclusion(root.path, shellSandboxExecutable),
         ].filter((path): path is string => path !== undefined),
       ),
     ];
@@ -220,6 +259,19 @@ function projectRelativeExclusion(root: string, target: string): string | undefi
   }
   if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) return undefined;
   return fromRoot.split(sep).join('/');
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  const leftPath = resolve(left);
+  const rightPath = resolve(right);
+  const fromLeft = relative(leftPath, rightPath);
+  const fromRight = relative(rightPath, leftPath);
+  return (
+    !fromLeft ||
+    (!fromLeft.startsWith(`..${sep}`) && fromLeft !== '..' && !isAbsolute(fromLeft)) ||
+    !fromRight ||
+    (!fromRight.startsWith(`..${sep}`) && fromRight !== '..' && !isAbsolute(fromRight))
+  );
 }
 
 main().catch(error => {

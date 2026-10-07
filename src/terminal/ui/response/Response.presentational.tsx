@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Box, Text } from 'ink';
-import { ChatResponsePartType } from '../../../chat/ChatResponsePartType.ts';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.ts';
 import { sanitizeText } from '../shared/sanitizeText.ts';
 import { Markdown } from './Markdown.presentational.tsx';
 import { parseInlineMarkdown } from './parseInlineMarkdown.ts';

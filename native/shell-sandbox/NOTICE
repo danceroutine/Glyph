@@ -1,0 +1,6 @@
+The macOS Seatbelt baseline is informed by and partially adapted from OpenAI Codex's sandbox policies.
+
+OpenAI Codex
+Copyright OpenAI
+Licensed under the Apache License, Version 2.0.
+https://github.com/openai/codex/tree/main/codex-rs/sandboxing

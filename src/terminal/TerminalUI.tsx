@@ -22,6 +22,12 @@ import { QuestionAnswerType } from '../interaction/questions/QuestionAnswerType.
 import type { QuestionForm } from '../interaction/questions/QuestionForm.ts';
 import type { QuestionFormResult } from '../interaction/questions/QuestionFormResult.ts';
 import type { QuestionPresenter } from '../interaction/questions/QuestionPresenter.ts';
+import type { ShellPermissionDecision } from '../shell/ShellPermissionDecision.ts';
+import { ShellPermissionDecision as ShellPermissionDecisionValue } from '../shell/ShellPermissionDecision.ts';
+import type { ShellPermissionPresenter } from '../shell/ShellPermissionPresenter.ts';
+import type { ShellPermissionRequest } from '../shell/ShellPermissionRequest.ts';
+import type { ShellSessionManager } from '../shell/ShellSessionManager.ts';
+import type { ShellWakeEvent } from '../shell/ShellWakeEvent.ts';
 import { AccountSelectionType } from './AccountSelectionType.ts';
 import {
   mergeReviewEntries,
@@ -54,7 +60,7 @@ type AccountSelection =
   { type: AccountSelectionType.ACCOUNT; account: ChatAccount } | { type: AccountSelectionType.ADD };
 
 /** Ink-backed terminal host with a plain readline fallback for redirected IO. */
-export class TerminalUI implements ChatResponseStream, QuestionPresenter {
+export class TerminalUI implements ChatResponseStream, QuestionPresenter, ShellPermissionPresenter {
   static readonly help = TERMINAL_HELP;
 
   private readonly events = new EventEmitter();
@@ -62,21 +68,27 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter {
   private reader: Interface | undefined;
   private closed = false;
   private responseSection: ChatResponsePartType.TEXT | ChatResponsePartType.REASONING_SUMMARY | undefined;
+  private stopObservingShells: (() => void) | undefined;
+  private shellSessions: ShellSessionManager | undefined;
+  private shellRefreshTimer: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly input: TerminalInputStream = process.stdin,
     private readonly output: TerminalOutputStream = process.stdout,
     private readonly errorOutput: NodeJS.WritableStream = process.stderr,
     private readonly files?: WorkspacePathIndex,
+    shellSessions?: ShellSessionManager,
   ) {
     if (input.isTTY === true && typeof input.setRawMode === 'function' && output.isTTY === true) {
       this.renderer = new TerminalInkRenderer(input, output, errorOutput);
       this.renderer.on('SIGINT', () => this.events.emit('SIGINT'));
       this.renderer.on('close', () => this.events.emit('close'));
+      this.renderer.setBackgroundShells(shellSessions?.sessions ?? []);
     } else {
       input.once('end', this.handleInputClosed);
       input.once('close', this.handleInputClosed);
     }
+    if (shellSessions) this.connectShellSessions(shellSessions);
   }
 
   on(event: 'SIGINT', listener: () => void): void {
@@ -89,6 +101,22 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter {
     this.events.on('close', listener);
   }
 
+  connectShellSessions(shellSessions: ShellSessionManager): void {
+    this.stopObservingShells?.();
+    if (this.shellRefreshTimer) clearTimeout(this.shellRefreshTimer);
+    this.shellRefreshTimer = undefined;
+    this.shellSessions = shellSessions;
+    this.renderer?.setBackgroundShells(shellSessions.sessions);
+    this.stopObservingShells = shellSessions.onDidChange(() => {
+      if (this.shellRefreshTimer) return;
+      this.shellRefreshTimer = setTimeout(() => {
+        this.shellRefreshTimer = undefined;
+        this.renderer?.setBackgroundShells(shellSessions.sessions);
+      }, 50);
+      this.shellRefreshTimer.unref();
+    });
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -96,6 +124,10 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter {
     this.input.off('close', this.handleInputClosed);
     this.reader?.close();
     this.reader = undefined;
+    this.stopObservingShells?.();
+    if (this.shellRefreshTimer) clearTimeout(this.shellRefreshTimer);
+    this.shellRefreshTimer = undefined;
+    this.shellSessions?.shutdown();
     this.renderer?.close();
   }
 
@@ -226,10 +258,7 @@ ${TERMINAL_HELP}`);
           <Text underline>{clean(url)}</Text>
         </Box>,
       );
-    } else
-      this.line(
-        `\n${clean(title)}\n${clean(message)}\n\nIf the browser does not open, visit:\n${clean(url)}\n`,
-      );
+    } else this.line(`\n${clean(title)}\n${clean(message)}\n\nIf the browser does not open, visit:\n${clean(url)}\n`);
 
     if (process.platform === 'win32') return;
     const command = process.platform === 'darwin' ? 'open' : 'xdg-open';
@@ -254,6 +283,10 @@ ${TERMINAL_HELP}`);
   beginAssistantResponse(): void {
     this.responseSection = undefined;
     this.renderer?.beginResponse();
+  }
+
+  preservePromptDraft(): void {
+    this.renderer?.preservePromptDraft();
   }
 
   push(part: ChatResponsePart): void {
@@ -370,6 +403,13 @@ ${TERMINAL_HELP}`);
     this.appendText('Unknown command. Use /help.', { color: 'yellow' });
   }
 
+  showShellWake(event: ShellWakeEvent): void {
+    this.appendText(
+      `Background terminal ${clean(event.terminalId.slice(0, 8))} matched "${clean(event.pattern)}". Waking its agent.`,
+      { color: 'yellow' },
+    );
+  }
+
   showUsage(usage: Usage): void {
     this.appendText(
       `${formatUsage(usage)}\nCompleted requests only. Plan/credit limits: https://chatgpt.com/settings/usage`,
@@ -389,7 +429,7 @@ ${TERMINAL_HELP}`);
     this.appendText(
       revoked
         ? 'Signed out. Renewable session revoked.'
-        : 'Local tokens cleared. Remote revocation was not confirmed; disconnect Glyph in ChatGPT settings.',
+        : "Local credentials cleared. Remote revocation was not confirmed; review the provider's credential settings.",
     );
   }
 
@@ -459,6 +499,38 @@ ${TERMINAL_HELP}`);
       }
     }
     return { answers };
+  }
+
+  async presentShellPermission(request: ShellPermissionRequest, signal: AbortSignal): Promise<ShellPermissionDecision> {
+    if (this.renderer) {
+      return this.renderer.presentShellPermission(request, signal, () => this.events.emit('SIGINT'));
+    }
+    this.line(`\nShell permission required\nDirectory: ${clean(request.workingDirectory)}\n${clean(request.command)}`);
+    this.line('1. Allow once in the project-write sandbox');
+    this.line('2. Always allow this exact command in the sandbox');
+    this.line('3. Allow safe inspection commands in a read-only, offline sandbox');
+    this.line('4. Allow this command outside the sandbox once');
+    this.line('5. Allow everything outside the sandbox');
+    this.line('6. Deny');
+    for (;;) {
+      const choice = (await this.ask('Choice [1-6]: ', signal)).trim();
+      switch (choice) {
+        case '1':
+          return ShellPermissionDecisionValue.ALLOW_ONCE;
+        case '2':
+          return ShellPermissionDecisionValue.ALWAYS_ALLOW;
+        case '3':
+          return ShellPermissionDecisionValue.ALLOW_SAFE;
+        case '4':
+          return ShellPermissionDecisionValue.ALLOW_OUTSIDE_SANDBOX_ONCE;
+        case '5':
+          return ShellPermissionDecisionValue.ALLOW_EVERYTHING;
+        case '6':
+          return ShellPermissionDecisionValue.DENY;
+        default:
+          this.appendText('Choose a number from 1 through 6.', { color: 'yellow' });
+      }
+    }
   }
 
   private async ask(label: string, signal: AbortSignal): Promise<string> {

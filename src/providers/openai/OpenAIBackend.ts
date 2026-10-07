@@ -31,8 +31,8 @@ export class OpenAIBackend implements ChatBackend {
   constructor(
     private readonly store: OpenAIAccountStore,
     private readonly session: OpenAISessionService,
-    private readonly models: ModelCatalog,
-    private readonly providers: ChatProviderFactory,
+    private readonly models: ModelCatalog<string>,
+    private readonly providers: ChatProviderFactory<() => Promise<string>>,
     private readonly configuration: OpenAIConfiguration,
   ) {}
 

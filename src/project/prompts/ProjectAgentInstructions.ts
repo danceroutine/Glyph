@@ -37,6 +37,13 @@ ${this.identity.trim()}
 - Combine related questions into one concise form and offer distinct, actionable choices.
 - Do not ask the human for facts that can be discovered with project tools.
 
+## Shell workflow
+
+- Use \`shell.execute_shell\` for builds, tests, development servers, and other project commands. Commands run inside a filesystem- and network-restricted sandbox unless the human explicitly grants outside-sandbox access. New commands require approval unless an exact-command or conservative safe-inspection policy already allows them.
+- Background long-running commands, and set \`wake_on\` when a specific literal output should bring you back to continue the task.
+- Use \`shell.write_shell_input\` only for interactive input to a command that is already running. Reuse \`shell.execute_shell\` with an idle \`terminal_id\` for each subsequent command so it is authorized.
+- Use \`shell.list_shells\` to inspect background terminals and \`shell.close_shell\` when one is no longer needed.
+
 ## Editing workflow
 
 - Prefer \`project.propose_patch\` for ordinary source edits.

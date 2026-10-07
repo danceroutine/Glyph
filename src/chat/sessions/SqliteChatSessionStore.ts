@@ -344,9 +344,7 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
     projectContextId: row.project_context_id,
     accountProvider: row.schema_version >= 3 ? row.account_client_id : 'openai',
     accountId:
-      row.schema_version >= 3
-        ? row.account_subject
-        : legacyAccountId(row.account_client_id, row.account_subject),
+      row.schema_version >= 3 ? row.account_subject : legacyAccountId(row.account_client_id, row.account_subject),
     modelSlug: row.model_slug,
     modelName: row.model_name,
     createdAt: row.created_at,

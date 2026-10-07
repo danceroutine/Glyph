@@ -1,8 +1,8 @@
 import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
-import { QuestionAnswerType } from '../../../interaction/questions/QuestionAnswerType.ts';
-import type { QuestionForm } from '../../../interaction/questions/QuestionForm.ts';
-import type { QuestionFormResult } from '../../../interaction/questions/QuestionFormResult.ts';
+import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.ts';
+import type { QuestionForm } from '#src/interaction/questions/QuestionForm.ts';
+import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.ts';
 import { sanitizeText } from '../shared/sanitizeText.ts';
 
 export interface QuestionFormReceiptProps {

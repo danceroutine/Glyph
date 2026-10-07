@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
 import { useCursor, useInput, usePaste } from 'ink';
-import type { QuestionAnswer } from '../../../interaction/questions/QuestionAnswer.ts';
-import { QuestionAnswerType } from '../../../interaction/questions/QuestionAnswerType.ts';
-import type { Question } from '../../../interaction/questions/Question.ts';
+import type { QuestionAnswer } from '#src/interaction/questions/QuestionAnswer.ts';
+import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.ts';
+import type { Question } from '#src/interaction/questions/Question.ts';
 import type { QuestionFormRequest } from './QuestionFormRequest.ts';
 
 export interface QuestionFormState {

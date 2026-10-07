@@ -5,7 +5,7 @@ import type { Model } from '../../chat/Model.ts';
 import type { ModelCatalog } from '../../chat/ModelCatalog.ts';
 import type { OpenAIConfiguration } from './OpenAIConfiguration.ts';
 
-export class OpenAIModelCatalog implements ModelCatalog {
+export class OpenAIModelCatalog implements ModelCatalog<string> {
   constructor(
     private readonly configuration: OpenAIConfiguration,
     private readonly http: HttpClient,

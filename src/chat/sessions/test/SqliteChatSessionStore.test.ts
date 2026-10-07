@@ -1,6 +1,7 @@
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PersistenceError } from '../../../errors/PersistenceError.ts';
 import { ProjectContextResolver } from '../../../project/context/ProjectContextResolver.ts';
@@ -46,6 +47,10 @@ describe(SqliteChatSessionStore, () => {
             schemaVersion: 1,
             scope: { kind: 'workspace', root: context.roots[0]!.path },
             projectContextId: undefined,
+            accountProvider: undefined,
+            accountId: undefined,
+            accountClientId: 'client',
+            accountSubject: 'subject',
           },
         ],
       }),
@@ -54,8 +59,55 @@ describe(SqliteChatSessionStore, () => {
 
     await store.initialize(context);
 
-    await expect(store.load(context.id)).resolves.toEqual([record(context.id)]);
+    await expect(store.load(context.id)).resolves.toEqual([
+      {
+        ...record(context.id),
+        accountProvider: 'openai',
+        accountId: JSON.stringify(['client', 'subject']),
+      },
+    ]);
     await expect(stat(join(directory, 'chats.json'))).resolves.toBeDefined();
+    await store.dispose();
+  });
+
+  it('loads schema-v2 OpenAI ownership as a provider-neutral account identity', async () => {
+    const directory = await fixture('glyph-chat-store-');
+    const project = await fixture('glyph-chat-project-');
+    const context = await ProjectContextResolver.folder(project, 'local');
+    const store = new SqliteChatSessionStore(directory);
+    await store.initialize(context);
+    const database = new Database(join(directory, 'chats.sqlite3'));
+    database
+      .prepare(
+        `INSERT INTO chats(
+           id, schema_version, project_context_id, title, title_origin,
+           account_client_id, account_subject, model_slug, model_name,
+           created_at, updated_at, provider_state
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'legacy-chat',
+        2,
+        context.id,
+        'Legacy Chat',
+        'human',
+        'client',
+        'subject',
+        'model',
+        'Model',
+        '2026-10-06T00:00:00.000Z',
+        '2026-10-06T00:00:00.000Z',
+        JSON.stringify({ provider: 'openai-responses', version: 1, data: { history: [] } }),
+      );
+    database.close();
+
+    await expect(store.load(context.id)).resolves.toEqual([
+      expect.objectContaining({
+        schemaVersion: 3,
+        accountProvider: 'openai',
+        accountId: JSON.stringify(['client', 'subject']),
+      }),
+    ]);
     await store.dispose();
   });
 
@@ -79,13 +131,13 @@ describe(SqliteChatSessionStore, () => {
 
 function record(projectContextId: string): ChatSessionRecord {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: 'chat-id',
     title: 'Test Chat',
     titleOrigin: 'human',
     projectContextId,
-    accountClientId: 'client',
-    accountSubject: 'subject',
+    accountProvider: 'fixture',
+    accountId: 'account',
     modelSlug: 'model',
     modelName: 'Model',
     createdAt: '2026-10-06T00:00:00.000Z',

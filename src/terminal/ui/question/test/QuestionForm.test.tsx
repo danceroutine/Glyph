@@ -1,6 +1,6 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
-import { QuestionAnswerType } from '../../../../interaction/questions/QuestionAnswerType.ts';
+import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.ts';
 import { QuestionForm } from '../QuestionForm.presentational.tsx';
 import { QuestionFormReceipt } from '../QuestionFormReceipt.presentational.tsx';
 

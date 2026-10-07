@@ -16,6 +16,7 @@ import { ProjectAccess } from '../../../project/ProjectAccess.ts';
 import { ProjectToolRuntime } from '../../../project/ProjectToolRuntime.ts';
 import { ProjectAgentInstructions } from '../../../project/prompts/ProjectAgentInstructions.ts';
 import { OpenAIProvider } from '../../../providers/openai/OpenAIProvider.ts';
+import { OpenAIBackend } from '../../../providers/openai/OpenAIBackend.ts';
 import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
 import { RecordingLogger } from './RecordingLogger.ts';
 import { RecordingResponseStream } from './RecordingResponseStream.ts';
@@ -92,12 +93,11 @@ export class EditingE2EHarness {
       runtime,
     );
     const accountStore = new FixtureOpenAIAccountStore();
-    this.application = new GlyphService(
+    const backend = new OpenAIBackend(
       accountStore,
       new FixtureOpenAISession(accountStore.state.accounts[0]!),
       new FixtureModelCatalog(),
       new FixtureChatProviderFactory(this.provider),
-      this.logger,
       {
         issuer: 'https://auth.fixture.invalid',
         resource: 'https://responses.fixture.invalid/v1',
@@ -105,11 +105,15 @@ export class EditingE2EHarness {
         planScope: 'chatgpt.tokens.use.direct',
         requestTimeoutMs: 1_000,
       },
+    );
+    this.application = new GlyphService(
+      backend,
+      this.logger,
       { traceEnabled: true },
       this.reviews,
       new ContextAttachmentService(this.workspace),
     );
-    this.conversation = this.application.createConversation(accountStore.state.accounts[0]!, {
+    this.conversation = this.application.createConversation(backend.accounts[0]!, {
       slug: 'test-model',
       name: 'Test Model',
     });

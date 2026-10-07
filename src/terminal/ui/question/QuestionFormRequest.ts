@@ -1,5 +1,5 @@
-import type { QuestionForm } from '../../../interaction/questions/QuestionForm.ts';
-import type { QuestionFormResult } from '../../../interaction/questions/QuestionFormResult.ts';
+import type { QuestionForm } from '#src/interaction/questions/QuestionForm.ts';
+import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.ts';
 
 /** Renderer-owned question interaction consumed by the wired form. */
 export interface QuestionFormRequest {

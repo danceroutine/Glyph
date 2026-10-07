@@ -2,9 +2,10 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import type { ChatAccount } from '../../chat/ChatAccount.ts';
+import type { ChatBackend } from '../../chat/ChatBackend.ts';
 import type { ChatProvider } from '../../chat/ChatProvider.ts';
 import { toChatRequest } from '../../chat/ChatRequest.ts';
-import type { ChatProviderFactory } from '../../chat/ChatProviderFactory.ts';
 import type { ChatProviderState } from '../../chat/ChatProviderState.ts';
 import { ChatSessionManager } from '../../chat/sessions/ChatSessionManager.ts';
 import type { ChatSessionRecord } from '../../chat/sessions/ChatSessionRecord.ts';
@@ -12,56 +13,21 @@ import type { ChatSessionStore } from '../../chat/sessions/ChatSessionStore.ts';
 import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
 import type { ChatResponsePart } from '../../chat/ChatResponsePart.ts';
 import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
-import type { ModelCatalog } from '../../chat/ModelCatalog.ts';
 import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
 import type { TurnResult } from '../../chat/TurnResult.ts';
 import type { Logger } from '../../observability/Logger.ts';
-import type { OpenAIConfiguration } from '../../providers/openai/OpenAIConfiguration.ts';
-import type { OpenAIAccount } from '../../providers/openai/auth/OpenAIAccount.ts';
-import type { OpenAIAccountStore } from '../../providers/openai/auth/OpenAIAccountStore.ts';
-import type { OpenAISavedState } from '../../providers/openai/auth/OpenAISavedState.ts';
-import type { OpenAISessionService } from '../../providers/openai/auth/OpenAISessionService.ts';
 import type { ProjectContext } from '../../project/context/ProjectContext.ts';
 import { ProjectContextResolver } from '../../project/context/ProjectContextResolver.ts';
 import { GlyphService } from '../GlyphService.ts';
 
-const configuration: OpenAIConfiguration = {
-  issuer: 'https://auth.example.test',
-  resource: 'https://api.example.test/v1',
-  scopes: 'openid plan',
-  planScope: 'plan',
-  requestTimeoutMs: 30_000,
+const account: ChatAccount = {
+  provider: 'fixture',
+  id: 'account-1',
+  label: 'developer@example.com',
+  detail: 'workspace',
+  connected: true,
+  inferenceAccess: true,
 };
-
-const account: OpenAIAccount = {
-  clientId: 'client',
-  subject: 'subject',
-  email: 'developer@example.com',
-  tokens: {
-    accessToken: 'access',
-    refreshToken: 'refresh',
-    idToken: 'id',
-    expiresAt: Number.MAX_SAFE_INTEGER,
-    scopes: [configuration.planScope],
-  },
-};
-
-class MemoryStore implements OpenAIAccountStore {
-  readonly state: OpenAISavedState = { version: 1, hostId: 'urn:uuid:test', accounts: [account] };
-  readonly acquire = vi.fn(async () => {});
-  readonly load = vi.fn(async () => {});
-  readonly save = vi.fn(async () => {});
-  readonly release = vi.fn(async () => {});
-}
-
-class FakeSession implements OpenAISessionService {
-  readonly signIn = vi.fn(async () => account);
-  readonly accessToken = vi.fn(async () => 'access');
-  readonly logout = vi.fn(async () => true);
-  redact(message: string): string {
-    return message.replaceAll('secret', '[REDACTED]');
-  }
-}
 
 class FakeProvider implements ChatProvider {
   readonly model = 'model-a';
@@ -101,6 +67,34 @@ class FakeProvider implements ChatProvider {
   }
 }
 
+class FakeBackend implements ChatBackend {
+  readonly presentation = {
+    name: 'Fixture',
+    welcome: 'Glyph | Fixture',
+    usageDescription: 'Fixture usage',
+    accountsHeading: 'Fixture accounts',
+    addAccountLabel: 'Add account',
+    activeAccessLabel: 'Fixture access',
+  };
+  readonly accounts = [account];
+  readonly initialize = vi.fn(async () => {});
+  readonly dispose = vi.fn(async () => {});
+  readonly signIn = vi.fn(async () => account);
+  readonly acknowledgeNotice = vi.fn(async () => {});
+  readonly listModels = vi.fn(async () => [{ slug: 'model-a', name: 'Model A' }]);
+  readonly createProvider = vi.fn(
+    (_account: ChatAccount, _model: { slug: string; name: string }, _state?: ChatProviderState) =>
+      this.providerFactory(),
+  );
+  readonly logout = vi.fn(async () => true);
+
+  constructor(private readonly providerFactory: () => ChatProvider = () => new FakeProvider()) {}
+
+  redact(message: string): string {
+    return message.replaceAll('secret', '[REDACTED]');
+  }
+}
+
 function logger(trace: Logger['trace'] = async () => {}): Logger {
   const result: Logger = {
     destination: '/config/trace.log',
@@ -117,7 +111,7 @@ function logger(trace: Logger['trace'] = async () => {}): Logger {
 describe(GlyphService, () => {
   describe(GlyphService.prototype.initialize, () => {
     it('initializes and disposes the resident file index with the account-store lifecycle', async () => {
-      const store = new MemoryStore();
+      const backend = new FakeBackend();
       const fileSearch: WorkspacePathIndex = {
         initialize: vi.fn(async () => ({
           root: '/project',
@@ -132,18 +126,7 @@ describe(GlyphService, () => {
         refresh: vi.fn(),
         dispose: vi.fn(async () => {}),
       };
-      const service = new GlyphService(
-        store,
-        new FakeSession(),
-        { list: async () => [] },
-        { create: () => new FakeProvider() },
-        logger(),
-        configuration,
-        {},
-        undefined,
-        undefined,
-        fileSearch,
-      );
+      const service = new GlyphService(backend, logger(), {}, undefined, undefined, fileSearch);
 
       await service.initialize();
       await service.initialize();
@@ -152,12 +135,12 @@ describe(GlyphService, () => {
 
       expect(fileSearch.initialize).toHaveBeenCalledOnce();
       expect(fileSearch.dispose).toHaveBeenCalledOnce();
-      expect(store.acquire).toHaveBeenCalledOnce();
-      expect(store.release).toHaveBeenCalledOnce();
+      expect(backend.initialize).toHaveBeenCalledOnce();
+      expect(backend.dispose).toHaveBeenCalledOnce();
     });
 
     it('disposes a failed file index and releases the account lock before surfacing startup failure', async () => {
-      const store = new MemoryStore();
+      const backend = new FakeBackend();
       const startupFailure = new Error('native index could not start');
       const fileSearch: WorkspacePathIndex = {
         initialize: vi.fn(async () => {
@@ -169,45 +152,27 @@ describe(GlyphService, () => {
         refresh: vi.fn(),
         dispose: vi.fn(async () => {}),
       };
-      const service = new GlyphService(
-        store,
-        new FakeSession(),
-        { list: async () => [] },
-        { create: () => new FakeProvider() },
-        logger(),
-        configuration,
-        {},
-        undefined,
-        undefined,
-        fileSearch,
-      );
+      const service = new GlyphService(backend, logger(), {}, undefined, undefined, fileSearch);
 
       await expect(service.initialize()).rejects.toBe(startupFailure);
 
       expect(fileSearch.dispose).toHaveBeenCalledOnce();
-      expect(store.release).toHaveBeenCalledOnce();
+      expect(backend.dispose).toHaveBeenCalledOnce();
       await service.dispose();
-      expect(store.release).toHaveBeenCalledOnce();
+      expect(backend.dispose).toHaveBeenCalledOnce();
     });
   });
 
   describe(GlyphService.prototype.createConversation, () => {
     it('exposes request-scoped response parts through injected lifecycle ports', async () => {
-      const store = new MemoryStore();
-      const session = new FakeSession();
       const provider = new FakeProvider();
-      const catalog: ModelCatalog = { list: vi.fn(async () => [{ slug: 'model-a', name: 'Model A' }]) };
-      const providers: ChatProviderFactory = { create: vi.fn(() => provider) };
+      const backend = new FakeBackend(() => provider);
       const traces: unknown[] = [];
       const service = new GlyphService(
-        store,
-        session,
-        catalog,
-        providers,
+        backend,
         logger(async (_message, data) => {
           traces.push(data);
         }),
-        configuration,
       );
       const parts: ChatResponsePart[] = [];
 
@@ -222,11 +187,9 @@ describe(GlyphService, () => {
       conversation.reset();
       await service.dispose();
 
-      expect(store.acquire).toHaveBeenCalledOnce();
-      expect(store.load).toHaveBeenCalledOnce();
-      expect(store.release).toHaveBeenCalledOnce();
-      expect(session.accessToken).toHaveBeenCalledOnce();
-      expect(providers.create).toHaveBeenCalledWith('model-a', expect.any(Function));
+      expect(backend.initialize).toHaveBeenCalledOnce();
+      expect(backend.dispose).toHaveBeenCalledOnce();
+      expect(backend.createProvider).toHaveBeenCalledWith(account, { slug: 'model-a', name: 'Model A' }, undefined);
       expect(parts).toEqual([
         expect.objectContaining({ type: ChatResponsePartType.TOOL }),
         { type: ChatResponsePartType.REASONING_SUMMARY, value: 'Looked up the relevant project context.' },
@@ -240,14 +203,10 @@ describe(GlyphService, () => {
 
     it('reports logger failures without discarding a completed turn', async () => {
       const service = new GlyphService(
-        new MemoryStore(),
-        new FakeSession(),
-        { list: async () => [{ slug: 'model-a', name: 'Model A' }] },
-        { create: () => new FakeProvider() },
+        new FakeBackend(),
         logger(async () => {
           throw new Error('secret disk failure');
         }),
-        configuration,
       );
       const conversation = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
       const parts: ChatResponsePart[] = [];
@@ -269,20 +228,12 @@ describe(GlyphService, () => {
 
     it('creates isolated provider history for each host-owned conversation', async () => {
       const created: FakeProvider[] = [];
-      const service = new GlyphService(
-        new MemoryStore(),
-        new FakeSession(),
-        { list: async () => [{ slug: 'model-a', name: 'Model A' }] },
-        {
-          create: () => {
-            const provider = new FakeProvider();
-            created.push(provider);
-            return provider;
-          },
-        },
-        logger(),
-        configuration,
-      );
+      const backend = new FakeBackend(() => {
+        const provider = new FakeProvider();
+        created.push(provider);
+        return provider;
+      });
+      const service = new GlyphService(backend, logger());
       const first = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
       const second = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
 
@@ -302,20 +253,8 @@ describe(GlyphService, () => {
       try {
         const chatStore = new MemoryChatSessionStore();
         const sessions = new ChatSessionManager(chatStore, await ProjectContextResolver.folder(root), () => 'chat-id');
-        const providers: ChatProviderFactory = { create: vi.fn(() => new FakeProvider()) };
-        const service = new GlyphService(
-          new MemoryStore(),
-          new FakeSession(),
-          { list: async () => [{ slug: 'model-a', name: 'Model A' }] },
-          providers,
-          logger(),
-          configuration,
-          {},
-          undefined,
-          undefined,
-          undefined,
-          sessions,
-        );
+        const backend = new FakeBackend();
+        const service = new GlyphService(backend, logger(), {}, undefined, undefined, undefined, sessions);
         await service.initialize();
 
         const chat = await service.createChat(account, { slug: 'model-a', name: 'Model A' });
@@ -334,10 +273,14 @@ describe(GlyphService, () => {
           title: 'Architecture review',
           titleOrigin: 'human',
         });
-        expect(() => service.openChat(chat.id, { ...account, subject: 'someone-else' })).toThrow(
-          'different ChatGPT account',
+        expect(() => service.openChat(chat.id, { ...account, id: 'someone-else' })).toThrow(
+          'different provider account',
         );
-        expect(providers.create).toHaveBeenLastCalledWith('model-a', expect.any(Function), expect.any(Object));
+        expect(backend.createProvider).toHaveBeenLastCalledWith(
+          account,
+          { slug: 'model-a', name: 'Model A' },
+          expect.any(Object),
+        );
         await service.dispose();
       } finally {
         await rm(root, { recursive: true, force: true });

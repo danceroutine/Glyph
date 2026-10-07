@@ -1,12 +1,15 @@
 import { Duplex, Writable } from 'node:stream';
 import { Text } from 'ink';
 import { describe, expect, it, vi } from 'vitest';
-import { ChatResponsePartType } from '../../../../chat/ChatResponsePartType.ts';
-import type { WorkspacePathIndex } from '../../../../context/search/WorkspacePathIndex.ts';
-import type { ProposalReviewManager } from '../../../../editing/reviews/ProposalReviewManager.ts';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.ts';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.ts';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.ts';
 import type { ActivePromptRequest } from '../../prompt/PromptRequest.ts';
 import type { ProposalReviewRequest } from '../../proposal/ProposalReviewRequest.ts';
 import type { QuestionFormRequest } from '../../question/QuestionFormRequest.ts';
+import type { TerminalShellPermissionRequest } from '../../shell-permission/ShellPermissionRequest.ts';
+import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.ts';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.ts';
 import type { TranscriptEntry } from '../../shell/TranscriptEntry.ts';
 import { TerminalInkRenderer } from '../TerminalInkRenderer.tsx';
 import { createProposalReviewFixture } from '../../proposal/test/ProposalReviewFixture.ts';
@@ -80,6 +83,43 @@ describe(TerminalInkRenderer, () => {
       terminal.push('\r');
 
       await expect(secondPrompt).resolves.toEqual({ prompt: 'follow-up draft', attachmentPaths: [] });
+      renderer.close();
+    });
+
+    it('preserves an active prompt draft when its wait is interrupted for autonomous work', async () => {
+      const terminal = new TestTerminal();
+      const renderer = new TerminalInkRenderer(terminal, new TestOutput(), new TestOutput());
+      const controller = new AbortController();
+      const firstPrompt = renderer.prompt('you> ', controller.signal);
+
+      await waitUntil(() => terminal.isRaw);
+      terminal.push('keep this draft');
+      await tick();
+      renderer.preservePromptDraft();
+      renderer.preservePromptDraft();
+      controller.abort(new Error('wake'));
+      await expect(firstPrompt).rejects.toThrow('wake');
+
+      renderer.beginResponse();
+      renderer.completeResponse(<Text>autonomous turn done</Text>);
+      const resumed = renderer.prompt('you> ', new AbortController().signal);
+      terminal.push('\r');
+
+      await expect(resumed).resolves.toEqual({ prompt: 'keep this draft', attachmentPaths: [] });
+      renderer.close();
+    });
+
+    it('preserves the file-search context with an interrupted draft', async () => {
+      const renderer = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
+      const controller = new AbortController();
+      const files = {} as WorkspacePathIndex;
+      const prompt = renderer.prompt('you> ', controller.signal, files);
+
+      renderer.preservePromptDraft();
+      controller.abort(new Error('wake'));
+
+      await expect(prompt).rejects.toThrow('wake');
+      expect(rendererRequest<ActivePromptRequest>(renderer, 'promptRequest').files).toBe(files);
       renderer.close();
     });
 
@@ -442,11 +482,100 @@ describe(TerminalInkRenderer, () => {
       available.close();
     });
   });
+
+  describe(TerminalInkRenderer.prototype.presentShellPermission, () => {
+    it('authorizes during a response, preserves the draft, and shows background shells', async () => {
+      const terminal = new TestTerminal();
+      const output = new TestOutput();
+      const renderer = new TerminalInkRenderer(terminal, output, output);
+      renderer.beginResponse();
+      await tick();
+      terminal.push('draft message');
+      await tick();
+      renderer.setBackgroundShells([
+        {
+          id: 'terminal-one',
+          workingDirectory: '/project',
+          command: 'pnpm dev',
+          status: ShellSessionStatus.RUNNING,
+          background: true,
+          outputTail: 'ready',
+          startedAt: '2026-10-07T00:00:00.000Z',
+        },
+      ]);
+
+      const permission = renderer.presentShellPermission(
+        { command: 'pnpm test', workingDirectory: '/project' },
+        new AbortController().signal,
+        vi.fn(),
+      );
+      await waitUntil(() => output.value.includes('Shell permission required'));
+      expect(output.value).toContain('Background terminals');
+      renderer.beginResponse();
+      terminal.push('2');
+
+      await expect(permission).resolves.toBe(ShellPermissionDecision.ALWAYS_ALLOW);
+      const prompt = renderer.prompt('you> ', new AbortController().signal);
+      terminal.push('\r');
+      await expect(prompt).resolves.toEqual({ prompt: 'draft message', attachmentPaths: [] });
+      renderer.close();
+    });
+
+    it('rejects permission requests aborted with and without an explicit reason', async () => {
+      const renderer = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
+      const explicit = new AbortController();
+      const explicitPermission = renderer.presentShellPermission(shellPermission(), explicit.signal, vi.fn());
+      explicit.abort(new Error('stop'));
+      await expect(explicitPermission).rejects.toThrow('stop');
+
+      const implicit = new AbortController();
+      Object.defineProperty(implicit.signal, 'reason', { value: undefined });
+      const implicitPermission = renderer.presentShellPermission(shellPermission(), implicit.signal, vi.fn());
+      implicit.abort();
+      await expect(implicitPermission).rejects.toThrow('Shell permission cancelled.');
+      renderer.close();
+    });
+
+    it('ignores late completion and abort callbacks', async () => {
+      const terminal = new TestTerminal();
+      const renderer = new TerminalInkRenderer(terminal, new TestOutput(), new TestOutput());
+      const signal = new TestAbortSignal();
+      const permission = renderer.presentShellPermission(shellPermission(), signal.value, vi.fn());
+      const request = rendererRequest<TerminalShellPermissionRequest>(renderer, 'shellPermissionRequest');
+
+      await waitUntil(() => terminal.isRaw);
+      terminal.push('1');
+      await expect(permission).resolves.toBe(ShellPermissionDecision.ALLOW_ONCE);
+      request.complete(ShellPermissionDecision.DENY);
+      signal.abort(new Error('late'));
+      renderer.close();
+    });
+
+    it('rejects unavailable, pre-aborted, and closed permission interactions', async () => {
+      const renderer = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
+      const permission = renderer.presentShellPermission(shellPermission(), new AbortController().signal, vi.fn());
+
+      await expect(
+        renderer.presentShellPermission(shellPermission(), new AbortController().signal, vi.fn()),
+      ).rejects.toThrow('already waiting');
+      renderer.close();
+      await expect(permission).rejects.toThrow('Session closed.');
+      await expect(
+        renderer.presentShellPermission(shellPermission(), new AbortController().signal, vi.fn()),
+      ).rejects.toThrow('Session closed.');
+
+      const available = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
+      await expect(
+        available.presentShellPermission(shellPermission(), AbortSignal.abort(new Error('already aborted')), vi.fn()),
+      ).rejects.toThrow('already aborted');
+      available.close();
+    });
+  });
 });
 
 function rendererRequest<Request>(
   renderer: TerminalInkRenderer,
-  key: 'promptRequest' | 'questionRequest' | 'reviewRequest',
+  key: 'promptRequest' | 'questionRequest' | 'shellPermissionRequest' | 'reviewRequest',
 ): Request {
   return rendererValue(renderer, key);
 }
@@ -532,4 +661,8 @@ function questionForm() {
       },
     ],
   };
+}
+
+function shellPermission() {
+  return { command: 'pnpm test', workingDirectory: '/project' };
 }

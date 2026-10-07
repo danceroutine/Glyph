@@ -417,7 +417,7 @@ describe(OpenAIProvider, () => {
       };
       const { provider, requests } = harness([() => sse([empty]), () => sse([completed])]);
 
-      await expect(provider.send('empty', options())).rejects.toThrow(/without returning text or a project tool call/);
+      await expect(provider.send('empty', options())).rejects.toThrow(/without returning text or a tool call/);
       await provider.send('retry', options());
 
       expect(requests[1]?.input).toEqual([{ role: 'user', content: 'retry' }]);

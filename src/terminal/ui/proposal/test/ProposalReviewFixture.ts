@@ -1,10 +1,10 @@
 import { vi } from 'vitest';
-import { EditOperation } from '../../../../editing/proposals/EditOperation.ts';
-import type { EditProposal } from '../../../../editing/proposals/EditProposal.ts';
-import { EditApplicabilityState } from '../../../../editing/reviews/EditApplicabilityState.ts';
-import { EditDecisionState } from '../../../../editing/reviews/EditDecisionState.ts';
-import { EditReviewItemKind } from '../../../../editing/reviews/EditReviewItemKind.ts';
-import type { ProposalReviewManager } from '../../../../editing/reviews/ProposalReviewManager.ts';
+import { EditOperation } from '#src/editing/proposals/EditOperation.ts';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.ts';
+import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.ts';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.ts';
+import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.ts';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.ts';
 
 export interface ProposalReviewFixture {
   manager: ProposalReviewManager;

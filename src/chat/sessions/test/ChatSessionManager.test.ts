@@ -219,8 +219,8 @@ async function projectFixture(): Promise<string> {
 
 function input() {
   return {
-    accountClientId: 'client',
-    accountSubject: 'subject',
+    accountProvider: 'fixture',
+    accountId: 'account',
     modelSlug: 'model',
     modelName: 'Model',
   };

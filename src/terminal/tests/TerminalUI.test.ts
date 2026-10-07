@@ -1,12 +1,15 @@
 import { Duplex, PassThrough, Writable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
 import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
 import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
 import { TerminalActionType } from '../TerminalActionType.ts';
 import { TERMINAL_COMMANDS } from '../TerminalCommand.ts';
 import { TerminalUI } from '../TerminalUI.tsx';
+import { ShellPermissionDecision } from '../../shell/ShellPermissionDecision.ts';
+import type { ShellSessionManager } from '../../shell/ShellSessionManager.ts';
+import { ShellSessionStatus } from '../../shell/ShellSessionStatus.ts';
 
 describe(TerminalUI, () => {
   describe(TerminalUI.prototype.nextAction, () => {
@@ -58,6 +61,100 @@ describe(TerminalUI, () => {
       expect(terminal.rawTransitions).toContain(true);
       ui.close();
       expect(terminal.rawTransitions.at(-1)).toBe(false);
+    });
+
+    it.each([
+      {
+        name: 'Option+Left',
+        before: '',
+        shortcut: '\u001b[1;3D',
+        insertion: 'X',
+        expected: 'alpha Xbeta',
+      },
+      {
+        name: 'Option+Right',
+        before: '\u0001',
+        shortcut: '\u001b[1;3C',
+        insertion: 'X',
+        expected: 'alphaX beta',
+      },
+      {
+        name: 'Option+Backspace',
+        before: '',
+        shortcut: '\u001b\u007f',
+        insertion: 'X',
+        expected: 'alpha X',
+      },
+      {
+        name: 'Option+Delete',
+        before: '\u0001',
+        shortcut: '\u001b[3;3~',
+        insertion: 'X',
+        expected: 'X beta',
+      },
+      {
+        name: 'Cmd+Left',
+        before: '',
+        shortcut: '\u001b[1;9D',
+        insertion: 'X',
+        expected: 'Xalpha beta',
+      },
+      {
+        name: 'Cmd+Right',
+        before: '\u0001',
+        shortcut: '\u001b[1;9C',
+        insertion: 'X',
+        expected: 'alpha betaX',
+      },
+      {
+        name: 'Cmd+Backspace',
+        before: '',
+        shortcut: '\u001b[127;9u',
+        insertion: 'X',
+        expected: 'X',
+      },
+      {
+        name: 'Cmd+Delete',
+        before: '\u0001',
+        shortcut: '\u001b[3;9~',
+        insertion: 'X',
+        expected: 'X',
+      },
+    ])('edits the prompt with $name terminal sequences', async ({ before, shortcut, insertion, expected }) => {
+      const terminal = new VirtualTTY();
+      const ui = new TerminalUI(terminal, new MemoryOutput(true), new MemoryOutput(false));
+      const action = ui.nextAction(new AbortController().signal);
+
+      await waitUntil(() => terminal.isRaw);
+      await type(terminal, 'alpha beta');
+      if (before) {
+        terminal.push(before);
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+      terminal.push(shortcut);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await type(terminal, insertion);
+      terminal.push('\r');
+
+      await expect(action).resolves.toMatchObject({ type: TerminalActionType.SEND, prompt: expected });
+      ui.close();
+    });
+
+    it('ignores Kitty key-release events', async () => {
+      const terminal = new VirtualTTY();
+      const ui = new TerminalUI(terminal, new MemoryOutput(true), new MemoryOutput(false));
+      const action = ui.nextAction(new AbortController().signal);
+
+      await waitUntil(() => terminal.isRaw);
+      terminal.push('\u001b[120;1:3u');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      terminal.push('\u000c');
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await type(terminal, 'ok');
+      terminal.push('\r');
+
+      await expect(action).resolves.toMatchObject({ type: TerminalActionType.SEND, prompt: 'ok' });
+      ui.close();
     });
 
     it('fuzzy-searches, attaches, and submits a project file from the Ink prompt', async () => {
@@ -285,6 +382,91 @@ describe(TerminalUI, () => {
     });
   });
 
+  describe(TerminalUI.prototype.presentShellPermission, () => {
+    it('validates and returns a redirected-IO approval choice', async () => {
+      const input = new PassThrough();
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(input, output, new MemoryOutput(false));
+      const result = ui.presentShellPermission(
+        { command: 'pnpm test', workingDirectory: '/project' },
+        new AbortController().signal,
+      );
+
+      await waitUntil(() => output.value.includes('Choice [1-6]'));
+      input.write('invalid\n');
+      await waitUntil(() => output.value.includes('Choose a number from 1 through 6'));
+      input.write('5\n');
+
+      await expect(result).resolves.toBe(ShellPermissionDecision.ALLOW_EVERYTHING);
+      expect(output.value).toContain('Always allow this exact command');
+      ui.close();
+    });
+
+    it('presents Ink approval during a response', async () => {
+      const terminal = new VirtualTTY();
+      const output = new MemoryOutput(true);
+      const ui = new TerminalUI(terminal, output, new MemoryOutput(false));
+      ui.beginAssistantResponse();
+      const result = ui.presentShellPermission(
+        { command: 'pnpm test', workingDirectory: '/project' },
+        new AbortController().signal,
+      );
+
+      await waitUntil(() => stripVTControlCharacters(output.value).includes('Shell permission required'));
+      terminal.push('1');
+
+      await expect(result).resolves.toBe(ShellPermissionDecision.ALLOW_ONCE);
+      ui.close();
+    });
+  });
+
+  describe(TerminalUI.prototype.connectShellSessions, () => {
+    it('renders observed sessions, reports wakes, and stops every process on close', async () => {
+      const terminal = new VirtualTTY();
+      const output = new MemoryOutput(true);
+      const shutdown = vi.fn();
+      let listener: (() => void) | undefined;
+      const stop = vi.fn();
+      const manager = {
+        sessions: [],
+        onDidChange: vi.fn((value: () => void) => {
+          listener = value;
+          return stop;
+        }),
+        shutdown,
+      } as unknown as ShellSessionManager;
+      const ui = new TerminalUI(terminal, output, new MemoryOutput(false));
+      ui.connectShellSessions(manager);
+      (manager as unknown as { sessions: unknown[] }).sessions = [
+        {
+          id: 'terminal-one',
+          workingDirectory: '/project',
+          command: 'pnpm dev',
+          status: ShellSessionStatus.RUNNING,
+          background: true,
+          outputTail: 'ready',
+          startedAt: '2026-10-07T00:00:00.000Z',
+        },
+      ];
+      listener?.();
+      ui.showShellWake({
+        id: 'wake',
+        terminalId: 'terminal-one',
+        pattern: 'ready',
+        command: 'pnpm dev',
+        workingDirectory: '/project',
+        output: 'ready',
+        matchedAt: '2026-10-07T00:00:00.000Z',
+      });
+
+      await waitUntil(() => stripVTControlCharacters(output.value).includes('Background terminals (1)'));
+      expect(stripVTControlCharacters(output.value)).toContain('matched "ready"');
+      ui.close();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(shutdown).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('chat session presentation', () => {
     it('lists project chats, marks the active chat, and explains an empty catalog', () => {
       const output = new MemoryOutput(false);
@@ -359,13 +541,13 @@ describe(TerminalUI, () => {
 
 function chatSummary(id: string, title: string, turnCount: number) {
   return {
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     id,
     title,
     titleOrigin: 'generated' as const,
     projectContextId: 'project-context',
-    accountClientId: 'client',
-    accountSubject: 'subject',
+    accountProvider: 'fixture',
+    accountId: 'account',
     modelSlug: 'model',
     modelName: 'Model',
     createdAt: '2026-10-06T00:00:00.000Z',

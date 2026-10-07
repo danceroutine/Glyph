@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useInput, useWindowSize } from 'ink';
-import { EditDecisionState } from '../../../editing/reviews/EditDecisionState.ts';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.ts';
 import {
   clamp,
   mergeReviewEntries,

@@ -1,4 +1,3 @@
-import type { ChatConfiguration } from '../../configuration/ChatConfiguration.ts';
 import { ProviderError } from '../../errors/ProviderError.ts';
 import type { ToolRuntime } from '../../tools/ToolRuntime.ts';
 import type { ChatContextEvent } from '../ChatContextEvent.ts';
@@ -11,11 +10,11 @@ import type { ToolActivity } from '../ToolActivity.ts';
 import { ToolActivityPhase } from '../ToolActivityPhase.ts';
 import type { TurnResult } from '../TurnResult.ts';
 import type { Usage } from '../Usage.ts';
-import type {
-  AgentModelAdapter,
-  AgentToolResult,
-  AgentTurnContext,
-} from './AgentModelAdapter.ts';
+import type { AgentModelAdapter, AgentToolResult, AgentTurnContext } from './AgentModelAdapter.ts';
+
+interface AgentRuntimeConfiguration {
+  readonly timeoutMs: number;
+}
 
 /** Provider-independent turn lifecycle, tool loop, cancellation, and state transaction. */
 export class AgentRuntime<TTurn> implements ChatProvider {
@@ -24,7 +23,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
 
   constructor(
     private readonly adapter: AgentModelAdapter<TTurn>,
-    private readonly configuration: ChatConfiguration,
+    private readonly configuration: AgentRuntimeConfiguration,
     private readonly tools: ToolRuntime,
     initialState?: ChatProviderState,
   ) {
@@ -169,7 +168,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
             : new ProviderError(error instanceof Error ? error.message : 'Model provider failed.', { cause: error });
       trace('history.rolled_back', {
         committedState: this.state,
-        ...(turn === undefined ? {} : { discardedTurn: turn }),
+        hadUncommittedTurn: turn !== undefined,
       });
       trace('turn.failed', errorDetails(reportedError));
       throw reportedError;
@@ -201,7 +200,15 @@ function errorDetails(error: unknown): unknown {
   for (const name of Object.getOwnPropertyNames(error)) {
     if (name === 'name' || name === 'message' || name === 'stack') continue;
     const value: unknown = (error as unknown as Record<string, unknown>)[name];
-    details[name] = value instanceof Error ? errorDetails(value) : value;
+    details[name] =
+      value instanceof Error ? errorDetails(value) : value instanceof Headers ? redactedHeaders(value) : value;
   }
   return details;
+}
+
+function redactedHeaders(headers: Headers): Record<string, string> {
+  const sensitive = new Set(['authorization', 'proxy-authenticate', 'set-cookie', 'www-authenticate']);
+  return Object.fromEntries(
+    [...headers].map(([name, value]) => [name, sensitive.has(name.toLowerCase()) ? '[REDACTED]' : value]),
+  );
 }

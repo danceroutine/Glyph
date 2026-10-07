@@ -1,9 +1,9 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkspacePathIndex } from '../../../../context/search/WorkspacePathIndex.ts';
-import { WorkspacePathIndexError } from '../../../../context/search/WorkspacePathIndexError.ts';
-import { WorkspacePathIndexFailureReason } from '../../../../context/search/WorkspacePathIndexFailureReason.ts';
-import { TERMINAL_COMMANDS } from '../../../TerminalCommand.ts';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.ts';
+import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.ts';
+import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.ts';
+import { TERMINAL_COMMANDS } from '#src/terminal/TerminalCommand.ts';
 import { WiredPromptEditor } from '../PromptEditor.wired.tsx';
 
 describe(WiredPromptEditor, () => {
@@ -230,7 +230,7 @@ describe(WiredPromptEditor, () => {
       view.unmount();
     });
 
-    it('moves right across a surrogate pair and ignores control input', async () => {
+    it('moves right across a surrogate pair and supports Ctrl+D forward deletion', async () => {
       const complete = vi.fn();
       const view = render(
         <WiredPromptEditor
@@ -247,7 +247,7 @@ describe(WiredPromptEditor, () => {
       view.stdin.write('\r');
       await waitUntil(() => complete.mock.calls.length === 1);
 
-      expect(complete).toHaveBeenCalledWith({ prompt: '😀xb', attachmentPaths: [] });
+      expect(complete).toHaveBeenCalledWith({ prompt: '😀x', attachmentPaths: [] });
       view.unmount();
     });
 

@@ -1,6 +1,6 @@
 import type { Model } from './Model.ts';
 
-/** Provider-neutral model discovery port used during account activation. */
-export interface ModelCatalog {
-  list(accessToken: string): Promise<Model[]>;
+/** Provider-internal model discovery port parameterized by its credential representation. */
+export interface ModelCatalog<TCredential> {
+  list(credential: TCredential): Promise<Model[]>;
 }
