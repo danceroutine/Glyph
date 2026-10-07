@@ -69,7 +69,7 @@ describe(WiredTerminalRoot, () => {
           snapshot={{
             entries: [],
             responseParts: undefined,
-            prompt: { id: 1, label: 'you> ', complete: () => {} },
+            prompt: { id: 1, label: 'you> ', acceptsSubmission: true, complete: () => {} },
             review: { id: 2, manager: fixture.manager, complete: () => {}, interrupt: () => {} },
             interrupt: () => {},
           }}
@@ -77,6 +77,42 @@ describe(WiredTerminalRoot, () => {
       );
 
       expect(view.lastFrame()).toContain('File 1/1');
+      expect(view.lastFrame()).not.toContain('you>');
+      view.unmount();
+    });
+
+    it('shows an active question while keeping the prompt hidden', () => {
+      const view = render(
+        <WiredTerminalRoot
+          snapshot={{
+            entries: [],
+            responseParts: undefined,
+            prompt: { id: 1, label: 'you> ', acceptsSubmission: false },
+            question: {
+              id: 2,
+              form: {
+                questions: [
+                  {
+                    id: 'choice',
+                    prompt: 'Choose one.',
+                    options: [
+                      { id: 'one', label: 'One' },
+                      { id: 'two', label: 'Two' },
+                    ],
+                    allowMultiple: false,
+                  },
+                ],
+              },
+              complete: () => {},
+              interrupt: () => {},
+            },
+            review: undefined,
+            interrupt: () => {},
+          }}
+        />,
+      );
+
+      expect(view.lastFrame()).toContain('Choose one.');
       expect(view.lastFrame()).not.toContain('you>');
       view.unmount();
     });

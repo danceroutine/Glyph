@@ -8,6 +8,8 @@ import { DiagnosticSeverity } from './DiagnosticSeverity.ts';
 import type { ProviderTraceEntry } from './ProviderTraceEntry.ts';
 import type { TurnResult } from './TurnResult.ts';
 import type { ChatRequestInput } from './ChatRequest.ts';
+import type { ChatProviderState } from './ChatProviderState.ts';
+import type { ChatContextEvent } from './ChatContextEvent.ts';
 
 /** Mutable history for one host-owned chat session. */
 export class ChatConversation {
@@ -28,6 +30,18 @@ export class ChatConversation {
   }
   get isTraceEnabled(): boolean {
     return this.traceEnabled;
+  }
+
+  exportState(): ChatProviderState {
+    return this.provider.exportState();
+  }
+
+  recordContext(events: readonly ChatContextEvent[]): void {
+    this.provider.recordContext(events);
+  }
+
+  restoreState(state: ChatProviderState): void {
+    this.provider.restoreState(state);
   }
 
   reset(): void {

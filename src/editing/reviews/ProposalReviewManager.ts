@@ -11,6 +11,7 @@ import type { FileEditPlan } from '../proposals/FileEditPlan.ts';
 import { EditApplicabilityState } from './EditApplicabilityState.ts';
 import { EditDecisionState } from './EditDecisionState.ts';
 import { EditReviewItemKind } from './EditReviewItemKind.ts';
+import type { EditReviewResult } from './EditReviewResult.ts';
 import type { ProposalReviewStore } from './persistence/ProposalReviewStore.ts';
 
 /**
@@ -21,6 +22,7 @@ import type { ProposalReviewStore } from './persistence/ProposalReviewStore.ts';
  */
 export class ProposalReviewManager {
   private reviews: EditProposal[] = [];
+  private completedReviews: EditProposal[] = [];
   private queue: Promise<void> = Promise.resolve();
   private readonly settledDecisions = new Map<
     string,
@@ -33,6 +35,7 @@ export class ProposalReviewManager {
     private readonly store: ProposalReviewStore,
     logger: Logger = new NullLogger(),
     private readonly maxActiveReviews = 8,
+    private readonly workspaceIdentity = workspace.root,
   ) {
     this.logger = logger.forNamespace('editing.review');
   }
@@ -42,6 +45,9 @@ export class ProposalReviewManager {
   }
   get activeReviews(): readonly EditProposal[] {
     return [...this.reviews];
+  }
+  get pendingResults(): readonly EditReviewResult[] {
+    return this.completedReviews.map(toReviewResult);
   }
   get pendingChangeCount(): number {
     return this.reviews.reduce(
@@ -60,14 +66,17 @@ export class ProposalReviewManager {
   }
 
   async initialize(): Promise<void> {
-    this.reviews = await this.store.load();
+    const stored = await this.store.load(this.workspaceIdentity);
+    this.reviews = stored.filter(review => !isSettled(review));
+    this.completedReviews = stored.filter(isSettled);
+    for (const review of this.completedReviews) this.rememberSettledDecisions(review);
     if (this.reviews.length === 0) return;
     for (const review of this.reviews) {
       for (const file of review.files) await this.reconcile(review, file);
     }
     const recoveredIds = this.reviews.map(review => review.id);
     await this.persist();
-    await this.logger.info('recovered', { proposalIds: recoveredIds, activeReviews: this.reviews.length });
+    await this.log('info', 'recovered', { proposalIds: recoveredIds, activeReviews: this.reviews.length });
   }
 
   stage(proposal: EditProposal): Promise<void> {
@@ -86,12 +95,12 @@ export class ProposalReviewManager {
       }
       this.reviews.push(proposal);
       try {
-        await this.store.save(this.reviews);
+        await this.saveCheckpoint();
       } catch (error) {
         this.reviews.pop();
         throw error;
       }
-      await this.logger.info('staged', {
+      await this.log('info', 'staged', {
         proposalId: proposal.id,
         files: proposal.files.length,
         queuePosition: this.reviews.length,
@@ -147,7 +156,24 @@ export class ProposalReviewManager {
         for (const item of pendingItems) item.decision = EditDecisionState.PENDING;
         throw error;
       }
-      await this.logger.info('rejected_all', { proposalIds: reviews.map(review => review.id) });
+      await this.log('info', 'rejected_all', { proposalIds: reviews.map(review => review.id) });
+    });
+  }
+
+  acknowledgeResults(resultIds: readonly string[]): Promise<void> {
+    return this.enqueue(async () => {
+      const acknowledged = new Set(resultIds);
+      if (acknowledged.size === 0) return;
+      const previous = this.completedReviews;
+      const remaining = previous.filter(review => !acknowledged.has(reviewResultId(review.id)));
+      if (remaining.length === previous.length) return;
+      this.completedReviews = remaining;
+      try {
+        await this.saveCheckpoint();
+      } catch (error) {
+        this.completedReviews = previous;
+        throw error;
+      }
     });
   }
 
@@ -199,7 +225,7 @@ export class ProposalReviewManager {
         item.decision = EditDecisionState.PENDING;
         throw error;
       }
-      await this.logger.info('item.rejected', { proposalId: review.id, fileId: file.id, itemId });
+      await this.log('info', 'item.rejected', { proposalId: review.id, fileId: file.id, itemId });
       return;
     }
     await this.synchronize(file);
@@ -215,7 +241,7 @@ export class ProposalReviewManager {
     const applyingState = captureFileState(file);
     const mutation = { undoGroupId: review.id };
     try {
-      await this.logger.debug('revision.check', {
+      await this.log('debug', 'revision.check', {
         proposalId: review.id,
         fileId: file.id,
         path: file.currentPath,
@@ -278,7 +304,7 @@ export class ProposalReviewManager {
       } catch {
         restoreFileState(file, applyingState);
       }
-      await this.logger.error('item.failed', {
+      await this.log('error', 'item.failed', {
         proposalId: review.id,
         fileId: file.id,
         itemId,
@@ -289,7 +315,7 @@ export class ProposalReviewManager {
       });
       throw error;
     }
-    await this.logger.info('item.accepted', {
+    await this.log('info', 'item.accepted', {
       proposalId: review.id,
       fileId: file.id,
       itemId,
@@ -310,7 +336,9 @@ export class ProposalReviewManager {
       );
       if (rename && (await this.workspace.readOptional(file.targetPath))) throw this.stale(file);
     }
-    await this.logger.forNamespace('accept_all').debug('preflight_passed', { proposalId: proposal.id });
+    await this.logWith(this.logger.forNamespace('accept_all'), 'debug', 'preflight_passed', {
+      proposalId: proposal.id,
+    });
   }
 
   private async preflightAll(reviews: readonly EditProposal[]): Promise<void> {
@@ -359,7 +387,7 @@ export class ProposalReviewManager {
         }
       }
     }
-    await this.logger.forNamespace('accept_all').debug('queue_preflight_passed', {
+    await this.logWith(this.logger.forNamespace('accept_all'), 'debug', 'queue_preflight_passed', {
       proposalIds: reviews.map(review => review.id),
     });
   }
@@ -455,15 +483,41 @@ export class ProposalReviewManager {
   private async persist(): Promise<void> {
     const settled = this.reviews.filter(isSettled);
     const remaining = this.reviews.filter(review => !settled.includes(review));
-    await this.store.save(remaining);
+    await this.store.save([...remaining, ...this.completedReviews, ...settled], this.workspaceIdentity);
     this.reviews = remaining;
+    this.completedReviews = [...this.completedReviews, ...settled];
     for (const review of settled) {
-      for (const file of review.files) {
-        for (const item of file.items) {
-          this.settledDecisions.set(item.id, { reviewId: review.id, decision: item.decision });
-        }
+      this.rememberSettledDecisions(review);
+      await this.log('info', 'settled', { proposalId: review.id, activeReviews: remaining.length });
+    }
+  }
+
+  private saveCheckpoint(): Promise<void> {
+    return this.store.save([...this.reviews, ...this.completedReviews], this.workspaceIdentity);
+  }
+
+  private rememberSettledDecisions(review: EditProposal): void {
+    for (const file of review.files) {
+      for (const item of file.items) {
+        this.settledDecisions.set(item.id, { reviewId: review.id, decision: item.decision });
       }
-      await this.logger.info('settled', { proposalId: review.id, activeReviews: remaining.length });
+    }
+  }
+
+  private log(level: 'debug' | 'info' | 'error', message: string, data?: unknown): Promise<void> {
+    return this.logWith(this.logger, level, message, data);
+  }
+
+  private async logWith(
+    logger: Logger,
+    level: 'debug' | 'info' | 'error',
+    message: string,
+    data?: unknown,
+  ): Promise<void> {
+    try {
+      await logger[level](message, data);
+    } catch {
+      // Diagnostics must never change review or workspace state.
     }
   }
 
@@ -510,6 +564,28 @@ export class ProposalReviewManager {
 
 function isSettled(review: EditProposal): boolean {
   return review.files.every(file => file.items.every(item => item.decision !== EditDecisionState.PENDING));
+}
+
+function reviewResultId(reviewId: string): string {
+  return `edit-review-result:${reviewId}`;
+}
+
+function toReviewResult(review: EditProposal): EditReviewResult {
+  return {
+    schemaVersion: 1,
+    id: reviewResultId(review.id),
+    reviewId: review.id,
+    items: review.files.flatMap(file =>
+      file.items.map(item => ({
+        itemId: item.id,
+        fileId: file.id,
+        kind: item.kind,
+        decision: item.decision as Exclude<EditDecisionState, EditDecisionState.PENDING>,
+        affectedPaths: [...new Set([file.sourcePath, file.targetPath, file.currentPath])],
+        resultingRevision: file.currentRevision,
+      })),
+    ),
+  };
 }
 
 function composeWith(file: FileEditPlan, itemId: string): string {

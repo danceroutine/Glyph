@@ -12,6 +12,7 @@ describe(PromptEditor, () => {
       const view = render(
         <PromptEditor
           label="you> "
+          acceptsSubmission
           pendingChanges={0}
           text={'hello\u001b[31m @src/App.tsx'}
           cursor={5}
@@ -38,6 +39,7 @@ describe(PromptEditor, () => {
       const view = render(
         <PromptEditor
           label="you> "
+          acceptsSubmission
           pendingChanges={0}
           text={text}
           cursor={mentionEnd}
@@ -57,6 +59,7 @@ describe(PromptEditor, () => {
       const view = render(
         <PromptEditor
           label="you> "
+          acceptsSubmission
           pendingChanges={0}
           text="hello"
           cursor={5}
@@ -77,6 +80,7 @@ describe(PromptEditor, () => {
       const view = render(
         <PromptEditor
           label="you> "
+          acceptsSubmission
           pendingChanges={0}
           text={text}
           cursor={text.length}
@@ -101,6 +105,7 @@ describe(PromptEditor, () => {
       const view = render(
         <PromptEditor
           label="you> "
+          acceptsSubmission
           pendingChanges={pendingChanges}
           text=""
           cursor={0}
@@ -120,6 +125,7 @@ describe(PromptEditor, () => {
       const view = render(
         <PromptEditor
           label="you> "
+          acceptsSubmission
           pendingChanges={0}
           text="/tr"
           cursor={3}
@@ -141,6 +147,26 @@ describe(PromptEditor, () => {
       expect(promptRailContent(view.lastFrame())).toBe(
         'you> /tr\n    /trace  Show tracing\n  › /trace on  Enable tracing',
       );
+      view.unmount();
+    });
+
+    it('marks the composer as draft-only while the agent is responding', () => {
+      const view = render(
+        <PromptEditor
+          label="you> "
+          acceptsSubmission={false}
+          pendingChanges={0}
+          text="follow-up"
+          cursor={9}
+          attachments={[]}
+          matches={[]}
+          commandMatches={[]}
+          selectedMatch={0}
+          searchError=""
+        />,
+      );
+
+      expect(promptRailContent(view.lastFrame())).toBe('Agent responding · draft only\nyou> follow-up');
       view.unmount();
     });
   });

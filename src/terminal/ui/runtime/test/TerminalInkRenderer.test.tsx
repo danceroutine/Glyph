@@ -2,9 +2,12 @@ import { Duplex, Writable } from 'node:stream';
 import { Text } from 'ink';
 import { describe, expect, it, vi } from 'vitest';
 import { ChatResponsePartType } from '../../../../chat/ChatResponsePartType.ts';
+import type { WorkspacePathIndex } from '../../../../context/search/WorkspacePathIndex.ts';
 import type { ProposalReviewManager } from '../../../../editing/reviews/ProposalReviewManager.ts';
-import type { PromptRequest } from '../../prompt/PromptRequest.ts';
+import type { ActivePromptRequest } from '../../prompt/PromptRequest.ts';
 import type { ProposalReviewRequest } from '../../proposal/ProposalReviewRequest.ts';
+import type { QuestionFormRequest } from '../../question/QuestionFormRequest.ts';
+import type { TranscriptEntry } from '../../shell/TranscriptEntry.ts';
 import { TerminalInkRenderer } from '../TerminalInkRenderer.tsx';
 import { createProposalReviewFixture } from '../../proposal/test/ProposalReviewFixture.ts';
 
@@ -34,6 +37,78 @@ describe(TerminalInkRenderer, () => {
       expect(terminal.rawTransitions.at(-1)).toBe(false);
     });
 
+    it('replaces the visible transcript when a different chat is activated', async () => {
+      const output = new TestOutput();
+      const renderer = new TerminalInkRenderer(new TestTerminal(), output, output);
+      const replacement = <Text>new chat</Text>;
+      renderer.append(<Text>old chat</Text>);
+
+      renderer.replaceTranscript(replacement);
+
+      await waitUntil(() => output.value.includes('new chat'));
+      expect(rendererValue<readonly TranscriptEntry[]>(renderer, 'entries')).toEqual([
+        expect.objectContaining({ content: replacement }),
+      ]);
+      renderer.close();
+    });
+
+    it('keeps a draft composer mounted during a response and submits its text afterward', async () => {
+      const terminal = new TestTerminal();
+      const output = new TestOutput();
+      const renderer = new TerminalInkRenderer(terminal, output, output);
+      const files = {} as WorkspacePathIndex;
+      const firstPrompt = renderer.prompt('you> ', new AbortController().signal, files);
+
+      await waitUntil(() => terminal.isRaw);
+      terminal.push('first message');
+      await tick();
+      terminal.push('\r');
+      await expect(firstPrompt).resolves.toEqual({ prompt: 'first message', attachmentPaths: [] });
+
+      renderer.beginResponse();
+      await waitUntil(() => output.value.includes('Agent responding · draft only'));
+      terminal.push('follow-up draft');
+      await waitUntil(() => output.value.includes('follow-up draft'));
+      terminal.push('\r');
+      await tick();
+
+      expect(output.value).toContain('follow-up draft');
+      expect(rendererRequest(renderer, 'promptRequest')).toMatchObject({ acceptsSubmission: false, files });
+
+      renderer.completeResponse(<Text>done</Text>);
+      const secondPrompt = renderer.prompt('you> ', new AbortController().signal);
+      terminal.push('\r');
+
+      await expect(secondPrompt).resolves.toEqual({ prompt: 'follow-up draft', attachmentPaths: [] });
+      renderer.close();
+    });
+
+    it('does not replace an active prompt or review when a response begins', async () => {
+      const promptRenderer = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
+      const prompt = promptRenderer.prompt('you> ', new AbortController().signal);
+      const activePrompt = rendererRequest(promptRenderer, 'promptRequest');
+
+      promptRenderer.beginResponse();
+
+      expect(rendererRequest(promptRenderer, 'promptRequest')).toBe(activePrompt);
+      promptRenderer.close();
+      await expect(prompt).rejects.toThrow('Session closed.');
+
+      const reviewRenderer = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
+      const review = reviewRenderer.review(
+        createProposalReviewFixture().manager,
+        new AbortController().signal,
+        vi.fn(),
+      );
+      const activeReview = rendererRequest(reviewRenderer, 'reviewRequest');
+
+      reviewRenderer.beginResponse();
+
+      expect(rendererRequest(reviewRenderer, 'reviewRequest')).toBe(activeReview);
+      reviewRenderer.close();
+      await expect(review).rejects.toThrow('Session closed.');
+    });
+
     it('places the cursor on the prompt row below its top margin', async () => {
       const terminal = new TestTerminal();
       const output = new TestOutput();
@@ -45,6 +120,29 @@ describe(TerminalInkRenderer, () => {
       expect(output.value).not.toContain('\u001B[1A\u001B[7G\u001B[?25h');
       renderer.close();
       await expect(prompt).rejects.toThrow('Session closed.');
+    });
+
+    it('waits for the bottom rail measurement before placing the cursor after a chat switch', async () => {
+      const terminal = new TestTerminal();
+      const output = new TestOutput();
+      const renderer = new TerminalInkRenderer(terminal, output, output);
+      const command = renderer.prompt('you> ', new AbortController().signal);
+
+      await waitUntil(() => terminal.isRaw);
+      terminal.push('/chat saved');
+      await tick();
+      terminal.push('\r');
+      await command;
+      const outputOffset = output.value.length;
+
+      renderer.replaceTranscript(<Text>Chat saved</Text>);
+      const nextPrompt = renderer.prompt('you> ', new AbortController().signal);
+      await waitUntil(() => output.value.slice(outputOffset).includes('\u001B[7G\u001B[?25h'));
+
+      const switchedOutput = output.value.slice(outputOffset);
+      expect(switchedOutput).not.toMatch(/\u001b\[\d+A\u001b\[7G\u001b\[\?25h/u);
+      renderer.close();
+      await expect(nextPrompt).rejects.toThrow('Session closed.');
     });
 
     it('renders a pending-review eyebrow and positions the cursor beneath it', async () => {
@@ -146,7 +244,7 @@ describe(TerminalInkRenderer, () => {
       const renderer = new TerminalInkRenderer(terminal, new TestOutput(), new TestOutput());
       const signal = new TestAbortSignal();
       const prompt = renderer.prompt('you> ', signal.value);
-      const request = rendererRequest<PromptRequest>(renderer, 'promptRequest');
+      const request = rendererRequest<ActivePromptRequest>(renderer, 'promptRequest');
 
       await waitUntil(() => terminal.isRaw);
       terminal.push('done');
@@ -198,12 +296,19 @@ describe(TerminalInkRenderer, () => {
       const terminal = new TestTerminal();
       const renderer = new TerminalInkRenderer(terminal, new TestOutput(), new TestOutput());
       const fixture = createProposalReviewFixture();
+      renderer.beginResponse();
+      await tick();
+      terminal.push('draft through review');
+      await tick();
       const review = renderer.review(fixture.manager, new AbortController().signal, vi.fn());
 
       await waitUntil(() => terminal.isRaw);
       terminal.push('q');
 
       await expect(review).resolves.toBeUndefined();
+      const prompt = renderer.prompt('you> ', new AbortController().signal);
+      terminal.push('\r');
+      await expect(prompt).resolves.toEqual({ prompt: 'draft through review', attachmentPaths: [] });
       renderer.close();
     });
 
@@ -260,10 +365,94 @@ describe(TerminalInkRenderer, () => {
       renderer.close();
     });
   });
+
+  describe(TerminalInkRenderer.prototype.presentQuestionForm, () => {
+    it('answers during a response, records a receipt, and preserves the draft composer', async () => {
+      const terminal = new TestTerminal();
+      const output = new TestOutput();
+      const renderer = new TerminalInkRenderer(terminal, output, output);
+      renderer.beginResponse();
+      await tick();
+      terminal.push('draft message');
+      await tick();
+
+      const question = renderer.presentQuestionForm(questionForm(), new AbortController().signal, vi.fn());
+      await waitUntil(() => output.value.includes('Choose a color'));
+      terminal.push('\r');
+
+      await expect(question).resolves.toEqual({
+        answers: [{ questionId: 'color', type: 'SELECTION', optionIds: ['red'] }],
+      });
+      await waitUntil(() => output.value.includes('Red'));
+      const prompt = renderer.prompt('you> ', new AbortController().signal);
+      terminal.push('\r');
+      await expect(prompt).resolves.toEqual({ prompt: 'draft message', attachmentPaths: [] });
+      renderer.close();
+    });
+
+    it('rejects questions aborted with and without an explicit reason', async () => {
+      const renderer = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
+      const explicit = new AbortController();
+      const explicitQuestion = renderer.presentQuestionForm(questionForm(), explicit.signal, vi.fn());
+      explicit.abort(new Error('stop'));
+      await expect(explicitQuestion).rejects.toThrow('stop');
+
+      const implicit = new AbortController();
+      Object.defineProperty(implicit.signal, 'reason', { value: undefined });
+      const implicitQuestion = renderer.presentQuestionForm(questionForm(), implicit.signal, vi.fn());
+      implicit.abort();
+      await expect(implicitQuestion).rejects.toThrow('Question cancelled.');
+      renderer.close();
+    });
+
+    it('ignores late completion and abort callbacks', async () => {
+      const terminal = new TestTerminal();
+      const renderer = new TerminalInkRenderer(terminal, new TestOutput(), new TestOutput());
+      const signal = new TestAbortSignal();
+      const question = renderer.presentQuestionForm(questionForm(), signal.value, vi.fn());
+      const request = rendererRequest<QuestionFormRequest>(renderer, 'questionRequest');
+
+      await waitUntil(() => terminal.isRaw);
+      terminal.push('\r');
+      await expect(question).resolves.toBeDefined();
+      request.complete({ answers: [] });
+      signal.abort(new Error('late'));
+      renderer.close();
+    });
+
+    it('rejects unavailable, pre-aborted, and closed question interactions', async () => {
+      const renderer = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
+      const question = renderer.presentQuestionForm(questionForm(), new AbortController().signal, vi.fn());
+
+      await expect(renderer.presentQuestionForm(questionForm(), new AbortController().signal, vi.fn())).rejects.toThrow(
+        'already waiting',
+      );
+      renderer.beginResponse();
+      expect(rendererRequest(renderer, 'questionRequest')).toBeDefined();
+      renderer.close();
+      await expect(question).rejects.toThrow('Session closed.');
+      await expect(renderer.presentQuestionForm(questionForm(), new AbortController().signal, vi.fn())).rejects.toThrow(
+        'Session closed.',
+      );
+
+      const available = new TerminalInkRenderer(new TestTerminal(), new TestOutput(), new TestOutput());
+      await expect(
+        available.presentQuestionForm(questionForm(), AbortSignal.abort(new Error('already aborted')), vi.fn()),
+      ).rejects.toThrow('already aborted');
+      available.close();
+    });
+  });
 });
 
-function rendererRequest<Request>(renderer: TerminalInkRenderer, key: 'promptRequest' | 'reviewRequest'): Request {
-  return (renderer as unknown as Record<string, Request>)[key]!;
+function rendererRequest<Request>(
+  renderer: TerminalInkRenderer,
+  key: 'promptRequest' | 'questionRequest' | 'reviewRequest',
+): Request {
+  return rendererValue(renderer, key);
+}
+
+function rendererValue<Value>(renderer: TerminalInkRenderer, key: string): Value {
+  return (renderer as unknown as Record<string, Value>)[key]!;
 }
 
 class TestAbortSignal {
@@ -326,4 +515,21 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 
 async function tick(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
+}
+
+function questionForm() {
+  return {
+    title: 'Preferences',
+    questions: [
+      {
+        id: 'color',
+        prompt: 'Choose a color.',
+        options: [
+          { id: 'red', label: 'Red' },
+          { id: 'blue', label: 'Blue' },
+        ],
+        allowMultiple: false,
+      },
+    ],
+  };
 }

@@ -15,6 +15,7 @@ const SEARCH_LIMIT = 10;
 /** Complete rendering contract produced by the prompt's interactive state hook. */
 export interface PromptEditorState {
   label: string;
+  acceptsSubmission: boolean;
   pendingChanges: number;
   text: string;
   cursor: number;
@@ -28,10 +29,16 @@ export interface PromptEditorState {
 export interface UsePromptEditorStateOptions {
   request: PromptRequest;
   interrupt: () => void;
-  railTop: number;
+  active: boolean;
+  railTop: number | undefined;
 }
 
-export function usePromptEditorState({ request, interrupt, railTop }: UsePromptEditorStateOptions): PromptEditorState {
+export function usePromptEditorState({
+  request,
+  interrupt,
+  active,
+  railTop,
+}: UsePromptEditorStateOptions): PromptEditorState {
   const pendingChanges = request.pendingChanges ?? 0;
   const [text, setText] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -80,10 +87,12 @@ export function usePromptEditorState({ request, interrupt, railTop }: UsePromptE
   const visiblePrefix = `${request.label}${sanitizeText(promptText.cursorPrefix)}`;
   const width = Math.max(1, columns - PromptLayout.railHorizontalPadding * 2);
   const cursorWidth = stringWidth(visiblePrefix);
-  setCursorPosition({
-    x: PromptLayout.railHorizontalPadding + (cursorWidth % width),
-    y: PromptLayout.railCursorY(railTop, pendingChanges) + Math.floor(cursorWidth / width),
-  });
+  if (active && railTop !== undefined) {
+    setCursorPosition({
+      x: PromptLayout.railHorizontalPadding + (cursorWidth % width),
+      y: PromptLayout.railCursorY(railTop, pendingChanges, request.acceptsSubmission) + Math.floor(cursorWidth / width),
+    });
+  }
 
   const updateText = (next: string, nextCursor: number): void => {
     setText(next);
@@ -93,11 +102,10 @@ export function usePromptEditorState({ request, interrupt, railTop }: UsePromptE
     setSelectedMatch(0);
   };
 
-  const acceptSelectedCommand = (submit: boolean): boolean => {
+  const completeSelectedCommand = (): boolean => {
     const candidate = commandMatches[selectedMatch];
     if (!candidate) return false;
-    if (submit) request.complete({ prompt: candidate.value, attachmentPaths: [] });
-    else updateText(`${candidate.value} `, candidate.value.length + 1);
+    updateText(`${candidate.value} `, candidate.value.length + 1);
     return true;
   };
 
@@ -112,73 +120,86 @@ export function usePromptEditorState({ request, interrupt, railTop }: UsePromptE
     return true;
   };
 
-  usePaste(value => {
-    const safe = value.replace(/[\r\n]+/gu, ' ');
-    updateText(`${text.slice(0, cursor)}${safe}${text.slice(cursor)}`, cursor + safe.length);
-  });
+  usePaste(
+    value => {
+      const safe = value.replace(/[\r\n]+/gu, ' ');
+      updateText(`${text.slice(0, cursor)}${safe}${text.slice(cursor)}`, cursor + safe.length);
+    },
+    { isActive: active },
+  );
 
-  useInput((input, key) => {
-    if (key.ctrl && input.toLowerCase() === 'c') {
-      interrupt();
-      return;
-    }
-    if (key.escape) {
-      const completion = commandQuery ?? mention;
-      if (completion) {
-        setDismissedCompletion(completion.signature);
-        setMatches([]);
+  useInput(
+    (input, key) => {
+      if (key.ctrl && input.toLowerCase() === 'c') {
+        interrupt();
+        return;
       }
-      return;
-    }
-    if (key.return && acceptSelectedCommand(true)) return;
-    if (key.tab && acceptSelectedCommand(false)) return;
-    if ((key.return || key.tab) && attachSelected()) return;
-    if (key.return) {
-      request.complete({ prompt: text.trim(), attachmentPaths: [...attachments] });
-      return;
-    }
-    const completionCount = commandQuery ? commandMatches.length : matches.length;
-    if (key.upArrow && completionCount > 0) {
-      setSelectedMatch(value => Math.max(0, value - 1));
-      return;
-    }
-    if (key.downArrow && completionCount > 0) {
-      setSelectedMatch(value => Math.min(completionCount - 1, value + 1));
-      return;
-    }
-    if (key.leftArrow) {
-      setCursor(previousCharacterOffset(text, cursor));
-      return;
-    }
-    if (key.rightArrow) {
-      setCursor(nextCharacterOffset(text, cursor));
-      return;
-    }
-    if (key.home || (key.ctrl && input.toLowerCase() === 'a')) {
-      setCursor(0);
-      return;
-    }
-    if (key.end || (key.ctrl && input.toLowerCase() === 'e')) {
-      setCursor(text.length);
-      return;
-    }
-    if (key.backspace) {
-      const previous = previousCharacterOffset(text, cursor);
-      if (previous !== cursor) updateText(text.slice(0, previous) + text.slice(cursor), previous);
-      return;
-    }
-    if (key.delete) {
-      const next = nextCharacterOffset(text, cursor);
-      if (next !== cursor) updateText(text.slice(0, cursor) + text.slice(next), cursor);
-      return;
-    }
-    if (isPrintableInput(input, key.ctrl, key.meta)) {
-      updateText(`${text.slice(0, cursor)}${input}${text.slice(cursor)}`, cursor + input.length);
-    }
-  });
+      if (key.escape) {
+        const completion = commandQuery ?? mention;
+        if (completion) {
+          setDismissedCompletion(completion.signature);
+          setMatches([]);
+        }
+        return;
+      }
+      if (key.return && !request.acceptsSubmission) return;
+      if (key.return && request.acceptsSubmission) {
+        const command = commandMatches[selectedMatch];
+        if (command) {
+          request.complete({ prompt: command.value, attachmentPaths: [] });
+          return;
+        }
+        if (attachSelected()) return;
+        request.complete({ prompt: text.trim(), attachmentPaths: [...attachments] });
+        return;
+      }
+      if (key.tab && completeSelectedCommand()) return;
+      if (key.tab && attachSelected()) return;
+      const completionCount = commandQuery ? commandMatches.length : matches.length;
+      if (key.upArrow && completionCount > 0) {
+        setSelectedMatch(value => Math.max(0, value - 1));
+        return;
+      }
+      if (key.downArrow && completionCount > 0) {
+        setSelectedMatch(value => Math.min(completionCount - 1, value + 1));
+        return;
+      }
+      if (key.leftArrow) {
+        setCursor(previousCharacterOffset(text, cursor));
+        return;
+      }
+      if (key.rightArrow) {
+        setCursor(nextCharacterOffset(text, cursor));
+        return;
+      }
+      if (key.home || (key.ctrl && input.toLowerCase() === 'a')) {
+        setCursor(0);
+        return;
+      }
+      if (key.end || (key.ctrl && input.toLowerCase() === 'e')) {
+        setCursor(text.length);
+        return;
+      }
+      if (key.backspace) {
+        const previous = previousCharacterOffset(text, cursor);
+        if (previous !== cursor) updateText(text.slice(0, previous) + text.slice(cursor), previous);
+        return;
+      }
+      if (key.delete) {
+        const next = nextCharacterOffset(text, cursor);
+        if (next !== cursor) updateText(text.slice(0, cursor) + text.slice(next), cursor);
+        return;
+      }
+      if (isPrintableInput(input, key.ctrl, key.meta)) {
+        updateText(`${text.slice(0, cursor)}${input}${text.slice(cursor)}`, cursor + input.length);
+      }
+    },
+    { isActive: active },
+  );
 
   return {
     label: request.label,
+    acceptsSubmission: request.acceptsSubmission,
     pendingChanges,
     text,
     cursor,

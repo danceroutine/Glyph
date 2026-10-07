@@ -4,6 +4,7 @@ import { ChatResponsePartType } from '../../../chat/ChatResponsePartType.ts';
 import { parseInlineMarkdown } from './parseInlineMarkdown.ts';
 import { ToolActivity } from './ToolActivity.presentational.tsx';
 import type { ResponseState } from './useResponseState.ts';
+import { sanitizeText } from '../shared/sanitizeText.ts';
 
 export interface ResponseProps extends ResponseState {
   footer?: ReactNode;
@@ -21,7 +22,9 @@ export function Response({ sections, pendingFrame, toolFrame, messageWidth, foot
             return (
               <Box key={index} maxWidth={messageWidth}>
                 <Box backgroundColor="gray" borderColor="gray" borderStyle="round" paddingX={2}>
-                  <Text color="white">{value}</Text>
+                  <Text color="white">
+                    <InlineMarkdown value={value} />
+                  </Text>
                 </Box>
               </Box>
             );
@@ -31,15 +34,7 @@ export function Response({ sections, pendingFrame, toolFrame, messageWidth, foot
             return (
               <Text key={index} dimColor>
                 {'thinking> '}
-                {parseInlineMarkdown(value).map((segment, segmentIndex) =>
-                  segment.strong ? (
-                    <Text key={segmentIndex} bold>
-                      {segment.value}
-                    </Text>
-                  ) : (
-                    segment.value
-                  ),
-                )}
+                <InlineMarkdown value={value} />
               </Text>
             );
           }
@@ -65,6 +60,22 @@ export function Response({ sections, pendingFrame, toolFrame, messageWidth, foot
       })}
       {footer}
     </Box>
+  );
+}
+
+function InlineMarkdown({ value }: { value: string }): ReactElement {
+  return (
+    <>
+      {parseInlineMarkdown(value).map((segment, index) =>
+        segment.strong ? (
+          <Text key={index} bold>
+            {sanitizeText(segment.value)}
+          </Text>
+        ) : (
+          sanitizeText(segment.value)
+        ),
+      )}
+    </>
   );
 }
 

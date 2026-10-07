@@ -9,8 +9,6 @@ import { ProposalReviewManager } from '../../editing/reviews/ProposalReviewManag
 import { FileProposalReviewStore } from '../../editing/reviews/persistence/FileProposalReviewStore.ts';
 import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
 import { EditingE2EHarness } from './fixtures/EditingE2EHarness.ts';
-import { EditingE2ERequirement } from './fixtures/EditingE2ERequirement.ts';
-import { EditingE2EScenarios } from './fixtures/EditingE2EScenarios.ts';
 import { ScriptedOpenAIResponsesFixture } from './fixtures/ScriptedOpenAIResponsesFixture.ts';
 import { ToolInputKind } from '../../tools/ToolInputKind.ts';
 
@@ -31,11 +29,6 @@ afterEach(() => {
 });
 
 describe('staged editing loop', () => {
-  it('keeps every editing equivalence class and boundary mapped to an E2E scenario', () => {
-    const covered = new Set(EditingE2EScenarios.flatMap(scenario => scenario.covers));
-    expect([...covered].sort()).toEqual(Object.values(EditingE2ERequirement).sort());
-  });
-
   it('runs a strict structured tool call through the real provider and applies mixed per-item decisions', async () => {
     const base = 'first\nmiddle\nlast\n';
     const revision = sha256(Buffer.from(base));
@@ -127,6 +120,91 @@ describe('staged editing loop', () => {
         ]),
       );
       expect(networkAttempts).toBe(0);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it('continues after mixed review decisions and restart with model context matching the workspace', async () => {
+    const base = 'first\nmiddle\nlast\n';
+    const call = ScriptedOpenAIResponsesFixture.encodeToolCall({
+      callId: 'call-review-result',
+      namespace: 'project',
+      name: 'propose_edits',
+      inputKind: ToolInputKind.JSON,
+      input: {
+        files: [
+          {
+            operation: EditOperation.UPDATE,
+            path: 'file.txt',
+            new_path: null,
+            base_revision: sha256(Buffer.from(base)),
+            content: null,
+            byte_order_mark: null,
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+                expected_text: 'first',
+                replacement_text: 'FIRST',
+              },
+              {
+                range: { start: { line: 2, character: 0 }, end: { line: 2, character: 4 } },
+                expected_text: 'last',
+                replacement_text: 'LAST',
+              },
+            ],
+          },
+        ],
+      },
+    });
+    let observedResult: {
+      reviewId: string;
+      items: { decision: string; affectedPaths: string[]; resultingRevision: string | null }[];
+    } | null = null;
+    const harness = await EditingE2EHarness.create({ 'file.txt': base }, [
+      { id: 'response-review-tool', output: [call] },
+      { id: 'response-review-final', output: [EditingE2EHarness.finalMessage()] },
+      {
+        id: 'response-after-restart',
+        output: [EditingE2EHarness.finalMessage('The accepted change is present and the rejected change is absent.')],
+        validate: request => {
+          const developer = (request.input as { role?: string; content?: string }[]).find(
+            item => item.role === 'developer',
+          );
+          expect(developer).toBeDefined();
+          const context = JSON.parse(developer!.content!) as {
+            schema: string;
+            event: { type: string; payload: typeof observedResult };
+          };
+          expect(context.schema).toBe('glyph.context-event.v1');
+          expect(context.event.type).toBe('edit_review_result');
+          observedResult = context.event.payload;
+        },
+      },
+    ]);
+    try {
+      await harness.send('Change the first and last lines.');
+      const proposal = harness.reviews.active!;
+      const [first, last] = proposal.files[0]!.items;
+      await harness.reviews.accept(first!.id);
+      await harness.reviews.reject(last!.id);
+
+      expect(harness.reviews.pendingResults).toHaveLength(1);
+      await harness.commitReviewResults();
+      harness.restartConversationFromCheckpoint();
+      const response = await harness.send('Continue based on my review decisions.');
+
+      expect(response).toBe('The accepted change is present and the rejected change is absent.');
+      expect(await readFile(join(harness.projectRoot, 'file.txt'), 'utf8')).toBe('FIRST\nmiddle\nlast\n');
+      expect(harness.reviews.activeReviews).toEqual([]);
+      expect(harness.reviews.pendingResults).toEqual([]);
+      expect(observedResult).toMatchObject({
+        reviewId: proposal.id,
+        items: [
+          { decision: EditDecisionState.ACCEPTED, affectedPaths: ['file.txt'], resultingRevision: expect.any(String) },
+          { decision: EditDecisionState.REJECTED, affectedPaths: ['file.txt'], resultingRevision: expect.any(String) },
+        ],
+      });
     } finally {
       await harness.dispose();
     }

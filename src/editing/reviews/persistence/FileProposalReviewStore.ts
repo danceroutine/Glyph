@@ -12,7 +12,8 @@ import { EditReviewItemKind } from '../EditReviewItemKind.ts';
 import type { ProposalReviewStore } from './ProposalReviewStore.ts';
 
 interface ProposalReviewCheckpoint {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
+  readonly workspaceIdentity: string;
   readonly proposals: readonly EditProposal[];
 }
 
@@ -78,7 +79,8 @@ const editProposalSchema = z
 
 const checkpointSchema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
+    workspaceIdentity: z.string().min(1),
     proposals: z.array(editProposalSchema),
   })
   .strict();
@@ -91,13 +93,14 @@ export class FileProposalReviewStore implements ProposalReviewStore {
     this.path = join(directory, 'active-proposal-review.json');
   }
 
-  async load(): Promise<EditProposal[]> {
+  async load(workspaceIdentity: string): Promise<EditProposal[]> {
     try {
       const value: unknown = JSON.parse(await readFile(this.path, 'utf8'));
-      const legacy = editProposalSchema.safeParse(value);
-      if (legacy.success) return [legacy.data];
       const checkpoint = checkpointSchema.safeParse(value);
       if (!checkpoint.success) throw new Error('Unsupported proposal-review checkpoint schema.');
+      if (checkpoint.data.workspaceIdentity !== workspaceIdentity) {
+        throw new Error('Proposal-review checkpoint belongs to a different workspace.');
+      }
       return [...checkpoint.data.proposals];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -110,10 +113,10 @@ export class FileProposalReviewStore implements ProposalReviewStore {
     }
   }
 
-  async save(proposals: readonly EditProposal[]): Promise<void> {
+  async save(proposals: readonly EditProposal[], workspaceIdentity: string): Promise<void> {
     if (proposals.length === 0) return this.clear();
     const temporary = `${this.path}.${randomUUID()}.tmp`;
-    const checkpoint: ProposalReviewCheckpoint = { schemaVersion: 2, proposals };
+    const checkpoint: ProposalReviewCheckpoint = { schemaVersion: 3, workspaceIdentity, proposals };
     try {
       await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
       await chmod(dirname(this.path), 0o700);

@@ -110,6 +110,26 @@ describe(WiredResponse, () => {
       view.unmount();
     });
 
+    it('renders inline Markdown in assistant bubbles without leaking delimiters', () => {
+      const view = render(
+        <WiredResponse
+          parts={[
+            {
+              type: ChatResponsePartType.TEXT,
+              value: 'You selected:\n\n- **Favorite color:** Red\n- **Preferred pet:** Dog',
+            },
+          ]}
+        />,
+      );
+
+      const frame = view.lastFrame() ?? '';
+      const readable = stripVTControlCharacters(frame);
+      expect(readable).toContain('- Favorite color: Red');
+      expect(readable).toContain('- Preferred pet: Dog');
+      expect(readable).not.toContain('**');
+      view.unmount();
+    });
+
     it('coalesces tool lifecycle events into one successful tag', () => {
       const view = render(
         <WiredResponse

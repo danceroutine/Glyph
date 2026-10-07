@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { z } from 'zod';
 import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems';
 import type {
   Response,
@@ -14,12 +15,14 @@ import { ProviderError } from '../../errors/ProviderError.ts';
 import type { ToolRuntime } from '../../tools/ToolRuntime.ts';
 import { ToolInputKind } from '../../tools/ToolInputKind.ts';
 import type { ChatProvider } from '../../chat/ChatProvider.ts';
+import type { ChatProviderState } from '../../chat/ChatProviderState.ts';
 import type { ProviderTraceEntry } from '../../chat/ProviderTraceEntry.ts';
 import type { ToolActivity } from '../../chat/ToolActivity.ts';
 import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
 import type { TurnResult } from '../../chat/TurnResult.ts';
 import type { ChatRequest, ChatRequestInput } from '../../chat/ChatRequest.ts';
 import { toChatRequest } from '../../chat/ChatRequest.ts';
+import type { ChatContextEvent } from '../../chat/ChatContextEvent.ts';
 
 export class OpenAIProvider implements ChatProvider {
   private history: ResponseInputItem[] = [];
@@ -31,10 +34,34 @@ export class OpenAIProvider implements ChatProvider {
     private readonly token: () => Promise<string>,
     private readonly client: OpenAI | undefined,
     private readonly tools: ToolRuntime,
-  ) {}
+    initialState?: ChatProviderState,
+  ) {
+    if (initialState) this.history = historyFrom(initialState);
+  }
 
   get model(): string {
     return this.modelName;
+  }
+
+  recordContext(events: readonly ChatContextEvent[]): void {
+    if (this.busy) throw new ProviderError('Cannot record context during a response. Cancel it first.');
+    for (const event of events) {
+      if (this.history.some(item => contextEventId(item) === event.id)) continue;
+      this.history.push(toContextEventInput(event));
+    }
+  }
+
+  exportState(): ChatProviderState {
+    return {
+      provider: 'openai-responses',
+      version: 1,
+      data: JSON.parse(JSON.stringify({ history: this.history })) as unknown,
+    };
+  }
+
+  restoreState(state: ChatProviderState): void {
+    if (this.busy) throw new ProviderError('Cannot restore history during a response. Cancel it first.');
+    this.history = historyFrom(state);
   }
 
   reset(): void {
@@ -312,6 +339,20 @@ export class OpenAIProvider implements ChatProvider {
   }
 }
 
+const openAIProviderStateSchema = z
+  .object({
+    provider: z.literal('openai-responses'),
+    version: z.literal(1),
+    data: z.object({ history: z.array(z.record(z.string(), z.unknown())) }).strict(),
+  })
+  .strict();
+
+function historyFrom(state: ChatProviderState): ResponseInputItem[] {
+  const parsed = openAIProviderStateSchema.safeParse(state);
+  if (!parsed.success) throw new ProviderError('Saved conversation state is not compatible with OpenAI Responses.');
+  return parsed.data.data.history as unknown as ResponseInputItem[];
+}
+
 function toUserInput(request: ChatRequest): ResponseInputItem {
   if (request.attachments.length === 0) return { role: 'user', content: request.text };
   const context = JSON.stringify({
@@ -330,6 +371,32 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
       { type: 'input_text', text: request.text },
     ],
   };
+}
+
+function toContextEventInput(event: ChatContextEvent): ResponseInputItem {
+  return {
+    role: 'developer',
+    content: JSON.stringify({ schema: 'glyph.context-event.v1', event }),
+  };
+}
+
+function contextEventId(item: ResponseInputItem): string | undefined {
+  if (
+    (item.type !== undefined && item.type !== 'message') ||
+    !('role' in item) ||
+    item.role !== 'developer' ||
+    !('content' in item) ||
+    typeof item.content !== 'string'
+  )
+    return undefined;
+  try {
+    const value = JSON.parse(item.content) as { schema?: unknown; event?: { id?: unknown } };
+    return value.schema === 'glyph.context-event.v1' && typeof value.event?.id === 'string'
+      ? value.event.id
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function responseHeaders(headers: Headers): Record<string, string> {

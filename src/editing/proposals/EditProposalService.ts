@@ -149,11 +149,8 @@ export class EditProposalService {
       let proposed = base.text;
       for (const hunk of file.hunks) {
         const oldLogical = hunk.lines.filter(line => line.prefix !== '+').map(line => line.text);
-        const newLogical = hunk.lines.filter(line => line.prefix !== '-').map(line => line.text);
         const lineEnding = file.lineEnding ?? dominantLineEnding(base.text);
-        const oldText = oldLogical.join(lineEnding);
-        const newText = newLogical.join(lineEnding);
-        const candidates = indexesOf(proposed, oldText);
+        const candidates = findHunkMatches(proposed, oldLogical);
         if (candidates.length === 0) {
           throw new EditError(EditFailureReason.INCONSISTENT, 'Patch context does not exactly match the base file.', {
             path: file.path,
@@ -162,12 +159,13 @@ export class EditProposalService {
         if (candidates.length > 1) {
           throw new EditError(EditFailureReason.AMBIGUOUS, 'Patch context matches more than one location.', {
             path: file.path,
-            candidates: candidates.map(offset => lineAt(proposed, offset)),
+            candidates: candidates.map(candidate => lineAt(proposed, candidate.start)),
             retry: 'Include more unique context or use structured coordinates.',
           });
         }
-        const offset = candidates[0]!;
-        proposed = proposed.slice(0, offset) + newText + proposed.slice(offset + oldText.length);
+        const match = candidates[0]!;
+        const replacement = renderHunk(hunk, match, lineEnding, match.end === proposed.length);
+        proposed = proposed.slice(0, match.start) + replacement + proposed.slice(match.end);
       }
       proposed = applyFinalNewline(proposed, file.noFinalNewline);
       structured.files.push({
@@ -585,18 +583,77 @@ function parsePatch(patch: string): PatchFile[] {
   return files;
 }
 
-function indexesOf(text: string, search: string): number[] {
-  if (!search) return [];
-  const result: number[] = [];
-  for (let offset = text.indexOf(search); offset >= 0; offset = text.indexOf(search, offset + 1)) {
-    const before = offset === 0 ? '' : text[offset - 1];
-    const end = offset + search.length;
-    const after = end === text.length ? '' : text[end];
-    const startsOnLine = offset === 0 || before === '\n' || before === '\r';
-    const endsOnLine = end === text.length || after === '\n' || after === '\r';
-    if (startsOnLine && endsOnLine) result.push(offset);
+interface ExactPatchLine {
+  readonly text: string;
+  readonly lineEnding: '' | '\n' | '\r\n' | '\r';
+  readonly start: number;
+  readonly end: number;
+}
+
+interface PatchHunkMatch {
+  readonly start: number;
+  readonly end: number;
+  readonly lines: readonly ExactPatchLine[];
+}
+
+function findHunkMatches(text: string, expectedLines: readonly string[]): PatchHunkMatch[] {
+  if (expectedLines.length === 0) return [];
+  const lines = exactPatchLines(text);
+  const matches: PatchHunkMatch[] = [];
+  for (let start = 0; start + expectedLines.length <= lines.length; start++) {
+    const candidate = lines.slice(start, start + expectedLines.length);
+    if (!candidate.every((line, index) => line.text === expectedLines[index])) continue;
+    matches.push({ start: candidate[0]!.start, end: candidate.at(-1)!.end, lines: candidate });
   }
-  return result;
+  return matches;
+}
+
+function renderHunk(
+  hunk: PatchHunk,
+  match: PatchHunkMatch,
+  lineEnding: '\n' | '\r\n' | '\r',
+  endsAtEof: boolean,
+): string {
+  const output: { text: string; lineEnding: '' | '\n' | '\r\n' | '\r'; added: boolean }[] = [];
+  let sourceIndex = 0;
+  for (const line of hunk.lines) {
+    if (line.prefix === '+') {
+      output.push({ text: line.text, lineEnding, added: true });
+      continue;
+    }
+    const source = match.lines[sourceIndex++]!;
+    if (line.prefix === ' ') {
+      output.push({ text: source.text, lineEnding: source.lineEnding, added: false });
+    }
+  }
+  if (output.length === 0) return '';
+
+  for (let index = 0; index < output.length - 1; index++) {
+    if (output[index]!.lineEnding === '') output[index]!.lineEnding = lineEnding;
+  }
+  const sourceHadFinalEnding = match.lines.at(-1)!.lineEnding !== '';
+  const last = output.at(-1)!;
+  if (endsAtEof && !sourceHadFinalEnding && last.added) last.lineEnding = '';
+  else if (last.added && sourceHadFinalEnding) last.lineEnding = lineEnding;
+
+  return output.map(line => `${line.text}${line.lineEnding}`).join('');
+}
+
+function exactPatchLines(text: string): ExactPatchLine[] {
+  const lines: ExactPatchLine[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let cursor = start;
+    while (cursor < text.length && text[cursor] !== '\r' && text[cursor] !== '\n') cursor++;
+    let lineEnding: ExactPatchLine['lineEnding'] = '';
+    if (text[cursor] === '\r' && text[cursor + 1] === '\n') lineEnding = '\r\n';
+    else if (text[cursor] === '\r') lineEnding = '\r';
+    else if (text[cursor] === '\n') lineEnding = '\n';
+    const end = cursor + lineEnding.length;
+    lines.push({ text: text.slice(start, cursor), lineEnding, start, end });
+    start = end;
+  }
+  return lines;
 }
 
 function lineAt(text: string, offset: number): number {

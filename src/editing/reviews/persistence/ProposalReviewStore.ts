@@ -8,7 +8,7 @@ import type { EditProposal } from '../../proposals/EditProposal.ts';
  * a particular filesystem or editor storage API.
  */
 export interface ProposalReviewStore {
-  load(): Promise<EditProposal[]>;
-  save(proposals: readonly EditProposal[]): Promise<void>;
+  load(workspaceIdentity: string): Promise<EditProposal[]>;
+  save(proposals: readonly EditProposal[], workspaceIdentity: string): Promise<void>;
   clear(): Promise<void>;
 }

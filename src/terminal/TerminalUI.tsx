@@ -13,8 +13,14 @@ import type { Model } from '../chat/Model.ts';
 import type { ToolActivity } from '../chat/ToolActivity.ts';
 import type { Usage } from '../chat/Usage.ts';
 import type { WorkspacePathIndex } from '../context/search/WorkspacePathIndex.ts';
+import type { ChatSessionSummary, ChatTranscriptTurn } from '../chat/sessions/ChatSessionRecord.ts';
 import { ToolActivityPhase } from '../chat/ToolActivityPhase.ts';
 import type { ProposalReviewManager } from '../editing/reviews/ProposalReviewManager.ts';
+import type { QuestionAnswer } from '../interaction/questions/QuestionAnswer.ts';
+import { QuestionAnswerType } from '../interaction/questions/QuestionAnswerType.ts';
+import type { QuestionForm } from '../interaction/questions/QuestionForm.ts';
+import type { QuestionFormResult } from '../interaction/questions/QuestionFormResult.ts';
+import type { QuestionPresenter } from '../interaction/questions/QuestionPresenter.ts';
 import { AccountSelectionType } from './AccountSelectionType.ts';
 import {
   mergeReviewEntries,
@@ -30,6 +36,8 @@ import type { TerminalOutputStream } from './ui/runtime/TerminalOutputStream.ts'
 import type { UserPromptDraft } from './ui/prompt/UserPromptDraft.ts';
 import { inlineMarkdownText } from './ui/response/parseInlineMarkdown.ts';
 import { sanitizeText } from './ui/shared/sanitizeText.ts';
+import type { ProjectContext } from '../project/context/ProjectContext.ts';
+import { ChatHistory } from './ui/chat/ChatHistory.presentational.tsx';
 
 const TERMINAL_HELP = `Commands: ${TERMINAL_COMMANDS.map(command => command.value).join(' ')}
 Type @ at the chat prompt to fuzzy-search and attach project files.
@@ -46,7 +54,7 @@ type AccountSelection =
   { type: AccountSelectionType.ACCOUNT; account: OpenAIAccount } | { type: AccountSelectionType.ADD };
 
 /** Ink-backed terminal host with a plain readline fallback for redirected IO. */
-export class TerminalUI implements ChatResponseStream {
+export class TerminalUI implements ChatResponseStream, QuestionPresenter {
   static readonly help = TERMINAL_HELP;
 
   private readonly events = new EventEmitter();
@@ -95,14 +103,18 @@ export class TerminalUI implements ChatResponseStream {
     this.appendText(TERMINAL_HELP);
   }
 
-  showWelcome(projectRoot: string, logPath: string | undefined, traceEnabled: boolean): void {
+  showWelcome(project: ProjectContext, logPath: string | undefined, traceEnabled: boolean): void {
+    const roots = project.roots.map(root => `${root.name}: ${clean(root.path)}`);
     if (this.renderer) {
       this.renderer.append(
         <Box flexDirection="column">
           <Text bold color="cyan">
             Glyph | Continue with ChatGPT
           </Text>
-          <Text>{`Project: ${clean(projectRoot)}`}</Text>
+          <Text>{`Project: ${clean(project.name)} (${project.kind})`}</Text>
+          {roots.map(root => (
+            <Text key={root}>{`  ${root}`}</Text>
+          ))}
           <Text>Uses your plan allowance and any credits you authorize in ChatGPT settings.</Text>
           <Text dimColor>Usage controls: https://chatgpt.com/settings/usage</Text>
           <Text dimColor>{`Log: ${logPath ? clean(logPath) : 'off'}`}</Text>
@@ -113,7 +125,8 @@ export class TerminalUI implements ChatResponseStream {
       return;
     }
     this.line(`Glyph | Continue with ChatGPT
-Project: ${clean(projectRoot)}
+Project: ${clean(project.name)} (${project.kind})
+${roots.map(root => `  ${root}`).join('\n')}
 Uses your plan allowance and any credits you authorize in ChatGPT settings.
 Usage controls: https://chatgpt.com/settings/usage
 Log: ${logPath ? clean(logPath) : 'off'}
@@ -310,8 +323,42 @@ ${TERMINAL_HELP}`);
   showConversationReset(): void {
     this.appendText('Conversation cleared.');
   }
-  showConversationReplaced(): void {
-    this.appendText('Started a new conversation for the selected account.');
+  showChats(chats: readonly ChatSessionSummary[], activeId: string | undefined): void {
+    if (chats.length === 0) {
+      this.appendText('No saved chats are available in this project.');
+      return;
+    }
+    const lines = chats.map(chat => {
+      const active = chat.id === activeId ? '›' : ' ';
+      return `${active} ${chat.id.slice(0, 8)}  ${chat.title}  · ${chat.turnCount} ${chat.turnCount === 1 ? 'turn' : 'turns'}`;
+    });
+    this.appendText(`Project chats\n${lines.join('\n')}\nUse /chat <ID> to switch.`);
+  }
+
+  showChatActivated(summary: ChatSessionSummary, transcript: readonly ChatTranscriptTurn[]): void {
+    const heading = `Chat ${summary.id.slice(0, 8)}  ${summary.title}  · ${summary.modelSlug}`;
+    const turns = transcript
+      .map(
+        turn =>
+          `you> ${clean(turn.userText)}${turn.reasoningSummary ? `\nthinking> ${clean(turn.reasoningSummary)}` : ''}\nassistant> ${clean(turn.assistantText)}`,
+      )
+      .join('\n\n');
+    const history = `${clean(heading)}${turns ? `\n\n${turns}` : ''}`;
+    if (this.renderer) {
+      this.renderer.replaceTranscript(
+        <ChatHistory
+          summary={summary}
+          transcript={transcript}
+          promptWidth={Math.max(3, Math.floor((this.output.columns ?? 80) * 0.8))}
+        />,
+      );
+      return;
+    }
+    this.line(clean(history));
+  }
+
+  showChatRenamed(title: string): void {
+    this.appendText(`Chat renamed to "${clean(title)}".`);
   }
   showUnknownCommand(): void {
     this.appendText('Unknown command. Use /help.', { color: 'yellow' });
@@ -362,6 +409,50 @@ ${TERMINAL_HELP}`);
         this.errorLine(`Error: ${sanitizeText(error instanceof Error ? error.message : String(error))}`);
       }
     }
+  }
+
+  async present(form: QuestionForm, signal: AbortSignal): Promise<QuestionFormResult> {
+    if (this.renderer) {
+      return this.renderer.presentQuestionForm(form, signal, () => this.events.emit('SIGINT'));
+    }
+    if (form.title) this.line(`\n${clean(form.title)}`);
+    const answers: QuestionAnswer[] = [];
+    for (const question of form.questions) {
+      for (;;) {
+        this.line(`\n${clean(question.prompt)}`);
+        question.options.forEach((option, index) => this.line(`${index + 1}. ${clean(option.label)}`));
+        this.line('o. Other');
+        const label = question.allowMultiple ? 'Choices (comma-separated): ' : 'Choice: ';
+        const choice = (await this.ask(label, signal)).trim();
+        if (choice.toLowerCase() === 'o') {
+          const text = (await this.ask('Other: ', signal)).trim();
+          if (text) {
+            answers.push({ questionId: question.id, type: QuestionAnswerType.OTHER, text });
+            break;
+          }
+        } else {
+          const indices = choice
+            .split(',')
+            .map(value => Number(value.trim()) - 1)
+            .filter((value, index, values) => values.indexOf(value) === index);
+          const selected = indices.map(index => question.options[index]).filter(option => option !== undefined);
+          const valid =
+            indices.length > 0 &&
+            selected.length === indices.length &&
+            (question.allowMultiple || indices.length === 1);
+          if (valid) {
+            answers.push({
+              questionId: question.id,
+              type: QuestionAnswerType.SELECTION,
+              optionIds: selected.map(option => option.id),
+            });
+            break;
+          }
+        }
+        this.appendText('Choose one of the listed options, or o for Other.', { color: 'yellow' });
+      }
+    }
+    return { answers };
   }
 
   private async ask(label: string, signal: AbortSignal): Promise<string> {

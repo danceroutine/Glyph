@@ -148,6 +148,18 @@ export class EditingE2EHarness {
     return response.text;
   }
 
+  async commitReviewResults(): Promise<void> {
+    await this.application.commitReviewResults(this.conversation);
+  }
+
+  restartConversationFromCheckpoint(): void {
+    const checkpoint = JSON.parse(JSON.stringify(this.conversation.exportState())) as ReturnType<
+      ChatConversation['exportState']
+    >;
+    this.conversation.reset();
+    this.conversation.restoreState(checkpoint);
+  }
+
   async dispose(): Promise<void> {
     this.fixture.assertConsumed();
     if (this.http.attempts !== 0) throw new Error(`Unexpected HTTP attempts: ${this.http.attempts}`);

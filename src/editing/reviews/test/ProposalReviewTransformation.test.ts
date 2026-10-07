@@ -171,6 +171,7 @@ describe(ProposalReviewManager, () => {
       ).join('');
       expect(recovered.activeReviews).toStrictEqual([]);
       expect(finalText).toBe(expectedFinalText);
+      await recovered.acknowledgeResults(recovered.pendingResults.map(result => result.id));
       await expect(readFile(join(state, 'active-proposal-review.json'), 'utf8')).rejects.toMatchObject({
         code: 'ENOENT',
       });

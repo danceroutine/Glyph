@@ -451,7 +451,7 @@ describe(ProposalReviewManager, () => {
   });
 
   describe(ProposalReviewManager.prototype.initialize, () => {
-    it('loads a legacy single-review checkpoint and migrates it without losing the proposal', async () => {
+    it('rejects an unbound legacy checkpoint because its workspace identity cannot be validated', async () => {
       const { root, state, service } = await fixture('');
       const proposal = await service.proposeStructured({
         files: [
@@ -472,14 +472,8 @@ describe(ProposalReviewManager, () => {
         new FileSystemWorkspaceTextStore(root),
         new FileProposalReviewStore(state),
       );
-      await recovered.initialize();
-
-      expect(recovered.activeReviews).toEqual([proposal]);
-      const migrated = JSON.parse(await readFile(join(state, 'active-proposal-review.json'), 'utf8')) as {
-        schemaVersion: number;
-        proposals: { id: string }[];
-      };
-      expect(migrated).toMatchObject({ schemaVersion: 2, proposals: [{ id: proposal.id }] });
+      await expect(recovered.initialize()).rejects.toMatchObject({ reason: EditFailureReason.PERSISTENCE });
+      expect(recovered.activeReviews).toEqual([]);
     });
 
     it('recovers multiple actor proposals in queue order', async () => {
@@ -515,10 +509,12 @@ describe(ProposalReviewManager, () => {
 
       const checkpoint = JSON.parse(await readFile(join(state, 'active-proposal-review.json'), 'utf8')) as {
         schemaVersion: number;
+        workspaceIdentity: string;
         proposals: { id: string }[];
       };
       expect(checkpoint).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: 3,
+        workspaceIdentity: root,
         proposals: [{ id: first.id }, { id: second.id }],
       });
 
@@ -633,7 +629,7 @@ describe(ProposalReviewManager, () => {
       const applying = file.items[0]!;
       file.applyingItemId = applying.id;
       file.applicability = EditApplicabilityState.APPLYING;
-      await new FileProposalReviewStore(state).save([proposal]);
+      await new FileProposalReviewStore(state).save([proposal], root);
       await workspace.replace('file.txt', base.revision, 'ONE\nmiddle\nthree\n', false);
 
       const recovered = new ProposalReviewManager(

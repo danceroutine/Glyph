@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { EditError } from '../../editing/errors/EditError.ts';
 import { EditFailureReason } from '../../editing/errors/EditFailureReason.ts';
 import { FileSystemWorkspaceTextStore } from '../FileSystemWorkspaceTextStore.ts';
+import { WorkspaceMutationConsistency } from '../WorkspaceMutationConsistency.ts';
 
 const directories: string[] = [];
 
@@ -77,6 +78,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       directories.push(root);
       await writeFile(join(root, 'file.txt'), 'base\n', { mode: 0o640 });
       const store = new FileSystemWorkspaceTextStore(root);
+      expect(store.mutationConsistency).toBe(WorkspaceMutationConsistency.BEST_EFFORT_FILESYSTEM);
       const base = await store.read('file.txt');
       await writeFile(join(root, 'file.txt'), 'collaborator\n');
 

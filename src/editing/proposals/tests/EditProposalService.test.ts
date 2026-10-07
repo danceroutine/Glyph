@@ -227,6 +227,63 @@ describe(EditProposalService, () => {
       expect(proposal.files[0]?.proposed.text).toBe('one\nTWO\nthree\n');
     });
 
+    it.each([
+      {
+        name: 'whole-line deletion',
+        base: 'alpha\nbeta\ngamma\n',
+        patch: ' alpha\n-beta\n gamma',
+        edit: {
+          range: { start: { line: 1, character: 0 }, end: { line: 2, character: 0 } },
+          expected_text: 'beta\n',
+          replacement_text: '',
+        },
+      },
+      {
+        name: 'whole-line insertion',
+        base: 'alpha\ngamma\n',
+        patch: ' alpha\n+beta\n gamma',
+        edit: {
+          range: { start: { line: 1, character: 0 }, end: { line: 1, character: 0 } },
+          expected_text: '',
+          replacement_text: 'beta\n',
+        },
+      },
+      {
+        name: 'insertion at EOF without a final newline',
+        base: 'alpha',
+        patch: ' alpha\n+omega',
+        edit: {
+          range: { start: { line: 0, character: 5 }, end: { line: 0, character: 5 } },
+          expected_text: '',
+          replacement_text: '\nomega',
+        },
+      },
+    ])('is byte-equivalent to a structured $name', async ({ base: text, patch, edit }) => {
+      const { service, workspace } = await fixture(text);
+      const base = await workspace.read('file.txt');
+      const [patchProposal, structuredProposal] = await Promise.all([
+        service.proposePatch(
+          `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${base.revision}\n@@\n${patch}\n*** End Patch`,
+        ),
+        service.proposeStructured({
+          files: [
+            {
+              operation: EditOperation.UPDATE,
+              path: 'file.txt',
+              new_path: null,
+              base_revision: base.revision,
+              content: null,
+              byte_order_mark: null,
+              edits: [edit],
+            },
+          ],
+        }),
+      ]);
+
+      expect(patchProposal.files[0]?.proposed.text).toBe(structuredProposal.files[0]?.proposed.text);
+      expect(patchProposal.files[0]?.proposed.revision).toBe(structuredProposal.files[0]?.proposed.revision);
+    });
+
     it('accepts one final line ending after the end delimiter', async () => {
       const { service } = await fixture('base');
 

@@ -12,6 +12,7 @@ export type PromptEditorProps = PromptEditorState & {
 
 export function PromptEditor({
   label,
+  acceptsSubmission,
   pendingChanges,
   text,
   cursor,
@@ -37,6 +38,7 @@ export function PromptEditor({
       paddingX={PromptLayout.railHorizontalPadding}
       width="100%"
     >
+      {!acceptsSubmission ? <Text dimColor>Agent responding · draft only</Text> : null}
       {pendingChanges > 0 ? <PendingReviewEyebrow count={pendingChanges} /> : null}
       <Text wrap="hard">
         <Text bold color="cyan">

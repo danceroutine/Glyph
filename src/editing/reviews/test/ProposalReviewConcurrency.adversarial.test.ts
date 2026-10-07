@@ -304,6 +304,10 @@ class ControllableWorkspaceTextStore implements WorkspaceTextStore {
     return this.delegate.caseSensitive;
   }
 
+  get mutationConsistency() {
+    return this.delegate.mutationConsistency;
+  }
+
   blockNextReplace(): Barrier {
     const barrier = createBarrier();
     this.replaceBarrier = barrier;

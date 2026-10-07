@@ -16,6 +16,11 @@ import type { ChatRequest } from '../chat/ChatRequest.ts';
 import type { ContextAttachmentReference } from '../context/attachments/ContextAttachmentReference.ts';
 import type { ContextAttachmentService } from '../context/attachments/ContextAttachmentService.ts';
 import type { WorkspacePathIndex } from '../context/search/WorkspacePathIndex.ts';
+import type { ChatProviderState } from '../chat/ChatProviderState.ts';
+import type { ChatSession } from '../chat/sessions/ChatSession.ts';
+import type { ChatSessionManager } from '../chat/sessions/ChatSessionManager.ts';
+import type { ChatSessionSummary } from '../chat/sessions/ChatSessionRecord.ts';
+import type { ChatContextEvent } from '../chat/ChatContextEvent.ts';
 
 const emptyUsage = (): Usage => ({
   inputTokens: 0,
@@ -47,6 +52,7 @@ export class GlyphService {
     readonly proposalReviews?: ProposalReviewManager,
     private readonly contextAttachments?: ContextAttachmentService,
     private readonly pathIndex?: WorkspacePathIndex,
+    private readonly chatSessions?: ChatSessionManager,
   ) {
     this.traceEnabled = options.traceEnabled ?? true;
   }
@@ -69,8 +75,11 @@ export class GlyphService {
     await this.store.acquire();
     this.acquired = true;
     let pathIndexStarted = false;
+    let chatSessionsStarted = false;
     try {
       await this.store.load();
+      chatSessionsStarted = this.chatSessions !== undefined;
+      await this.chatSessions?.initialize();
       await this.proposalReviews?.initialize();
       pathIndexStarted = this.pathIndex !== undefined;
       await this.pathIndex?.initialize();
@@ -80,6 +89,13 @@ export class GlyphService {
       if (pathIndexStarted) {
         try {
           await this.pathIndex?.dispose();
+        } catch (cleanupError) {
+          cleanupFailures.push(cleanupError);
+        }
+      }
+      if (chatSessionsStarted) {
+        try {
+          await this.chatSessions?.dispose();
         } catch (cleanupError) {
           cleanupFailures.push(cleanupError);
         }
@@ -105,7 +121,11 @@ export class GlyphService {
     try {
       await this.pathIndex?.dispose();
     } finally {
-      await this.store.release();
+      try {
+        await this.chatSessions?.dispose();
+      } finally {
+        await this.store.release();
+      }
     }
   }
 
@@ -131,7 +151,62 @@ export class GlyphService {
   }
 
   createConversation(account: OpenAIAccount, model: Model): ChatConversation {
-    const provider = this.providers.create(model.slug, () => this.session.accessToken(account));
+    return this.instantiateConversation(account, model);
+  }
+
+  async commitReviewResults(conversation: {
+    recordContext(events: readonly ChatContextEvent[]): void | Promise<void>;
+  }): Promise<void> {
+    if (!this.proposalReviews || this.proposalReviews.pendingResults.length === 0) return;
+    const results = this.proposalReviews.pendingResults;
+    await conversation.recordContext(
+      results.map(result => ({
+        schemaVersion: 1,
+        id: result.id,
+        type: 'edit_review_result',
+        payload: result,
+      })),
+    );
+    await this.proposalReviews.acknowledgeResults(results.map(result => result.id));
+  }
+
+  listChats(account?: OpenAIAccount): readonly ChatSessionSummary[] {
+    return this.requireChatSessions().list(account);
+  }
+
+  async createChat(account: OpenAIAccount, model: Model): Promise<ChatSession> {
+    const conversation = this.instantiateConversation(account, model);
+    return this.requireChatSessions().create(
+      {
+        accountClientId: account.clientId,
+        accountSubject: account.subject,
+        modelSlug: model.slug,
+        modelName: model.name,
+      },
+      conversation,
+    );
+  }
+
+  openChat(identifier: string, account: OpenAIAccount): ChatSession {
+    return this.requireChatSessions().open(identifier, record => {
+      if (record.accountClientId !== account.clientId || record.accountSubject !== account.subject) {
+        throw new Error('That chat belongs to a different ChatGPT account or workspace.');
+      }
+      return this.instantiateConversation(
+        account,
+        { slug: record.modelSlug, name: record.modelName },
+        record.providerState,
+      );
+    });
+  }
+
+  renameChat(identifier: string, title: string): Promise<ChatSessionSummary> {
+    return this.requireChatSessions().rename(identifier, title);
+  }
+
+  private instantiateConversation(account: OpenAIAccount, model: Model, state?: ChatProviderState): ChatConversation {
+    const token = (): Promise<string> => this.session.accessToken(account);
+    const provider = state ? this.providers.create(model.slug, token, state) : this.providers.create(model.slug, token);
     return new ChatConversation(
       provider,
       this.logger,
@@ -165,5 +240,10 @@ export class GlyphService {
     for (const key of Object.keys(this.aggregateUsage) as (keyof Usage)[]) {
       this.aggregateUsage[key] += result.usage[key];
     }
+  }
+
+  private requireChatSessions(): ChatSessionManager {
+    if (!this.chatSessions) throw new Error('This host does not support persistent chat sessions.');
+    return this.chatSessions;
   }
 }

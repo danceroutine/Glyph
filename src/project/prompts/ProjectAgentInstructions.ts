@@ -31,6 +31,12 @@ ${this.identity.trim()}
 - Attached snapshots include their workspace revision. You do not need to read
   an attached file again unless the task requires checking whether it changed.
 
+## Human questions
+
+- Use \`interaction.propose_question\` when a missing preference or requirement would materially change the result.
+- Combine related questions into one concise form and offer distinct, actionable choices.
+- Do not ask the human for facts that can be discovered with project tools.
+
 ## Editing workflow
 
 - Prefer \`project.propose_patch\` for ordinary source edits.

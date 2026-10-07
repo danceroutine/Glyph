@@ -1,14 +1,16 @@
 import type { GlyphService } from '../application/GlyphService.ts';
-import type { ChatConversation } from '../chat/ChatConversation.ts';
+import type { ChatSession } from '../chat/sessions/ChatSession.ts';
+import type { Model } from '../chat/Model.ts';
 import { describeError } from '../describeError.ts';
 import type { OpenAIAccount } from '../providers/openai/auth/OpenAIAccount.ts';
 import { AccountSelectionType } from './AccountSelectionType.ts';
 import { TerminalActionType } from './TerminalActionType.ts';
 import type { TerminalUI } from './TerminalUI.tsx';
 import type { TerminalEditReviewer } from './ui/proposal/TerminalEditReviewer.ts';
+import type { ProjectContext } from '../project/context/ProjectContext.ts';
 
 interface TerminalApplicationOptions {
-  projectRoot: string;
+  projectContext: ProjectContext;
   configuredModel?: string;
 }
 
@@ -18,7 +20,8 @@ interface TerminalApplicationOptions {
  */
 export class TerminalApplication {
   private activeRequest: AbortController | undefined;
-  private conversation: ChatConversation | undefined;
+  private conversation: ChatSession | undefined;
+  private model: Model | undefined;
 
   constructor(
     private readonly glyph: GlyphService,
@@ -36,7 +39,7 @@ export class TerminalApplication {
     try {
       await this.glyph.initialize();
       if (this.shutdown.aborted) return 0;
-      this.ui.showWelcome(this.options.projectRoot, this.glyph.tracePath, this.glyph.isTraceEnabled);
+      this.ui.showWelcome(this.options.projectContext, this.glyph.tracePath, this.glyph.isTraceEnabled);
 
       let account = await this.enablePlanIfNeeded(await this.chooseAccount());
       await this.selectModel(account);
@@ -51,9 +54,37 @@ export class TerminalApplication {
             this.ui.showHelp();
             break;
           case TerminalActionType.RESET:
-            this.requireConversation().reset();
+            await this.requireConversation().reset();
             this.ui.showConversationReset();
             break;
+          case TerminalActionType.NEW_CHAT: {
+            try {
+              const conversation = await this.glyph.createChat(account, this.requireModel());
+              this.activateChat(conversation);
+            } catch (error) {
+              this.ui.showError(this.glyph.redact(describeError(error)));
+            }
+            break;
+          }
+          case TerminalActionType.LIST_CHATS:
+            this.ui.showChats(this.glyph.listChats(account), this.conversation?.id);
+            break;
+          case TerminalActionType.SWITCH_CHAT:
+            try {
+              this.activateChat(this.glyph.openChat(action.chatId, account));
+            } catch (error) {
+              this.ui.showError(this.glyph.redact(describeError(error)));
+            }
+            break;
+          case TerminalActionType.RENAME_CHAT: {
+            try {
+              const summary = await this.glyph.renameChat(this.requireConversation().id, action.title);
+              this.ui.showChatRenamed(summary.title);
+            } catch (error) {
+              this.ui.showError(this.glyph.redact(describeError(error)));
+            }
+            break;
+          }
           case TerminalActionType.USAGE:
             this.ui.showUsage(this.glyph.usage);
             break;
@@ -73,6 +104,7 @@ export class TerminalApplication {
           case TerminalActionType.ACCEPT_ALL:
             try {
               await this.glyph.proposalReviews?.acceptAll();
+              await this.flushReviewResults();
             } catch (error) {
               this.ui.showError(this.glyph.redact(describeError(error)));
             }
@@ -80,6 +112,7 @@ export class TerminalApplication {
           case TerminalActionType.REJECT_ALL:
             try {
               await this.glyph.proposalReviews?.rejectAll();
+              await this.flushReviewResults();
             } catch (error) {
               this.ui.showError(this.glyph.redact(describeError(error)));
             }
@@ -94,7 +127,6 @@ export class TerminalApplication {
                   );
             account = await this.enablePlanIfNeeded(next);
             await this.selectModel(account);
-            this.ui.showConversationReplaced();
             break;
           }
           case TerminalActionType.UNKNOWN_COMMAND:
@@ -139,8 +171,19 @@ export class TerminalApplication {
     }
     const models = await this.glyph.listModels(account);
     const model = await this.ui.chooseModel(models, this.options.configuredModel, this.shutdown);
-    this.conversation = this.glyph.createConversation(account, model);
+    this.model = model;
+    const existing = this.glyph.listChats(account).find(chat => chat.modelSlug === model.slug);
+    const conversation = existing
+      ? this.glyph.openChat(existing.id, account)
+      : await this.glyph.createChat(account, model);
     this.ui.showActive(account, model);
+    this.activateChat(conversation);
+  }
+
+  private activateChat(conversation: ChatSession): void {
+    this.conversation = conversation;
+    this.model = { slug: conversation.summary.modelSlug, name: conversation.summary.modelName };
+    this.ui.showChatActivated(conversation.summary, conversation.transcript);
   }
 
   private async send(prompt: string, attachmentPaths: readonly string[]): Promise<void> {
@@ -166,10 +209,20 @@ export class TerminalApplication {
   private async reviewPending(): Promise<void> {
     if (this.glyph.proposalReviews?.active && this.reviewer)
       await this.reviewer.review(this.glyph.proposalReviews, this.shutdown);
+    await this.flushReviewResults();
   }
 
-  private requireConversation(): ChatConversation {
+  private async flushReviewResults(): Promise<void> {
+    await this.glyph.commitReviewResults(this.requireConversation());
+  }
+
+  private requireConversation(): ChatSession {
     if (!this.conversation) throw new Error('Select an account and model before sending a message.');
     return this.conversation;
+  }
+
+  private requireModel(): Model {
+    if (!this.model) throw new Error('Select a model before starting a chat.');
+    return this.model;
   }
 }

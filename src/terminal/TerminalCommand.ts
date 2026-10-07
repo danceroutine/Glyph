@@ -4,6 +4,10 @@ export type TerminalCommandAction =
   | { readonly type: TerminalActionType.EXIT }
   | { readonly type: TerminalActionType.HELP }
   | { readonly type: TerminalActionType.RESET }
+  | { readonly type: TerminalActionType.NEW_CHAT }
+  | { readonly type: TerminalActionType.LIST_CHATS }
+  | { readonly type: TerminalActionType.SWITCH_CHAT; readonly chatId: string }
+  | { readonly type: TerminalActionType.RENAME_CHAT; readonly title: string }
   | { readonly type: TerminalActionType.USAGE }
   | { readonly type: TerminalActionType.TRACE; readonly enabled?: boolean }
   | { readonly type: TerminalActionType.ACCOUNT }
@@ -23,6 +27,26 @@ export interface TerminalCommand {
 export const TERMINAL_COMMANDS: readonly TerminalCommand[] = [
   { value: '/help', description: 'Show commands and keyboard help', action: { type: TerminalActionType.HELP } },
   { value: '/reset', description: 'Clear the current conversation', action: { type: TerminalActionType.RESET } },
+  {
+    value: '/new',
+    description: 'Start a new chat in the active project context',
+    action: { type: TerminalActionType.NEW_CHAT },
+  },
+  {
+    value: '/chats',
+    description: 'List chats available in this project',
+    action: { type: TerminalActionType.LIST_CHATS },
+  },
+  {
+    value: '/chat',
+    description: 'List chats; add an ID to switch chats',
+    action: { type: TerminalActionType.LIST_CHATS },
+  },
+  {
+    value: '/rename',
+    description: 'Rename the active chat by adding a title',
+    action: { type: TerminalActionType.RENAME_CHAT, title: '' },
+  },
   { value: '/usage', description: 'Show completed-request usage', action: { type: TerminalActionType.USAGE } },
   { value: '/trace', description: 'Show the current tracing state', action: { type: TerminalActionType.TRACE } },
   {
@@ -63,5 +87,9 @@ export function searchTerminalCommands(query: string): readonly TerminalCommand[
 }
 
 export function resolveTerminalCommand(value: string): TerminalCommandAction | undefined {
+  const switchChat = /^\/chat\s+(\S+)$/u.exec(value);
+  if (switchChat) return { type: TerminalActionType.SWITCH_CHAT, chatId: switchChat[1]! };
+  const renameChat = /^\/rename\s+(.+)$/u.exec(value);
+  if (renameChat) return { type: TerminalActionType.RENAME_CHAT, title: renameChat[1]!.trim() };
   return TERMINAL_COMMANDS.find(command => command.value === value)?.action;
 }

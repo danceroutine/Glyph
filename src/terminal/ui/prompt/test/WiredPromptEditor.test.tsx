@@ -10,7 +10,12 @@ describe(WiredPromptEditor, () => {
   describe('interaction', () => {
     it('submits printable and pasted text', async () => {
       const complete = vi.fn();
-      const view = render(<WiredPromptEditor request={{ id: 1, label: 'you> ', complete }} interrupt={vi.fn()} />);
+      const view = render(
+        <WiredPromptEditor
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete }}
+          interrupt={vi.fn()}
+        />,
+      );
 
       await write(view, 'hello');
       await write(view, '\x1b[200~ world\nagain\x1b[201~');
@@ -21,9 +26,28 @@ describe(WiredPromptEditor, () => {
       view.unmount();
     });
 
+    it('accepts draft input but ignores Enter while submission is disabled', async () => {
+      const view = render(
+        <WiredPromptEditor request={{ id: 1, label: 'you> ', acceptsSubmission: false }} interrupt={vi.fn()} />,
+      );
+
+      await write(view, 'follow-up');
+      view.stdin.write('\r');
+      await tick();
+
+      expect(view.lastFrame()).toContain('Agent responding · draft only');
+      expect(view.lastFrame()).toContain('you> follow-up');
+      view.unmount();
+    });
+
     it('lists every slash command, filters, navigates, and completes with Tab', async () => {
       const complete = vi.fn();
-      const view = render(<WiredPromptEditor request={{ id: 1, label: 'you> ', complete }} interrupt={vi.fn()} />);
+      const view = render(
+        <WiredPromptEditor
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete }}
+          interrupt={vi.fn()}
+        />,
+      );
 
       await write(view, '/');
       for (const command of TERMINAL_COMMANDS) expect(view.lastFrame()).toContain(command.value);
@@ -44,7 +68,12 @@ describe(WiredPromptEditor, () => {
 
     it('executes the selected slash command with Enter', async () => {
       const complete = vi.fn();
-      const view = render(<WiredPromptEditor request={{ id: 1, label: 'you> ', complete }} interrupt={vi.fn()} />);
+      const view = render(
+        <WiredPromptEditor
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete }}
+          interrupt={vi.fn()}
+        />,
+      );
 
       await write(view, '/rev');
       expect(view.lastFrame()).toContain('Resume pending edit review');
@@ -57,7 +86,10 @@ describe(WiredPromptEditor, () => {
 
     it('dismisses slash completion with Escape and reopens it when typing resumes', async () => {
       const view = render(
-        <WiredPromptEditor request={{ id: 1, label: 'you> ', complete: vi.fn() }} interrupt={vi.fn()} />,
+        <WiredPromptEditor
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete: vi.fn() }}
+          interrupt={vi.fn()}
+        />,
       );
 
       await write(view, '/');
@@ -84,7 +116,7 @@ describe(WiredPromptEditor, () => {
       }));
       const view = render(
         <WiredPromptEditor
-          request={{ id: 1, label: 'you> ', files: fileSearch(search), complete }}
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, files: fileSearch(search), complete }}
           interrupt={vi.fn()}
         />,
       );
@@ -124,7 +156,7 @@ describe(WiredPromptEditor, () => {
       }));
       const view = render(
         <WiredPromptEditor
-          request={{ id: 1, label: 'you> ', files: fileSearch(search), complete }}
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, files: fileSearch(search), complete }}
           interrupt={vi.fn()}
         />,
       );
@@ -151,7 +183,7 @@ describe(WiredPromptEditor, () => {
       }));
       const view = render(
         <WiredPromptEditor
-          request={{ id: 1, label: 'you> ', files: fileSearch(search), complete: vi.fn() }}
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, files: fileSearch(search), complete: vi.fn() }}
           interrupt={vi.fn()}
         />,
       );
@@ -168,7 +200,12 @@ describe(WiredPromptEditor, () => {
 
     it('supports cursor movement and deletion across surrogate pairs', async () => {
       const complete = vi.fn();
-      const view = render(<WiredPromptEditor request={{ id: 1, label: 'you> ', complete }} interrupt={vi.fn()} />);
+      const view = render(
+        <WiredPromptEditor
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete }}
+          interrupt={vi.fn()}
+        />,
+      );
 
       for (const input of [
         'a😀b',
@@ -195,7 +232,12 @@ describe(WiredPromptEditor, () => {
 
     it('moves right across a surrogate pair and ignores control input', async () => {
       const complete = vi.fn();
-      const view = render(<WiredPromptEditor request={{ id: 1, label: 'you> ', complete }} interrupt={vi.fn()} />);
+      const view = render(
+        <WiredPromptEditor
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete }}
+          interrupt={vi.fn()}
+        />,
+      );
 
       await write(view, '😀b');
       await write(view, '\x1b[H');
@@ -215,6 +257,7 @@ describe(WiredPromptEditor, () => {
           request={{
             id: 1,
             label: 'you> ',
+            acceptsSubmission: true,
             files: fileSearch(async () => {
               throw 'broken';
             }),
@@ -232,6 +275,7 @@ describe(WiredPromptEditor, () => {
           request={{
             id: 2,
             label: 'you> ',
+            acceptsSubmission: true,
             files: fileSearch(async () => {
               throw new Error('broken');
             }),
@@ -253,6 +297,7 @@ describe(WiredPromptEditor, () => {
             request={{
               id: 2,
               label: 'you> ',
+              acceptsSubmission: true,
               files: fileSearch(async () => {
                 throw error;
               }),
@@ -271,7 +316,10 @@ describe(WiredPromptEditor, () => {
     it('forwards Ctrl+C to the interrupt handler', async () => {
       const interrupt = vi.fn();
       const view = render(
-        <WiredPromptEditor request={{ id: 1, label: 'you> ', complete: vi.fn() }} interrupt={interrupt} />,
+        <WiredPromptEditor
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete: vi.fn() }}
+          interrupt={interrupt}
+        />,
       );
 
       view.stdin.write('\x03');
@@ -298,7 +346,7 @@ describe(WiredPromptEditor, () => {
       );
       const view = render(
         <WiredPromptEditor
-          request={{ id: 1, label: 'you> ', files: fileSearch(search), complete: vi.fn() }}
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, files: fileSearch(search), complete: vi.fn() }}
           interrupt={vi.fn()}
         />,
       );

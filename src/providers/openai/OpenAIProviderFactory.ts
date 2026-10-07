@@ -1,4 +1,5 @@
 import type { ChatProviderFactory } from '../../chat/ChatProviderFactory.ts';
+import type { ChatProviderState } from '../../chat/ChatProviderState.ts';
 import type { ConfigurationProvider } from '../../configuration/ConfigurationProvider.ts';
 import { ProjectAccess } from '../../project/ProjectAccess.ts';
 import { ProjectAgentInstructions } from '../../project/prompts/ProjectAgentInstructions.ts';
@@ -12,7 +13,7 @@ export class OpenAIProviderFactory implements ChatProviderFactory {
     private readonly tools?: ToolRuntime,
   ) {}
 
-  create(model: string, token: () => Promise<string>): OpenAIProvider {
+  create(model: string, token: () => Promise<string>, state?: ChatProviderState): OpenAIProvider {
     return new OpenAIProvider(
       model,
       {
@@ -22,6 +23,7 @@ export class OpenAIProviderFactory implements ChatProviderFactory {
       token,
       undefined,
       this.tools ?? new ProjectAccess(this.projectRoot),
+      state,
     );
   }
 }

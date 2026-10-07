@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NullLogger } from '../../../observability/NullLogger.ts';
+import type { Logger } from '../../../observability/Logger.ts';
 import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
 import type { WorkspaceMutationOptions } from '../../../workspace/WorkspaceMutationOptions.ts';
 import type { WorkspaceTextSnapshot } from '../../../workspace/WorkspaceTextSnapshot.ts';
@@ -87,6 +88,29 @@ describe(ProposalReviewManager, () => {
       expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
     });
 
+    it('preserves an applied first hunk when its completed checkpoint fails before accepting a second hunk', async () => {
+      const fixture = await createFixture();
+      await writeFile(join(fixture.root, 'file.txt'), 'one\nmiddle\nthree\n');
+      const proposal = await proposeTwoReplacements(fixture.service, fixture.workspace);
+      const [first, second] = proposal.files[0]!.items;
+      await fixture.manager.stage(proposal);
+      fixture.store.failSaveCall(4);
+
+      await expect(fixture.manager.accept(first!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.PERSISTENCE,
+      });
+
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('ONE\nmiddle\nthree\n');
+      expect(first!.decision).toBe(EditDecisionState.ACCEPTED);
+      expect(second!.decision).toBe(EditDecisionState.PENDING);
+
+      await fixture.manager.accept(second!.id);
+
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('ONE\nmiddle\nTHREE\n');
+      expect(fixture.workspace.replaceCalls).toBe(2);
+      expect(fixture.manager.activeReviews).toStrictEqual([]);
+    });
+
     it('recovers when the workspace commits a replacement but reports an I/O failure afterward', async () => {
       const fixture = await createFixture();
       const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
@@ -114,6 +138,24 @@ describe(ProposalReviewManager, () => {
       expect(recoveredWorkspace.replaceCalls).toBe(0);
       expect(recovered.activeReviews).toStrictEqual([]);
       expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+    });
+
+    it('does not turn a successful workspace mutation into a failed decision when logging fails', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      const manager = new ProposalReviewManager(
+        fixture.workspace,
+        new FileProposalReviewStore(fixture.state),
+        new ThrowingLogger(),
+        8,
+      );
+
+      await manager.stage(proposal);
+      await expect(manager.accept(proposal.files[0]!.items[0]!.id)).resolves.toBeUndefined();
+
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+      expect(manager.activeReviews).toStrictEqual([]);
+      expect(manager.pendingResults).toHaveLength(1);
     });
   });
 
@@ -173,14 +215,87 @@ describe(ProposalReviewManager, () => {
     });
   });
 
+  describe(ProposalReviewManager.prototype.acknowledgeResults, () => {
+    it('retains accepted and rejected item receipts across restart until the host acknowledges them', async () => {
+      const fixture = await createFixture();
+      await writeFile(join(fixture.root, 'file.txt'), 'one\nmiddle\nthree\n');
+      const proposal = await proposeTwoReplacements(fixture.service, fixture.workspace);
+      const [first, second] = proposal.files[0]!.items;
+      await fixture.manager.stage(proposal);
+      await fixture.manager.accept(first!.id);
+      await fixture.manager.reject(second!.id);
+
+      expect(fixture.manager.activeReviews).toStrictEqual([]);
+      expect(fixture.manager.pendingResults).toEqual([
+        expect.objectContaining({
+          id: `edit-review-result:${proposal.id}`,
+          reviewId: proposal.id,
+          items: [
+            expect.objectContaining({
+              itemId: first!.id,
+              decision: EditDecisionState.ACCEPTED,
+              affectedPaths: ['file.txt'],
+              resultingRevision: expect.any(String),
+            }),
+            expect.objectContaining({
+              itemId: second!.id,
+              decision: EditDecisionState.REJECTED,
+              affectedPaths: ['file.txt'],
+              resultingRevision: expect.any(String),
+            }),
+          ],
+        }),
+      ]);
+
+      const recovered = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(fixture.root),
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+      expect(recovered.activeReviews).toStrictEqual([]);
+      expect(recovered.pendingResults).toEqual(fixture.manager.pendingResults);
+
+      await recovered.acknowledgeResults(recovered.pendingResults.map(result => result.id));
+
+      expect(recovered.pendingResults).toStrictEqual([]);
+      await expect(readFile(join(fixture.state, 'active-proposal-review.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+  });
+
   describe(ProposalReviewManager.prototype.initialize, () => {
+    it('rejects a checkpoint from another workspace even when paths and contents match', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+
+      const otherRoot = await mkdtemp(join(tmpdir(), 'proposal-recovery-other-root-'));
+      directories.push(otherRoot);
+      await writeFile(join(otherRoot, 'file.txt'), 'base');
+      const otherWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(otherRoot));
+      const otherManager = new ProposalReviewManager(
+        otherWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+
+      await expect(otherManager.initialize()).rejects.toMatchObject({ reason: EditFailureReason.PERSISTENCE });
+      expect(otherManager.activeReviews).toStrictEqual([]);
+      expect(otherWorkspace.mutationCalls).toBe(0);
+      expect(await readFile(join(otherRoot, 'file.txt'), 'utf8')).toBe('base');
+    });
+
     it('turns an applying checkpoint back into a retryable pending edit when no mutation occurred', async () => {
       const fixture = await createFixture();
       const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
       const file = proposal.files[0]!;
       file.applicability = EditApplicabilityState.APPLYING;
       file.applyingItemId = file.items[0]!.id;
-      await new FileProposalReviewStore(fixture.state).save([proposal]);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
 
       const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
       const recovered = new ProposalReviewManager(
@@ -210,7 +325,7 @@ describe(ProposalReviewManager, () => {
       const file = proposal.files[0]!;
       file.applicability = EditApplicabilityState.APPLYING;
       file.applyingItemId = file.items[0]!.id;
-      await new FileProposalReviewStore(fixture.state).save([proposal]);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
       await fixture.workspace.replace('file.txt', file.currentRevision!, 'next', false);
 
       const firstStore = new FaultInjectingProposalReviewStore(new FileProposalReviewStore(fixture.state));
@@ -251,7 +366,7 @@ describe(ProposalReviewManager, () => {
         ],
       });
       markApplying(proposal);
-      await new FileProposalReviewStore(fixture.state).save([proposal]);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
       await new FileSystemWorkspaceTextStore(fixture.root).create('created.txt', 'created', false);
 
       const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
@@ -285,7 +400,7 @@ describe(ProposalReviewManager, () => {
         ],
       });
       markApplying(proposal);
-      await new FileProposalReviewStore(fixture.state).save([proposal]);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
       await new FileSystemWorkspaceTextStore(fixture.root).delete('file.txt', base.revision);
 
       const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
@@ -307,7 +422,7 @@ describe(ProposalReviewManager, () => {
       const proposal = await proposeRename(fixture);
       const file = proposal.files[0]!;
       markApplying(proposal);
-      await new FileProposalReviewStore(fixture.state).save([proposal]);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
       await new FileSystemWorkspaceTextStore(fixture.root).rename(
         file.sourcePath,
         file.targetPath,
@@ -333,7 +448,7 @@ describe(ProposalReviewManager, () => {
       const fixture = await createFixture();
       const proposal = await proposeRename(fixture);
       markApplying(proposal);
-      await new FileProposalReviewStore(fixture.state).save([proposal]);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
       await link(join(fixture.root, 'file.txt'), join(fixture.root, 'renamed.txt'));
 
       const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
@@ -401,20 +516,41 @@ class FaultInjectingProposalReviewStore implements ProposalReviewStore {
     this.failingSaveCalls.add(call);
   }
 
-  load(): Promise<EditProposal[]> {
-    return this.delegate.load();
+  load(workspaceIdentity: string): Promise<EditProposal[]> {
+    return this.delegate.load(workspaceIdentity);
   }
 
-  async save(proposals: readonly EditProposal[]): Promise<void> {
+  async save(proposals: readonly EditProposal[], workspaceIdentity: string): Promise<void> {
     this.saveCalls++;
     if (this.failingSaveCalls.delete(this.saveCalls)) {
       throw new EditError(EditFailureReason.PERSISTENCE, 'Injected checkpoint failure.');
     }
-    await this.delegate.save(proposals);
+    await this.delegate.save(proposals, workspaceIdentity);
   }
 
   clear(): Promise<void> {
     return this.delegate.clear();
+  }
+}
+
+class ThrowingLogger implements Logger {
+  forNamespace(): Logger {
+    return this;
+  }
+  trace(): never {
+    throw new Error('Injected logging failure.');
+  }
+  debug(): never {
+    throw new Error('Injected logging failure.');
+  }
+  info(): never {
+    throw new Error('Injected logging failure.');
+  }
+  warn(): never {
+    throw new Error('Injected logging failure.');
+  }
+  error(): never {
+    throw new Error('Injected logging failure.');
   }
 }
 
@@ -431,6 +567,10 @@ class CountingWorkspaceTextStore implements WorkspaceTextStore {
 
   get caseSensitive(): boolean {
     return this.delegate.caseSensitive;
+  }
+
+  get mutationConsistency() {
+    return this.delegate.mutationConsistency;
   }
 
   failAfterNextReplace(): void {

@@ -20,6 +20,7 @@ import { EditError } from '../editing/errors/EditError.ts';
 import { EditFailureReason } from '../editing/errors/EditFailureReason.ts';
 import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
+import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';
 
 const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
@@ -39,6 +40,7 @@ type ResolvedOptions = Omit<z.output<typeof fileSystemWorkspaceTextStoreOptionsS
 export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   readonly root: string;
   readonly caseSensitive: boolean;
+  readonly mutationConsistency = WorkspaceMutationConsistency.BEST_EFFORT_FILESYSTEM;
   private readonly options: ResolvedOptions;
 
   constructor(root: string, options: FileSystemWorkspaceTextStoreOptions = {}) {
@@ -182,6 +184,9 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     text: string,
     byteOrderMark: boolean,
   ): Promise<WorkspaceTextSnapshot> {
+    // POSIX filesystems do not expose compare-and-swap replacement by content
+    // revision. The second check narrows, but cannot eliminate, the interval in
+    // which a non-cooperating external writer can be overwritten by rename(2).
     const path = this.normalizePath(input);
     const current = await this.assertRevision(path, expectedRevision);
     const absolute = resolve(this.root, path);

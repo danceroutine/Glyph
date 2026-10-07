@@ -4,12 +4,14 @@ import { ConfigurationError } from '../../../errors/ConfigurationError.ts';
 import type { WorkspaceMutationOptions } from '../../../workspace/WorkspaceMutationOptions.ts';
 import type { WorkspaceTextSnapshot } from '../../../workspace/WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from '../../../workspace/WorkspaceTextStore.ts';
+import { WorkspaceMutationConsistency } from '../../../workspace/WorkspaceMutationConsistency.ts';
 import { ContextAttachmentError } from '../ContextAttachmentError.ts';
 import { ContextAttachmentFailureReason } from '../ContextAttachmentFailureReason.ts';
 import { ContextAttachmentService } from '../ContextAttachmentService.ts';
 
 class MutableWorkspaceTextStore implements WorkspaceTextStore {
   readonly root = '/workspace';
+  readonly mutationConsistency = WorkspaceMutationConsistency.ATOMIC_VERSIONED;
   readonly reads: string[] = [];
   private readonly snapshots = new Map<string, WorkspaceTextSnapshot>();
 

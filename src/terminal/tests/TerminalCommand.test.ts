@@ -14,4 +14,15 @@ describe('terminal commands', () => {
     expect(resolveTerminalCommand('/quit')).toEqual({ type: TerminalActionType.EXIT });
     expect(resolveTerminalCommand('/missing')).toBeUndefined();
   });
+
+  it('parses chat identifiers and human-authored titles from argument-bearing commands', () => {
+    expect(resolveTerminalCommand('/chat abc123')).toEqual({
+      type: TerminalActionType.SWITCH_CHAT,
+      chatId: 'abc123',
+    });
+    expect(resolveTerminalCommand('/rename   Authentication cleanup  ')).toEqual({
+      type: TerminalActionType.RENAME_CHAT,
+      title: 'Authentication cleanup',
+    });
+  });
 });

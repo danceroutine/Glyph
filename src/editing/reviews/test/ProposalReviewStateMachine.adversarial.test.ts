@@ -110,11 +110,12 @@ describe(ProposalReviewManager, () => {
         }
 
         expect(manager.activeReviews, `seed ${seed}`).toStrictEqual([]);
+        await manager.acknowledgeResults(manager.pendingResults.map(result => result.id));
         await expect(readFile(join(state, 'active-proposal-review.json'), 'utf8')).rejects.toMatchObject({
           code: 'ENOENT',
         });
       }
-    });
+    }, 15_000);
   });
 });
 

@@ -2,10 +2,13 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import OpenAI from 'openai';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatConfiguration } from '../../../configuration/ChatConfiguration.ts';
 import { describeError } from '../../../describeError.ts';
 import { ProjectAccess } from '../../../project/ProjectAccess.ts';
+import { CompositeToolRuntime } from '../../../tools/CompositeToolRuntime.ts';
+import { ToolInputKind } from '../../../tools/ToolInputKind.ts';
+import type { ToolRuntime } from '../../../tools/ToolRuntime.ts';
 import type { ProviderTraceEntry } from '../../../chat/ProviderTraceEntry.ts';
 import { OpenAIProvider } from '../OpenAIProvider.ts';
 
@@ -57,7 +60,7 @@ function sse(events: unknown[]): Response {
   );
 }
 
-function harness(replies: (() => Response | Promise<Response>)[], project?: ProjectAccess) {
+function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolRuntime) {
   const requests: Record<string, unknown>[] = [];
   const client = new OpenAI({
     apiKey: 'test-secret',
@@ -75,7 +78,7 @@ function harness(replies: (() => Response | Promise<Response>)[], project?: Proj
       configuration,
       async () => 'oauth-test-token',
       client,
-      project ?? new ProjectAccess(process.cwd()),
+      tools ?? new ProjectAccess(process.cwd()),
     ),
     requests,
   };
@@ -87,6 +90,7 @@ describe(OpenAIProvider, () => {
     it('streams split Unicode, reports usage, replays full state, and resets', async () => {
       const { provider, requests } = harness([
         () => sse([{ type: 'response.output_text.delta', delta: 'Hello 🧪' }, completed]),
+        () => sse([completed]),
         () => sse([completed]),
         () => sse([completed]),
       ]);
@@ -134,9 +138,51 @@ describe(OpenAIProvider, () => {
         ...completed.response.output,
         { role: 'user', content: 'second' },
       ]);
+      const saved = provider.exportState();
       provider.reset();
       await provider.send('fresh', options());
       expect(requests[2]?.input).toEqual([{ role: 'user', content: 'fresh' }]);
+      provider.restoreState(saved);
+      await provider.send('restored', options());
+      expect(requests[3]?.input).toEqual([
+        { role: 'user', content: 'first' },
+        ...completed.response.output,
+        { role: 'user', content: 'second' },
+        ...completed.response.output,
+        { role: 'user', content: 'restored' },
+      ]);
+      expect(() => provider.restoreState({ provider: 'somewhere-else', version: 1, data: { history: [] } })).toThrow(
+        'not compatible',
+      );
+    });
+
+    it('commits idempotent host context before the next model turn and preserves it across restore', async () => {
+      const { provider, requests } = harness([() => sse([completed]), () => sse([completed])]);
+      const event = {
+        schemaVersion: 1 as const,
+        id: 'edit-review-result:review-1',
+        type: 'edit_review_result',
+        payload: {
+          accepted: [{ path: 'src/a.ts', resultingRevision: 'revision-2' }],
+          rejected: [{ path: 'src/b.ts', resultingRevision: 'revision-1' }],
+        },
+      };
+
+      provider.recordContext([event]);
+      provider.recordContext([event]);
+      const saved = provider.exportState();
+      provider.restoreState(saved);
+      await provider.send('Continue from the review.', options());
+
+      const input = requests[0]!.input as Array<{ role: string; content: string }>;
+      expect(input).toHaveLength(2);
+      expect(input[0]?.role).toBe('developer');
+      expect(JSON.parse(input[0]!.content)).toEqual({ schema: 'glyph.context-event.v1', event });
+      expect(input[1]).toEqual({ role: 'user', content: 'Continue from the review.' });
+
+      await provider.send('Continue again.', options());
+      const nextInput = requests[1]!.input as Array<{ role: string; content: string }>;
+      expect(nextInput.filter(item => item.role === 'developer')).toHaveLength(1);
     });
 
     it('falls back to completed output when the stream omits text deltas', async () => {
@@ -151,6 +197,35 @@ describe(OpenAIProvider, () => {
       });
 
       expect(text).toBe('Hello');
+    });
+
+    it('translates independently composed tool domains without provider coupling', async () => {
+      const interaction: ToolRuntime = {
+        definitions: [
+          {
+            namespace: 'interaction',
+            name: 'propose_question',
+            description: 'Ask the human.',
+            inputKind: ToolInputKind.JSON,
+            parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+          },
+        ],
+        execute: vi.fn(async () => '{}'),
+      };
+      const { provider, requests } = harness(
+        [() => sse([completed])],
+        new CompositeToolRuntime([new ProjectAccess(process.cwd()), interaction]),
+      );
+
+      await provider.send('hello', options());
+
+      expect(requests[0]?.tools).toEqual([
+        expect.objectContaining({ name: 'project' }),
+        expect.objectContaining({
+          name: 'interaction',
+          tools: [expect.objectContaining({ name: 'propose_question', type: 'function' })],
+        }),
+      ]);
     });
 
     it('keeps attached workspace snapshots separate from the visible user text', async () => {

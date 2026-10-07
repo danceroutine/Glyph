@@ -1,7 +1,14 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatProvider } from '../../chat/ChatProvider.ts';
 import { toChatRequest } from '../../chat/ChatRequest.ts';
 import type { ChatProviderFactory } from '../../chat/ChatProviderFactory.ts';
+import type { ChatProviderState } from '../../chat/ChatProviderState.ts';
+import { ChatSessionManager } from '../../chat/sessions/ChatSessionManager.ts';
+import type { ChatSessionRecord } from '../../chat/sessions/ChatSessionRecord.ts';
+import type { ChatSessionStore } from '../../chat/sessions/ChatSessionStore.ts';
 import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
 import type { ChatResponsePart } from '../../chat/ChatResponsePart.ts';
 import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
@@ -14,6 +21,8 @@ import type { OpenAIAccount } from '../../providers/openai/auth/OpenAIAccount.ts
 import type { OpenAIAccountStore } from '../../providers/openai/auth/OpenAIAccountStore.ts';
 import type { OpenAISavedState } from '../../providers/openai/auth/OpenAISavedState.ts';
 import type { OpenAISessionService } from '../../providers/openai/auth/OpenAISessionService.ts';
+import type { ProjectContext } from '../../project/context/ProjectContext.ts';
+import { ProjectContextResolver } from '../../project/context/ProjectContextResolver.ts';
 import { GlyphService } from '../GlyphService.ts';
 
 const configuration: OpenAIConfiguration = {
@@ -57,7 +66,17 @@ class FakeSession implements OpenAISessionService {
 class FakeProvider implements ChatProvider {
   readonly model = 'model-a';
   readonly reset = vi.fn();
+  readonly recordContext = vi.fn();
   readonly prompts: string[] = [];
+  private state: ChatProviderState = { provider: 'fake', version: 1, data: null };
+
+  exportState(): ChatProviderState {
+    return this.state;
+  }
+
+  restoreState(state: ChatProviderState): void {
+    this.state = state;
+  }
 
   async send(
     input: Parameters<ChatProvider['send']>[0],
@@ -275,4 +294,70 @@ describe(GlyphService, () => {
       expect(created[1]?.prompts).toEqual(['second-session']);
     });
   });
+
+  describe('project chat sessions', () => {
+    it('creates, names, lists, restores, and renames durable chats through the headless service', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'glyph-service-chats-'));
+      await mkdir(join(root, '.git'));
+      try {
+        const chatStore = new MemoryChatSessionStore();
+        const sessions = new ChatSessionManager(chatStore, await ProjectContextResolver.folder(root), () => 'chat-id');
+        const providers: ChatProviderFactory = { create: vi.fn(() => new FakeProvider()) };
+        const service = new GlyphService(
+          new MemoryStore(),
+          new FakeSession(),
+          { list: async () => [{ slug: 'model-a', name: 'Model A' }] },
+          providers,
+          logger(),
+          configuration,
+          {},
+          undefined,
+          undefined,
+          undefined,
+          sessions,
+        );
+        await service.initialize();
+
+        const chat = await service.createChat(account, { slug: 'model-a', name: 'Model A' });
+        await chat.send('Please review the project architecture', { push: () => {} }, new AbortController().signal);
+
+        expect(service.listChats(account)).toEqual([
+          expect.objectContaining({
+            id: 'chat-id',
+            title: 'Review Project Architecture',
+            titleOrigin: 'generated',
+            turnCount: 1,
+          }),
+        ]);
+        expect(service.openChat('chat', account).transcript).toHaveLength(1);
+        await expect(service.renameChat(chat.id, 'Architecture review')).resolves.toMatchObject({
+          title: 'Architecture review',
+          titleOrigin: 'human',
+        });
+        expect(() => service.openChat(chat.id, { ...account, subject: 'someone-else' })).toThrow(
+          'different ChatGPT account',
+        );
+        expect(providers.create).toHaveBeenLastCalledWith('model-a', expect.any(Function), expect.any(Object));
+        await service.dispose();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  });
 });
+
+class MemoryChatSessionStore implements ChatSessionStore {
+  private records: readonly ChatSessionRecord[] = [];
+
+  async initialize(_context: ProjectContext): Promise<void> {}
+
+  async load(projectContextId: string): Promise<readonly ChatSessionRecord[]> {
+    return structuredClone(this.records.filter(record => record.projectContextId === projectContextId));
+  }
+
+  async save(record: ChatSessionRecord): Promise<void> {
+    this.records = [...this.records.filter(candidate => candidate.id !== record.id), structuredClone(record)];
+  }
+
+  async dispose(): Promise<void> {}
+}

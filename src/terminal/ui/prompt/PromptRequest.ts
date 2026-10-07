@@ -2,10 +2,20 @@ import type { WorkspacePathIndex } from '../../../context/search/WorkspacePathIn
 import type { UserPromptDraft } from './UserPromptDraft.ts';
 
 /** Event bridge exposed to the prompt component for one pending host request. */
-export interface PromptRequest {
+interface PromptRequestBase {
   id: number;
   label: string;
   pendingChanges?: number;
   files?: WorkspacePathIndex;
+}
+
+export interface ActivePromptRequest extends PromptRequestBase {
+  acceptsSubmission: true;
   complete: (draft: UserPromptDraft) => void;
 }
+
+export interface DraftPromptRequest extends PromptRequestBase {
+  acceptsSubmission: false;
+}
+
+export type PromptRequest = ActivePromptRequest | DraftPromptRequest;

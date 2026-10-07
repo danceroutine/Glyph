@@ -21,7 +21,7 @@
     "check": "pnpm format:check && pnpm lint && pnpm context-index:check && pnpm context-index:build && tsc --noEmit",
     "test": "pnpm context-index:test && pnpm test:unit && pnpm test:e2e",
     "test:unit": "vitest run --exclude='**/*.e2e.test.ts' --coverage",
-    "test:e2e": "pnpm context-index:build && vitest run --pool=forks --maxWorkers=1 src/application/tests/EditingLoop.e2e.test.ts src/application/tests/ContextInjection.e2e.test.ts src/context/search/tests/RustWorkspacePathIndex.e2e.test.ts src/terminal/tests/TerminalEditing.e2e.test.ts",
+    "test:e2e": "pnpm context-index:build && vitest run --pool=forks --maxWorkers=1 src/application/tests/EditingLoop.e2e.test.ts src/application/tests/ContextInjection.e2e.test.ts src/context/search/tests/RustWorkspacePathIndex.e2e.test.ts src/project/tests/MultiRootProjectAccess.e2e.test.ts src/terminal/tests/TerminalEditing.e2e.test.ts",
     "test:transform-performance": "for size in 1 5 10 20 50; do node --expose-gc --import tsx src/editing/documents/test/TextEditTransformer.benchmark.ts $size; done",
     "test:watch": "vitest",
     "todo:dev": "pnpm --dir examples/todo-app dev",
@@ -29,10 +29,12 @@
     "todo:preview": "pnpm --dir examples/todo-app preview"
   },
   "dependencies": {
+    "better-sqlite3": "13.0.3",
     "cli-highlight": "2.1.11",
     "diff": "9.0.0",
     "ink": "8.0.0",
     "jose": "^6.2.12",
+    "jsonc-parser": "3.3.1",
     "marked": "^18.1.0",
     "openai": "7.23.0",
     "react": "19.3.0",
@@ -41,6 +43,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
     "@types/node": "^22.0.0",
     "@types/react": "19.3.0",
     "@vitest/coverage-v8": "5.0.3",

@@ -224,7 +224,167 @@ describe(TerminalUI, () => {
       ui.close();
     });
   });
+
+  describe(TerminalUI.prototype.present, () => {
+    it('collects validated single, multiple, and Other answers through redirected IO', async () => {
+      const input = new PassThrough();
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(input, output, new MemoryOutput(false));
+      const result = ui.present(
+        {
+          title: 'Decisions',
+          questions: [question('single', false), question('multiple', true), question('other', false)],
+        },
+        new AbortController().signal,
+      );
+
+      await waitUntil(() => output.value.includes('Choice:'));
+      input.write('3\n');
+      await waitUntil(() => occurrences(output.value, 'Choose one of the listed options') === 1);
+      input.write('2\n');
+      await waitUntil(() => output.value.includes('Choices (comma-separated):'));
+      input.write('1,3\n');
+      await waitUntil(() => occurrences(output.value, 'Choose one of the listed options') === 2);
+      input.write('1,2,1\n');
+      await waitUntil(() => occurrences(output.value, 'Choice:') >= 3);
+      input.write('o\n');
+      await waitUntil(() => output.value.includes('Other:'));
+      input.write('\n');
+      await waitUntil(() => occurrences(output.value, 'Choose one of the listed options') === 3);
+      input.write('o\n');
+      await waitUntil(() => occurrences(output.value, 'Other:') === 2);
+      input.write('Custom answer\n');
+
+      await expect(result).resolves.toEqual({
+        answers: [
+          { questionId: 'single', type: 'SELECTION', optionIds: ['second'] },
+          { questionId: 'multiple', type: 'SELECTION', optionIds: ['first', 'second'] },
+          { questionId: 'other', type: 'OTHER', text: 'Custom answer' },
+        ],
+      });
+      expect(output.value).toContain('Decisions');
+      expect(output.value).toContain('Choices (comma-separated):');
+      expect(output.value).toContain('Choose one of the listed options');
+      ui.close();
+    });
+
+    it('presents an Ink question during a streamed response', async () => {
+      const terminal = new VirtualTTY();
+      const output = new MemoryOutput(true);
+      const ui = new TerminalUI(terminal, output, new MemoryOutput(false));
+      ui.beginAssistantResponse();
+      const result = ui.present({ questions: [question('single', false)] }, new AbortController().signal);
+
+      await waitUntil(() => stripVTControlCharacters(output.value).includes('Choose for single'));
+      terminal.push('\r');
+
+      await expect(result).resolves.toEqual({
+        answers: [{ questionId: 'single', type: 'SELECTION', optionIds: ['first'] }],
+      });
+      ui.close();
+    });
+  });
+
+  describe('chat session presentation', () => {
+    it('lists project chats, marks the active chat, and explains an empty catalog', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      const first = chatSummary('first-chat', 'First chat', 1);
+      const second = chatSummary('second-chat', 'Second chat', 2);
+
+      ui.showChats([], undefined);
+      ui.showChats([first, second], second.id);
+      ui.close();
+
+      expect(output.value).toContain('No saved chats are available');
+      expect(output.value).toContain('  first-ch  First chat  · 1 turn');
+      expect(output.value).toContain('› second-c  Second chat  · 2 turns');
+      expect(output.value).toContain('Use /chat <ID> to switch.');
+    });
+
+    it('replays the visible transcript and confirms human-authored names', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+
+      ui.showChatActivated(chatSummary('chat-123456', 'Saved work', 2), [
+        {
+          userText: 'First question',
+          attachmentPaths: [],
+          reasoningSummary: 'Checked context',
+          assistantText: 'First answer',
+          createdAt: '2026-10-06T00:00:00.000Z',
+        },
+        {
+          userText: 'Second question',
+          attachmentPaths: [],
+          reasoningSummary: '',
+          assistantText: 'Second answer',
+          createdAt: '2026-10-06T00:00:01.000Z',
+        },
+      ]);
+      ui.showChatActivated(chatSummary('empty-chat', 'New chat', 0), []);
+      ui.showChatRenamed('Human title');
+      ui.close();
+
+      expect(output.value).toContain('Chat chat-123  Saved work  · model');
+      expect(output.value).toContain('you> First question\nthinking> Checked context\nassistant> First answer');
+      expect(output.value).toContain('you> Second question\nassistant> Second answer');
+      expect(output.value).toContain('Chat empty-ch  New chat  · model');
+      expect(output.value).toContain('Chat renamed to "Human title".');
+    });
+
+    it('replaces the Ink transcript when a new chat is activated', async () => {
+      const terminal = new VirtualTTY();
+      const output = new MemoryOutput(true);
+      const ui = new TerminalUI(terminal, output, new MemoryOutput(false));
+
+      ui.showChatActivated(chatSummary('old-chat', 'Old chat', 1), [
+        {
+          userText: 'Old question',
+          attachmentPaths: [],
+          reasoningSummary: '',
+          assistantText: 'Old answer',
+          createdAt: '2026-10-06T00:00:00.000Z',
+        },
+      ]);
+      ui.showChatActivated(chatSummary('new-chat', 'New chat', 0), []);
+
+      await waitUntil(() => stripVTControlCharacters(output.value).includes('Chat new-chat  New chat  · model'));
+      const renderer = (ui as unknown as { renderer: { entries: unknown[] } }).renderer;
+      expect(renderer.entries).toHaveLength(1);
+      ui.close();
+    });
+  });
 });
+
+function chatSummary(id: string, title: string, turnCount: number) {
+  return {
+    schemaVersion: 2 as const,
+    id,
+    title,
+    titleOrigin: 'generated' as const,
+    projectContextId: 'project-context',
+    accountClientId: 'client',
+    accountSubject: 'subject',
+    modelSlug: 'model',
+    modelName: 'Model',
+    createdAt: '2026-10-06T00:00:00.000Z',
+    updatedAt: '2026-10-06T00:00:00.000Z',
+    turnCount,
+  };
+}
+
+function question(id: string, allowMultiple: boolean) {
+  return {
+    id,
+    prompt: `Choose for ${id}.`,
+    options: [
+      { id: 'first', label: 'First' },
+      { id: 'second', label: 'Second' },
+    ],
+    allowMultiple,
+  };
+}
 
 class VirtualTTY extends Duplex {
   readonly isTTY = true;
@@ -304,4 +464,8 @@ async function type(terminal: VirtualTTY, value: string): Promise<void> {
     terminal.push(character);
     await new Promise<void>(resolve => setImmediate(resolve));
   }
+}
+
+function occurrences(value: string, search: string): number {
+  return value.split(search).length - 1;
 }

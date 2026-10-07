@@ -5,6 +5,8 @@ import type { Instance } from 'ink';
 import type { ChatResponsePart } from '../../../chat/ChatResponsePart.ts';
 import type { WorkspacePathIndex } from '../../../context/search/WorkspacePathIndex.ts';
 import type { ProposalReviewManager } from '../../../editing/reviews/ProposalReviewManager.ts';
+import type { QuestionForm } from '../../../interaction/questions/QuestionForm.ts';
+import type { QuestionFormResult } from '../../../interaction/questions/QuestionFormResult.ts';
 import { Deferred } from './Deferred.ts';
 import { PromptRecord } from '../prompt/PromptRecord.presentational.tsx';
 import type { PromptRequest } from '../prompt/PromptRequest.ts';
@@ -18,6 +20,8 @@ import type { TerminalRendererSnapshot } from '../shell/TerminalRendererSnapshot
 import { WiredTerminalRoot } from '../shell/TerminalRoot.wired.tsx';
 import type { TranscriptEntry } from '../shell/TranscriptEntry.ts';
 import { WiredResponse } from '../response/Response.wired.tsx';
+import type { QuestionFormRequest } from '../question/QuestionFormRequest.ts';
+import { QuestionFormReceipt } from '../question/QuestionFormReceipt.presentational.tsx';
 
 /**
  * Owns the single interactive Ink tree for the terminal host. All prompt,
@@ -30,9 +34,16 @@ export class TerminalInkRenderer {
   private readonly entries: TranscriptEntry[] = [];
   private responseParts: ChatResponsePart[] | undefined;
   private promptRequest: PromptRequest | undefined;
+  private questionRequest: QuestionFormRequest | undefined;
   private reviewRequest: ProposalReviewRequest | undefined;
   private promptResult: Deferred<UserPromptDraft> | undefined;
+  private questionResult: Deferred<QuestionFormResult> | undefined;
   private reviewResult: Deferred<void> | undefined;
+  private chatPromptContext: {
+    label: string;
+    files?: WorkspacePathIndex;
+    pendingChanges: number;
+  } = { label: 'you> ', pendingChanges: 0 };
   private nextId = 1;
   private closed = false;
 
@@ -52,7 +63,10 @@ export class TerminalInkRenderer {
       exitOnCtrlC: false,
       patchConsole: false,
       interactive: true,
-      incrementalRendering: true,
+      // The full-height layout can move response rows between frames. A full
+      // redraw prevents incremental line diffs from leaving transient UI,
+      // such as the thinking pulser, behind after completion.
+      incrementalRendering: false,
       maxFps: 30,
     });
     input.once('end', this.handleInputClosed);
@@ -72,8 +86,24 @@ export class TerminalInkRenderer {
     this.refresh();
   }
 
+  replaceTranscript(content: ReactNode): void {
+    this.entries.length = 0;
+    this.entries.push({ id: this.nextId++, content });
+    this.responseParts = undefined;
+    this.refresh();
+  }
+
   beginResponse(): void {
     this.responseParts = [];
+    if (!this.promptRequest && !this.questionRequest && !this.reviewRequest) {
+      this.promptRequest = {
+        id: this.nextId++,
+        label: this.chatPromptContext.label,
+        acceptsSubmission: false,
+        pendingChanges: this.chatPromptContext.pendingChanges,
+        ...(this.chatPromptContext.files ? { files: this.chatPromptContext.files } : {}),
+      };
+    }
     this.refresh();
   }
 
@@ -99,11 +129,18 @@ export class TerminalInkRenderer {
     files?: WorkspacePathIndex,
     pendingChanges = 0,
   ): Promise<UserPromptDraft> {
-    this.assertAvailable();
+    const draftRequest =
+      this.promptRequest?.acceptsSubmission === false && this.promptRequest.label === label
+        ? this.promptRequest
+        : undefined;
+    this.assertAvailable(draftRequest);
     signal.throwIfAborted();
+    if (label === 'you> ') {
+      this.chatPromptContext = { label, pendingChanges, ...(files ? { files } : {}) };
+    }
     const result = new Deferred<UserPromptDraft>();
     this.promptResult = result;
-    const id = this.nextId++;
+    const id = draftRequest?.id ?? this.nextId++;
     const cleanup = (): void => signal.removeEventListener('abort', abort);
     const abort = (): void => {
       if (this.promptRequest?.id !== id) return;
@@ -116,6 +153,7 @@ export class TerminalInkRenderer {
     this.promptRequest = {
       id,
       label,
+      acceptsSubmission: true,
       pendingChanges,
       ...(files ? { files } : {}),
       complete: draft => {
@@ -144,7 +182,8 @@ export class TerminalInkRenderer {
 
   async review(manager: ProposalReviewManager, signal: AbortSignal, interrupt: () => void): Promise<void> {
     if (manager.activeReviews.length === 0) return;
-    this.assertAvailable();
+    const draftRequest = this.promptRequest?.acceptsSubmission === false ? this.promptRequest : undefined;
+    this.assertAvailable(draftRequest);
     signal.throwIfAborted();
     const result = new Deferred<void>();
     this.reviewResult = result;
@@ -173,6 +212,41 @@ export class TerminalInkRenderer {
     return result.promise;
   }
 
+  async presentQuestionForm(
+    form: QuestionForm,
+    signal: AbortSignal,
+    interrupt: () => void,
+  ): Promise<QuestionFormResult> {
+    const draftRequest = this.promptRequest?.acceptsSubmission === false ? this.promptRequest : undefined;
+    this.assertAvailable(draftRequest);
+    signal.throwIfAborted();
+    const result = new Deferred<QuestionFormResult>();
+    this.questionResult = result;
+    const id = this.nextId++;
+    const cleanup = (): void => signal.removeEventListener('abort', abort);
+    const complete = (formResult: QuestionFormResult): void => {
+      if (this.questionRequest?.id !== id) return;
+      this.questionRequest = undefined;
+      this.questionResult = undefined;
+      cleanup();
+      this.entries.push({ id, content: <QuestionFormReceipt form={form} result={formResult} /> });
+      this.refresh();
+      result.resolve(formResult);
+    };
+    const abort = (): void => {
+      if (this.questionRequest?.id !== id) return;
+      this.questionRequest = undefined;
+      this.questionResult = undefined;
+      cleanup();
+      this.refresh();
+      result.reject(signal.reason ?? new Error('Question cancelled.'));
+    };
+    this.questionRequest = { id, form, complete, interrupt };
+    signal.addEventListener('abort', abort, { once: true });
+    this.refresh();
+    return result.promise;
+  }
+
   requestInterrupt(): void {
     this.events.emit('SIGINT');
   }
@@ -182,19 +256,24 @@ export class TerminalInkRenderer {
     this.closed = true;
     const cancellation = new Error('Session closed.');
     this.promptResult?.reject(cancellation);
+    this.questionResult?.reject(cancellation);
     this.reviewResult?.reject(cancellation);
     this.promptResult = undefined;
+    this.questionResult = undefined;
     this.reviewResult = undefined;
     this.promptRequest = undefined;
+    this.questionRequest = undefined;
     this.reviewRequest = undefined;
     this.input.off('end', this.handleInputClosed);
     this.input.off('close', this.handleInputClosed);
     this.instance.cleanup();
   }
 
-  private assertAvailable(): void {
+  private assertAvailable(reusablePrompt?: PromptRequest): void {
     if (this.closed) throw new Error('Session closed.');
-    if (this.promptRequest || this.reviewRequest) throw new Error('The terminal is already waiting for input.');
+    if ((this.promptRequest && this.promptRequest !== reusablePrompt) || this.questionRequest || this.reviewRequest) {
+      throw new Error('The terminal is already waiting for input.');
+    }
   }
 
   private refresh(): void {
@@ -207,6 +286,7 @@ export class TerminalInkRenderer {
       entries: [...this.entries],
       responseParts: this.responseParts ? [...this.responseParts] : undefined,
       prompt: this.promptRequest,
+      ...(this.questionRequest ? { question: this.questionRequest } : {}),
       review: this.reviewRequest,
       interrupt: () => this.requestInterrupt(),
     };

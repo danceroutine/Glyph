@@ -4,6 +4,7 @@ import type { TranscriptEntry } from './TranscriptEntry.ts';
 
 export interface TerminalRootProps {
   entries: readonly TranscriptEntry[];
+  display?: 'flex' | 'none';
   height: number;
   response: ReactNode;
   interaction: ReactNode;
@@ -43,9 +44,15 @@ function TranscriptViewport({ entries, response }: TranscriptViewportProps): Rea
   );
 }
 
-export function TerminalRoot({ entries, height, response, interaction }: TerminalRootProps): ReactElement {
+export function TerminalRoot({
+  entries,
+  display = 'flex',
+  height,
+  response,
+  interaction,
+}: TerminalRootProps): ReactElement {
   return (
-    <Box flexDirection="column" height={height} overflow="hidden" width="100%">
+    <Box display={display} flexDirection="column" height={height} overflow="hidden" width="100%">
       <TranscriptViewport entries={entries} response={response} />
       {interaction}
     </Box>

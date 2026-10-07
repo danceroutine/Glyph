@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import type { ChatResponsePart } from '../../../chat/ChatResponsePart.ts';
 import type { PromptRequest } from '../prompt/PromptRequest.ts';
 import type { ProposalReviewRequest } from '../proposal/ProposalReviewRequest.ts';
+import type { QuestionFormRequest } from '../question/QuestionFormRequest.ts';
 import type { TerminalRendererSnapshot } from './TerminalRendererSnapshot.ts';
 import type { TranscriptEntry } from './TranscriptEntry.ts';
 
@@ -10,6 +11,7 @@ export interface TerminalRootState {
   entries: readonly TranscriptEntry[];
   responseParts: readonly ChatResponsePart[] | undefined;
   prompt: PromptRequest | undefined;
+  question: QuestionFormRequest | undefined;
   review: ProposalReviewRequest | undefined;
   interrupt: () => void;
 }
@@ -20,9 +22,10 @@ export function useTerminalRootState(snapshot: TerminalRendererSnapshot): Termin
       entries: snapshot.entries,
       responseParts: snapshot.responseParts,
       prompt: snapshot.prompt,
+      question: snapshot.question,
       review: snapshot.review,
       interrupt: snapshot.interrupt,
     }),
-    [snapshot.entries, snapshot.interrupt, snapshot.prompt, snapshot.responseParts, snapshot.review],
+    [snapshot.entries, snapshot.interrupt, snapshot.prompt, snapshot.question, snapshot.responseParts, snapshot.review],
   );
 }
