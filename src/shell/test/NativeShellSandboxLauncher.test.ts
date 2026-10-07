@@ -41,12 +41,11 @@ describe(NativeShellSandboxLauncher, () => {
           '/state',
           '--workspace-root',
           '/project',
-          '--workspace-root',
-          '/second',
           '--protected-path',
           '/project/worker',
         ]),
       );
+      expect(arguments_).not.toContain('/second');
       expect(arguments_.slice(-3)).toEqual(['/bin/sh', '-c', 'rg needle']);
       const policyIndex = arguments_.indexOf('--workspace-policy');
       expect(JSON.parse(arguments_[policyIndex + 1]!)).toMatchObject({

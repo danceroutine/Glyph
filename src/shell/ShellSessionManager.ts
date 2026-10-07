@@ -6,6 +6,7 @@ import type { ShellCommandAuthorizer } from './ShellCommandAuthorizer.ts';
 import type { ShellCommandResult } from './ShellCommandResult.ts';
 import type { ShellSessionRegistry } from './ShellSessionRegistry.ts';
 import type { ShellSessionSnapshot } from './ShellSessionSnapshot.ts';
+import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
 import { ShellSessionStatus } from './ShellSessionStatus.ts';
 import type { ShellWakeEvent } from './ShellWakeEvent.ts';
 import type { ShellWorkingDirectoryResolver } from './ShellWorkingDirectoryResolver.ts';
@@ -17,6 +18,7 @@ const DEFAULT_MAX_SESSIONS = 16;
 
 interface RunningCommand {
   output: string;
+  readonly sandboxProfile: ShellSandboxProfile;
   readonly resolve: (result: { output: string; exitCode: number }) => void;
   readonly reject: (error: Error) => void;
 }
@@ -28,6 +30,7 @@ interface ExecuteShellCommandOptions {
   readonly wakeOn?: string;
   readonly timeoutMs?: number;
   readonly signal: AbortSignal;
+  readonly ownerChatId?: string;
 }
 
 /** Owns authorized shell processes, output observation, wake events, and deterministic cleanup. */
@@ -49,7 +52,13 @@ export class ShellSessionManager implements ShellSessionRegistry {
 
   get sessions(): readonly ShellSessionSnapshot[] {
     return [...this.terminals.values()]
-      .filter(terminal => terminal.snapshot.background)
+      .filter(terminal => terminal.snapshot.background && terminal.snapshot.ownerChatId === this.ownerChatId)
+      .map(terminal => terminal.snapshot);
+  }
+
+  sessionsFor(ownerChatId: string): readonly ShellSessionSnapshot[] {
+    return [...this.terminals.values()]
+      .filter(terminal => terminal.snapshot.background && terminal.snapshot.ownerChatId === ownerChatId)
       .map(terminal => terminal.snapshot);
   }
 
@@ -77,7 +86,8 @@ export class ShellSessionManager implements ShellSessionRegistry {
   async execute(command: string, options: ExecuteShellCommandOptions): Promise<ShellCommandResult> {
     options.signal.throwIfAborted();
     this.assertAvailable();
-    const existing = options.terminalId ? this.requireTerminal(options.terminalId) : undefined;
+    const ownerChatId = options.ownerChatId ?? this.ownerChatId;
+    const existing = options.terminalId ? this.requireTerminal(options.terminalId, ownerChatId) : undefined;
     if (!existing && this.terminals.size >= this.maxSessions) {
       throw new Error(`At most ${this.maxSessions} shell terminals may be active.`);
     }
@@ -96,7 +106,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
     if (!existing && this.terminals.size >= this.maxSessions) {
       throw new Error(`At most ${this.maxSessions} shell terminals may be active.`);
     }
-    const terminal = existing ?? this.createTerminal(workingDirectory, options.background === true, this.ownerChatId);
+    const terminal = existing ?? this.createTerminal(workingDirectory, options.background === true, ownerChatId);
     if (options.wakeOn !== undefined) terminal.setWakePattern(options.wakeOn);
     let completion: Promise<{ output: string; exitCode: number }>;
     try {
@@ -123,19 +133,25 @@ export class ShellSessionManager implements ShellSessionRegistry {
       if (existing) await terminal.terminate();
       throw error;
     } finally {
-      if (!existing) await this.close(terminal.snapshot.id);
+      if (!existing) await this.close(terminal.snapshot.id, ownerChatId);
     }
   }
 
-  writeInput(terminalId: string, input: string, appendNewline: boolean, wakeOn?: string): void {
+  writeInput(
+    terminalId: string,
+    input: string,
+    appendNewline: boolean,
+    wakeOn?: string,
+    ownerChatId = this.ownerChatId,
+  ): void {
     this.assertAvailable();
-    const terminal = this.requireTerminal(terminalId);
+    const terminal = this.requireTerminal(terminalId, ownerChatId);
     if (wakeOn !== undefined) terminal.setWakePattern(wakeOn);
     terminal.writeInput(`${input}${appendNewline ? '\n' : ''}`);
   }
 
-  async close(terminalId: string): Promise<void> {
-    const terminal = this.requireTerminal(terminalId);
+  async close(terminalId: string, ownerChatId = this.ownerChatId): Promise<void> {
+    const terminal = this.requireTerminal(terminalId, ownerChatId);
     this.terminals.delete(terminalId);
     this.changed();
     await terminal.terminate();
@@ -182,9 +198,11 @@ export class ShellSessionManager implements ShellSessionRegistry {
     return terminal;
   }
 
-  private requireTerminal(terminalId: string): ManagedShellSession {
+  private requireTerminal(terminalId: string, ownerChatId: string | undefined): ManagedShellSession {
     const terminal = this.terminals.get(terminalId);
-    if (!terminal) throw new Error(`Unknown shell terminal: ${terminalId}`);
+    if (!terminal || terminal.snapshot.ownerChatId !== ownerChatId) {
+      throw new Error(`Unknown shell terminal: ${terminalId}`);
+    }
     return terminal;
   }
 
@@ -276,7 +294,7 @@ class ManagedShellSession {
     child.stderr!.on('data', value => this.appendOutput(String(value)));
     this.options.changed();
     const completion = new Promise<{ output: string; exitCode: number }>((resolve, reject) => {
-      this.active = { output: '', resolve, reject };
+      this.active = { output: '', sandboxProfile: authorization.sandboxProfile, resolve, reject };
       child.once('error', error => {
         if (this.child !== child) return;
         this.status = ShellSessionStatus.EXITED;
@@ -310,6 +328,11 @@ class ManagedShellSession {
     if (this.status !== ShellSessionStatus.RUNNING) {
       throw new Error(
         'Raw shell input is only allowed while a command is running. Use execute_shell for a new command.',
+      );
+    }
+    if (this.active?.sandboxProfile === ShellSandboxProfile.FULL_ACCESS) {
+      throw new Error(
+        'Raw input to a full-access command is not authorized. Close it and use execute_shell so the complete command can be reviewed.',
       );
     }
     this.child?.stdin?.write(input);

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ToolDefinition } from '../tools/ToolDefinition.ts';
 import { ToolInputKind } from '../tools/ToolInputKind.ts';
 import type { ToolRuntime } from '../tools/ToolRuntime.ts';
+import type { ToolExecutionContext } from '../tools/ToolExecutionContext.ts';
 import type { ShellSessionManager } from './ShellSessionManager.ts';
 import { ShellToolName } from './ShellToolName.ts';
 import { ShellToolNamespace } from './ShellToolNamespace.ts';
@@ -76,8 +77,15 @@ export class ShellToolRuntime implements ToolRuntime {
 
   constructor(private readonly sessions: ShellSessionManager) {}
 
-  async execute(name: string, input: string, signal = new AbortController().signal): Promise<string> {
+  async execute(
+    name: string,
+    input: string,
+    signal = new AbortController().signal,
+    context?: ToolExecutionContext,
+  ): Promise<string> {
     try {
+      const ownerChatId = context?.chat?.id;
+      if (!ownerChatId) throw new Error('Shell tools require an owning chat execution context.');
       switch (name) {
         case ShellToolName.EXECUTE: {
           const {
@@ -95,6 +103,7 @@ export class ShellToolRuntime implements ToolRuntime {
             ...(wakeOn === null ? {} : { wakeOn }),
             ...(timeoutMs === null ? {} : { timeoutMs }),
             signal,
+            ownerChatId,
           });
           return JSON.stringify(serializeCommandResult(result));
         }
@@ -105,18 +114,18 @@ export class ShellToolRuntime implements ToolRuntime {
             append_newline: appendNewline,
             wake_on: wakeOn,
           } = writeInputArgumentsSchema.parse(JSON.parse(input));
-          this.sessions.writeInput(terminalId, value, appendNewline, wakeOn ?? undefined);
+          this.sessions.writeInput(terminalId, value, appendNewline, wakeOn ?? undefined, ownerChatId);
           return JSON.stringify({ terminal_id: terminalId, status: 'input_written' });
         }
         case ShellToolName.CLOSE: {
           const { terminal_id: terminalId } = closeArgumentsSchema.parse(JSON.parse(input));
-          await this.sessions.close(terminalId);
+          await this.sessions.close(terminalId, ownerChatId);
           return JSON.stringify({ terminal_id: terminalId, status: 'closed' });
         }
         case ShellToolName.LIST:
           listArgumentsSchema.parse(JSON.parse(input));
           return JSON.stringify({
-            terminals: this.sessions.sessions.map(session => ({
+            terminals: this.sessions.sessionsFor(ownerChatId).map(session => ({
               terminal_id: session.id,
               ...(session.ownerChatId ? { owner_chat_id: session.ownerChatId } : {}),
               working_directory: session.workingDirectory,

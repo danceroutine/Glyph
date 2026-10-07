@@ -5,8 +5,13 @@ export enum ShellPermissionMode {
 }
 
 export interface ShellPermissionPolicy {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly projectContextId: string;
   readonly mode: ShellPermissionMode;
-  readonly allowedCommands: readonly string[];
+  readonly allowedCommands: readonly ShellCommandGrant[];
+}
+
+export interface ShellCommandGrant {
+  readonly command: string;
+  readonly workingDirectory: string;
 }

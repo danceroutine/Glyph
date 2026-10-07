@@ -4,6 +4,10 @@ import { ShellToolName } from '../ShellToolName.ts';
 import { ShellToolNamespace } from '../ShellToolNamespace.ts';
 import { ShellToolRuntime } from '../ShellToolRuntime.ts';
 
+const context = {
+  chat: { id: 'chat-one', accountProvider: 'openai', accountId: 'account-one' },
+};
+
 describe(ShellToolRuntime, () => {
   describe('definitions', () => {
     it('exposes provider-neutral strict JSON lifecycle tools', () => {
@@ -36,6 +40,7 @@ describe(ShellToolRuntime, () => {
           timeout_ms: null,
         }),
         signal,
+        context,
       );
       await runtime.execute(
         ShellToolName.EXECUTE,
@@ -48,9 +53,14 @@ describe(ShellToolRuntime, () => {
           timeout_ms: 500,
         }),
         signal,
+        context,
       );
 
-      expect(manager.execute).toHaveBeenNthCalledWith(1, 'pnpm test', { background: true, signal });
+      expect(manager.execute).toHaveBeenNthCalledWith(1, 'pnpm test', {
+        background: true,
+        signal,
+        ownerChatId: 'chat-one',
+      });
       expect(manager.execute).toHaveBeenNthCalledWith(2, 'pnpm test', {
         terminalId: 'terminal',
         workingDirectory: 'packages/app',
@@ -58,6 +68,7 @@ describe(ShellToolRuntime, () => {
         wakeOn: 'passed',
         timeoutMs: 500,
         signal,
+        ownerChatId: 'chat-one',
       });
     });
 
@@ -82,6 +93,8 @@ describe(ShellToolRuntime, () => {
             wake_on: null,
             timeout_ms: null,
           }),
+          undefined,
+          context,
         ),
       ) as Record<string, unknown>;
 
@@ -102,32 +115,38 @@ describe(ShellToolRuntime, () => {
         runtime.execute(
           ShellToolName.WRITE_INPUT,
           JSON.stringify({ terminal_id: 'terminal', input: 'yes', append_newline: true, wake_on: null }),
+          undefined,
+          context,
         ),
       ).resolves.toContain('input_written');
       await runtime.execute(
         ShellToolName.WRITE_INPUT,
         JSON.stringify({ terminal_id: 'terminal', input: '', append_newline: false, wake_on: 'ready' }),
+        undefined,
+        context,
       );
       await expect(
-        runtime.execute(ShellToolName.CLOSE, JSON.stringify({ terminal_id: 'terminal' })),
+        runtime.execute(ShellToolName.CLOSE, JSON.stringify({ terminal_id: 'terminal' }), undefined, context),
       ).resolves.toContain('closed');
-      await expect(runtime.execute(ShellToolName.LIST, '{}')).resolves.toContain('terminal');
+      await expect(runtime.execute(ShellToolName.LIST, '{}', undefined, context)).resolves.toContain('terminal');
 
-      expect(manager.writeInput).toHaveBeenNthCalledWith(1, 'terminal', 'yes', true, undefined);
-      expect(manager.writeInput).toHaveBeenNthCalledWith(2, 'terminal', '', false, 'ready');
-      expect(manager.close).toHaveBeenCalledWith('terminal');
+      expect(manager.writeInput).toHaveBeenNthCalledWith(1, 'terminal', 'yes', true, undefined, 'chat-one');
+      expect(manager.writeInput).toHaveBeenNthCalledWith(2, 'terminal', '', false, 'ready', 'chat-one');
+      expect(manager.close).toHaveBeenCalledWith('terminal', 'chat-one');
     });
 
     it('returns structured malformed and runtime failures but preserves cancellation', async () => {
       const manager = sessions();
       const runtime = new ShellToolRuntime(manager);
-      const malformed = JSON.parse(await runtime.execute(ShellToolName.EXECUTE, '{}')) as {
+      const malformed = JSON.parse(await runtime.execute(ShellToolName.EXECUTE, '{}', undefined, context)) as {
         error: { code: string };
       };
-      const unknown = JSON.parse(await runtime.execute('missing', '{}')) as { error: { code: string } };
+      const unknown = JSON.parse(await runtime.execute('missing', '{}', undefined, context)) as {
+        error: { code: string };
+      };
       manager.close.mockRejectedValueOnce(new Error('close failed'));
       const failed = JSON.parse(
-        await runtime.execute(ShellToolName.CLOSE, JSON.stringify({ terminal_id: 'terminal' })),
+        await runtime.execute(ShellToolName.CLOSE, JSON.stringify({ terminal_id: 'terminal' }), undefined, context),
       ) as { error: { code: string; message: string } };
       const cancellation = new AbortController();
       cancellation.abort(new Error('cancelled'));
@@ -135,14 +154,15 @@ describe(ShellToolRuntime, () => {
       expect(malformed.error.code).toBe('MALFORMED');
       expect(unknown.error.code).toBe('SHELL_FAILED');
       expect(failed.error).toEqual({ code: 'SHELL_FAILED', message: 'close failed' });
-      await expect(runtime.execute(ShellToolName.LIST, '{', cancellation.signal)).rejects.toThrow('cancelled');
+      await expect(runtime.execute(ShellToolName.LIST, '{', cancellation.signal, context)).rejects.toThrow('cancelled');
+      await expect(runtime.execute(ShellToolName.LIST, '{}')).resolves.toContain('owning chat');
     });
   });
 });
 
 function sessions() {
   return {
-    sessions: [{ id: 'terminal' }],
+    sessionsFor: vi.fn(() => [{ id: 'terminal' }]),
     execute: vi.fn(async () => ({ terminalId: 'terminal', status: 'completed', output: '', exitCode: 0 })),
     writeInput: vi.fn(),
     close: vi.fn(async () => {}),

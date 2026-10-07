@@ -1,10 +1,15 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt::{Display, Formatter};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 use serde::{Deserialize, Serialize};
+
+const MAX_WORKSPACE_SCAN_ENTRIES: usize = 100_000;
+const MAX_WORKSPACE_SCAN_DEPTH: usize = 64;
+const MAX_GIT_POINTER_BYTES: u64 = 4 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SandboxProfile {
@@ -235,7 +240,12 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
 }
 
 fn is_unsafe_workspace_root(root: &Path, home_directory: Option<&Path>) -> bool {
-    if root.parent().is_none() || home_directory.is_some_and(|home| home.starts_with(root)) {
+    if root.parent().is_none()
+        || home_directory.is_some_and(|home| home.starts_with(root))
+        || home_sensitive_paths(home_directory)
+            .iter()
+            .any(|sensitive| root.starts_with(sensitive) || sensitive.starts_with(root))
+    {
         return true;
     }
     [
@@ -293,7 +303,22 @@ fn repository_metadata_paths(
         }
         paths.push(path.to_owned());
         if file_type.is_file() {
-            let contents = fs::read_to_string(path)?;
+            let mut contents = Vec::with_capacity(MAX_GIT_POINTER_BYTES as usize + 1);
+            fs::File::open(path)?
+                .take(MAX_GIT_POINTER_BYTES + 1)
+                .read_to_end(&mut contents)?;
+            if contents.len() as u64 > MAX_GIT_POINTER_BYTES {
+                return Err(SandboxError::InvalidPath(format!(
+                    "Git metadata pointer exceeds {MAX_GIT_POINTER_BYTES} bytes: {}",
+                    path.display()
+                )));
+            }
+            let contents = String::from_utf8(contents).map_err(|_| {
+                SandboxError::InvalidPath(format!(
+                    "Git metadata pointer is not valid UTF-8: {}",
+                    path.display()
+                ))
+            })?;
             if let Some(value) = contents.strip_prefix("gitdir:") {
                 let linked = Path::new(value.trim());
                 let resolved = if linked.is_absolute() {
@@ -336,7 +361,55 @@ fn visit_workspace(
     policy: &WorkspaceAccessPolicy,
     visitor: &mut impl FnMut(&Path, fs::FileType) -> Result<bool, SandboxError>,
 ) -> Result<(), SandboxError> {
+    visit_workspace_with_limits(
+        directory,
+        policy,
+        MAX_WORKSPACE_SCAN_ENTRIES,
+        MAX_WORKSPACE_SCAN_DEPTH,
+        visitor,
+    )
+}
+
+fn visit_workspace_with_limits(
+    directory: &Path,
+    policy: &WorkspaceAccessPolicy,
+    max_entries: usize,
+    max_depth: usize,
+    visitor: &mut impl FnMut(&Path, fs::FileType) -> Result<bool, SandboxError>,
+) -> Result<(), SandboxError> {
+    let mut entries = 0;
+    visit_workspace_bounded(
+        directory,
+        policy,
+        max_entries,
+        max_depth,
+        0,
+        &mut entries,
+        visitor,
+    )
+}
+
+fn visit_workspace_bounded(
+    directory: &Path,
+    policy: &WorkspaceAccessPolicy,
+    max_entries: usize,
+    max_depth: usize,
+    depth: usize,
+    entries: &mut usize,
+    visitor: &mut impl FnMut(&Path, fs::FileType) -> Result<bool, SandboxError>,
+) -> Result<(), SandboxError> {
+    if depth > max_depth {
+        return Err(SandboxError::InvalidPath(format!(
+            "workspace scan exceeds the maximum depth of {max_depth}"
+        )));
+    }
     for entry in fs::read_dir(directory)? {
+        *entries += 1;
+        if *entries > max_entries {
+            return Err(SandboxError::InvalidPath(format!(
+                "workspace scan exceeds the maximum entry count of {max_entries}"
+            )));
+        }
         let entry = entry?;
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
@@ -345,7 +418,15 @@ fn visit_workspace(
         let path = entry.path();
         let descend = visitor(&path, file_type)?;
         if descend && !is_ignored_directory(&path, policy) {
-            visit_workspace(&path, policy, visitor)?;
+            visit_workspace_bounded(
+                &path,
+                policy,
+                max_entries,
+                max_depth,
+                depth + 1,
+                entries,
+                visitor,
+            )?;
         }
     }
     Ok(())
@@ -451,7 +532,6 @@ pub fn execute(_request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
 #[cfg(any(target_os = "macos", test))]
 pub mod macos {
     use super::{SandboxError, SandboxProfile, SandboxRequest};
-    use std::fs;
     use std::path::{Path, PathBuf};
 
     pub fn seatbelt_policy(
@@ -545,7 +625,7 @@ pub mod macos {
         Ok(policy)
     }
 
-    fn readable_paths(
+    pub fn readable_paths(
         request: &SandboxRequest,
         temporary_directory: &Path,
         home_directory: Option<&Path>,
@@ -569,13 +649,6 @@ pub mod macos {
         paths.extend(request.workspace_roots.iter().cloned());
         paths.push(temporary_directory.to_owned());
         paths.extend(toolchain_paths(home_directory));
-        if let Some(search_path) = std::env::var_os("PATH") {
-            for path in std::env::split_paths(&search_path) {
-                if path != Path::new("/") && home_directory != Some(path.as_path()) {
-                    paths.push(fs::canonicalize(&path).unwrap_or(path));
-                }
-            }
-        }
         paths.sort();
         paths.dedup();
         paths
@@ -686,11 +759,23 @@ pub mod linux {
 
         for root in &request.workspace_roots {
             for metadata in super::repository_metadata_paths(root, &request.workspace_policy)? {
-                push_path_mount(&mut arguments, "--ro-bind", &metadata, &metadata);
+                if request
+                    .workspace_roots
+                    .iter()
+                    .any(|workspace_root| metadata.starts_with(workspace_root))
+                {
+                    push_path_mount(&mut arguments, "--ro-bind", &metadata, &metadata);
+                }
             }
         }
         for path in super::protected_paths(request)? {
-            push_path_mount(&mut arguments, "--ro-bind", &path, &path);
+            if request
+                .workspace_roots
+                .iter()
+                .any(|root| path.starts_with(root))
+            {
+                push_path_mount(&mut arguments, "--ro-bind", &path, &path);
+            }
         }
         for path in super::workspace_sensitive_paths(request)? {
             push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), &path);
@@ -922,6 +1007,26 @@ mod tests {
         ));
         assert!(is_unsafe_workspace_root(Path::new("/private/tmp"), None));
         assert!(is_unsafe_workspace_root(Path::new("/usr/local"), None));
+        assert!(is_unsafe_workspace_root(
+            &home_sensitive_root(".ssh/project"),
+            Some(Path::new("/synthetic/home"))
+        ));
+        assert!(is_unsafe_workspace_root(
+            &home_sensitive_root(".config"),
+            Some(Path::new("/synthetic/home"))
+        ));
+        assert!(is_unsafe_workspace_root(
+            Path::new("/synthetic/home"),
+            Some(Path::new("/synthetic/home"))
+        ));
+        assert!(!is_unsafe_workspace_root(
+            &home_sensitive_root("projects/safe"),
+            Some(Path::new("/synthetic/home"))
+        ));
+    }
+
+    fn home_sensitive_root(path: &str) -> PathBuf {
+        Path::new("/synthetic/home").join(path)
     }
 
     #[test]
@@ -982,6 +1087,15 @@ mod tests {
             "(literal \"{}\")",
             protected_executable().unwrap().display()
         )));
+
+        let readable = macos::readable_paths(
+            &request(SandboxProfile::ReadOnly, &root, &state),
+            &temporary,
+            Some(&home),
+        );
+        assert!(readable.contains(&root));
+        assert!(readable.contains(&temporary));
+        assert!(!readable.contains(&fixture.path().join("path-controlled")));
     }
 
     #[test]
@@ -1051,6 +1165,8 @@ mod tests {
         create_dir(root.join(".git")).expect("git metadata");
         write(root.join(".env"), "synthetic canary").expect("workspace secret");
         write(root.join(".git-credentials"), "synthetic canary").expect("workspace credentials");
+        let protected = root.join("worker");
+        write(&protected, "fixture worker").expect("protected fixture");
 
         let read_only = linux::bubblewrap_arguments(
             &request(SandboxProfile::ReadOnly, &root, &state),
@@ -1065,11 +1181,10 @@ mod tests {
             .windows(3)
             .any(|values| { values[0] == "--ro-bind" && values[1] == "/" && values[2] == "/" }));
 
-        let writable = linux::bubblewrap_arguments(
-            &request(SandboxProfile::WorkspaceWrite, &root, &state),
-            Some(&home),
-        )
-        .expect("arguments");
+        let mut writable_request = request(SandboxProfile::WorkspaceWrite, &root, &state);
+        writable_request.protected_paths.push(protected.clone());
+        let writable =
+            linux::bubblewrap_arguments(&writable_request, Some(&home)).expect("arguments");
         assert!(writable.windows(3).any(|values| {
             values[0] == "--bind" && values[1] == root.as_os_str() && values[2] == root.as_os_str()
         }));
@@ -1083,8 +1198,13 @@ mod tests {
                 && values[1] == Path::new("/dev/null").as_os_str()
                 && values[2] == root.join(".env").as_os_str()
         }));
-        let executable = protected_executable().unwrap();
         assert!(writable.windows(3).any(|values| {
+            values[0] == "--ro-bind"
+                && values[1] == protected.as_os_str()
+                && values[2] == protected.as_os_str()
+        }));
+        let executable = protected_executable().unwrap();
+        assert!(!writable.windows(3).any(|values| {
             values[0] == "--ro-bind"
                 && values[1] == executable.as_os_str()
                 && values[2] == executable.as_os_str()
@@ -1134,5 +1254,79 @@ mod tests {
         assert!(linux::bubblewrap_executable_candidates()
             .iter()
             .all(|candidate| Path::new(candidate).is_absolute()));
+    }
+
+    #[test]
+    fn workspace_scans_fail_closed_at_small_entry_depth_and_pointer_limits() {
+        let fixture = tempdir().expect("fixture");
+        let root = fixture.path().join("project");
+        create_dir(&root).expect("root");
+        write(root.join("one"), "fixture").expect("first entry");
+        write(root.join("two"), "fixture").expect("second entry");
+        let mut visitor = |_path: &Path, file_type: fs::FileType| Ok(file_type.is_dir());
+        assert!(matches!(
+            visit_workspace_with_limits(
+                &root,
+                &WorkspaceAccessPolicy::default(),
+                1,
+                8,
+                &mut visitor
+            ),
+            Err(SandboxError::InvalidPath(_))
+        ));
+
+        let nested = root.join("nested");
+        create_dir(&nested).expect("nested");
+        let mut visitor = |_path: &Path, file_type: fs::FileType| Ok(file_type.is_dir());
+        assert!(matches!(
+            visit_workspace_with_limits(
+                &root,
+                &WorkspaceAccessPolicy::default(),
+                16,
+                0,
+                &mut visitor
+            ),
+            Err(SandboxError::InvalidPath(_))
+        ));
+
+        write(
+            root.join(".git"),
+            vec![b'a'; MAX_GIT_POINTER_BYTES as usize + 1],
+        )
+        .expect("oversized pointer");
+        assert!(matches!(
+            repository_metadata_paths(&root, &WorkspaceAccessPolicy::default()),
+            Err(SandboxError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn bubblewrap_does_not_turn_external_gitdir_targets_into_read_grants() {
+        let fixture = tempdir().expect("fixture");
+        let root = fixture.path().join("project");
+        let state = fixture.path().join("state");
+        let external = fixture.path().join("external-metadata");
+        create_dir(&root).expect("root");
+        create_dir(&state).expect("state");
+        create_dir(&external).expect("external metadata");
+        write(root.join(".git"), "gitdir: ../external-metadata\n").expect("worktree marker");
+
+        let arguments = linux::bubblewrap_arguments(
+            &request(SandboxProfile::WorkspaceWrite, &root, &state),
+            None,
+        )
+        .expect("arguments");
+        let external = fs::canonicalize(external).expect("canonical external metadata");
+
+        assert!(!arguments.windows(3).any(|values| {
+            values[0] == "--ro-bind"
+                && values[1] == external.as_os_str()
+                && values[2] == external.as_os_str()
+        }));
+        assert!(arguments.windows(3).any(|values| {
+            values[0] == "--ro-bind"
+                && values[1] == root.join(".git").as_os_str()
+                && values[2] == root.join(".git").as_os_str()
+        }));
     }
 }

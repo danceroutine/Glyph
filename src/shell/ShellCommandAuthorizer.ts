@@ -42,7 +42,12 @@ export class ShellCommandAuthorizer {
       const normalized = normalizeCommand(command);
       if (this.policy.mode === ShellPermissionMode.ALLOW_EVERYTHING)
         return authorization(ShellSandboxProfile.FULL_ACCESS);
-      if (this.policy.allowedCommands.includes(normalized)) return authorization(ShellSandboxProfile.WORKSPACE_WRITE);
+      if (
+        this.policy.allowedCommands.some(
+          grant => grant.command === normalized && grant.workingDirectory === workingDirectory,
+        )
+      )
+        return authorization(ShellSandboxProfile.WORKSPACE_WRITE);
       if (
         this.policy.mode === ShellPermissionMode.ALLOW_SAFE &&
         !context.background &&
@@ -55,15 +60,13 @@ export class ShellCommandAuthorizer {
         case ShellPermissionDecision.ALLOW_ONCE:
           return authorization(ShellSandboxProfile.WORKSPACE_WRITE);
         case ShellPermissionDecision.ALWAYS_ALLOW:
-          this.policy = {
+          await this.persist({
             ...this.policy,
-            allowedCommands: [...new Set([...this.policy.allowedCommands, normalized])],
-          };
-          await this.store.save(this.policy);
+            allowedCommands: uniqueGrants([...this.policy.allowedCommands, { command: normalized, workingDirectory }]),
+          });
           return authorization(ShellSandboxProfile.WORKSPACE_WRITE);
         case ShellPermissionDecision.ALLOW_SAFE:
-          this.policy = { ...this.policy, mode: ShellPermissionMode.ALLOW_SAFE };
-          await this.store.save(this.policy);
+          await this.persist({ ...this.policy, mode: ShellPermissionMode.ALLOW_SAFE });
           return authorization(
             !context.background && !context.existingTerminal && isSafeShellCommand(normalized)
               ? ShellSandboxProfile.READ_ONLY
@@ -72,8 +75,7 @@ export class ShellCommandAuthorizer {
         case ShellPermissionDecision.ALLOW_OUTSIDE_SANDBOX_ONCE:
           return authorization(ShellSandboxProfile.FULL_ACCESS);
         case ShellPermissionDecision.ALLOW_EVERYTHING:
-          this.policy = { ...this.policy, mode: ShellPermissionMode.ALLOW_EVERYTHING };
-          await this.store.save(this.policy);
+          await this.persist({ ...this.policy, mode: ShellPermissionMode.ALLOW_EVERYTHING });
           return authorization(ShellSandboxProfile.FULL_ACCESS);
         case ShellPermissionDecision.DENY:
           throw new Error('The user denied permission to execute this shell command.');
@@ -89,6 +91,11 @@ export class ShellCommandAuthorizer {
     );
     return result;
   }
+
+  private async persist(policy: ShellPermissionPolicy): Promise<void> {
+    await this.store.save(policy);
+    this.policy = policy;
+  }
 }
 
 function authorization(sandboxProfile: ShellSandboxProfile): ShellExecutionAuthorization {
@@ -97,11 +104,20 @@ function authorization(sandboxProfile: ShellSandboxProfile): ShellExecutionAutho
 
 function emptyPolicy(projectContextId: string): ShellPermissionPolicy {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     projectContextId,
     mode: ShellPermissionMode.ASK,
     allowedCommands: [],
   };
+}
+
+function uniqueGrants(grants: ShellPermissionPolicy['allowedCommands']): ShellPermissionPolicy['allowedCommands'] {
+  return grants.filter(
+    (grant, index) =>
+      grants.findIndex(
+        candidate => candidate.command === grant.command && candidate.workingDirectory === grant.workingDirectory,
+      ) === index,
+  );
 }
 
 function normalizeCommand(command: string): string {

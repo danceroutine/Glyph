@@ -298,7 +298,7 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
 
 function toContextEventInput(event: ChatContextEvent): ResponseInputItem {
   return {
-    role: 'developer',
+    role: event.type === 'shell_wake' ? 'user' : 'developer',
     content: JSON.stringify({ schema: 'glyph.context-event.v1', event }),
   };
 }
@@ -307,16 +307,19 @@ function contextEventId(item: ResponseInputItem): string | undefined {
   if (
     (item.type !== undefined && item.type !== 'message') ||
     !('role' in item) ||
-    item.role !== 'developer' ||
+    (item.role !== 'developer' && item.role !== 'user') ||
     !('content' in item) ||
     typeof item.content !== 'string'
   )
     return undefined;
   try {
-    const value = JSON.parse(item.content) as { schema?: unknown; event?: { id?: unknown } };
-    return value.schema === 'glyph.context-event.v1' && typeof value.event?.id === 'string'
-      ? value.event.id
-      : undefined;
+    const value = JSON.parse(item.content) as {
+      schema?: unknown;
+      event?: { id?: unknown; type?: unknown };
+    };
+    if (value.schema !== 'glyph.context-event.v1' || typeof value.event?.id !== 'string') return undefined;
+    if (item.role === 'user' && value.event.type !== 'shell_wake') return undefined;
+    return value.event.id;
   } catch {
     return undefined;
   }

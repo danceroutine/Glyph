@@ -7,6 +7,14 @@ import type { ShellPermissionStore } from './ShellPermissionStore.ts';
 
 const shellPermissionPolicySchema = z
   .object({
+    schemaVersion: z.literal(2),
+    projectContextId: z.string().min(1),
+    mode: z.enum(ShellPermissionMode),
+    allowedCommands: z.array(z.object({ command: z.string().min(1), workingDirectory: z.string().min(1) }).strict()),
+  })
+  .strict();
+const legacyShellPermissionPolicySchema = z
+  .object({
     schemaVersion: z.literal(1),
     projectContextId: z.string().min(1),
     mode: z.enum(ShellPermissionMode),
@@ -24,7 +32,14 @@ export class FileShellPermissionStore implements ShellPermissionStore {
 
   async load(projectContextId: string): Promise<ShellPermissionPolicy | undefined> {
     try {
-      const policy = shellPermissionPolicySchema.parse(JSON.parse(await readFile(this.path, 'utf8')));
+      const stored: unknown = JSON.parse(await readFile(this.path, 'utf8'));
+      const current = shellPermissionPolicySchema.safeParse(stored);
+      const legacy = current.success ? undefined : legacyShellPermissionPolicySchema.safeParse(stored);
+      const policy = current.success
+        ? current.data
+        : legacy?.success
+          ? { ...legacy.data, schemaVersion: 2 as const, allowedCommands: [] }
+          : shellPermissionPolicySchema.parse(stored);
       if (policy.projectContextId !== projectContextId) {
         throw new Error('Shell permission policy belongs to a different project context.');
       }

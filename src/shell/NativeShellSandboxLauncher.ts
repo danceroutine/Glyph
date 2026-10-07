@@ -43,6 +43,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
     }
     const shell = sandboxShell(environment);
     const accessPolicy = this.options.accessPolicy ?? new WorkspaceAccessPolicy();
+    const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
     const arguments_ = [
       '--profile',
       authorization.sandboxProfile === ShellSandboxProfile.READ_ONLY ? 'read-only' : 'workspace-write',
@@ -50,7 +51,8 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       workingDirectory,
       '--state-directory',
       this.options.stateDirectory,
-      ...this.options.workspaceRoots.flatMap(root => ['--workspace-root', root]),
+      '--workspace-root',
+      workspaceRoot,
       ...(this.options.protectedPaths ?? []).flatMap(path => ['--protected-path', path]),
       '--workspace-policy',
       JSON.stringify(accessPolicy.toJSON()),
@@ -63,6 +65,15 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       env: sandboxEnvironment(authorization.sandboxProfile, shell.executable, environment),
     });
   }
+}
+
+function mostSpecificWorkspaceRoot(roots: readonly string[], workingDirectory: string): string {
+  const matches = roots
+    .filter(root => isInside(root, workingDirectory))
+    .sort((left, right) => right.length - left.length);
+  const root = matches[0];
+  if (!root) throw new Error('Shell working directory must be inside a configured workspace root.');
+  return root;
 }
 
 /**

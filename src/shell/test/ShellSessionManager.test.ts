@@ -79,7 +79,7 @@ describe(ShellSessionManager, () => {
     });
 
     it('writes interactive input only to a running command and can configure its wake condition', async () => {
-      const { manager } = await fixture();
+      const { manager } = await fixture(ShellSandboxProfile.WORKSPACE_WRITE);
       const command = await manager.execute('read value; printf "got:%s" "$value"', {
         background: true,
         signal: new AbortController().signal,
@@ -95,6 +95,44 @@ describe(ShellSessionManager, () => {
       expect(manager.takePendingWake()).toMatchObject({ pattern: 'got:answer' });
       expect(manager.sessions[0]?.outputTail).toContain('got:answer');
       expect(() => manager.writeInput(command.terminalId, 'next', true)).toThrow('only allowed while');
+    });
+
+    it('does not treat raw input as authorization for a full-access command', async () => {
+      const { manager } = await fixture();
+      const command = await manager.execute('read value', {
+        background: true,
+        signal: new AbortController().signal,
+      });
+
+      expect(() => manager.writeInput(command.terminalId, 'unreviewed', true)).toThrow(
+        'complete command can be reviewed',
+      );
+      await manager.close(command.terminalId);
+    });
+
+    it('binds listing, reuse, input, and close capabilities to the owning chat', async () => {
+      const { manager } = await fixture(ShellSandboxProfile.WORKSPACE_WRITE);
+      manager.setOwnerChat('chat-one');
+      const command = await manager.execute('read value', {
+        background: true,
+        signal: new AbortController().signal,
+      });
+
+      manager.setOwnerChat('chat-two');
+      expect(manager.sessions).toEqual([]);
+      expect(manager.sessionsFor('chat-two')).toEqual([]);
+      expect(() => manager.writeInput(command.terminalId, 'cross-chat', true)).toThrow('Unknown shell terminal');
+      await expect(manager.close(command.terminalId)).rejects.toThrow('Unknown shell terminal');
+      await expect(
+        manager.execute('printf cross-chat', {
+          terminalId: command.terminalId,
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow('Unknown shell terminal');
+
+      manager.setOwnerChat('chat-one');
+      expect(manager.sessions).toHaveLength(1);
+      await manager.close(command.terminalId);
     });
 
     it('terminates a timed-out command while retaining its reusable terminal', async () => {
@@ -291,19 +329,27 @@ describe(ShellSessionManager, () => {
   });
 });
 
-async function fixture(): Promise<{
+async function fixture(profile = ShellSandboxProfile.FULL_ACCESS): Promise<{
   manager: ShellSessionManager;
   authorize: ReturnType<typeof vi.fn<ShellCommandAuthorizer['authorize']>>;
 }> {
   const root = await mkdtemp(join(tmpdir(), 'glyph-shell-session-'));
   temporaryDirectories.push(root);
   const authorize = vi.fn<ShellCommandAuthorizer['authorize']>(async () => ({
-    sandboxProfile: ShellSandboxProfile.FULL_ACCESS,
+    sandboxProfile: profile,
   }));
+  const nativeLauncher = launcher(root);
   const manager = new ShellSessionManager(
     { authorize } as unknown as ShellCommandAuthorizer,
     { resolve: async () => root } as unknown as ShellWorkingDirectoryResolver,
-    launcher(root),
+    profile === ShellSandboxProfile.FULL_ACCESS
+      ? nativeLauncher
+      : {
+          launch: (command, workingDirectory) =>
+            nativeLauncher.launch(command, workingDirectory, {
+              sandboxProfile: ShellSandboxProfile.FULL_ACCESS,
+            }),
+        },
   );
   managers.push(manager);
   return { manager, authorize };

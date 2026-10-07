@@ -1,4 +1,5 @@
-import { appendFile, chmod, mkdir } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { LogLevel } from './LogLevel.ts';
 import type { Logger } from './Logger.ts';
@@ -37,7 +38,20 @@ export class FileLogger implements Logger {
       message: this.namespace ? `${this.namespace}.${message}` : message,
       ...(data === undefined ? {} : { data }),
     };
-    await appendFile(this.destination, `${JSON.stringify(entry)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await chmod(this.destination, 0o600);
+    const file = await open(
+      this.destination,
+      constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      const identity = await file.stat();
+      if (!identity.isFile() || identity.nlink !== 1) {
+        throw new Error('Trace destination must be one uniquely linked regular file.');
+      }
+      await file.chmod(0o600);
+      await file.writeFile(`${JSON.stringify(entry)}\n`, 'utf8');
+    } finally {
+      await file.close();
+    }
   }
 }

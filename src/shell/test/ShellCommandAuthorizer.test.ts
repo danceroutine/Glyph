@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -57,11 +57,43 @@ describe(ShellCommandAuthorizer, () => {
 
       expect(presentShellPermission).toHaveBeenCalledOnce();
       expect(save).toHaveBeenCalledWith({
-        schemaVersion: 1,
+        schemaVersion: 2,
         projectContextId: 'project',
         mode: ShellPermissionMode.ASK,
-        allowedCommands: ['pnpm test'],
+        allowedCommands: [{ command: 'pnpm test', workingDirectory: '/project' }],
       });
+    });
+
+    it('binds an exact-command grant to its reviewed working directory', async () => {
+      const presentShellPermission = vi
+        .fn<ShellPermissionPresenter['presentShellPermission']>()
+        .mockResolvedValue(ShellPermissionDecision.ALWAYS_ALLOW);
+      const authorizer = new ShellCommandAuthorizer('project', store(), { presentShellPermission });
+
+      await authorizer.authorize('pnpm test', '/project/one', signal());
+      await authorizer.authorize('pnpm test', '/project/one', signal());
+      await authorizer.authorize('pnpm test', '/project/two', signal());
+
+      expect(presentShellPermission).toHaveBeenCalledTimes(2);
+      expect(presentShellPermission).toHaveBeenLastCalledWith(
+        { command: 'pnpm test', workingDirectory: '/project/two' },
+        expect.any(AbortSignal),
+      );
+    });
+
+    it('does not retain a widened in-memory policy when persistence fails', async () => {
+      const presentShellPermission = vi
+        .fn<ShellPermissionPresenter['presentShellPermission']>()
+        .mockResolvedValue(ShellPermissionDecision.ALWAYS_ALLOW);
+      const save = vi.fn<ShellPermissionStore['save']>().mockRejectedValueOnce(new Error('save failed'));
+      const authorizer = new ShellCommandAuthorizer('project', store(undefined, save), {
+        presentShellPermission,
+      });
+
+      await expect(authorizer.authorize('pnpm test', '/project', signal())).rejects.toThrow('save failed');
+      await authorizer.authorize('pnpm test', '/project', signal());
+
+      expect(presentShellPermission).toHaveBeenCalledTimes(2);
     });
 
     it('persists allow-everything and skips all later prompts', async () => {
@@ -110,7 +142,7 @@ describe(ShellCommandAuthorizer, () => {
       expect(authorizer.mode).toBe(ShellPermissionMode.ALLOW_SAFE);
       expect(presentShellPermission).toHaveBeenCalledTimes(3);
       expect(save).toHaveBeenCalledWith({
-        schemaVersion: 1,
+        schemaVersion: 2,
         projectContextId: 'project',
         mode: ShellPermissionMode.ALLOW_SAFE,
         allowedCommands: [],
@@ -132,10 +164,10 @@ describe(ShellCommandAuthorizer, () => {
       const authorizer = new ShellCommandAuthorizer(
         'project',
         store({
-          schemaVersion: 1,
+          schemaVersion: 2,
           projectContextId: 'project',
           mode: ShellPermissionMode.ASK,
-          allowedCommands: ['pnpm test'],
+          allowedCommands: [{ command: 'pnpm test', workingDirectory: '/project' }],
         }),
         { presentShellPermission },
       );
@@ -198,10 +230,10 @@ describe(FileShellPermissionStore, () => {
       const store = new FileShellPermissionStore(directory);
       expect(await store.load('project')).toBeUndefined();
       const policy = {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         projectContextId: 'project',
         mode: ShellPermissionMode.ASK,
-        allowedCommands: ['pnpm test'],
+        allowedCommands: [{ command: 'pnpm test', workingDirectory: '/project' }],
       };
 
       await store.save(policy);
@@ -213,6 +245,32 @@ describe(FileShellPermissionStore, () => {
         expect((await stat(directory)).mode & 0o777).toBe(0o700);
         expect((await stat(join(directory, 'shell-permissions.json'))).mode & 0o777).toBe(0o600);
       }
+    });
+
+    it('migrates legacy exact-command grants closed because their directory scope is unknown', async () => {
+      const directory = await temporaryDirectory();
+      await new FileShellPermissionStore(directory).save({
+        schemaVersion: 2,
+        projectContextId: 'seed',
+        mode: ShellPermissionMode.ASK,
+        allowedCommands: [],
+      });
+      await writeFile(
+        join(directory, 'shell-permissions.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          projectContextId: 'project',
+          mode: ShellPermissionMode.ASK,
+          allowedCommands: ['pnpm test'],
+        }),
+      );
+
+      await expect(new FileShellPermissionStore(directory).load('project')).resolves.toEqual({
+        schemaVersion: 2,
+        projectContextId: 'project',
+        mode: ShellPermissionMode.ASK,
+        allowedCommands: [],
+      });
     });
   });
 });

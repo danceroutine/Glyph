@@ -199,6 +199,7 @@ export class TerminalApplication {
 
   private activateChat(conversation: ChatSession): void {
     this.conversation = conversation;
+    this.shellSessions?.setOwnerChat(conversation.id);
     this.model = { slug: conversation.summary.modelSlug, name: conversation.summary.modelName };
     this.ui.showChatActivated(conversation.summary, conversation.transcript);
   }

@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "contract_id": "glyph-shell-authority-v1-draft",
+  "status": "draft_requires_review",
+  "execution_permission": "none",
+  "independence": "Reviewed expectations are inputs to tests; never generated from the policy builder under test.",
+  "required_rules": [
+    {
+      "id": "trusted-launch",
+      "rule": "Only controller-verified trusted executable identities may execute before confinement; no writable PATH lookup or silent FULL_ACCESS fallback."
+    },
+    {
+      "id": "declared-read",
+      "rule": "Read grants are limited to declared workspace content, reviewed runtime dependencies and private scratch; PATH and Git text cannot create additional authority."
+    },
+    {
+      "id": "protected-read",
+      "rule": "Synthetic state, declared synthetic credentials, and forbidden fixture siblings must not be disclosed."
+    },
+    {
+      "id": "workspace-write",
+      "rule": "Workspace-write may change explicitly granted workspace content; read-only may not. Both may use private scratch."
+    },
+    {
+      "id": "protected-write",
+      "rule": "Protected Git metadata, trusted launch inputs, state and forbidden fixture siblings remain unwritable."
+    },
+    {
+      "id": "session-owner",
+      "rule": "Known terminal IDs do not bypass owner/interactive-authority checks."
+    },
+    {
+      "id": "untrusted-output",
+      "rule": "Command output has data/tool trust, never developer authority; wake cannot expand a grant."
+    },
+    {
+      "id": "trace-origin",
+      "rule": "Trace storage and its writer identity must be outside attacker-writable authority."
+    },
+    {
+      "id": "loopback-denial",
+      "rule": "Restricted profiles cannot connect to the held fixture listener; only the independent positive control can retrieve its synthetic response."
+    }
+  ],
+  "exact_capability_decisions": [
+    {
+      "id": "runtime-read-allowlist",
+      "status": "contract_unresolved",
+      "scope": "Exact OS/backend-specific runtime paths and identities; populated by controller maintainer from a reviewed runtime manifest, not by enumerating host secrets.",
+      "owner_role": "sandbox maintainer",
+      "blocks_vectors": ["P11"],
+      "reopen_when": "Runtime/backend identity or deployment changes."
+    },
+    {
+      "id": "sensitive-content-scope",
+      "status": "contract_unresolved",
+      "scope": "Precisely define protected credential classes, alias identity and after-snapshot behavior; name recognition alone is not a universal secrecy guarantee.",
+      "owner_role": "sandbox maintainer",
+      "blocks_vectors": ["P04", "P05", "P06"],
+      "reopen_when": "Exposure model, classification rule or alias semantics change."
+    },
+    {
+      "id": "git-history-confidentiality",
+      "status": "contract_unresolved",
+      "scope": "Decide whether Git history is intentionally readable or excluded for confidentiality. Until reviewed, P10 cannot yield a pass or close a finding.",
+      "owner_role": "product and sandbox maintainer",
+      "blocks_vectors": ["P10"],
+      "reopen_when": "Git/read-profile trust contract changes."
+    },
+    {
+      "id": "mach-ipc-allowlist",
+      "status": "contract_unresolved",
+      "scope": "For each named Mach service, POSIX shared-memory right, descriptor and IPC capability, require exact name/right, rationale, OS applicability and signed-off disposition. Current grants are inventory, not approvals.",
+      "observed_service_names": [
+        "com.apple.bsd.dirhelper",
+        "com.apple.cfprefsd.agent",
+        "com.apple.cfprefsd.daemon",
+        "com.apple.CoreServices.coreservicesd",
+        "com.apple.system.logger",
+        "com.apple.system.opendirectoryd.libinfo"
+      ],
+      "approved_service_names": [],
+      "approved_blanket_ipc_rights": [],
+      "owner_role": "platform security reviewer",
+      "blocks_vectors": ["K06", "K07", "K09", "K10", "K11", "K12", "K13", "K15"],
+      "reopen_when": "OS/service policy, descriptor contract or runtime dependencies change."
+    },
+    {
+      "id": "approval-scope-lifetime",
+      "status": "contract_unresolved",
+      "scope": "Specify cwd/root-set/executable-revision/interactive-lifetime binding and revocation semantics; until reviewed, test the proposed strict contract as a failing design check.",
+      "owner_role": "product and authorization maintainer",
+      "blocks_vectors": ["A02", "A03", "A06", "A07", "A09", "A13", "A14"],
+      "reopen_when": "Grant scope, session model or project identity changes."
+    }
+  ],
+  "closure_rules": {
+    "contract_unresolved": "Non-closing; has owner, affected cells and decision requirement.",
+    "residual_risk": "Non-closing for resistance claims; has owner, rationale, affected cells and reopening condition.",
+    "static_only": "May complete a review task, never a native enforcement claim."
+  }
+}

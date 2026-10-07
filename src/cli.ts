@@ -44,6 +44,7 @@ import { FileShellPermissionStore } from './shell/FileShellPermissionStore.ts';
 import { NativeShellSandboxLauncher } from './shell/NativeShellSandboxLauncher.ts';
 import { ShellCommandAuthorizer } from './shell/ShellCommandAuthorizer.ts';
 import { ShellSessionManager } from './shell/ShellSessionManager.ts';
+import { assertShellRuntimePathIsolation } from './shell/ShellRuntimePathPolicy.ts';
 import { ShellToolRuntime } from './shell/ShellToolRuntime.ts';
 import { ShellWorkingDirectoryResolver } from './shell/ShellWorkingDirectoryResolver.ts';
 
@@ -63,32 +64,26 @@ async function main(): Promise<void> {
     currentDirectory: process.cwd(),
     ...workspaceArgument(process.argv.slice(2)),
   });
-  if (projectContext.roots.some(root => pathsOverlap(configuration.stateDirectory, root.path))) {
-    throw new ConfigurationError(
-      'GLYPH_CONFIG_DIR must be outside every project root because Glyph state contains credentials and provider traces.',
-    );
-  }
+  assertShellRuntimePathIsolation(
+    projectContext.roots.map(root => root.path),
+    configuration.stateDirectory,
+    configuration.traceFile,
+  );
   const logger = new FileLogger(configuration.traceFile);
   const http = new FetchHttpClient(logger);
   const store = new FileOpenAIAccountStore(configuration.stateDirectory);
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const indexExecutable = resolve(
-    process.env.GLYPH_CONTEXT_INDEX_BINARY ??
-      resolve(
-        packageRoot,
-        'target',
-        'release',
-        process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
-      ),
+    packageRoot,
+    'target',
+    'release',
+    process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
   );
   const shellSandboxExecutable = resolve(
-    process.env.GLYPH_SHELL_SANDBOX_BINARY ??
-      resolve(
-        packageRoot,
-        'target',
-        'release',
-        process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
-      ),
+    packageRoot,
+    'target',
+    'release',
+    process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
   );
   const accessPolicy = new WorkspaceAccessPolicy();
   const { workspace, pathIndex } = createProjectRuntime(
@@ -101,8 +96,8 @@ async function main(): Promise<void> {
   );
   const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, pathIndex);
   const shellAuthorizer = new ShellCommandAuthorizer(
-    projectContext.id,
-    new FileShellPermissionStore(join(configuration.stateDirectory, 'projects', projectContext.id)),
+    projectContext.mutationIdentity,
+    new FileShellPermissionStore(join(configuration.stateDirectory, 'projects', projectContext.mutationIdentity)),
     ui,
   );
   const shellSessions = new ShellSessionManager(
@@ -112,7 +107,7 @@ async function main(): Promise<void> {
       binaryPath: shellSandboxExecutable,
       workspaceRoots: projectContext.roots.map(root => root.path),
       stateDirectory: configuration.stateDirectory,
-      protectedPaths: [indexExecutable, shellSandboxExecutable],
+      protectedPaths: [packageRoot, indexExecutable, shellSandboxExecutable],
       accessPolicy,
     }),
   );
@@ -265,19 +260,6 @@ function projectRelativeExclusion(root: string, target: string): string | undefi
   }
   if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) return undefined;
   return fromRoot.split(sep).join('/');
-}
-
-function pathsOverlap(left: string, right: string): boolean {
-  const leftPath = resolve(left);
-  const rightPath = resolve(right);
-  const fromLeft = relative(leftPath, rightPath);
-  const fromRight = relative(rightPath, leftPath);
-  return (
-    !fromLeft ||
-    (!fromLeft.startsWith(`..${sep}`) && fromLeft !== '..' && !isAbsolute(fromLeft)) ||
-    !fromRight ||
-    (!fromRight.startsWith(`..${sep}`) && fromRight !== '..' && !isAbsolute(fromRight))
-  );
 }
 
 main().catch(error => {

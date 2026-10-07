@@ -20,6 +20,7 @@
     "shell-sandbox:check": "cargo clippy --package glyph-shell-sandbox --all-targets -- -D warnings",
     "shell-sandbox:test": "cargo test --package glyph-shell-sandbox",
     "shell-sandbox:torture": "cargo test --release --package glyph-shell-sandbox --test sandbox_e2e -- --ignored --nocapture",
+    "shell-sandbox:remediation": "node src/shell/test/remediation/run-remediation.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "oxlint .",
