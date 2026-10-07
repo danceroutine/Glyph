@@ -185,6 +185,42 @@ describe(OpenAIProvider, () => {
       expect(nextInput.filter(item => item.role === 'developer')).toHaveLength(1);
     });
 
+    it('settles a persisted tool intent with an unknown outcome before resuming inference', async () => {
+      const { provider, requests } = harness([() => sse([completed])]);
+      provider.restoreState({
+        provider: 'openai-responses',
+        version: 1,
+        data: {
+          history: [
+            {
+              type: 'function_call',
+              call_id: 'call-interrupted',
+              name: 'execute_shell',
+              arguments: '{"command":"work"}',
+            },
+          ],
+        },
+      });
+      const checkpoints: unknown[] = [];
+
+      await provider.send('Continue safely.', {
+        ...options(),
+        onStateCheckpoint: state => {
+          checkpoints.push(state);
+        },
+      });
+
+      expect(checkpoints).toHaveLength(1);
+      const input = requests[0]!.input as Array<Record<string, unknown>>;
+      expect(input.slice(0, 2)).toEqual([
+        expect.objectContaining({ type: 'function_call', call_id: 'call-interrupted' }),
+        expect.objectContaining({ type: 'function_call_output', call_id: 'call-interrupted' }),
+      ]);
+      expect(JSON.parse(input[1]!.output as string)).toMatchObject({
+        error: { code: 'TOOL_EXECUTION_INTERRUPTED', outcome: 'unknown' },
+      });
+    });
+
     it('keeps command-controlled shell wake output in an untrusted user-role event', async () => {
       const { provider, requests } = harness([() => sse([completed])]);
       const event = {

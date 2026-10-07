@@ -117,6 +117,13 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     let turn: TTurn | undefined;
     let hasToolCheckpoint = false;
     try {
+      const recovery = this.adapter.recoverInterruptedToolCalls(this.state);
+      if (recovery.recoveredCallCount > 0) {
+        this.state = recovery.state;
+        hasToolCheckpoint = true;
+        await options.onStateCheckpoint?.(structuredClone(this.state));
+        trace('tool.interrupted_recovered', { recoveredCallCount: recovery.recoveredCallCount });
+      }
       turn = await this.adapter.beginTurn(this.state, request, context(0));
       let totalUsage: Usage | null = null;
       let round = 0;
@@ -135,38 +142,57 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           trace('history.committed', { state: this.state }, round);
           return { responseId: step.responseId, usage: totalUsage };
         }
-        const results = await Promise.all(
-          step.toolCalls.map(async call => {
-            trace('tool.call', { call }, round);
-            const activity = {
-              ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
-              name: call.name,
-              callId: call.id,
-              arguments: call.input,
-            };
-            reportToolActivity({ phase: ToolActivityPhase.STARTED, ...activity });
-            const output = options.toolContext
-              ? await this.tools.execute(call.name, call.input, signal, options.toolContext)
-              : await this.tools.execute(call.name, call.input, signal);
-            trace(
-              'tool.result',
-              {
-                namespace: call.namespace,
-                name: call.name,
-                callId: call.id,
-                output,
-              },
-              round,
-            );
-            reportToolActivity({ phase: ToolActivityPhase.COMPLETED, ...activity, output });
-            return { call, output } satisfies AgentToolResult;
-          }),
-        );
-        turn = this.adapter.appendToolResults(turn, results);
         this.state = this.adapter.commit(turn);
         hasToolCheckpoint = true;
         await options.onStateCheckpoint?.(structuredClone(this.state));
-        trace('history.checkpointed', { state: this.state }, round);
+        trace('tool.intent_checkpointed', { calls: step.toolCalls }, round);
+
+        let interrupted: unknown = signal.aborted ? signal.reason : undefined;
+        const results = signal.aborted
+          ? step.toolCalls.map(call => ({
+              call,
+              output: toolInterruptionOutput(
+                'TOOL_NOT_STARTED',
+                'The call was not started because the turn was cancelled.',
+                false,
+              ),
+            }))
+          : await Promise.all(
+              step.toolCalls.map(async call => {
+                const activity = {
+                  ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
+                  name: call.name,
+                  callId: call.id,
+                  arguments: call.input,
+                };
+                trace('tool.call', { call }, round);
+                reportToolActivity({ phase: ToolActivityPhase.STARTED, ...activity });
+                let output: string;
+                try {
+                  output = options.toolContext
+                    ? await this.tools.execute(call.name, call.input, signal, options.toolContext)
+                    : await this.tools.execute(call.name, call.input, signal);
+                } catch (error) {
+                  output = toolInterruptionOutput(
+                    signal.aborted ? 'TOOL_EXECUTION_INTERRUPTED' : 'TOOL_EXECUTION_FAILED',
+                    signal.aborted
+                      ? 'The call was interrupted; it may have produced side effects before cancellation.'
+                      : 'The tool threw before reporting an outcome; side effects may have occurred.',
+                    true,
+                  );
+                  if (signal.aborted) interrupted ??= error;
+                }
+                trace('tool.result', { namespace: call.namespace, name: call.name, callId: call.id, output }, round);
+                reportToolActivity({ phase: ToolActivityPhase.COMPLETED, ...activity, output });
+                return { call, output } satisfies AgentToolResult;
+              }),
+            );
+        interrupted ??= signal.aborted ? signal.reason : undefined;
+        turn = this.adapter.appendToolResults(turn, results);
+        this.state = this.adapter.commit(turn);
+        await options.onStateCheckpoint?.(structuredClone(this.state));
+        trace('tool.outcomes_checkpointed', { callIds: results.map(result => result.call.id) }, round);
+        if (interrupted !== undefined) throw interrupted;
       }
     } catch (error) {
       const reportedError = options.signal.aborted
@@ -186,6 +212,16 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       this.busy = false;
     }
   }
+}
+
+function toolInterruptionOutput(code: string, message: string, outcomeUnknown: boolean): string {
+  return JSON.stringify({
+    error: {
+      code,
+      message,
+      outcome: outcomeUnknown ? 'unknown' : 'not_started',
+    },
+  });
 }
 
 function addUsage(left: Usage | null, right: Usage | null): Usage | null {

@@ -15,6 +15,8 @@ type Checkpoint = (
 
 /** A resumable conversation whose completed turns are checkpointed atomically. */
 export class ChatSession {
+  private unpersistedProviderState: ReturnType<ChatConversation['exportState']> | undefined;
+
   constructor(
     private readonly record: () => ChatSessionRecord,
     private readonly conversation: ChatConversation,
@@ -42,6 +44,7 @@ export class ChatSession {
   }
 
   async reset(): Promise<void> {
+    await this.persistOutstandingToolState();
     const previousState = this.conversation.exportState();
     this.conversation.reset();
     try {
@@ -54,6 +57,7 @@ export class ChatSession {
 
   async recordContext(events: readonly ChatContextEvent[]): Promise<void> {
     if (events.length === 0) return;
+    await this.persistOutstandingToolState();
     const previousState = this.conversation.exportState();
     this.conversation.recordContext(events);
     try {
@@ -73,6 +77,7 @@ export class ChatSession {
     response: ChatResponseStream,
     signal: AbortSignal,
   ): Promise<ChatTurnResult> {
+    await this.persistOutstandingToolState();
     const request = toChatRequest(requestInput);
     const previousState = this.conversation.exportState();
     let durableState = previousState;
@@ -90,8 +95,10 @@ export class ChatSession {
     try {
       result = await this.conversation.send(request, recordingResponse, signal, {
         onStateCheckpoint: async state => {
+          this.unpersistedProviderState = state;
           await this.checkpoint(state, undefined, true);
           durableState = state;
+          this.unpersistedProviderState = undefined;
         },
         toolContext: {
           chat: {
@@ -102,7 +109,7 @@ export class ChatSession {
         },
       });
     } catch (error) {
-      this.conversation.restoreState(durableState);
+      this.conversation.restoreState(this.unpersistedProviderState ?? durableState);
       throw error;
     }
     try {
@@ -118,6 +125,14 @@ export class ChatSession {
       this.conversation.restoreState(durableState);
       throw error;
     }
+  }
+
+  private async persistOutstandingToolState(): Promise<void> {
+    const state = this.unpersistedProviderState;
+    if (!state) return;
+    await this.checkpoint(state, undefined, true);
+    this.unpersistedProviderState = undefined;
+    this.conversation.restoreState(state);
   }
 }
 

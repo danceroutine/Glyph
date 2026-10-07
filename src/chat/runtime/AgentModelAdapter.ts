@@ -33,6 +33,11 @@ export interface AgentTurnContext {
   readonly trace: (kind: string, data: unknown, round?: number) => void;
 }
 
+export interface InterruptedToolRecovery {
+  readonly state: ChatProviderState;
+  readonly recoveredCallCount: number;
+}
+
 /**
  * Provider protocol seam. Implementations translate provider wire state into
  * semantic model steps while AgentRuntime owns the host/tool lifecycle.
@@ -41,6 +46,8 @@ export interface AgentModelAdapter<TTurn> {
   readonly model: string;
   emptyState(): ChatProviderState;
   restoreState(state: ChatProviderState): ChatProviderState;
+  /** Settles durable tool intents that have no outcome, such as after process interruption. */
+  recoverInterruptedToolCalls(state: ChatProviderState): InterruptedToolRecovery;
   recordContext(state: ChatProviderState, events: readonly ChatContextEvent[]): ChatProviderState;
   beginTurn(state: ChatProviderState, request: ChatRequest, context: AgentTurnContext): Promise<TTurn>;
   streamStep(turn: TTurn, context: AgentTurnContext): Promise<AgentTurnStep<TTurn>>;

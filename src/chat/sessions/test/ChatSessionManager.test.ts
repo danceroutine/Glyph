@@ -137,6 +137,33 @@ describe(ChatSessionManager, () => {
     expect(session.transcript).toEqual([]);
   });
 
+  it('preserves completed tool state in memory and blocks continuation until persistence recovers', async () => {
+    const store = new MemoryChatSessionStore();
+    const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+    await manager.initialize();
+    const session = await manager.create(input(), conversation());
+    store.failOnSaveCall = store.saveCalls + 2;
+
+    await expect(
+      session.send('tool outcome checkpoint fails', { push: () => {} }, new AbortController().signal),
+    ).rejects.toThrow('checkpoint unavailable');
+    expect(providerMessages(store.records[0]!)).toEqual(['tool outcome checkpoint fails', 'tool-intent:mutation']);
+    await expect(session.send('must remain blocked', { push: () => {} }, new AbortController().signal)).rejects.toThrow(
+      'checkpoint unavailable',
+    );
+
+    store.failure = undefined;
+    await session.send('continue after recovery', { push: () => {} }, new AbortController().signal);
+
+    expect(providerMessages(store.records[0]!)).toEqual([
+      'tool outcome checkpoint fails',
+      'tool-intent:mutation',
+      'tool-result:mutation-complete',
+      'continue after recovery',
+    ]);
+    expect(session.transcript).toEqual([expect.objectContaining({ userText: 'continue after recovery' })]);
+  });
+
   it('checkpoints host context without changing the visible transcript and rolls it back on failure', async () => {
     const store = new MemoryChatSessionStore();
     const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
@@ -177,6 +204,8 @@ describe(ChatSessionManager, () => {
 class MemoryChatSessionStore implements ChatSessionStore {
   records: readonly ChatSessionRecord[] = [];
   failure: Error | undefined;
+  failOnSaveCall: number | undefined;
+  saveCalls = 0;
 
   async initialize(_context: ProjectContext): Promise<void> {}
 
@@ -185,6 +214,10 @@ class MemoryChatSessionStore implements ChatSessionStore {
   }
 
   async save(record: ChatSessionRecord): Promise<void> {
+    this.saveCalls += 1;
+    if (this.saveCalls === this.failOnSaveCall) {
+      this.failure = new Error('checkpoint unavailable');
+    }
     if (this.failure) throw this.failure;
     this.records = [...this.records.filter(candidate => candidate.id !== record.id), structuredClone(record)];
   }
@@ -223,6 +256,12 @@ class StatefulProvider implements ChatProvider {
       this.messages.push('tool-result:mutation-complete');
       await options.onStateCheckpoint?.(this.exportState());
       throw new Error('provider failed after tool execution');
+    }
+    if (text === 'tool outcome checkpoint fails') {
+      this.messages.push('tool-intent:mutation');
+      await options.onStateCheckpoint?.(this.exportState());
+      this.messages.push('tool-result:mutation-complete');
+      await options.onStateCheckpoint?.(this.exportState());
     }
     options.onReasoningSummary?.('thinking');
     options.onText('answer');

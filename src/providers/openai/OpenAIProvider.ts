@@ -48,6 +48,37 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     return stateFrom(historyFrom(state));
   }
 
+  recoverInterruptedToolCalls(state: ChatProviderState) {
+    const history = historyFrom(state);
+    const settled = new Set(
+      history.flatMap(item =>
+        (item.type === 'function_call_output' || item.type === 'custom_tool_call_output') && 'call_id' in item
+          ? [item.call_id]
+          : [],
+      ),
+    );
+    const results: ResponseInputItem[] = [];
+    for (const item of history) {
+      if ((item.type !== 'function_call' && item.type !== 'custom_tool_call') || settled.has(item.call_id)) continue;
+      const output = JSON.stringify({
+        error: {
+          code: 'TOOL_EXECUTION_INTERRUPTED',
+          message: 'Glyph restarted before this tool reported an outcome; side effects may have occurred.',
+          outcome: 'unknown',
+        },
+      });
+      results.push(
+        item.type === 'custom_tool_call'
+          ? { type: 'custom_tool_call_output', call_id: item.call_id, output }
+          : { type: 'function_call_output', call_id: item.call_id, output },
+      );
+    }
+    return {
+      state: results.length === 0 ? stateFrom(history) : stateFrom([...history, ...results]),
+      recoveredCallCount: results.length,
+    };
+  }
+
   recordContext(state: ChatProviderState, events: readonly ChatContextEvent[]): ChatProviderState {
     const history = historyFrom(state);
     for (const event of events) {
