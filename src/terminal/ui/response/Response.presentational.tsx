@@ -1,10 +1,11 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import { ChatResponsePartType } from '../../../chat/ChatResponsePartType.ts';
+import { sanitizeText } from '../shared/sanitizeText.ts';
+import { Markdown } from './Markdown.presentational.tsx';
 import { parseInlineMarkdown } from './parseInlineMarkdown.ts';
 import { ToolActivity } from './ToolActivity.presentational.tsx';
 import type { ResponseState } from './useResponseState.ts';
-import { sanitizeText } from '../shared/sanitizeText.ts';
 
 export interface ResponseProps extends ResponseState {
   footer?: ReactNode;
@@ -21,10 +22,8 @@ export function Response({ sections, pendingFrame, toolFrame, messageWidth, foot
             const { value } = section;
             return (
               <Box key={index} maxWidth={messageWidth}>
-                <Box backgroundColor="gray" borderColor="gray" borderStyle="round" paddingX={2}>
-                  <Text color="white">
-                    <InlineMarkdown value={value} />
-                  </Text>
+                <Box backgroundColor="gray" borderColor="gray" borderStyle="round" flexDirection="column" paddingX={2}>
+                  <Markdown value={value} />
                 </Box>
               </Box>
             );
