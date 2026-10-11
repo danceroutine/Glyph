@@ -22,6 +22,29 @@ const peer = { ...owner, windowId: 'peer' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(GlyphDesktopHost, () => {
+  it('[review-06] expires an abandoned connection’s ownership and disposes its runtime so a replacement window can write', async () => {
+    vi.useFakeTimers();
+    const fixture = new HostFixture();
+    try {
+      fixture.connect('owner', owner);
+      const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+      await fixture.receive('owner', owner, 'attach-owner', attach);
+      await fixture.host.disconnect('owner');
+      // A reconnect grace period is allowed; indefinite ownership is not.
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      fixture.connect('replacement', peer);
+      await fixture.receive('replacement', peer, 'attach-replacement', attach);
+      const snapshot = fixture
+        .events('replacement')
+        .find(value => value.event.type === GlyphHostEventType.INITIAL_STATE);
+      expect.soft(snapshot?.event).toMatchObject({ state: { readOnly: false, ownerWindowId: peer.windowId } });
+      expect.soft(fixture.runtime.dispose).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.host.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([3, 520])(
     'recovers a renderer missing %s events using replay or an authoritative snapshot',
     async missingCount => {

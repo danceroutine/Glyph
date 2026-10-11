@@ -122,6 +122,17 @@ it.describe('Pending Propose Question (propose_question)', () => {
 
 // Create/delete are staged file operations in patch/structured-edit proposals,
 // not separate registered project tool names. Desktop application is still pending.
+it.describe('Pending structural file mutations through a reviewed proposal', () => {
+  it.fixme(
+    'shows a proposed rename and moves the file through the workbench only after acceptance, with Undo restoring its original path',
+    async () => {},
+  );
+  it.fixme(
+    'preserves both files when a rename is rejected or its destination becomes occupied before acceptance',
+    async () => {},
+  );
+});
+
 it.describe('Pending Delete File through a reviewed proposal', () => {
   it.fixme(
     'shows the file and its contents in a deletion review without deleting it before acceptance',

@@ -186,6 +186,32 @@ describe(ProposalReviewManager, () => {
   });
 
   describe(ProposalReviewManager.prototype.rejectAll, () => {
+    it('[review-03] reconciles an applied edit before reject-all after both completion checkpoints fail', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      fixture.store.failSaveCall(4);
+      fixture.store.failSaveCall(5);
+      await expect(fixture.manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.PERSISTENCE,
+      });
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+      expect(fixture.workspace.replaceCalls).toBe(1);
+
+      await fixture.manager.rejectAll();
+      const recovered = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(fixture.root),
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+      const decisions = recovered.pendingResults.flatMap(result => result.items.map(item => item.decision));
+      expect(decisions).toEqual([EditDecisionState.ACCEPTED]);
+      expect(recovered.activeReviews).toEqual([]);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+    });
+
     it('rolls every in-memory decision back when its checkpoint fails, then retries durably', async () => {
       const fixture = await createFixture();
       await writeFile(join(fixture.root, 'file.txt'), 'one\nmiddle\nthree\n');

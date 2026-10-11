@@ -74,12 +74,68 @@ Run `pnpm code-oss:test:integration --list` to browse the behavior inventory:
 - [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): shell, project read/search, proposal, question, and reviewed file creation/deletion contracts.
 - [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs): Plan Mode, blocking/background sub-agents, action items, web fetch/search, and shell wake conditions.
 - [GlyphBrowserAutomation.test.mjs](tests/electron/GlyphBrowserAutomation.test.mjs): CDP lifecycle, DOM inspection/highlighting, input, screenshots, and browser feedback.
+- [GlyphMcp.test.mjs](tests/electron/GlyphMcp.test.mjs): human/agent installation and configuration, authentication, tool discovery/calls, resources/prompts, and optional or revision-dependent capabilities.
+- [GlyphSkills.test.mjs](tests/electron/GlyphSkills.test.mjs): skill discovery, activation, progressive loading, human/agent management, and execution boundaries.
+- [GlyphRules.test.mjs](tests/electron/GlyphRules.test.mjs): always-on, file-pattern, agent-selected, and manual rules with configuration and source visibility.
+- [GlyphAgentsMd.test.mjs](tests/electron/GlyphAgentsMd.test.mjs): root/nested instruction discovery, scope, precedence, refresh, and reviewable edits.
+- [GlyphIdeContext.test.mjs](tests/electron/GlyphIdeContext.test.mjs): active editors, exact selections, diagnostics/symbols, retrieval/indexing, context budgets, and privacy.
 
-The three capability files are explicit `it.fixme` inventories, not passing
+The capability files are explicit `it.fixme` inventories, not passing
 integration coverage. Enabling them requires scripted provider tool calls through
 the production runtime and observable workbench/browser/filesystem assertions.
 Use isolated local fixtures rather than live providers, real browsing profiles,
 or direct calls to internal Glyph services.
+
+Format references for these contracts are the [MCP specification](https://modelcontextprotocol.io/specification/2026-07-28),
+[Agent Skills specification](https://agentskills.io/specification),
+[Cursor rule activation modes](https://cursor.com/docs/rules), and
+[AGENTS.md conventions](https://agents.md/). These are Glyph product targets,
+not claims of complete compatibility with another IDE. Pin the protocol revision
+and fixture capabilities when implementing an MCP case; extensions and legacy
+features are kept separate from core support. Context/rule/skill cases should
+assert the recorded provider input, not infer correct inclusion from a plausible
+model response.
+
+## Review regressions
+
+The `[review-NN]` cases are ordinary executable tests asserting correct behavior.
+They intentionally fail against the reviewed implementation: they are not
+`it.fails`, skips, fixmes, or unconditional failures. Production code is unchanged.
+The review's 11 findings map to these tests:
+
+| Finding | Regression coverage                                                                           | Test file                                                                                        |
+| ------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 01      | Case-insensitive exclusion of `.ENV` and `.GIT/config`                                        | [FileSystemWorkspaceTextStore](../src/workspace/tests/FileSystemWorkspaceTextStore.test.ts)      |
+| 02      | Separate accounts refreshing concurrently; one shared account across workspace sessions       | [OpenAISession](../src/providers/openai/auth/tests/OpenAISession.test.ts)                        |
+| 03      | Applied edits retain accepted receipts after two checkpoint failures, reject-all, and restart | [ProposalReviewRecovery](../src/editing/reviews/test/ProposalReviewRecovery.adversarial.test.ts) |
+| 04      | Existing provider callbacks use replacement sign-in credentials                               | [OpenAIBackend](../src/providers/openai/tests/OpenAIBackend.test.ts)                             |
+| 05      | Host exit releases an active send and subsequent sends acquire a live connection              | [GlyphReviewRegressions](tests/electron/GlyphReviewRegressions.test.mjs)                         |
+| 06      | Abandoned ownership expires and its runtime is disposed                                       | [GlyphDesktopHost](../src/desktop/host/tests/GlyphDesktopHost.test.ts)                           |
+| 07      | Symlink aliases cannot establish two mutation owners                                          | [DesktopHostPrimitives](../src/desktop/host/tests/DesktopHostPrimitives.test.ts)                 |
+| 08      | Close and dispose escalate cleanup after parent exit while descendants retain pipes           | [ShellCleanup](../src/shell/test/ShellCleanup.regression.test.ts)                                |
+| 09      | Narrow reads and attachments enforce limits before loading the whole file                     | [ProjectReadBudgets](../src/project/tests/ProjectReadBudgets.regression.test.ts)                 |
+| 10      | Account and workspace-ownership rejection preserve unsent drafts                              | [GlyphReviewRegressions](tests/electron/GlyphReviewRegressions.test.mjs)                         |
+| 11      | Human titles survive send, context, and reset checkpoints and reload                          | [ChatSessionManager](../src/chat/sessions/test/ChatSessionManager.test.ts)                       |
+
+Run just the reviewed regressions with:
+
+```sh
+pnpm exec vitest run --maxWorkers=1 -t '\[review-'
+pnpm code-oss:test:integration GlyphReviewRegressions
+```
+
+The shell cleanup case simulates child events and intercepts all process signals.
+The Electron crash case kills only the named Glyph utility child discovered via
+the isolated test application's process metrics. Credentials are fabricated, and
+file tests use disposable canaries and tiny size limits. The abandoned-owner test
+allows a bounded reconnect grace period (five minutes of virtual time), not an
+indefinite claim on the workspace.
+
+The acknowledged editing-workflow blockers remain explicit fixmes:
+
+- Question and approval forms and proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).
+- Structural create/delete/rename review and application: the structural mutation, Create File, and Delete File groups in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
+- Dirty-buffer content search suppressing stale disk matches: `Pending Search Contents` in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
 
 ## Native Preact view
 

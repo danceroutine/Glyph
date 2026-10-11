@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphHostStatus } from '#src/desktop/protocol/events/GlyphHostStatus.js';
 import { ChatOperationSerializer } from '#src/desktop/host/ChatOperationSerializer.js';
@@ -11,6 +15,27 @@ const second = { ...first, windowId: 'two' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(WorkspaceOwnershipRegistry, () => {
+  it('[review-07] refuses a second mutation owner for the same directory reached through another symlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'glyph-ownership-alias-'));
+    try {
+      const target = join(root, 'target');
+      await mkdir(target);
+      const aliases = [join(root, 'first-alias'), join(root, 'second-alias')];
+      for (const alias of aliases) await symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      expect(await realpath(aliases[0]!)).toBe(await realpath(aliases[1]!));
+      const registry = new WorkspaceOwnershipRegistry();
+      const workspaceRoots = (path: string) => [
+        { name: 'project', uri: pathToFileURL(path).toString(), canonicalPath: path },
+      ];
+      expect(registry.acquire(first, workspaceRoots(aliases[0]!)).readOnly).toBe(false);
+      expect(() =>
+        registry.acquire({ ...second, workspaceId: 'alias-workspace' }, workspaceRoots(aliases[1]!)),
+      ).toThrow(/overlap/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('grants one owner, permits a read-only peer, and blocks overlapping workspaces across profiles', () => {
     const registry = new WorkspaceOwnershipRegistry();
     expect(registry.acquire(first, roots)).toEqual({ ownerWindowId: 'one', readOnly: false });

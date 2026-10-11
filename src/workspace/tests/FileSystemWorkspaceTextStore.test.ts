@@ -15,6 +15,22 @@ afterEach(async () => {
 
 describe(FileSystemWorkspaceTextStore, () => {
   describe(FileSystemWorkspaceTextStore.prototype.read, () => {
+    it.each(['.ENV', '.GIT/config'])(
+      '[review-01] refuses protected path %s under case-insensitive policy before returning its contents',
+      async path => {
+        const root = await mkdtemp(join(tmpdir(), 'workspace-case-policy-'));
+        directories.push(root);
+        await mkdir(join(root, '.GIT'));
+        // Uppercase fixture names make the policy regression reproducible even
+        // on a case-sensitive CI volume. These are synthetic, harmless canaries.
+        await writeFile(join(root, path), 'fixture-only-protected-content');
+        await writeFile(join(root, 'public.txt'), 'public fixture');
+        const store = new FileSystemWorkspaceTextStore(root, { caseSensitive: false });
+        await expect(store.read('public.txt')).resolves.toMatchObject({ text: 'public fixture' });
+        await expect(store.read(path)).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+      },
+    );
+
     it('preserves the UTF-8 byte order mark, mixed line endings, whitespace, and raw-byte revisions', async () => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-store-'));
       directories.push(root);

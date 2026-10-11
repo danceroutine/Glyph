@@ -22,6 +22,35 @@ afterEach(async () => {
 });
 
 describe(ChatSessionManager, () => {
+  it.each(['send', 'context', 'reset'] as const)(
+    '[review-11] preserves a human title longer than four words across a %s checkpoint and reload',
+    async operation => {
+      const store = new MemoryChatSessionStore();
+      const context = await ProjectContextResolver.folder(await projectFixture());
+      const manager = new ChatSessionManager(store, context);
+      await manager.initialize();
+      const session = await manager.create(input(), conversation());
+      const title = 'Investigate the desktop account refresh race carefully';
+      await manager.rename(session.id, title);
+      switch (operation) {
+        case 'send':
+          await session.send('Continue investigating', { push: () => {} }, new AbortController().signal);
+          break;
+        case 'context':
+          await session.recordContext([
+            { schemaVersion: 1, id: 'review-title-context', type: 'edit_review_result', payload: {} },
+          ]);
+          break;
+        case 'reset':
+          await session.reset();
+          break;
+      }
+      const reloaded = new ChatSessionManager(store, context);
+      await reloaded.initialize();
+      expect(reloaded.list()[0]).toMatchObject({ title, titleOrigin: 'human' });
+    },
+  );
+
   it('automatically isolates chats by the project context active when the manager is created', async () => {
     const store = new MemoryChatSessionStore();
     const first = new ChatSessionManager(
