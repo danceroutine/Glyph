@@ -1,7 +1,7 @@
 import { stripVTControlCharacters } from 'node:util';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
-import { ChatHistory } from '../ChatHistory.presentational.tsx';
+import { ChatHistory } from '#src/terminal/ui/chat/ChatHistory.presentational.js';
 
 describe(ChatHistory, () => {
   it('replays saved turns with live chat bubbles and collapsed reasoning', () => {

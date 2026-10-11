@@ -2,12 +2,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NativeShellSandboxLauncher } from '../NativeShellSandboxLauncher.ts';
-import type { ShellCommandAuthorizer } from '../ShellCommandAuthorizer.ts';
-import { ShellSandboxProfile } from '../ShellSandboxProfile.ts';
-import { ShellSessionManager } from '../ShellSessionManager.ts';
-import { ShellSessionStatus } from '../ShellSessionStatus.ts';
-import type { ShellWorkingDirectoryResolver } from '../ShellWorkingDirectoryResolver.ts';
+import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
+import type { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.js';
+import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
+import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
+import type { ShellWorkingDirectoryResolver } from '#src/shell/ShellWorkingDirectoryResolver.js';
 
 const managers: ShellSessionManager[] = [];
 const temporaryDirectories: string[] = [];

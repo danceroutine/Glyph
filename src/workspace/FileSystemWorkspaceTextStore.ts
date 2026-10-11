@@ -16,8 +16,8 @@ import {
 } from 'node:fs/promises';
 import { dirname, isAbsolute, matchesGlob, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
-import { EditError } from '../editing/errors/EditError.ts';
-import { EditFailureReason } from '../editing/errors/EditFailureReason.ts';
+import { EditError } from '#src/editing/errors/EditError.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
 import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';

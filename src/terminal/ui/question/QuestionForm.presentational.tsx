@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
-import { sanitizeText } from '../shared/sanitizeText.ts';
+import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 import type { QuestionFormState } from './useQuestionFormState.ts';
 
 export type QuestionFormProps = QuestionFormState;

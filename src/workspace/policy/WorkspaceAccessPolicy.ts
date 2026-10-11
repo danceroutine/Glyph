@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { WorkspaceAccessPolicyOptions } from './WorkspaceAccessPolicyOptions.ts';
 
 const defaults = {
-  ignoredDirectories: ['.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
+  ignoredDirectories: ['.artifacts', '.code-oss', '.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
   sensitiveFileNames: ['.git-credentials', '.netrc', '.npmrc', '.pypirc'],
   sensitiveFilePrefixes: ['.env'],
   sensitiveFileExtensions: ['.key', '.pem', '.p12', '.pfx'],

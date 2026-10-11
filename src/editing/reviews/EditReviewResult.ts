@@ -1,6 +1,6 @@
 import type { EditDecisionState } from './EditDecisionState.ts';
 import type { EditReviewItemKind } from './EditReviewItemKind.ts';
-import type { EditProposalOrigin } from '../proposals/EditProposalOrigin.ts';
+import type { EditProposalOrigin } from '#src/editing/proposals/EditProposalOrigin.js';
 
 export interface EditReviewResultItem {
   readonly itemId: string;

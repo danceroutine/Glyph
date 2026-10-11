@@ -1,14 +1,14 @@
 import { z } from 'zod';
-import { WorkspacePathIndexError } from '../context/search/WorkspacePathIndexError.ts';
-import { WorkspacePathIndexFailureReason } from '../context/search/WorkspacePathIndexFailureReason.ts';
-import type { WorkspacePathIndex } from '../context/search/WorkspacePathIndex.ts';
-import type { ToolDefinition } from '../tools/ToolDefinition.ts';
-import { ToolInputKind } from '../tools/ToolInputKind.ts';
-import { FileSystemWorkspaceTextStore } from '../workspace/FileSystemWorkspaceTextStore.ts';
-import type { WorkspaceTextStore } from '../workspace/WorkspaceTextStore.ts';
-import { WorkspaceAccessPolicy } from '../workspace/policy/WorkspaceAccessPolicy.ts';
-import { EditError } from '../editing/errors/EditError.ts';
-import { EditFailureReason } from '../editing/errors/EditFailureReason.ts';
+import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
+import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
+import type { ToolDefinition } from '#src/tools/ToolDefinition.js';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { EditError } from '#src/editing/errors/EditError.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 

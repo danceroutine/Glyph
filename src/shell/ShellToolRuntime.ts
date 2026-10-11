@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import type { ToolDefinition } from '../tools/ToolDefinition.ts';
-import { ToolInputKind } from '../tools/ToolInputKind.ts';
-import type { ToolRuntime } from '../tools/ToolRuntime.ts';
-import type { ToolExecutionContext } from '../tools/ToolExecutionContext.ts';
+import type { ToolDefinition } from '#src/tools/ToolDefinition.js';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import type { ShellSessionManager } from './ShellSessionManager.ts';
 import { ShellToolName } from './ShellToolName.ts';
 import { ShellToolNamespace } from './ShellToolNamespace.ts';

@@ -1,5 +1,5 @@
-import type { Logger } from '../observability/Logger.ts';
-import { ProviderError } from '../errors/ProviderError.ts';
+import type { Logger } from '#src/observability/Logger.js';
+import { ProviderError } from '#src/errors/ProviderError.js';
 import type { ChatProvider } from './ChatProvider.ts';
 import { ChatResponsePartType } from './ChatResponsePartType.ts';
 import type { ChatResponseStream } from './ChatResponseStream.ts';
@@ -10,7 +10,7 @@ import type { TurnResult } from './TurnResult.ts';
 import type { ChatRequestInput } from './ChatRequest.ts';
 import type { ChatProviderState } from './ChatProviderState.ts';
 import type { ChatContextEvent } from './ChatContextEvent.ts';
-import type { ToolExecutionContext } from '../tools/ToolExecutionContext.ts';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 
 export interface ChatConversationSendOptions {
   readonly onStateCheckpoint?: (state: ChatProviderState) => void | Promise<void>;

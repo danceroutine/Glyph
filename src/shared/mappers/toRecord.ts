@@ -1,4 +1,4 @@
-import { ProtocolError } from '../../errors/ProtocolError.ts';
+import { ProtocolError } from '#src/errors/ProtocolError.js';
 
 export function toRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

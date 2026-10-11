@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { QuestionAnswer } from '../QuestionAnswer.ts';
-import { QuestionAnswerType } from '../QuestionAnswerType.ts';
-import type { QuestionPresenter } from '../QuestionPresenter.ts';
-import { ProposeQuestionToolRuntime } from '../ProposeQuestionToolRuntime.ts';
-import { QuestionToolName } from '../QuestionToolName.ts';
-import { QuestionToolNamespace } from '../QuestionToolNamespace.ts';
+import type { QuestionAnswer } from '#src/interaction/questions/QuestionAnswer.js';
+import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
+import type { QuestionPresenter } from '#src/interaction/questions/QuestionPresenter.js';
+import { ProposeQuestionToolRuntime } from '#src/interaction/questions/ProposeQuestionToolRuntime.js';
+import { QuestionToolName } from '#src/interaction/questions/QuestionToolName.js';
+import { QuestionToolNamespace } from '#src/interaction/questions/QuestionToolNamespace.js';
 
 const validInput = JSON.stringify({
   title: 'Choose an implementation',

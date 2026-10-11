@@ -2,7 +2,7 @@ import { link, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FileLogger } from '../FileLogger.ts';
+import { FileLogger } from '#src/observability/FileLogger.js';
 
 const temporaryDirectories: string[] = [];
 

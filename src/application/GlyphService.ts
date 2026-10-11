@@ -1,21 +1,21 @@
-import { ChatConversation } from '../chat/ChatConversation.ts';
-import type { ChatAccount } from '../chat/ChatAccount.ts';
-import type { ChatAuthorizationHandler } from '../chat/ChatAuthorizationRequest.ts';
-import type { ChatBackend, ChatBackendPresentation } from '../chat/ChatBackend.ts';
-import type { Model } from '../chat/Model.ts';
-import type { TurnResult } from '../chat/TurnResult.ts';
-import type { Usage } from '../chat/Usage.ts';
-import type { Logger } from '../observability/Logger.ts';
-import type { ProposalReviewManager } from '../editing/reviews/ProposalReviewManager.ts';
-import type { ChatRequest } from '../chat/ChatRequest.ts';
-import type { ContextAttachmentReference } from '../context/attachments/ContextAttachmentReference.ts';
-import type { ContextAttachmentService } from '../context/attachments/ContextAttachmentService.ts';
-import type { WorkspacePathIndex } from '../context/search/WorkspacePathIndex.ts';
-import type { ChatProviderState } from '../chat/ChatProviderState.ts';
-import type { ChatSession } from '../chat/sessions/ChatSession.ts';
-import type { ChatSessionManager } from '../chat/sessions/ChatSessionManager.ts';
-import type { ChatSessionSummary } from '../chat/sessions/ChatSessionRecord.ts';
-import type { ChatContextEvent } from '../chat/ChatContextEvent.ts';
+import { ChatConversation } from '#src/chat/ChatConversation.js';
+import type { ChatAccount } from '#src/chat/ChatAccount.js';
+import type { ChatAuthorizationHandler } from '#src/chat/ChatAuthorizationRequest.js';
+import type { ChatBackend, ChatBackendPresentation } from '#src/chat/ChatBackend.js';
+import type { Model } from '#src/chat/Model.js';
+import type { TurnResult } from '#src/chat/TurnResult.js';
+import type { Usage } from '#src/chat/Usage.js';
+import type { Logger } from '#src/observability/Logger.js';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import type { ChatRequest } from '#src/chat/ChatRequest.js';
+import type { ContextAttachmentReference } from '#src/context/attachments/ContextAttachmentReference.js';
+import type { ContextAttachmentService } from '#src/context/attachments/ContextAttachmentService.js';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { ChatSession } from '#src/chat/sessions/ChatSession.js';
+import type { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
+import type { ChatSessionSummary } from '#src/chat/sessions/ChatSessionRecord.js';
+import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 
 const emptyUsage = (): Usage => ({
   inputTokens: 0,
@@ -199,16 +199,16 @@ export class GlyphService {
   }
 
   openChat(identifier: string, account: ChatAccount): ChatSession {
-    return this.requireChatSessions().open(identifier, record => {
-      if (record.accountProvider !== account.provider || record.accountId !== account.id) {
-        throw new Error('That chat belongs to a different provider account or workspace.');
-      }
-      return this.instantiateConversation(
-        account,
-        { slug: record.modelSlug, name: record.modelName },
-        record.providerState,
-      );
-    });
+    return this.requireChatSessions().open(
+      identifier,
+      record =>
+        this.instantiateConversation(account, { slug: record.modelSlug, name: record.modelName }, record.providerState),
+      record => {
+        if (record.accountProvider !== account.provider || record.accountId !== account.id) {
+          throw new Error('That chat belongs to a different provider account or workspace.');
+        }
+      },
+    );
   }
 
   renameChat(identifier: string, title: string): Promise<ChatSessionSummary> {

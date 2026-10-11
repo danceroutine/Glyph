@@ -1,4 +1,4 @@
-import type { EditReviewItem } from '../reviews/EditReviewItem.ts';
+import type { EditReviewItem } from '#src/editing/reviews/EditReviewItem.js';
 
 /** Converts exact Base and Proposed text into independently reviewable changes. */
 export interface TextDiffer {

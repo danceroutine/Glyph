@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ToolInputKind } from '../ToolInputKind.ts';
-import type { ToolRuntime } from '../ToolRuntime.ts';
-import { CompositeToolRuntime } from '../CompositeToolRuntime.ts';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import { CompositeToolRuntime } from '#src/tools/CompositeToolRuntime.js';
 
 describe(CompositeToolRuntime, () => {
   describe('constructor', () => {

@@ -1,5 +1,5 @@
-import type { OpenAIAccountStore } from '../../../providers/openai/auth/OpenAIAccountStore.ts';
-import type { OpenAISavedState } from '../../../providers/openai/auth/OpenAISavedState.ts';
+import type { OpenAIAccountStore } from '#src/providers/openai/auth/OpenAIAccountStore.js';
+import type { OpenAISavedState } from '#src/providers/openai/auth/OpenAISavedState.js';
 
 export class FixtureOpenAIAccountStore implements OpenAIAccountStore {
   readonly state: OpenAISavedState = {

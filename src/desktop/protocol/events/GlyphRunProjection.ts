@@ -1,0 +1,26 @@
+import type { GlyphToolActivity } from './GlyphToolActivity.ts';
+import type { GlyphQuestionRequest } from './GlyphQuestionRequest.ts';
+import type { GlyphApprovalRequest } from './GlyphApprovalRequest.ts';
+
+export enum GlyphRunStatus {
+  STREAMING = 'streaming',
+  WAITING_FOR_QUESTION = 'waiting_for_question',
+  WAITING_FOR_APPROVAL = 'waiting_for_approval',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+  INTERRUPTED = 'interrupted',
+  FAILED = 'failed',
+}
+
+export interface GlyphRunProjection {
+  readonly chatId: string;
+  readonly runId: string;
+  readonly status: GlyphRunStatus;
+  readonly text: string;
+  readonly userText?: string;
+  readonly reasoning: string;
+  readonly tools: readonly GlyphToolActivity[];
+  readonly question?: GlyphQuestionRequest;
+  readonly approval?: GlyphApprovalRequest;
+  readonly terminalMessage?: string;
+}

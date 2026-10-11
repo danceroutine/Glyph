@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ProjectContextKind } from '../ProjectContextKind.ts';
-import { ProjectContextResolver } from '../ProjectContextResolver.ts';
+import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
+import { ProjectContextResolver } from '#src/project/context/ProjectContextResolver.js';
 
 const temporaryPaths: string[] = [];
 

@@ -2,14 +2,14 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FileShellPermissionStore } from '../FileShellPermissionStore.ts';
-import { ShellCommandAuthorizer } from '../ShellCommandAuthorizer.ts';
-import { ShellPermissionDecision } from '../ShellPermissionDecision.ts';
-import { ShellPermissionMode } from '../ShellPermissionPolicy.ts';
-import { ShellSandboxProfile } from '../ShellSandboxProfile.ts';
-import { isSafeShellCommand } from '../isSafeShellCommand.ts';
-import type { ShellPermissionPresenter } from '../ShellPermissionPresenter.ts';
-import type { ShellPermissionStore } from '../ShellPermissionStore.ts';
+import { FileShellPermissionStore } from '#src/shell/FileShellPermissionStore.js';
+import { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.js';
+import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
+import { ShellPermissionMode } from '#src/shell/ShellPermissionPolicy.js';
+import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
+import { isSafeShellCommand } from '#src/shell/isSafeShellCommand.js';
+import type { ShellPermissionPresenter } from '#src/shell/ShellPermissionPresenter.js';
+import type { ShellPermissionStore } from '#src/shell/ShellPermissionStore.js';
 
 const temporaryDirectories: string[] = [];
 

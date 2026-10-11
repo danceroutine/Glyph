@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
-import { ShutdownSignal } from '../ShutdownSignal.ts';
-import { installShutdownHandlers } from '../installShutdownHandlers.ts';
+import { ShutdownSignal } from '#src/terminal/ShutdownSignal.js';
+import { installShutdownHandlers } from '#src/terminal/installShutdownHandlers.js';
 
 describe(installShutdownHandlers, () => {
   it('cancels an active response before shutting down on SIGINT', () => {

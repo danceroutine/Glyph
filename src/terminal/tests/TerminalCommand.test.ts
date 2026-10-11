@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { TerminalActionType } from '../TerminalActionType.ts';
-import { resolveTerminalCommand, searchTerminalCommands, TERMINAL_COMMANDS } from '../TerminalCommand.ts';
+import { TerminalActionType } from '#src/terminal/TerminalActionType.js';
+import { resolveTerminalCommand, searchTerminalCommands, TERMINAL_COMMANDS } from '#src/terminal/TerminalCommand.js';
 
 describe('terminal commands', () => {
   it('searches the complete catalog by case-insensitive prefix', () => {

@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AuthenticationError } from '../../../../errors/AuthenticationError.ts';
-import type { HttpClient } from '../../../../http/HttpClient.ts';
-import type { OpenAIConfiguration } from '../../OpenAIConfiguration.ts';
-import type { OpenAIAccount } from '../OpenAIAccount.ts';
-import type { OpenAIAccountStore } from '../OpenAIAccountStore.ts';
-import { OpenAIAuthenticationClient } from '../OpenAIAuthenticationClient.ts';
-import type { OpenAISavedState } from '../OpenAISavedState.ts';
-import { OpenAISession } from '../OpenAISession.ts';
+import { AuthenticationError } from '#src/errors/AuthenticationError.js';
+import type { HttpClient } from '#src/http/HttpClient.js';
+import type { OpenAIConfiguration } from '#src/providers/openai/OpenAIConfiguration.js';
+import type { OpenAIAccount } from '#src/providers/openai/auth/OpenAIAccount.js';
+import type { OpenAIAccountStore } from '#src/providers/openai/auth/OpenAIAccountStore.js';
+import { OpenAIAuthenticationClient } from '#src/providers/openai/auth/OpenAIAuthenticationClient.js';
+import type { OpenAISavedState } from '#src/providers/openai/auth/OpenAISavedState.js';
+import { OpenAISession } from '#src/providers/openai/auth/OpenAISession.js';
 
 const configuration: OpenAIConfiguration = {
   issuer: 'https://auth.example.test',

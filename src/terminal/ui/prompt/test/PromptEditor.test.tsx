@@ -1,10 +1,10 @@
 import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
-import { TerminalActionType } from '#src/terminal/TerminalActionType.ts';
-import { PromptEditor } from '../PromptEditor.presentational.tsx';
-import { PromptRecord } from '../PromptRecord.presentational.tsx';
-import { formatPromptText } from '../formatPromptText.ts';
+import { TerminalActionType } from '#src/terminal/TerminalActionType.js';
+import { PromptEditor } from '#src/terminal/ui/prompt/PromptEditor.presentational.js';
+import { PromptRecord } from '#src/terminal/ui/prompt/PromptRecord.presentational.js';
+import { formatPromptText } from '#src/terminal/ui/prompt/formatPromptText.js';
 
 describe(PromptEditor, () => {
   describe('rendering', () => {

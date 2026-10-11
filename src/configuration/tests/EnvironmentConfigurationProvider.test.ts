@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigurationError } from '../../errors/ConfigurationError.ts';
-import { EnvironmentConfigurationProvider } from '../EnvironmentConfigurationProvider.ts';
+import { ConfigurationError } from '#src/errors/ConfigurationError.js';
+import { EnvironmentConfigurationProvider } from '#src/configuration/EnvironmentConfigurationProvider.js';
 
 describe(EnvironmentConfigurationProvider, () => {
   it('maps environment values into host-facing configuration without reading API credentials', () => {

@@ -3,15 +3,15 @@ import { join } from 'node:path';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { ConfigurationError } from '../../../errors/ConfigurationError.ts';
-import type { WorkspaceMutationOptions } from '../../../workspace/WorkspaceMutationOptions.ts';
-import type { WorkspaceTextSnapshot } from '../../../workspace/WorkspaceTextSnapshot.ts';
-import type { WorkspaceTextStore } from '../../../workspace/WorkspaceTextStore.ts';
-import { WorkspaceMutationConsistency } from '../../../workspace/WorkspaceMutationConsistency.ts';
-import { ContextAttachmentError } from '../ContextAttachmentError.ts';
-import { ContextAttachmentFailureReason } from '../ContextAttachmentFailureReason.ts';
-import { ContextAttachmentService } from '../ContextAttachmentService.ts';
-import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
+import { ConfigurationError } from '#src/errors/ConfigurationError.js';
+import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationOptions.js';
+import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
+import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
+import { ContextAttachmentError } from '#src/context/attachments/ContextAttachmentError.js';
+import { ContextAttachmentFailureReason } from '#src/context/attachments/ContextAttachmentFailureReason.js';
+import { ContextAttachmentService } from '#src/context/attachments/ContextAttachmentService.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 
 class MutableWorkspaceTextStore implements WorkspaceTextStore {
   readonly root = '/workspace';

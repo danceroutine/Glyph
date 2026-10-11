@@ -1,8 +1,8 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
-import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.ts';
-import { QuestionForm } from '../QuestionForm.presentational.tsx';
-import { QuestionFormReceipt } from '../QuestionFormReceipt.presentational.tsx';
+import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
+import { QuestionForm } from '#src/terminal/ui/question/QuestionForm.presentational.js';
+import { QuestionFormReceipt } from '#src/terminal/ui/question/QuestionFormReceipt.presentational.js';
 
 const singleQuestion = {
   id: 'color',

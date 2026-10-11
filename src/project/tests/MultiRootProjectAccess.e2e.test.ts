@@ -2,13 +2,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { MultiRootWorkspacePathIndex } from '../../context/search/MultiRootWorkspacePathIndex.ts';
-import { RustWorkspacePathIndex } from '../../context/search/RustWorkspacePathIndex.ts';
-import type { ProjectContext } from '../context/ProjectContext.ts';
-import { ProjectContextKind } from '../context/ProjectContextKind.ts';
-import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
-import { MultiRootWorkspaceTextStore } from '../../workspace/MultiRootWorkspaceTextStore.ts';
-import { ProjectAccess } from '../ProjectAccess.ts';
+import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
+import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
+import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTextStore.js';
+import { ProjectAccess } from '#src/project/ProjectAccess.js';
 
 const temporaryPaths: string[] = [];
 

@@ -1,15 +1,15 @@
 import { Duplex, PassThrough, Writable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
-import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
-import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
-import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
-import { TerminalActionType } from '../TerminalActionType.ts';
-import { TERMINAL_COMMANDS } from '../TerminalCommand.ts';
-import { TerminalUI } from '../TerminalUI.tsx';
-import { ShellPermissionDecision } from '../../shell/ShellPermissionDecision.ts';
-import type { ShellSessionManager } from '../../shell/ShellSessionManager.ts';
-import { ShellSessionStatus } from '../../shell/ShellSessionStatus.ts';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
+import { TerminalActionType } from '#src/terminal/TerminalActionType.js';
+import { TERMINAL_COMMANDS } from '#src/terminal/TerminalCommand.js';
+import { TerminalUI } from '#src/terminal/TerminalUI.js';
+import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
+import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 
 describe(TerminalUI, () => {
   describe(TerminalUI.prototype.nextAction, () => {

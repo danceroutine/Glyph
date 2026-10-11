@@ -1,7 +1,8 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    exclude: [...configDefaults.exclude, '**/.code-oss/**', 'code-oss/tests/electron/**', 'scripts/code-oss/tests/**'],
     coverage: {
       provider: 'v8',
       include: ['src/terminal/ui/**/*.{ts,tsx}'],

@@ -1,11 +1,11 @@
 import type { ReactElement } from 'react';
 import { Box, useWindowSize } from 'ink';
-import { WiredPromptEditor } from '../prompt/PromptEditor.wired.tsx';
-import { WiredProposalReview } from '../proposal/ProposalReview.wired.tsx';
-import { WiredQuestionForm } from '../question/QuestionForm.wired.tsx';
-import { WiredResponse } from '../response/Response.wired.tsx';
-import { WiredShellPermission } from '../shell-permission/ShellPermission.wired.tsx';
-import { WiredBackgroundShells } from '../background-shell/BackgroundShells.wired.tsx';
+import { WiredPromptEditor } from '#src/terminal/ui/prompt/PromptEditor.wired.js';
+import { WiredProposalReview } from '#src/terminal/ui/proposal/ProposalReview.wired.js';
+import { WiredQuestionForm } from '#src/terminal/ui/question/QuestionForm.wired.js';
+import { WiredResponse } from '#src/terminal/ui/response/Response.wired.js';
+import { WiredShellPermission } from '#src/terminal/ui/shell-permission/ShellPermission.wired.js';
+import { WiredBackgroundShells } from '#src/terminal/ui/background-shell/BackgroundShells.wired.js';
 import { TerminalRoot } from './TerminalRoot.presentational.tsx';
 import type { TerminalRendererSnapshot } from './TerminalRendererSnapshot.ts';
 import { useTerminalRootState } from './useTerminalRootState.ts';

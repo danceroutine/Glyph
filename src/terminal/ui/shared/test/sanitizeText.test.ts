@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sanitizeText } from '../sanitizeText.ts';
+import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 
 describe(sanitizeText, () => {
   it('removes terminal controls and exposes direction overrides', () => {

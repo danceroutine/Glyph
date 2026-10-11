@@ -1,9 +1,9 @@
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import { describe, expect, it, vi } from 'vitest';
-import { AuthenticationError } from '../../../../errors/AuthenticationError.ts';
-import type { HttpClient } from '../../../../http/HttpClient.ts';
-import type { OpenAIConfiguration } from '../../OpenAIConfiguration.ts';
-import { OpenAIAuthenticationClient } from '../OpenAIAuthenticationClient.ts';
+import { AuthenticationError } from '#src/errors/AuthenticationError.js';
+import type { HttpClient } from '#src/http/HttpClient.js';
+import type { OpenAIConfiguration } from '#src/providers/openai/OpenAIConfiguration.js';
+import { OpenAIAuthenticationClient } from '#src/providers/openai/auth/OpenAIAuthenticationClient.js';
 
 const configuration: OpenAIConfiguration = {
   issuer: 'https://auth.example.test',

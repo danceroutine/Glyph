@@ -1,17 +1,17 @@
-import { ProviderError } from '../../errors/ProviderError.ts';
-import type { ToolRuntime } from '../../tools/ToolRuntime.ts';
-import type { ChatContextEvent } from '../ChatContextEvent.ts';
-import type { ChatProvider } from '../ChatProvider.ts';
-import type { ChatProviderState } from '../ChatProviderState.ts';
-import type { ProviderTraceEntry } from '../ProviderTraceEntry.ts';
-import type { ChatRequestInput } from '../ChatRequest.ts';
-import { toChatRequest } from '../ChatRequest.ts';
-import type { ToolActivity } from '../ToolActivity.ts';
-import { ToolActivityPhase } from '../ToolActivityPhase.ts';
-import type { TurnResult } from '../TurnResult.ts';
-import type { Usage } from '../Usage.ts';
+import { ProviderError } from '#src/errors/ProviderError.js';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
+import type { ChatProvider } from '#src/chat/ChatProvider.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { ProviderTraceEntry } from '#src/chat/ProviderTraceEntry.js';
+import type { ChatRequestInput } from '#src/chat/ChatRequest.js';
+import { toChatRequest } from '#src/chat/ChatRequest.js';
+import type { ToolActivity } from '#src/chat/ToolActivity.js';
+import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
+import type { TurnResult } from '#src/chat/TurnResult.js';
+import type { Usage } from '#src/chat/Usage.js';
 import type { AgentModelAdapter, AgentToolResult, AgentTurnContext } from './AgentModelAdapter.ts';
-import type { ToolExecutionContext } from '../../tools/ToolExecutionContext.ts';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 
 interface AgentRuntimeConfiguration {
   readonly timeoutMs: number;

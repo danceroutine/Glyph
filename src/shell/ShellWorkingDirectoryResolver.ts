@@ -1,7 +1,7 @@
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import type { ProjectContext } from '../project/context/ProjectContext.ts';
-import { ProjectContextKind } from '../project/context/ProjectContextKind.ts';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
+import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 
 /** Resolves project-relative shell directories without permitting root or symlink escapes. */
 export class ShellWorkingDirectoryResolver {

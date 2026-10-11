@@ -2,13 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { EditError } from '../../errors/EditError.ts';
-import { EditFailureReason } from '../../errors/EditFailureReason.ts';
-import { EditOperation } from '../../proposals/EditOperation.ts';
-import type { EditProposal } from '../../proposals/EditProposal.ts';
-import { EditApplicabilityState } from '../EditApplicabilityState.ts';
-import { EditDecisionState } from '../EditDecisionState.ts';
-import { EditReviewItemKind } from '../EditReviewItemKind.ts';
+import { EditError } from '#src/editing/errors/EditError.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
+import { EditOperation } from '#src/editing/proposals/EditOperation.js';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
+import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
 import type { ProposalReviewStore } from './ProposalReviewStore.ts';
 
 interface ProposalReviewCheckpoint {

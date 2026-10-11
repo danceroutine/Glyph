@@ -1,7 +1,7 @@
-import type { WorkspaceTextSnapshot } from '../../workspace/WorkspaceTextSnapshot.ts';
-import type { EditApplicabilityState } from '../reviews/EditApplicabilityState.ts';
+import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
+import type { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
 import type { EditOperation } from './EditOperation.ts';
-import type { EditReviewItem } from '../reviews/EditReviewItem.ts';
+import type { EditReviewItem } from '#src/editing/reviews/EditReviewItem.js';
 
 export interface FileEditPlan {
   readonly id: string;

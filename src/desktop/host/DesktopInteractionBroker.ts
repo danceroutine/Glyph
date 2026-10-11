@@ -1,0 +1,195 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
+import type { QuestionPresenter } from '#src/interaction/questions/QuestionPresenter.js';
+import type { QuestionForm } from '#src/interaction/questions/QuestionForm.js';
+import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.js';
+import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
+import type { ShellPermissionPresenter } from '#src/shell/ShellPermissionPresenter.js';
+import type { ShellPermissionRequest } from '#src/shell/ShellPermissionRequest.js';
+import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
+import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
+
+interface RunIdentity {
+  readonly chatId: string;
+  readonly runId: string;
+}
+interface PendingDecision extends RunIdentity {
+  readonly resolve: (value: unknown) => void;
+  readonly reject: (error: Error) => void;
+  readonly kind: 'question' | 'approval';
+}
+const answersSchema = z.object({
+  answers: z.array(
+    z.discriminatedUnion('type', [
+      z.object({ questionId: z.string(), type: z.literal(QuestionAnswerType.OTHER), text: z.string().trim().min(1) }),
+      z.object({
+        questionId: z.string(),
+        type: z.literal(QuestionAnswerType.SELECTION),
+        optionIds: z.array(z.string()).min(1),
+      }),
+    ]),
+  ),
+});
+
+/** Routes human decisions to the originating run even when several chats execute concurrently. */
+export class DesktopInteractionBroker implements QuestionPresenter, ShellPermissionPresenter {
+  private readonly scope = new AsyncLocalStorage<RunIdentity>();
+  private readonly pending = new Map<string, PendingDecision>();
+  private readonly queues = new Map<string, Promise<void>>();
+
+  constructor(private readonly emit: (event: GlyphHostEvent) => void) {}
+
+  run<T>(identity: RunIdentity, operation: () => Promise<T>): Promise<T> {
+    return this.scope.run({ chatId: identity.chatId, runId: identity.runId }, operation);
+  }
+
+  async present(form: QuestionForm, signal: AbortSignal): Promise<QuestionFormResult> {
+    const identity = this.requireRun();
+    const id = randomUUID();
+    return this.wait(
+      id,
+      identity,
+      'question',
+      signal,
+      value => {
+        const result = answersSchema.parse(value);
+        if (
+          result.answers.length !== form.questions.length ||
+          new Set(result.answers.map(answer => answer.questionId)).size !== result.answers.length
+        ) {
+          throw new Error('Answer every question exactly once.');
+        }
+        for (const question of form.questions) {
+          const answer = result.answers.find(value => value.questionId === question.id);
+          if (!answer) throw new Error('An answer is missing.');
+          if (
+            answer.type === QuestionAnswerType.SELECTION &&
+            ((!question.allowMultiple && answer.optionIds.length !== 1) ||
+              answer.optionIds.some(id => !question.options.some(option => option.id === id)))
+          )
+            throw new Error('The selected answer is invalid.');
+        }
+        return result;
+      },
+      () =>
+        this.emit({
+          type: GlyphHostEventType.QUESTION,
+          ...identity,
+          question: {
+            id,
+            title: form.title ?? 'Question',
+            prompt: form.questions.map(question => question.prompt).join('\n'),
+            questions: form.questions,
+          },
+        }),
+    );
+  }
+
+  presentShellPermission(request: ShellPermissionRequest, signal: AbortSignal): Promise<ShellPermissionDecision> {
+    const identity = this.requireRun();
+    const id = randomUUID();
+    return this.wait(
+      id,
+      identity,
+      'approval',
+      signal,
+      value => {
+        if (typeof value !== 'boolean') throw new Error('An approval must be a boolean.');
+        return value ? ShellPermissionDecision.ALLOW_ONCE : ShellPermissionDecision.DENY;
+      },
+      () =>
+        this.emit({
+          type: GlyphHostEventType.APPROVAL,
+          ...identity,
+          approval: {
+            id,
+            title: 'Allow shell command?',
+            detail: `${request.command}\nWorking directory: ${request.workingDirectory}`,
+            sandboxed: true,
+          },
+        }),
+    );
+  }
+
+  answer(
+    input: RunIdentity & { readonly id: string; readonly kind: PendingDecision['kind']; readonly value: unknown },
+  ): void {
+    const pending = this.pending.get(input.id);
+    if (!pending || pending.chatId !== input.chatId || pending.runId !== input.runId || pending.kind !== input.kind) {
+      throw new Error('This decision is no longer pending for that run.');
+    }
+    pending.resolve(input.value);
+  }
+
+  private requireRun(): RunIdentity {
+    const identity = this.scope.getStore();
+    if (!identity) throw new Error('Human interaction requires an active chat run.');
+    return identity;
+  }
+
+  private wait<T>(
+    id: string,
+    identity: RunIdentity,
+    kind: PendingDecision['kind'],
+    signal: AbortSignal,
+    parse: (value: unknown) => T,
+    publish: () => void,
+  ): Promise<T> {
+    // A run exposes one human decision at a time; parallel tool calls queue
+    // here so a reconnect snapshot never loses an unanswered form.
+    const key = `${identity.chatId}\0${identity.runId}`;
+    const previous = this.queues.get(key);
+    const result = previous
+      ? previous.then(() => this.waitNow(id, identity, kind, signal, parse, publish))
+      : this.waitNow(id, identity, kind, signal, parse, publish);
+    const settled = result.then(
+      () => {},
+      () => {},
+    );
+    this.queues.set(key, settled);
+    void settled.then(() => {
+      if (this.queues.get(key) === settled) this.queues.delete(key);
+    });
+    return result;
+  }
+
+  private waitNow<T>(
+    id: string,
+    identity: RunIdentity,
+    kind: PendingDecision['kind'],
+    signal: AbortSignal,
+    parse: (value: unknown) => T,
+    publish: () => void,
+  ): Promise<T> {
+    signal.throwIfAborted();
+    return new Promise<T>((resolve, reject) => {
+      const cleanup = () => {
+        this.pending.delete(id);
+        signal.removeEventListener('abort', abort);
+      };
+      const abort = () => {
+        cleanup();
+        reject(signal.reason ?? new Error('Run cancelled.'));
+      };
+      this.pending.set(id, {
+        ...identity,
+        kind,
+        reject,
+        resolve: value => {
+          // Parse before removing the request: malformed answers can be corrected.
+          const parsed = parse(value);
+          cleanup();
+          resolve(parsed);
+        },
+      });
+      signal.addEventListener('abort', abort, { once: true });
+      try {
+        publish();
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    });
+  }
+}

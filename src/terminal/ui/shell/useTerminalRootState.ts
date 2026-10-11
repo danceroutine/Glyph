@@ -1,10 +1,10 @@
 import { useMemo } from 'react';
-import type { ChatResponsePart } from '#src/chat/ChatResponsePart.ts';
-import type { PromptRequest } from '../prompt/PromptRequest.ts';
-import type { ProposalReviewRequest } from '../proposal/ProposalReviewRequest.ts';
-import type { QuestionFormRequest } from '../question/QuestionFormRequest.ts';
-import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.ts';
-import type { TerminalShellPermissionRequest } from '../shell-permission/ShellPermissionRequest.ts';
+import type { ChatResponsePart } from '#src/chat/ChatResponsePart.js';
+import type { PromptRequest } from '#src/terminal/ui/prompt/PromptRequest.js';
+import type { ProposalReviewRequest } from '#src/terminal/ui/proposal/ProposalReviewRequest.js';
+import type { QuestionFormRequest } from '#src/terminal/ui/question/QuestionFormRequest.js';
+import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
+import type { TerminalShellPermissionRequest } from '#src/terminal/ui/shell-permission/ShellPermissionRequest.js';
 import type { TerminalRendererSnapshot } from './TerminalRendererSnapshot.ts';
 import type { TranscriptEntry } from './TranscriptEntry.ts';
 

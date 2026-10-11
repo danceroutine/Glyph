@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GlyphService } from '../../application/GlyphService.ts';
-import type { ChatSession } from '../../chat/sessions/ChatSession.ts';
-import type { ShellSessionManager } from '../../shell/ShellSessionManager.ts';
-import type { ShellWakeEvent } from '../../shell/ShellWakeEvent.ts';
-import { TerminalApplication } from '../TerminalApplication.ts';
-import type { TerminalUI } from '../TerminalUI.tsx';
-import { TerminalActionType } from '../TerminalActionType.ts';
-import { ProjectContextKind } from '../../project/context/ProjectContextKind.ts';
+import type { GlyphService } from '#src/application/GlyphService.js';
+import type { ChatSession } from '#src/chat/sessions/ChatSession.js';
+import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
+import { TerminalApplication } from '#src/terminal/TerminalApplication.js';
+import type { TerminalUI } from '#src/terminal/TerminalUI.js';
+import { TerminalActionType } from '#src/terminal/TerminalActionType.js';
+import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 
 const projectContext = {
   id: 'project',

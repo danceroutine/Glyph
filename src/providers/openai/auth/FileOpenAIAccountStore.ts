@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ConcurrentInstanceError } from '../../../errors/ConcurrentInstanceError.ts';
-import { PersistenceError } from '../../../errors/PersistenceError.ts';
+import { ConcurrentInstanceError } from '#src/errors/ConcurrentInstanceError.js';
+import { PersistenceError } from '#src/errors/PersistenceError.js';
 import type { OpenAIAccountStore } from './OpenAIAccountStore.ts';
 import type { OpenAISavedState } from './OpenAISavedState.ts';
 

@@ -4,7 +4,7 @@ import { basename, delimiter, isAbsolute, relative, sep } from 'node:path';
 import type { ShellExecutionAuthorization } from './ShellExecutionAuthorization.ts';
 import type { ShellProcessLauncher } from './ShellProcessLauncher.ts';
 import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
-import { WorkspaceAccessPolicy } from '../workspace/policy/WorkspaceAccessPolicy.ts';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 export interface NativeShellSandboxLauncherOptions {
   readonly binaryPath: string;

@@ -10,20 +10,20 @@ import type {
   ResponseOutputItem,
   NamespaceTool,
 } from 'openai/resources/responses/responses';
-import type { ChatConfiguration } from '../../configuration/ChatConfiguration.ts';
-import { ProviderError } from '../../errors/ProviderError.ts';
-import type { ToolRuntime } from '../../tools/ToolRuntime.ts';
-import { ToolInputKind } from '../../tools/ToolInputKind.ts';
-import type { ChatProviderState } from '../../chat/ChatProviderState.ts';
-import type { ChatRequest } from '../../chat/ChatRequest.ts';
-import type { ChatContextEvent } from '../../chat/ChatContextEvent.ts';
-import { AgentRuntime } from '../../chat/runtime/AgentRuntime.ts';
+import type { ChatConfiguration } from '#src/configuration/ChatConfiguration.js';
+import { ProviderError } from '#src/errors/ProviderError.js';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { ChatRequest } from '#src/chat/ChatRequest.js';
+import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
+import { AgentRuntime } from '#src/chat/runtime/AgentRuntime.js';
 import type {
   AgentModelAdapter,
   AgentToolResult,
   AgentTurnContext,
   AgentTurnStep,
-} from '../../chat/runtime/AgentModelAdapter.ts';
+} from '#src/chat/runtime/AgentModelAdapter.js';
 
 interface OpenAITurn {
   readonly client: OpenAI;

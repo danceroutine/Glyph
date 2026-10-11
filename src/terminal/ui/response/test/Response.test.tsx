@@ -2,12 +2,12 @@ import { stripVTControlCharacters } from 'node:util';
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.ts';
-import { DiagnosticSeverity } from '#src/chat/DiagnosticSeverity.ts';
-import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.ts';
-import { Response } from '../Response.presentational.tsx';
-import { WiredResponse } from '../Response.wired.tsx';
-import { ToolActivity } from '../ToolActivity.presentational.tsx';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import { DiagnosticSeverity } from '#src/chat/DiagnosticSeverity.js';
+import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
+import { Response } from '#src/terminal/ui/response/Response.presentational.js';
+import { WiredResponse } from '#src/terminal/ui/response/Response.wired.js';
+import { ToolActivity } from '#src/terminal/ui/response/ToolActivity.presentational.js';
 
 describe(Response, () => {
   describe('rendering', () => {

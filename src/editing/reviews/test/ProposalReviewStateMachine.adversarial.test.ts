@@ -2,15 +2,15 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { NullLogger } from '../../../observability/NullLogger.ts';
-import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
-import type { EditingConfiguration } from '../../configuration/EditingConfiguration.ts';
-import { JsDiffTextDiffer } from '../../documents/JsDiffTextDiffer.ts';
-import { EditOperation } from '../../proposals/EditOperation.ts';
-import { EditProposalService } from '../../proposals/EditProposalService.ts';
-import { EditDecisionState } from '../EditDecisionState.ts';
-import { ProposalReviewManager } from '../ProposalReviewManager.ts';
-import { FileProposalReviewStore } from '../persistence/FileProposalReviewStore.ts';
+import { NullLogger } from '#src/observability/NullLogger.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
+import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
+import { EditOperation } from '#src/editing/proposals/EditOperation.js';
+import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
+import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
 
 const directories: string[] = [];
 const configuration: EditingConfiguration = {

@@ -1,8 +1,8 @@
 import { useMemo } from 'react';
 import { useAnimation, useWindowSize } from 'ink';
-import type { ChatResponsePart } from '#src/chat/ChatResponsePart.ts';
-import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.ts';
-import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.ts';
+import type { ChatResponsePart } from '#src/chat/ChatResponsePart.js';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 
 /** Display-ready response sections after adjacent stream fragments are combined. */
 export interface ResponseState {

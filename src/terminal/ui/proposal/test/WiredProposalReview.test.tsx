@@ -1,8 +1,8 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.ts';
-import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.ts';
-import { WiredProposalReview } from '../ProposalReview.wired.tsx';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
+import { WiredProposalReview } from '#src/terminal/ui/proposal/ProposalReview.wired.js';
 import { createProposalReviewFixture } from './ProposalReviewFixture.ts';
 
 describe(WiredProposalReview, () => {

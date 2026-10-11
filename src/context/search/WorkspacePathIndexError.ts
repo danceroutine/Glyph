@@ -1,4 +1,4 @@
-import { GlyphError } from '../../errors/GlyphError.ts';
+import { GlyphError } from '#src/errors/GlyphError.js';
 import type { WorkspacePathIndexFailureReason } from './WorkspacePathIndexFailureReason.ts';
 
 /** Typed failure returned by the native workspace-path protocol or its transport. */

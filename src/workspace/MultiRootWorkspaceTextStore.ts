@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
-import { EditError } from '../editing/errors/EditError.ts';
-import { EditFailureReason } from '../editing/errors/EditFailureReason.ts';
-import type { ProjectContext } from '../project/context/ProjectContext.ts';
+import { EditError } from '#src/editing/errors/EditError.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import type { WorkspaceMutationOptions } from './WorkspaceMutationOptions.ts';
 import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';

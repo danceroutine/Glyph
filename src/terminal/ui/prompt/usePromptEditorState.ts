@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCursor, useInput, usePaste, useWindowSize } from 'ink';
 import stringWidth from 'string-width';
-import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.ts';
-import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.ts';
-import type { FileSearchMatch } from '#src/context/search/FileSearchMatch.ts';
-import { searchTerminalCommands, type TerminalCommand } from '../../TerminalCommand.ts';
-import { sanitizeText } from '../shared/sanitizeText.ts';
+import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
+import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
+import type { FileSearchMatch } from '#src/context/search/FileSearchMatch.js';
+import { searchTerminalCommands, type TerminalCommand } from '#src/terminal/TerminalCommand.js';
+import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 import type { PromptRequest } from './PromptRequest.ts';
 import { editPrompt } from './PromptEditing.ts';
 import { formatPromptText } from './formatPromptText.ts';

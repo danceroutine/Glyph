@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { assertShellRuntimePathIsolation, pathsOverlap } from '../ShellRuntimePathPolicy.ts';
+import { assertShellRuntimePathIsolation, pathsOverlap } from '#src/shell/ShellRuntimePathPolicy.js';
 
 const temporaryDirectories: string[] = [];
 

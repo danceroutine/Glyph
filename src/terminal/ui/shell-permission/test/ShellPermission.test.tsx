@@ -1,8 +1,8 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
-import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.ts';
-import type { TerminalShellPermissionRequest } from '../ShellPermissionRequest.ts';
-import { WiredShellPermission } from '../ShellPermission.wired.tsx';
+import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
+import type { TerminalShellPermissionRequest } from '#src/terminal/ui/shell-permission/ShellPermissionRequest.js';
+import { WiredShellPermission } from '#src/terminal/ui/shell-permission/ShellPermission.wired.js';
 
 describe(WiredShellPermission, () => {
   describe('interaction', () => {

@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ProjectContext } from '../../project/context/ProjectContext.ts';
-import { ProjectContextKind } from '../../project/context/ProjectContextKind.ts';
-import { FileSystemWorkspaceTextStore } from '../FileSystemWorkspaceTextStore.ts';
-import { MultiRootWorkspaceTextStore } from '../MultiRootWorkspaceTextStore.ts';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
+import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTextStore.js';
 
 const temporaryPaths: string[] = [];
 

@@ -8,7 +8,7 @@ import {
   type ResolvedRustWorkspacePathIndexOptions,
   type RustWorkspacePathIndexConfiguration,
 } from './RustWorkspacePathIndexOptions.ts';
-import { WorkspaceAccessPolicy } from '../../workspace/policy/WorkspaceAccessPolicy.ts';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import {
   workspaceContentSearchOptionsSchema,
   type WorkspaceContentSearchOptions,

@@ -1,0 +1,14 @@
+{
+  "extends": "../.code-oss/src/src/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "typeRoots": ["../.code-oss/src/node_modules/@types", "../.code-oss/src/node_modules"],
+    "paths": {
+      "#vs/*": ["./overlay/src/vs/*", "../.code-oss/src/src/vs/*"],
+      "#glyph/*": ["./overlay/src/vs/platform/glyph/common/*", "../.code-oss/src/src/vs/platform/glyph/common/*"],
+      "electron": ["../.code-oss/src/.build/typings/electron.d.ts"],
+      "electron/*": ["../.code-oss/src/.build/typings/electron.d.ts"]
+    }
+  },
+  "include": ["overlay/src/**/*.ts", "../.code-oss/src/src/typings/**/*.d.ts"]
+}

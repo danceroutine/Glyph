@@ -1,8 +1,8 @@
 import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
-import type { ToolActivity as ToolActivityModel } from '#src/chat/ToolActivity.ts';
-import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.ts';
-import { sanitizeText } from '../shared/sanitizeText.ts';
+import type { ToolActivity as ToolActivityModel } from '#src/chat/ToolActivity.js';
+import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
+import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 
 export interface ToolActivityProps {
   activity: ToolActivityModel;

@@ -1,8 +1,8 @@
-import { ProviderError } from '../../errors/ProviderError.ts';
-import type { HttpClient } from '../../http/HttpClient.ts';
-import { toRecord } from '../../shared/mappers/toRecord.ts';
-import type { Model } from '../../chat/Model.ts';
-import type { ModelCatalog } from '../../chat/ModelCatalog.ts';
+import { ProviderError } from '#src/errors/ProviderError.js';
+import type { HttpClient } from '#src/http/HttpClient.js';
+import { toRecord } from '#src/shared/mappers/toRecord.js';
+import type { Model } from '#src/chat/Model.js';
+import type { ModelCatalog } from '#src/chat/ModelCatalog.js';
 import type { OpenAIConfiguration } from './OpenAIConfiguration.ts';
 
 export class OpenAIModelCatalog implements ModelCatalog<string> {

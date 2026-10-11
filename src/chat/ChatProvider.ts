@@ -4,7 +4,7 @@ import type { TurnResult } from './TurnResult.ts';
 import type { ChatRequestInput } from './ChatRequest.ts';
 import type { ChatProviderState } from './ChatProviderState.ts';
 import type { ChatContextEvent } from './ChatContextEvent.ts';
-import type { ToolExecutionContext } from '../tools/ToolExecutionContext.ts';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 
 /** Low-level model/agent adapter. Hosts consume GlyphService instead. */
 export interface ChatProvider {

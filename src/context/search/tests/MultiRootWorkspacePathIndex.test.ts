@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { FileSearchResult } from '../FileSearchResult.ts';
-import { MultiRootWorkspacePathIndex } from '../MultiRootWorkspacePathIndex.ts';
-import type { WorkspaceContentSearchOptions } from '../WorkspaceContentSearchOptions.ts';
-import type { WorkspaceContentSearchResult } from '../WorkspaceContentSearchResult.ts';
-import type { WorkspacePathGlobResult } from '../WorkspacePathGlobResult.ts';
-import type { WorkspacePathIndex } from '../WorkspacePathIndex.ts';
-import type { WorkspacePathIndexState } from '../WorkspacePathIndexState.ts';
+import type { FileSearchResult } from '#src/context/search/FileSearchResult.js';
+import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
+import type { WorkspaceContentSearchOptions } from '#src/context/search/WorkspaceContentSearchOptions.js';
+import type { WorkspaceContentSearchResult } from '#src/context/search/WorkspaceContentSearchResult.js';
+import type { WorkspacePathGlobResult } from '#src/context/search/WorkspacePathGlobResult.js';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
+import type { WorkspacePathIndexState } from '#src/context/search/WorkspacePathIndexState.js';
 
 describe(MultiRootWorkspacePathIndex, () => {
   it('merges native index state, fuzzy matches, and glob results into named paths', async () => {

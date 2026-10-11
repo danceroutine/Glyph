@@ -1,7 +1,7 @@
-import type { ChatContextEvent } from '../ChatContextEvent.ts';
-import type { ChatProviderState } from '../ChatProviderState.ts';
-import type { ChatRequest } from '../ChatRequest.ts';
-import type { Usage } from '../Usage.ts';
+import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { ChatRequest } from '#src/chat/ChatRequest.js';
+import type { Usage } from '#src/chat/Usage.js';
 
 export interface AgentToolCall {
   readonly id: string;

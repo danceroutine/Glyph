@@ -1,4 +1,4 @@
-import type { ChatProviderState } from '../ChatProviderState.ts';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 
 export interface ChatTranscriptTurn {
   readonly userText: string;

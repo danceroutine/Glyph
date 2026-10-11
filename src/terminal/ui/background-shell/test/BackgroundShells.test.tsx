@@ -1,8 +1,8 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
-import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.ts';
-import { BackgroundShells } from '../BackgroundShells.presentational.tsx';
-import { WiredBackgroundShells } from '../BackgroundShells.wired.tsx';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
+import { BackgroundShells } from '#src/terminal/ui/background-shell/BackgroundShells.presentational.js';
+import { WiredBackgroundShells } from '#src/terminal/ui/background-shell/BackgroundShells.wired.js';
 
 describe(BackgroundShells, () => {
   describe('rendering', () => {

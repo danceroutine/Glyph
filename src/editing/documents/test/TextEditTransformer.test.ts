@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { diffChars } from 'diff';
-import { transformTextEditRanges } from '../transformTextEditRanges.ts';
+import { transformTextEditRanges } from '#src/editing/documents/transformTextEditRanges.js';
 
 describe(transformTextEditRanges, () => {
   it('keeps ranges unchanged when the document did not change', () => {

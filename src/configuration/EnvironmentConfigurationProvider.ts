@@ -1,11 +1,11 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
-import { ConfigurationError } from '../errors/ConfigurationError.ts';
-import type { OpenAIConfiguration } from '../providers/openai/OpenAIConfiguration.ts';
+import { ConfigurationError } from '#src/errors/ConfigurationError.js';
+import type { OpenAIConfiguration } from '#src/providers/openai/OpenAIConfiguration.js';
 import type { ChatConfiguration } from './ChatConfiguration.ts';
-import type { EditingConfiguration } from '../editing/configuration/EditingConfiguration.ts';
-import type { ContextAttachmentConfiguration } from '../context/attachments/ContextAttachmentConfiguration.ts';
+import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
+import type { ContextAttachmentConfiguration } from '#src/context/attachments/ContextAttachmentConfiguration.js';
 import type { ConfigurationProvider } from './ConfigurationProvider.ts';
 
 const environmentConfigurationSchema = z

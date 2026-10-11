@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WorkspaceAccessPolicy } from '../WorkspaceAccessPolicy.ts';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 describe(WorkspaceAccessPolicy, () => {
   describe(WorkspaceAccessPolicy.prototype.isSensitiveFileName, () => {

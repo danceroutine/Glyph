@@ -2,8 +2,8 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ProjectContextKind } from '../../project/context/ProjectContextKind.ts';
-import { ShellWorkingDirectoryResolver } from '../ShellWorkingDirectoryResolver.ts';
+import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
+import { ShellWorkingDirectoryResolver } from '#src/shell/ShellWorkingDirectoryResolver.js';
 
 const temporaryDirectories: string[] = [];
 

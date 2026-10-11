@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { transformTextEditRanges } from '../transformTextEditRanges.ts';
+import { transformTextEditRanges } from '#src/editing/documents/transformTextEditRanges.js';
 
 interface Edit {
   readonly sourceStart: number;

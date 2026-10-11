@@ -33,6 +33,20 @@ Sandboxed commands fail closed when the native sandbox backend is unavailable. T
 
 The separate **Allow outside sandbox** choices use the configured login shell and full inherited environment, including credentials. They deliberately run with the same authority as your user account and should be reserved for commands that genuinely require host or network access.
 
+## Source imports and builds
+
+Cross-directory imports use `#src/*` for application code and `#scripts/*` for
+build tooling. Use `.js` in `#src/` specifiers; TypeScript, Vitest, and the `tsx`
+development runner resolve them to the corresponding `.ts` or `.tsx` sources.
+Same-directory `./` imports remain local. Code OSS uses its own `#vs/*` and
+`#glyph/*` aliases, documented in [code-oss/README.md](code-oss/README.md).
+
+Use `pnpm build` to emit JavaScript and declarations. The build resolves source
+aliases during TypeScript emission, including dynamic imports and declaration
+import types. Desktop packaging uses the same emitter, so compiled artifacts
+run without this checkout's source files or package import map. The unit suite
+guards against reintroducing parent-relative module imports.
+
 ## Features
 
 - ChatGPT account authentication with saved sessions, token refresh, account switching, and logout revocation.

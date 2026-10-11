@@ -1,0 +1,115 @@
+/**
+ * @fileoverview Recreates Glyph's intentionally small Code OSS patch on top of
+ * the pinned generated source tree. Keeping this operation idempotent lets us
+ * review Glyph-owned files separately from upstream and regenerate at will.
+ */
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildGlyphUi } from './build-ui.mjs';
+import { resolveOverlayImports } from './resolve-overlay-imports.mjs';
+import { sourceAliasTransformer } from '#scripts/imports/source-alias-transformer.mjs';
+import ts from 'typescript';
+
+const repositoryRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
+const sourceRoot = join(repositoryRoot, '.code-oss', 'src');
+const overlayRoot = join(repositoryRoot, 'code-oss', 'overlay');
+
+// These two directories are generated exclusively from Glyph-owned sources.
+// Recreate them so removed modules and case-only renames cannot linger locally.
+await rm(join(sourceRoot, 'src', 'vs', 'platform', 'glyph'), { recursive: true, force: true });
+await rm(join(sourceRoot, 'src', 'vs', 'workbench', 'contrib', 'glyph'), { recursive: true, force: true });
+await cp(overlayRoot, sourceRoot, { recursive: true, force: true });
+await resolveOverlayTree(overlayRoot, sourceRoot);
+await buildGlyphUi(sourceRoot);
+const protocolSourceRoot = join(repositoryRoot, 'src', 'desktop', 'protocol');
+const protocolTargetRoot = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'common', 'protocol');
+await copyProtocol(protocolSourceRoot, protocolTargetRoot);
+await copyProtocol(
+  join(repositoryRoot, 'src', 'desktop', 'workbench'),
+  join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'common', 'workbench'),
+);
+
+async function copyProtocol(source, target) {
+  await mkdir(target, { recursive: true });
+  for (const entry of await readdir(source, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (entry.name !== 'tests') await copyProtocol(join(source, entry.name), join(target, entry.name));
+      continue;
+    }
+    if (!entry.name.endsWith('.ts')) continue;
+    const contents = await readFile(join(source, entry.name), 'utf8');
+    const input = ts.createSourceFile(join(source, entry.name), contents, ts.ScriptTarget.Latest, true);
+    const transformed = ts.transform(input, [sourceAliasTransformer]);
+    try {
+      const emitted = ts.createPrinter().printFile(transformed.transformed[0]);
+      await writeFile(join(target, entry.name), emitted.replaceAll(".ts'", ".js'"));
+    } finally {
+      transformed.dispose();
+    }
+  }
+}
+
+async function resolveOverlayTree(source, target) {
+  for (const entry of await readdir(source, { withFileTypes: true })) {
+    const input = join(source, entry.name);
+    const output = join(target, entry.name);
+    if (entry.isDirectory()) {
+      await resolveOverlayTree(input, output);
+    } else if (entry.name.endsWith('.ts')) {
+      await writeFile(output, resolveOverlayImports(await readFile(input, 'utf8'), input));
+    }
+  }
+}
+
+const workbenchEntry = join(sourceRoot, 'src', 'vs', 'workbench', 'workbench.desktop.main.ts');
+await insertOnce(
+  workbenchEntry,
+  "import './contrib/glyph/electron-browser/glyph.contribution.js';",
+  "import './contrib/terminal/electron-browser/terminal.contribution.js';",
+);
+
+const applicationEntry = join(sourceRoot, 'src', 'vs', 'code', 'electron-main', 'app.ts');
+await insertOnce(
+  applicationEntry,
+  "import { GlyphHostStarter } from '../../platform/glyph/electron-main/glyphHostStarter.js';",
+  "import { ElectronAgentHostStarter } from '../../platform/agentHost/electron-main/electronAgentHostStarter.js';",
+);
+await insertOnce(
+  applicationEntry,
+  '\t\tthis._register(appInstantiationService.createInstance(GlyphHostStarter));',
+  '\t\tconst agentHostProcessManager = appInstantiationService.createInstance(AgentHostProcessManager, agentHostStarter, process.platform);',
+);
+
+const productPath = join(sourceRoot, 'product.json');
+const product = JSON.parse(await readFile(productPath, 'utf8'));
+Object.assign(product, {
+  nameShort: 'Glyph',
+  nameLong: 'Glyph',
+  applicationName: 'glyph',
+  dataFolderName: '.glyph-editor',
+  urlProtocol: 'glyph',
+  darwinBundleIdentifier: 'com.danceroutine.glyph',
+  win32AppUserModelId: 'Danceroutine.Glyph',
+  win32MutexName: 'glyph',
+  win32RegValueName: 'Glyph',
+  linuxIconName: 'glyph',
+  serverApplicationName: 'glyph-server',
+  extensionsGallery: {
+    serviceUrl: 'https://open-vsx.org/vscode/gallery',
+    itemUrl: 'https://open-vsx.org/vscode/item',
+    resourceUrlTemplate: 'https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}',
+    extensionUrlTemplate: 'https://open-vsx.org/vscode/gallery/{publisher}/{name}/latest',
+  },
+  linkProtectionTrustedDomains: ['https://open-vsx.org'],
+});
+await writeFile(productPath, `${JSON.stringify(product, null, '\t')}\n`);
+
+async function insertOnce(path, insertion, anchor) {
+  // Anchors deliberately fail closed when the pinned upstream layout changes;
+  // silently inserting near the wrong code would be harder to review and debug.
+  const source = await readFile(path, 'utf8');
+  if (source.includes(insertion)) return;
+  if (!source.includes(anchor)) throw new Error(`Pinned Code OSS anchor was not found in ${path}`);
+  await writeFile(path, source.replace(anchor, `${anchor}\n${insertion}`));
+}

@@ -1,0 +1,21 @@
+import type { GlyphDesktopSnapshot } from '#src/desktop/protocol/events/GlyphDesktopSnapshot.js';
+import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
+import type { GlyphWorkbenchSelection } from './GlyphWorkbenchSelection.ts';
+import type { GlyphTranscriptEntry } from './GlyphTranscriptEntry.ts';
+
+export enum GlyphWorkbenchStatus {
+  READY = 'ready',
+  STREAMING = 'streaming',
+  DISCONNECTED = 'disconnected',
+  WAITING_FOR_QUESTION = 'waiting_for_question',
+  WAITING_FOR_APPROVAL = 'waiting_for_approval',
+}
+
+/** Minimal sidebar state; the host remains authoritative for durable chat state. */
+export interface GlyphWorkbenchState extends GlyphDesktopSnapshot {
+  readonly status: GlyphWorkbenchStatus;
+  readonly transcript: readonly GlyphTranscriptEntry[];
+  readonly selection?: GlyphWorkbenchSelection;
+  readonly selectedChatId?: string;
+  readonly usage: Readonly<Record<string, GlyphUsage>>;
+}

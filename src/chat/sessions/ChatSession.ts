@@ -1,10 +1,10 @@
-import type { ChatConversation } from '../ChatConversation.ts';
-import type { ChatRequestInput } from '../ChatRequest.ts';
-import { toChatRequest } from '../ChatRequest.ts';
-import type { ChatResponseStream } from '../ChatResponseStream.ts';
-import { ChatResponsePartType } from '../ChatResponsePartType.ts';
-import type { ChatTurnResult } from '../ChatTurnResult.ts';
-import type { ChatContextEvent } from '../ChatContextEvent.ts';
+import type { ChatConversation } from '#src/chat/ChatConversation.js';
+import type { ChatRequestInput } from '#src/chat/ChatRequest.js';
+import { toChatRequest } from '#src/chat/ChatRequest.js';
+import type { ChatResponseStream } from '#src/chat/ChatResponseStream.js';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import type { ChatTurnResult } from '#src/chat/ChatTurnResult.js';
+import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatSessionRecord, ChatSessionSummary, ChatTranscriptTurn } from './ChatSessionRecord.ts';
 
 type Checkpoint = (
@@ -16,6 +16,7 @@ type Checkpoint = (
 /** A resumable conversation whose completed turns are checkpointed atomically. */
 export class ChatSession {
   private unpersistedProviderState: ReturnType<ChatConversation['exportState']> | undefined;
+  private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly record: () => ChatSessionRecord,
@@ -44,6 +45,10 @@ export class ChatSession {
   }
 
   async reset(): Promise<void> {
+    return this.enqueue(() => this.resetNow());
+  }
+
+  private async resetNow(): Promise<void> {
     await this.persistOutstandingToolState();
     const previousState = this.conversation.exportState();
     this.conversation.reset();
@@ -57,6 +62,10 @@ export class ChatSession {
 
   async recordContext(events: readonly ChatContextEvent[]): Promise<void> {
     if (events.length === 0) return;
+    return this.enqueue(() => this.recordContextNow(events));
+  }
+
+  private async recordContextNow(events: readonly ChatContextEvent[]): Promise<void> {
     await this.persistOutstandingToolState();
     const previousState = this.conversation.exportState();
     this.conversation.recordContext(events);
@@ -73,6 +82,14 @@ export class ChatSession {
   }
 
   async send(
+    requestInput: ChatRequestInput,
+    response: ChatResponseStream,
+    signal: AbortSignal,
+  ): Promise<ChatTurnResult> {
+    return this.enqueue(() => this.sendNow(requestInput, response, signal));
+  }
+
+  private async sendNow(
     requestInput: ChatRequestInput,
     response: ChatResponseStream,
     signal: AbortSignal,
@@ -133,6 +150,15 @@ export class ChatSession {
     await this.checkpoint(state, undefined, true);
     this.unpersistedProviderState = undefined;
     this.conversation.restoreState(state);
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(operation, operation);
+    this.operationQueue = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
   }
 }
 

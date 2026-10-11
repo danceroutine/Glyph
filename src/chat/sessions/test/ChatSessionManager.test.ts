@@ -2,18 +2,18 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { NullLogger } from '../../../observability/NullLogger.ts';
-import type { ProjectContext } from '../../../project/context/ProjectContext.ts';
-import { ProjectContextResolver } from '../../../project/context/ProjectContextResolver.ts';
-import { ChatConversation } from '../../ChatConversation.ts';
-import type { ChatProvider } from '../../ChatProvider.ts';
-import type { ChatProviderState } from '../../ChatProviderState.ts';
-import type { ChatRequestInput } from '../../ChatRequest.ts';
-import { ChatResponsePartType } from '../../ChatResponsePartType.ts';
-import type { TurnResult } from '../../TurnResult.ts';
-import { ChatSessionManager } from '../ChatSessionManager.ts';
-import type { ChatSessionRecord } from '../ChatSessionRecord.ts';
-import type { ChatSessionStore } from '../ChatSessionStore.ts';
+import { NullLogger } from '#src/observability/NullLogger.js';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
+import { ProjectContextResolver } from '#src/project/context/ProjectContextResolver.js';
+import { ChatConversation } from '#src/chat/ChatConversation.js';
+import type { ChatProvider } from '#src/chat/ChatProvider.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { ChatRequestInput } from '#src/chat/ChatRequest.js';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import type { TurnResult } from '#src/chat/TurnResult.js';
+import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
+import type { ChatSessionRecord } from '#src/chat/sessions/ChatSessionRecord.js';
+import type { ChatSessionStore } from '#src/chat/sessions/ChatSessionStore.js';
 
 const temporaryPaths: string[] = [];
 
@@ -233,7 +233,7 @@ class StatefulProvider implements ChatProvider {
     this.messages = state ? [...(state.data as { messages: string[] }).messages] : [];
   }
 
-  recordContext(events: readonly import('../../ChatContextEvent.ts').ChatContextEvent[]): void {
+  recordContext(events: readonly import('#src/chat/ChatContextEvent.js').ChatContextEvent[]): void {
     this.messages.push(...events.map(event => `context:${event.id}`));
   }
 

@@ -1,9 +1,9 @@
-import type { ChatProviderFactory } from '../../chat/ChatProviderFactory.ts';
-import type { ChatProviderState } from '../../chat/ChatProviderState.ts';
-import type { ConfigurationProvider } from '../../configuration/ConfigurationProvider.ts';
-import { ProjectAccess } from '../../project/ProjectAccess.ts';
-import { ProjectAgentInstructions } from '../../project/prompts/ProjectAgentInstructions.ts';
-import type { ToolRuntime } from '../../tools/ToolRuntime.ts';
+import type { ChatProviderFactory } from '#src/chat/ChatProviderFactory.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { ConfigurationProvider } from '#src/configuration/ConfigurationProvider.js';
+import { ProjectAccess } from '#src/project/ProjectAccess.js';
+import { ProjectAgentInstructions } from '#src/project/prompts/ProjectAgentInstructions.js';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
 import { OpenAIProvider } from './OpenAIProvider.ts';
 
 export class OpenAIProviderFactory implements ChatProviderFactory<() => Promise<string>> {

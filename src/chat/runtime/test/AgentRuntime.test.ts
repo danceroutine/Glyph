@@ -2,12 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChatContextEvent } from '../../ChatContextEvent.ts';
-import type { ChatProviderState } from '../../ChatProviderState.ts';
-import type { ChatRequest } from '../../ChatRequest.ts';
-import type { ToolRuntime } from '../../../tools/ToolRuntime.ts';
-import { AgentRuntime } from '../AgentRuntime.ts';
-import type { AgentModelAdapter, AgentToolResult, AgentTurnContext, AgentTurnStep } from '../AgentModelAdapter.ts';
+import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { ChatRequest } from '#src/chat/ChatRequest.js';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import { AgentRuntime } from '#src/chat/runtime/AgentRuntime.js';
+import type {
+  AgentModelAdapter,
+  AgentToolResult,
+  AgentTurnContext,
+  AgentTurnStep,
+} from '#src/chat/runtime/AgentModelAdapter.js';
 
 type ClaudeBlock =
   | { readonly type: 'thinking'; readonly thinking: string; readonly signature: string }

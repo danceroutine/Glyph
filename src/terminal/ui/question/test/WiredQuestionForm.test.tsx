@@ -1,8 +1,8 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
-import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.ts';
-import type { QuestionFormRequest } from '../QuestionFormRequest.ts';
-import { WiredQuestionForm } from '../QuestionForm.wired.tsx';
+import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
+import type { QuestionFormRequest } from '#src/terminal/ui/question/QuestionFormRequest.js';
+import { WiredQuestionForm } from '#src/terminal/ui/question/QuestionForm.wired.js';
 
 describe(WiredQuestionForm, () => {
   describe('interaction', () => {

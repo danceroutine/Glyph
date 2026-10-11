@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { ChatConversation } from '../ChatConversation.ts';
-import type { ChatProviderState } from '../ChatProviderState.ts';
-import type { ProjectContext } from '../../project/context/ProjectContext.ts';
+import type { ChatConversation } from '#src/chat/ChatConversation.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import { ChatSession, toSummary } from './ChatSession.ts';
 import type { ChatSessionRecord, ChatSessionSummary, ChatTranscriptTurn } from './ChatSessionRecord.ts';
 import type { ChatSessionStore } from './ChatSessionStore.ts';
@@ -20,6 +20,7 @@ type ConversationFactory = (record: ChatSessionRecord) => ChatConversation;
 /** Project-aware catalog and lifecycle manager for resumable conversations. */
 export class ChatSessionManager {
   private records = new Map<string, ChatSessionRecord>();
+  private readonly liveSessions = new Map<string, ChatSession>();
   private queue: Promise<void> = Promise.resolve();
   private initialized = false;
 
@@ -66,13 +67,22 @@ export class ChatSessionManager {
       transcript: [],
     };
     await this.enqueue(() => this.saveWith(record.id, record));
-    return this.instantiate(record.id, conversation);
+    return this.remember(this.instantiate(record.id, conversation));
   }
 
-  open(identifier: string, createConversation: ConversationFactory): ChatSession {
+  open(
+    identifier: string,
+    createConversation: ConversationFactory,
+    assertCanOpen?: (record: ChatSessionRecord) => void,
+  ): ChatSession {
     this.requireInitialized();
     const record = this.resolve(identifier);
-    return this.instantiate(record.id, createConversation(record));
+    // Authorization must run before returning a cached live session; otherwise a
+    // caller could bypass account ownership checks after the first open.
+    assertCanOpen?.(record);
+    const existing = this.liveSessions.get(record.id);
+    if (existing) return existing;
+    return this.remember(this.instantiate(record.id, createConversation(record)));
   }
 
   rename(identifier: string, title: string): Promise<ChatSessionSummary> {
@@ -94,7 +104,13 @@ export class ChatSessionManager {
   }
 
   async dispose(): Promise<void> {
+    this.liveSessions.clear();
     await this.store.dispose();
+  }
+
+  private remember(session: ChatSession): ChatSession {
+    this.liveSessions.set(session.id, session);
+    return session;
   }
 
   private instantiate(id: string, conversation: ChatConversation): ChatSession {

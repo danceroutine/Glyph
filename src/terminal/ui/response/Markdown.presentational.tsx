@@ -3,7 +3,7 @@ import { Box, Text } from 'ink';
 import { Lexer } from 'marked';
 import type { Tokens } from 'marked';
 import stringWidth from 'string-width';
-import { sanitizeText } from '../shared/sanitizeText.ts';
+import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 import { inlineMarkdownText } from './parseInlineMarkdown.ts';
 
 export interface MarkdownProps {

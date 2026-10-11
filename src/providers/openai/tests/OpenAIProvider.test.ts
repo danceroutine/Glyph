@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatConfiguration } from '../../../configuration/ChatConfiguration.ts';
-import { describeError } from '../../../describeError.ts';
-import { ProjectAccess } from '../../../project/ProjectAccess.ts';
-import { CompositeToolRuntime } from '../../../tools/CompositeToolRuntime.ts';
-import { ToolInputKind } from '../../../tools/ToolInputKind.ts';
-import type { ToolRuntime } from '../../../tools/ToolRuntime.ts';
-import type { ProviderTraceEntry } from '../../../chat/ProviderTraceEntry.ts';
-import { OpenAIProvider } from '../OpenAIProvider.ts';
+import type { ChatConfiguration } from '#src/configuration/ChatConfiguration.js';
+import { describeError } from '#src/describeError.js';
+import { ProjectAccess } from '#src/project/ProjectAccess.js';
+import { CompositeToolRuntime } from '#src/tools/CompositeToolRuntime.js';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ProviderTraceEntry } from '#src/chat/ProviderTraceEntry.js';
+import { OpenAIProvider } from '#src/providers/openai/OpenAIProvider.js';
 
 const configuration: ChatConfiguration = {
   instructions: 'You are a helpful assistant.',

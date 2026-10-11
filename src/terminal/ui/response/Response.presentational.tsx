@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Box, Text } from 'ink';
-import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.ts';
-import { sanitizeText } from '../shared/sanitizeText.ts';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 import { Markdown } from './Markdown.presentational.tsx';
 import { parseInlineMarkdown } from './parseInlineMarkdown.ts';
 import { ToolActivity } from './ToolActivity.presentational.tsx';

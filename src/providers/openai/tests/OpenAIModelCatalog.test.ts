@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { HttpClient } from '../../../http/HttpClient.ts';
-import type { OpenAIConfiguration } from '../OpenAIConfiguration.ts';
-import { OpenAIModelCatalog } from '../OpenAIModelCatalog.ts';
+import type { HttpClient } from '#src/http/HttpClient.js';
+import type { OpenAIConfiguration } from '#src/providers/openai/OpenAIConfiguration.js';
+import { OpenAIModelCatalog } from '#src/providers/openai/OpenAIModelCatalog.js';
 
 const configuration: OpenAIConfiguration = {
   issuer: 'https://auth.example.test',

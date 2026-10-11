@@ -1,5 +1,5 @@
-import { EditError } from '../errors/EditError.ts';
-import { EditFailureReason } from '../errors/EditFailureReason.ts';
+import { EditError } from '#src/editing/errors/EditError.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 
 interface TextDocumentEdit {
   readonly range: {

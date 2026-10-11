@@ -1,4 +1,4 @@
-import { GlyphError } from '../../errors/GlyphError.ts';
+import { GlyphError } from '#src/errors/GlyphError.js';
 import type { ContextAttachmentFailureReason } from './ContextAttachmentFailureReason.ts';
 
 interface ContextAttachmentErrorDetails {

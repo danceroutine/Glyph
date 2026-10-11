@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { EditFailureReason } from '../../errors/EditFailureReason.ts';
-import { TextDocument } from '../TextDocument.ts';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
+import { TextDocument } from '#src/editing/documents/TextDocument.js';
 
 describe(TextDocument, () => {
   describe(TextDocument.prototype.apply, () => {

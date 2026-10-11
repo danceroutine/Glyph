@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import { RustWorkspacePathIndex } from '../RustWorkspacePathIndex.ts';
-import { WorkspacePathIndexError } from '../WorkspacePathIndexError.ts';
-import { WorkspacePathIndexFailureReason } from '../WorkspacePathIndexFailureReason.ts';
+import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
+import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 
 describe(RustWorkspacePathIndex, () => {
   describe('protocol', () => {
@@ -113,7 +113,16 @@ describe(RustWorkspacePathIndex, () => {
           params: {
             root: '/project',
             cachePath: '/cache/index.bin',
-            ignoredDirectories: ['.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
+            ignoredDirectories: [
+              '.artifacts',
+              '.code-oss',
+              '.git',
+              '.next',
+              'coverage',
+              'dist',
+              'node_modules',
+              'target',
+            ],
             excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
             sensitiveFileNames: ['.git-credentials', '.netrc', '.npmrc', '.pypirc'],
             sensitiveFilePrefixes: ['.env'],

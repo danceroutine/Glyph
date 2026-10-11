@@ -5,7 +5,7 @@ import type {
 } from 'openai/resources/responses/responses';
 import type { ScriptedResponseRound } from './ScriptedResponseRound.ts';
 import type { ScriptedToolInvocation } from './ScriptedToolInvocation.ts';
-import { ToolInputKind } from '../../../tools/ToolInputKind.ts';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 
 export class ScriptedOpenAIResponsesFixture {
   readonly requests: Record<string, unknown>[] = [];

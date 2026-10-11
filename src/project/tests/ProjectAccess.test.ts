@@ -2,12 +2,12 @@ import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { WorkspacePathIndexError } from '../../context/search/WorkspacePathIndexError.ts';
-import { WorkspacePathIndexFailureReason } from '../../context/search/WorkspacePathIndexFailureReason.ts';
-import { EditFailureReason } from '../../editing/errors/EditFailureReason.ts';
-import { FileSystemWorkspaceTextStore } from '../../workspace/FileSystemWorkspaceTextStore.ts';
-import { WorkspaceAccessPolicy } from '../../workspace/policy/WorkspaceAccessPolicy.ts';
-import { ProjectAccess } from '../ProjectAccess.ts';
+import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
+import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { ProjectAccess } from '#src/project/ProjectAccess.js';
 
 async function fixture(): Promise<{ access: ProjectAccess; root: string }> {
   const root = await mkdtemp(join(tmpdir(), 'glyph-project-'));

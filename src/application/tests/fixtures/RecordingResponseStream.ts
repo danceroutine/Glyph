@@ -1,6 +1,6 @@
-import type { ChatResponsePart } from '../../../chat/ChatResponsePart.ts';
-import { ChatResponsePartType } from '../../../chat/ChatResponsePartType.ts';
-import type { ChatResponseStream } from '../../../chat/ChatResponseStream.ts';
+import type { ChatResponsePart } from '#src/chat/ChatResponsePart.js';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import type { ChatResponseStream } from '#src/chat/ChatResponseStream.js';
 
 export class RecordingResponseStream implements ChatResponseStream {
   readonly parts: ChatResponsePart[] = [];

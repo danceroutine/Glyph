@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useInput, useWindowSize } from 'ink';
-import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.ts';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import {
   clamp,
   mergeReviewEntries,
@@ -9,7 +9,7 @@ import {
   ReviewViewMode,
   wrapReviewLines,
 } from './TerminalEditReviewer.ts';
-import { sanitizeText } from '../shared/sanitizeText.ts';
+import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 import type { ProposalReviewRequest } from './ProposalReviewRequest.ts';
 
 /** Complete rendering contract produced by the proposal-review state hook. */

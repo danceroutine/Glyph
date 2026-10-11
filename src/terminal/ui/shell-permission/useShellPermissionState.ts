@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useCursor, useInput } from 'ink';
-import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.ts';
+import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
 import type { TerminalShellPermissionRequest } from './ShellPermissionRequest.ts';
 
 export interface ShellPermissionChoice {

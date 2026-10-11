@@ -1,16 +1,16 @@
 import { z } from 'zod';
-import { EditError } from '../editing/errors/EditError.ts';
-import { EditProposalService } from '../editing/proposals/EditProposalService.ts';
-import type { ProposalReviewManager } from '../editing/reviews/ProposalReviewManager.ts';
-import type { ToolRuntime } from '../tools/ToolRuntime.ts';
-import type { ToolDefinition } from '../tools/ToolDefinition.ts';
-import { ToolInputKind } from '../tools/ToolInputKind.ts';
-import type { Logger } from '../observability/Logger.ts';
-import { NullLogger } from '../observability/NullLogger.ts';
+import { EditError } from '#src/editing/errors/EditError.js';
+import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ToolDefinition } from '#src/tools/ToolDefinition.js';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import type { Logger } from '#src/observability/Logger.js';
+import { NullLogger } from '#src/observability/NullLogger.js';
 import type { ProjectAccess } from './ProjectAccess.ts';
 import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
-import type { ToolExecutionContext } from '../tools/ToolExecutionContext.ts';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 
 const editDefinitions: readonly ToolDefinition[] = [
   {

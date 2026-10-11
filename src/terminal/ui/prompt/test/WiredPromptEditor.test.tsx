@@ -1,10 +1,10 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.ts';
-import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.ts';
-import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.ts';
-import { TERMINAL_COMMANDS } from '#src/terminal/TerminalCommand.ts';
-import { WiredPromptEditor } from '../PromptEditor.wired.tsx';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
+import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
+import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
+import { TERMINAL_COMMANDS } from '#src/terminal/TerminalCommand.js';
+import { WiredPromptEditor } from '#src/terminal/ui/prompt/PromptEditor.wired.js';
 
 describe(WiredPromptEditor, () => {
   describe('interaction', () => {

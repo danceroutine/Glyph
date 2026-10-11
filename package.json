@@ -3,8 +3,22 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "glyph": "./dist/cli.js"
+  },
   "imports": {
-    "#src/*": "./src/*"
+    "#src/*": "./src/*",
+    "#scripts/*": "./scripts/*"
+  },
+  "exports": {
+    "./desktop-contract": {
+      "types": "./dist/desktop/protocol/index.d.ts",
+      "import": "./dist/desktop/protocol/index.js"
+    },
+    "./desktop-host": {
+      "types": "./dist/desktop/host/index.d.ts",
+      "import": "./dist/desktop/host/index.js"
+    }
   },
   "description": "A local-first terminal coding agent with ChatGPT authentication and reviewable workspace edits.",
   "engines": {
@@ -12,6 +26,17 @@
   },
   "scripts": {
     "start": "pnpm context-index:build && pnpm shell-sandbox:build && node --import tsx --env-file-if-exists=.env src/cli.ts",
+    "build": "node scripts/build.mjs",
+    "desktop:artifact": "pnpm build && pnpm context-index:build && pnpm shell-sandbox:build && node scripts/build-desktop-artifact.mjs",
+    "code-oss:bootstrap": "node scripts/code-oss/bootstrap.mjs",
+    "code-oss:apply": "node scripts/code-oss/apply-overlay.mjs",
+    "code-oss:install": "node scripts/code-oss/run.mjs install",
+    "code-oss:check:ui": "tsc -p code-oss/ui/tsconfig.json --noEmit",
+    "code-oss:check:overlay": "tsc -p code-oss/tsconfig.json --noEmit",
+    "code-oss:test:aliases": "vitest run --config code-oss/vitest.config.mjs",
+    "code-oss:compile": "pnpm code-oss:check:ui && pnpm code-oss:apply && pnpm code-oss:check:overlay && node scripts/code-oss/run.mjs run compile-client",
+    "code-oss:launch": "node scripts/code-oss/run.mjs launch",
+    "code-oss:test:integration": "node scripts/code-oss/test-electron.mjs",
     "context-index:build": "cargo build --release --package glyph-context-index",
     "context-index:bench": "cargo test --release --package glyph-context-index measures_ -- --ignored --nocapture",
     "context-index:check": "cargo fmt --all --check && cargo clippy --package glyph-context-index --all-targets -- -D warnings",
@@ -26,7 +51,7 @@
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
     "fix": "pnpm lint:fix && pnpm format",
-    "check": "pnpm format:check && pnpm lint && pnpm context-index:check && pnpm shell-sandbox:check && pnpm context-index:build && pnpm shell-sandbox:build && tsc --noEmit",
+    "check": "pnpm format:check && pnpm lint && pnpm context-index:check && pnpm shell-sandbox:check && pnpm context-index:build && pnpm shell-sandbox:build && tsc --noEmit && pnpm code-oss:check:ui && pnpm build",
     "test": "pnpm context-index:test && pnpm shell-sandbox:test && pnpm test:unit && pnpm test:e2e",
     "test:unit": "vitest run --exclude='**/*.e2e.test.ts' --coverage",
     "test:e2e": "pnpm context-index:build && pnpm shell-sandbox:build && vitest run --pool=forks --maxWorkers=1 src/application/tests/EditingLoop.e2e.test.ts src/application/tests/ContextInjection.e2e.test.ts src/context/search/tests/RustWorkspacePathIndex.e2e.test.ts src/project/tests/MultiRootProjectAccess.e2e.test.ts src/terminal/tests/TerminalEditing.e2e.test.ts",
@@ -45,6 +70,7 @@
     "jsonc-parser": "3.3.1",
     "marked": "^18.1.0",
     "openai": "7.23.0",
+    "preact": "11.0.1",
     "react": "19.3.0",
     "string-width": "8.3.0",
     "wrap-ansi": "9.0.2",
@@ -55,6 +81,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "19.3.0",
     "@vitest/coverage-v8": "5.0.3",
+    "esbuild": "0.28.2",
     "ink-testing-library": "4.0.0",
     "oxlint": "1.86.0",
     "prettier": "3.9.9",

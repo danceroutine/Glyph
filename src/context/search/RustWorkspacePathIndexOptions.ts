@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { WorkspaceAccessPolicy } from '../../workspace/policy/WorkspaceAccessPolicy.ts';
+import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 const defaults = {
   excludedPaths: [],

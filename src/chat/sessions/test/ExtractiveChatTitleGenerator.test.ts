@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ExtractiveChatTitleGenerator } from '../ExtractiveChatTitleGenerator.ts';
+import { ExtractiveChatTitleGenerator } from '#src/chat/sessions/ExtractiveChatTitleGenerator.js';
 
 describe(ExtractiveChatTitleGenerator, () => {
   it.each([

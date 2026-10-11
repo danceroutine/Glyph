@@ -1,8 +1,8 @@
 import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
-import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.ts';
-import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.ts';
-import { sanitizeText } from '../shared/sanitizeText.ts';
+import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
+import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 
 export interface BackgroundShellsProps {
   readonly sessions: readonly ShellSessionSnapshot[];

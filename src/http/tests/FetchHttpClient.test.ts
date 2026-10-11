@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { HttpError } from '../../errors/HttpError.ts';
-import type { Logger } from '../../observability/Logger.ts';
-import { FetchHttpClient } from '../FetchHttpClient.ts';
-import { HttpBodyEncoding } from '../HttpBodyEncoding.ts';
+import { HttpError } from '#src/errors/HttpError.js';
+import type { Logger } from '#src/observability/Logger.js';
+import { FetchHttpClient } from '#src/http/FetchHttpClient.js';
+import { HttpBodyEncoding } from '#src/http/HttpBodyEncoding.js';
 
 function logger() {
   const debug = vi.fn<(message: string, data?: unknown) => void>();

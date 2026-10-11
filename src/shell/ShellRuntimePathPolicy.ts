@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { ConfigurationError } from '../errors/ConfigurationError.ts';
+import { ConfigurationError } from '#src/errors/ConfigurationError.js';
 
 /** Rejects host-owned state and trace destinations that a project command could replace. */
 export function assertShellRuntimePathIsolation(

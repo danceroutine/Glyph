@@ -2,13 +2,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { NullLogger } from '../../../observability/NullLogger.ts';
-import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
-import type { EditingConfiguration } from '../../configuration/EditingConfiguration.ts';
-import { JsDiffTextDiffer } from '../../documents/JsDiffTextDiffer.ts';
-import { EditFailureReason } from '../../errors/EditFailureReason.ts';
-import { EditOperation } from '../EditOperation.ts';
-import { EditProposalService } from '../EditProposalService.ts';
+import { NullLogger } from '#src/observability/NullLogger.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
+import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
+import { EditOperation } from '#src/editing/proposals/EditOperation.js';
+import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 
 const directories: string[] = [];
 const configuration: EditingConfiguration = {

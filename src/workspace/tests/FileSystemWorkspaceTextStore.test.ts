@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EditError } from '../../editing/errors/EditError.ts';
-import { EditFailureReason } from '../../editing/errors/EditFailureReason.ts';
-import { FileSystemWorkspaceTextStore } from '../FileSystemWorkspaceTextStore.ts';
-import { WorkspaceMutationConsistency } from '../WorkspaceMutationConsistency.ts';
+import { EditError } from '#src/editing/errors/EditError.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 
 const directories: string[] = [];
 

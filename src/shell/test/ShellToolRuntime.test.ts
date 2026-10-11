@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ShellSessionManager } from '../ShellSessionManager.ts';
-import { ShellToolName } from '../ShellToolName.ts';
-import { ShellToolNamespace } from '../ShellToolNamespace.ts';
-import { ShellToolRuntime } from '../ShellToolRuntime.ts';
+import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import { ShellToolName } from '#src/shell/ShellToolName.js';
+import { ShellToolNamespace } from '#src/shell/ShellToolNamespace.js';
+import { ShellToolRuntime } from '#src/shell/ShellToolRuntime.js';
 
 const context = {
   chat: { id: 'chat-one', accountProvider: 'openai', accountId: 'account-one' },

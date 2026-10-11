@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from 'react';
-import type { ChatResponsePart } from '#src/chat/ChatResponsePart.ts';
+import type { ChatResponsePart } from '#src/chat/ChatResponsePart.js';
 import { Response } from './Response.presentational.tsx';
 import { useResponseState } from './useResponseState.ts';
 

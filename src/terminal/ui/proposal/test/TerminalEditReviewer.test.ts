@@ -1,13 +1,13 @@
 import { highlight } from 'cli-highlight';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.ts';
-import { EditOperation } from '#src/editing/proposals/EditOperation.ts';
-import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.ts';
-import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.ts';
-import type { EditReviewItem } from '#src/editing/reviews/EditReviewItem.ts';
-import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.ts';
-import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.ts';
-import type { TerminalUI } from '#src/terminal/TerminalUI.tsx';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditOperation } from '#src/editing/proposals/EditOperation.js';
+import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
+import type { EditReviewItem } from '#src/editing/reviews/EditReviewItem.js';
+import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import type { TerminalUI } from '#src/terminal/TerminalUI.js';
 import {
   mergeReviewEntries,
   pendingEntries,
@@ -15,7 +15,7 @@ import {
   ReviewViewMode,
   reviewEntries,
   TerminalEditReviewer,
-} from '../TerminalEditReviewer.ts';
+} from '#src/terminal/ui/proposal/TerminalEditReviewer.js';
 import { createProposalReviewFixture } from './ProposalReviewFixture.ts';
 
 vi.mock('cli-highlight', async () => {

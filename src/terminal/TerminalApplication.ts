@@ -1,15 +1,15 @@
-import type { GlyphService } from '../application/GlyphService.ts';
-import type { ChatSession } from '../chat/sessions/ChatSession.ts';
-import type { ChatAccount } from '../chat/ChatAccount.ts';
-import type { Model } from '../chat/Model.ts';
-import { describeError } from '../describeError.ts';
+import type { GlyphService } from '#src/application/GlyphService.js';
+import type { ChatSession } from '#src/chat/sessions/ChatSession.js';
+import type { ChatAccount } from '#src/chat/ChatAccount.js';
+import type { Model } from '#src/chat/Model.js';
+import { describeError } from '#src/describeError.js';
 import { AccountSelectionType } from './AccountSelectionType.ts';
 import { TerminalActionType } from './TerminalActionType.ts';
 import type { TerminalUI } from './TerminalUI.tsx';
 import type { TerminalEditReviewer } from './ui/proposal/TerminalEditReviewer.ts';
-import type { ProjectContext } from '../project/context/ProjectContext.ts';
-import type { ShellSessionManager } from '../shell/ShellSessionManager.ts';
-import type { ShellWakeEvent } from '../shell/ShellWakeEvent.ts';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
+import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 
 interface TerminalApplicationOptions {
   projectContext: ProjectContext;

@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { ConfigurationError } from '../../errors/ConfigurationError.ts';
-import type { WorkspaceTextSnapshot } from '../../workspace/WorkspaceTextSnapshot.ts';
-import type { WorkspaceTextStore } from '../../workspace/WorkspaceTextStore.ts';
+import { ConfigurationError } from '#src/errors/ConfigurationError.js';
+import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
+import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { ContextAttachment } from './ContextAttachment.ts';
 import type { ContextAttachmentConfiguration } from './ContextAttachmentConfiguration.ts';
 import { ContextAttachmentError } from './ContextAttachmentError.ts';

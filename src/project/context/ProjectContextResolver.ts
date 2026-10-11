@@ -4,7 +4,7 @@ import { basename, dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse, printParseErrorCode, type ParseError } from 'jsonc-parser';
 import { z } from 'zod';
-import { ConfigurationError } from '../../errors/ConfigurationError.ts';
+import { ConfigurationError } from '#src/errors/ConfigurationError.js';
 import type { ProjectContext } from './ProjectContext.ts';
 import { ProjectContextIdentity } from './ProjectContextIdentity.ts';
 import { ProjectContextKind } from './ProjectContextKind.ts';

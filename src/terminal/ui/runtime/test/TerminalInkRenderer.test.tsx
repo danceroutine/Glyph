@@ -1,18 +1,18 @@
 import { Duplex, Writable } from 'node:stream';
 import { Text } from 'ink';
 import { describe, expect, it, vi } from 'vitest';
-import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.ts';
-import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.ts';
-import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.ts';
-import type { ActivePromptRequest } from '../../prompt/PromptRequest.ts';
-import type { ProposalReviewRequest } from '../../proposal/ProposalReviewRequest.ts';
-import type { QuestionFormRequest } from '../../question/QuestionFormRequest.ts';
-import type { TerminalShellPermissionRequest } from '../../shell-permission/ShellPermissionRequest.ts';
-import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.ts';
-import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.ts';
-import type { TranscriptEntry } from '../../shell/TranscriptEntry.ts';
-import { TerminalInkRenderer } from '../TerminalInkRenderer.tsx';
-import { createProposalReviewFixture } from '../../proposal/test/ProposalReviewFixture.ts';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import type { ActivePromptRequest } from '#src/terminal/ui/prompt/PromptRequest.js';
+import type { ProposalReviewRequest } from '#src/terminal/ui/proposal/ProposalReviewRequest.js';
+import type { QuestionFormRequest } from '#src/terminal/ui/question/QuestionFormRequest.js';
+import type { TerminalShellPermissionRequest } from '#src/terminal/ui/shell-permission/ShellPermissionRequest.js';
+import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
+import type { TranscriptEntry } from '#src/terminal/ui/shell/TranscriptEntry.js';
+import { TerminalInkRenderer } from '#src/terminal/ui/runtime/TerminalInkRenderer.js';
+import { createProposalReviewFixture } from '#src/terminal/ui/proposal/test/ProposalReviewFixture.js';
 
 describe(TerminalInkRenderer, () => {
   describe('lifecycle', () => {

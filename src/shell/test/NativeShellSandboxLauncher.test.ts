@@ -1,8 +1,8 @@
 import { realpathSync } from 'node:fs';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
-import { NativeShellSandboxLauncher } from '../NativeShellSandboxLauncher.ts';
-import { ShellSandboxProfile } from '../ShellSandboxProfile.ts';
+import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
+import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 
 describe(NativeShellSandboxLauncher, () => {
   describe(NativeShellSandboxLauncher.prototype.launch, () => {

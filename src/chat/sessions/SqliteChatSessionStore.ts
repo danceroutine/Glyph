@@ -2,10 +2,10 @@ import { chmod, mkdir, readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { z } from 'zod';
-import { PersistenceError } from '../../errors/PersistenceError.ts';
-import type { ProjectContext } from '../../project/context/ProjectContext.ts';
-import { ProjectContextIdentity } from '../../project/context/ProjectContextIdentity.ts';
-import { ProjectContextKind } from '../../project/context/ProjectContextKind.ts';
+import { PersistenceError } from '#src/errors/PersistenceError.js';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
+import { ProjectContextIdentity } from '#src/project/context/ProjectContextIdentity.js';
+import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 import type { ChatSessionRecord } from './ChatSessionRecord.ts';
 import type { ChatSessionStore } from './ChatSessionStore.ts';
 

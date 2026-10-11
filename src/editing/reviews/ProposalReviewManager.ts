@@ -1,18 +1,32 @@
 import { createHash } from 'node:crypto';
-import type { Logger } from '../../observability/Logger.ts';
-import { NullLogger } from '../../observability/NullLogger.ts';
-import type { WorkspaceTextStore } from '../../workspace/WorkspaceTextStore.ts';
-import { transformTextEditRanges } from '../documents/transformTextEditRanges.ts';
-import { EditError } from '../errors/EditError.ts';
-import { EditFailureReason } from '../errors/EditFailureReason.ts';
-import { EditOperation } from '../proposals/EditOperation.ts';
-import type { EditProposal } from '../proposals/EditProposal.ts';
-import type { FileEditPlan } from '../proposals/FileEditPlan.ts';
+import type { Logger } from '#src/observability/Logger.js';
+import { NullLogger } from '#src/observability/NullLogger.js';
+import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import { transformTextEditRanges } from '#src/editing/documents/transformTextEditRanges.js';
+import { EditError } from '#src/editing/errors/EditError.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
+import { EditOperation } from '#src/editing/proposals/EditOperation.js';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
 import { EditApplicabilityState } from './EditApplicabilityState.ts';
 import { EditDecisionState } from './EditDecisionState.ts';
 import { EditReviewItemKind } from './EditReviewItemKind.ts';
 import type { EditReviewResult } from './EditReviewResult.ts';
 import type { ProposalReviewStore } from './persistence/ProposalReviewStore.ts';
+
+export enum ProposalReviewChangeType {
+  RECOVERED = 'recovered',
+  STAGED = 'staged',
+  DECISION = 'decision',
+  ACKNOWLEDGED = 'acknowledged',
+}
+
+/** Coarse invalidation event; consumers re-read the manager's authoritative projection. */
+export interface ProposalReviewChange {
+  readonly type: ProposalReviewChangeType;
+  readonly proposalIds: readonly string[];
+  readonly pendingChangeCount: number;
+}
 
 /**
  * Owns the lifecycle of active proposal reviews: staging, durable decisions,
@@ -29,6 +43,7 @@ export class ProposalReviewManager {
     { readonly reviewId: string; readonly decision: EditDecisionState }
   >();
   private readonly logger: Logger;
+  private readonly listeners = new Set<(change: ProposalReviewChange) => void>();
 
   constructor(
     private readonly workspace: WorkspaceTextStore,
@@ -65,6 +80,11 @@ export class ProposalReviewManager {
     return this.reviews.find(review => review.id === reviewId);
   }
 
+  onDidChange(listener: (change: ProposalReviewChange) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
   async initialize(): Promise<void> {
     const stored = await this.store.load(this.workspaceIdentity);
     this.reviews = stored.filter(review => !isSettled(review));
@@ -77,6 +97,7 @@ export class ProposalReviewManager {
     const recoveredIds = this.reviews.map(review => review.id);
     await this.persist();
     await this.log('info', 'recovered', { proposalIds: recoveredIds, activeReviews: this.reviews.length });
+    this.emitChange(ProposalReviewChangeType.RECOVERED, recoveredIds);
   }
 
   stage(proposal: EditProposal): Promise<void> {
@@ -106,6 +127,7 @@ export class ProposalReviewManager {
         queuePosition: this.reviews.length,
         activeReviews: this.reviews.length,
       });
+      this.emitChange(ProposalReviewChangeType.STAGED, [proposal.id]);
     });
   }
 
@@ -157,6 +179,10 @@ export class ProposalReviewManager {
         throw error;
       }
       await this.log('info', 'rejected_all', { proposalIds: reviews.map(review => review.id) });
+      this.emitChange(
+        ProposalReviewChangeType.DECISION,
+        reviews.map(review => review.id),
+      );
     });
   }
 
@@ -191,6 +217,10 @@ export class ProposalReviewManager {
         this.completedReviews = previousCompleted;
         throw error;
       }
+      this.emitChange(
+        ProposalReviewChangeType.ACKNOWLEDGED,
+        proposals.map(proposal => proposal.id),
+      );
     });
   }
 
@@ -243,6 +273,7 @@ export class ProposalReviewManager {
         throw error;
       }
       await this.log('info', 'item.rejected', { proposalId: review.id, fileId: file.id, itemId });
+      this.emitChange(ProposalReviewChangeType.DECISION, [review.id]);
       return;
     }
     await this.synchronize(file);
@@ -256,7 +287,8 @@ export class ProposalReviewManager {
       throw error;
     }
     const applyingState = captureFileState(file);
-    const mutation = { undoGroupId: review.id };
+    const operationId = `${review.id}:${file.id}:${item.id}`;
+    const mutation = { operationId, undoGroupId: operationId };
     try {
       await this.log('debug', 'revision.check', {
         proposalId: review.id,
@@ -338,6 +370,16 @@ export class ProposalReviewManager {
       itemId,
       revision: file.currentRevision,
     });
+    this.emitChange(ProposalReviewChangeType.DECISION, [review.id]);
+  }
+
+  private emitChange(type: ProposalReviewChange['type'], proposalIds: readonly string[]): void {
+    const change: ProposalReviewChange = {
+      type,
+      proposalIds: [...proposalIds],
+      pendingChangeCount: this.pendingChangeCount,
+    };
+    for (const listener of this.listeners) listener(change);
   }
 
   private async preflight(proposal: EditProposal): Promise<void> {
@@ -431,7 +473,8 @@ export class ProposalReviewManager {
     if (item.kind === EditReviewItemKind.RENAME) {
       const target = (await this.workspace.readOptional(file.targetPath)) ?? null;
       if (current && target && current.identity === target.identity && current.revision === file.currentRevision) {
-        await this.workspace.delete(file.currentPath, current.revision, { undoGroupId: review.id });
+        const operationId = `${review.id}:${file.id}:${item.id}:rename_cleanup`;
+        await this.workspace.delete(file.currentPath, current.revision, { operationId, undoGroupId: operationId });
         after = target;
       } else if (!current) after = target;
     }

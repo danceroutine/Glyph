@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
-import { ProposalReview } from '../ProposalReview.presentational.tsx';
-import { ProposalReviewReceipt } from '../ProposalReviewReceipt.presentational.tsx';
+import { ProposalReview } from '#src/terminal/ui/proposal/ProposalReview.presentational.js';
+import { ProposalReviewReceipt } from '#src/terminal/ui/proposal/ProposalReviewReceipt.presentational.js';
 
 describe(ProposalReview, () => {
   describe('rendering', () => {

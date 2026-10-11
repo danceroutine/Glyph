@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PersistenceError } from '../../../errors/PersistenceError.ts';
-import { ProjectContextResolver } from '../../../project/context/ProjectContextResolver.ts';
-import type { ChatSessionRecord } from '../ChatSessionRecord.ts';
-import { SqliteChatSessionStore } from '../SqliteChatSessionStore.ts';
+import { PersistenceError } from '#src/errors/PersistenceError.js';
+import { ProjectContextResolver } from '#src/project/context/ProjectContextResolver.js';
+import type { ChatSessionRecord } from '#src/chat/sessions/ChatSessionRecord.js';
+import { SqliteChatSessionStore } from '#src/chat/sessions/SqliteChatSessionStore.js';
 
 const temporaryPaths: string[] = [];
 

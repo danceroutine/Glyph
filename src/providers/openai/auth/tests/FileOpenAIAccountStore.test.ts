@@ -2,8 +2,8 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ConcurrentInstanceError } from '../../../../errors/ConcurrentInstanceError.ts';
-import { FileOpenAIAccountStore } from '../FileOpenAIAccountStore.ts';
+import { ConcurrentInstanceError } from '#src/errors/ConcurrentInstanceError.js';
+import { FileOpenAIAccountStore } from '#src/providers/openai/auth/FileOpenAIAccountStore.js';
 
 describe(FileOpenAIAccountStore, () => {
   describe(FileOpenAIAccountStore.prototype.acquire, () => {

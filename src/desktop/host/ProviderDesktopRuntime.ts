@@ -1,0 +1,403 @@
+import type { GlyphService } from '#src/application/GlyphService.js';
+import type { ChatAccount } from '#src/chat/ChatAccount.js';
+import type { Model } from '#src/chat/Model.js';
+import type { ChatResponsePart } from '#src/chat/ChatResponsePart.js';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
+import type { ChatSession } from '#src/chat/sessions/ChatSession.js';
+import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import type { DesktopInteractionBroker } from './DesktopInteractionBroker.ts';
+import type {
+  GlyphDesktopWorkspaceRuntime,
+  GlyphRuntimeCommand,
+  GlyphRuntimeSnapshot,
+} from './GlyphDesktopWorkspaceRuntime.ts';
+import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
+import { GlyphRunStatus, type GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import { GlyphResponseDeltaKind } from '#src/desktop/protocol/events/GlyphResponseDelta.js';
+import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
+import { GlyphProposalApplicability } from '#src/desktop/protocol/events/GlyphProposalFileSummary.js';
+import type { GlyphProposalSummary } from '#src/desktop/protocol/events/GlyphProposalSummary.js';
+import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
+
+interface ActiveRun {
+  readonly controller: AbortController;
+  readonly completion: Promise<void>;
+  readonly runId: string;
+}
+
+/** Adapts the existing application service to desktop commands without moving provider logic into Electron. */
+export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
+  private readonly runs = new Map<string, GlyphRunProjection>();
+  private readonly active = new Map<string, ActiveRun>();
+  private readonly sessions = new Map<string, ChatSession>();
+  private readonly proposals = new Map<string, GlyphProposalSummary>();
+  private readonly usageByChat: Record<string, GlyphUsage> = {};
+  private selectedAccount: ChatAccount | undefined;
+  private models: readonly Model[] = [];
+  private selectedModel: Model | undefined;
+  private disposed = false;
+  private readonly unsubscribe: (() => void) | undefined;
+
+  constructor(
+    private readonly options: {
+      readonly glyph: GlyphService;
+      readonly interactions: DesktopInteractionBroker;
+      readonly shellSessions: Pick<ShellSessionManager, 'close' | 'dispose'>;
+      readonly emit: (event: GlyphHostEvent) => void;
+      readonly ownerWindowId: string;
+    },
+  ) {
+    this.unsubscribe = options.glyph.proposalReviews?.onDidChange(change => {
+      for (const id of change.proposalIds) {
+        const proposal = options.glyph.proposalReviews?.get(id);
+        const previous = this.proposals.get(id);
+        const summary = this.proposalSummary(proposal, previous);
+        if (!summary) continue;
+        this.proposals.set(id, summary);
+        this.publish({ type: GlyphHostEventType.PROPOSAL_CHANGED, chatId: summary.chatId ?? '', proposal: summary });
+      }
+    });
+  }
+
+  /** Rebuild reconnect state from live reviews so missed notifications cannot leave stale decisions. */
+  async snapshot(): Promise<GlyphRuntimeSnapshot> {
+    for (const proposal of this.options.glyph.proposalReviews?.activeReviews ?? [])
+      this.proposals.set(proposal.id, toProposal(proposal));
+    return {
+      accounts: this.options.glyph.accounts,
+      models: this.models,
+      chats: this.options.glyph.listChats(),
+      runs: [...this.runs.values()],
+      proposals: [...this.proposals.values()],
+      usageByChat: { ...this.usageByChat },
+      ...(this.selectedAccount
+        ? { selectedAccount: { provider: this.selectedAccount.provider, id: this.selectedAccount.id } }
+        : {}),
+      ...(this.selectedModel ? { selectedModel: this.selectedModel.slug } : {}),
+    };
+  }
+
+  /** Dispatch commands without holding the request acknowledgement open for an entire model turn. */
+  async handle(command: GlyphRuntimeCommand): Promise<void> {
+    if (this.disposed) throw new Error('The workspace runtime has stopped.');
+    const glyph = this.options.glyph;
+    switch (command.type) {
+      case GlyphWorkbenchCommandType.SELECT_ACCOUNT: {
+        const account = this.account(command.accountProvider, command.accountId);
+        const models = await glyph.listModels(account);
+        this.selectedAccount = account;
+        this.models = models;
+        this.selectedModel = models[0];
+        return;
+      }
+      case GlyphWorkbenchCommandType.SELECT_MODEL: {
+        const model = this.models.find(model => model.slug === command.model);
+        if (!model) throw new Error('Select an available model for the current account.');
+        this.selectedModel = model;
+        return;
+      }
+      case GlyphWorkbenchCommandType.LIST_CHATS: {
+        const account =
+          command.accountProvider && command.accountId
+            ? this.account(command.accountProvider, command.accountId)
+            : undefined;
+        for (const chat of glyph.listChats(account)) this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
+        return;
+      }
+      case GlyphWorkbenchCommandType.CREATE_CHAT: {
+        const account = this.account(command.accountProvider, command.accountId);
+        const models = await glyph.listModels(account);
+        const model = models.find(value => value.slug === command.model);
+        if (!model) throw new Error('The selected model is unavailable.');
+        this.selectedAccount = account;
+        this.models = models;
+        this.selectedModel = model;
+        const session = await glyph.createChat(account, model);
+        this.sessions.set(session.id, session);
+        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
+        return;
+      }
+      case GlyphWorkbenchCommandType.OPEN_CHAT: {
+        const session = this.session(command.chatId);
+        // Durable history seeds an empty projection only; replay must not duplicate live turns.
+        if (!this.active.has(session.id) && ![...this.runs.values()].some(run => run.chatId === session.id)) {
+          session.transcript.forEach((turn, index) =>
+            this.setRun({
+              chatId: session.id,
+              runId: `${session.id}:history:${index}`,
+              userText: turn.userText,
+              text: turn.assistantText,
+              reasoning: turn.reasoningSummary,
+              tools: [],
+              status: GlyphRunStatus.COMPLETED,
+            }),
+          );
+        }
+        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
+        return;
+      }
+      case GlyphWorkbenchCommandType.SEND: {
+        if (this.active.has(command.chatId)) throw new Error('This chat already has an active run.');
+        if (this.runs.has(command.runId)) throw new Error('This run id has already been used.');
+        const session = this.session(command.chatId);
+        const controller = new AbortController();
+        // Defer execution one microtask so cancellation can always find its controller.
+        const completion = Promise.resolve().then(() => this.send(command, session, controller.signal));
+        this.active.set(command.chatId, { controller, completion, runId: command.runId });
+        void completion.finally(() => this.active.delete(command.chatId));
+        return;
+      }
+      case GlyphWorkbenchCommandType.CANCEL_RUN: {
+        const active = this.active.get(command.chatId);
+        if (active?.runId === command.runId) active.controller.abort(new Error('Response cancelled.'));
+        return;
+      }
+      case GlyphWorkbenchCommandType.ANSWER_QUESTION: {
+        this.options.interactions.answer({
+          ...command,
+          id: command.questionId,
+          kind: 'question',
+          value: command.answer,
+        });
+        // Only a broker-validated decision may clear the waiting state.
+        this.resumeRun(command.runId);
+        return;
+      }
+      case GlyphWorkbenchCommandType.DECIDE_APPROVAL: {
+        this.options.interactions.answer({
+          ...command,
+          id: command.approvalId,
+          kind: 'approval',
+          value: command.approved,
+        });
+        this.resumeRun(command.runId);
+        return;
+      }
+      case GlyphWorkbenchCommandType.STOP_SHELL_SESSION: {
+        await this.options.shellSessions.close(command.sessionId, command.chatId);
+        return;
+      }
+      case GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM:
+      case GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM:
+        return this.decideProposal(command);
+    }
+  }
+
+  /** Check the originating chat and account before a renderer-supplied id can mutate a review. */
+  private async decideProposal(
+    command: Extract<
+      GlyphRuntimeCommand,
+      {
+        type: GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM | GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM;
+      }
+    >,
+  ): Promise<void> {
+    const glyph = this.options.glyph;
+    const reviews = glyph.proposalReviews;
+    const review = reviews?.get(command.proposalId);
+    const session = this.session(command.chatId);
+    if (
+      !reviews ||
+      !review ||
+      review.origin?.chatId !== command.chatId ||
+      review.origin.accountId !== session.summary.accountId ||
+      review.origin.accountProvider !== session.summary.accountProvider
+    ) {
+      throw new Error('This proposal does not belong to that chat.');
+    }
+    if (command.type === GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM)
+      await reviews.acceptInReview(command.proposalId, command.itemId);
+    else await reviews.rejectInReview(command.proposalId, command.itemId);
+    await glyph.commitReviewResults(session);
+  }
+
+  /** Pending prompts are cancelled when their owning renderer disappears. */
+  async connectionLost(windowId: string): Promise<void> {
+    if (windowId !== this.options.ownerWindowId) return;
+    for (const run of this.active.values()) run.controller.abort(new Error('The owning window disconnected.'));
+    await Promise.allSettled([...this.active.values()].map(run => run.completion));
+  }
+
+  /** Settle active operations before closing their shell and persistence dependencies. */
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    await this.connectionLost(this.options.ownerWindowId);
+    this.unsubscribe?.();
+    try {
+      await this.options.shellSessions.dispose();
+    } finally {
+      await this.options.glyph.dispose();
+    }
+  }
+
+  /** Record pending decisions before delivery so reconnect snapshots cannot lose a waiting prompt. */
+  publish(event: GlyphHostEvent): void {
+    if (event.type === GlyphHostEventType.QUESTION || event.type === GlyphHostEventType.APPROVAL) {
+      const run = this.runs.get(event.runId);
+      if (run)
+        this.runs.set(
+          event.runId,
+          event.type === GlyphHostEventType.QUESTION
+            ? { ...run, question: event.question, status: GlyphRunStatus.WAITING_FOR_QUESTION }
+            : { ...run, approval: event.approval, status: GlyphRunStatus.WAITING_FOR_APPROVAL },
+        );
+    }
+    this.options.emit(event);
+  }
+
+  /** Recheck inference access at use time rather than trusting a previously selected account. */
+  private account(provider: string, id: string): ChatAccount {
+    const account = this.options.glyph.accounts.find(value => value.provider === provider && value.id === id);
+    if (!account?.connected || !account.inferenceAccess)
+      throw new Error('Connect an account with inference access first.');
+    return account;
+  }
+
+  /** Resolve through this workspace’s chat catalog to reject ids belonging to another workspace. */
+  private session(id: string): ChatSession {
+    const summary = this.options.glyph.listChats().find(chat => chat.id === id);
+    if (!summary) throw new Error('Unknown chat in this workspace.');
+    const account = this.account(summary.accountProvider, summary.accountId);
+    const session = this.sessions.get(id) ?? this.options.glyph.openChat(id, account);
+    this.sessions.set(id, session);
+    return session;
+  }
+
+  /** Keep provider streaming behind the application service while retaining a recoverable desktop projection. */
+  private async send(
+    command: Extract<GlyphRuntimeCommand, { type: GlyphWorkbenchCommandType.SEND }>,
+    session: ChatSession,
+    signal: AbortSignal,
+  ): Promise<void> {
+    this.setRun({
+      chatId: command.chatId,
+      runId: command.runId,
+      userText: command.text,
+      text: '',
+      reasoning: '',
+      tools: [],
+      status: GlyphRunStatus.STREAMING,
+    });
+    try {
+      // Review decisions must enter provider history before the next turn can reason about the files.
+      await this.options.glyph.commitReviewResults(session);
+      // Bind tool prompts to this exact run so another chat cannot answer them.
+      const result = await this.options.interactions.run(command, () =>
+        session.send(
+          {
+            text: command.text,
+            attachments: command.attachments.map(attachment => ({
+              path: attachment.path,
+              text: attachment.text,
+              revision: attachment.contentRevision,
+              byteOrderMark: false,
+              byteLength: Buffer.byteLength(attachment.text),
+            })),
+          },
+          { push: part => this.response(command.runId, part) },
+          signal,
+        ),
+      );
+      const run = this.runs.get(command.runId)!;
+      this.setRun({ ...run, status: signal.aborted ? GlyphRunStatus.CANCELLED : GlyphRunStatus.COMPLETED });
+      if (result.usage) {
+        this.usageByChat[command.chatId] = result.usage;
+        this.publish({ type: GlyphHostEventType.USAGE, chatId: command.chatId, usage: result.usage });
+      }
+      this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
+    } catch (error) {
+      const run = this.runs.get(command.runId)!;
+      // A failed or cancelled turn must not leave an actionable approval behind.
+      const { question: _question, approval: _approval, ...settled } = run;
+      this.setRun({
+        ...settled,
+        status: signal.aborted ? GlyphRunStatus.CANCELLED : GlyphRunStatus.FAILED,
+        terminalMessage: this.options.glyph.redact(error instanceof Error ? error.message : String(error)),
+      });
+    }
+  }
+
+  /** Update replayable state before publishing deltas; tool ids replace activity rather than duplicating it. */
+  private response(runId: string, part: ChatResponsePart): void {
+    const run = this.runs.get(runId)!;
+    if (part.type === ChatResponsePartType.TOOL) {
+      const activity = {
+        id: part.activity.callId,
+        name: part.activity.name,
+        status:
+          part.activity.phase === ToolActivityPhase.STARTED
+            ? GlyphToolActivityStatus.STARTED
+            : GlyphToolActivityStatus.COMPLETED,
+        ...(part.activity.output ? { summary: part.activity.output } : {}),
+      };
+      this.runs.set(runId, { ...run, tools: [...run.tools.filter(tool => tool.id !== activity.id), activity] });
+      this.publish({ type: GlyphHostEventType.TOOL_ACTIVITY, chatId: run.chatId, runId, activity });
+      return;
+    }
+    const kind = this.deltaKind(part.type);
+    const value = part.type === ChatResponsePartType.DIAGNOSTIC ? part.message : part.value;
+    this.runs.set(runId, {
+      ...run,
+      text: run.text + (kind === GlyphResponseDeltaKind.TEXT ? value : ''),
+      reasoning: run.reasoning + (kind === GlyphResponseDeltaKind.REASONING ? value : ''),
+    });
+    this.publish({ type: GlyphHostEventType.RESPONSE_DELTA, chatId: run.chatId, runId, delta: { kind, value } });
+  }
+
+  /** Keep provider response categories out of the browser-only protocol. */
+  private deltaKind(type: Exclude<ChatResponsePartType, ChatResponsePartType.TOOL>): GlyphResponseDeltaKind {
+    switch (type) {
+      case ChatResponsePartType.TEXT:
+        return GlyphResponseDeltaKind.TEXT;
+      case ChatResponsePartType.REASONING_SUMMARY:
+        return GlyphResponseDeltaKind.REASONING;
+      case ChatResponsePartType.DIAGNOSTIC:
+        return GlyphResponseDeltaKind.DIAGNOSTIC;
+    }
+  }
+
+  /** A removed review still needs a final projection that retires its pending buttons. */
+  private proposalSummary(
+    proposal: EditProposal | undefined,
+    previous: GlyphProposalSummary | undefined,
+  ): GlyphProposalSummary | undefined {
+    if (proposal) return toProposal(proposal);
+    if (!previous) return undefined;
+    return { ...previous, files: previous.files.map(file => ({ ...file, pendingItemIds: [] })) };
+  }
+
+  /** Drop answered forms so later snapshots cannot offer the same decision twice. */
+  private resumeRun(runId: string): void {
+    const run = this.runs.get(runId);
+    if (!run) return;
+    const { question: _question, approval: _approval, ...rest } = run;
+    this.setRun({ ...rest, status: GlyphRunStatus.STREAMING });
+  }
+
+  /** Store before emitting so observers and snapshots see the same transition. */
+  private setRun(run: GlyphRunProjection): void {
+    this.runs.set(run.runId, run);
+    this.publish({ type: GlyphHostEventType.RUN_STATE, run });
+  }
+}
+
+function toProposal(proposal: EditProposal): GlyphProposalSummary {
+  return {
+    id: proposal.id,
+    ...(proposal.origin ? { chatId: proposal.origin.chatId } : {}),
+    createdAt: proposal.createdAt,
+    files: proposal.files.map(file => ({
+      id: file.id,
+      path: file.currentPath,
+      proposedUri: `glyph-proposal:/${encodeURIComponent(proposal.id)}/${encodeURIComponent(file.id)}`,
+      pendingItemIds: file.items.filter(item => item.decision === EditDecisionState.PENDING).map(item => item.id),
+      applicability:
+        Object.values(GlyphProposalApplicability).find(value => value === String(file.applicability).toLowerCase()) ??
+        GlyphProposalApplicability.STALE,
+    })),
+  };
+}

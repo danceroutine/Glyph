@@ -1,5 +1,5 @@
-import type { OpenAIAccount } from '../../../providers/openai/auth/OpenAIAccount.ts';
-import type { OpenAISessionService } from '../../../providers/openai/auth/OpenAISessionService.ts';
+import type { OpenAIAccount } from '#src/providers/openai/auth/OpenAIAccount.js';
+import type { OpenAISessionService } from '#src/providers/openai/auth/OpenAISessionService.js';
 
 export class FixtureOpenAISession implements OpenAISessionService {
   constructor(private readonly account: OpenAIAccount) {}

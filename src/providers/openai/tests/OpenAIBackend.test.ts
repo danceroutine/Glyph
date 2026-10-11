@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatProvider } from '../../../chat/ChatProvider.ts';
-import type { ChatProviderState } from '../../../chat/ChatProviderState.ts';
-import type { OpenAIAccount } from '../auth/OpenAIAccount.ts';
-import type { OpenAIAccountStore } from '../auth/OpenAIAccountStore.ts';
-import type { OpenAISavedState } from '../auth/OpenAISavedState.ts';
-import type { OpenAISessionService } from '../auth/OpenAISessionService.ts';
-import { OpenAIBackend } from '../OpenAIBackend.ts';
+import type { ChatProvider } from '#src/chat/ChatProvider.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { OpenAIAccount } from '#src/providers/openai/auth/OpenAIAccount.js';
+import type { OpenAIAccountStore } from '#src/providers/openai/auth/OpenAIAccountStore.js';
+import type { OpenAISavedState } from '#src/providers/openai/auth/OpenAISavedState.js';
+import type { OpenAISessionService } from '#src/providers/openai/auth/OpenAISessionService.js';
+import { OpenAIBackend } from '#src/providers/openai/OpenAIBackend.js';
 
 const configuration = {
   issuer: 'https://auth.example.test',

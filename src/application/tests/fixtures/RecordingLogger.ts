@@ -1,4 +1,4 @@
-import type { Logger } from '../../../observability/Logger.ts';
+import type { Logger } from '#src/observability/Logger.js';
 
 export class RecordingLogger implements Logger {
   constructor(

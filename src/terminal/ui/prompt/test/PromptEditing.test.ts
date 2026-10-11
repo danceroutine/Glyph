@@ -1,6 +1,6 @@
 import type { Key } from 'ink';
 import { describe, expect, it } from 'vitest';
-import { editPrompt, PromptEditAction, promptEditAction } from '../PromptEditing.ts';
+import { editPrompt, PromptEditAction, promptEditAction } from '#src/terminal/ui/prompt/PromptEditing.js';
 
 type EditingKey = Pick<
   Key,

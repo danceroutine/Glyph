@@ -1,11 +1,11 @@
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
-import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.ts';
-import { TerminalRoot } from '../TerminalRoot.presentational.tsx';
-import { WiredTerminalRoot } from '../TerminalRoot.wired.tsx';
-import { createProposalReviewFixture } from '../../proposal/test/ProposalReviewFixture.ts';
-import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.ts';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import { TerminalRoot } from '#src/terminal/ui/shell/TerminalRoot.presentational.js';
+import { WiredTerminalRoot } from '#src/terminal/ui/shell/TerminalRoot.wired.js';
+import { createProposalReviewFixture } from '#src/terminal/ui/proposal/test/ProposalReviewFixture.js';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 
 describe(TerminalRoot, () => {
   describe('rendering', () => {

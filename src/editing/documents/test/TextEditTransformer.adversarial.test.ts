@@ -4,7 +4,7 @@ import {
   transformTextEditRanges,
   type TextEditRange,
   type TransformedTextEditRange,
-} from '../transformTextEditRanges.ts';
+} from '#src/editing/documents/transformTextEditRanges.js';
 
 describe('TextEditTransformer adversarial behavior', () => {
   describe('ambiguous and repeated text', () => {

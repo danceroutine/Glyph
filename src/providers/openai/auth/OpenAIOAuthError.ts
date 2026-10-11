@@ -1,4 +1,4 @@
-import { AuthenticationError } from '../../../errors/AuthenticationError.ts';
+import { AuthenticationError } from '#src/errors/AuthenticationError.js';
 
 export class OpenAIOAuthError extends AuthenticationError {
   constructor(

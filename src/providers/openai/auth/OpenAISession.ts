@@ -1,5 +1,5 @@
-import { AuthenticationError } from '../../../errors/AuthenticationError.ts';
-import type { OpenAIConfiguration } from '../OpenAIConfiguration.ts';
+import { AuthenticationError } from '#src/errors/AuthenticationError.js';
+import type { OpenAIConfiguration } from '#src/providers/openai/OpenAIConfiguration.js';
 import type { AuthorizationHandler } from './AuthorizationHandler.ts';
 import type { OpenAIAccount } from './OpenAIAccount.ts';
 import type { OpenAIAccountStore } from './OpenAIAccountStore.ts';

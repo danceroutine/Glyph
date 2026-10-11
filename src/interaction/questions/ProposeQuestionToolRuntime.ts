@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import type { ToolDefinition } from '../../tools/ToolDefinition.ts';
-import { ToolInputKind } from '../../tools/ToolInputKind.ts';
-import type { ToolRuntime } from '../../tools/ToolRuntime.ts';
+import type { ToolDefinition } from '#src/tools/ToolDefinition.js';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
 import type { QuestionAnswer } from './QuestionAnswer.ts';
 import { QuestionAnswerType } from './QuestionAnswerType.ts';
 import type { QuestionForm } from './QuestionForm.ts';

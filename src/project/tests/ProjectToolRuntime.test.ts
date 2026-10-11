@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { EditProposalService } from '../../editing/proposals/EditProposalService.ts';
-import type { EditProposal } from '../../editing/proposals/EditProposal.ts';
-import type { ProposalReviewManager } from '../../editing/reviews/ProposalReviewManager.ts';
-import { NullLogger } from '../../observability/NullLogger.ts';
-import type { ProjectAccess } from '../ProjectAccess.ts';
-import { ProjectToolName } from '../ProjectToolName.ts';
-import { ProjectToolRuntime } from '../ProjectToolRuntime.ts';
+import type { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import { NullLogger } from '#src/observability/NullLogger.js';
+import type { ProjectAccess } from '#src/project/ProjectAccess.js';
+import { ProjectToolName } from '#src/project/ProjectToolName.js';
+import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
 
 describe(ProjectToolRuntime, () => {
   describe(ProjectToolRuntime.prototype.execute, () => {

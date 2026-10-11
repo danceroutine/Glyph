@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ProjectAgentInstructions } from '../ProjectAgentInstructions.ts';
+import { ProjectAgentInstructions } from '#src/project/prompts/ProjectAgentInstructions.js';
 
 describe(ProjectAgentInstructions, () => {
   describe(ProjectAgentInstructions.prototype.render, () => {

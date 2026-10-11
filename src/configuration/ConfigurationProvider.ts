@@ -1,7 +1,7 @@
-import type { OpenAIConfiguration } from '../providers/openai/OpenAIConfiguration.ts';
+import type { OpenAIConfiguration } from '#src/providers/openai/OpenAIConfiguration.js';
 import type { ChatConfiguration } from './ChatConfiguration.ts';
-import type { EditingConfiguration } from '../editing/configuration/EditingConfiguration.ts';
-import type { ContextAttachmentConfiguration } from '../context/attachments/ContextAttachmentConfiguration.ts';
+import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
+import type { ContextAttachmentConfiguration } from '#src/context/attachments/ContextAttachmentConfiguration.js';
 
 /** Host-facing configuration port. A VS Code adapter can read these values from WorkspaceConfiguration. */
 export interface ConfigurationProvider {

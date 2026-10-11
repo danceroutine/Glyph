@@ -1,4 +1,4 @@
-import type { ContextAttachment } from '../context/attachments/ContextAttachment.ts';
+import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 
 /**
  * Provider-neutral input for one user turn. Attachments are exact workspace

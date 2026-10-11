@@ -1,10 +1,10 @@
 import type { ReactElement } from 'react';
 import { Box, Text } from 'ink';
-import type { ChatSessionSummary, ChatTranscriptTurn } from '#src/chat/sessions/ChatSessionRecord.ts';
-import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.ts';
-import { PromptRecord } from '../prompt/PromptRecord.presentational.tsx';
-import { WiredResponse } from '../response/Response.wired.tsx';
-import { sanitizeText } from '../shared/sanitizeText.ts';
+import type { ChatSessionSummary, ChatTranscriptTurn } from '#src/chat/sessions/ChatSessionRecord.js';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import { PromptRecord } from '#src/terminal/ui/prompt/PromptRecord.presentational.js';
+import { WiredResponse } from '#src/terminal/ui/response/Response.wired.js';
+import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 
 export interface ChatHistoryProps {
   summary: ChatSessionSummary;

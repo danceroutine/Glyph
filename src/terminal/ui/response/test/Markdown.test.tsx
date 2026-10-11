@@ -1,7 +1,7 @@
 import { stripVTControlCharacters } from 'node:util';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
-import { Markdown } from '../Markdown.presentational.tsx';
+import { Markdown } from '#src/terminal/ui/response/Markdown.presentational.js';
 
 describe(Markdown, () => {
   it('renders headings, lists, quotes, fenced code, and tables as terminal blocks', () => {

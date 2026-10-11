@@ -1,5 +1,5 @@
-import { HttpError } from '../errors/HttpError.ts';
-import type { Logger } from '../observability/Logger.ts';
+import { HttpError } from '#src/errors/HttpError.js';
+import type { Logger } from '#src/observability/Logger.js';
 import { HttpBodyEncoding } from './HttpBodyEncoding.ts';
 import type { HttpClient } from './HttpClient.ts';
 import type { HttpRequestOptions } from './HttpRequestOptions.ts';

@@ -1,4 +1,4 @@
-import type { EditProposal } from '../../proposals/EditProposal.ts';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
 
 /**
  * Durable checkpoint port for active proposal reviews.

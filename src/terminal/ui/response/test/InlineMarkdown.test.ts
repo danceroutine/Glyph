@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inlineMarkdownText, parseInlineMarkdown } from '../parseInlineMarkdown.ts';
+import { inlineMarkdownText, parseInlineMarkdown } from '#src/terminal/ui/response/parseInlineMarkdown.js';
 
 describe(parseInlineMarkdown, () => {
   it('uses Markdown emphasis rules and preserves nested inline text', () => {

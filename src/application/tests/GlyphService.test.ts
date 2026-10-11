@@ -2,26 +2,26 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatAccount } from '../../chat/ChatAccount.ts';
-import type { ChatBackend } from '../../chat/ChatBackend.ts';
-import type { ChatProvider } from '../../chat/ChatProvider.ts';
-import { toChatRequest } from '../../chat/ChatRequest.ts';
-import type { ChatProviderState } from '../../chat/ChatProviderState.ts';
-import { ChatSessionManager } from '../../chat/sessions/ChatSessionManager.ts';
-import type { ChatSessionRecord } from '../../chat/sessions/ChatSessionRecord.ts';
-import type { ChatSessionStore } from '../../chat/sessions/ChatSessionStore.ts';
-import type { WorkspacePathIndex } from '../../context/search/WorkspacePathIndex.ts';
-import type { ChatResponsePart } from '../../chat/ChatResponsePart.ts';
-import { ChatResponsePartType } from '../../chat/ChatResponsePartType.ts';
-import { ToolActivityPhase } from '../../chat/ToolActivityPhase.ts';
-import type { TurnResult } from '../../chat/TurnResult.ts';
-import type { Logger } from '../../observability/Logger.ts';
-import type { ProjectContext } from '../../project/context/ProjectContext.ts';
-import { ProjectContextResolver } from '../../project/context/ProjectContextResolver.ts';
-import { GlyphService } from '../GlyphService.ts';
-import type { ProposalReviewManager } from '../../editing/reviews/ProposalReviewManager.ts';
-import { EditDecisionState } from '../../editing/reviews/EditDecisionState.ts';
-import { EditReviewItemKind } from '../../editing/reviews/EditReviewItemKind.ts';
+import type { ChatAccount } from '#src/chat/ChatAccount.js';
+import type { ChatBackend } from '#src/chat/ChatBackend.js';
+import type { ChatProvider } from '#src/chat/ChatProvider.js';
+import { toChatRequest } from '#src/chat/ChatRequest.js';
+import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
+import type { ChatSessionRecord } from '#src/chat/sessions/ChatSessionRecord.js';
+import type { ChatSessionStore } from '#src/chat/sessions/ChatSessionStore.js';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
+import type { ChatResponsePart } from '#src/chat/ChatResponsePart.js';
+import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
+import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
+import type { TurnResult } from '#src/chat/TurnResult.js';
+import type { Logger } from '#src/observability/Logger.js';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
+import { ProjectContextResolver } from '#src/project/context/ProjectContextResolver.js';
+import { GlyphService } from '#src/application/GlyphService.js';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
+import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
 
 const account: ChatAccount = {
   provider: 'fixture',
@@ -250,7 +250,7 @@ describe(GlyphService, () => {
   });
 
   describe('project chat sessions', () => {
-    it('creates, names, lists, restores, and renames durable chats through the headless service', async () => {
+    it('creates, names, lists, reuses, and renames durable chats through the headless service', async () => {
       const root = await mkdtemp(join(tmpdir(), 'glyph-service-chats-'));
       await mkdir(join(root, '.git'));
       try {
@@ -271,7 +271,8 @@ describe(GlyphService, () => {
             turnCount: 1,
           }),
         ]);
-        expect(service.openChat('chat', account).transcript).toHaveLength(1);
+        expect(service.openChat('chat', account)).toBe(chat);
+        expect(chat.transcript).toHaveLength(1);
         await expect(service.renameChat(chat.id, 'Architecture review')).resolves.toMatchObject({
           title: 'Architecture review',
           titleOrigin: 'human',
@@ -282,8 +283,9 @@ describe(GlyphService, () => {
         expect(backend.createProvider).toHaveBeenLastCalledWith(
           account,
           { slug: 'model-a', name: 'Model A' },
-          expect.any(Object),
+          undefined,
         );
+        expect(backend.createProvider).toHaveBeenCalledTimes(1);
         await service.dispose();
       } finally {
         await rm(root, { recursive: true, force: true });
@@ -332,9 +334,9 @@ describe(GlyphService, () => {
 
         await service.commitReviewResults(current);
 
-        expect(providers).toHaveLength(3);
+        expect(providers).toHaveLength(2);
         expect(providers[1]!.recordContext).not.toHaveBeenCalled();
-        expect(providers[2]!.recordContext).toHaveBeenCalledWith([
+        expect(providers[0]!.recordContext).toHaveBeenCalledWith([
           expect.objectContaining({ id: result.id, payload: result }),
         ]);
         expect(reviews.acknowledgeResults).toHaveBeenCalledWith([result.id]);

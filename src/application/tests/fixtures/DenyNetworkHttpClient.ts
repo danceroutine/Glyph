@@ -1,5 +1,5 @@
-import type { HttpClient } from '../../../http/HttpClient.ts';
-import type { HttpResponse } from '../../../http/HttpResponse.ts';
+import type { HttpClient } from '#src/http/HttpClient.js';
+import type { HttpResponse } from '#src/http/HttpResponse.js';
 
 export class DenyNetworkHttpClient implements HttpClient {
   attempts = 0;
