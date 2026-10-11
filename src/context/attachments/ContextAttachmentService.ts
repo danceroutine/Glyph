@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ConfigurationError } from '#src/errors/ConfigurationError.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import type { ContextAttachment } from './ContextAttachment.ts';
 import type { ContextAttachmentConfiguration } from './ContextAttachmentConfiguration.ts';
 import { ContextAttachmentError } from './ContextAttachmentError.ts';
@@ -58,7 +59,7 @@ export class ContextAttachmentService {
     const attachments: ContextAttachment[] = [];
     let totalBytes = 0;
     for (const path of paths) {
-      const snapshot = await this.read(path);
+      const snapshot = await this.read(path, totalBytes);
       if (snapshot.byteLength > this.configuration.maxFileBytes) {
         throw new ContextAttachmentError(
           ContextAttachmentFailureReason.FILE_SIZE_LIMIT_EXCEEDED,
@@ -115,10 +116,29 @@ export class ContextAttachmentService {
     return paths;
   }
 
-  private async read(path: string): Promise<WorkspaceTextSnapshot> {
+  private async read(path: string, totalBytes: number): Promise<WorkspaceTextSnapshot> {
     try {
-      return await this.workspace.read(path);
+      return await this.workspace.read(path, {
+        maxBytes: Math.min(this.configuration.maxFileBytes, this.configuration.maxTotalBytes - totalBytes),
+      });
     } catch (error) {
+      if (error instanceof WorkspaceReadLimitError) {
+        const perFile = error.actualBytes > this.configuration.maxFileBytes;
+        const reason = perFile
+          ? ContextAttachmentFailureReason.FILE_SIZE_LIMIT_EXCEEDED
+          : ContextAttachmentFailureReason.TOTAL_SIZE_LIMIT_EXCEEDED;
+        const limit = perFile ? this.configuration.maxFileBytes : this.configuration.maxTotalBytes;
+        throw new ContextAttachmentError(
+          reason,
+          `Context attachment ${path} exceeds the ${limit}-byte limit.`,
+          {
+            path,
+            limit,
+            actual: perFile ? error.actualBytes : totalBytes + error.actualBytes,
+          },
+          { cause: error },
+        );
+      }
       throw new ContextAttachmentError(
         ContextAttachmentFailureReason.READ_FAILED,
         `Could not resolve context attachment ${path}.`,

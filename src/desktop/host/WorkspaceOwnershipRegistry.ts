@@ -1,4 +1,5 @@
-import { relative, resolve, sep } from 'node:path';
+import { basename, dirname, relative, resolve, sep } from 'node:path';
+import { realpathSync } from 'node:fs';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphWorkspaceRoot } from '#src/desktop/protocol/connection/GlyphWorkspaceRoot.js';
 
@@ -45,7 +46,7 @@ export class WorkspaceOwnershipRegistry {
         'A desktop workspace requires at least one local root.',
       );
     }
-    const canonicalRoots = roots.map(root => resolve(root.canonicalPath));
+    const canonicalRoots = roots.map(root => canonicalRoot(root.canonicalPath));
     const existingOwner = this.owners.get(getWorkspaceKey(identity));
     if (!existingOwner) {
       const conflict = [...this.owners.values()].find(owner => rootsOverlap(owner.roots, canonicalRoots));
@@ -96,6 +97,17 @@ export function getWorkspaceKey(identity: Pick<GlyphConnectionIdentity, 'profile
 function areSameRoots(left: readonly string[], right: readonly string[]): boolean {
   const sortedRight = [...right].sort();
   return left.length === right.length && [...left].sort().every((root, index) => root === sortedRight[index]);
+}
+
+/** Reserve missing roots relative to their real existing ancestor, never a symlink alias. */
+function canonicalRoot(path: string): string {
+  const absolute = resolve(path);
+  try {
+    return realpathSync(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(absolute) === absolute) throw error;
+    return resolve(canonicalRoot(dirname(absolute)), basename(absolute));
+  }
 }
 
 function rootsOverlap(left: readonly string[], right: readonly string[]): boolean {

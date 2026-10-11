@@ -5,6 +5,7 @@ import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import type { WorkspaceMutationOptions } from './WorkspaceMutationOptions.ts';
 import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
+import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';
 
 interface NamedWorkspaceTextStore {
@@ -70,14 +71,14 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
     return { files, truncated };
   }
 
-  async read(path: string): Promise<WorkspaceTextSnapshot> {
+  async read(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot> {
     const route = this.fileRoute(path);
-    return this.prefix(route.name, await route.store.read(route.relativePath));
+    return this.prefix(route.name, await route.store.read(route.relativePath, options));
   }
 
-  async readOptional(path: string): Promise<WorkspaceTextSnapshot | undefined> {
+  async readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {
     const route = this.fileRoute(path);
-    const snapshot = await route.store.readOptional(route.relativePath);
+    const snapshot = await route.store.readOptional(route.relativePath, options);
     return snapshot ? this.prefix(route.name, snapshot) : undefined;
   }
 

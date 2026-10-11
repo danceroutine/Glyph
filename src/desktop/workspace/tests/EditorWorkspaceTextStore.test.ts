@@ -11,6 +11,30 @@ import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationCo
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 
 describe(EditorWorkspaceTextStore, () => {
+  it('passes read budgets to the editor and preserves budget failures for attachment callers', async () => {
+    const store = new EditorWorkspaceTextStore('/project', true, {
+      listPaths: async () => ({ files: [], truncated: false }),
+      request: async request => {
+        expect(request).toMatchObject({ type: GlyphEditorRequestType.READ_SNAPSHOT, path: 'file.ts', maxBytes: 32 });
+        return {
+          operationId: 'read',
+          ok: false,
+          error: {
+            code: GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
+            message: 'Read limit exceeded',
+            retryable: false,
+            details: { maxBytes: 32, actualBytes: 64 },
+          },
+        };
+      },
+    });
+    await expect(store.read('file.ts', { maxBytes: 32 })).rejects.toMatchObject({ maxBytes: 32, actualBytes: 64 });
+    await expect(store.readOptional('file.ts', { maxBytes: 32 })).rejects.toMatchObject({
+      maxBytes: 32,
+      actualBytes: 64,
+    });
+  });
+
   it('reads live snapshots and applies a token-guarded, deduplicated text mutation', async () => {
     const client = new FixtureEditorClient('before\n');
     const store = new EditorWorkspaceTextStore('/project', true, client);

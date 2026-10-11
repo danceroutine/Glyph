@@ -4,7 +4,7 @@ import { Disposable } from '#vs/base/common/lifecycle.js';
 import { IModelService } from '#vs/editor/common/services/model.js';
 import { ITextFileService } from '#vs/workbench/services/textfile/common/textfiles.js';
 import { IWorkspaceTrustManagementService } from '#vs/platform/workspace/common/workspaceTrust.js';
-import { FileOperationResult, toFileOperationResult } from '#vs/platform/files/common/files.js';
+import { FileOperationResult, IFileService, toFileOperationResult } from '#vs/platform/files/common/files.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#glyph/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#glyph/protocol/editor/GlyphEditorResponse.js';
 import { GlyphWorkingCopyPatternKind } from '#glyph/protocol/editor/GlyphWorkingCopySearchOptions.js';
@@ -47,6 +47,7 @@ export class GlyphEditorAdapter extends Disposable {
     @IModelService private readonly modelService: IModelService,
     @ITextFileService private readonly textFileService: ITextFileService,
     @IWorkspaceTrustManagementService private readonly trustService: IWorkspaceTrustManagementService,
+    @IFileService private readonly fileService: IFileService,
   ) {
     super();
   }
@@ -60,7 +61,7 @@ export class GlyphEditorAdapter extends Disposable {
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       switch (request.type) {
         case GlyphEditorRequestType.READ_SNAPSHOT:
-          return { operationId, ok: true, snapshot: await this.read(request.path) };
+          return { operationId, ok: true, snapshot: await this.read(request.path, request.maxBytes) };
         case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
           return { operationId, ok: true, ...(await this.apply(request.mutation)) };
         case GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT:
@@ -79,6 +80,7 @@ export class GlyphEditorAdapter extends Disposable {
           code,
           message: error instanceof Error ? error.message : String(error),
           retryable: code === GlyphDesktopErrorCode.STALE_DOCUMENT,
+          ...(error instanceof GlyphEditorAdapterError && error.details ? { details: error.details } : {}),
         },
       };
     }
@@ -146,10 +148,18 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   /** Reads through a model reference so unopened files and dirty open files share one path. */
-  async read(path: string): Promise<GlyphEditorTextSnapshot> {
+  async read(path: string, maxBytes?: number): Promise<GlyphEditorTextSnapshot> {
     const resource = this.resolve(path);
+    if (maxBytes !== undefined) {
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0)
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.INVALID_REQUEST);
+      if (!this.modelService.getModel(resource)) {
+        const info = await this.fileService.stat(resource);
+        if (info.size !== undefined) this.assertReadBudget(info.size, maxBytes);
+      }
+    }
     const reference = await this.reference(resource);
-    return this.snapshot(path, reference.object.textEditorModel);
+    return this.snapshot(path, reference.object.textEditorModel, maxBytes);
   }
 
   /**
@@ -245,7 +255,10 @@ export class GlyphEditorAdapter extends Disposable {
     return resource;
   }
 
-  private async snapshot(path: string, model: ITextModel): Promise<GlyphEditorTextSnapshot> {
+  private async snapshot(path: string, model: ITextModel, maxBytes?: number): Promise<GlyphEditorTextSnapshot> {
+    // UTF-16 length is a lower bound on UTF-8 bytes, so reject oversized live
+    // buffers before flattening them into strings or hashing their contents.
+    if (maxBytes !== undefined) this.assertReadBudget(model.getValueLength(), maxBytes);
     // Capture the version before hashing yields so the token describes these bytes.
     const token = {
       workspaceGeneration: this.workspaceGeneration,
@@ -257,6 +270,7 @@ export class GlyphEditorAdapter extends Disposable {
     const byteOrderMark = value.startsWith('\uFEFF');
     const text = byteOrderMark ? value.slice(1) : value;
     const bytes = new TextEncoder().encode(text);
+    if (maxBytes !== undefined) this.assertReadBudget(bytes.byteLength + (byteOrderMark ? 3 : 0), maxBytes);
     return {
       uri: model.uri.toString(),
       path,
@@ -278,6 +292,11 @@ export class GlyphEditorAdapter extends Disposable {
       this.incarnations.set(model, value);
     }
     return value;
+  }
+
+  private assertReadBudget(actualBytes: number, maxBytes: number): void {
+    if (actualBytes > maxBytes)
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED, { maxBytes, actualBytes });
   }
 
   private pathFor(resource: URI): string {

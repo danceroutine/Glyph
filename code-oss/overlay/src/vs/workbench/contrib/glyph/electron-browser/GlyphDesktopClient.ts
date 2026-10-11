@@ -1,5 +1,6 @@
 import { Emitter, type Event } from '#vs/base/common/event.js';
-import { Disposable } from '#vs/base/common/lifecycle.js';
+import { Disposable, toDisposable } from '#vs/base/common/lifecycle.js';
+import { ipcRenderer } from '#vs/base/parts/sandbox/electron-browser/globals.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import {
   GlyphTransportMessageType,
@@ -38,25 +39,31 @@ export class GlyphDesktopClient extends Disposable {
   private port: MessagePort | undefined;
   private identity: GlyphConnectionIdentity | undefined;
   private connecting: Promise<void> | undefined;
+  private readonly disconnectEmitter = this._register(new Emitter<Error>());
+  readonly onDidDisconnect = this.disconnectEmitter.event;
+  private connectionEpoch = 0;
+  private cancelHandshake: ((error: Error) => void) | undefined;
 
   constructor(private readonly handleEditorRequest: (request: GlyphEditorRequest) => Promise<GlyphEditorResponse>) {
     super();
+    const hostExited = (): void =>
+      this.disconnect(new Error('The Glyph desktop host exited. The response was interrupted.'));
+    ipcRenderer.on('vscode:glyph:hostExited', hostExited);
+    this._register(toDisposable(() => ipcRenderer.removeListener('vscode:glyph:hostExited', hostExited)));
   }
 
   /** Reuses one connection attempt so concurrent view actions cannot create competing ports. */
   connect(roots: readonly GlyphWorkspaceRoot[], trusted: boolean): Promise<void> {
     if (this.connecting) return this.connecting;
     if (this.port && this.identity) return Promise.resolve();
-    return (this.connecting = this.connectNow(roots, trusted)
+    const epoch = this.connectionEpoch;
+    return (this.connecting = this.connectNow(roots, trusted, epoch)
       .catch(error => {
-        this.port?.close();
-        this.port = undefined;
-        this.identity = undefined;
-        this.failPending(error instanceof Error ? error : new Error(String(error)));
+        if (epoch === this.connectionEpoch) this.disconnect(error instanceof Error ? error : new Error(String(error)));
         throw error;
       })
       .finally(() => {
-        this.connecting = undefined;
+        if (epoch === this.connectionEpoch) this.connecting = undefined;
       }));
   }
 
@@ -74,7 +81,12 @@ export class GlyphDesktopClient extends Disposable {
       command,
     };
     const completed = new Promise<void>((resolve, reject) => this.pending.set(requestId, { resolve, reject }));
-    port.postMessage(envelope);
+    try {
+      port.postMessage(envelope);
+    } catch (error) {
+      this.pending.delete(requestId);
+      return Promise.reject(error);
+    }
     return completed;
   }
 
@@ -90,34 +102,48 @@ export class GlyphDesktopClient extends Disposable {
       port.postMessage(envelope);
       port.close();
     }
-    this.failPending(new Error('The Glyph desktop host disconnected.'));
-    this.port = undefined;
-    this.identity = undefined;
+    this.disconnect(new Error('The Glyph desktop host disconnected.'));
     super.dispose();
   }
 
-  private async connectNow(roots: readonly GlyphWorkspaceRoot[], trusted: boolean): Promise<void> {
+  private async connectNow(roots: readonly GlyphWorkspaceRoot[], trusted: boolean, epoch: number): Promise<void> {
     const port = await acquirePort(
       'vscode:glyph:createHostMessageChannel',
       'vscode:glyph:createHostMessageChannelResult',
     );
+    if (epoch !== this.connectionEpoch) {
+      port.close();
+      throw new Error('The Glyph host connection was superseded.');
+    }
     this.port = port;
     // A late message from a retired port must not rewind a new host generation.
     port.addEventListener('message', event => {
       if (this.port === port) this.receive(event.data);
     });
-    port.addEventListener('messageerror', () => this.failPending(new Error('The Glyph host sent an invalid message.')));
+    port.addEventListener('messageerror', () => {
+      if (this.port === port) this.disconnect(new Error('The Glyph host sent an invalid message.'));
+    });
     const ready = await new Promise<ReadyMessage>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('The Glyph host connection timed out.')), 10_000);
-      const listener = (event: MessageEvent) => {
-        if (!isReadyMessage(event.data)) return;
+      const cleanup = (): void => {
         clearTimeout(timeout);
         port.removeEventListener('message', listener);
+        this.cancelHandshake = undefined;
+      };
+      const cancel = (error: Error): void => {
+        cleanup();
+        reject(error);
+      };
+      const timeout = setTimeout(() => cancel(new Error('The Glyph host connection timed out.')), 10_000);
+      const listener = (event: MessageEvent) => {
+        if (!isReadyMessage(event.data)) return;
+        cleanup();
         resolve(event.data);
       };
+      this.cancelHandshake = cancel;
       port.addEventListener('message', listener);
       port.start();
     });
+    if (epoch !== this.connectionEpoch) throw new Error('The Glyph host disconnected during connection.');
     this.identity = ready.identity;
     this.cursor.bind(ready.hostGeneration);
     await this.request({ type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted, ...this.cursor.resume });
@@ -185,6 +211,19 @@ export class GlyphDesktopClient extends Disposable {
   private failPending(error: Error): void {
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
+  }
+
+  /** Retire all state tied to a dead port; a later user action can connect afresh. */
+  private disconnect(error: Error): void {
+    this.connectionEpoch++;
+    this.cancelHandshake?.(error);
+    this.port?.close();
+    this.port = undefined;
+    this.identity = undefined;
+    this.connecting = undefined;
+    this.recovering = undefined;
+    this.failPending(error);
+    this.disconnectEmitter.fire(error);
   }
 }
 

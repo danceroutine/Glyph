@@ -4,8 +4,33 @@ import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphResponseDeltaKind } from '#src/desktop/protocol/events/GlyphResponseDelta.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
+import { GlyphHostStatus } from '#src/desktop/protocol/events/GlyphHostStatus.js';
 
 describe(GlyphWorkbenchProjection, () => {
+  it('interrupts pending human decisions on disconnect while preserving the partial answer', () => {
+    const projection = new GlyphWorkbenchProjection();
+    projection.accept({
+      type: GlyphHostEventType.RESPONSE_DELTA,
+      chatId: 'chat',
+      runId: 'run',
+      delta: { kind: GlyphResponseDeltaKind.TEXT, value: 'partial' },
+    });
+    projection.accept({
+      type: GlyphHostEventType.QUESTION,
+      chatId: 'chat',
+      runId: 'run',
+      question: { id: 'question', title: 'Choose', prompt: 'Which file?' },
+    });
+    projection.accept({
+      type: GlyphHostEventType.HOST_STATUS,
+      status: GlyphHostStatus.DISCONNECTED,
+      message: 'Host exited',
+    });
+    expect(projection.state.runs[0]).toMatchObject({ status: GlyphRunStatus.INTERRUPTED, text: 'partial' });
+    expect(projection.state.runs[0]?.question).toBeUndefined();
+    expect(projection.diagnostics).toContain('Host exited');
+  });
+
   it('restores pending decisions and replaces stale runs when a reconnect snapshot arrives', () => {
     const projection = new GlyphWorkbenchProjection();
     projection.accept({

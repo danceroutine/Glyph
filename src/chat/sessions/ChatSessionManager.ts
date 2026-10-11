@@ -134,7 +134,7 @@ export class ChatSessionManager {
       const title = generateTitle ? await this.titles.generate(turn.userText) : current.title;
       const updated: ChatSessionRecord = {
         ...current,
-        title: normalizeGeneratedTitle(title),
+        title: generateTitle ? normalizeGeneratedTitle(title) : title,
         titleOrigin: generateTitle ? 'generated' : current.titleOrigin,
         updatedAt: this.now().toISOString(),
         providerState,

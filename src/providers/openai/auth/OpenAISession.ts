@@ -10,7 +10,9 @@ import type { OpenAITokens } from './OpenAITokens.ts';
 
 export class OpenAISession implements OpenAISessionService {
   private readonly secrets = new Set<string>();
-  private pending: Promise<string> | undefined;
+  // Borrowed stores share account objects across workspaces. Refresh-token
+  // rotation must be serialized for that account, never for unrelated accounts.
+  private static readonly pending = new WeakMap<OpenAIAccount, Promise<string>>();
 
   constructor(
     private readonly store: OpenAIAccountStore,
@@ -51,11 +53,15 @@ export class OpenAISession implements OpenAISessionService {
     }
     this.remember(account.tokens);
     if (account.tokens.expiresAt > Date.now() + 30_000) return account.tokens.accessToken;
-    if (!this.pending) this.pending = this.refresh(account);
+    let pending = OpenAISession.pending.get(account);
+    if (!pending) {
+      pending = this.refresh(account);
+      OpenAISession.pending.set(account, pending);
+    }
     try {
-      return await this.pending;
+      return await pending;
     } finally {
-      this.pending = undefined;
+      if (OpenAISession.pending.get(account) === pending) OpenAISession.pending.delete(account);
     }
   }
 

@@ -1,4 +1,5 @@
 import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
+import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import type { WorkspaceMutationOptions } from './WorkspaceMutationOptions.ts';
 import type { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';
 
@@ -19,8 +20,8 @@ export interface WorkspaceTextStore {
     targetDirectory?: string,
   ): Promise<{ files: string[]; truncated: boolean }>;
   normalizePath(path: string): string;
-  read(path: string): Promise<WorkspaceTextSnapshot>;
-  readOptional(path: string): Promise<WorkspaceTextSnapshot | undefined>;
+  read(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot>;
+  readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined>;
   create(
     path: string,
     text: string,

@@ -12,7 +12,12 @@ export enum GlyphEditorRequestType {
 
 /** Closed renderer-side RPC union; requests remain structured-clone-safe DTOs. */
 export type GlyphEditorRequest =
-  | { readonly type: GlyphEditorRequestType.READ_SNAPSHOT; readonly operationId: string; readonly path: string }
+  | {
+      readonly type: GlyphEditorRequestType.READ_SNAPSHOT;
+      readonly operationId: string;
+      readonly path: string;
+      readonly maxBytes?: number;
+    }
   | { readonly type: GlyphEditorRequestType.LIST_WORKING_COPIES; readonly operationId: string }
   | {
       readonly type: GlyphEditorRequestType.SEARCH_WORKING_COPIES;

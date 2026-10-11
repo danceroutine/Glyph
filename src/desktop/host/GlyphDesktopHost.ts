@@ -50,7 +50,9 @@ export class GlyphDesktopHost {
   private readonly sessions = new Map<string, Connection>();
   private readonly runtimes = new Map<string, WorkspaceRuntimeRecord>();
   private readonly runtimeCreations = new Map<string, Promise<WorkspaceRuntimeRecord>>();
+  private readonly runtimeStops = new Map<string, Promise<void>>();
   private readonly ownership = new WorkspaceOwnershipRegistry();
+  private readonly disconnectTimers = new Map<Connection, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly runtimeFactory: GlyphDesktopWorkspaceRuntimeFactory,
@@ -80,6 +82,8 @@ export class GlyphDesktopHost {
       this.sessions.set(key, connection);
     }
     connection.send = send;
+    clearTimeout(this.disconnectTimers.get(connection));
+    this.disconnectTimers.delete(connection);
     connection.ready = false;
     this.connections.set(connectionId, connection);
   }
@@ -96,13 +100,28 @@ export class GlyphDesktopHost {
     this.connections.delete(connectionId);
     connection.send = undefined;
     connection.ready = false;
+    // Preserve replay across a renderer reload, but never leave authority or
+    // background processes owned by a vanished window indefinitely.
+    const timer = setTimeout(() => {
+      this.disconnectTimers.delete(connection);
+      if (connection.send) return;
+      this.sessions.delete(connectionKey(connection.identity));
+      void this.detach(connection).catch(() => {
+        // Keep ownership reserved if cleanup failed; do not grant a second writer.
+      });
+    }, 30_000);
+    timer.unref();
+    this.disconnectTimers.set(connection, timer);
     if (!connection.attached) return;
     const record = this.runtimes.get(getWorkspaceKey(connection.identity));
     await record?.runtime.connectionLost(connection.identity.windowId);
   }
 
   async dispose(): Promise<void> {
+    for (const timer of this.disconnectTimers.values()) clearTimeout(timer);
+    this.disconnectTimers.clear();
     await Promise.allSettled(this.runtimeCreations.values());
+    await Promise.allSettled(this.runtimeStops.values());
     const records = [...new Set([...this.runtimes.values()].map(record => record.runtime))];
     this.connections.clear();
     this.sessions.clear();
@@ -167,8 +186,11 @@ export class GlyphDesktopHost {
     requestId: string,
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
   ): Promise<readonly GlyphHostEvent[]> {
-    const ownership = this.ownership.acquire(connection.identity, command.roots);
     const key = getWorkspaceKey(connection.identity);
+    // New authority cannot overlap a previous owner's asynchronous shutdown.
+    const stopping = this.runtimeStops.get(key);
+    if (stopping) await stopping;
+    const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {
       let creating = this.runtimeCreations.get(key);
@@ -195,6 +217,7 @@ export class GlyphDesktopHost {
       }
       record = await creating;
     }
+    if (this.runtimeStops.has(key)) throw new Error('The owning window disconnected during workspace initialization.');
     connection.attached = true;
     connection.ready = true;
     connection.trusted = command.trusted;
@@ -283,18 +306,20 @@ export class GlyphDesktopHost {
   }
 
   private async detach(connection: Connection): Promise<void> {
-    if (!connection.attached) return;
+    const key = getWorkspaceKey(connection.identity);
+    const isOwner = this.ownership.getOwnerWindowId(connection.identity) === connection.identity.windowId;
+    const pendingStop = this.runtimeStops.get(key);
+    if (isOwner && pendingStop) return pendingStop;
+    // The reservation can already exist while initialization is still pending.
+    if (!connection.attached && !isOwner) return;
     connection.attached = false;
     connection.ready = false;
     connection.canReplay = false;
-    const key = getWorkspaceKey(connection.identity);
     const record = this.runtimes.get(key);
-    await record?.runtime.connectionLost(connection.identity.windowId);
-    if (!this.ownership.release(connection.identity)) {
+    if (!isOwner) {
+      await record?.runtime.connectionLost(connection.identity.windowId);
       return;
     }
-    this.runtimes.delete(key);
-    await record?.runtime.dispose();
     for (const peer of this.sessions.values()) {
       if (getWorkspaceKey(peer.identity) !== key) continue;
       peer.attached = false;
@@ -306,6 +331,17 @@ export class GlyphDesktopHost {
         message: 'The owning window detached.',
       });
     }
+    const stopping = (async () => {
+      // A failed initialization has no runtime to stop and releases its own reservation.
+      const initialized = record ?? (await this.runtimeCreations.get(key)?.catch(() => undefined));
+      await initialized?.runtime.connectionLost(connection.identity.windowId);
+      await initialized?.runtime.dispose();
+      this.runtimes.delete(key);
+      this.ownership.release(connection.identity);
+    })();
+    this.runtimeStops.set(key, stopping);
+    await stopping;
+    this.runtimeStops.delete(key);
   }
 
   private broadcast(key: string, event: GlyphHostEvent): void {

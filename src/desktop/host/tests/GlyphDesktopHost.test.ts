@@ -22,6 +22,75 @@ const peer = { ...owner, windowId: 'peer' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(GlyphDesktopHost, () => {
+  it('cleans up an abandoned owner even when runtime initialization outlasts the reconnect grace period', async () => {
+    vi.useFakeTimers();
+    const fixture = new HostFixture();
+    let initialize!: (runtime: GlyphDesktopWorkspaceRuntime) => void;
+    fixture.factory.create.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          initialize = resolve;
+        }),
+    );
+    fixture.connect('owner', owner);
+    const attaching = fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    try {
+      await fixture.host.disconnect('owner');
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      initialize(fixture.runtime);
+      await attaching;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fixture.runtime.dispose).toHaveBeenCalledOnce();
+      fixture.connect('replacement', peer);
+      await fixture.receive('replacement', peer, 'attach-replacement', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: true,
+      });
+      expect(
+        fixture.events('replacement').find(value => value.event.type === GlyphHostEventType.INITIAL_STATE)?.event,
+      ).toMatchObject({ state: { readOnly: false, ownerWindowId: peer.windowId } });
+    } finally {
+      initialize(fixture.runtime);
+      await attaching;
+      await fixture.host.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for the previous owner’s runtime to stop before allowing a replacement writer', async () => {
+    const fixture = new HostFixture();
+    let finish!: () => void;
+    fixture.runtime.dispose.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        }),
+    );
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', attach);
+    const detached = fixture.receive('owner', owner, 'detach', { type: GlyphWorkbenchCommandType.DETACH });
+    fixture.connect('replacement', peer);
+    const replacement = fixture.receive('replacement', peer, 'attach-replacement', attach);
+    try {
+      await vi.waitFor(() => expect(fixture.runtime.dispose).toHaveBeenCalledOnce());
+      expect(fixture.factory.create).toHaveBeenCalledOnce();
+      expect(fixture.events('replacement')).toEqual([]);
+    } finally {
+      finish();
+      await Promise.all([detached, replacement]);
+      await fixture.host.dispose();
+    }
+    expect(
+      fixture.events('replacement').find(event => event.event.type === GlyphHostEventType.INITIAL_STATE)?.event,
+    ).toMatchObject({ state: { readOnly: false, ownerWindowId: peer.windowId } });
+  });
+
   it('[review-06] expires an abandoned connection’s ownership and disposes its runtime so a replacement window can write', async () => {
     vi.useFakeTimers();
     const fixture = new HostFixture();

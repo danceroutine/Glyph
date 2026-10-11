@@ -62,6 +62,22 @@ export class GlyphWorkbenchProjection {
       }
       case GlyphHostEventType.HOST_STATUS: {
         this.status = event.status;
+        if (event.status === GlyphHostStatus.DISCONNECTED) {
+          // Streaming and human-decision waits cannot remain actionable after
+          // their host disappears. Preserve the partial answer until recovery.
+          for (const run of this.snapshot.runs) {
+            if (
+              ![
+                GlyphRunStatus.STREAMING,
+                GlyphRunStatus.WAITING_FOR_QUESTION,
+                GlyphRunStatus.WAITING_FOR_APPROVAL,
+              ].includes(run.status)
+            )
+              continue;
+            const { question: _question, approval: _approval, ...settled } = run;
+            this.setRun({ ...settled, status: GlyphRunStatus.INTERRUPTED });
+          }
+        }
         if (event.message) this.diagnostics.push(event.message);
         return;
       }

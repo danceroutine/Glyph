@@ -44,6 +44,18 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
     this.client = this._register(new GlyphDesktopClient(request => editor.handle(request)));
     this._register(
+      this.client.onDidDisconnect(error => {
+        editor.invalidate();
+        this.pendingRunId = undefined;
+        this.projection.accept({
+          type: GlyphHostEventType.HOST_STATUS,
+          status: GlyphHostStatus.DISCONNECTED,
+          message: error.message,
+        });
+        this.changeEmitter.fire(this.state);
+      }),
+    );
+    this._register(
       this.client.onDidReceiveEvent(envelope => {
         const event = envelope.event;
         this.projection.accept(event);
@@ -178,6 +190,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     } catch (error) {
       this.pendingRunId = undefined;
       this.report(error);
+      // The composer owns its draft and restores it when submission fails.
+      throw error;
     } finally {
       this.sending = false;
     }

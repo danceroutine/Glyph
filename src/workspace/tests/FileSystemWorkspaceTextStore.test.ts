@@ -15,6 +15,19 @@ afterEach(async () => {
 
 describe(FileSystemWorkspaceTextStore, () => {
   describe(FileSystemWorkspaceTextStore.prototype.read, () => {
+    it('accepts an exact byte budget and rejects oversized UTF-8 input before decoding', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'workspace-budget-'));
+      directories.push(root);
+      await writeFile(join(root, 'text.txt'), 'é🙂');
+      const store = new FileSystemWorkspaceTextStore(root);
+      await expect(store.read('text.txt', { maxBytes: 6 })).resolves.toMatchObject({ text: 'é🙂', byteLength: 6 });
+      await expect(store.readOptional('text.txt', { maxBytes: 5 })).rejects.toMatchObject({
+        maxBytes: 5,
+        actualBytes: 6,
+      });
+      await expect(store.readOptional('missing.txt', { maxBytes: 0 })).resolves.toBeUndefined();
+    });
+
     it.each(['.ENV', '.GIT/config'])(
       '[review-01] refuses protected path %s under case-insensitive policy before returning its contents',
       async path => {

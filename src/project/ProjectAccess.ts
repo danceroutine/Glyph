@@ -242,7 +242,7 @@ export class ProjectAccess {
     lines: { number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }[];
   }> {
     const startLine = requestedStart ?? 1;
-    const snapshot = await this.workspace.read(path);
+    const snapshot = await this.workspace.read(path, { maxBytes: this.options.maxFileBytes });
     // TODO: Read oversized files incrementally so line-range requests do not require loading the whole file.
     if (snapshot.byteLength > this.options.maxFileBytes) {
       throw new Error(`File exceeds the ${this.options.maxFileBytes}-byte read limit.`);

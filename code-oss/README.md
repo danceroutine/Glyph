@@ -99,8 +99,8 @@ model response.
 ## Review regressions
 
 The `[review-NN]` cases are ordinary executable tests asserting correct behavior.
-They intentionally fail against the reviewed implementation: they are not
-`it.fails`, skips, fixmes, or unconditional failures. Production code is unchanged.
+They reproduce the original defects and pass against the corrected implementations;
+they are not `it.fails`, skips, fixmes, or unconditional failures.
 The review's 11 findings map to these tests:
 
 | Finding | Regression coverage                                                                           | Test file                                                                                        |
@@ -130,6 +130,10 @@ the isolated test application's process metrics. Credentials are fabricated, and
 file tests use disposable canaries and tiny size limits. The abandoned-owner test
 allows a bounded reconnect grace period (five minutes of virtual time), not an
 indefinite claim on the workspace.
+
+Disconnected windows retain ownership for a 30-second reconnect grace period.
+After that, the host stops the abandoned runtime before granting replacement
+authority, including when the original runtime was still initializing.
 
 The acknowledged editing-workflow blockers remain explicit fixmes:
 

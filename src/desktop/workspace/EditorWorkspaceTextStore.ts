@@ -6,6 +6,8 @@ import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationO
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import type { GlyphDocumentToken } from '#src/desktop/protocol/connection/GlyphDocumentToken.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 import type { GlyphEditorTextSnapshot } from '#src/desktop/protocol/editor/GlyphEditorTextSnapshot.js';
@@ -55,23 +57,25 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     return fromRoot.split(sep).join('/');
   }
 
-  async read(input: string): Promise<WorkspaceTextSnapshot> {
+  async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
     const path = this.normalizePath(input);
     const response = await this.client.request({
       type: GlyphEditorRequestType.READ_SNAPSHOT,
       operationId: randomUUID(),
       path,
+      ...options,
     });
     const snapshot = requireSnapshot(response, path);
     return this.remember(snapshot);
   }
 
-  async readOptional(input: string): Promise<WorkspaceTextSnapshot | undefined> {
+  async readOptional(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot | undefined> {
     const path = this.normalizePath(input);
     const response = await this.client.request({
       type: GlyphEditorRequestType.READ_SNAPSHOT,
       operationId: randomUUID(),
       path,
+      ...options,
     });
     if (!response.ok && response.error?.code === GlyphDesktopErrorCode.NOT_FOUND) return undefined;
     return this.remember(requireSnapshot(response, path));
@@ -199,8 +203,15 @@ function requireSnapshot(response: GlyphEditorResponse, path: string): GlyphEdit
 }
 
 /** Converts a wire-safe error DTO back into the editing domain's proper Error hierarchy. */
-function responseError(response: GlyphEditorResponse, path: string): EditError {
+function responseError(response: GlyphEditorResponse, path: string): Error {
   const code = response.error?.code;
+  if (code === GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED) {
+    return new WorkspaceReadLimitError(
+      path,
+      Number(response.error?.details?.maxBytes),
+      Number(response.error?.details?.actualBytes),
+    );
+  }
   const reason =
     code === GlyphDesktopErrorCode.STALE_DOCUMENT
       ? EditFailureReason.STALE

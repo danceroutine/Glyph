@@ -99,8 +99,10 @@ export class OpenAIBackend implements ChatBackend {
   }
 
   createProvider(account: ChatAccount, model: Model, state?: ChatProviderState): ChatProvider {
-    const value = this.resolve(account);
-    const token = (): Promise<string> => this.session.accessToken(value);
+    this.resolve(account);
+    // Reauthentication replaces the stored account; cached chats must resolve
+    // current credentials each time rather than retaining the old token object.
+    const token = (): Promise<string> => this.session.accessToken(this.resolve(account));
     return state ? this.providers.create(model.slug, token, state) : this.providers.create(model.slug, token);
   }
 

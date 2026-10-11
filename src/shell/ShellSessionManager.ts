@@ -380,7 +380,9 @@ function tail(value: string, limit: number): string {
 }
 
 function terminateProcess(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (child.exitCode !== null || child.pid === undefined) return;
+  // The group can outlive its leader and keep stdout/stderr open. Escalation
+  // must still reach descendants after the parent has emitted exit.
+  if (child.pid === undefined) return;
   try {
     process.kill(-child.pid, signal);
   } catch {

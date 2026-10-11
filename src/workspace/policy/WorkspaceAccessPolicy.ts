@@ -40,12 +40,14 @@ export class WorkspaceAccessPolicy {
     this.allowedFileNames = resolved.allowedFileNames;
   }
 
-  isSensitiveFileName(name: string): boolean {
-    if (this.allowedFileNames.includes(name)) return false;
+  isSensitiveFileName(name: string, caseSensitive = true): boolean {
+    const normalize = (value: string): string => (caseSensitive ? value : value.toLowerCase());
+    name = normalize(name);
+    if (this.allowedFileNames.some(value => normalize(value) === name)) return false;
     return (
-      this.sensitiveFileNames.includes(name) ||
-      this.sensitiveFilePrefixes.some(prefix => name.startsWith(prefix)) ||
-      this.sensitiveFileExtensions.some(extension => name.endsWith(extension))
+      this.sensitiveFileNames.some(value => normalize(value) === name) ||
+      this.sensitiveFilePrefixes.some(prefix => name.startsWith(normalize(prefix))) ||
+      this.sensitiveFileExtensions.some(extension => name.endsWith(normalize(extension)))
     );
   }
 

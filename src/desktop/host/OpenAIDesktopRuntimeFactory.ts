@@ -113,7 +113,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         request: async (request, signal) => {
           // Reuse filesystem policy and symlink checks before granting editor access.
           const path = this.requestPath(request);
-          if (path) await disk.readOptional(path);
+          const readOptions =
+            request.type === GlyphEditorRequestType.READ_SNAPSHOT && request.maxBytes !== undefined
+              ? { maxBytes: request.maxBytes }
+              : {};
+          if (path) await disk.readOptional(path, readOptions);
           const qualified = path && roots.length > 1 ? `${root.name}/${path}` : path;
           const wire = this.withRequestPath(request, qualified);
           const response = await this.editors.request(input.identity, wire, signal);

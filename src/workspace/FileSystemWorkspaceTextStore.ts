@@ -22,6 +22,8 @@ import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
 import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';
 import { WorkspaceAccessPolicy } from './policy/WorkspaceAccessPolicy.ts';
+import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
+import { WorkspaceReadLimitError } from './WorkspaceReadLimitError.ts';
 
 const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
@@ -52,10 +54,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
 
   normalizePath(input: string): string {
     const normalized = normalizeProjectPath(this.root, input);
-    if (
-      normalized.split('/').some(part => this.options.accessPolicy.ignoredDirectories.includes(part)) ||
-      this.isExcluded(normalized)
-    ) {
+    if (normalized.split('/').some(part => this.isIgnoredDirectory(part)) || this.isExcluded(normalized)) {
       throw new EditError(EditFailureReason.UNSUPPORTED, 'That path is excluded from project access.', {
         path: normalized,
       });
@@ -90,8 +89,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         const absolute = resolve(directory, entry.name);
         const path = relative(root, absolute).split(sep).join('/');
         if (entry.isDirectory()) {
-          if (!this.options.accessPolicy.ignoredDirectories.includes(entry.name) && !this.isExcludedPath(path))
-            await visit(absolute);
+          if (!this.isIgnoredDirectory(entry.name) && !this.isExcludedPath(path)) await visit(absolute);
           if (truncated) return;
         } else if (entry.isFile()) {
           const pathWithinTarget = relative(searchRoot, absolute).split(sep).join('/');
@@ -110,7 +108,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return { files, truncated };
   }
 
-  async read(input: string): Promise<WorkspaceTextSnapshot> {
+  async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, false);
     const absolute = resolve(this.root, path);
@@ -122,13 +120,18 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const resolvedRoot = await realpath(this.root);
     const resolvedFile = await realpath(absolute);
     assertInsideRoot(resolvedRoot, resolvedFile, path);
-    const bytes = await readFile(resolvedFile);
+    // Check the filesystem's spelling too: aliases must not bypass the policy.
+    this.normalizePath(relative(resolvedRoot, resolvedFile));
+    const bytes =
+      options.maxBytes === undefined
+        ? await readFile(resolvedFile)
+        : await this.readBounded(resolvedFile, path, options.maxBytes);
     return toSnapshot(path, bytes, link.mode & 0o777, `${link.dev}:${link.ino}`);
   }
 
-  async readOptional(path: string): Promise<WorkspaceTextSnapshot | undefined> {
+  async readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {
     try {
-      return await this.read(path);
+      return await this.read(path, options);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
@@ -228,6 +231,30 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     await unlink(resolve(this.root, path));
   }
 
+  private async readBounded(absolute: string, path: string, maxBytes: number): Promise<Buffer> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error('Read budget must be a non-negative integer.');
+    const handle = await open(absolute, 'r');
+    try {
+      const info = await handle.stat();
+      if (info.size > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, info.size);
+      // A file can grow after stat. Read at most one byte beyond the budget,
+      // never an unbounded readFile followed by a post-allocation size check.
+      const chunks: Buffer[] = [];
+      let length = 0;
+      while (length <= maxBytes) {
+        const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes - length + 1));
+        const { bytesRead } = await handle.read(buffer);
+        if (bytesRead === 0) return Buffer.concat(chunks, length);
+        length += bytesRead;
+        if (length > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, length);
+        chunks.push(buffer.subarray(0, bytesRead));
+      }
+      throw new WorkspaceReadLimitError(path, maxBytes, length);
+    } finally {
+      await handle.close();
+    }
+  }
+
   private async assertRevision(path: string, expected: string): Promise<WorkspaceTextSnapshot> {
     const current = await this.readOptional(path);
     if (!current || current.revision !== expected) {
@@ -276,7 +303,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
 
   private isExcluded(path: string): boolean {
     if (this.isExcludedPath(path)) return true;
-    return this.options.accessPolicy.isSensitiveFileName(path.split('/').at(-1) ?? '');
+    return this.options.accessPolicy.isSensitiveFileName(path.split('/').at(-1) ?? '', this.caseSensitive);
+  }
+
+  private isIgnoredDirectory(name: string): boolean {
+    return this.options.accessPolicy.ignoredDirectories.some(value =>
+      this.caseSensitive ? value === name : value.toLowerCase() === name.toLowerCase(),
+    );
   }
 
   private isExcludedPath(path: string): boolean {

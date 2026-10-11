@@ -104,7 +104,7 @@ export class GlyphHostStarter extends Disposable {
       utilityProcess.onExit(() => {
         if (this.utilityProcess === utilityProcess) this.utilityProcess = undefined;
         for (const sender of this.senders.values()) {
-          if (!sender.isDestroyed()) sender.send('glyph:hostExited');
+          if (!sender.isDestroyed()) sender.send('vscode:glyph:hostExited');
         }
       }),
     );

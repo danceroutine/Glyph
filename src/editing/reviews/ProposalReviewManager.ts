@@ -162,6 +162,15 @@ export class ProposalReviewManager {
   async rejectAll(): Promise<void> {
     return this.enqueue(async () => {
       const reviews = this.requireReviews();
+      // A failed completion checkpoint does not mean the edit failed. Recover
+      // applied decisions before choosing which items remain rejectable.
+      for (const review of reviews) {
+        for (const file of review.files) {
+          if (!file.applyingItemId) continue;
+          await this.reconcile(review, file);
+          await this.persist();
+        }
+      }
       const pendingItems = reviews.flatMap(review =>
         review.files.flatMap(file => file.items.filter(item => item.decision === EditDecisionState.PENDING)),
       );
