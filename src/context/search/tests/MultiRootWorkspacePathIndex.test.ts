@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { FileSearchResult } from '#src/context/search/FileSearchResult.js';
 import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
 import type { WorkspaceContentSearchOptions } from '#src/context/search/WorkspaceContentSearchOptions.js';
@@ -8,6 +8,44 @@ import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.
 import type { WorkspacePathIndexState } from '#src/context/search/WorkspacePathIndexState.js';
 
 describe(MultiRootWorkspacePathIndex, () => {
+  it('[round2-09] bounds combined content and continues from the first unreturned match across native pages', async () => {
+    const api = new FixtureIndex('api', 'file.ts', 1);
+    const search = vi.spyOn(api, 'searchContents').mockImplementation(async (_pattern, options) => {
+      const offset = options.offset ?? 0;
+      return {
+        outputMode: 'content',
+        matches: [
+          {
+            path: `file-${offset}.ts`,
+            line: 1,
+            column: 1,
+            endLine: 1,
+            endColumn: 2,
+            lineText: 'x'.repeat(8192),
+            matchedText: 'x',
+            linesBefore: Array.from({ length: 20 }, (_, number) => ({ number: number + 1, content: 'x'.repeat(8192) })),
+            linesAfter: Array.from({ length: 20 }, (_, number) => ({ number: number + 22, content: 'x'.repeat(8192) })),
+          },
+        ],
+        searchedFiles: 3,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: offset < 2,
+        nextOffset: offset < 2 ? offset + 1 : null,
+      };
+    });
+    const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
+    const first = await index.searchContents('x', { outputMode: 'content', limit: 3 });
+    if (first.outputMode !== 'content') throw new Error('Expected content matches');
+    expect.soft(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(512 * 1024);
+    expect.soft(first.truncated).toBe(true);
+    expect.soft(first.nextOffset).toBe(first.matches.length);
+    expect.soft(search.mock.calls.length).toBeLessThanOrEqual(3);
+    const next = await index.searchContents('x', { outputMode: 'content', limit: 3, offset: first.matches.length });
+    if (next.outputMode !== 'content') throw new Error('Expected content matches');
+    expect(next.matches[0]?.path).toBe(`api/file-${first.matches.length}.ts`);
+  });
+
   it('merges native index state, fuzzy matches, and glob results into named paths', async () => {
     const api = new FixtureIndex('api', 'src/server.ts', 10);
     const web = new FixtureIndex('web', 'src/App.tsx', 20);

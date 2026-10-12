@@ -37,6 +37,17 @@ it.describe('Review regressions — utility-host failure', () => {
 it.describe('Review regressions — rejected send with no account', () => {
   it.use({ productionRuntime: true });
 
+  it('[round2-06] restarts the production host after a crash without manually removing its credential lock', async ({
+    glyph,
+  }) => {
+    await glyph.send('Initialize the production account store without credentials.');
+    await expect(glyph.diagnostics).toContainText([/Sign in.*inference access/]);
+    await crashFixtureHost(glyph);
+    await glyph.send('Reconnect to the production account store.');
+    await expect(glyph.diagnostics.filter({ hasText: /Sign in.*inference access/ })).toHaveCount(2);
+    await expect(glyph.composer).toHaveValue('Reconnect to the production account store.');
+  });
+
   it('[review-10] retains the unsent draft when no account has inference access', async ({ glyph }) => {
     const draft = 'Keep this unsent question until I have signed in.';
     await glyph.send(draft);

@@ -1,7 +1,7 @@
 import { link, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import type { Logger } from '#src/observability/Logger.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -39,6 +39,34 @@ afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { r
 
 describe(ProposalReviewManager, () => {
   describe(ProposalReviewManager.prototype.accept, () => {
+    it('[round2-02] exposes no accepted receipt while a text mutation is pending and subsequently fails', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      let rejectMutation!: (error: Error) => void;
+      let started!: () => void;
+      const entered = new Promise<void>(resolve => {
+        started = resolve;
+      });
+      vi.spyOn(fixture.workspace, 'replace').mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectMutation = reject;
+            started();
+          }),
+      );
+      const accepting = fixture.manager.accept(proposal.files[0]!.items[0]!.id);
+      const failure = expect(accepting).rejects.toThrow('mutation failed');
+      await entered;
+      // A concurrent chat flush reads this public projection before awaiting acknowledgement.
+      const recordedReceipts = structuredClone(fixture.manager.pendingResults);
+      rejectMutation(new Error('mutation failed'));
+      await failure;
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
+      expect(fixture.manager.pendingChangeCount).toBe(1);
+      expect(recordedReceipts.flatMap(result => result.items)).toEqual([]);
+    });
+
     it('does not touch the workspace when the applying checkpoint cannot be persisted, then retries once', async () => {
       const fixture = await createFixture();
       const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');

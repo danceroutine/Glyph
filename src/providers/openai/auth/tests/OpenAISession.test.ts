@@ -45,6 +45,26 @@ function store(saved: OpenAIAccount): OpenAIAccountStore {
 
 describe(OpenAISession, () => {
   describe(OpenAISession.prototype.accessToken, () => {
+    it('[round2-05] retries saving rotated credentials before allowing another workspace to reuse them', async () => {
+      const saved = account(0);
+      const savedStore = store(saved);
+      const save = vi
+        .spyOn(savedStore, 'save')
+        .mockRejectedValueOnce(new Error('disk unavailable'))
+        .mockRejectedValueOnce(new Error('disk still unavailable'));
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      const refresh = vi
+        .spyOn(authentication, 'refresh')
+        .mockResolvedValue({ ...saved.tokens!, accessToken: 'rotated', expiresAt: Number.MAX_SAFE_INTEGER });
+      const first = new OpenAISession(savedStore, authentication, configuration);
+      await expect(first.accessToken(saved)).rejects.toThrow('disk unavailable');
+      const second = new OpenAISession(savedStore, authentication, configuration);
+      await expect(second.accessToken(saved)).rejects.toThrow('disk still unavailable');
+      await expect(second.accessToken(saved)).resolves.toBe('rotated');
+      expect(save).toHaveBeenCalledTimes(3);
+      expect(refresh).toHaveBeenCalledOnce();
+    });
+
     it('[review-02] returns each account’s own token when different accounts refresh concurrently', async () => {
       const first = account(0);
       const second = { ...account(0), subject: 'second-subject' };

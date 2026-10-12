@@ -163,7 +163,8 @@ export class GlyphDesktopHost {
         case GlyphWorkbenchCommandType.ATTACH_WORKSPACE:
           return await this.attach(connection, request.requestId, request.command);
         case GlyphWorkbenchCommandType.REQUEST_SNAPSHOT:
-          return [await this.snapshotEvent(connection), toCommandResultGlyphHostEvent(request.requestId)];
+          await this.publishSnapshot(connection);
+          return [toCommandResultGlyphHostEvent(request.requestId)];
         case GlyphWorkbenchCommandType.DETACH:
           await this.detach(connection);
           return [toCommandResultGlyphHostEvent(request.requestId)];
@@ -233,9 +234,9 @@ export class GlyphDesktopHost {
       for (const event of replay) connection.send?.(event);
       return [toCommandResultGlyphHostEvent(requestId)];
     }
-    const snapshot = await this.snapshotEvent(connection);
+    await this.publishSnapshot(connection);
     connection.canReplay = true;
-    return [snapshot, toCommandResultGlyphHostEvent(requestId)];
+    return [toCommandResultGlyphHostEvent(requestId)];
   }
 
   private async dispatch(
@@ -290,19 +291,30 @@ export class GlyphDesktopHost {
     return [toCommandResultGlyphHostEvent(requestId)];
   }
 
-  private async snapshotEvent(connection: Connection): Promise<GlyphHostEvent> {
+  private async publishSnapshot(connection: Connection): Promise<void> {
     const record = this.runtimes.get(getWorkspaceKey(connection.identity));
     if (!record) throw new Error('The Glyph workspace runtime is unavailable.');
-    const state = await record.runtime.snapshot();
-    return {
-      type: GlyphHostEventType.INITIAL_STATE,
-      state: {
-        ...state,
-        ownerWindowId: record.ownerWindowId,
-        readOnly: connection.readOnly,
-        sequence: connection.journal.watermark + 1,
-      },
-    };
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const before = connection.journal.watermark;
+      const state = await record.runtime.snapshot();
+      if (this.runtimes.get(getWorkspaceKey(connection.identity)) !== record || !connection.ready)
+        throw new Error('The workspace detached during snapshot capture.');
+      if (before !== connection.journal.watermark) continue;
+      // Check and sequence synchronously: returning the snapshot through another
+      // await would let a newer event overtake it again. Deduplication caches only
+      // the acknowledgement, never stale state that could be republished later.
+      this.send(connection, {
+        type: GlyphHostEventType.INITIAL_STATE,
+        state: {
+          ...state,
+          ownerWindowId: record.ownerWindowId,
+          readOnly: connection.readOnly,
+          sequence: before + 1,
+        },
+      });
+      return;
+    }
+    throw new Error('Workspace state changed during snapshot capture. Retry the snapshot request.');
   }
 
   private async detach(connection: Connection): Promise<void> {

@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { ConcurrentInstanceError } from '#src/errors/ConcurrentInstanceError.js';
 import { PersistenceError } from '#src/errors/PersistenceError.js';
 import type { OpenAIAccountStore } from './OpenAIAccountStore.ts';
 import type { OpenAISavedState } from './OpenAISavedState.ts';
 
 export class FileOpenAIAccountStore implements OpenAIAccountStore {
+  private saving: Promise<void> = Promise.resolve();
+  private lock: Database.Database | undefined;
   readonly state: OpenAISavedState = {
     version: 1,
     hostId: `urn:uuid:${randomUUID()}`,
@@ -16,29 +19,62 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
   constructor(readonly directory: string) {}
 
   async acquire(): Promise<void> {
+    if (this.lock) return;
     try {
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
       await chmod(this.directory, 0o700);
     } catch (error) {
       throw new PersistenceError('Could not prepare the ChatGPT account directory.', { cause: error });
     }
+    let lock: Database.Database | undefined;
     try {
-      await mkdir(join(this.directory, 'session.lock'), { mode: 0o700 });
+      // SQLite's OS lock dies with the process, unlike a sentinel directory.
+      // Keep this transaction open for the store's lifetime; credentials remain
+      // in accounts.json and concurrent application instances still fail closed.
+      lock = new Database(join(this.directory, 'session-lock.sqlite'), { timeout: 0 });
+      lock.exec('BEGIN EXCLUSIVE');
+      await chmod(join(this.directory, 'session-lock.sqlite'), 0o600);
+      await this.retireLegacyLock();
+      this.lock = lock;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw new PersistenceError('Could not acquire the ChatGPT account lock.', { cause: error });
+      lock?.close();
+      if (error instanceof ConcurrentInstanceError) throw error;
+      if ((error as { code?: string }).code === 'SQLITE_BUSY')
+        throw new ConcurrentInstanceError('Another Glyph instance owns this account store.', { cause: error });
+      throw new PersistenceError('Could not acquire the ChatGPT account lock.', { cause: error });
+    }
+  }
+
+  /** Only retire old-version sentinel locks when their recorded process is conclusively dead. */
+  private async retireLegacyLock(): Promise<void> {
+    const path = join(this.directory, 'session.lock');
+    let pid: number;
+    try {
+      pid = Number(await readFile(join(path, 'pid'), 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Distinguish no legacy lock from an incomplete, unverifiable one.
+        try {
+          await lstat(path);
+        } catch (missing) {
+          if ((missing as NodeJS.ErrnoException).code === 'ENOENT') return;
+          throw missing;
+        }
       }
-      throw new ConcurrentInstanceError(
-        `Another instance may be running. Close it first. After a crash, remove ${join(this.directory, 'session.lock')} only after verifying no instance is running.`,
-        { cause: error },
-      );
+      throw new ConcurrentInstanceError('A legacy account lock could not be verified.', { cause: error });
     }
+    if (!Number.isSafeInteger(pid) || pid <= 0)
+      throw new ConcurrentInstanceError('A legacy account lock has an invalid owner.');
     try {
-      await writeFile(join(this.directory, 'session.lock', 'pid'), String(process.pid), { mode: 0o600 });
+      process.kill(pid, 0);
     } catch (error) {
-      await this.release();
-      throw new PersistenceError('Could not create the session lock.', { cause: error });
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+        await rm(path, { recursive: true, force: true });
+        return;
+      }
+      throw new ConcurrentInstanceError('The legacy account-lock owner could not be checked.', { cause: error });
     }
+    throw new ConcurrentInstanceError('Another Glyph instance owns the legacy account lock.');
   }
 
   async load(): Promise<void> {
@@ -58,7 +94,15 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
     }
   }
 
-  async save(): Promise<void> {
+  save(): Promise<void> {
+    // Atomic rename prevents torn files, not stale writers. Serialize the whole
+    // capture/write/rename transaction and allow a later save to retry failures.
+    const saving = this.saving.then(() => this.persist());
+    this.saving = saving.catch(() => {});
+    return saving;
+  }
+
+  private async persist(): Promise<void> {
     const temporary = join(this.directory, `accounts.${randomUUID()}.tmp`);
     try {
       await writeFile(temporary, JSON.stringify(this.state, null, 2), { flag: 'wx', mode: 0o600 });
@@ -71,7 +115,9 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
   }
 
   async release(): Promise<void> {
-    await rm(join(this.directory, 'session.lock'), { recursive: true, force: true });
+    await this.saving;
+    this.lock?.close();
+    this.lock = undefined;
   }
 }
 

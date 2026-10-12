@@ -16,12 +16,68 @@ import {
 } from '#src/desktop/host/GlyphDesktopWorkspaceRuntime.js';
 import type { GlyphDesktopWorkspaceRuntimeFactory } from '#src/desktop/host/GlyphDesktopWorkspaceRuntimeFactory.js';
 import { GlyphHostEventCursor, GlyphHostEventDisposition } from '#src/desktop/workbench/GlyphHostEventCursor.js';
+import { GlyphWorkbenchProjection } from '#src/desktop/workbench/GlyphWorkbenchProjection.js';
+import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 
 const owner = { profileId: 'profile', windowId: 'owner', workspaceId: 'workspace' } as const;
 const peer = { ...owner, windowId: 'peer' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(GlyphDesktopHost, () => {
+  it('[round2-03] never restores an older streaming snapshot over a completed run emitted during capture', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    const run = {
+      chatId: 'chat',
+      runId: 'run',
+      status: GlyphRunStatus.STREAMING,
+      text: 'partial',
+      reasoning: '',
+      tools: [],
+    };
+    let finish!: (state: GlyphRuntimeSnapshot) => void;
+    const stale = { accounts: [], models: [], chats: [], proposals: [], runs: [run] };
+    vi.spyOn(fixture.runtime, 'snapshot')
+      .mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValue({ ...stale, runs: [{ ...run, status: GlyphRunStatus.COMPLETED, text: 'complete' }] });
+    const capturing = fixture.receive('owner', owner, 'snapshot', {
+      type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+      afterSequence: 0,
+    });
+    fixture.runtime.emit({
+      type: GlyphHostEventType.RUN_STATE,
+      run: { ...run, status: GlyphRunStatus.COMPLETED, text: 'complete' },
+    });
+    finish(stale);
+    await capturing;
+    const snapshots = fixture
+      .events('owner')
+      .filter(envelope => envelope.event.type === GlyphHostEventType.INITIAL_STATE);
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[1]?.event).toMatchObject({
+      state: { runs: [{ status: GlyphRunStatus.COMPLETED, text: 'complete' }] },
+    });
+    expect(fixture.events('owner').at(-1)?.event).toMatchObject({
+      type: GlyphHostEventType.COMMAND_RESULT,
+      requestId: 'snapshot',
+      ok: true,
+    });
+    const projection = new GlyphWorkbenchProjection();
+    for (const envelope of fixture.events('owner')) projection.accept(envelope.event);
+    expect(projection.state.runs[0]).toMatchObject({ status: GlyphRunStatus.COMPLETED, text: 'complete' });
+    await fixture.host.dispose();
+  });
+
   it('cleans up an abandoned owner even when runtime initialization outlasts the reconnect grace period', async () => {
     vi.useFakeTimers();
     const fixture = new HostFixture();

@@ -229,6 +229,7 @@ interface ManagedShellSessionOptions {
 class ManagedShellSession {
   private child: ChildProcess | undefined;
   private processExited: Promise<void> | undefined;
+  private readonly groupCleanups = new Map<ChildProcess, Promise<void>>();
   private active: RunningCommand | undefined;
   private command = '';
   private status = ShellSessionStatus.IDLE;
@@ -304,7 +305,7 @@ class ManagedShellSession {
         this.options.changed();
       });
     });
-    child.once('exit', () => terminateProcessGroup(child.pid, 'SIGTERM'));
+    child.once('exit', () => this.cleanProcessGroup(child));
     this.processExited = new Promise(resolve => {
       child.once('close', (code, signal) => {
         if (this.child !== child) {
@@ -340,12 +341,26 @@ class ManagedShellSession {
 
   async terminate(): Promise<void> {
     const child = this.child;
-    if (!child) return;
+    if (child) this.cleanProcessGroup(child);
+    await Promise.all([this.processExited, ...this.groupCleanups.values()]);
+  }
+
+  private cleanProcessGroup(child: ChildProcess): void {
+    if (this.groupCleanups.has(child)) return;
     terminateProcess(child, 'SIGTERM');
-    const timer = setTimeout(() => terminateProcess(child, 'SIGKILL'), TERMINATION_GRACE_MS);
-    timer.unref();
-    await this.processExited;
-    clearTimeout(timer);
+    // A closed parent/pipe says nothing about surviving descendants. Retain
+    // escalation independently, including while the terminal runs its next command.
+    const cleanup = new Promise<void>(resolve => {
+      setTimeout(() => {
+        if (process.platform === 'win32') terminateProcess(child, 'SIGKILL');
+        else terminateProcessGroup(child.pid, 'SIGKILL');
+        this.groupCleanups.delete(child);
+        resolve();
+      }, TERMINATION_GRACE_MS);
+      // Keep the host alive until escalation, even if every child stream has
+      // closed and this is the last remaining work during shutdown.
+    });
+    this.groupCleanups.set(child, cleanup);
   }
 
   private appendOutput(value: string): void {

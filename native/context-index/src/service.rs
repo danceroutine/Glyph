@@ -74,13 +74,27 @@ struct IndexPolicy {
 
 impl From<&InitializeParams> for IndexPolicy {
     fn from(params: &InitializeParams) -> Self {
+        // Normalize policy and candidates alike; walking, watch updates, and
+        // cache validation must agree with the workspace reader's case policy.
+        let normalize = |values: &[String]| -> Vec<String> {
+            values
+                .iter()
+                .map(|value| {
+                    if params.case_sensitive {
+                        value.clone()
+                    } else {
+                        value.to_lowercase()
+                    }
+                })
+                .collect()
+        };
         Self {
-            ignored_directories: params.ignored_directories.clone(),
-            sensitive_file_names: params.sensitive_file_names.clone(),
-            sensitive_file_prefixes: params.sensitive_file_prefixes.clone(),
-            sensitive_file_extensions: params.sensitive_file_extensions.clone(),
-            allowed_file_names: params.allowed_file_names.clone(),
-            excluded_paths: params.excluded_paths.clone(),
+            ignored_directories: normalize(&params.ignored_directories),
+            sensitive_file_names: normalize(&params.sensitive_file_names),
+            sensitive_file_prefixes: normalize(&params.sensitive_file_prefixes),
+            sensitive_file_extensions: normalize(&params.sensitive_file_extensions),
+            allowed_file_names: normalize(&params.allowed_file_names),
+            excluded_paths: normalize(&params.excluded_paths),
             respect_git_ignore: params.respect_git_ignore,
             max_files: params.max_files,
             case_sensitive: params.case_sensitive,
@@ -122,6 +136,13 @@ impl IndexPolicy {
     }
 
     fn excludes(&self, relative_path: &str) -> bool {
+        let folded;
+        let relative_path = if self.case_sensitive {
+            relative_path
+        } else {
+            folded = relative_path.to_lowercase();
+            &folded
+        };
         if self
             .excluded_paths
             .iter()
@@ -1073,6 +1094,28 @@ mod tests {
             case_sensitive: default_case_sensitive(),
             max_content_search_file_bytes: DEFAULT_MAX_CONTENT_SEARCH_FILE_BYTES,
         }
+    }
+
+    #[test]
+    fn round2_01_scan_excludes_sensitive_names_using_filesystem_case_policy() {
+        let directory = tempdir().expect("fixture directory");
+        for name in [
+            ".ENV",
+            ".ENV.production",
+            "private.PEM",
+            "public.txt",
+            ".ENV.EXAMPLE",
+        ] {
+            write(directory.path().join(name), "harmless search fixture").unwrap();
+        }
+        let mut input = params(directory.path());
+        input.case_sensitive = false;
+        input.respect_git_ignore = false;
+        let policy = IndexPolicy::from(&input);
+        let result = scan_paths(directory.path(), &policy, None, &AtomicBool::new(false)).unwrap();
+        assert_eq!(result.paths, vec![".ENV.EXAMPLE", "public.txt"]);
+        assert!(policy.excludes(".GIT/config"));
+        assert!(policy.excludes("folder/private.PEM"));
     }
 
     #[test]

@@ -13,6 +13,7 @@ export class OpenAISession implements OpenAISessionService {
   // Borrowed stores share account objects across workspaces. Refresh-token
   // rotation must be serialized for that account, never for unrelated accounts.
   private static readonly pending = new WeakMap<OpenAIAccount, Promise<string>>();
+  private static readonly unpersisted = new WeakSet<OpenAIAccount>();
 
   constructor(
     private readonly store: OpenAIAccountStore,
@@ -42,7 +43,8 @@ export class OpenAISession implements OpenAISessionService {
     );
     if (index < 0) this.store.state.accounts.push(account);
     else this.store.state.accounts[index] = account;
-    await this.store.save();
+    OpenAISession.unpersisted.add(account);
+    await this.persist(account);
     return account;
   }
 
@@ -52,10 +54,18 @@ export class OpenAISession implements OpenAISessionService {
       throw new AuthenticationError('ChatGPT plan usage was not granted. Use /login to enable it explicitly.');
     }
     this.remember(account.tokens);
-    if (account.tokens.expiresAt > Date.now() + 30_000) return account.tokens.accessToken;
     let pending = OpenAISession.pending.get(account);
     if (!pending) {
-      pending = this.refresh(account);
+      if (OpenAISession.unpersisted.has(account)) {
+        pending = this.persist(account).then(() => {
+          if (!account.tokens) throw new AuthenticationError('This account is signed out.');
+          return account.tokens.expiresAt > Date.now() + 30_000 ? account.tokens.accessToken : this.refresh(account);
+        });
+      } else if (account.tokens.expiresAt > Date.now() + 30_000) {
+        return account.tokens.accessToken;
+      } else {
+        pending = this.refresh(account);
+      }
       OpenAISession.pending.set(account, pending);
     }
     try {
@@ -77,12 +87,19 @@ export class OpenAISession implements OpenAISessionService {
     for (const secret of [tokens.accessToken, tokens.refreshToken, tokens.idToken]) this.secrets.add(secret);
   }
 
+  private async persist(account: OpenAIAccount): Promise<void> {
+    const tokens = account.tokens;
+    await this.store.save();
+    if (account.tokens === tokens) OpenAISession.unpersisted.delete(account);
+  }
+
   private async refresh(account: OpenAIAccount): Promise<string> {
     try {
       const tokens = await this.authentication.refresh(account, this.signal);
       this.remember(tokens);
       account.tokens = tokens;
-      await this.store.save();
+      OpenAISession.unpersisted.add(account);
+      await this.persist(account);
       if (!tokens.scopes.includes(this.configuration.planScope)) {
         throw new AuthenticationError('ChatGPT plan usage is disabled. Use /login to enable it.');
       }

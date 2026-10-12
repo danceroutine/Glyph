@@ -7,7 +7,6 @@ import type {
   WorkspaceContentCountResult,
   WorkspaceContentMatchesResult,
   WorkspaceContentSearchResult,
-  WorkspaceFilesWithMatchesResult,
 } from './WorkspaceContentSearchResult.ts';
 import type { WorkspacePathGlobResult } from './WorkspacePathGlobResult.ts';
 import type { WorkspacePathIndex } from './WorkspacePathIndex.ts';
@@ -98,31 +97,56 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     const candidates = [...this.indexes].filter(
       ([name]) => (!path || path.name === name) && (!fileGlob || fileGlob.name === name),
     );
-    const desired = resolved.offset + resolved.limit;
-    const batches = await Promise.all(
-      candidates.map(async ([name, index]) => ({
-        name,
-        batch: await collect(
-          index,
-          pattern,
-          {
-            ...resolved,
-            path: path?.path || null,
-            fileGlob: fileGlob?.pattern ?? resolved.fileGlob,
-            offset: 0,
-            ...(signal ? { signal } : {}),
-          },
-          desired,
-        ),
-      })),
-    );
-    const entries = batches.flatMap(({ name, batch }) => prefixEntries(name, batch.result));
-    const selected = entries.slice(resolved.offset, resolved.offset + resolved.limit);
-    const truncated = entries.length > resolved.offset + selected.length || batches.some(entry => entry.batch.hasMore);
+    const selected: unknown[] = [];
+    let skip = resolved.offset;
+    // Keep room for response metadata as well as root-qualified JSON entries.
+    // Fetch sequentially and discard skipped entries instead of retaining offset
+    // pages from every root; the native per-page cap alone is not an aggregate cap.
+    let remainingBytes = 512 * 1024 - 1024;
+    let searchedFiles = 0;
+    let skippedFiles = 0;
+    let indexTruncated = false;
+    let truncated = false;
+    roots: for (const [name, index] of candidates) {
+      let offset = 0;
+      while (true) {
+        signal?.throwIfAborted();
+        const page = await index.searchContents(pattern, {
+          ...resolved,
+          path: path?.path || null,
+          fileGlob: fileGlob?.pattern ?? resolved.fileGlob,
+          offset,
+          limit: Math.min(1000, Math.max(1, skip + resolved.limit - selected.length)),
+          ...(signal ? { signal } : {}),
+        });
+        if (offset === 0) {
+          searchedFiles += page.searchedFiles;
+          skippedFiles += page.skippedFiles;
+        }
+        indexTruncated ||= page.indexTruncated;
+        for (const entry of prefixEntries(name, page)) {
+          if (skip > 0) {
+            skip--;
+            continue;
+          }
+          const bytes = Buffer.byteLength(JSON.stringify(entry)) + 1;
+          if (selected.length >= resolved.limit || bytes > remainingBytes) {
+            if (selected.length === 0) throw new Error('A content-search entry exceeds the response byte limit.');
+            truncated = true;
+            break roots;
+          }
+          selected.push(entry);
+          remainingBytes -= bytes;
+        }
+        if (page.nextOffset === null) break;
+        if (page.nextOffset <= offset) throw new Error('Content search returned a non-advancing page offset.');
+        offset = page.nextOffset;
+      }
+    }
     const metadata = {
-      searchedFiles: batches.reduce((sum, entry) => sum + entry.batch.result.searchedFiles, 0),
-      skippedFiles: batches.reduce((sum, entry) => sum + entry.batch.result.skippedFiles, 0),
-      indexTruncated: batches.some(entry => entry.batch.result.indexTruncated),
+      searchedFiles,
+      skippedFiles,
+      indexTruncated,
       truncated,
       nextOffset: truncated ? resolved.offset + selected.length : null,
     };
@@ -189,37 +213,6 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
   }
 }
 
-interface CollectedResult {
-  readonly result: WorkspaceContentSearchResult;
-  readonly hasMore: boolean;
-}
-
-async function collect(
-  index: WorkspacePathIndex,
-  pattern: string,
-  options: WorkspaceContentSearchOptions,
-  desired: number,
-): Promise<CollectedResult> {
-  let offset = 0;
-  let first: WorkspaceContentSearchResult | undefined;
-  const entries: unknown[] = [];
-  let hasMore = false;
-  while (entries.length < desired) {
-    const page = await index.searchContents(pattern, {
-      ...options,
-      offset,
-      limit: Math.min(1_000, Math.max(1, desired - entries.length)),
-    });
-    first ??= page;
-    entries.push(...resultEntries(page));
-    hasMore = page.nextOffset !== null;
-    if (!hasMore) break;
-    offset = page.nextOffset!;
-  }
-  const base = first ?? emptyResult(options.outputMode ?? 'content');
-  return { result: withEntries(base, entries), hasMore };
-}
-
 function prefixEntries(name: string, result: WorkspaceContentSearchResult): unknown[] {
   switch (result.outputMode) {
     case 'content':
@@ -229,45 +222,4 @@ function prefixEntries(name: string, result: WorkspaceContentSearchResult): unkn
     case 'count':
       return result.counts.map(count => ({ ...count, path: `${name}/${count.path}` }));
   }
-}
-
-function resultEntries(result: WorkspaceContentSearchResult): readonly unknown[] {
-  switch (result.outputMode) {
-    case 'content':
-      return result.matches;
-    case 'files_with_matches':
-      return result.files;
-    case 'count':
-      return result.counts;
-  }
-}
-
-function withEntries(result: WorkspaceContentSearchResult, entries: readonly unknown[]): WorkspaceContentSearchResult {
-  switch (result.outputMode) {
-    case 'content':
-      return { ...result, matches: entries as WorkspaceContentMatchesResult['matches'] };
-    case 'files_with_matches':
-      return { ...result, files: entries as WorkspaceFilesWithMatchesResult['files'] };
-    case 'count':
-      return { ...result, counts: entries as WorkspaceContentCountResult['counts'] };
-  }
-}
-
-function emptyResult(outputMode: 'content' | 'files_with_matches' | 'count'): WorkspaceContentSearchResult {
-  const metadata = {
-    searchedFiles: 0,
-    skippedFiles: 0,
-    indexTruncated: false,
-    truncated: false,
-    nextOffset: null,
-  };
-  switch (outputMode) {
-    case 'content':
-      return { outputMode, matches: [], ...metadata };
-    case 'files_with_matches':
-      return { outputMode, files: [], ...metadata };
-    case 'count':
-      return { outputMode, counts: [], ...metadata };
-  }
-  throw new Error('Unsupported content-search output mode.');
 }

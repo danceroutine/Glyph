@@ -109,6 +109,26 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
+    const { path, resolvedFile, mode, identity } = await this.inspectReadPath(input);
+    const bytes =
+      options.maxBytes === undefined
+        ? await readFile(resolvedFile)
+        : await this.readBounded(resolvedFile, path, options.maxBytes);
+    return toSnapshot(path, bytes, mode, identity);
+  }
+
+  /** Enforces disk access policy without loading stale content ahead of an authoritative editor read. */
+  async validateAccess(input: string): Promise<void> {
+    try {
+      await this.inspectReadPath(input);
+    } catch (error) {
+      // A live editor may own a new, unsaved file. Ancestor and exclusion checks
+      // still run before a missing path is allowed through to the editor.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+
+  private async inspectReadPath(input: string) {
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, false);
     const absolute = resolve(this.root, path);
@@ -122,11 +142,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     assertInsideRoot(resolvedRoot, resolvedFile, path);
     // Check the filesystem's spelling too: aliases must not bypass the policy.
     this.normalizePath(relative(resolvedRoot, resolvedFile));
-    const bytes =
-      options.maxBytes === undefined
-        ? await readFile(resolvedFile)
-        : await this.readBounded(resolvedFile, path, options.maxBytes);
-    return toSnapshot(path, bytes, link.mode & 0o777, `${link.dev}:${link.ino}`);
+    return { path, resolvedFile, mode: link.mode & 0o777, identity: `${link.dev}:${link.ino}` };
   }
 
   async readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {

@@ -147,6 +147,10 @@ it.describe('Pending intelligent context discovery and RAG', () => {
 
 it.describe('Pending IDE context budgets and privacy', () => {
   it.fixme(
+    'lets the user configure sensitive-file exclusions in settings and consistently applies them to file reads, attachments, indexing, and retrieval',
+    async () => {},
+  );
+  it.fixme(
     'shows the assembled context sources and estimated budget use and identifies what was omitted or truncated',
     async () => {},
   );

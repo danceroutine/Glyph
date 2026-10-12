@@ -108,13 +108,19 @@ describe(ProposalReviewManager, () => {
       expect(proposal.files[0]!.items.map(item => item.decision)).toEqual([
         EditDecisionState.PENDING,
         EditDecisionState.PENDING,
-        EditDecisionState.ACCEPTED,
+        EditDecisionState.PENDING,
       ]);
+      expect(proposal.files[0]!.applyingItemId).toBe(two!.id);
       expect(workspace.mutationAttempts).toEqual(['replace:file.txt']);
 
       barrier.release();
       await Promise.all([acceptTwo, acceptZero, rejectOne]);
 
+      expect(proposal.files[0]!.items.map(item => item.decision)).toEqual([
+        EditDecisionState.ACCEPTED,
+        EditDecisionState.REJECTED,
+        EditDecisionState.ACCEPTED,
+      ]);
       expect(await workspace.read('file.txt')).toMatchObject({ text: 'ZERO\nkeep-a\none\nkeep-b\nTWO\n' });
       expect(workspace.mutationAttempts).toEqual(['replace:file.txt', 'replace:file.txt']);
       expect(resolutionOrder).toEqual(['accept-two', 'accept-zero', 'reject-one']);

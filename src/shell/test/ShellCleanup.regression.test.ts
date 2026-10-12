@@ -9,9 +9,14 @@ import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 
 describe('Shell cleanup after parent exit', () => {
-  it.each(['close', 'dispose'] as const)(
-    '[review-08] escalates %s to SIGKILL when an exited parent leaves descendants holding its output pipes',
-    async operation => {
+  it.each([
+    { operation: 'close', closedPipes: false, review: 'review-08' },
+    { operation: 'dispose', closedPipes: false, review: 'review-08' },
+    { operation: 'close', closedPipes: true, review: 'round2-08' },
+    { operation: 'dispose', closedPipes: true, review: 'round2-08' },
+  ])(
+    '[$review] escalates $operation to SIGKILL after parent exit even when descendant pipes are closed: $closedPipes',
+    async ({ operation, closedPipes }) => {
       vi.useFakeTimers();
       // No process is spawned or signalled: this models Node's distinct exit
       // and close events, with a descendant retaining the output pipes.
@@ -49,6 +54,7 @@ describe('Shell cleanup after parent exit', () => {
         });
         Object.defineProperty(child, 'exitCode', { value: 0, configurable: true });
         child.emit('exit', 0, null);
+        if (closedPipes) child.emit('close', 0, null);
         let settled = false;
         completion = operation === 'close' ? manager.close(command.terminalId) : manager.dispose();
         void completion.then(() => {

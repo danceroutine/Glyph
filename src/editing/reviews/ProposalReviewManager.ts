@@ -337,7 +337,8 @@ export class ProposalReviewManager {
           if (!file.base || !file.current || !file.currentRevision) throw this.stale(file);
           const textChange = planTextAcceptance(file, item);
           if (!textChange) throw this.stale(file, file.currentRevision);
-          item.decision = EditDecisionState.ACCEPTED;
+          // Keep the public receipt pending until the workspace confirms the
+          // mutation; concurrent chat flushes may inspect it while we await.
           const result = await this.workspace.replace(
             file.currentPath,
             file.currentRevision,
@@ -345,6 +346,7 @@ export class ProposalReviewManager {
             file.proposed.byteOrderMark,
             mutation,
           );
+          item.decision = EditDecisionState.ACCEPTED;
           applyTransformedRanges(textChange.transformedItems);
           updateBaseline(file, result);
           break;

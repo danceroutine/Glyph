@@ -135,6 +135,38 @@ Disconnected windows retain ownership for a 30-second reconnect grace period.
 After that, the host stops the abandoned runtime before granting replacement
 authority, including when the original runtime was still initializing.
 
+### Second-round regressions
+
+The `[round2-NN]` cases (and Rust's `round2_01` case) were first run against
+the unfixed implementation and failed, then rerun against the fixes. They cover:
+
+| Finding | Regression coverage                                                                                          | Test file                                                                                                                                           |
+| ------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 01      | Native search applies case-insensitive sensitive-file exclusions                                             | [Native index service](../native/context-index/src/service.rs)                                                                                      |
+| 02      | A pending, subsequently failed text mutation exposes no accepted receipt                                     | [ProposalReviewRecovery](../src/editing/reviews/test/ProposalReviewRecovery.adversarial.test.ts)                                                    |
+| 03      | Snapshot capture cannot overwrite a newer completed-run event                                                | [GlyphDesktopHost](../src/desktop/host/tests/GlyphDesktopHost.test.ts)                                                                              |
+| 04      | Delayed earlier credential saves cannot overwrite newer account tokens                                       | [FileOpenAIAccountStore](../src/providers/openai/auth/tests/FileOpenAIAccountStore.regression.test.ts)                                              |
+| 05      | Failed token persistence is retried before another workspace reuses the token                                | [OpenAISession](../src/providers/openai/auth/tests/OpenAISession.test.ts)                                                                           |
+| 06      | Dead legacy locks are reclaimed, live owners stay exclusive, and the production host restarts after a crash  | [Account lock](../src/providers/openai/auth/tests/FileOpenAIAccountStore.test.ts), [Electron crash](tests/electron/GlyphReviewRegressions.test.mjs) |
+| 07      | An attached peer reattaches over its existing transport after its owner disappears                           | [GlyphDesktopClient](../scripts/code-oss/tests/GlyphDesktopClient.test.mjs)                                                                         |
+| 08      | Close and dispose retain SIGKILL escalation after the parent and its pipes close                             | [ShellCleanup](../src/shell/test/ShellCleanup.regression.test.ts)                                                                                   |
+| 09      | Aggregated search stays within its byte budget and resumes at the first omitted match                        | [MultiRootWorkspacePathIndex](../src/context/search/tests/MultiRootWorkspacePathIndex.test.ts)                                                      |
+| 10      | Small dirty buffers remain readable over oversized disk files without bypassing exclusions or symlink checks | [OpenAIDesktopRuntimeFactory](../src/desktop/host/tests/OpenAIDesktopRuntimeFactory.test.ts)                                                        |
+
+```sh
+pnpm exec vitest run --maxWorkers=1 -t '\[round2-'
+cargo test --package glyph-context-index round2_01
+pnpm code-oss:test:aliases
+pnpm code-oss:test:integration --grep '\[round2-'
+```
+
+The peer test bundles the real workbench client with a simulated MessagePort.
+The production crash case uses an empty isolated account store, not live credentials.
+Account ownership now uses a SQLite OS lock, released automatically on process
+death; legacy sentinel directories are removed only after their recorded PID is
+confirmed absent. Shell regressions simulate process events and signals, not
+native sandbox enforcement.
+
 The acknowledged editing-workflow blockers remain explicit fixmes:
 
 - Question and approval forms and proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).

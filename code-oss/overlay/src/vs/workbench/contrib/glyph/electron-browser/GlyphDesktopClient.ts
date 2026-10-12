@@ -11,6 +11,7 @@ import type { GlyphEditorResponse } from '#glyph/protocol/editor/GlyphEditorResp
 import { acquirePort } from '#vs/base/parts/ipc/electron-browser/ipc.mp.js';
 import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#glyph/protocol/GlyphDesktopProtocolVersion.js';
 import { GlyphHostEventType } from '#glyph/protocol/events/GlyphHostEvent.js';
+import { GlyphHostStatus } from '#glyph/protocol/events/GlyphHostStatus.js';
 import { GlyphWorkbenchCommandType } from '#glyph/protocol/GlyphWorkbenchCommand.js';
 import type { GlyphConnectionIdentity } from '#glyph/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphHostEventEnvelope } from '#glyph/protocol/events/GlyphHostEventEnvelope.js';
@@ -39,6 +40,7 @@ export class GlyphDesktopClient extends Disposable {
   private port: MessagePort | undefined;
   private identity: GlyphConnectionIdentity | undefined;
   private connecting: Promise<void> | undefined;
+  private attached = false;
   private readonly disconnectEmitter = this._register(new Emitter<Error>());
   readonly onDidDisconnect = this.disconnectEmitter.event;
   private connectionEpoch = 0;
@@ -55,9 +57,13 @@ export class GlyphDesktopClient extends Disposable {
   /** Reuses one connection attempt so concurrent view actions cannot create competing ports. */
   connect(roots: readonly GlyphWorkspaceRoot[], trusted: boolean): Promise<void> {
     if (this.connecting) return this.connecting;
-    if (this.port && this.identity) return Promise.resolve();
+    if (this.port && this.identity && this.attached) return Promise.resolve();
     const epoch = this.connectionEpoch;
-    return (this.connecting = this.connectNow(roots, trusted, epoch)
+    const connect =
+      this.port && this.identity
+        ? this.request({ type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted })
+        : this.connectNow(roots, trusted, epoch);
+    return (this.connecting = connect
       .catch(error => {
         if (epoch === this.connectionEpoch) this.disconnect(error instanceof Error ? error : new Error(String(error)));
         throw error;
@@ -166,7 +172,16 @@ export class GlyphDesktopClient extends Disposable {
     if (!isHostEventEnvelope(value)) return;
     if (!this.matchesIdentity(value)) return;
     const disposition = this.cursor.accept(value);
-    if (disposition === GlyphHostEventDisposition.APPLY) this.eventEmitter.fire(value);
+    if (disposition === GlyphHostEventDisposition.APPLY) {
+      if (value.event.type === GlyphHostEventType.INITIAL_STATE) this.attached = true;
+      if (value.event.type === GlyphHostEventType.HOST_STATUS && value.event.status === GlyphHostStatus.DISCONNECTED) {
+        this.attached = false;
+        // The utility process is alive, but this workspace lost its owner.
+        // Retain the transport and require a fresh attach before the next action.
+        this.failPending(new Error(value.event.message ?? 'The workspace owner disconnected.'));
+      }
+      this.eventEmitter.fire(value);
+    }
     if (disposition === GlyphHostEventDisposition.RECOVER && !this.connecting) this.recover();
     // A snapshot can supersede an acknowledgement's sequence without completing
     // its promise. Settle correlated results independently of projection deduplication.
@@ -221,6 +236,7 @@ export class GlyphDesktopClient extends Disposable {
     this.port = undefined;
     this.identity = undefined;
     this.connecting = undefined;
+    this.attached = false;
     this.recovering = undefined;
     this.failPending(error);
     this.disconnectEmitter.fire(error);
