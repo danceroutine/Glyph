@@ -13,6 +13,9 @@ import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FilePr
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
 import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
+import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 
 const directories: string[] = [];
 const configuration: EditingConfiguration = {
@@ -31,6 +34,71 @@ const configuration: EditingConfiguration = {
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
 
 describe(ProposalReviewManager, () => {
+  it('[round4-03] accepts distinct case-sensitive filenames together without a false collision', async () => {
+    // An in-memory case-sensitive filesystem keeps this portable on macOS.
+    const files = new Map([
+      ['foo.ts', 'lower'],
+      ['Foo.ts', 'upper'],
+    ]);
+    const snapshot = (path: string): WorkspaceTextSnapshot => {
+      const text = files.get(path);
+      if (text === undefined) throw new Error(`Missing ${path}`);
+      return { path, text, revision: text, identity: path, byteLength: text.length, byteOrderMark: false, mode: 0o644 };
+    };
+    const unsupported = async (): Promise<never> => {
+      throw new Error('Unexpected structural mutation');
+    };
+    const workspace: WorkspaceTextStore = {
+      root: '/fixture',
+      caseSensitive: true,
+      mutationConsistency: WorkspaceMutationConsistency.ATOMIC_VERSIONED,
+      normalizePath: path => path,
+      list: async () => ({ files: [...files.keys()], truncated: false }),
+      read: async path => snapshot(path),
+      readOptional: async path => (files.has(path) ? snapshot(path) : undefined),
+      replace: async (path, revision, text) => {
+        expect(snapshot(path).revision).toBe(revision);
+        files.set(path, text);
+        return snapshot(path);
+      },
+      create: unsupported,
+      rename: unsupported,
+      delete: unsupported,
+    };
+    const logger = new NullLogger();
+    const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, logger);
+    const manager = new ProposalReviewManager(
+      workspace,
+      { load: async () => [], save: async () => {}, clear: async () => {} },
+      logger,
+    );
+    await manager.initialize();
+    const proposal = await service.proposeStructured({
+      files: [...files].map(([path, text]) => ({
+        operation: EditOperation.UPDATE,
+        path,
+        new_path: null,
+        base_revision: text,
+        content: null,
+        byte_order_mark: null,
+        edits: [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: text.length } },
+            expected_text: text,
+            replacement_text: text.toUpperCase(),
+          },
+        ],
+      })),
+    });
+    await manager.stage(proposal);
+    await manager.acceptAll();
+    expect([...files]).toEqual([
+      ['foo.ts', 'LOWER'],
+      ['Foo.ts', 'UPPER'],
+    ]);
+    expect(manager.activeReviews).toEqual([]);
+  });
+
   describe(ProposalReviewManager.prototype.accept, () => {
     it('recomputes Current from Base so accepting hunks in reverse order is stable', async () => {
       const { root, manager, service, workspace } = await fixture('first\nmiddle\nlast\n');

@@ -434,7 +434,10 @@ export class ProposalReviewManager {
         );
         const paths = pendingRename ? [file.currentPath, file.targetPath] : [file.currentPath];
         for (const path of new Set(paths)) {
-          const key = path.normalize('NFC').toLocaleLowerCase('en-US');
+          // Collision detection must agree with the workspace's path identity;
+          // case folding would merge distinct resources on a case-sensitive store.
+          const normalized = path.normalize('NFC');
+          const key = this.workspace.caseSensitive ? normalized : normalized.toLocaleLowerCase('en-US');
           const existing = claimedPaths.get(key);
           if (existing && (existing.reviewId !== review.id || existing.fileId !== file.id)) {
             if (

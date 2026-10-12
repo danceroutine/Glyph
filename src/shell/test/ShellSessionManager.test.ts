@@ -19,6 +19,26 @@ afterEach(async () => {
 
 describe(ShellSessionManager, () => {
   describe('command lifecycle', () => {
+    it('[round4-02] preserves terminal capacity after repeated invalid wake patterns', async () => {
+      const { manager } = await fixture();
+      for (let attempt = 0; attempt < 16; attempt++) {
+        await expect(
+          manager.execute('printf should-not-run', {
+            wakeOn: '   ',
+            signal: new AbortController().signal,
+          }),
+        ).rejects.toThrow();
+      }
+      expect(manager.sessions).toEqual([]);
+      await expect(
+        manager.execute('printf available', { signal: new AbortController().signal }),
+      ).resolves.toMatchObject({
+        status: 'completed',
+        output: 'available',
+        exitCode: 0,
+      });
+    });
+
     it('executes an authorized foreground command and removes its transient terminal', async () => {
       const { manager, authorize } = await fixture();
       const changed = vi.fn();

@@ -1,6 +1,7 @@
 import { URI } from '#vs/base/common/uri.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
+import { CancellationTokenSource } from '#vs/base/common/cancellation.js';
 import { IModelService } from '#vs/editor/common/services/model.js';
 import { ITextFileService } from '#vs/workbench/services/textfile/common/textfiles.js';
 import { IWorkspaceTrustManagementService } from '#vs/platform/workspace/common/workspaceTrust.js';
@@ -11,6 +12,7 @@ import { GlyphWorkingCopyPatternKind } from '#glyph/protocol/editor/GlyphWorking
 import type { GlyphWorkingCopySearchMatch } from '#glyph/protocol/editor/GlyphWorkingCopySearchMatch.js';
 import { ResourceTextEdit, IBulkEditService } from '#vs/editor/browser/services/bulkEditService.js';
 import { ITextModel } from '#vs/editor/common/model.js';
+import { EditSources } from '#vs/editor/common/textModelEditSource.js';
 import { ITextModelService } from '#vs/editor/common/services/resolverService.js';
 import { IWorkspaceContextService } from '#vs/platform/workspace/common/workspace.js';
 import { UndoRedoGroup } from '#vs/platform/undoRedo/common/undoRedo.js';
@@ -34,6 +36,7 @@ export class GlyphEditorAdapter extends Disposable {
   private readonly incarnations = new WeakMap<ITextModel, string>();
   /** Receipts make operation ids idempotent across a lost renderer response. */
   private readonly receipts = new Map<string, GlyphMutationReceipt>();
+  private readonly pendingMutations = new Set<CancellationTokenSource>();
   /** Maps protocol grouping ids onto Code OSS's process-local undo groups. */
   private readonly undoGroups = new Map<string, UndoRedoGroup>();
   private workspaceGeneration = generateUuid();
@@ -66,6 +69,10 @@ export class GlyphEditorAdapter extends Disposable {
     const operationId =
       request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ? request.mutation.operationId : request.operationId;
     try {
+      // Recovery inspects recorded evidence, not the current workspace. A root
+      // change must not hide a write that completed before access was revoked.
+      if (request.type === GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT)
+        return { operationId, ok: true, receipt: await this.inspectReceipt(operationId) };
       this.assertWorkspaceBinding();
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
@@ -74,8 +81,6 @@ export class GlyphEditorAdapter extends Disposable {
           return { operationId, ok: true, snapshot: await this.read(request.path, request.maxBytes) };
         case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
           return { operationId, ok: true, ...(await this.apply(request.mutation)) };
-        case GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT:
-          return { operationId, ok: true, receipt: await this.inspectReceipt(operationId) };
         case GlyphEditorRequestType.LIST_WORKING_COPIES:
           return { operationId, ok: true, workingCopies: await this.workingCopies() };
         case GlyphEditorRequestType.SEARCH_WORKING_COPIES:
@@ -86,6 +91,7 @@ export class GlyphEditorAdapter extends Disposable {
       return {
         operationId,
         ok: false,
+        ...(this.receipts.has(operationId) ? { receipt: this.receipts.get(operationId) } : {}),
         error: {
           code,
           message: error instanceof Error ? error.message : String(error),
@@ -147,6 +153,7 @@ export class GlyphEditorAdapter extends Disposable {
 
   /** Invalidates every previously issued token after workspace or ownership changes. */
   invalidate(): void {
+    for (const mutation of this.pendingMutations) mutation.cancel();
     this.workspaceGeneration = generateUuid();
     for (const reference of this.references.values()) reference.dispose();
     this.references.clear();
@@ -173,19 +180,26 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   /**
-   * Revalidates both token and content immediately before using Bulk Edit. A
-   * repeated operation id returns its receipt instead of applying a second edit.
+   * Cancels prepared Bulk Edits when their authority is revoked. Receipts are
+   * captured at the model change, before asynchronous completion can lose access
+   * to the workspace. A repeated operation id never applies a second edit.
    */
   async apply(
     mutation: GlyphTextMutation,
   ): Promise<{ snapshot: GlyphEditorTextSnapshot; receipt: GlyphMutationReceipt }> {
     const known = this.receipts.get(mutation.operationId);
     if (known) {
+      if (known.state === GlyphMutationReceiptState.UNKNOWN)
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
       return { snapshot: await this.read(mutation.path), receipt: known };
     }
     const resource = this.resolve(mutation.path);
-    const reference = await this.reference(resource);
-    {
+    // Own a reference until settlement: invalidating cached read capabilities
+    // must not dispose a model while Bulk Edit is still using it.
+    const reference = await this.textModelService.createModelReference(resource);
+    const cancellation = new CancellationTokenSource();
+    this.pendingMutations.add(cancellation);
+    try {
       const model = reference.object.textEditorModel;
       const before = await this.snapshot(mutation.path, model);
       if (
@@ -198,43 +212,98 @@ export class GlyphEditorAdapter extends Disposable {
       if (before.byteOrderMark !== mutation.byteOrderMark) {
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
       }
+      // Text models normalize inserted newlines to their current EOL sequence.
+      // Receipt hashes must describe those actual bytes, not the wire spelling.
+      const appliedText = mutation.text.replace(/\r\n|\r|\n/g, model.getEOL());
+      const afterRevision = await sha256(appliedText, mutation.byteOrderMark);
       // Hashing yields to the renderer. Recheck trust immediately before the
       // edit, since a trust change can invalidate the earlier RPC authorization.
       if (!this.trustService.isWorkspaceTrusted()) {
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       }
       this.assertWorkspaceBinding();
-      const result = await this.bulkEditService.apply(
-        [
-          // The inner object is Code OSS's ITextEdit data shape; ResourceTextEdit
-          // supplies the resource/version class wrapper required by Bulk Edit.
-          new ResourceTextEdit(
-            resource,
-            { range: model.getFullModelRange(), text: mutation.text },
-            before.token.version,
-          ),
-        ],
-        {
-          label: 'Apply Glyph edit',
-          code: 'glyph.applyEdit',
-          undoRedoGroupId: this.undoGroup(mutation.undoGroupId).id,
-          respectAutoSaveConfig: true,
-        },
-      );
-      if (!result.isApplied) {
+      if (before.token.workspaceGeneration !== this.workspaceGeneration)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-      }
-      const snapshot = await this.snapshot(mutation.path, model);
-      const receipt: GlyphMutationReceipt = {
-        operationId: mutation.operationId,
-        state: GlyphMutationReceiptState.APPLIED,
-        beforeRevision: before.contentRevision,
-        afterRevision: snapshot.contentRevision,
-        appliedToken: snapshot.token,
-        observedAt: new Date().toISOString(),
+      const reason = EditSources.unknown({ name: `glyph.applyEdit:${mutation.operationId}` });
+      let observed: GlyphMutationReceipt | undefined;
+      const observe = (state: GlyphMutationReceiptState): GlyphMutationReceipt => {
+        return {
+          operationId: mutation.operationId,
+          state,
+          beforeRevision: before.contentRevision,
+          afterRevision,
+          appliedToken: { ...before.token, version: model.getVersionId() },
+          observedAt: new Date().toISOString(),
+        };
       };
-      this.receipts.set(mutation.operationId, receipt);
-      return { snapshot, receipt };
+      const changed = model.onDidChangeContent(event => {
+        const expectedValue = (mutation.byteOrderMark ? '\uFEFF' : '') + appliedText;
+        if (model.getVersionId() !== before.token.version && model.getValue(undefined, true) === expectedValue) {
+          if (event.detailedReasons.includes(reason)) {
+            const receipt = observe(GlyphMutationReceiptState.APPLIED);
+            this.receipts.set(mutation.operationId, receipt);
+          } else {
+            // Some upstream editor fallbacks drop the source. Retain evidence
+            // without attributing an unrelated user edit to this operation.
+            observed = observe(GlyphMutationReceiptState.UNKNOWN);
+          }
+        }
+      });
+      try {
+        const result = await this.bulkEditService.apply(
+          [
+            // The inner object is Code OSS's ITextEdit data shape; ResourceTextEdit
+            // supplies the resource/version class wrapper required by Bulk Edit.
+            new ResourceTextEdit(
+              resource,
+              { range: model.getFullModelRange(), text: mutation.text },
+              before.token.version,
+            ),
+          ],
+          {
+            label: 'Apply Glyph edit',
+            code: 'glyph.applyEdit',
+            undoRedoGroupId: this.undoGroup(mutation.undoGroupId).id,
+            respectAutoSaveConfig: true,
+            token: cancellation.token,
+            reason,
+          },
+        );
+        // Upstream's isApplied describes a nonempty edit list, even when its
+        // cancellation check skipped every write. Only an observed change (or
+        // a successful no-op) is evidence for an applied receipt.
+        if (
+          result.isApplied &&
+          !cancellation.token.isCancellationRequested &&
+          before.contentRevision === afterRevision
+        ) {
+          this.receipts.set(mutation.operationId, observe(GlyphMutationReceiptState.APPLIED));
+        }
+        if (result.isApplied && observed && !this.receipts.has(mutation.operationId)) {
+          this.receipts.set(mutation.operationId, {
+            ...observed,
+            state: cancellation.token.isCancellationRequested
+              ? GlyphMutationReceiptState.UNKNOWN
+              : GlyphMutationReceiptState.APPLIED,
+          });
+        }
+        this.assertWorkspaceBinding();
+        const receipt = this.receipts.get(mutation.operationId);
+        if (!receipt || receipt.state === GlyphMutationReceiptState.UNKNOWN) {
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+        }
+        const snapshot = await this.snapshot(mutation.path, model);
+        return { snapshot, receipt };
+      } finally {
+        if (observed && cancellation.token.isCancellationRequested && !this.receipts.has(mutation.operationId)) {
+          this.receipts.set(mutation.operationId, observed);
+        }
+        changed.dispose();
+      }
+    } finally {
+      this.pendingMutations.delete(cancellation);
+      cancellation.dispose();
+      reference.dispose();
     }
   }
 

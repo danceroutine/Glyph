@@ -107,9 +107,11 @@ export class ShellSessionManager implements ShellSessionRegistry {
       throw new Error(`At most ${this.maxSessions} shell terminals may be active.`);
     }
     const terminal = existing ?? this.createTerminal(workingDirectory, options.background === true, ownerChatId);
-    if (options.wakeOn !== undefined) terminal.setWakePattern(options.wakeOn);
     let completion: Promise<{ output: string; exitCode: number }>;
     try {
+      // Configuration can fail before launch too; it must release a newly
+      // allocated terminal just like a synchronous process-launch failure.
+      if (options.wakeOn !== undefined) terminal.setWakePattern(options.wakeOn);
       completion = terminal.execute(command, authorization);
     } catch (error) {
       if (!existing) {

@@ -188,6 +188,16 @@ Shell matching is deliberately case-insensitive on every platform. These tests
 inspect policy construction and simulate process events; they do not execute a
 sandbox bypass or establish native enforcement evidence.
 
+### Fourth-round regressions
+
+The `[round4-NN]` tests reproduced the three findings before their fixes:
+
+- Editor mutations now pass an operation-scoped cancellation token to Bulk Edit. Folder changes, invalidation, and disposal cancel prepared writes. A write that completed before revocation retains its receipt, which remains inspectable without reading the removed workspace. Tests separately gate preparation and completion, including Code OSS's non-authoritative `isApplied` flag.
+- Invalid shell wake patterns release newly allocated terminal slots; repeated failures no longer exhaust capacity.
+- Bulk proposal acceptance honors the workspace's case-sensitivity policy, allowing distinct `foo.ts` and `Foo.ts` resources on a case-sensitive store.
+
+Editor regressions are in [GlyphEditorAdapter.test.mjs](../scripts/code-oss/tests/GlyphEditorAdapter.test.mjs); shell and proposal regressions are in their respective `ShellSessionManager` and `ProposalReviewManager` test suites. Folder changes still require a reload to establish a new host/editor binding.
+
 The acknowledged editing-workflow blockers remain explicit fixmes:
 
 - Question and approval forms and proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).
