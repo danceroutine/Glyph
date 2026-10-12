@@ -32,6 +32,9 @@
     "code-oss:apply": "node scripts/code-oss/apply-overlay.mjs",
     "code-oss:install": "node scripts/code-oss/run.mjs install",
     "code-oss:check:ui": "tsc -p code-oss/ui/tsconfig.json --noEmit",
+    "code-oss:check:storybook": "tsc -p code-oss/storybook/tsconfig.json --noEmit",
+    "storybook": "storybook dev -c code-oss/storybook -p 6006 --host 127.0.0.1 --no-open --disable-telemetry",
+    "storybook:build": "pnpm code-oss:check:storybook && storybook build -c code-oss/storybook -o .artifacts/storybook --disable-telemetry",
     "code-oss:check:overlay": "tsc -p code-oss/tsconfig.json --noEmit",
     "code-oss:test:aliases": "vitest run --config code-oss/vitest.config.mjs",
     "code-oss:compile": "pnpm code-oss:check:ui && pnpm code-oss:apply && pnpm code-oss:check:overlay && node scripts/code-oss/run.mjs run compile-client",
@@ -51,7 +54,7 @@
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
     "fix": "pnpm lint:fix && pnpm format",
-    "check": "pnpm format:check && pnpm lint && pnpm context-index:check && pnpm shell-sandbox:check && pnpm context-index:build && pnpm shell-sandbox:build && tsc --noEmit && pnpm code-oss:check:ui && pnpm build",
+    "check": "pnpm format:check && pnpm lint && pnpm context-index:check && pnpm shell-sandbox:check && pnpm context-index:build && pnpm shell-sandbox:build && tsc --noEmit && pnpm code-oss:check:ui && pnpm code-oss:check:storybook && pnpm build",
     "test": "pnpm context-index:test && pnpm shell-sandbox:test && pnpm test:unit && pnpm test:e2e",
     "test:unit": "vitest run --exclude='**/*.e2e.test.ts' --coverage",
     "test:e2e": "pnpm context-index:build && pnpm shell-sandbox:build && vitest run --pool=forks --maxWorkers=1 src/application/tests/EditingLoop.e2e.test.ts src/application/tests/ContextInjection.e2e.test.ts src/context/search/tests/RustWorkspacePathIndex.e2e.test.ts src/project/tests/MultiRootProjectAccess.e2e.test.ts src/terminal/tests/TerminalEditing.e2e.test.ts",
@@ -77,6 +80,8 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@preact/preset-vite": "2.10.6",
+    "@storybook/preact-vite": "10.6.1",
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "^22.0.0",
     "@types/react": "19.3.0",
@@ -85,8 +90,10 @@
     "ink-testing-library": "4.0.0",
     "oxlint": "1.86.0",
     "prettier": "3.9.9",
+    "storybook": "10.6.1",
     "tsx": "4.23.15",
     "typescript": "^5.9.3",
+    "vite": "8.3.4",
     "vitest": "^5.0.3"
   }
 }

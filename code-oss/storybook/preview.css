@@ -1,0 +1,48 @@
+/* Preview-only approximations of the native pane's inherited theme and font. */
+.glyph-story-stage {
+  --vscode-foreground: #cccccc;
+  --vscode-sideBar-background: #181818;
+  --vscode-panel-border: #2b2b2b;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-background: #313131;
+  --vscode-input-border: #3c3c3c;
+  --vscode-focusBorder: #0078d4;
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 16px;
+  background: #101010;
+  color: var(--vscode-foreground);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+}
+
+.glyph-story-stage[data-theme='light'] {
+  --vscode-foreground: #3b3b3b;
+  --vscode-sideBar-background: #f8f8f8;
+  --vscode-panel-border: #e5e5e5;
+  --vscode-descriptionForeground: #616161;
+  --vscode-input-foreground: #3b3b3b;
+  --vscode-input-background: #ffffff;
+  --vscode-input-border: #cecece;
+  background: #e8e8e8;
+}
+
+.glyph-story-frame {
+  box-sizing: border-box;
+  max-width: 100%;
+  height: calc(100vh - 32px);
+  min-height: 320px;
+  background: var(--vscode-sideBar-background);
+  border: 1px solid var(--vscode-panel-border);
+}
+
+.glyph-story-frame textarea,
+.glyph-story-frame button {
+  font: inherit;
+}
+
+.glyph-story-frame :focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}

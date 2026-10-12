@@ -220,6 +220,51 @@ or runtime package resolution. Do not edit those generated bundles.
 the Preact root with the pane. Components own draft state and reconcile keyed
 transcript rows, preserving DOM identity while response text streams in.
 
+### Browser iteration with Storybook
+
+Run the Preact UI directly in a browser without bootstrapping, building, or
+launching Code OSS:
+
+```sh
+pnpm install
+pnpm storybook
+```
+
+Open http://127.0.0.1:6006 and start with **Glyph / Workbench / Interactive**.
+Send a message to simulate a streaming reply, type another draft while it
+streams, or cancel the reply. Everything stays in memory; these stories use
+fabricated state and never connect to accounts, models, or the desktop host.
+Edits to `code-oss/ui/` refresh the browser through Vite.
+
+The toolbar switches between light/dark themes and 280px, 360px, and 600px pane
+widths. Workbench, composer, and transcript stories also cover empty state,
+attached selections, a fixed streaming state, send failures, and long scrolling
+conversations. In **Send Failure**, submit a draft to see the error and draft
+restoration. Fixed stories use inert callbacks; use **Interactive** for send and
+cancel behavior.
+
+Stories live beside their components in `code-oss/ui/`; shared fixtures and
+preview configuration live in `code-oss/storybook/`. The stories import the
+production components and CSS. The preview stylesheet approximates the native pane's
+inherited theme variables and typography. Check native styles, workbench
+shortcuts, editor selection, pane lifecycle, and host communication in Code OSS.
+Storybook does not implement the currently missing account/approval/proposal UI.
+
+```sh
+pnpm code-oss:check:storybook
+pnpm storybook:build
+```
+
+The static build goes to ignored `.artifacts/storybook/`. Storybook's Vite
+configuration resolves `#src` to editable TypeScript and uses a separate Preact
+TypeScript configuration; it does not change the terminal's React runtime or
+the production esbuild bundle. Storybook is pinned to 10.6.1. Its Preact renderer
+still declares a Preact 8/10 peer range, so installation reports a peer warning
+with our Preact 11; verify browser rendering and interactions when upgrading.
+The renderer also requests the optional `@storybook/react-dom-shim` during
+dependency optimization, which produces a startup warning in this setup without
+the Docs addon. The component previews do not use that shim.
+
 ## Upstream-host decision
 
 At the pinned revision, Code OSS's agent host owns its own session protocol,
