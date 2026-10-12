@@ -167,6 +167,27 @@ death; legacy sentinel directories are removed only after their recorded PID is
 confirmed absent. Shell regressions simulate process events and signals, not
 native sandbox enforcement.
 
+### Third-round regressions
+
+The `[round3-NN]` regressions reproduced all five findings before their fixes:
+
+| Finding | Regression coverage                                                                                                     | Test file                                                                                                                  |
+| ------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 01      | Shell sensitive-file policy and automatic approval reject differently cased secret filenames                            | [Sandbox policy](../native/shell-sandbox/src/lib.rs), [Shell classifier](../src/shell/test/ShellCommandAuthorizer.test.ts) |
+| 02      | Rejection, bulk rejection, and acceptance receipts stay unpublished until their checkpoint succeeds                     | [ProposalReviewRecovery](../src/editing/reviews/test/ProposalReviewRecovery.adversarial.test.ts)                           |
+| 03      | Folder changes cannot redirect an existing host path to a nested namesake                                               | [GlyphEditorAdapter](../scripts/code-oss/tests/GlyphEditorAdapter.test.mjs)                                                |
+| 04      | Search returns its completed page at the maximum offset without fetching an invalid next page                           | [MultiRootWorkspacePathIndex](../src/context/search/tests/MultiRootWorkspacePathIndex.test.ts)                             |
+| 05      | Foreground commands return immediately when the process group is absent; surviving descendants still receive escalation | [ShellCleanup](../src/shell/test/ShellCleanup.regression.test.ts)                                                          |
+
+Workspace-folder changes currently detach Glyph and require a window reload to
+establish a new host/editor binding. Requests against the old binding fail closed
+with `WORKSPACE_CHANGED`, including reads or mutations already awaiting editor
+work. Automatic rebinding is tracked in the IDE-context fixmes.
+
+Shell matching is deliberately case-insensitive on every platform. These tests
+inspect policy construction and simulate process events; they do not execute a
+sandbox bypass or establish native enforcement evidence.
+
 The acknowledged editing-workflow blockers remain explicit fixmes:
 
 - Question and approval forms and proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).

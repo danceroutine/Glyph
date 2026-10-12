@@ -38,7 +38,70 @@ const configuration: EditingConfiguration = {
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
 
 describe(ProposalReviewManager, () => {
+  it.each(['reject', 'rejectAll'] as const)(
+    '[round3-02] publishes only durable decisions when %s fails and the user subsequently accepts',
+    async operation => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      const item = proposal.files[0]!.items[0]!;
+      let entered!: () => void;
+      let fail!: (error: Error) => void;
+      const saving = new Promise<void>(resolve => {
+        entered = resolve;
+      });
+      vi.spyOn(fixture.store, 'save').mockImplementationOnce(() => {
+        entered();
+        return new Promise<void>((_resolve, reject) => {
+          fail = reject;
+        });
+      });
+      const rejecting = operation === 'reject' ? fixture.manager.reject(item.id) : fixture.manager.rejectAll();
+      const rejection = expect(rejecting).rejects.toThrow('checkpoint failed');
+      await saving;
+      const leaked = structuredClone(fixture.manager.pendingResults);
+      fail(new Error('checkpoint failed'));
+      await rejection;
+      await fixture.manager.accept(item.id);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+      expect(fixture.manager.pendingResults.flatMap(result => result.items).map(item => item.decision)).toEqual([
+        EditDecisionState.ACCEPTED,
+      ]);
+      expect(leaked.flatMap(result => result.items)).toEqual([]);
+    },
+  );
   describe(ProposalReviewManager.prototype.accept, () => {
+    it('[round3-02] withholds accepted receipts until the completed checkpoint is durable', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      const save = fixture.store.save.bind(fixture.store);
+      let entered!: () => void;
+      let release!: () => void;
+      const blocked = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const saving = new Promise<void>(resolve => {
+        entered = resolve;
+      });
+      let calls = 0;
+      vi.spyOn(fixture.store, 'save').mockImplementation(async (...args) => {
+        if (++calls === 2) {
+          entered();
+          await blocked;
+        }
+        await save(...args);
+      });
+      const accepting = fixture.manager.accept(proposal.files[0]!.items[0]!.id);
+      await saving;
+      const pending = fixture.manager.pendingResults;
+      release();
+      await accepting;
+      expect(pending).toEqual([]);
+      expect(fixture.manager.pendingResults.flatMap(result => result.items).map(item => item.decision)).toEqual([
+        EditDecisionState.ACCEPTED,
+      ]);
+    });
     it('[round2-02] exposes no accepted receipt while a text mutation is pending and subsequently fails', async () => {
       const fixture = await createFixture();
       const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');

@@ -9,6 +9,56 @@ import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 
 describe('Shell cleanup after parent exit', () => {
+  it('[round3-05] returns a completed foreground command without a grace-period delay when no descendants remain', async () => {
+    vi.useFakeTimers();
+    const child = new ChildProcess();
+    const pipes = { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() };
+    Object.assign(child, pipes, { pid: 424242, exitCode: null });
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('No process group'), { code: 'ESRCH' });
+    });
+    vi.spyOn(child, 'kill').mockReturnValue(false);
+    const authorizer = new ShellCommandAuthorizer(
+      'fixture',
+      { load: async () => undefined, save: async () => {} },
+      { presentShellPermission: async () => ShellPermissionDecision.DENY },
+    );
+    vi.spyOn(authorizer, 'authorize').mockResolvedValue({ sandboxProfile: ShellSandboxProfile.READ_ONLY });
+    const directories = new ShellWorkingDirectoryResolver({
+      id: 'fixture',
+      mutationIdentity: 'fixture',
+      kind: ProjectContextKind.FOLDER,
+      name: 'fixture',
+      authority: 'file',
+      roots: [{ name: 'fixture', path: '/fixture' }],
+    });
+    vi.spyOn(directories, 'resolve').mockResolvedValue('/fixture');
+    const manager = new ShellSessionManager(authorizer, directories, {
+      launch: () => {
+        queueMicrotask(() => {
+          Object.assign(child, { exitCode: 0 });
+          child.emit('exit', 0, null);
+          child.emit('close', 0, null);
+        });
+        return child;
+      },
+    });
+    let settled = false;
+    const completion = manager.execute('fixture-only command', { signal: new AbortController().signal }).then(() => {
+      settled = true;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+    } finally {
+      await vi.advanceTimersByTimeAsync(3000);
+      await completion;
+      await manager.dispose();
+      for (const pipe of Object.values(pipes)) pipe.destroy();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
   it.each([
     { operation: 'close', closedPipes: false, review: 'review-08' },
     { operation: 'dispose', closedPipes: false, review: 'review-08' },

@@ -195,6 +195,12 @@ describe(ShellCommandAuthorizer, () => {
 });
 
 describe(isSafeShellCommand, () => {
+  it.each(['cat .ENV', 'cat private.PEM', 'head config/.Env.production', 'cat .NETRC'])(
+    '[round3-01] does not automatically approve a differently cased sensitive path in %s',
+    command => {
+      expect(isSafeShellCommand(command)).toBe(false);
+    },
+  );
   it.each(['pwd', 'ls -la src', 'rg "a phrase" src'])('recognizes the bounded inspection command %s', command => {
     expect(isSafeShellCommand(command)).toBe(true);
   });

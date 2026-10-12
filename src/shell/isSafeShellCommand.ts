@@ -106,7 +106,8 @@ function isDangerousArgument(argument: string): boolean {
 
 function isSensitiveArgument(argument: string): boolean {
   if (argument === '/' || argument === '/dev' || argument.startsWith('/dev/')) return true;
-  const name = basename(argument.replace(/\/+$/u, ''));
+  // Match the native sandbox's conservative policy even on case-sensitive hosts.
+  const name = basename(argument.replace(/\/+$/u, '')).toLowerCase();
   if (name === '.env.example') return false;
   if (matchesSensitiveName(name)) return true;
   return /\.(?:key|pem|p12|pfx)$/u.test(name);

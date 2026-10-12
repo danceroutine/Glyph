@@ -37,6 +37,7 @@ export interface ProposalReviewChange {
 export class ProposalReviewManager {
   private reviews: EditProposal[] = [];
   private completedReviews: EditProposal[] = [];
+  private durableResults: readonly EditReviewResult[] = [];
   private queue: Promise<void> = Promise.resolve();
   private readonly settledDecisions = new Map<
     string,
@@ -62,7 +63,9 @@ export class ProposalReviewManager {
     return [...this.reviews];
   }
   get pendingResults(): readonly EditReviewResult[] {
-    return [...this.reviews, ...this.completedReviews].flatMap(review => pendingReviewResults(review));
+    // UI decisions may be optimistic while a save is pending. Model-facing
+    // receipts must reflect only the last successful checkpoint, never that UI state.
+    return structuredClone(this.durableResults);
   }
   get pendingChangeCount(): number {
     return this.reviews.reduce(
@@ -87,6 +90,7 @@ export class ProposalReviewManager {
 
   async initialize(): Promise<void> {
     const stored = await this.store.load(this.workspaceIdentity);
+    this.durableResults = structuredClone(stored.flatMap(pendingReviewResults));
     this.reviews = stored.filter(review => !isSettled(review));
     this.completedReviews = stored.filter(isSettled);
     for (const review of this.completedReviews) this.rememberSettledDecisions(review);
@@ -554,7 +558,7 @@ export class ProposalReviewManager {
   private async persist(): Promise<void> {
     const settled = this.reviews.filter(isSettled);
     const remaining = this.reviews.filter(review => !settled.includes(review));
-    await this.store.save([...remaining, ...this.completedReviews, ...settled], this.workspaceIdentity);
+    await this.saveCheckpoint([...remaining, ...this.completedReviews, ...settled]);
     this.reviews = remaining;
     this.completedReviews = [...this.completedReviews, ...settled];
     for (const review of settled) {
@@ -563,8 +567,10 @@ export class ProposalReviewManager {
     }
   }
 
-  private saveCheckpoint(): Promise<void> {
-    return this.store.save([...this.reviews, ...this.completedReviews], this.workspaceIdentity);
+  private async saveCheckpoint(proposals = [...this.reviews, ...this.completedReviews]): Promise<void> {
+    const checkpoint = structuredClone(proposals);
+    await this.store.save(checkpoint, this.workspaceIdentity);
+    this.durableResults = checkpoint.flatMap(pendingReviewResults);
   }
 
   private rememberSettledDecisions(review: EditProposal): void {

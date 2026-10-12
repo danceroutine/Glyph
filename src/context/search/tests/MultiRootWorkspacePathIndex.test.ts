@@ -2,12 +2,33 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FileSearchResult } from '#src/context/search/FileSearchResult.js';
 import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
 import type { WorkspaceContentSearchOptions } from '#src/context/search/WorkspaceContentSearchOptions.js';
+import { workspaceContentSearchOptionsSchema } from '#src/context/search/WorkspaceContentSearchOptions.js';
 import type { WorkspaceContentSearchResult } from '#src/context/search/WorkspaceContentSearchResult.js';
 import type { WorkspacePathGlobResult } from '#src/context/search/WorkspacePathGlobResult.js';
 import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
 import type { WorkspacePathIndexState } from '#src/context/search/WorkspacePathIndexState.js';
 
 describe(MultiRootWorkspacePathIndex, () => {
+  it('[round3-04] returns the requested match at the maximum offset without fetching an invalid extra page', async () => {
+    const api = new FixtureIndex('api', 'file.ts', 1);
+    const search = vi.spyOn(api, 'searchContents').mockImplementation(async (_pattern, options) => {
+      const { offset, limit } = workspaceContentSearchOptionsSchema.parse(options);
+      return {
+        outputMode: 'files_with_matches',
+        files: Array.from({ length: limit }, (_, i) => `file-${offset + i}.ts`),
+        searchedFiles: 200000,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: true,
+        nextOffset: offset + limit,
+      };
+    });
+    const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
+    await expect(
+      index.searchContents('x', { outputMode: 'files_with_matches', offset: 100000, limit: 1 }),
+    ).resolves.toMatchObject({ files: ['api/file-100000.ts'], truncated: true, nextOffset: null });
+    expect(search.mock.calls.every(([, options]) => (options.offset ?? 0) <= 100000)).toBe(true);
+  });
   it('[round2-09] bounds combined content and continues from the first unreturned match across native pages', async () => {
     const api = new FixtureIndex('api', 'file.ts', 1);
     const search = vi.spyOn(api, 'searchContents').mockImplementation(async (_pattern, options) => {

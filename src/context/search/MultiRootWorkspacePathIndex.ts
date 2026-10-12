@@ -107,7 +107,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     let skippedFiles = 0;
     let indexTruncated = false;
     let truncated = false;
-    roots: for (const [name, index] of candidates) {
+    roots: for (const [rootIndex, [name, index]] of candidates.entries()) {
       let offset = 0;
       while (true) {
         signal?.throwIfAborted();
@@ -138,17 +138,25 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
           selected.push(entry);
           remainingBytes -= bytes;
         }
+        // A full result is complete even if another page exists. Probing that
+        // page can fail or exceed the native offset ceiling and lose valid work.
+        if (selected.length === resolved.limit) {
+          truncated = page.nextOffset !== null || rootIndex < candidates.length - 1;
+          break roots;
+        }
         if (page.nextOffset === null) break;
         if (page.nextOffset <= offset) throw new Error('Content search returned a non-advancing page offset.');
         offset = page.nextOffset;
       }
     }
+    const nextOffset = resolved.offset + selected.length;
+    const canContinue = workspaceContentSearchOptionsSchema.shape.offset.safeParse(nextOffset).success;
     const metadata = {
       searchedFiles,
       skippedFiles,
       indexTruncated,
       truncated,
-      nextOffset: truncated ? resolved.offset + selected.length : null,
+      nextOffset: truncated && canContinue ? nextOffset : null,
     };
     switch (resolved.outputMode) {
       case 'content':

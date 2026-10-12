@@ -447,25 +447,28 @@ fn is_sensitive_workspace_file(path: &Path, policy: &WorkspaceAccessPolicy) -> b
     let Some(name) = path.file_name().and_then(OsStr::to_str) else {
         return false;
     };
+    // Shell policy is conservative across filesystems: a spelling variation
+    // must not turn a sensitive file into an automatically readable resource.
+    let name = name.to_lowercase();
     if policy
         .allowed_file_names
         .iter()
-        .any(|allowed| allowed == name)
+        .any(|allowed| allowed.to_lowercase() == name)
     {
         return false;
     }
     policy
         .sensitive_file_names
         .iter()
-        .any(|sensitive| sensitive == name)
+        .any(|sensitive| sensitive.to_lowercase() == name)
         || policy
             .sensitive_file_prefixes
             .iter()
-            .any(|prefix| name.starts_with(prefix))
+            .any(|prefix| name.starts_with(&prefix.to_lowercase()))
         || policy
             .sensitive_file_extensions
             .iter()
-            .any(|extension| name.ends_with(extension))
+            .any(|extension| name.ends_with(&extension.to_lowercase()))
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -876,6 +879,43 @@ mod tests {
     use super::*;
     use std::fs::{create_dir, write};
     use tempfile::tempdir;
+
+    #[test]
+    fn round3_01_sensitive_file_policy_rejects_case_variants() {
+        let policy = WorkspaceAccessPolicy::default();
+        for name in [
+            ".ENV",
+            ".Env.production",
+            "private.PEM",
+            "token.PfX",
+            ".NETRC",
+        ] {
+            assert!(
+                is_sensitive_workspace_file(Path::new(name), &policy),
+                "{name}"
+            );
+        }
+        assert!(!is_sensitive_workspace_file(
+            Path::new(".ENV.EXAMPLE"),
+            &policy
+        ));
+        // Inspect policy construction only; no sandboxed command is launched.
+        let fixture = tempdir().unwrap();
+        let root = fixture.path().join("workspace");
+        create_dir(&root).unwrap();
+        for name in [".ENV", "private.PEM", ".ENV.EXAMPLE"] {
+            write(root.join(name), "synthetic canary").unwrap();
+        }
+        let request = request(
+            SandboxProfile::ReadOnly,
+            &root,
+            &fixture.path().join("state"),
+        );
+        assert_eq!(
+            workspace_sensitive_paths(&request).unwrap(),
+            vec![root.join(".ENV"), root.join("private.PEM")]
+        );
+    }
 
     fn request(profile: SandboxProfile, root: &Path, state: &Path) -> SandboxRequest {
         SandboxRequest {

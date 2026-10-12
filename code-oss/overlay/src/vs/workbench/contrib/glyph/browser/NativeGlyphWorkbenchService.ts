@@ -32,6 +32,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private pendingRunId: string | undefined;
   private creatingChat = false;
   private sending = false;
+  private workspaceChanged = false;
   private readonly prompts = new Map<string, string>();
   private readonly errors: GlyphTranscriptEntry[] = [];
 
@@ -43,6 +44,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     super();
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
     this.client = this._register(new GlyphDesktopClient(request => editor.handle(request)));
+    this._register(
+      this.workspaceContextService.onDidChangeWorkspaceFolders(() => {
+        this.workspaceChanged = true;
+        // Detach the old runtime too: its index and shell authority still name
+        // the original roots even though the editor has already changed folders.
+        // TODO: Negotiate a replacement host/editor binding without a window reload.
+        this.client.dispose();
+        this.report(new Error('Workspace folders changed. Reload the window to reconnect Glyph.'));
+      }),
+    );
     this._register(
       this.client.onDidDisconnect(error => {
         editor.invalidate();
@@ -77,6 +88,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     );
     this._register(
       this.workspaceTrustService.onDidChangeTrust(() => {
+        if (this.workspaceChanged) return;
         editor.invalidate();
         void this.client
           .request({
@@ -143,6 +155,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   async connect(): Promise<void> {
+    if (this.workspaceChanged) throw new Error('Workspace folders changed. Reload the window to reconnect Glyph.');
     await this.client.connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted());
     if (this.selectedChatId && !this.projection.state.runs.some(run => run.chatId === this.selectedChatId)) {
       await this.client.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });

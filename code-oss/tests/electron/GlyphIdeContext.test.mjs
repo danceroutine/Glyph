@@ -7,6 +7,10 @@ import { test as it } from './GlyphWorkbench.fixture.mjs';
 
 it.describe('Pending active editor and open-file context', () => {
   it.fixme(
+    'reattaches the host and editor to changed workspace folders without a reload and never reinterprets old paths or document tokens under the new roots',
+    async () => {},
+  );
+  it.fixme(
     'shows the active file’s workspace-qualified path and lets the user include or exclude it from the next turn',
     async () => {},
   );

@@ -37,6 +37,8 @@ export class GlyphEditorAdapter extends Disposable {
   /** Maps protocol grouping ids onto Code OSS's process-local undo groups. */
   private readonly undoGroups = new Map<string, UndoRedoGroup>();
   private workspaceGeneration = generateUuid();
+  private readonly workspaceBinding: string;
+  private workspaceChanged = false;
   /** Keep unopened models alive while the host holds their incarnation tokens. */
   private readonly references = new Map<string, Awaited<ReturnType<ITextModelService['createModelReference']>>>();
 
@@ -50,6 +52,13 @@ export class GlyphEditorAdapter extends Disposable {
     @IFileService private readonly fileService: IFileService,
   ) {
     super();
+    this.workspaceBinding = this.currentWorkspaceBinding();
+    this._register(
+      this.workspaceContextService.onDidChangeWorkspaceFolders(() => {
+        this.workspaceChanged = true;
+        this.invalidate();
+      }),
+    );
   }
 
   /** Serializes failures at the process boundary while keeping typed errors inside the adapter. */
@@ -57,6 +66,7 @@ export class GlyphEditorAdapter extends Disposable {
     const operationId =
       request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ? request.mutation.operationId : request.operationId;
     try {
+      this.assertWorkspaceBinding();
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       switch (request.type) {
@@ -193,6 +203,7 @@ export class GlyphEditorAdapter extends Disposable {
       if (!this.trustService.isWorkspaceTrusted()) {
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       }
+      this.assertWorkspaceBinding();
       const result = await this.bulkEditService.apply(
         [
           // The inner object is Code OSS's ITextEdit data shape; ResourceTextEdit
@@ -233,6 +244,7 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   private resolve(path: string): URI {
+    this.assertWorkspaceBinding();
     const folders = this.workspaceContextService.getWorkspace().folders;
     const segments = path.split('/');
     if (
@@ -256,6 +268,7 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   private async snapshot(path: string, model: ITextModel, maxBytes?: number): Promise<GlyphEditorTextSnapshot> {
+    this.assertWorkspaceBinding();
     // UTF-16 length is a lower bound on UTF-8 bytes, so reject oversized live
     // buffers before flattening them into strings or hashing their contents.
     if (maxBytes !== undefined) this.assertReadBudget(model.getValueLength(), maxBytes);
@@ -271,12 +284,14 @@ export class GlyphEditorAdapter extends Disposable {
     const text = byteOrderMark ? value.slice(1) : value;
     const bytes = new TextEncoder().encode(text);
     if (maxBytes !== undefined) this.assertReadBudget(bytes.byteLength + (byteOrderMark ? 3 : 0), maxBytes);
+    const contentRevision = await sha256(text, byteOrderMark);
+    this.assertWorkspaceBinding();
     return {
       uri: model.uri.toString(),
       path,
       text,
       byteOrderMark,
-      contentRevision: await sha256(text, byteOrderMark),
+      contentRevision,
       byteLength: bytes.byteLength + (byteOrderMark ? 3 : 0),
       mode: 0o644,
       identity: model.uri.toString(),
@@ -300,6 +315,7 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   private pathFor(resource: URI): string {
+    this.assertWorkspaceBinding();
     const folder = this.workspaceContextService.getWorkspaceFolder(resource);
     if (!folder) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     const path = resource.path.slice(folder.uri.path.replace(/\/$/, '').length + 1);
@@ -332,6 +348,21 @@ export class GlyphEditorAdapter extends Disposable {
       this.undoGroups.set(id, group);
     }
     return group;
+  }
+
+  private currentWorkspaceBinding(): string {
+    const workspace = this.workspaceContextService.getWorkspace();
+    return JSON.stringify([workspace.id, workspace.folders.map(folder => [folder.name, folder.uri.toString()])]);
+  }
+
+  private assertWorkspaceBinding(): void {
+    // Host paths use the namespace negotiated when this adapter was created.
+    // Never reinterpret one under a different root count, name, URI, or order.
+    if (this.workspaceChanged || this.currentWorkspaceBinding() !== this.workspaceBinding) {
+      this.workspaceChanged = true;
+      this.invalidate();
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.WORKSPACE_CHANGED);
+    }
   }
 }
 

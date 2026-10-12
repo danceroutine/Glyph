@@ -347,6 +347,9 @@ class ManagedShellSession {
 
   private cleanProcessGroup(child: ChildProcess): void {
     if (this.groupCleanups.has(child)) return;
+    // Unlike closed pipes or parent exit, ESRCH proves the group is gone.
+    // Ordinary completed commands need no grace period; surviving descendants do.
+    if (!processGroupMayExist(child)) return;
     terminateProcess(child, 'SIGTERM');
     // A closed parent/pipe says nothing about surviving descendants. Retain
     // escalation independently, including while the terminal runs its next command.
@@ -392,6 +395,18 @@ class ManagedShellSession {
 
 function tail(value: string, limit: number): string {
   return value.length <= limit ? value : value.slice(value.length - limit);
+}
+
+function processGroupMayExist(child: ChildProcess): boolean {
+  if (child.pid === undefined) return false;
+  if (process.platform === 'win32') return child.exitCode === null && child.signalCode === null;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    // Permission or other errors are not evidence that descendants have exited.
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
 }
 
 function terminateProcess(child: ChildProcess, signal: NodeJS.Signals): void {
