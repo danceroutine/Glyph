@@ -226,28 +226,37 @@ export class GlyphEditorAdapter extends Disposable {
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
       const reason = EditSources.unknown({ name: `glyph.applyEdit:${mutation.operationId}` });
       let observed: GlyphMutationReceipt | undefined;
-      const observe = (state: GlyphMutationReceiptState): GlyphMutationReceipt => {
+      const receiptWrites: Promise<void>[] = [];
+      const observe = (state: GlyphMutationReceiptState, revision?: string): GlyphMutationReceipt => {
         return {
           operationId: mutation.operationId,
           state,
           beforeRevision: before.contentRevision,
-          afterRevision,
+          ...(revision === undefined ? {} : { afterRevision: revision }),
           appliedToken: { ...before.token, version: model.getVersionId() },
           observedAt: new Date().toISOString(),
         };
       };
       const changed = model.onDidChangeContent(event => {
-        const expectedValue = (mutation.byteOrderMark ? '\uFEFF' : '') + appliedText;
-        if (model.getVersionId() !== before.token.version && model.getValue(undefined, true) === expectedValue) {
-          if (event.detailedReasons.includes(reason)) {
-            const receipt = observe(GlyphMutationReceiptState.APPLIED);
-            this.receipts.set(mutation.operationId, receipt);
-          } else {
-            // Some upstream editor fallbacks drop the source. Retain evidence
-            // without attributing an unrelated user edit to this operation.
-            observed = observe(GlyphMutationReceiptState.UNKNOWN);
-          }
-        }
+        if (model.getVersionId() === before.token.version) return;
+        const attributed = event.detailedReasons.includes(reason);
+        const receipt = observe(attributed ? GlyphMutationReceiptState.APPLIED : GlyphMutationReceiptState.UNKNOWN);
+        // Capture bytes and version together at the real edit boundary. Code OSS
+        // can normalize more than newlines (for example trim automatic whitespace),
+        // so the requested replacement is not an authoritative post-edit snapshot.
+        const value = model.getValue(undefined, true);
+        const byteOrderMark = value.startsWith('\uFEFF');
+        const text = byteOrderMark ? value.slice(1) : value;
+        if (attributed) this.receipts.set(mutation.operationId, receipt);
+        else observed = receipt;
+        receiptWrites.push(
+          sha256(text, byteOrderMark).then(revision => {
+            const complete = { ...receipt, afterRevision: revision };
+            // An older hash finishing late must not overwrite a newer observation.
+            if (this.receipts.get(mutation.operationId) === receipt) this.receipts.set(mutation.operationId, complete);
+            if (observed === receipt) observed = complete;
+          }),
+        );
       });
       try {
         const result = await this.bulkEditService.apply(
@@ -269,15 +278,17 @@ export class GlyphEditorAdapter extends Disposable {
             reason,
           },
         );
+        await Promise.all(receiptWrites);
         // Upstream's isApplied describes a nonempty edit list, even when its
         // cancellation check skipped every write. Only an observed change (or
         // a successful no-op) is evidence for an applied receipt.
         if (
           result.isApplied &&
           !cancellation.token.isCancellationRequested &&
-          before.contentRevision === afterRevision
+          before.contentRevision === afterRevision &&
+          model.getVersionId() === before.token.version
         ) {
-          this.receipts.set(mutation.operationId, observe(GlyphMutationReceiptState.APPLIED));
+          this.receipts.set(mutation.operationId, observe(GlyphMutationReceiptState.APPLIED, afterRevision));
         }
         if (result.isApplied && observed && !this.receipts.has(mutation.operationId)) {
           this.receipts.set(mutation.operationId, {
@@ -295,10 +306,11 @@ export class GlyphEditorAdapter extends Disposable {
         const snapshot = await this.snapshot(mutation.path, model);
         return { snapshot, receipt };
       } finally {
+        changed.dispose();
+        await Promise.all(receiptWrites);
         if (observed && cancellation.token.isCancellationRequested && !this.receipts.has(mutation.operationId)) {
           this.receipts.set(mutation.operationId, observed);
         }
-        changed.dispose();
       }
     } finally {
       this.pendingMutations.delete(cancellation);

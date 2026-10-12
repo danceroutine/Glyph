@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
@@ -102,19 +102,46 @@ const checkpointSchema = z
 /** Filesystem-backed, atomic checkpoint storage for active proposal reviews. */
 export class FileProposalReviewStore implements ProposalReviewStore {
   private readonly path: string;
+  private readonly legacyPath: string | undefined;
 
-  constructor(directory: string) {
-    this.path = join(directory, 'active-proposal-review.json');
+  constructor(
+    directory: string,
+    private readonly options: { readonly mutationScope?: string } = {},
+  ) {
+    const legacy = join(directory, 'active-proposal-review.json');
+    if (options.mutationScope !== undefined) {
+      // A saved workspace keeps its container id when folders change. Reviews
+      // instead belong to the exact roots against which their paths were planned.
+      const scope = createHash('sha256').update(options.mutationScope).digest('hex');
+      this.path = join(directory, 'mutation-scopes', scope, 'active-proposal-review.json');
+      this.legacyPath = legacy;
+    } else {
+      this.path = legacy;
+    }
   }
 
   async load(workspaceIdentity: string): Promise<EditProposal[]> {
     try {
-      const value: unknown = JSON.parse(await readFile(this.path, 'utf8'));
+      this.assertScope(workspaceIdentity);
+      let text: string;
+      let importingLegacy = false;
+      try {
+        text = await readFile(this.path, 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !this.legacyPath) throw error;
+        text = await readFile(this.legacyPath, 'utf8');
+        importingLegacy = true;
+      }
+      const value: unknown = JSON.parse(text);
       const checkpoint = checkpointSchema.safeParse(value);
       if (!checkpoint.success) throw new Error('Unsupported proposal-review checkpoint schema.');
       if (checkpoint.data.workspaceIdentity !== workspaceIdentity) {
+        // Preserve the old scope's checkpoint; never reinterpret its paths in
+        // the new roots or make an unrelated scope unavailable because it exists.
+        if (importingLegacy) return [];
         throw new Error('Proposal-review checkpoint belongs to a different workspace.');
       }
+      if (importingLegacy) await this.save(checkpoint.data.proposals, workspaceIdentity);
       return [...checkpoint.data.proposals];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -128,7 +155,8 @@ export class FileProposalReviewStore implements ProposalReviewStore {
   }
 
   async save(proposals: readonly EditProposal[], workspaceIdentity: string): Promise<void> {
-    if (proposals.length === 0) return this.clear();
+    this.assertScope(workspaceIdentity);
+    if (proposals.length === 0 && this.options.mutationScope === undefined) return this.clear();
     const temporary = `${this.path}.${randomUUID()}.tmp`;
     const checkpoint: ProposalReviewCheckpoint = { schemaVersion: 3, workspaceIdentity, proposals };
     try {
@@ -152,6 +180,9 @@ export class FileProposalReviewStore implements ProposalReviewStore {
   }
 
   async clear(): Promise<void> {
+    // An empty scoped checkpoint is authoritative. Deleting it would import
+    // the retained legacy backup again and resurrect already settled reviews.
+    if (this.options.mutationScope !== undefined) return this.save([], this.options.mutationScope);
     try {
       await unlink(this.path);
     } catch (error) {
@@ -163,6 +194,12 @@ export class FileProposalReviewStore implements ProposalReviewStore {
           { cause: error },
         );
       }
+    }
+  }
+
+  private assertScope(workspaceIdentity: string): void {
+    if (this.options.mutationScope !== undefined && this.options.mutationScope !== workspaceIdentity) {
+      throw new EditError(EditFailureReason.PERSISTENCE, 'The review store is bound to a different mutation scope.');
     }
   }
 }

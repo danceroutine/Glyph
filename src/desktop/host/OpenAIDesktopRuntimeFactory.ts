@@ -140,7 +140,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           );
     const reviews = new ProposalReviewManager(
       workspace,
-      new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', context.id)),
+      new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', context.id), {
+        mutationScope: context.mutationIdentity,
+      }),
       logger,
       configuration.editing.maxActiveReviews,
       context.mutationIdentity,

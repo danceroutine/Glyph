@@ -51,6 +51,88 @@ async function adapterModule() {
 }
 
 describe('Editor workspace binding', () => {
+  it('[round5-02] records the actual pinned editor result when applying an edit also trims automatic whitespace', async () => {
+    const { GlyphEditorAdapter, URI } = await adapterModule();
+    const built = await build({
+      entryPoints: ['.code-oss/src/src/vs/editor/test/common/testTextModel.ts'],
+      bundle: true,
+      write: false,
+      platform: 'node',
+      format: 'esm',
+      tsconfigRaw: { compilerOptions: { experimentalDecorators: true } },
+      loader: { '.css': 'empty' },
+    });
+    const { createTextModel } = await import(
+      `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`
+    );
+    const resource = URI.file('/workspace/file.ts');
+    const model = createTextModel('hello\n\nend', null, { trimAutoWhitespace: true }, resource);
+    model.pushEditOperations(
+      null,
+      [
+        {
+          range: { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 1 },
+          text: '    ',
+          isAutoWhitespaceEdit: true,
+        },
+      ],
+      () => null,
+    );
+    const adapter = new GlyphEditorAdapter(
+      { createModelReference: async () => ({ object: { textEditorModel: model }, dispose() {} }) },
+      {
+        apply: async (_edits, options) => {
+          // Bulk Edit minimizes a whole-document replacement in the active editor.
+          model.pushEditOperations(
+            null,
+            [
+              {
+                range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 6 },
+                text: 'HELLO',
+              },
+            ],
+            () => null,
+            undefined,
+            options.reason,
+          );
+          return { isApplied: true };
+        },
+      },
+      {
+        getWorkspace: () => ({ id: 'workspace', folders: [{ name: 'workspace', uri: URI.file('/workspace') }] }),
+        isInsideWorkspace: () => true,
+        onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+      },
+      { getModels: () => [model] },
+      { isDirty: () => true },
+      { isWorkspaceTrusted: () => true },
+      {},
+    );
+    try {
+      const before = await adapter.read('file.ts');
+      expect(before.text).toBe('hello\n    \nend');
+      const response = await adapter.handle({
+        type: 'apply_text_mutation',
+        mutation: {
+          operationId: 'trim',
+          path: 'file.ts',
+          text: 'HELLO\n    \nend',
+          byteOrderMark: false,
+          undoGroupId: 'trim',
+          expectedContentRevision: before.contentRevision,
+          expectedToken: before.token,
+        },
+      });
+      expect(model.getValue()).toBe('HELLO\n\nend');
+      expect(response).toMatchObject({ ok: true, snapshot: { text: 'HELLO\n\nend' }, receipt: { state: 'applied' } });
+      expect(response.receipt.afterRevision).toBe(response.snapshot.contentRevision);
+      expect((await adapter.inspectReceipt('trim')).afterRevision).toBe(response.snapshot.contentRevision);
+    } finally {
+      adapter.dispose();
+      model.dispose();
+    }
+  });
+
   it('[round4-01] does not claim an unrelated matching user edit when Bulk Edit rejects its stale version', async () => {
     const fixture = await pendingEdit({ sourceTagged: false, failAfterWrite: true });
     try {

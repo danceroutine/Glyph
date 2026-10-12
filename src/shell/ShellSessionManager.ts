@@ -111,8 +111,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
     try {
       // Configuration can fail before launch too; it must release a newly
       // allocated terminal just like a synchronous process-launch failure.
-      if (options.wakeOn !== undefined) terminal.setWakePattern(options.wakeOn);
-      completion = terminal.execute(command, authorization);
+      completion = terminal.execute({ command, authorization, wakeOn: options.wakeOn });
     } catch (error) {
       if (!existing) {
         this.terminals.delete(terminal.snapshot.id);
@@ -272,10 +271,22 @@ class ManagedShellSession {
     this.options.changed();
   }
 
-  execute(command: string, authorization: ShellExecutionAuthorization): Promise<{ output: string; exitCode: number }> {
+  execute({
+    command,
+    authorization,
+    wakeOn,
+  }: {
+    readonly command: string;
+    readonly authorization: ShellExecutionAuthorization;
+    readonly wakeOn: string | undefined;
+  }): Promise<{ output: string; exitCode: number }> {
     if (this.active) throw new Error('Shell terminal is busy. Use write_shell_input for interactive input.');
     const normalized = command.trim();
     if (!normalized) throw new Error('Shell command cannot be empty.');
+    // Validate the proposed configuration before launch, but don't change the
+    // live command's condition unless a new command is actually admitted.
+    const wakePattern = wakeOn?.trim();
+    if (wakePattern !== undefined && !wakePattern) throw new Error('Shell wake pattern cannot be empty.');
     this.command = normalized;
     this.status = ShellSessionStatus.RUNNING;
     this.exitCode = undefined;
@@ -288,6 +299,10 @@ class ManagedShellSession {
       throw error;
     }
     this.child = child;
+    if (wakePattern !== undefined) {
+      this.wakePattern = wakePattern;
+      this.wakeScanTail = '';
+    }
     child.stdout!.setEncoding('utf8');
     child.stderr!.setEncoding('utf8');
     child.stdin!.on('error', () => {

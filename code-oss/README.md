@@ -198,6 +198,16 @@ The `[round4-NN]` tests reproduced the three findings before their fixes:
 
 Editor regressions are in [GlyphEditorAdapter.test.mjs](../scripts/code-oss/tests/GlyphEditorAdapter.test.mjs); shell and proposal regressions are in their respective `ShellSessionManager` and `ProposalReviewManager` test suites. Folder changes still require a reload to establish a new host/editor binding.
 
+### Fifth-round regressions
+
+The `[round5-NN]` regressions first reproduced these failures:
+
+- A saved workspace can reopen after its folders change even when the previous configuration has pending reviews. Desktop checkpoints now live under their exact mutation scope. Matching legacy checkpoints are copied into scoped storage; the legacy file is preserved, and empty scoped checkpoints prevent settled reviews from being imported again. Restoring the original folders restores their pending reviews. Corrupt checkpoints and foreign checkpoints inside an already scoped directory still fail closed.
+- The editor receipt hashes the actual model change, identified by its edit source, rather than predicting the resulting bytes from the replacement request. The regression uses the pinned Code OSS text model with pending automatic whitespace and verifies both successful application and the resulting receipt hash.
+- A rejected command cannot change a running terminal's wake condition. The new condition is installed only after command admission and successful process launch.
+
+Coverage lives in the `OpenAIDesktopRuntimeFactory`, `FileProposalReviewStore`, `GlyphEditorAdapter`, and `ShellSessionManager` tests. The factory test uses real checkpoint initialization with provider initialization stubbed; no live account or provider is required.
+
 The acknowledged editing-workflow blockers remain explicit fixmes:
 
 - Question and approval forms and proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).

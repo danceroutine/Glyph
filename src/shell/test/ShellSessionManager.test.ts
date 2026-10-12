@@ -19,6 +19,32 @@ afterEach(async () => {
 
 describe(ShellSessionManager, () => {
   describe('command lifecycle', () => {
+    it('[round5-03] keeps the running command wake condition when a second command is rejected as busy', async () => {
+      const { manager } = await fixture(ShellSandboxProfile.WORKSPACE_WRITE);
+      const wake = vi.fn();
+      const stop = manager.onDidWake(wake);
+      try {
+        const running = await manager.execute('read value; printf ready', {
+          background: true,
+          wakeOn: 'ready',
+          signal: new AbortController().signal,
+        });
+        await expect(
+          manager.execute('printf rejected', {
+            terminalId: running.terminalId,
+            wakeOn: 'different',
+            signal: new AbortController().signal,
+          }),
+        ).rejects.toThrow('busy');
+        expect.soft(manager.sessions[0]?.wakePattern).toBe('ready');
+        manager.writeInput(running.terminalId, 'continue', true);
+        await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+        expect(wake).toHaveBeenCalledWith(expect.objectContaining({ pattern: 'ready' }));
+      } finally {
+        stop();
+      }
+    });
+
     it('[round4-02] preserves terminal capacity after repeated invalid wake patterns', async () => {
       const { manager } = await fixture();
       for (let attempt = 0; attempt < 16; attempt++) {
