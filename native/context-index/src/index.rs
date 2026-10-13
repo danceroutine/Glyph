@@ -101,15 +101,17 @@ impl SearchIndex {
                 append,
             );
             self.query.clone_from(&query);
+        }
 
-            loop {
-                let status = self.matcher.tick(MATCH_WAIT_MS);
-                if latest_generation.load(Ordering::Acquire) > generation {
-                    return Err(SearchFailure::Superseded);
-                }
-                if !status.running {
-                    break;
-                }
+        // An interrupted generation may have parsed this same query without
+        // publishing its snapshot. Even unchanged text must settle the worker.
+        loop {
+            let status = self.matcher.tick(MATCH_WAIT_MS);
+            if latest_generation.load(Ordering::Acquire) > generation {
+                return Err(SearchFailure::Superseded);
+            }
+            if !status.running {
+                break;
             }
         }
 
@@ -182,6 +184,30 @@ mod tests {
             .indices
             .windows(2)
             .all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn settles_an_unpublished_query_when_the_next_generation_repeats_it() {
+        let mut index = SearchIndex::from_paths(vec!["alpha.ts".into(), "zebra.ts".into()])
+            .expect("index should build");
+        let _ = search(&mut index, "zebra", 1);
+        // Reproduce the state left by an interrupted search: the parsed query
+        // changed but the matcher has not published its replacement snapshot.
+        index
+            .matcher
+            .pattern
+            .reparse(0, "alpha", CaseMatching::Smart, Normalization::Smart, false);
+        index.query = "alpha".into();
+        let result = search(&mut index, "alpha", 3);
+        assert_eq!(
+            result
+                .matches
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha.ts"]
+        );
+        assert_eq!(result.matches[0].indices.len(), 5);
     }
 
     #[test]

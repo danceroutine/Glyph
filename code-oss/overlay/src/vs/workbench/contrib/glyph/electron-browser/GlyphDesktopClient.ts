@@ -33,6 +33,7 @@ interface ReadyMessage {
 export class GlyphDesktopClient extends Disposable {
   private readonly cursor = new GlyphHostEventCursor();
   private attachment: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }> | undefined;
+  private appliedAttachment: typeof this.attachment;
   private recovering: Promise<void> | undefined;
   private readonly eventEmitter = this._register(new Emitter<GlyphHostEventEnvelope>());
   readonly onDidReceiveEvent: Event<GlyphHostEventEnvelope> = this.eventEmitter.event;
@@ -56,13 +57,29 @@ export class GlyphDesktopClient extends Disposable {
 
   /** Reuses one connection attempt so concurrent view actions cannot create competing ports. */
   connect(roots: readonly GlyphWorkspaceRoot[], trusted: boolean): Promise<void> {
+    // Record authority changes even while port acquisition or an older attach
+    // is pending. Only the last acknowledged configuration permits commands.
+    if (
+      !this.attachment ||
+      this.attachment.trusted !== trusted ||
+      JSON.stringify(this.attachment.roots) !== JSON.stringify(roots)
+    ) {
+      this.attachment = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted };
+    }
     if (this.connecting) return this.connecting;
-    if (this.port && this.identity && this.attached) return Promise.resolve();
+    if (this.port && this.identity && this.attached && this.appliedAttachment === this.attachment)
+      return Promise.resolve();
     const epoch = this.connectionEpoch;
-    const connect =
-      this.port && this.identity
-        ? this.request({ type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted })
-        : this.connectNow(roots, trusted, epoch);
+    const connect = Promise.resolve().then(async () => {
+      if (!this.port || !this.identity) await this.connectNow(epoch);
+      do {
+        const attachment = this.attachment!;
+        await this.postRequest({ ...attachment, ...this.cursor.resume });
+        if (epoch !== this.connectionEpoch) throw new Error('The Glyph host connection was superseded.');
+        this.appliedAttachment = attachment;
+        this.attached = true;
+      } while (this.appliedAttachment !== this.attachment);
+    });
     return (this.connecting = connect
       .catch(error => {
         if (epoch === this.connectionEpoch) this.disconnect(error instanceof Error ? error : new Error(String(error)));
@@ -75,10 +92,19 @@ export class GlyphDesktopClient extends Disposable {
 
   /** Resolves only after the host acknowledges the request id or returns its correlated error. */
   async request(command: GlyphWorkbenchCommand): Promise<void> {
+    if (command.type === GlyphWorkbenchCommandType.ATTACH_WORKSPACE)
+      return this.connect(command.roots, command.trusted);
+    // Initial snapshots may arrive before attach acknowledgement. They are UI
+    // state, not authorization to bypass a pending trust synchronization.
+    while (this.connecting) await this.connecting;
+    if (!this.attached) throw new Error('The Glyph desktop workspace is not attached.');
+    return this.postRequest(command);
+  }
+
+  private async postRequest(command: GlyphWorkbenchCommand): Promise<void> {
     const port = this.port;
     const identity = this.identity;
     if (!port || !identity) throw new Error('The Glyph desktop host is not connected.');
-    if (command.type === GlyphWorkbenchCommandType.ATTACH_WORKSPACE) this.attachment = command;
     const requestId = generateUuid();
     const envelope: GlyphRequestEnvelope = {
       ...identity,
@@ -112,7 +138,7 @@ export class GlyphDesktopClient extends Disposable {
     super.dispose();
   }
 
-  private async connectNow(roots: readonly GlyphWorkspaceRoot[], trusted: boolean, epoch: number): Promise<void> {
+  private async connectNow(epoch: number): Promise<void> {
     const port = await acquirePort(
       'vscode:glyph:createHostMessageChannel',
       'vscode:glyph:createHostMessageChannelResult',
@@ -152,7 +178,6 @@ export class GlyphDesktopClient extends Disposable {
     if (epoch !== this.connectionEpoch) throw new Error('The Glyph host disconnected during connection.');
     this.identity = ready.identity;
     this.cursor.bind(ready.hostGeneration);
-    await this.request({ type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted, ...this.cursor.resume });
   }
 
   private receive(value: unknown): void {
@@ -200,6 +225,7 @@ export class GlyphDesktopClient extends Disposable {
   private recover(): void {
     if (this.recovering || !this.attachment) return;
     const { roots, trusted } = this.attachment;
+    this.appliedAttachment = undefined;
     this.recovering = this.request({
       type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
       roots,
@@ -237,6 +263,7 @@ export class GlyphDesktopClient extends Disposable {
     this.identity = undefined;
     this.connecting = undefined;
     this.attached = false;
+    this.appliedAttachment = undefined;
     this.recovering = undefined;
     this.failPending(error);
     this.disconnectEmitter.fire(error);

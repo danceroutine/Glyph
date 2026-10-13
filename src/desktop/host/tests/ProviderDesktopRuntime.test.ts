@@ -87,19 +87,70 @@ async function fixture(send: (options: SendOptions, interactions: DesktopInterac
     sessions,
   );
   await glyph.initialize();
+  const shells = { close: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
   runtime = new ProviderDesktopRuntime({
     glyph,
     interactions,
-    shellSessions: { close: async () => {}, dispose: async () => {} },
+    shellSessions: shells,
     emit: event => events.push(event),
     ownerWindowId: 'owner',
   });
   await runtime.handle({ type: Command.CREATE_CHAT, accountProvider: 'fixture', accountId: 'account', model: 'model' });
   const chatId = (await runtime.snapshot()).chats[0]!.id;
-  return { runtime, chatId, saved, events };
+  return { runtime, chatId, saved, events, glyph, shells };
 }
 
 describe(ProviderDesktopRuntime, () => {
+  it('[round7-01] cancels an active provider turn and terminates background shells during trust-boundary disposal', async () => {
+    const harness = await fixture(async options => {
+      await new Promise<void>((_resolve, reject) => {
+        if (options.signal.aborted) reject(options.signal.reason);
+        else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+      });
+    });
+    await harness.runtime.handle({
+      type: Command.SEND,
+      chatId: harness.chatId,
+      runId: 'active',
+      text: 'Continue',
+      attachments: [],
+    });
+    await harness.runtime.dispose();
+    expect(harness.shells.dispose).toHaveBeenCalledOnce();
+    expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
+  });
+
+  it('[round7-12] drains an admitted proposal decision before disposing its chat storage', async () => {
+    const harness = await fixture(async () => {});
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    const disposed = vi.spyOn(harness.glyph, 'dispose');
+    const checkpoint = vi.spyOn(harness.glyph, 'renameChat');
+    const decisions = harness.runtime as unknown as { decideProposal(): Promise<void> };
+    vi.spyOn(decisions, 'decideProposal').mockImplementation(async () => {
+      await gate;
+      await harness.glyph.renameChat(harness.chatId, 'Decision checkpoint');
+    });
+    const decision = harness.runtime.handle({
+      type: Command.ACCEPT_PROPOSAL_ITEM,
+      chatId: harness.chatId,
+      proposalId: 'proposal',
+      itemId: 'item',
+    });
+    const stopping = harness.runtime.dispose();
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(disposed).not.toHaveBeenCalled();
+    } finally {
+      finish();
+      await decision;
+      await stopping;
+    }
+    expect(checkpoint.mock.invocationCallOrder[0]).toBeLessThan(disposed.mock.invocationCallOrder[0]!);
+  });
+
   it('streams a real application turn, persists its transcript, and includes reasoning, tools, and usage in recovery state', async () => {
     const harness = await fixture(async options => {
       options.onText('Answer');

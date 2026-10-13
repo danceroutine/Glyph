@@ -39,6 +39,7 @@ export class ProposalReviewManager {
   private completedReviews: EditProposal[] = [];
   private durableResults: readonly EditReviewResult[] = [];
   private queue: Promise<void> = Promise.resolve();
+  private mutationCheckpointPending = false;
   private readonly settledDecisions = new Map<
     string,
     { readonly reviewId: string; readonly decision: EditDecisionState }
@@ -150,6 +151,7 @@ export class ProposalReviewManager {
 
   async acceptAll(): Promise<void> {
     return this.enqueue(async () => {
+      if (this.reviews.length === 0) return;
       const reviews = this.requireReviews();
       await this.preflightAll(reviews);
       for (const review of reviews) {
@@ -165,6 +167,9 @@ export class ProposalReviewManager {
 
   async rejectAll(): Promise<void> {
     return this.enqueue(async () => {
+      // Retrying a completed checkpoint may have settled the last review before
+      // this bulk action starts. There is then nothing left to reject.
+      if (this.reviews.length === 0) return;
       const reviews = this.requireReviews();
       // A failed completion checkpoint does not mean the edit failed. Recover
       // applied decisions before choosing which items remain rejectable.
@@ -302,6 +307,7 @@ export class ProposalReviewManager {
     const applyingState = captureFileState(file);
     const operationId = `${review.id}:${file.id}:${item.id}`;
     const mutation = { operationId, undoGroupId: operationId };
+    let applicability = EditApplicabilityState.READY;
     try {
       await this.log('debug', 'revision.check', {
         proposalId: review.id,
@@ -350,23 +356,50 @@ export class ProposalReviewManager {
             file.proposed.byteOrderMark,
             mutation,
           );
+          // The mutation is complete even if editor normalization invalidates
+          // another pending range. Never restore its pre-edit decision state.
+          this.mutationCheckpointPending = true;
+          const previous = { ...file };
           item.decision = EditDecisionState.ACCEPTED;
-          applyTransformedRanges(textChange.transformedItems);
-          updateBaseline(file, result);
+          file.current = result;
+          file.currentPath = result.path;
+          file.currentRevision = result.revision;
+          file.applyingItemId = null;
+          file.applicability = EditApplicabilityState.STALE;
+          const actual = planTextAcceptance(previous, item, result.text);
+          if (actual) {
+            applyTransformedRanges(actual.transformedItems);
+            updateBaseline(file, result);
+          } else {
+            // Keep the old base/ranges as conflict evidence, but checkpoint the
+            // observed current document and the completed item's acceptance.
+            applicability = EditApplicabilityState.STALE;
+          }
           break;
         }
       }
       item.decision = EditDecisionState.ACCEPTED;
-      file.applicability = EditApplicabilityState.READY;
+      file.applicability = applicability;
       file.applyingItemId = null;
+      this.mutationCheckpointPending = true;
       await this.persist();
     } catch (error) {
-      restoreFileState(file, applyingState);
-      try {
-        await this.reconcile(review, file);
-        await this.persist();
-      } catch {
+      if (this.mutationCheckpointPending) {
+        // The workspace's observed result is stronger evidence than predicted
+        // bytes. Keep it across save failures and block decisions until saved.
+        try {
+          await this.persist();
+        } catch {
+          /* Retried by the next queued operation. */
+        }
+      } else {
         restoreFileState(file, applyingState);
+        try {
+          await this.reconcile(review, file);
+          await this.persist();
+        } catch {
+          restoreFileState(file, applyingState);
+        }
       }
       await this.log('error', 'item.failed', {
         proposalId: review.id,
@@ -507,7 +540,7 @@ export class ProposalReviewManager {
     if (!applied) return false;
     item.decision = EditDecisionState.ACCEPTED;
     if (item.kind === EditReviewItemKind.TEXT && after) {
-      const textChange = planTextAcceptance(file, item);
+      const textChange = planTextAcceptance(file, item, after.text);
       if (!textChange) return false;
       applyTransformedRanges(textChange.transformedItems);
       updateBaseline(file, after);
@@ -562,6 +595,7 @@ export class ProposalReviewManager {
     const settled = this.reviews.filter(isSettled);
     const remaining = this.reviews.filter(review => !settled.includes(review));
     await this.saveCheckpoint([...remaining, ...this.completedReviews, ...settled]);
+    this.mutationCheckpointPending = false;
     this.reviews = remaining;
     this.completedReviews = [...this.completedReviews, ...settled];
     for (const review of settled) {
@@ -636,7 +670,11 @@ export class ProposalReviewManager {
   }
 
   private enqueue(operation: () => Promise<void>): Promise<void> {
-    const result = this.queue.then(operation, operation);
+    const guarded = async (): Promise<void> => {
+      if (this.mutationCheckpointPending) await this.persist();
+      await operation();
+    };
+    const result = this.queue.then(guarded, guarded);
     this.queue = result.catch(() => {});
     return result;
   }
@@ -741,6 +779,7 @@ function rebasePendingTextItems(file: FileEditPlan, previousText: string, curren
 function planTextAcceptance(
   file: FileEditPlan,
   item: FileEditPlan['items'][number],
+  actualText?: string,
 ):
   | {
       readonly text: string;
@@ -760,7 +799,9 @@ function planTextAcceptance(
       candidate.kind === EditReviewItemKind.TEXT &&
       candidate.decision === EditDecisionState.PENDING,
   );
-  const ranges = transformTextEditRanges(file.current.text, text, remaining);
+  // Editor-backed stores may normalize EOLs or automatic whitespace. Pending
+  // ranges must follow the observed result, never predicted replacement bytes.
+  const ranges = transformTextEditRanges(file.current.text, actualText ?? text, remaining);
   if (!ranges) return undefined;
   return {
     text,

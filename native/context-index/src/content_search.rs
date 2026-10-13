@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -181,32 +181,32 @@ impl ContentSearchContext {
         let searched_files = AtomicUsize::new(0);
         let skipped_files = AtomicUsize::new(0);
         let finished = AtomicBool::new(false);
-        let next_candidate = AtomicUsize::new(0);
         let worker_count = thread::available_parallelism()
             .map_or(1, usize::from)
             .min(MAX_WORKERS)
             .min(candidates.len().max(1));
-        let channel_capacity = worker_count.saturating_mul(2).max(1);
-        let (sender, receiver) = mpsc::sync_channel(channel_capacity);
         let target_entries = params.offset as usize + params.limit as usize + 1;
         let mut accumulator = ResultAccumulator::new(&params, index_truncated);
 
         thread::scope(|scope| {
-            for _ in 0..worker_count {
-                let sender = sender.clone();
+            // One bounded lane per worker lets the reducer consume file order
+            // without an unbounded map of results behind a slow earlier file.
+            let mut receivers = Vec::new();
+            for lane in 0..worker_count {
+                let (sender, receiver) = mpsc::sync_channel(1);
+                receivers.push(receiver);
                 let matcher = matcher.clone();
                 let params = &params;
                 let candidates = &candidates;
-                let next_candidate = &next_candidate;
                 let searched_files = &searched_files;
                 let skipped_files = &skipped_files;
                 let finished = &finished;
                 scope.spawn(move || {
-                    while !cancelled.load(Ordering::Acquire) && !finished.load(Ordering::Acquire) {
-                        let index = next_candidate.fetch_add(1, Ordering::AcqRel);
-                        let Some(path) = candidates.get(index) else {
+                    for index in (lane..candidates.len()).step_by(worker_count) {
+                        if cancelled.load(Ordering::Acquire) || finished.load(Ordering::Acquire) {
                             break;
-                        };
+                        }
+                        let path = &candidates[index];
                         let outcome =
                             match read_searchable_file(&self.root, path, self.max_file_bytes) {
                                 Ok(text) => {
@@ -225,28 +225,23 @@ impl ContentSearchContext {
                                     FileOutcome::empty(path)
                                 }
                             };
-                        if sender.send((index, outcome)).is_err() {
+                        if sender.send(outcome).is_err() {
                             break;
                         }
                     }
                 });
             }
-            drop(sender);
-
-            let mut pending = BTreeMap::new();
-            let mut next_result = 0;
-            while let Ok((index, outcome)) = receiver.recv() {
-                pending.insert(index, outcome);
-                while let Some(outcome) = pending.remove(&next_result) {
-                    if accumulator.push(outcome) {
-                        finished.store(true, Ordering::Release);
-                    }
-                    next_result += 1;
-                }
-                if cancelled.load(Ordering::Acquire) {
+            for index in 0..candidates.len() {
+                let Ok(outcome) = receivers[index % worker_count].recv() else {
+                    break;
+                };
+                if cancelled.load(Ordering::Acquire) || accumulator.push(outcome) {
                     finished.store(true, Ordering::Release);
+                    break;
                 }
             }
+            // Release blocked sends before scoped threads are joined.
+            drop(receivers);
         });
 
         if cancelled.load(Ordering::Acquire) {
@@ -369,7 +364,7 @@ impl<'a> ResultAccumulator<'a> {
     fn push(&mut self, outcome: FileOutcome) -> bool {
         match self.params.output_mode {
             ContentSearchOutputMode::Content => {
-                for found in outcome.matches {
+                for (start, end) in outcome.matches {
                     if self.seen_entries < self.params.offset as usize {
                         self.seen_entries += 1;
                         continue;
@@ -378,15 +373,30 @@ impl<'a> ResultAccumulator<'a> {
                         self.has_more = true;
                         return true;
                     }
-                    let bytes = content_match_bytes(&found);
-                    if self.content_bytes + bytes > MAX_RESULT_TEXT_BYTES
-                        && !self.matches.is_empty()
-                    {
+                    // Size borrowed slices before allocating duplicated context.
+                    let bytes = content_match_size(
+                        &outcome.path,
+                        &outcome.text,
+                        &outcome.lines,
+                        start,
+                        end,
+                        self.params,
+                    );
+                    if self.content_bytes + bytes > MAX_RESULT_TEXT_BYTES {
                         self.has_more = true;
                         return true;
                     }
                     self.content_bytes += bytes;
                     self.seen_entries += 1;
+                    let found = content_match(
+                        &outcome.path,
+                        &outcome.text,
+                        &outcome.lines,
+                        start,
+                        end,
+                        self.params,
+                    );
+                    debug_assert_eq!(bytes, content_match_bytes(&found));
                     self.matches.push(found);
                 }
                 if outcome.matches_truncated {
@@ -466,7 +476,9 @@ impl<'a> ResultAccumulator<'a> {
 
 struct FileOutcome {
     path: String,
-    matches: Vec<ContentMatch>,
+    text: String,
+    lines: Vec<LineRange>,
+    matches: Vec<(usize, usize)>,
     count: u64,
     matches_truncated: bool,
 }
@@ -475,6 +487,8 @@ impl FileOutcome {
     fn empty(path: &str) -> Self {
         Self {
             path: path.to_owned(),
+            text: String::new(),
+            lines: Vec::new(),
             matches: Vec::new(),
             count: 0,
             matches_truncated: false,
@@ -590,6 +604,11 @@ fn search_file(
         if cancelled.load(Ordering::Acquire) {
             return false;
         }
+        // grep's byte matcher permits empty matches inside UTF-8 codepoints.
+        // Such offsets are not valid text matches or safe Rust string slices.
+        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            return true;
+        }
         count.set(count.get().saturating_add(1));
         if params.output_mode == ContentSearchOutputMode::Content {
             if ranges.len() < match_limit {
@@ -618,13 +637,15 @@ fn search_file(
             }
         }
     }
-    let matches = ranges
-        .into_iter()
-        .map(|(start, end)| content_match(path, text, &lines, start, end, params))
-        .collect();
     FileOutcome {
         path: path.to_owned(),
-        matches,
+        text: if ranges.is_empty() {
+            String::new()
+        } else {
+            text.to_owned()
+        },
+        lines: if ranges.is_empty() { Vec::new() } else { lines },
+        matches: ranges,
         count: count.get(),
         matches_truncated: truncated.get(),
     }
@@ -690,6 +711,44 @@ fn content_match(
     }
 }
 
+fn content_match_size(
+    path: &str,
+    text: &str,
+    lines: &[LineRange],
+    start: usize,
+    end: usize,
+    params: &ContentSearchParams,
+) -> usize {
+    let first = line_index_at(lines, start);
+    let last = line_index_at(lines, end);
+    let line_bytes = |index: usize| {
+        clipped_utf8_len(
+            &text[lines[index].start..lines[index].content_end],
+            MAX_LINE_BYTES,
+        )
+    };
+    path.len()
+        + line_bytes(first)
+        + clipped_utf8_len(&text[start..end], MAX_CAPTURE_BYTES)
+        + (first.saturating_sub(params.lines_before as usize)..first)
+            .map(line_bytes)
+            .sum::<usize>()
+        + ((last + 1)..(last + params.lines_after as usize + 1).min(lines.len()))
+            .map(line_bytes)
+            .sum::<usize>()
+}
+
+fn clipped_utf8_len(value: &str, maximum: usize) -> usize {
+    if value.len() <= maximum {
+        return value.len();
+    }
+    let mut end = maximum;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    end + '…'.len_utf8()
+}
+
 fn line_index_at(lines: &[LineRange], offset: usize) -> usize {
     lines
         .partition_point(|line| line.start <= offset)
@@ -739,6 +798,44 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn round7_unicode_empty_matches_never_slice_inside_a_codepoint() {
+        for multiline in [false, true] {
+            let mut params = parameters(ContentSearchOutputMode::Content);
+            params.pattern = "a*".to_owned();
+            params.pattern_kind = ContentSearchPatternKind::RegularExpression;
+            params.multiline = multiline;
+            let matcher = compile_matcher(&params).unwrap();
+            let outcome = search_file(
+                "unicode.txt",
+                "é",
+                &matcher,
+                &params,
+                100,
+                &AtomicBool::new(false),
+            );
+            assert_eq!(outcome.count, 2);
+        }
+    }
+
+    #[test]
+    fn round7_buffers_match_locations_without_copying_megabytes_of_repeated_context() {
+        let mut params = parameters(ContentSearchOutputMode::Content);
+        params.lines_before = 20;
+        params.lines_after = 20;
+        let text = format!("needle {}\n", "x".repeat(2048)).repeat(80);
+        let matcher = compile_matcher(&params).unwrap();
+        let outcome = search_file(
+            "context.txt",
+            &text,
+            &matcher,
+            &params,
+            100,
+            &AtomicBool::new(false),
+        );
+        assert!(serde_json::to_vec(&outcome.matches).unwrap().len() <= MAX_RESULT_TEXT_BYTES);
+    }
+
     fn parameters(output_mode: ContentSearchOutputMode) -> ContentSearchParams {
         ContentSearchParams {
             pattern: "needle".to_owned(),
@@ -754,6 +851,31 @@ mod tests {
             limit: 100,
             offset: 0,
         }
+    }
+
+    #[test]
+    fn round7_materializes_only_budgeted_context_and_resumes_the_next_match() {
+        let text = format!("needle {}\n", "x".repeat(2048)).repeat(80);
+        let (_directory, search) = context(&[("context.txt", &text)]);
+        let mut params = parameters(ContentSearchOutputMode::Content);
+        params.lines_before = 20;
+        params.lines_after = 20;
+        let ContentSearchResult::Content { matches, metadata } = search
+            .search(params.clone(), &AtomicBool::new(false))
+            .unwrap()
+        else {
+            panic!("content expected");
+        };
+        assert!(matches.iter().map(content_match_bytes).sum::<usize>() <= MAX_RESULT_TEXT_BYTES);
+        assert!(metadata.truncated);
+        assert!(!matches.is_empty());
+        params.offset = metadata.next_offset.unwrap();
+        let ContentSearchResult::Content { matches: next, .. } =
+            search.search(params, &AtomicBool::new(false)).unwrap()
+        else {
+            panic!("content expected");
+        };
+        assert_eq!(next[0].line, matches.last().unwrap().line + 1);
     }
 
     fn context(files: &[(&str, &str)]) -> (tempfile::TempDir, ContentSearchContext) {

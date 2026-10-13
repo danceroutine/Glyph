@@ -116,7 +116,9 @@ async function main(): Promise<void> {
   const session = new OpenAISession(store, authentication, configuration.openAI, shutdown.signal);
   const proposalReviews = new ProposalReviewManager(
     workspace,
-    new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', projectContext.id)),
+    new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', projectContext.id), {
+      mutationScope: projectContext.mutationIdentity,
+    }),
     logger,
     configuration.editing.maxActiveReviews,
     projectContext.mutationIdentity,

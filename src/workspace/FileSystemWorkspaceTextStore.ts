@@ -364,7 +364,8 @@ function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string)
   const content = byteOrderMark ? bytes.subarray(3) : bytes;
   let text: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(content);
+    // The encoding marker was removed above; a second U+FEFF is document text.
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
   } catch (error) {
     throw new EditError(EditFailureReason.UNSUPPORTED, 'File is not valid UTF-8.', { path }, { cause: error });
   }

@@ -39,6 +39,7 @@ import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTe
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { EditorWorkspaceTextStore } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
+import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
 import type { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphDesktopWorkspaceRuntimeFactory } from './GlyphDesktopWorkspaceRuntimeFactory.ts';
@@ -60,17 +61,27 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     }));
     const configuration = this.configuration;
     const roots = await Promise.all(
-      input.roots.map(async root => ({ name: root.name, path: await realpath(root.canonicalPath) })),
+      input.roots.map(async root => ({
+        name: getGlyphWorkspaceRootId(root, input.roots),
+        path: await realpath(root.canonicalPath),
+      })),
     );
     const root = roots[0];
     if (!root) throw new Error('A local workspace root is required.');
     const kind = roots.length === 1 ? ProjectContextKind.FOLDER : ProjectContextKind.WORKSPACE;
     const authority = 'file';
+    const containerIdentity = `${input.identity.profileId}:${input.identity.workspaceId}`;
+    // Electron's workspace id identifies the container even when its folder
+    // count changes. Root shape belongs in mutation authority, not chat identity.
+    const id = ProjectContextIdentity.create(ProjectContextKind.WORKSPACE, authority, containerIdentity);
+    const legacyFolderId = ProjectContextIdentity.create(ProjectContextKind.FOLDER, authority, containerIdentity);
+    // Keep existing scoped reviews and shell permissions at their original paths.
+    const mutationStorageId = ProjectContextIdentity.create(kind, authority, containerIdentity);
     const context = {
-      id: ProjectContextIdentity.create(kind, authority, `${input.identity.profileId}:${input.identity.workspaceId}`),
+      id,
       mutationIdentity: ProjectContextIdentity.createMutationScope(kind, authority, roots),
       kind,
-      name: root.name,
+      name: input.roots[0]!.name,
       authority,
       roots,
     };
@@ -140,7 +151,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           );
     const reviews = new ProposalReviewManager(
       workspace,
-      new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', context.id), {
+      new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', mutationStorageId), {
         mutationScope: context.mutationIdentity,
       }),
       logger,
@@ -152,7 +163,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const shells = new ShellSessionManager(
       new ShellCommandAuthorizer(
         context.mutationIdentity,
-        new FileShellPermissionStore(join(configuration.stateDirectory, 'projects', context.id)),
+        new FileShellPermissionStore(join(configuration.stateDirectory, 'projects', mutationStorageId)),
         interactions,
       ),
       new ShellWorkingDirectoryResolver(context),
@@ -190,7 +201,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       reviews,
       new ContextAttachmentService(workspace, configuration.contextAttachments),
       index,
-      new ChatSessionManager(new SqliteChatSessionStore(configuration.stateDirectory), context),
+      new ChatSessionManager(
+        new SqliteChatSessionStore(configuration.stateDirectory, {
+          contextMigration: { targetId: id, sourceIds: [legacyFolderId] },
+        }),
+        context,
+      ),
     );
     try {
       await glyph.initialize();

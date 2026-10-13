@@ -9,6 +9,24 @@ import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.
 import type { WorkspacePathIndexState } from '#src/context/search/WorkspacePathIndexState.js';
 
 describe(MultiRootWorkspacePathIndex, () => {
+  it.each(['app', '🧪/app'])(
+    '[round11-03] offsets native code-point highlights through an emoji root for %s',
+    async query => {
+      const native = new FixtureIndex('root', 'app.ts', 10);
+      vi.spyOn(native, 'search').mockResolvedValue({
+        generation: 1,
+        query: 'app',
+        fileCount: 1,
+        matches: [{ path: 'app.ts', score: 10, indices: [0, 1, 2] }],
+      });
+      const index = new MultiRootWorkspacePathIndex('workspace', [{ name: '🧪', index: native }]);
+      const result = await index.search(query, { generation: 1 });
+      expect(result.matches[0]).toEqual({ path: '🧪/app.ts', score: 10, indices: [2, 3, 4] });
+      const match = result.matches[0]!;
+      expect(match.indices.map(position => Array.from(match.path)[position]).join('')).toBe('app');
+    },
+  );
+
   it('[round3-04] returns the requested match at the maximum offset without fetching an invalid extra page', async () => {
     const api = new FixtureIndex('api', 'file.ts', 1);
     const search = vi.spyOn(api, 'searchContents').mockImplementation(async (_pattern, options) => {

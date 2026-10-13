@@ -281,6 +281,33 @@ describe(TerminalUI, () => {
       );
     });
 
+    it('[round11-02] sanitizes the complete tool error including codes, messages, and nested details in plain output', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      try {
+        ui.push({
+          type: ChatResponsePartType.TOOL,
+          activity: {
+            phase: ToolActivityPhase.COMPLETED,
+            name: 'read',
+            callId: 'call',
+            arguments: '',
+            output: JSON.stringify({
+              error: {
+                code: '\u001b[35mEXCLUDED\u001b[0m',
+                message: 'Denied\u0007',
+                path: '.env\u001b[35msecret\u001b[0m',
+                details: ['one\u202etwo'],
+              },
+            }),
+          },
+        });
+        expect(output.value).toBe('[read ×]\n  Error: EXCLUDED: Denied (path=.envsecret; details=one\\u202etwo)\n');
+      } finally {
+        ui.close();
+      }
+    });
+
     it('hides successful tool arguments and output in redirected output', () => {
       const input = new PassThrough();
       const output = new MemoryOutput(false);

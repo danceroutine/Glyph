@@ -24,6 +24,31 @@ const peer = { ...owner, windowId: 'peer' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(GlyphDesktopHost, () => {
+  it('[round7-01] drains the owning runtime when trust is revoked and rejects further mutations', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.receive('owner', owner, 'revoke', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    expect.soft(fixture.runtime.connectionLost).toHaveBeenCalledWith(owner.windowId);
+    expect.soft(fixture.runtime.dispose).toHaveBeenCalledOnce();
+    await fixture.receive('owner', owner, 'accept', {
+      type: GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM,
+      chatId: 'chat',
+      proposalId: 'proposal',
+      itemId: 'item',
+    });
+    expect(errorCodes(fixture.events('owner'))).toContain('UNTRUSTED_WORKSPACE');
+    await fixture.host.dispose();
+  });
+
   it('[round2-03] never restores an older streaming snapshot over a completed run emitted during capture', async () => {
     const fixture = new HostFixture();
     fixture.connect('owner', owner);

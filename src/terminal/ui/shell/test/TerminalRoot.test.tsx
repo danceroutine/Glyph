@@ -1,6 +1,6 @@
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
 import { TerminalRoot } from '#src/terminal/ui/shell/TerminalRoot.presentational.js';
 import { WiredTerminalRoot } from '#src/terminal/ui/shell/TerminalRoot.wired.js';
@@ -9,6 +9,49 @@ import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 
 describe(TerminalRoot, () => {
   describe('rendering', () => {
+    it('[round8-10] opens a different conversation at its newest message instead of retaining the previous scroll offset', async () => {
+      const rows = (id: number, text: string) => (
+        <TerminalRoot
+          pagingActive
+          height={4}
+          entries={[{ id, content: <Text>{text}</Text> }]}
+          response={undefined}
+          interaction={<Text>prompt</Text>}
+        />
+      );
+      const view = render(rows(1, 'oldest\nsecond\nthird\nfourth\nlatest'));
+      try {
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('latest'));
+        view.stdin.write('\u001b[5~');
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('oldest'));
+        view.rerender(rows(2, 'other oldest\nsecond\nthird\nfourth\nother latest'));
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('other latest'));
+      } finally {
+        view.unmount();
+      }
+    });
+    it('[round7-11] lets Page Up reveal older transcript rows and Page Down return to the latest response', async () => {
+      const view = render(
+        <TerminalRoot
+          entries={[{ id: 1, content: <Text>{'oldest\nsecond\nthird\nfourth\nlatest'}</Text> }]}
+          height={4}
+          pagingActive
+          response={undefined}
+          interaction={<Text>prompt</Text>}
+        />,
+      );
+      try {
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('latest'));
+        view.stdin.write('\u001b[5~');
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('oldest'), { timeout: 500 });
+        expect(view.lastFrame()).toContain('prompt');
+        view.stdin.write('\u001b[6~');
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('latest'));
+      } finally {
+        view.unmount();
+      }
+    });
+
     it('lays out transcript, response, and interaction content', () => {
       const view = render(
         <TerminalRoot
@@ -153,7 +196,9 @@ describe(WiredTerminalRoot, () => {
       );
 
       expect(view.lastFrame()).toContain('Shell permission required');
-      expect(view.lastFrame()).toContain('Background terminals (1)');
+      expect(view.lastFrame()).toContain('› 1. Allow once');
+      expect(view.lastFrame()).toContain('Esc deny');
+      expect(view.lastFrame()).not.toContain('Background terminals (1)');
       expect(view.lastFrame()).not.toContain('you>');
       view.unmount();
     });

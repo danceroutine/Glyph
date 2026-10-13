@@ -188,6 +188,12 @@ export class GlyphDesktopHost {
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
   ): Promise<readonly GlyphHostEvent[]> {
     const key = getWorkspaceKey(connection.identity);
+    if (!command.trusted && connection.trusted && !connection.readOnly && connection.attached) {
+      // Trust revocation is a lifecycle boundary, not just a guard on the next
+      // send. Draining/disposal cancels runs and terminates background shells.
+      connection.trusted = false;
+      await this.detach(connection, { notifyOwner: false });
+    }
     // New authority cannot overlap a previous owner's asynchronous shutdown.
     const stopping = this.runtimeStops.get(key);
     if (stopping) await stopping;
@@ -253,7 +259,7 @@ export class GlyphDesktopHost {
         }),
       ];
     }
-    if (!connection.trusted && command.type === GlyphWorkbenchCommandType.SEND) {
+    if (!connection.trusted && isMutationCommand(command)) {
       return [
         toErrorGlyphHostEvent({
           requestId: requestId,
@@ -317,7 +323,7 @@ export class GlyphDesktopHost {
     throw new Error('Workspace state changed during snapshot capture. Retry the snapshot request.');
   }
 
-  private async detach(connection: Connection): Promise<void> {
+  private async detach(connection: Connection, options: { notifyOwner?: boolean } = {}): Promise<void> {
     const key = getWorkspaceKey(connection.identity);
     const isOwner = this.ownership.getOwnerWindowId(connection.identity) === connection.identity.windowId;
     const pendingStop = this.runtimeStops.get(key);
@@ -337,6 +343,7 @@ export class GlyphDesktopHost {
       peer.attached = false;
       peer.ready = false;
       peer.canReplay = false;
+      if (peer === connection && options.notifyOwner === false) continue;
       this.send(peer, {
         type: GlyphHostEventType.HOST_STATUS,
         status: GlyphHostStatus.DISCONNECTED,

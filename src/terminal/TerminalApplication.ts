@@ -54,7 +54,7 @@ export class TerminalApplication {
       await this.reviewPending();
 
       while (!this.shutdown.aborted) {
-        const activity = await this.nextActivity();
+        const activity = await this.nextActivity(account);
         if ('wake' in activity) {
           await this.resumeFromShellWake(activity.wake, account);
           continue;
@@ -198,6 +198,7 @@ export class TerminalApplication {
   }
 
   private activateChat(conversation: ChatSession): void {
+    conversation.setTraceEnabled(this.glyph.isTraceEnabled);
     this.conversation = conversation;
     this.shellSessions?.setOwnerChat(conversation.id);
     this.model = { slug: conversation.summary.modelSlug, name: conversation.summary.modelName };
@@ -205,15 +206,21 @@ export class TerminalApplication {
   }
 
   private async send(prompt: string, attachmentPaths: readonly string[]): Promise<void> {
+    if (this.shutdown.aborted) return;
     this.shellSessions?.setOwnerChat(this.requireConversation().id);
     this.activeRequest = new AbortController();
+    // A turn must obey application shutdown even when no interrupt handler
+    // owned its controller at the time shutdown began.
+    const signal = AbortSignal.any([this.shutdown, this.activeRequest.signal]);
     this.ui.beginAssistantResponse();
     try {
       const request = await this.glyph.resolveChatRequest(
         prompt,
         attachmentPaths.map(path => ({ path })),
       );
-      const result = await this.requireConversation().send(request, this.ui, this.activeRequest.signal);
+      signal.throwIfAborted();
+      const result = await this.requireConversation().send(request, this.ui, signal);
+      if (this.shutdown.aborted) return;
       this.ui.showTurnCompleted(result.durationMs, result.usage);
     } catch (error) {
       if (!this.shutdown.aborted) {
@@ -222,13 +229,15 @@ export class TerminalApplication {
     } finally {
       this.activeRequest = undefined;
     }
-    await this.reviewPending();
+    if (!this.shutdown.aborted) await this.reviewPending();
   }
 
-  private async nextActivity(): Promise<
-    { action: Awaited<ReturnType<TerminalUI['nextAction']>> } | { wake: ShellWakeEvent }
-  > {
-    const pending = this.shellSessions?.takePendingWake();
+  private async nextActivity(
+    account: ChatAccount,
+  ): Promise<{ action: Awaited<ReturnType<TerminalUI['nextAction']>> } | { wake: ShellWakeEvent }> {
+    const accepts = (event: ShellWakeEvent): boolean =>
+      !event.ownerChatId || this.glyph.listChats(account).some(chat => chat.id === event.ownerChatId);
+    const pending = this.shellSessions?.peekPendingWake(accepts);
     if (pending) return { wake: pending };
     if (!this.shellSessions) {
       return {
@@ -238,6 +247,7 @@ export class TerminalApplication {
     const controller = new AbortController();
     let wake: ShellWakeEvent | undefined;
     const stop = this.shellSessions.onDidWake(event => {
+      if (!accepts(event)) return;
       wake ??= event;
       this.ui.preservePromptDraft();
       controller.abort(new Error('Background shell awakened the agent.'));
@@ -250,7 +260,6 @@ export class TerminalApplication {
       return { action };
     } catch (error) {
       if (!wake) throw error;
-      this.shellSessions.takePendingWake(wake.id);
       return { wake };
     } finally {
       stop();
@@ -258,6 +267,8 @@ export class TerminalApplication {
   }
 
   private async resumeFromShellWake(wake: ShellWakeEvent, account: ChatAccount): Promise<void> {
+    if (this.shutdown.aborted) return;
+    const previous = this.conversation;
     if (wake.ownerChatId && wake.ownerChatId !== this.conversation?.id) {
       try {
         this.activateChat(this.glyph.openChat(wake.ownerChatId, account));
@@ -266,17 +277,28 @@ export class TerminalApplication {
         return;
       }
     }
-    const conversation = this.requireConversation();
-    await conversation.recordContext([
-      {
-        schemaVersion: 1,
-        id: wake.id,
-        type: 'shell_wake',
-        payload: wake,
-      },
-    ]);
-    this.ui.showShellWake(wake);
-    await this.send('A background shell wake condition matched. Continue from the shell_wake context event.', []);
+    try {
+      const conversation = this.requireConversation();
+      await conversation.recordContext([
+        {
+          schemaVersion: 1,
+          id: wake.id,
+          type: 'shell_wake',
+          payload: wake,
+        },
+      ]);
+      // Persistence can outlive the UI. Recording a wake is not permission to
+      // start inference after the user has exited.
+      if (this.shutdown.aborted) return;
+      // Acknowledge only after the owning conversation durably records the wake.
+      this.shellSessions?.takePendingWake(wake.id);
+      this.ui.showShellWake(wake);
+      await this.send('A background shell wake condition matched. Continue from the shell_wake context event.', []);
+    } finally {
+      // The mounted draft belongs to the chat the human was using, not the
+      // background turn. Restore that chat before input becomes submittable.
+      if (!this.shutdown.aborted && previous && previous !== this.conversation) this.activateChat(previous);
+    }
   }
 
   private async reviewPending(): Promise<void> {

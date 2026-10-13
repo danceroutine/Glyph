@@ -1,5 +1,5 @@
 import type { Preview } from '@storybook/preact-vite';
-import '../ui/glyphWorkbench.css';
+import '#code-oss/ui/glyphWorkbench.css';
 import './preview.css';
 
 const preview: Preview = {

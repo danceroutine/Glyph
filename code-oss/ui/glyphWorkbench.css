@@ -19,6 +19,16 @@
   padding: 8px;
   border-top: 1px solid var(--vscode-panel-border);
 }
+.glyph-workbench .glyph-unsent {
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.glyph-workbench .glyph-unsent pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
 .glyph-workbench .glyph-context-chip {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;

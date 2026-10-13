@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
@@ -32,6 +32,106 @@ afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { r
 
 describe(ProposalReviewManager, () => {
   describe(ProposalReviewManager.prototype.accept, () => {
+    it('[round9-01] retains a successful acceptance when editor whitespace cleanup conflicts with a remaining hunk', async () => {
+      const { manager, service, workspace, store } = await fixture('first\nmiddle\n   \n');
+      const replace = workspace.replace.bind(workspace);
+      vi.spyOn(workspace, 'replace').mockImplementation((path, revision, text, bom) =>
+        replace(path, revision, text.replace('   \n', '\n'), bom),
+      );
+      const proposal = await proposeLineChanges(service, workspace, [
+        { line: 0, expected: 'first', replacement: 'FIRST' },
+        { line: 2, expected: '   ', replacement: 'last' },
+      ]);
+      await manager.stage(proposal);
+      const file = proposal.files[0]!;
+      await manager.accept(file.items[0]!.id);
+      expect(file.items[0]!.decision).toBe(EditDecisionState.ACCEPTED);
+      expect(file.applicability).toBe(EditApplicabilityState.STALE);
+      const recovered = new ProposalReviewManager(workspace, store);
+      await recovered.initialize();
+      expect(recovered.activeReviews[0]!.files[0]!.items[0]!.decision).toBe(EditDecisionState.ACCEPTED);
+      await expect(recovered.accept(file.items[1]!.id)).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      await recovered.rejectAll();
+      expect((await workspace.read('file.txt')).text).toBe('FIRST\nmiddle\n\n');
+      expect(recovered.pendingResults.flatMap(result => result.items.map(item => item.decision))).toEqual([
+        EditDecisionState.ACCEPTED,
+        EditDecisionState.REJECTED,
+      ]);
+    });
+    it('[round8-08] applies both the rename and the BOM change when text is otherwise identical', async () => {
+      const { manager, service, workspace, root } = await fixture('same\n');
+      const base = await workspace.read('file.txt');
+      const proposal = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.RENAME,
+            path: 'file.txt',
+            new_path: 'renamed.txt',
+            base_revision: base.revision,
+            content: base.text,
+            byte_order_mark: true,
+            edits: [],
+          },
+        ],
+      });
+      await manager.stage(proposal);
+      await manager.acceptAll();
+      expect(await readFile(join(root, 'renamed.txt'), 'utf8')).toBe('\uFEFFsame\n');
+    });
+    it('[round8-02] retries the observed normalized edit checkpoint before allowing rejection of remaining hunks', async () => {
+      const { manager, service, workspace, store } = await fixture('first\r\nmiddle\r\nlast\r\n');
+      const replace = workspace.replace.bind(workspace);
+      let applied = false;
+      vi.spyOn(workspace, 'replace').mockImplementation(async (path, revision, text, bom) => {
+        const result = await replace(path, revision, text.replace(/\r\n|\r|\n/g, '\r\n'), bom);
+        applied = true;
+        return result;
+      });
+      const proposal = await proposeLineChanges(service, workspace, [
+        { line: 0, expected: 'first', replacement: 'FIRST\nEXTRA' },
+        { line: 2, expected: 'last', replacement: 'LAST' },
+      ]);
+      await manager.stage(proposal);
+      const save = store.save.bind(store);
+      let writable = false;
+      vi.spyOn(store, 'save').mockImplementation((...args) => {
+        if (applied && !writable) return Promise.reject(new Error('checkpoint unavailable'));
+        return save(...args);
+      });
+      const items = proposal.files[0]!.items;
+      await expect(manager.accept(items[0]!.id)).rejects.toThrow('checkpoint unavailable');
+      expect(manager.pendingResults).toEqual([]);
+      // Retry the failed checkpoint before deciding the remaining pending hunk.
+      await expect(manager.rejectAll()).rejects.toThrow('checkpoint unavailable');
+      expect(items[1]!.decision).toBe(EditDecisionState.PENDING);
+      writable = true;
+      await manager.rejectAll();
+      expect(items[0]!.decision).toBe(EditDecisionState.ACCEPTED);
+      expect(items[1]!.decision).toBe(EditDecisionState.REJECTED);
+      expect((await workspace.read('file.txt')).text).toContain('FIRST\r\nEXTRA');
+      expect(manager.pendingResults.flatMap(result => result.items.map(item => item.decision))).toContain(
+        EditDecisionState.ACCEPTED,
+      );
+    });
+    it('[round7-03] rebases remaining hunks against the actual CRLF text returned by an editor mutation', async () => {
+      const { manager, service, workspace } = await fixture('first\r\nmiddle\r\nlast\r\n');
+      const replace = workspace.replace.bind(workspace);
+      vi.spyOn(workspace, 'replace').mockImplementation((path, revision, text, bom) =>
+        replace(path, revision, text.replace(/\r\n|\r|\n/g, '\r\n'), bom),
+      );
+      const proposal = await proposeLineChanges(service, workspace, [
+        { line: 0, expected: 'first', replacement: 'FIRST\nEXTRA' },
+        { line: 2, expected: 'last', replacement: 'LAST' },
+      ]);
+      await manager.stage(proposal);
+      const items = proposal.files[0]!.items;
+      expect(items).toHaveLength(2);
+      await manager.accept(items[0]!.id);
+      expect(items[0]!.decision).toBe(EditDecisionState.ACCEPTED);
+      await manager.accept(items[1]!.id);
+      expect((await workspace.read('file.txt')).text).toBe('FIRST\r\nEXTRA\r\nmiddle\r\nLAST\r\n');
+    });
+
     it('merges a non-overlapping human edit made after the proposal was staged', async () => {
       const { root, manager, service, workspace } = await fixture('first\nmiddle\nlast\n');
       const proposal = await proposeLineChanges(service, workspace, [
@@ -263,8 +363,9 @@ async function fixture(text: string) {
   await writeFile(join(root, 'file.txt'), text);
   const workspace = new FileSystemWorkspaceTextStore(root);
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
-  const manager = new ProposalReviewManager(workspace, new FileProposalReviewStore(state), new NullLogger(), 8);
-  return { root, state, workspace, service, manager };
+  const store = new FileProposalReviewStore(state);
+  const manager = new ProposalReviewManager(workspace, store, new NullLogger(), 8);
+  return { root, state, workspace, service, manager, store };
 }
 
 function agentSource(index: number): string {

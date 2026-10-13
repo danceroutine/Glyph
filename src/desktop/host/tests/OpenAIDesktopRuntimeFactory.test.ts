@@ -13,8 +13,210 @@ import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { EnvironmentConfigurationProvider } from '#src/configuration/EnvironmentConfigurationProvider.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
+import { SqliteChatSessionStore } from '#src/chat/sessions/SqliteChatSessionStore.js';
+import { ProjectContextIdentity } from '#src/project/context/ProjectContextIdentity.js';
+import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
+import { OpenAIBackend } from '#src/providers/openai/OpenAIBackend.js';
+import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
 
 describe(OpenAIDesktopRuntimeFactory, () => {
+  it.each(['My Project', 'café'])(
+    '[round9-03] reopens the pre-routing checkpoint for an unchanged %s root',
+    async name => {
+      const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-compatible-root-')));
+      const root = join(directory, 'workspace');
+      const state = join(directory, 'state');
+      await mkdir(root);
+      await writeFile(join(root, 'file.txt'), 'original');
+      vi.stubEnv('GLYPH_CONFIG_DIR', state);
+      vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
+      let recoveredIds: readonly string[] = [];
+      vi.spyOn(GlyphService.prototype, 'initialize').mockImplementation(async function (this: GlyphService) {
+        await this.proposalReviews?.initialize();
+        recoveredIds = this.proposalReviews!.activeReviews.map(review => review.id);
+      });
+      const workspace = new FileSystemWorkspaceTextStore(root);
+      const service = new EditProposalService(
+        workspace,
+        new JsDiffTextDiffer(),
+        new EnvironmentConfigurationProvider().editing,
+        new NullLogger(),
+      );
+      const base = await workspace.read('file.txt');
+      const proposal = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.UPDATE,
+            path: 'file.txt',
+            new_path: null,
+            base_revision: base.revision,
+            content: null,
+            byte_order_mark: null,
+            edits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 8 } },
+                expected_text: 'original',
+                replacement_text: 'changed',
+              },
+            ],
+          },
+        ],
+      });
+      const identity = ProjectContextIdentity.create(ProjectContextKind.FOLDER, 'file', 'profile:workspace');
+      const scope = ProjectContextIdentity.createMutationScope(ProjectContextKind.FOLDER, 'file', [
+        { name, path: root },
+      ]);
+      await new FileProposalReviewStore(join(state, 'projects', identity), { mutationScope: scope }).save(
+        [proposal],
+        scope,
+      );
+      const editors = new EditorRpcRouter();
+      vi.spyOn(editors, 'request').mockResolvedValue({
+        operationId: 'fixture',
+        ok: true,
+        snapshot: {
+          ...base,
+          contentRevision: base.revision,
+          uri: `file://${root}/file.txt`,
+          dirty: false,
+          token: {
+            workspaceGeneration: 'workspace',
+            resource: `file://${root}/file.txt`,
+            incarnation: 'model',
+            version: 1,
+          },
+        },
+      });
+      const factory = new OpenAIDesktopRuntimeFactory(editors);
+      let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
+      try {
+        runtime = await factory.create({
+          identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
+          roots: [{ name, canonicalPath: root, uri: `file://${root}` }],
+          emit: () => {},
+        });
+        expect(recoveredIds).toEqual([proposal.id]);
+      } finally {
+        await runtime?.dispose();
+        await factory.dispose();
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+  it('[round8-03] initializes distinct roots with duplicate display names instead of rejecting the workspace', async () => {
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-routing-')));
+    const roots = ['one', 'two'].map(value => ({
+      name: 'app',
+      canonicalPath: join(directory, value),
+      uri: `file://${directory}/${value}`,
+    }));
+    for (const root of roots) await mkdir(root.canonicalPath);
+    vi.stubEnv('GLYPH_CONFIG_DIR', join(directory, 'state'));
+    vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
+    vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
+    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+    let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
+    try {
+      runtime = await factory.create({
+        identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
+        roots,
+        emit: () => {},
+      });
+      expect(runtime).toBeDefined();
+    } finally {
+      await runtime?.dispose();
+      await factory.dispose();
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it.each([ProjectContextKind.WORKSPACE, ProjectContextKind.FOLDER])(
+    '[round6-01] preserves existing %s chats through two-to-one folder changes without exposing another workspace or profile',
+    async legacyKind => {
+      const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-chat-identity-')));
+      const state = join(directory, 'state');
+      const roots = ['A', 'B'].map(name => ({ name, path: join(directory, 'workspace', name) }));
+      for (const root of roots) await mkdir(root.path, { recursive: true });
+      vi.stubEnv('GLYPH_CONFIG_DIR', state);
+      vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
+      vi.spyOn(OpenAIBackend.prototype, 'initialize').mockResolvedValue();
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'initialize').mockResolvedValue({
+        root: directory,
+        fileCount: 0,
+        fromCache: false,
+        truncated: false,
+        durationMilliseconds: 0,
+      });
+      const store = new SqliteChatSessionStore(state);
+      const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+      let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
+      try {
+        for (const identity of [
+          'profile:saved-workspace',
+          'profile:other-workspace',
+          'other-profile:saved-workspace',
+        ]) {
+          const context = {
+            id: ProjectContextIdentity.create(legacyKind, 'file', identity),
+            kind: legacyKind,
+            mutationIdentity: ProjectContextIdentity.createMutationScope(legacyKind, 'file', roots),
+            name: 'Saved workspace',
+            authority: 'file',
+            roots,
+          };
+          await store.initialize(context);
+          await store.save({
+            schemaVersion: 3,
+            id: identity,
+            title: 'Keep my conversation',
+            titleOrigin: 'human',
+            projectContextId: context.id,
+            accountProvider: 'openai',
+            accountId: 'fixture',
+            modelSlug: 'model',
+            modelName: 'Model',
+            createdAt: '2026-10-12T00:00:00Z',
+            updatedAt: '2026-10-12T00:00:00Z',
+            providerState: { provider: 'fixture', version: 1, data: { history: ['preserve'] } },
+            transcript: [
+              {
+                userText: 'Original question',
+                assistantText: 'Original answer',
+                reasoningSummary: '',
+                attachmentPaths: [],
+                createdAt: '2026-10-12T00:00:00Z',
+              },
+            ],
+          });
+        }
+        await store.dispose();
+        for (const count of [2, 1, 2]) {
+          runtime = await factory.create({
+            identity: { profileId: 'profile', workspaceId: 'saved-workspace', windowId: 'window' },
+            roots: roots
+              .slice(0, count)
+              .map(root => ({ name: root.name, canonicalPath: root.path, uri: `file://${root.path}` })),
+            emit: () => {},
+          });
+          expect((await runtime.snapshot()).chats.map(chat => chat.id)).toEqual(['profile:saved-workspace']);
+          await runtime.dispose();
+          runtime = undefined;
+        }
+      } finally {
+        await runtime?.dispose();
+        await store.dispose();
+        await factory.dispose();
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('[round5-01] reopens a saved workspace after adding a folder while preserving the original scope pending reviews', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-review-scopes-')));
     const project = join(directory, 'workspace');

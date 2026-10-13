@@ -162,6 +162,22 @@ describe(TerminalInkRenderer, () => {
       await expect(prompt).rejects.toThrow('Session closed.');
     });
 
+    it('[round8-11] positions the real 80-column terminal cursor after a wide character wrapped to the next row', async () => {
+      const terminal = new TestTerminal();
+      const output = new TestOutput();
+      const renderer = new TerminalInkRenderer(terminal, output, output);
+      const prompt = renderer.prompt('you> ', new AbortController().signal);
+      try {
+        await waitUntil(() => terminal.isRaw);
+        const offset = output.value.length;
+        terminal.push(`${'a'.repeat(72)}界`);
+        await waitUntil(() => output.value.slice(offset).includes('\u001B[4G\u001B[?25h'));
+      } finally {
+        renderer.close();
+        await expect(prompt).rejects.toThrow('Session closed.');
+      }
+    });
+
     it('waits for the bottom rail measurement before placing the cursor after a chat switch', async () => {
       const terminal = new TestTerminal();
       const output = new TestOutput();
@@ -484,7 +500,7 @@ describe(TerminalInkRenderer, () => {
   });
 
   describe(TerminalInkRenderer.prototype.presentShellPermission, () => {
-    it('authorizes during a response, preserves the draft, and shows background shells', async () => {
+    it('authorizes during a response, preserves the draft, and restores background shells after approval', async () => {
       const terminal = new TestTerminal();
       const output = new TestOutput();
       const renderer = new TerminalInkRenderer(terminal, output, output);
@@ -510,11 +526,12 @@ describe(TerminalInkRenderer, () => {
         vi.fn(),
       );
       await waitUntil(() => output.value.includes('Shell permission required'));
-      expect(output.value).toContain('Background terminals');
+      expect(output.value).toContain('› 1. Allow once');
       renderer.beginResponse();
       terminal.push('2');
 
       await expect(permission).resolves.toBe(ShellPermissionDecision.ALWAYS_ALLOW);
+      await waitUntil(() => output.value.includes('Background terminals'));
       const prompt = renderer.prompt('you> ', new AbortController().signal);
       terminal.push('\r');
       await expect(prompt).resolves.toEqual({ prompt: 'draft message', attachmentPaths: [] });

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
-import { GlyphWorkbench } from '../ui/GlyphWorkbench.tsx';
+import { GlyphWorkbench } from '#code-oss/ui/GlyphWorkbench.tsx';
 import { conversation, selection, workbenchState } from './fixtures.ts';
 
 /** A local simulation for UI iteration. It never connects to the desktop host. */

@@ -7,6 +7,52 @@ import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePa
 
 describe(RustWorkspacePathIndex, () => {
   describe('protocol', () => {
+    it('[round8-05] starts a clean response stream after a worker dies mid-message and ignores late old-worker data', async () => {
+      const old = new FakeWorker(() => NO_RESPONSE);
+      const next = new FakeWorker(request =>
+        request.method === 'shutdown'
+          ? { shutdown: true }
+          : {
+              root: '/project',
+              fileCount: 1,
+              fromCache: false,
+              truncated: false,
+              durationMilliseconds: 1,
+            },
+      );
+      let starts = 0;
+      const index = new RustWorkspacePathIndex({ binaryPath: '/fixture', root: '/project', cachePath: '/cache' }, () =>
+        starts++ === 0 ? old : next,
+      );
+      const initial = index.initialize().catch(error => error);
+      old.stdout.write('{"version":');
+      old.emit('exit', 1, null);
+      await initial;
+      try {
+        const replacement = index.initialize();
+        old.stdout.write('late broken response\n');
+        await expect(replacement).resolves.toMatchObject({ fileCount: 1 });
+      } finally {
+        await index.dispose();
+      }
+    });
+    it('[round7-02] consumes worker stdin errors and rejects outstanding requests instead of crashing the host', async () => {
+      const worker = new FakeWorker(() => NO_RESPONSE);
+      const index = new RustWorkspacePathIndex(
+        { binaryPath: '/fixture', root: '/project', cachePath: '/cache' },
+        () => worker,
+      );
+      const pending = index.initialize().catch(error => error);
+      try {
+        expect(() => worker.stdin.emit('error', new Error('EPIPE'))).not.toThrow();
+        expect(await pending).toMatchObject({ message: 'EPIPE' });
+      } finally {
+        worker.emit('error', new Error('fixture cleanup'));
+        await pending;
+        await index.dispose();
+      }
+    });
+
     it('uses the versioned JSONL protocol over one persistent worker', async () => {
       const worker = new FakeWorker(request => {
         switch (request.method) {

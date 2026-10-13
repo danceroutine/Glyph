@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCursor, useInput, usePaste, useWindowSize } from 'ink';
-import stringWidth from 'string-width';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
 import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 import type { FileSearchMatch } from '#src/context/search/FileSearchMatch.js';
@@ -10,8 +10,11 @@ import type { PromptRequest } from './PromptRequest.ts';
 import { editPrompt } from './PromptEditing.ts';
 import { formatPromptText } from './formatPromptText.ts';
 import { PromptLayout } from './PromptLayout.ts';
+import { getPromptViewport } from './getPromptViewport.ts';
 
 const SEARCH_LIMIT = 10;
+// Prompt components remount after each turn; the index worker does not.
+const searchGenerations = new WeakMap<WorkspacePathIndex, number>();
 
 /** Complete rendering contract produced by the prompt's interactive state hook. */
 export interface PromptEditorState {
@@ -25,6 +28,7 @@ export interface PromptEditorState {
   commandMatches: readonly TerminalCommand[];
   selectedMatch: number;
   searchError: string;
+  viewport?: ReturnType<typeof getPromptViewport>;
 }
 
 export interface UsePromptEditorStateOptions {
@@ -55,7 +59,7 @@ export function usePromptEditorState({
   const commandQuery = activeSlashCommand(text, cursor);
   const commandMatches =
     commandQuery && commandQuery.signature !== dismissedCompletion ? searchTerminalCommands(commandQuery.query) : [];
-  const { columns } = useWindowSize();
+  const { columns, rows } = useWindowSize();
   const { setCursorPosition } = useCursor();
 
   useEffect(() => {
@@ -66,7 +70,9 @@ export function usePromptEditorState({
       setSearchError('');
       return;
     }
-    const currentGeneration = ++generation.current;
+    const currentGeneration = (searchGenerations.get(files) ?? 0) + 1;
+    searchGenerations.set(files, currentGeneration);
+    generation.current = currentGeneration;
     const controller = new AbortController();
     void files
       .search(mention.query, { generation: currentGeneration, limit: SEARCH_LIMIT, signal: controller.signal })
@@ -86,12 +92,23 @@ export function usePromptEditorState({
   }, [dismissedCompletion, mentionSignature, request.files]);
 
   const visiblePrefix = `${request.label}${sanitizeText(promptText.cursorPrefix)}`;
-  const width = Math.max(1, columns - PromptLayout.railHorizontalPadding * 2);
-  const cursorWidth = stringWidth(visiblePrefix);
+  const completionCount = commandQuery ? commandMatches.length : matches.length;
+  const viewport = getPromptViewport({
+    text: request.label + promptText.segments.map(segment => sanitizeText(segment.value)).join(''),
+    prefix: visiblePrefix,
+    columns,
+    rows,
+    overhead:
+      2 +
+      Number(pendingChanges > 0) +
+      Number(!request.acceptsSubmission) +
+      Math.min(3, completionCount) +
+      Number(Boolean(searchError)),
+  });
   if (active && railTop !== undefined) {
     setCursorPosition({
-      x: PromptLayout.railHorizontalPadding + (cursorWidth % width),
-      y: PromptLayout.railCursorY(railTop, pendingChanges, request.acceptsSubmission) + Math.floor(cursorWidth / width),
+      x: PromptLayout.railHorizontalPadding + viewport.cursorX,
+      y: PromptLayout.railCursorY(railTop, pendingChanges, request.acceptsSubmission) + viewport.cursorY,
     });
   }
 
@@ -190,6 +207,7 @@ export function usePromptEditorState({
     commandMatches,
     selectedMatch,
     searchError,
+    viewport,
   };
 }
 

@@ -15,7 +15,10 @@ const config: StorybookConfig = {
       // editable TypeScript sources without building Glyph or Code OSS first.
       resolve: {
         dedupe: ['preact'],
-        alias: { '#src': fileURLToPath(new URL('../../src', import.meta.url)) },
+        alias: {
+          '#src': fileURLToPath(new URL('../../src', import.meta.url)),
+          '#code-oss': fileURLToPath(new URL('..', import.meta.url)),
+        },
       },
     });
   },

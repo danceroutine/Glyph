@@ -31,7 +31,7 @@ export function ToolActivity({ activity, frame = 0 }: ToolActivityProps): ReactE
     <Box flexDirection="column">
       <ToolTag name={name} icon="×" statusBackground={TOOL_STATUS_ERROR_BACKGROUND} statusForeground="whiteBright" />
       {argumentsText ? <Text dimColor>{indent(argumentsText)}</Text> : null}
-      <Text color="red">{`  ${result.message}`}</Text>
+      <Text color="red">{`  ${sanitizeText(result.message)}`}</Text>
     </Box>
   );
 }

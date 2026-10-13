@@ -80,6 +80,31 @@ describe('proposal review entries', () => {
 });
 
 describe(renderEntry, () => {
+  it.each([ReviewViewMode.FOCUSED, ReviewViewMode.FULL_FILE])(
+    '[round9-06] renders a 150000-line file in %s mode without argument-limit errors',
+    mode => {
+      const fixture = createProposalReviewFixture();
+      const file = fixture.proposal.files[0]!;
+      const text = 'a\n'.repeat(150000);
+      file.base = { ...file.base!, text };
+      file.current = file.base;
+      file.proposed = { ...file.proposed, text: 'b\n' + text.slice(2) };
+      const item = { ...file.items[0]!, sourceEnd: 1, removedText: 'a', insertedText: 'b' };
+      file.items.splice(0, file.items.length, item);
+      expect(() => renderEntry(file, item, mode, false)).not.toThrow();
+    },
+  );
+  it('[round8-06] renders a focused review of a 75000-line file without overflowing the argument stack', () => {
+    const fixture = createProposalReviewFixture();
+    const file = fixture.proposal.files[0]!;
+    const text = 'a\n'.repeat(75000);
+    file.base = { ...file.base!, text };
+    file.current = file.base;
+    file.proposed = { ...file.proposed, text: 'b\n' + text.slice(2) };
+    const item = { ...file.items[0]!, sourceEnd: 1, removedText: 'a', insertedText: 'b' };
+    file.items.splice(0, file.items.length, item);
+    expect(() => renderEntry(file, item, ReviewViewMode.FOCUSED, false)).not.toThrow();
+  });
   it('renders focused and full-file rename views, including an empty file', () => {
     const { file, item } = reviewFixture();
     const rename = { ...item, kind: EditReviewItemKind.RENAME };

@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react';
-import { useCursor, useInput, usePaste } from 'ink';
+import { useCursor, useInput, usePaste, useWindowSize } from 'ink';
 import type { QuestionAnswer } from '#src/interaction/questions/QuestionAnswer.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
 import type { Question } from '#src/interaction/questions/Question.js';
 import type { QuestionFormRequest } from './QuestionFormRequest.ts';
+import { getQuestionViewport } from './getQuestionViewport.ts';
 
 export interface QuestionFormState {
   readonly title: string | undefined;
@@ -16,6 +17,7 @@ export interface QuestionFormState {
   readonly otherText: string;
   readonly otherCursor: number;
   readonly diagnostic: string;
+  readonly scrollOffset?: number;
 }
 
 export interface UseQuestionFormStateOptions {
@@ -25,6 +27,7 @@ export interface UseQuestionFormStateOptions {
 
 /** Owns keyboard interaction and answer progression for a terminal question form. */
 export function useQuestionFormState({ request, active = true }: UseQuestionFormStateOptions): QuestionFormState {
+  const { rows, columns } = useWindowSize();
   const { setCursorPosition } = useCursor();
   setCursorPosition(undefined);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -34,6 +37,9 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
   const [otherText, setOtherText] = useState('');
   const [otherCursor, setOtherCursor] = useState(0);
   const [diagnostic, setDiagnostic] = useState('');
+  // Open at the question's beginning. Navigation opts back into following the
+  // selected option; paging can then inspect any part of the question again.
+  const [scrollOffset, setScrollOffset] = useState<number | undefined>(0);
   const answers = useRef<QuestionAnswer[]>([]);
   const question = request.form.questions[questionIndex]!;
   const otherOption = question.options.length;
@@ -45,6 +51,7 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
     setOtherText('');
     setOtherCursor(0);
     setDiagnostic('');
+    setScrollOffset(0);
   };
 
   const answer = (value: QuestionAnswer): void => {
@@ -83,6 +90,7 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
   };
 
   const updateOtherText = (text: string, cursor: number): void => {
+    setScrollOffset(undefined);
     setOtherText(text);
     setOtherCursor(cursor);
     setDiagnostic('');
@@ -106,7 +114,20 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
         request.interrupt();
         return;
       }
+      const viewport = getQuestionViewport({ ...state, rows, columns });
+      if (key.pageUp || key.pageDown) {
+        const delta = Math.max(1, viewport.height - 1) * (key.pageDown ? 1 : -1);
+        setScrollOffset(Math.max(0, Math.min(viewport.maximumOffset, viewport.offset + delta)));
+        return;
+      }
+      // Never confirm a choice while paging has hidden it. The first Enter
+      // returns to the selection, and a subsequent Enter confirms it.
+      if (key.return && !viewport.focusVisible) {
+        setScrollOffset(undefined);
+        return;
+      }
       if (enteringOther) {
+        setScrollOffset(undefined);
         if (key.escape) {
           setEnteringOther(false);
           setDiagnostic('');
@@ -134,14 +155,17 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
         return;
       }
       if (key.upArrow) {
+        setScrollOffset(undefined);
         setHighlightedOption(index => Math.max(0, index - 1));
         return;
       }
       if (key.downArrow) {
+        setScrollOffset(undefined);
         setHighlightedOption(index => Math.min(otherOption, index + 1));
         return;
       }
       if (input === ' ' && question.allowMultiple && highlightedOption < otherOption) {
+        setScrollOffset(undefined);
         const optionId = question.options[highlightedOption]!.id;
         setSelectedOptionIds(selected =>
           selected.includes(optionId) ? selected.filter(id => id !== optionId) : [...selected, optionId],
@@ -154,7 +178,7 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
     { isActive: active },
   );
 
-  return {
+  const state: QuestionFormState = {
     title: request.form.title,
     question,
     questionNumber: questionIndex + 1,
@@ -165,7 +189,9 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
     otherText,
     otherCursor,
     diagnostic,
+    ...(scrollOffset === undefined ? {} : { scrollOffset }),
   };
+  return state;
 }
 
 function isPrintableInput(input: string, control: boolean, meta: boolean): boolean {

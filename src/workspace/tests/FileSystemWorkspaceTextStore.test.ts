@@ -15,6 +15,15 @@ afterEach(async () => {
 
 describe(FileSystemWorkspaceTextStore, () => {
   describe(FileSystemWorkspaceTextStore.prototype.read, () => {
+    it('[round9-02] preserves a literal leading U+FEFF after the encoding BOM during an unrelated edit', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'workspace-double-bom-'));
+      directories.push(root);
+      await writeFile(join(root, 'text.txt'), Buffer.from('efbbbfefbbbf61', 'hex'));
+      const store = new FileSystemWorkspaceTextStore(root);
+      const before = await store.read('text.txt');
+      await store.replace('text.txt', before.revision, `${before.text}!`, before.byteOrderMark);
+      expect((await readFile(join(root, 'text.txt'))).toString('hex')).toBe('efbbbfefbbbf6121');
+    });
     it('accepts an exact byte budget and rejects oversized UTF-8 input before decoding', async () => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-budget-'));
       directories.push(root);

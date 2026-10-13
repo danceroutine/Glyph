@@ -15,6 +15,35 @@ afterEach(async () => {
 });
 
 describe(SqliteChatSessionStore, () => {
+  it('[round6-01] merges legacy context chats without changing their transcripts or provider state and can repeat the migration', async () => {
+    const directory = await fixture('glyph-chat-context-migration-');
+    const first = await ProjectContextResolver.folder(await fixture('glyph-old-context-'), 'local');
+    const target = await ProjectContextResolver.folder(await fixture('glyph-new-context-'), 'local');
+    const seed = new SqliteChatSessionStore(directory);
+    const existing = { ...record(target.id), id: 'already-current' };
+    try {
+      await seed.initialize(first);
+      await seed.initialize(target);
+      await seed.save(record(first.id));
+      await seed.save(existing);
+    } finally {
+      await seed.dispose();
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const store = new SqliteChatSessionStore(directory, {
+        contextMigration: { targetId: target.id, sourceIds: [first.id] },
+      });
+      try {
+        await store.initialize(target);
+        expect(await store.load(target.id)).toEqual(expect.arrayContaining([record(target.id), existing]));
+        expect(await store.load(target.id)).toHaveLength(2);
+        expect(await store.load(first.id)).toEqual([]);
+      } finally {
+        await store.dispose();
+      }
+    }
+  });
+
   it('persists individual chats, indexes them by project context, and uses owner-only permissions', async () => {
     const directory = await fixture('glyph-chat-store-');
     const firstRoot = await fixture('glyph-chat-project-');

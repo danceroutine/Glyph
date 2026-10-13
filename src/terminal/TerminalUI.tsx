@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline/promises';
 import type { Interface } from 'node:readline/promises';
-import { stripVTControlCharacters } from 'node:util';
+import { sanitizeText as clean } from '#src/terminal/ui/shared/sanitizeText.js';
 import { Box, Text } from 'ink';
 import type { ChatAccount, ChatAccountNotice } from '#src/chat/ChatAccount.js';
 import type { ChatAuthorizationRequest } from '#src/chat/ChatAuthorizationRequest.js';
@@ -589,7 +589,7 @@ ${TERMINAL_HELP}`);
     }
     const argumentsText = clean(activity.arguments).trimEnd();
     const details = argumentsText ? `\n${indent(argumentsText)}` : '';
-    this.output.write(`${prefix}[${name} ×]${details}\n  ${result.message}\n`);
+    this.output.write(`${prefix}[${name} ×]${details}\n  ${clean(result.message)}\n`);
   }
 
   private readonly forwardInterrupt = (): void => {
@@ -598,15 +598,6 @@ ${TERMINAL_HELP}`);
   private readonly handleInputClosed = (): void => {
     this.events.emit('close');
   };
-}
-
-function clean(text: string): string {
-  return stripVTControlCharacters(text)
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
-    .replace(
-      /[\u202a-\u202e\u2066-\u2069]/g,
-      character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
-    );
 }
 
 function formatUsage(usage: Usage): string {

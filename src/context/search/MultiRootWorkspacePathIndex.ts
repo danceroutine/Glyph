@@ -45,13 +45,15 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     );
     const limit = options.limit ?? 20;
     const matches = results
-      .flatMap(({ name, result }) =>
-        result.matches.map(match => ({
+      .flatMap(({ name, result }) => {
+        // Native match positions count code points, not UTF-16 code units.
+        const prefixLength = Array.from(name).length + 1;
+        return result.matches.map(match => ({
           ...match,
           path: `${name}/${match.path}`,
-          indices: match.indices.map(index => index + name.length + 1),
-        })),
-      )
+          indices: match.indices.map(index => index + prefixLength),
+        }));
+      })
       .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
       .slice(0, limit);
     return {

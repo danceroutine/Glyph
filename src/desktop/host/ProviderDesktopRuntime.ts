@@ -40,6 +40,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private models: readonly Model[] = [];
   private selectedModel: Model | undefined;
   private disposed = false;
+  private readonly commands = new Set<Promise<void>>();
   private readonly unsubscribe: (() => void) | undefined;
 
   constructor(
@@ -82,7 +83,18 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   }
 
   /** Dispatch commands without holding the request acknowledgement open for an entire model turn. */
-  async handle(command: GlyphRuntimeCommand): Promise<void> {
+  handle(command: GlyphRuntimeCommand): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error('The workspace runtime has stopped.'));
+    const pending = this.dispatch(command);
+    this.commands.add(pending);
+    void pending.then(
+      () => this.commands.delete(pending),
+      () => this.commands.delete(pending),
+    );
+    return pending;
+  }
+
+  private async dispatch(command: GlyphRuntimeCommand): Promise<void> {
     if (this.disposed) throw new Error('The workspace runtime has stopped.');
     const glyph = this.options.glyph;
     switch (command.type) {
@@ -226,6 +238,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   async dispose(): Promise<void> {
     this.disposed = true;
     await this.connectionLost(this.options.ownerWindowId);
+    // Proposal decisions checkpoint after their editor side effect. Closing
+    // persistence before those admitted commands settle would lose the outcome.
+    await Promise.allSettled(this.commands);
     this.unsubscribe?.();
     try {
       await this.options.shellSessions.dispose();

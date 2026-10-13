@@ -9,5 +9,5 @@ export interface WiredShellPermissionProps {
 }
 
 export function WiredShellPermission({ request, active = true }: WiredShellPermissionProps): ReactElement {
-  return <ShellPermission {...useShellPermissionState(request, active)} />;
+  return <ShellPermission key={request.id} {...useShellPermissionState(request, active)} active={active} />;
 }

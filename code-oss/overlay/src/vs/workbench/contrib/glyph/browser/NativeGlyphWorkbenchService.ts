@@ -91,11 +91,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         if (this.workspaceChanged) return;
         editor.invalidate();
         void this.client
-          .request({
-            type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
-            roots: this.workspaceRoots(),
-            trusted: this.workspaceTrustService.isWorkspaceTrusted(),
-          })
+          .connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted())
+          .then(() => this.hydrateSelectedChat())
           .catch(error => this.report(error));
       }),
     );
@@ -157,6 +154,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   async connect(): Promise<void> {
     if (this.workspaceChanged) throw new Error('Workspace folders changed. Reload the window to reconnect Glyph.');
     await this.client.connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted());
+    await this.hydrateSelectedChat();
+  }
+
+  /** Replacement runtimes recover durable history separately from their live-run snapshot. */
+  private async hydrateSelectedChat(): Promise<void> {
     if (this.selectedChatId && !this.projection.state.runs.some(run => run.chatId === this.selectedChatId)) {
       await this.client.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
     }

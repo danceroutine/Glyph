@@ -41,7 +41,10 @@ export class FileShellPermissionStore implements ShellPermissionStore {
           ? { ...legacy.data, schemaVersion: 2 as const, allowedCommands: [] }
           : shellPermissionPolicySchema.parse(stored);
       if (policy.projectContextId !== projectContextId) {
-        throw new Error('Shell permission policy belongs to a different project context.');
+        // A valid policy for different roots grants no authority here. Treat it
+        // as unconfigured so the new scope can ask for fresh consent. Invalid
+        // policy data still fails validation above and remains fail-closed.
+        return undefined;
       }
       return policy;
     } catch (error) {

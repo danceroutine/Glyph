@@ -291,11 +291,21 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   private ensureProcess(): SidecarProcess {
     if (this.process) return this.process;
     const process = this.processFactory(this.options.binaryPath);
+    this.outputBuffer = '';
+    this.errorOutput = '';
     this.process = process;
+    // Writable failures also emit a stream error independently of the write
+    // callback. Consume it and fail every request sharing this worker.
+    process.stdin.on('error', error => {
+      if (this.process === process) this.fail(error);
+    });
     process.stdout.setEncoding('utf8');
-    process.stdout.on('data', chunk => this.receive(String(chunk)));
+    process.stdout.on('data', chunk => {
+      if (this.process === process) this.receive(String(chunk));
+    });
     process.stderr.setEncoding('utf8');
     process.stderr.on('data', chunk => {
+      if (this.process !== process) return;
       this.errorOutput = `${this.errorOutput}${String(chunk)}`.slice(-MAXIMUM_ERROR_OUTPUT);
     });
     process.once('error', error => {
@@ -360,6 +370,8 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   private fail(error: Error): void {
     const process = this.process;
     this.process = undefined;
+    this.outputBuffer = '';
+    this.errorOutput = '';
     process?.kill('SIGTERM');
     const pending = [...this.pending.values()];
     this.pending.clear();

@@ -6,6 +6,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { removeLeakedCodeOssHuskyHooks } from './git-hooks.mjs';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const sourceRoot = join(repositoryRoot, '.code-oss', 'src');
@@ -14,6 +15,8 @@ const pin = JSON.parse(await readFile(join(repositoryRoot, 'code-oss', 'upstream
 const nodeBinary = join(runtimeRoot, 'node_modules', 'node', 'bin', process.platform === 'win32' ? 'node.exe' : 'node');
 const command = process.argv[2];
 const forwardedArguments = process.argv[3] === '--' ? process.argv.slice(4) : process.argv.slice(3);
+
+await cleanLeakedHooks();
 
 if (!(await exists(join(sourceRoot, '.glyph-upstream.json')))) {
   throw new Error('Run pnpm code-oss:bootstrap first.');
@@ -35,7 +38,13 @@ delete environment.VSCODE_IPC_HOOK;
 
 switch (command) {
   case 'install':
-    run('npm', ['install'], sourceRoot, environment);
+    try {
+      run('npm', ['install'], sourceRoot, environment);
+    } finally {
+      // Upstream still depends on Husky 0.13, which walks to the nearest .git
+      // directory and can replace Glyph's hooks from this generated checkout.
+      await cleanLeakedHooks();
+    }
     break;
   case 'run':
     run('npm', ['run', ...forwardedArguments], sourceRoot, environment);
@@ -45,6 +54,11 @@ switch (command) {
     break;
   default:
     throw new Error(`Unknown Code OSS command: ${String(command)}`);
+}
+
+async function cleanLeakedHooks() {
+  const removed = await removeLeakedCodeOssHuskyHooks(repositoryRoot);
+  if (removed.length > 0) process.stdout.write(`Removed leaked Code OSS Git hooks: ${removed.join(', ')}\n`);
 }
 
 function run(executable, arguments_, cwd, env) {

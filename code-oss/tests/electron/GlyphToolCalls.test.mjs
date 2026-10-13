@@ -95,6 +95,10 @@ it.describe('Pending Propose Patch (propose_patch)', () => {
 
 it.describe('Pending Propose Edits (propose_edits)', () => {
   it.fixme(
+    'applies explicit LF/CRLF conversions through an undoable editor EOL operation before accepting the proposal',
+    async () => {},
+  );
+  it.fixme(
     'renders structured range edits at the intended locations while preserving Unicode, whitespace, and line endings',
     async () => {},
   );

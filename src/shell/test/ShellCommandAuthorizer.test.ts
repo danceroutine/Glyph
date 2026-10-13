@@ -19,6 +19,24 @@ afterEach(async () => {
 
 describe(ShellCommandAuthorizer, () => {
   describe(ShellCommandAuthorizer.prototype.authorize, () => {
+    it('[round9-04] asks again after workspace roots change without inheriting a previous scope grant', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'glyph-permission-scope-'));
+      temporaryDirectories.push(directory);
+      const permissions = new FileShellPermissionStore(directory);
+      await permissions.save({
+        schemaVersion: 2,
+        projectContextId: 'old-roots',
+        mode: ShellPermissionMode.ALLOW_EVERYTHING,
+        allowedCommands: [],
+      });
+      const presentShellPermission = vi.fn<ShellPermissionPresenter['presentShellPermission']>(
+        async () => ShellPermissionDecision.ALLOW_ONCE,
+      );
+      const authorizer = new ShellCommandAuthorizer('new-roots', permissions, { presentShellPermission });
+      await authorizer.authorize('pnpm test', '/project', signal());
+      await authorizer.authorize('pnpm test', '/project', signal());
+      expect(presentShellPermission).toHaveBeenCalledTimes(2);
+    });
     it('asks once, trims the command, and does not persist an allow-once decision', async () => {
       const presentShellPermission = vi.fn<ShellPermissionPresenter['presentShellPermission']>(
         async () => ShellPermissionDecision.ALLOW_ONCE,
@@ -231,7 +249,7 @@ describe(isSafeShellCommand, () => {
 
 describe(FileShellPermissionStore, () => {
   describe('persistence', () => {
-    it('round-trips a private policy and reports invalid or mismatched state', async () => {
+    it('round-trips a private policy without granting its permissions to another mutation scope', async () => {
       const directory = await temporaryDirectory();
       const store = new FileShellPermissionStore(directory);
       expect(await store.load('project')).toBeUndefined();
@@ -245,7 +263,7 @@ describe(FileShellPermissionStore, () => {
       await store.save(policy);
 
       await expect(store.load('project')).resolves.toEqual(policy);
-      await expect(store.load('other')).rejects.toThrow('Could not load shell permissions');
+      await expect(store.load('other')).resolves.toBeUndefined();
       expect(JSON.parse(await readFile(join(directory, 'shell-permissions.json'), 'utf8'))).toEqual(policy);
       if (process.platform !== 'win32') {
         expect((await stat(directory)).mode & 0o777).toBe(0o700);

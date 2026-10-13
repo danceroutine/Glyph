@@ -76,6 +76,11 @@ export class ShellSessionManager implements ShellSessionRegistry {
     return () => this.events.off('wake', listener);
   }
 
+  /** Select without consuming so another account's wake survives until durable delivery. */
+  peekPendingWake(accepts: (event: ShellWakeEvent) => boolean): ShellWakeEvent | undefined {
+    return this.pendingWakes.find(accepts);
+  }
+
   takePendingWake(id?: string): ShellWakeEvent | undefined {
     if (id === undefined) return this.pendingWakes.shift();
     const index = this.pendingWakes.findIndex(event => event.id === id);
@@ -147,8 +152,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
   ): void {
     this.assertAvailable();
     const terminal = this.requireTerminal(terminalId, ownerChatId);
-    if (wakeOn !== undefined) terminal.setWakePattern(wakeOn);
-    terminal.writeInput(`${input}${appendNewline ? '\n' : ''}`);
+    terminal.writeInput(`${input}${appendNewline ? '\n' : ''}`, wakeOn);
   }
 
   async close(terminalId: string, ownerChatId = this.ownerChatId): Promise<void> {
@@ -299,10 +303,10 @@ class ManagedShellSession {
       throw error;
     }
     this.child = child;
-    if (wakePattern !== undefined) {
-      this.wakePattern = wakePattern;
-      this.wakeScanTail = '';
-    }
+    // A subscription and its partial match belong to one command, not the
+    // reusable terminal. Omission means no wake subscription for this launch.
+    this.wakePattern = wakePattern;
+    this.wakeScanTail = '';
     child.stdout!.setEncoding('utf8');
     child.stderr!.setEncoding('utf8');
     child.stdin!.on('error', () => {
@@ -342,7 +346,7 @@ class ManagedShellSession {
     return completion;
   }
 
-  writeInput(input: string): void {
+  writeInput(input: string, wakeOn?: string): void {
     if (this.status !== ShellSessionStatus.RUNNING) {
       throw new Error(
         'Raw shell input is only allowed while a command is running. Use execute_shell for a new command.',
@@ -353,6 +357,8 @@ class ManagedShellSession {
         'Raw input to a full-access command is not authorized. Close it and use execute_shell so the complete command can be reviewed.',
       );
     }
+    // A rejected input must not mutate the running command's subscription.
+    if (wakeOn !== undefined) this.setWakePattern(wakeOn);
     this.child?.stdin?.write(input);
   }
 

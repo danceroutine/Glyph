@@ -1,8 +1,14 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { GlyphWorkbench } from './GlyphWorkbench.tsx';
-import { InteractiveWorkbench } from '../storybook/InteractiveWorkbench.tsx';
-import { conversation, failingActions, previewActions, selection, workbenchState } from '../storybook/fixtures.ts';
+import { InteractiveWorkbench } from '#code-oss/storybook/InteractiveWorkbench.tsx';
+import {
+  conversation,
+  failingActions,
+  previewActions,
+  selection,
+  workbenchState,
+} from '#code-oss/storybook/fixtures.ts';
 
 const meta = {
   title: 'Glyph/Workbench',

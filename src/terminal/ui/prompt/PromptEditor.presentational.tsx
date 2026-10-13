@@ -22,8 +22,10 @@ export function PromptEditor({
   selectedMatch,
   searchError,
   rootRef,
+  viewport,
 }: PromptEditorProps): ReactElement {
   const promptText = formatPromptText(text, attachments, cursor);
+  const completionStart = Math.max(0, selectedMatch - 2);
   return (
     <Box
       ref={rootRef}
@@ -34,42 +36,53 @@ export function PromptEditor({
       borderRight={false}
       borderStyle="single"
       flexDirection="column"
+      flexShrink={0}
       marginTop={PromptLayout.railTopMargin}
       paddingX={PromptLayout.railHorizontalPadding}
       width="100%"
     >
       {!acceptsSubmission ? <Text dimColor>Agent responding · draft only</Text> : null}
       {pendingChanges > 0 ? <PendingReviewEyebrow count={pendingChanges} /> : null}
-      <Text wrap="hard">
-        <Text bold color="cyan">
-          {label}
-        </Text>
-        {promptText.segments.map((segment, index) =>
-          segment.type === 'attachment' && segment.collapsed ? (
-            <Text key={index} bold color="cyan">
-              {sanitizeText(segment.value)}
+      <Box
+        flexDirection="column"
+        flexShrink={0}
+        height={viewport?.height}
+        overflow="hidden"
+        contentOffsetY={viewport?.offset ?? 0}
+      >
+        <Box flexDirection="column" flexShrink={0} width="100%">
+          <Text wrap="hard">
+            <Text bold color="cyan">
+              {label}
             </Text>
-          ) : (
-            sanitizeText(segment.value)
-          ),
-        )}
-      </Text>
-      {matches.map((match, index) => (
-        <Text key={match.path}>
-          {index === selectedMatch ? <Text color="cyan">{'  › '}</Text> : '    '}
+            {promptText.segments.map((segment, index) =>
+              segment.type === 'attachment' && segment.collapsed ? (
+                <Text key={index} bold color="cyan">
+                  {sanitizeText(segment.value)}
+                </Text>
+              ) : (
+                sanitizeText(segment.value)
+              ),
+            )}{' '}
+          </Text>
+        </Box>
+      </Box>
+      {matches.slice(completionStart, completionStart + 3).map((match, index) => (
+        <Text key={match.path} wrap="truncate">
+          {index + completionStart === selectedMatch ? <Text color="cyan">{'  › '}</Text> : '    '}
           {highlightMatch(match)}
         </Text>
       ))}
-      {commandMatches.map((command, index) => (
-        <Text key={command.value}>
-          {index === selectedMatch ? <Text color="cyan">{'  › '}</Text> : '    '}
+      {commandMatches.slice(completionStart, completionStart + 3).map((command, index) => (
+        <Text key={command.value} wrap="truncate">
+          {index + completionStart === selectedMatch ? <Text color="cyan">{'  › '}</Text> : '    '}
           <Text bold color="magentaBright">
             {command.value}
           </Text>
           <Text dimColor>{`  ${command.description}`}</Text>
         </Text>
       ))}
-      {searchError ? <Text color="red">{`  File search: ${sanitizeText(searchError)}`}</Text> : null}
+      {searchError ? <Text color="red" wrap="truncate">{`  File search: ${sanitizeText(searchError)}`}</Text> : null}
     </Box>
   );
 }

@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphTranscript } from './GlyphTranscript.tsx';
-import { conversation } from '../storybook/fixtures.ts';
+import { conversation } from '#code-oss/storybook/fixtures.ts';
 
 const meta = {
   title: 'Glyph/Transcript',

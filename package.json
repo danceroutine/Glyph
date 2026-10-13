@@ -8,6 +8,7 @@
   },
   "imports": {
     "#src/*": "./src/*",
+    "#code-oss/*": "./code-oss/*",
     "#scripts/*": "./scripts/*"
   },
   "exports": {

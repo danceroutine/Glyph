@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { GlyphComposer } from './GlyphComposer.tsx';
-import { failingActions, previewActions, selection } from '../storybook/fixtures.ts';
+import { failingActions, previewActions, selection } from '#code-oss/storybook/fixtures.ts';
 
 const meta = {
   title: 'Glyph/Composer',

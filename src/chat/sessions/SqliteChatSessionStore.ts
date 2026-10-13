@@ -104,7 +104,12 @@ export class SqliteChatSessionStore implements ChatSessionStore {
   private readonly legacyPath: string;
   private database: Database.Database | undefined;
 
-  constructor(private readonly directory: string) {
+  constructor(
+    private readonly directory: string,
+    private readonly options: {
+      readonly contextMigration?: { readonly targetId: string; readonly sourceIds: readonly string[] };
+    } = {},
+  ) {
     this.path = join(directory, 'chats.sqlite3');
     this.legacyPath = join(directory, 'chats.json');
   }
@@ -126,7 +131,20 @@ export class SqliteChatSessionStore implements ChatSessionStore {
       }
     }
     try {
-      registerContext(this.requireDatabase(), context);
+      const database = this.requireDatabase();
+      const migration = this.options.contextMigration;
+      if (migration && migration.targetId !== context.id)
+        throw new Error('Chat migration target does not match the active context.');
+      database.transaction(() => {
+        registerContext(database, context);
+        // Only the host supplies previous identities for this same container.
+        // Move ownership atomically; chat ids, transcripts and provider state
+        // remain untouched, and an already migrated catalog is a no-op.
+        const migrate = database.prepare('UPDATE chats SET project_context_id = ? WHERE project_context_id = ?');
+        for (const sourceId of migration?.sourceIds ?? []) {
+          if (sourceId !== context.id) migrate.run(context.id, sourceId);
+        }
+      })();
     } catch (error) {
       throw new PersistenceError('Could not register the active project context.', { cause: error });
     }

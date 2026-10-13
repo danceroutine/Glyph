@@ -19,6 +19,46 @@ afterEach(async () => {
 
 describe(ShellSessionManager, () => {
   describe('command lifecycle', () => {
+    it('[round7-08] leaves the wake subscription unchanged when full-access input is rejected', async () => {
+      const { manager } = await fixture(ShellSandboxProfile.FULL_ACCESS);
+      const running = await manager.execute('read value', {
+        background: true,
+        wakeOn: 'ready',
+        signal: new AbortController().signal,
+      });
+      expect(() => manager.writeInput(running.terminalId, 'input', true, 'replacement')).toThrow('not authorized');
+      expect(manager.sessions[0]?.wakePattern).toBe('ready');
+    });
+
+    it('[round6-03] does not combine output or inherit a wake condition across separate commands', async () => {
+      const { manager } = await fixture();
+      const wake = vi.fn();
+      const stop = manager.onDidWake(wake);
+      try {
+        const first = await manager.execute('printf rea', {
+          background: true,
+          wakeOn: 'ready',
+          signal: new AbortController().signal,
+        });
+        await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+        await manager.execute('printf dy', {
+          terminalId: first.terminalId,
+          signal: new AbortController().signal,
+        });
+        expect.soft(wake).not.toHaveBeenCalled();
+        expect.soft(manager.takePendingWake()).toBeUndefined();
+        expect(manager.sessions[0]?.wakePattern).toBeUndefined();
+        // Even a complete match in a later command must not reuse an old subscription.
+        await manager.execute('printf ready', {
+          terminalId: first.terminalId,
+          signal: new AbortController().signal,
+        });
+        expect(wake).not.toHaveBeenCalled();
+      } finally {
+        stop();
+      }
+    });
+
     it('[round5-03] keeps the running command wake condition when a second command is rejected as busy', async () => {
       const { manager } = await fixture(ShellSandboxProfile.WORKSPACE_WRITE);
       const wake = vi.fn();

@@ -1,4 +1,5 @@
 import { URI } from '#vs/base/common/uri.js';
+import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
 import { CancellationTokenSource } from '#vs/base/common/cancellation.js';
@@ -215,6 +216,20 @@ export class GlyphEditorAdapter extends Disposable {
       // Text models normalize inserted newlines to their current EOL sequence.
       // Receipt hashes must describe those actual bytes, not the wire spelling.
       const appliedText = mutation.text.replace(/\r\n|\r|\n/g, model.getEOL());
+      if (mutation.text !== before.text && appliedText === before.text) {
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
+      }
+      // Uniform EOL conversions require an explicit model EOL operation, which
+      // this mutation port does not yet support. Never accept a partial conversion.
+      const endings = mutation.text.match(/\r\n|\r|\n/g);
+      if (
+        /\r|\n/.test(before.text) &&
+        endings?.length &&
+        endings.every(ending => ending === endings[0]) &&
+        endings[0] !== model.getEOL()
+      ) {
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
+      }
       const afterRevision = await sha256(appliedText, mutation.byteOrderMark);
       // Hashing yields to the renderer. Recheck trust immediately before the
       // edit, since a trust change can invalidate the earlier RPC authorization.
@@ -326,7 +341,7 @@ export class GlyphEditorAdapter extends Disposable {
 
   private resolve(path: string): URI {
     this.assertWorkspaceBinding();
-    const folders = this.workspaceContextService.getWorkspace().folders;
+    const folders = this.workspaceContextService.getWorkspace().folders.filter(folder => folder.uri.scheme === 'file');
     const segments = path.split('/');
     if (
       path.startsWith('/') ||
@@ -337,7 +352,10 @@ export class GlyphEditorAdapter extends Disposable {
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     }
     const rootName = folders.length > 1 ? segments.shift() : undefined;
-    const folder = rootName ? folders.find(folder => folder.name === rootName) : folders[0];
+    const roots = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
+    const folder = rootName
+      ? folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootName)
+      : folders[0];
     if (!folder || folder.uri.scheme !== 'file') {
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     }
@@ -400,7 +418,12 @@ export class GlyphEditorAdapter extends Disposable {
     const folder = this.workspaceContextService.getWorkspaceFolder(resource);
     if (!folder) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     const path = resource.path.slice(folder.uri.path.replace(/\/$/, '').length + 1);
-    return this.workspaceContextService.getWorkspace().folders.length > 1 ? `${folder.name}/${path}` : path;
+    const roots = this.workspaceContextService
+      .getWorkspace()
+      .folders.filter(folder => folder.uri.scheme === 'file')
+      .map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
+    const routingId = getGlyphWorkspaceRootId({ name: folder.name, uri: folder.uri.toString() }, roots);
+    return roots.length > 1 ? `${routingId}/${path}` : path;
   }
 
   private async reference(resource: URI): Promise<Awaited<ReturnType<ITextModelService['createModelReference']>>> {

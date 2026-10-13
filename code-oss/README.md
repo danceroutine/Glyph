@@ -208,11 +208,111 @@ The `[round5-NN]` regressions first reproduced these failures:
 
 Coverage lives in the `OpenAIDesktopRuntimeFactory`, `FileProposalReviewStore`, `GlyphEditorAdapter`, and `ShellSessionManager` tests. The factory test uses real checkpoint initialization with provider initialization stubbed; no live account or provider is required.
 
+### Sixth-round regressions
+
+The `[round6-NN]` regressions reproduce and guard three additional failures:
+
+- Desktop chat identity depends on the Electron profile/workspace container, not its folder count. Existing chats under the old single-folder identity migrate atomically into the stable catalog, preserving chat IDs, transcripts, and provider state. Review and shell-permission storage retains its existing locations and mutation-scope checks.
+- When a send fails after the user starts another draft, the original appears under **Unsent messages**. Editing it swaps it with the current draft, preserving both; nothing is automatically retried or queued. If there is no newer draft, the failed message returns directly to the composer. Component tests run the actual Preact view in headless Chromium.
+- Wake subscriptions and partial matches are command-scoped. Reusing a terminal without `wake_on` clears the previous condition; rejected commands still leave the running command's condition untouched.
+
+### Seventh-round regressions
+
+The `[round7-NN]` cases and Rust's `round7_` cases first reproduced the eleven
+review findings and the additional runtime-disposal race:
+
+- Revoking workspace trust drains the owning runtime, including active turns and background shells, before attaching an untrusted replacement. Mutating commands remain blocked until trust is restored.
+- Index-worker stdin errors enter the same cleanup path as process failures, rejecting pending requests without an unhandled stream error.
+- Proposal acceptance rebases remaining hunks against the editor's actual returned text, including normalized line endings. Patch compilation resolves all source spans against the original revision before applying replacements.
+- CLI review storage uses the workspace mutation scope, and activating a cached chat synchronizes the global trace setting.
+- Native searches reject regex offsets inside UTF-8 codepoints, budget context before copying it, and bound per-worker result queues. Tests use small fixtures, not memory-exhaustion stress probes.
+- Rejected raw shell input cannot replace a wake subscription. Account-specific wakes remain queued until their owning chat durably records them.
+- Terminal Page Up and Page Down make clipped transcript history reachable; paging to the bottom resumes following streamed output.
+- Runtime disposal waits for admitted commands, including proposal decisions, before closing chat storage.
+
+Host, runtime, shell, proposal, and terminal regressions use controlled dependencies
+or disposable filesystem fixtures. The CLI test checks composition wiring; the
+review-store tests exercise scoped checkpoint reopening. Native search tests cover
+the UTF-8 boundary and context-budget behavior directly. These are not evidence of
+native shell-sandbox enforcement or completed desktop review controls.
+
+### Eighth-round regressions
+
+The `[round8-NN]` regressions cover the next eleven findings:
+
+- Shell approval dedicates the terminal to a paged command viewport with fixed decision controls. Page Up/Down belongs to that panel while it is open; background-shell summaries return afterward. Approval is disabled when the terminal is too small to review the panel.
+- Successfully observed workspace mutations remain in memory after checkpoint failures. The next queued operation must persist them before it can change a decision; normalized editor text is not compared back to an obsolete prediction.
+- Desktop routing uses a single-component identifier shared by the host and editor. Safe unique folder names retain their existing addresses; duplicate or delimiter-containing display names use URI-derived identifiers. Display labels remain separate.
+- Attachment search generations survive prompt remounts. Replacement native workers start with clean transport buffers and ignore late output from the old worker.
+- Large-file review calculates line-number width iteratively. Rename proposals retain BOM-only decisions, and acceptance applies both changes.
+- Explicit EOL conversion of existing multiline editor content fails before mutation until the editor port supports an undoable EOL operation. Newline normalization for inserted text remains supported; unsupported conversions cannot silently settle as accepted.
+- Trust changes hydrate the selected chat after the new runtime snapshot. Transcript paging resets for a different conversation, and cursor placement follows Ink's hard-wrap behavior for wide characters.
+
+Coverage includes controlled transport/workbench fixtures, real terminal rendering,
+and disposable proposal/recovery fixtures. No approval fixture executes its displayed
+command. The EOL limitation has a dedicated Electron FIXME in
+[GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
+
+### Ninth-round regressions
+
+The `[round9-NN]` regressions cover the next ten findings:
+
+- Successful editor mutations keep their accepted receipts even when automatic whitespace cleanup conflicts with a remaining hunk. The observed document and stale remaining review survive checkpoint reload; rejection cannot relabel the applied edit.
+- UTF-8 decoding removes only the encoding BOM, preserving a literal leading U+FEFF in document text and subsequent replacements.
+- Compatible unique root names, including spaces and Unicode, retain their mutation identity and existing review checkpoints. Generated routing identifiers avoid collisions with friendly names. Valid shell permissions from a different root scope grant no authority and no longer prevent a fresh approval; malformed policies still fail closed.
+- A background wake runs in its owning chat, then restores the user's original conversation before allowing the preserved draft to submit.
+- Review rendering appends large line collections iteratively in both focused and full-file modes. Mixed-EOL changes that normalize entirely away fail before mutation rather than creating an accepted no-op receipt.
+- Background terminal summaries are compact and height-bounded. The composer follows its caret within a bounded viewport, and completion lists keep the highlighted entry visible. Question forms scroll to the highlighted option; Page Up/Down navigates the form instead of the transcript, with confirmation help outside the scrolling body.
+
+Coverage uses disposable filesystem/checkpoint fixtures, controlled editor adapters,
+and rendered terminal interactions. Background-panel fixtures do not execute shell
+commands. Desktop EOL conversion remains unsupported until its explicit editor
+operation is implemented; this round does not claim to implement the pending
+desktop question, proposal, or structural-edit UI.
+
+### Tenth-round regressions
+
+The trust, matcher, and question-viewport regressions were first observed failing
+against the previous implementation, then rerun against the fixes:
+
+- `GlyphTrustSynchronization.test.mjs` connects the actual workbench service,
+  client, and host over a fixture transport. Trust changes during the handshake
+  or attach acknowledgement are synchronized before runtime commands proceed;
+  restoring trust allows subsequent sends.
+- The native index test `settles_an_unpublished_query_when_the_next_generation_repeats_it`
+  reproduces an interrupted matcher state and verifies that repeating the query
+  publishes the new results instead of returning the previous snapshot.
+- `[round10-03]` renders a long question through the terminal root. Page Up/Down
+  scroll the prompt independently, arrow navigation reveals the selected choice,
+  and Enter reveals an offscreen choice before allowing confirmation.
+
+The formerly failing Storybook import guard is also fixed. Its shared UI and
+fixture imports use `#code-oss`; both TypeScript and the static Vite build resolve
+that alias. These checks do not exercise live providers or native sandbox enforcement.
+
+### Eleventh-round regressions
+
+The `[round11-NN]` cases failed before their fixes and cover:
+
+- Shutdown while a background wake is being persisted, while its request is
+  being prepared, and during inference. No new turn starts after shutdown;
+  an active turn receives shutdown cancellation without relying on an interrupt
+  handler to find its request controller.
+- Tool-error codes, messages, and nested details are sanitized before plain
+  output or Ink rendering. The Ink test compares styled frames rather than
+  stripping ANSI sequences and concealing an injected color.
+- Fuzzy-match positions stay in Unicode code-point coordinates when an emoji
+  workspace prefix is added, for both routed and cross-root queries.
+
+These tests use in-memory dependencies and harmless control-character markers;
+they do not call providers or execute shell commands.
+
 The acknowledged editing-workflow blockers remain explicit fixmes:
 
 - Question and approval forms and proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).
 - Structural create/delete/rename review and application: the structural mutation, Create File, and Delete File groups in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
 - Dirty-buffer content search suppressing stale disk matches: `Pending Search Contents` in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
+- Desktop background-shell wake delivery: `Pending background shells with agent-configured wake conditions` in [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs).
 
 ## Native Preact view
 
@@ -266,7 +366,7 @@ pnpm storybook:build
 ```
 
 The static build goes to ignored `.artifacts/storybook/`. Storybook's Vite
-configuration resolves `#src` to editable TypeScript and uses a separate Preact
+configuration resolves `#src` and `#code-oss` to editable source and uses a separate Preact
 TypeScript configuration; it does not change the terminal's React runtime or
 the production esbuild bundle. Storybook is pinned to 10.6.1. Its Preact renderer
 still declares a Preact 8/10 peer range, so installation reports a peer warning

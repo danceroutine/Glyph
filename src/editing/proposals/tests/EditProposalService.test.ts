@@ -9,6 +9,7 @@ import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
+import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
 
 const directories: string[] = [];
 const configuration: EditingConfiguration = {
@@ -29,6 +30,36 @@ afterEach(async () => {
 });
 
 describe(EditProposalService, () => {
+  it('[round8-08] retains a BOM-only change as a separate decision when renaming identical text', async () => {
+    const { service, workspace } = await fixture('same\n');
+    const base = await workspace.read('file.txt');
+    const proposal = await service.proposeStructured({
+      files: [
+        {
+          operation: EditOperation.RENAME,
+          path: 'file.txt',
+          new_path: 'renamed.txt',
+          base_revision: base.revision,
+          content: base.text,
+          byte_order_mark: true,
+          edits: [],
+        },
+      ],
+    });
+    expect(proposal.files[0]?.items.map(item => item.kind)).toEqual([
+      EditReviewItemKind.RENAME,
+      EditReviewItemKind.TEXT,
+    ]);
+  });
+  it('[round7-10] locates patch hunks in the original base even when an earlier replacement duplicates later context', async () => {
+    const { service, workspace } = await fixture('left\nseparator\nright\n');
+    const base = await workspace.read('file.txt');
+    const proposal = await service.proposePatch(
+      `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${base.revision}\n@@\n-left\n+right\n@@\n-right\n+last\n*** End Patch`,
+    );
+    expect(proposal.files[0]?.proposed.text).toBe('right\nseparator\nlast\n');
+  });
+
   describe(EditProposalService.prototype.proposeStructured, () => {
     it('applies zero-based UTF-16 edits in reverse source order without normalizing text', async () => {
       const { service, workspace } = await fixture('a😀b\r\nmiddle\r\nlast');

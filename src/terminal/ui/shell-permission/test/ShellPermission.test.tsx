@@ -3,9 +3,36 @@ import { describe, expect, it, vi } from 'vitest';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
 import type { TerminalShellPermissionRequest } from '#src/terminal/ui/shell-permission/ShellPermissionRequest.js';
 import { WiredShellPermission } from '#src/terminal/ui/shell-permission/ShellPermission.wired.js';
+import { Box } from 'ink';
 
 describe(WiredShellPermission, () => {
   describe('interaction', () => {
+    it('[round8-01] keeps the approval choice visible and pages through every line of a long command before Enter', async () => {
+      const complete = vi.fn();
+      const permission = {
+        ...request(complete),
+        permission: {
+          command: Array.from({ length: 30 }, (_, n) => `echo harmless-${n}`).join('\n'),
+          workingDirectory: '/project',
+        },
+      };
+      const view = render(
+        <Box height={24} overflow="hidden">
+          <WiredShellPermission request={permission} />
+        </Box>,
+      );
+      try {
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('› 1. Allow once'));
+        for (let n = 0; n < 10; n++) await write(view, '\u001b[6~');
+        expect(view.lastFrame()).toContain('echo harmless-29');
+        expect(view.lastFrame()).toContain('› 1. Allow once');
+        expect(complete).not.toHaveBeenCalled();
+        await write(view, '\r');
+        expect(complete).toHaveBeenCalledWith(ShellPermissionDecision.ALLOW_ONCE);
+      } finally {
+        view.unmount();
+      }
+    });
     it('renders safely and selects each approval choice with arrows and Enter', async () => {
       const complete = vi.fn();
       const view = render(<WiredShellPermission request={request(complete)} />);

@@ -210,6 +210,10 @@ it.describe('Pending desktop product contracts', () => {
   it.fixme('rejects a proposal without changing the editor or the file on disk', async () => {});
   it.fixme('refuses to apply a proposal after the user changes the referenced editor content', async () => {});
   it.fixme('keeps a second window read-only while another window owns the same workspace', async () => {});
+  it.fixme(
+    'moves an oversized pasted text block into a separately inspectable attachment instead of filling the composer text area',
+    async () => {},
+  );
 });
 
 it.describe('Pending chat annotations', () => {

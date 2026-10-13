@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useCursor, useInput } from 'ink';
+import { useCursor, useInput, useWindowSize } from 'ink';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
 import type { TerminalShellPermissionRequest } from './ShellPermissionRequest.ts';
 
@@ -50,6 +50,10 @@ export interface ShellPermissionState {
 }
 
 export function useShellPermissionState(request: TerminalShellPermissionRequest, active = true): ShellPermissionState {
+  const { rows, columns } = useWindowSize();
+  const choose = (decision: ShellPermissionDecision): void => {
+    if (decision === ShellPermissionDecision.DENY || (rows >= 16 && columns >= 40)) request.complete(decision);
+  };
   const { setCursorPosition } = useCursor();
   setCursorPosition(undefined);
   const [highlightedChoice, setHighlightedChoice] = useState(0);
@@ -66,11 +70,11 @@ export function useShellPermissionState(request: TerminalShellPermissionRequest,
       }
       if (key.upArrow) setHighlightedChoice(index => Math.max(0, index - 1));
       else if (key.downArrow) setHighlightedChoice(index => Math.min(choices.length - 1, index + 1));
-      else if (key.return) request.complete(choices[highlightedChoice]!.decision);
+      else if (key.return) choose(choices[highlightedChoice]!.decision);
       else {
         const number = Number(input);
         if (Number.isInteger(number) && number >= 1 && number <= choices.length) {
-          request.complete(choices[number - 1]!.decision);
+          choose(choices[number - 1]!.decision);
         }
       }
     },

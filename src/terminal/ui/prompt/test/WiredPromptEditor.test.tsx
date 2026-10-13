@@ -5,9 +5,66 @@ import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexE
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 import { TERMINAL_COMMANDS } from '#src/terminal/TerminalCommand.js';
 import { WiredPromptEditor } from '#src/terminal/ui/prompt/PromptEditor.wired.js';
+const cursorPosition = vi.hoisted(() => vi.fn());
+vi.mock('ink', async () => ({
+  ...(await vi.importActual<typeof import('ink')>('ink')),
+  useWindowSize: () => ({ columns: 80, rows: 24 }),
+  useCursor: () => ({ setCursorPosition: cursorPosition }),
+}));
 
 describe(WiredPromptEditor, () => {
   describe('interaction', () => {
+    it('[round8-11] places the cursor after a wide character that wraps past an unused final column', async () => {
+      const view = render(
+        <WiredPromptEditor
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete: vi.fn() }}
+          interrupt={vi.fn()}
+        />,
+      );
+      try {
+        await write(view, `${'a'.repeat(72)}界`);
+        await vi.waitFor(() => expect(cursorPosition.mock.lastCall?.[0].x).toBe(3));
+      } finally {
+        view.unmount();
+      }
+    });
+
+    it('[round8-04] shows attachment matches immediately after remounting a prompt with the same index', async () => {
+      let largest = 0;
+      const files = fileSearch(async (query, options) => {
+        if (options.generation < largest)
+          throw new WorkspacePathIndexError(WorkspacePathIndexFailureReason.SUPERSEDED, 'old');
+        largest = options.generation;
+        return {
+          generation: options.generation,
+          query,
+          fileCount: 1,
+          matches: [{ path: `${query}.ts`, score: 1, indices: [] }],
+        };
+      });
+      const first = render(
+        <WiredPromptEditor
+          request={{ id: 1, label: 'you> ', acceptsSubmission: true, files, complete: vi.fn() }}
+          interrupt={vi.fn()}
+        />,
+      );
+      await write(first, '@a');
+      await write(first, 'b');
+      await vi.waitFor(() => expect(first.lastFrame()).toContain('ab.ts'));
+      first.unmount();
+      const next = render(
+        <WiredPromptEditor
+          request={{ id: 2, label: 'you> ', acceptsSubmission: true, files, complete: vi.fn() }}
+          interrupt={vi.fn()}
+        />,
+      );
+      try {
+        await write(next, '@fresh');
+        await vi.waitFor(() => expect(next.lastFrame()).toContain('fresh.ts'));
+      } finally {
+        next.unmount();
+      }
+    });
     it('submits printable and pasted text', async () => {
       const complete = vi.fn();
       const view = render(
@@ -40,7 +97,7 @@ describe(WiredPromptEditor, () => {
       view.unmount();
     });
 
-    it('lists every slash command, filters, navigates, and completes with Tab', async () => {
+    it('keeps every slash command reachable in a bounded list, filters, navigates, and completes with Tab', async () => {
       const complete = vi.fn();
       const view = render(
         <WiredPromptEditor
@@ -50,7 +107,14 @@ describe(WiredPromptEditor, () => {
       );
 
       await write(view, '/');
-      for (const command of TERMINAL_COMMANDS) expect(view.lastFrame()).toContain(command.value);
+      const seen = new Set<string>();
+      for (let index = 0; index < TERMINAL_COMMANDS.length; index++) {
+        for (const command of TERMINAL_COMMANDS) {
+          if (view.lastFrame()?.includes(command.value)) seen.add(command.value);
+        }
+        await write(view, '\x1b[B');
+      }
+      expect([...seen].sort()).toEqual(TERMINAL_COMMANDS.map(command => command.value).sort());
 
       await write(view, 'tr');
       expect(view.lastFrame()).toContain('/trace off');

@@ -147,10 +147,11 @@ export class EditProposalService {
         continue;
       }
       let proposed = base.text;
+      const replacements: { start: number; end: number; text: string }[] = [];
       for (const hunk of file.hunks) {
         const oldLogical = hunk.lines.filter(line => line.prefix !== '+').map(line => line.text);
         const lineEnding = file.lineEnding ?? dominantLineEnding(base.text);
-        const candidates = findHunkMatches(proposed, oldLogical);
+        const candidates = findHunkMatches(base.text, oldLogical);
         if (candidates.length === 0) {
           throw new EditError(EditFailureReason.INCONSISTENT, 'Patch context does not exactly match the base file.', {
             path: file.path,
@@ -159,14 +160,23 @@ export class EditProposalService {
         if (candidates.length > 1) {
           throw new EditError(EditFailureReason.AMBIGUOUS, 'Patch context matches more than one location.', {
             path: file.path,
-            candidates: candidates.map(candidate => lineAt(proposed, candidate.start)),
+            candidates: candidates.map(candidate => lineAt(base.text, candidate.start)),
             retry: 'Include more unique context or use structured coordinates.',
           });
         }
         const match = candidates[0]!;
-        const replacement = renderHunk(hunk, match, lineEnding, match.end === proposed.length);
-        proposed = proposed.slice(0, match.start) + replacement + proposed.slice(match.end);
+        const replacement = renderHunk(hunk, match, lineEnding, match.end === base.text.length);
+        if (replacements.some(prior => match.start < prior.end && match.end > prior.start)) {
+          throw new EditError(EditFailureReason.INCONSISTENT, 'Patch hunks overlap in the base file.', {
+            path: file.path,
+          });
+        }
+        replacements.push({ start: match.start, end: match.end, text: replacement });
       }
+      // Resolve every source span before any replacement can manufacture new
+      // matches. Reverse application preserves the revision-checked offsets.
+      for (const change of replacements.sort((left, right) => right.start - left.start))
+        proposed = proposed.slice(0, change.start) + change.text + proposed.slice(change.end);
       proposed = applyFinalNewline(proposed, file.noFinalNewline);
       structured.files.push({
         operation: file.operation,
@@ -352,6 +362,9 @@ export class EditProposalService {
         path: file.path,
       });
     }
+    // Metadata changes need a decision even when a structural rename is also present.
+    if (items.length === 0 && proposed.byteOrderMark !== existing.byteOrderMark)
+      items.push(toStructuralItem(fileId, EditReviewItemKind.TEXT, existing.text, proposedText));
     if (file.operation === EditOperation.RENAME)
       items.unshift(toStructuralItem(fileId, EditReviewItemKind.RENAME, file.path, target));
     if (items.length === 0 && proposed.byteOrderMark === existing.byteOrderMark) {

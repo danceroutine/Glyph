@@ -188,6 +188,46 @@ describe(WiredResponse, () => {
 });
 
 describe(ToolActivity, () => {
+  it('[round11-02] sanitizes the complete tool error before Ink interprets its formatting', () => {
+    const activity = {
+      phase: ToolActivityPhase.COMPLETED,
+      name: 'read',
+      callId: 'call',
+      arguments: '',
+      output: JSON.stringify({
+        error: {
+          code: '\u001b[35mEXCLUDED\u001b[0m',
+          message: 'Denied\u0007',
+          path: '.env\u001b[35msecret\u001b[0m',
+          details: ['one\u202etwo'],
+        },
+      }),
+    };
+    const actual = render(<ToolActivity activity={activity} />);
+    const expected = render(
+      <ToolActivity
+        activity={{
+          ...activity,
+          output: JSON.stringify({
+            error: {
+              code: 'EXCLUDED',
+              message: 'Denied',
+              path: '.envsecret',
+              details: ['one\\u202etwo'],
+            },
+          }),
+        }}
+      />,
+    );
+    try {
+      // Compare styled frames: stripping ANSI would conceal an injected color.
+      expect(actual.lastFrame()).toBe(expected.lastFrame());
+    } finally {
+      actual.unmount();
+      expected.unmount();
+    }
+  });
+
   afterEach(() => vi.restoreAllMocks());
 
   describe('rendering', () => {

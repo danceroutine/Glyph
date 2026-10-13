@@ -194,7 +194,7 @@ export function renderEntry(
   const diffStart = lines.length;
   const visibleDiff = allDiffLines.slice(start, end);
   if (visibleDiff.length === 0) lines.push(style('  <empty file>', TerminalReviewColor.DIM, colors));
-  else lines.push(...visibleDiff.map(line => renderDiffLine(line, file.targetPath, lineNumberWidth, colors)));
+  else for (const line of visibleDiff) lines.push(renderDiffLine(line, file.targetPath, lineNumberWidth, colors));
   if (end < allDiffLines.length) {
     lines.push(style(`⋯ ${allDiffLines.length - end} diff lines below`, TerminalReviewColor.DIM, colors));
   }
@@ -218,32 +218,34 @@ function createFileDiffLines(file: FileEditPlan, selectedItem: EditReviewItem): 
   const result: DiffDisplayLine[] = [];
   let sourceOffset = 0;
   for (const candidate of textItems) {
-    result.push(
-      ...toDiffLines(
-        base.slice(sourceOffset, candidate.sourceStart),
-        DiffLineKind.CONTEXT,
-        lineNumbers,
-        undefined,
-        false,
-      ),
-      ...toDiffLines(
-        candidate.removedText,
-        DiffLineKind.DELETION,
-        lineNumbers,
-        candidate,
-        candidate.id === selectedItem.id,
-      ),
-      ...toDiffLines(
-        candidate.insertedText,
-        DiffLineKind.ADDITION,
-        lineNumbers,
-        candidate,
-        candidate.id === selectedItem.id,
-      ),
-    );
+    for (const line of toDiffLines(
+      base.slice(sourceOffset, candidate.sourceStart),
+      DiffLineKind.CONTEXT,
+      lineNumbers,
+      undefined,
+      false,
+    ))
+      result.push(line);
+    for (const line of toDiffLines(
+      candidate.removedText,
+      DiffLineKind.DELETION,
+      lineNumbers,
+      candidate,
+      candidate.id === selectedItem.id,
+    ))
+      result.push(line);
+    for (const line of toDiffLines(
+      candidate.insertedText,
+      DiffLineKind.ADDITION,
+      lineNumbers,
+      candidate,
+      candidate.id === selectedItem.id,
+    ))
+      result.push(line);
     sourceOffset = candidate.sourceEnd;
   }
-  result.push(...toDiffLines(base.slice(sourceOffset), DiffLineKind.CONTEXT, lineNumbers, undefined, false));
+  for (const line of toDiffLines(base.slice(sourceOffset), DiffLineKind.CONTEXT, lineNumbers, undefined, false))
+    result.push(line);
   return result;
 }
 
@@ -388,10 +390,9 @@ function ansi(open: string, close = '\x1b[39m'): (value: string) => string {
 }
 
 function diffLineNumberWidth(lines: readonly DiffDisplayLine[]): number {
-  return Math.max(
-    1,
-    ...lines.flatMap(line => [line.oldLine ?? 0, line.newLine ?? 0]).map(line => line.toString().length),
-  );
+  let largest = 1;
+  for (const line of lines) largest = Math.max(largest, line.oldLine ?? 0, line.newLine ?? 0);
+  return String(largest).length;
 }
 
 export function wrapReviewLines(rendered: RenderedEntry, width: number): RenderedEntry {
@@ -399,7 +400,7 @@ export function wrapReviewLines(rendered: RenderedEntry, width: number): Rendere
   let focusLine = 0;
   rendered.lines.forEach((line, index) => {
     if (index === rendered.focusLine) focusLine = lines.length;
-    lines.push(...wrapAnsi(line, width, { hard: true, trim: false }).split('\n'));
+    for (const wrapped of wrapAnsi(line, width, { hard: true, trim: false }).split('\n')) lines.push(wrapped);
   });
   return { lines, focusLine };
 }

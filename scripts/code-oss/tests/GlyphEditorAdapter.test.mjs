@@ -51,6 +51,79 @@ async function adapterModule() {
 }
 
 describe('Editor workspace binding', () => {
+  it.each([
+    ['A', 'A/B'],
+    ['app', 'app'],
+  ])('[round8-03] round-trips distinct files when folder display names are %s and %s', async (first, second) => {
+    const { GlyphEditorAdapter, URI } = await adapterModule();
+    const folders = [
+      { name: first, uri: URI.file('/workspace/one') },
+      { name: second, uri: URI.file('/workspace/two') },
+    ];
+    const models = ['/workspace/one/B/file.ts', '/workspace/two/file.ts'].map(path => ({
+      uri: URI.file(path),
+      getVersionId: () => 1,
+      getValue: () => path,
+      getValueLength: () => path.length,
+    }));
+    const adapter = new GlyphEditorAdapter(
+      {
+        createModelReference: async uri => {
+          const model = models.find(value => value.uri.toString() === uri.toString());
+          if (!model) throw new Error(`Wrong route: ${uri}`);
+          return { object: { textEditorModel: model }, dispose() {} };
+        },
+      },
+      {},
+      {
+        getWorkspace: () => ({ id: 'workspace', folders }),
+        getWorkspaceFolder: uri => folders.find(folder => uri.path.startsWith(`${folder.uri.path}/`)),
+        isInsideWorkspace: () => true,
+        onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+      },
+      { getModels: () => models },
+      { isDirty: () => true },
+      { isWorkspaceTrusted: () => true },
+      {},
+    );
+    try {
+      const response = await adapter.handle({ type: 'list_working_copies', operationId: 'list' });
+      expect(response.ok).toBe(true);
+      expect(new Set(response.workingCopies.map(copy => copy.path)).size).toBe(2);
+      for (const copy of response.workingCopies) expect((await adapter.read(copy.path)).uri).toBe(copy.uri);
+    } finally {
+      adapter.dispose();
+    }
+  });
+  it('[round8-07] rejects an unsupported EOL-only conversion instead of accepting an unchanged model', async () => {
+    const edit = await pendingEdit({ initial: 'line\n', replacement: 'line\r\n' });
+    edit.write.resolve();
+    edit.finish.resolve();
+    try {
+      const response = await edit.apply();
+      expect(response.ok).toBe(false);
+      expect(response.error.code).toBe('UNSUPPORTED_RESOURCE');
+      expect(edit.launch).not.toHaveBeenCalled();
+      expect(edit.text()).toBe('line\n');
+      expect(await edit.adapter.inspectReceipt('edit')).toBeUndefined();
+    } finally {
+      edit.adapter.dispose();
+    }
+  });
+  it('[round9-07] refuses a mixed EOL conversion that the editor would normalize into an unchanged document', async () => {
+    const edit = await pendingEdit({ initial: 'one\ntwo\n', replacement: 'one\r\ntwo\n' });
+    edit.write.resolve();
+    edit.finish.resolve();
+    try {
+      const response = await edit.apply();
+      expect(response.ok).toBe(false);
+      expect(response.error.code).toBe('UNSUPPORTED_RESOURCE');
+      expect(edit.launch).not.toHaveBeenCalled();
+      expect(await edit.adapter.inspectReceipt('edit')).toBeUndefined();
+    } finally {
+      edit.adapter.dispose();
+    }
+  });
   it('[round5-02] records the actual pinned editor result when applying an edit also trims automatic whitespace', async () => {
     const { GlyphEditorAdapter, URI } = await adapterModule();
     const built = await build({
@@ -341,6 +414,7 @@ describe('Editor workspace binding', () => {
 
 /** Gates preparation and completion separately, matching Bulk Edit's cancellation boundary. */
 async function pendingEdit({
+  initial = 'original',
   eol = '\n',
   replacement = 'replacement',
   sourceTagged = true,
@@ -354,7 +428,7 @@ async function pendingEdit({
   let folders = [{ name: 'A', uri: URI.file('/workspace/A') }];
   const folderListeners = new Set();
   const contentListeners = new Set();
-  let text = 'original';
+  let text = initial;
   let version = 1;
   const model = {
     uri: URI.file('/workspace/A/file.ts'),
