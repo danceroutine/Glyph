@@ -1,6 +1,6 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron, expect, test as base } from './playwright.mjs';
 import { GlyphWorkbench } from './GlyphWorkbench.mjs';
@@ -14,6 +14,8 @@ export const test = base.extend({
   productionRuntime: [false, { option: true }],
   scriptedProvider: [false, { option: true }],
   scriptedAccounts: [undefined, { option: true }],
+  workspaceFiles: [{}, { option: true }],
+  additionalRoots: [[], { option: true }],
   provider: async ({ scriptedProvider, scriptedAccounts }, use) => {
     if (!scriptedProvider) return use(undefined);
     const provider = new ScriptedProvider(scriptedAccounts);
@@ -25,7 +27,7 @@ export const test = base.extend({
       await provider.close();
     }
   },
-  glyph: async ({ trustedWorkspace, productionRuntime, provider }, use, testInfo) => {
+  glyph: async ({ trustedWorkspace, productionRuntime, provider, workspaceFiles, additionalRoots }, use, testInfo) => {
     // macOS Unix socket paths are limited to 103 bytes. Descriptive test titles
     // belong in the report, not in Code OSS's user-data directory path.
     const sandbox = await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'glyph-e2e-'));
@@ -35,6 +37,23 @@ export const test = base.extend({
     await mkdir(workspace, { recursive: true });
     await mkdir(join(userData, 'User'), { recursive: true });
     await writeFile(join(workspace, 'example.txt'), 'Untouched integration fixture.\n');
+    for (const [path, text] of Object.entries(workspaceFiles)) {
+      await mkdir(dirname(join(workspace, path)), { recursive: true });
+      await writeFile(join(workspace, path), text);
+    }
+    const rootPaths = [workspace];
+    for (const root of additionalRoots) {
+      const path = join(sandbox, root.name);
+      await mkdir(path, { recursive: true });
+      rootPaths.push(path);
+      for (const [file, text] of Object.entries(root.files)) {
+        await mkdir(dirname(join(path, file)), { recursive: true });
+        await writeFile(join(path, file), text);
+      }
+    }
+    const workspaceTarget = additionalRoots.length ? join(sandbox, 'fixture.code-workspace') : workspace;
+    if (additionalRoots.length)
+      await writeFile(workspaceTarget, JSON.stringify({ folders: rootPaths.map(path => ({ path })) }));
     await writeFile(
       join(userData, 'User', 'settings.json'),
       JSON.stringify({
@@ -114,7 +133,7 @@ export const test = base.extend({
         timeout: 60_000,
         args: [
           sourceRoot,
-          workspace,
+          workspaceTarget,
           '--new-window',
           '--skip-welcome',
           '--skip-release-notes',
@@ -139,6 +158,7 @@ export const test = base.extend({
       page.on('pageerror', error => logs.push(`[renderer error] ${error.stack}\n`));
       const glyph = new GlyphWorkbench(page, application);
       glyph.workspace = workspace;
+      glyph.rootPaths = rootPaths;
       await glyph.open();
       await use(glyph);
       expect(await readFile(join(workspace, 'example.txt'), 'utf8')).toBe('Untouched integration fixture.\n');

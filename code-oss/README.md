@@ -65,9 +65,12 @@ The panel opens beside the conversation when wide enough and as a drawer when na
 Drafts remain separate while switching chats, and workspace storage remembers the
 selected conversation across reloads. Human-decision forms and proposal controls
 remain follow-up components.
-Structural file mutations are not yet supported by the editor-backed text
-store, and indexed content search still reads disk rather than merging dirty
-buffers. These are product gaps, not capabilities proved by the smoke fixture.
+Indexed content search uses authorized live editor snapshots in place of disk text,
+including when an unsaved edit removes every match. The Rust matcher applies the
+same filters, context, and pagination to both sources. Snapshot transfer is bounded
+to 2,000 open paths, 512 KiB per file, and 768 KiB of aggregate serialized overrides
+per root; unavailable or oversized snapshots fail explicitly without a disk fallback.
+Structural file mutations are not yet supported by the editor-backed text store.
 
 `pnpm code-oss:test:integration` runs the Playwright Electron suite against the
 compiled application with isolated profiles and workspaces. Most cases select
@@ -83,7 +86,8 @@ Run `pnpm code-oss:test:integration --list` to browse the behavior inventory:
 - [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs): runnable workbench flows and pending chat, editor, hook, and cross-chat workflows.
 - [GlyphRecovery.test.mjs](tests/electron/GlyphRecovery.test.mjs): production-runtime partial-answer recovery, crash recovery with durable history, and second-window ownership protection.
 - [GlyphScriptedProvider.test.mjs](tests/electron/GlyphScriptedProvider.test.mjs): scripted provider calls through the real agent/tool loop and editor RPC, with recorded continuation assertions.
-- [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): shell, project read/search, proposal, question, and reviewed file creation/deletion contracts.
+- [GlyphProjectTools.test.mjs](tests/electron/GlyphProjectTools.test.mjs): file listing, live editor reads/search, exclusions, limits, and multi-root paths.
+- [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): pending shell, proposal, question, and reviewed file creation/deletion contracts.
 - [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs): Plan Mode, blocking/background sub-agents, action items, web fetch/search, and shell wake conditions.
 - [GlyphBrowserAutomation.test.mjs](tests/electron/GlyphBrowserAutomation.test.mjs): CDP lifecycle, DOM inspection/highlighting, input, screenshots, and browser feedback.
 - [GlyphMcp.test.mjs](tests/electron/GlyphMcp.test.mjs): human/agent installation and configuration, authentication, tool discovery/calls, resources/prompts, and optional or revision-dependent capabilities.
@@ -342,7 +346,6 @@ The acknowledged editing-workflow blockers remain explicit fixmes:
 
 - Question and approval forms and proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).
 - Structural create/delete/rename review and application: the structural mutation, Create File, and Delete File groups in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
-- Dirty-buffer content search suppressing stale disk matches: `Pending Search Contents` in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
 - Desktop background-shell wake delivery: `Pending background shells with agent-configured wake conditions` in [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs).
 
 ### Authentication lifetime, text fidelity, and bounded rendering

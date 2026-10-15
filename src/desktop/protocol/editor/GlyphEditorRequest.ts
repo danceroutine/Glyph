@@ -6,6 +6,7 @@ export enum GlyphEditorRequestType {
   EXISTS = 'exists',
   READ_SNAPSHOT = 'read_snapshot',
   LIST_WORKING_COPIES = 'list_working_copies',
+  LIST_WORKING_COPY_PATHS = 'list_working_copy_paths',
   SEARCH_WORKING_COPIES = 'search_working_copies',
   APPLY_TEXT_MUTATION = 'apply_text_mutation',
   INSPECT_MUTATION_RECEIPT = 'inspect_mutation_receipt',
@@ -21,6 +22,7 @@ export type GlyphEditorRequest =
       readonly maxBytes?: number;
     }
   | { readonly type: GlyphEditorRequestType.LIST_WORKING_COPIES; readonly operationId: string }
+  | { readonly type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS; readonly operationId: string }
   | {
       readonly type: GlyphEditorRequestType.SEARCH_WORKING_COPIES;
       readonly operationId: string;

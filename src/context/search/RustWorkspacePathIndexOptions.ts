@@ -32,6 +32,8 @@ export type RustWorkspacePathIndexOptions = z.input<typeof rustWorkspacePathInde
 
 export type RustWorkspacePathIndexConfiguration = RustWorkspacePathIndexOptions & {
   readonly accessPolicy?: WorkspaceAccessPolicy;
+  /** Authorized, transient editor text keyed by indexed project-relative path. */
+  readonly readContentOverrides?: (signal?: AbortSignal) => Promise<Readonly<Record<string, string>>>;
 };
 
 export type ResolvedRustWorkspacePathIndexOptions = z.output<typeof rustWorkspacePathIndexOptionsSchema> &

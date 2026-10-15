@@ -107,6 +107,17 @@ export class GlyphEditorAdapter extends Disposable {
           return { operationId, ok: true, ...(await this.apply(request.mutation)) };
         case GlyphEditorRequestType.LIST_WORKING_COPIES:
           return { operationId, ok: true, workingCopies: await this.workingCopies() };
+        case GlyphEditorRequestType.LIST_WORKING_COPY_PATHS: {
+          const models = this.modelService
+            .getModels()
+            .filter(model => model.uri.scheme === 'file' && this.workspaceContextService.isInsideWorkspace(model.uri));
+          if (models.length > 2000)
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED, {
+              maximumWorkingCopies: 2000,
+              workingCopies: models.length,
+            });
+          return { operationId, ok: true, workingCopyPaths: models.map(model => this.pathFor(model.uri)) };
+        }
         case GlyphEditorRequestType.SEARCH_WORKING_COPIES:
           return await this.searchWorkingCopies(request);
       }

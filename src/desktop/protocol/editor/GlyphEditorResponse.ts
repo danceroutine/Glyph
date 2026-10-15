@@ -13,6 +13,7 @@ export interface GlyphEditorResponse {
   readonly exists?: boolean;
   readonly snapshot?: GlyphEditorTextSnapshot;
   readonly workingCopies?: readonly GlyphEditorTextSnapshot[];
+  readonly workingCopyPaths?: readonly string[];
   readonly search?: GlyphWorkingCopySearchResult;
   readonly receipt?: GlyphMutationReceipt;
   readonly error?: GlyphDesktopError;

@@ -500,6 +500,45 @@ impl ContextIndexService {
         ))
     }
 
+    pub(crate) fn filter_paths(&self, paths: Vec<String>) -> Result<Vec<String>, ServiceError> {
+        if paths.len() > 2_000
+            || paths
+                .iter()
+                .any(|path| !is_normalized_project_relative_path(path))
+        {
+            return Err(ServiceError::invalid_request(
+                "Expected at most 2000 normalized editor paths.",
+            ));
+        }
+        let initialized = self
+            .initialized
+            .as_ref()
+            .ok_or_else(ServiceError::not_initialized)?;
+        let known = initialized
+            .known_paths
+            .read()
+            .map_err(|_| ServiceError::internal("The known-path set lock is poisoned."))?;
+        let mut selected = BTreeSet::new();
+        let mut aliases = HashSet::new();
+        for path in paths {
+            if known.contains(&path) {
+                selected.insert(path);
+            } else if !initialized.policy.case_sensitive {
+                aliases.insert(path.to_lowercase());
+            }
+        }
+        // Keep the catalog spelling so the replacement targets the same candidate
+        // even when a case-insensitive editor URI used another spelling.
+        if !aliases.is_empty() {
+            for path in known.iter() {
+                if aliases.contains(&path.to_lowercase()) {
+                    selected.insert(path.clone());
+                }
+            }
+        }
+        Ok(selected.into_iter().collect())
+    }
+
     pub(crate) fn glob(&self, params: GlobParams) -> Result<GlobResult, ServiceError> {
         if params.limit == 0 || params.limit > MAX_GLOB_LIMIT {
             return Err(ServiceError::invalid_request(format!(
@@ -1336,6 +1375,33 @@ mod tests {
             "created-after-init.ts"
         ));
         let _ = service.shutdown();
+    }
+
+    #[test]
+    fn editor_paths_use_catalog_spelling_and_preserve_case_and_exclusion_policy() {
+        for case_sensitive in [true, false] {
+            let directory = tempdir().unwrap();
+            create_dir_all(directory.path().join("src")).unwrap();
+            write(directory.path().join("src/Café.ts"), "text").unwrap();
+            write(directory.path().join(".env"), "secret").unwrap();
+            let mut configuration = params(directory.path());
+            configuration.case_sensitive = case_sensitive;
+            let mut service = ContextIndexService::new();
+            service.initialize(configuration).unwrap();
+            let paths = service
+                .filter_paths(vec!["SRC/CAFÉ.TS".to_owned(), ".env".to_owned()])
+                .unwrap();
+            assert_eq!(
+                paths,
+                if case_sensitive {
+                    vec![]
+                } else {
+                    vec!["src/Café.ts"]
+                }
+            );
+            assert!(service.filter_paths(vec!["../outside".to_owned()]).is_err());
+            service.shutdown();
+        }
     }
 
     #[test]

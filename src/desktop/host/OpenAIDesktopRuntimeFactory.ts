@@ -41,6 +41,7 @@ import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTe
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { EditorWorkspaceTextStore } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
+import { readEditorContentOverrides } from '#src/desktop/workspace/readEditorContentOverrides.js';
 import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
 import type { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
@@ -110,7 +111,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           : [];
       });
       const disk = new FileSystemWorkspaceTextStore(root.path, { accessPolicy: policy, excludedPaths });
-      const index = new RustWorkspacePathIndex({
+      const index: RustWorkspacePathIndex = new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
         root: root.path,
         cachePath: join(
@@ -122,6 +123,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         accessPolicy: policy,
         excludedPaths,
         caseSensitive: disk.caseSensitive,
+        readContentOverrides: signal =>
+          readEditorContentOverrides(
+            disk,
+            index,
+            (request, cancellation) => this.editors.request(input.identity, request, cancellation),
+            roots.length > 1 ? `${root.name}/` : '',
+            signal,
+          ),
       });
       const workspace = new EditorWorkspaceTextStore(root.path, disk.caseSensitive, {
         canonicalPath: path => disk.canonicalPath(path),
@@ -149,8 +158,6 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             context,
             parts.map(part => ({ name: part.name, store: part.workspace })),
           );
-    // TODO: Merge dirty working-copy matches into indexed content search, hiding
-    // disk matches for those same resources so reads and search agree.
     const index =
       roots.length === 1
         ? parts[0]!.index

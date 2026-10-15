@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -55,10 +55,28 @@ pub(crate) struct ContentSearchParams {
     pub(crate) multiline: bool,
     pub(crate) limit: u32,
     pub(crate) offset: u32,
+    #[serde(default)]
+    pub(crate) overrides: BTreeMap<String, String>,
 }
 
 impl ContentSearchParams {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.overrides.len() > 2_000
+            || self
+                .overrides
+                .keys()
+                .any(|path| !is_normalized_project_relative_path(path))
+            || self
+                .overrides
+                .iter()
+                .map(|(path, text)| path.len() + text.len())
+                .sum::<usize>()
+                > 768 * 1024
+        {
+            return Err(
+                "Editor search snapshots exceed the budget or contain invalid paths.".to_owned(),
+            );
+        }
         if self.pattern.is_empty() {
             return Err("pattern must not be empty.".to_owned());
         }
@@ -208,24 +226,32 @@ impl ContentSearchContext {
                             break;
                         }
                         let path = &candidates[index];
-                        let outcome =
-                            match read_searchable_file(&self.root, path, self.max_file_bytes) {
-                                Ok(text) => {
-                                    searched_files.fetch_add(1, Ordering::AcqRel);
-                                    search_file(
-                                        path,
-                                        &text,
-                                        &matcher,
-                                        params,
-                                        target_entries,
-                                        cancelled,
-                                    )
+                        let outcome = match params.overrides.get(path).map_or_else(
+                            || read_searchable_file(&self.root, path, self.max_file_bytes),
+                            |text| {
+                                if text.len() as u64 > self.max_file_bytes || text.contains('\0') {
+                                    Err(())
+                                } else {
+                                    Ok(text.clone())
                                 }
-                                Err(()) => {
-                                    skipped_files.fetch_add(1, Ordering::AcqRel);
-                                    FileOutcome::empty(path)
-                                }
-                            };
+                            },
+                        ) {
+                            Ok(text) => {
+                                searched_files.fetch_add(1, Ordering::AcqRel);
+                                search_file(
+                                    path,
+                                    &text,
+                                    &matcher,
+                                    params,
+                                    target_entries,
+                                    cancelled,
+                                )
+                            }
+                            Err(()) => {
+                                skipped_files.fetch_add(1, Ordering::AcqRel);
+                                FileOutcome::empty(path)
+                            }
+                        };
                         if sender.send(outcome).is_err() {
                             break;
                         }
@@ -1010,6 +1036,7 @@ mod tests {
             multiline: false,
             limit: 100,
             offset: 0,
+            overrides: BTreeMap::new(),
         }
     }
 
@@ -1056,6 +1083,78 @@ mod tests {
             1024 * 1024,
         );
         (directory, search)
+    }
+
+    #[test]
+    fn editor_snapshots_replace_disk_before_filters_context_and_pagination() {
+        let (directory, search) = context(&[
+            ("a.ts", "needle disk"),
+            ("b.ts", "nothing"),
+            ("c.md", "needle disk"),
+        ]);
+        let mut params = parameters(ContentSearchOutputMode::Content);
+        params.overrides = BTreeMap::from([
+            ("a.ts".to_owned(), "no match".to_owned()),
+            (
+                "b.ts".to_owned(),
+                "before\nneedle café\nneedle next\nafter".to_owned(),
+            ),
+            ("not-indexed.ts".to_owned(), "needle forbidden".to_owned()),
+        ]);
+        params.file_glob = Some("*.ts".to_owned());
+        params.limit = 1;
+        params.lines_before = 1;
+        params.lines_after = 1;
+        let ContentSearchResult::Content { matches, metadata } = search
+            .search(params.clone(), &AtomicBool::new(false))
+            .unwrap()
+        else {
+            panic!("content expected")
+        };
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, "b.ts");
+        assert_eq!(matches[0].line, 2);
+        assert_eq!(matches[0].lines_before[0].content, "before");
+        assert_eq!(metadata.next_offset, Some(1));
+        params.offset = 1;
+        let ContentSearchResult::Content { matches, metadata } = search
+            .search(params.clone(), &AtomicBool::new(false))
+            .unwrap()
+        else {
+            panic!("content expected")
+        };
+        assert_eq!(matches[0].line, 3);
+        assert!(!metadata.truncated);
+        params.offset = 0;
+        params.output_mode = ContentSearchOutputMode::Count;
+        let ContentSearchResult::Count { counts, .. } = search
+            .search(params.clone(), &AtomicBool::new(false))
+            .unwrap()
+        else {
+            panic!("count expected")
+        };
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].path, "b.ts");
+        assert_eq!(counts[0].count, 2);
+        params.output_mode = ContentSearchOutputMode::FilesWithMatches;
+        let ContentSearchResult::FilesWithMatches { files, .. } = search
+            .search(params.clone(), &AtomicBool::new(false))
+            .unwrap()
+        else {
+            panic!("files expected")
+        };
+        assert_eq!(files, ["b.ts"]);
+        assert_eq!(
+            fs::read_to_string(directory.path().join("a.ts")).unwrap(),
+            "needle disk"
+        );
+        params
+            .overrides
+            .insert("../outside".to_owned(), "needle".to_owned());
+        assert!(matches!(
+            search.search(params, &AtomicBool::new(false)),
+            Err(ContentSearchError::InvalidRequest(_))
+        ));
     }
 
     #[test]

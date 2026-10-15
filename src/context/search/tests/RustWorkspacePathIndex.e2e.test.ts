@@ -27,11 +27,15 @@ describe(RustWorkspacePathIndex, () => {
         root: project,
         cachePath: join(state, 'paths.bin'),
         excludedPaths: ['.glyph-state'],
+        caseSensitive: false,
       });
 
       try {
         const cold = await search.initialize();
         expect(cold.fromCache).toBe(false);
+        await expect(
+          search.filterPaths(['SRC/APP.TSX', '.env', '.glyph-state/accounts.json', 'missing.ts']),
+        ).resolves.toEqual(['src/App.tsx']);
         await expect(search.search('apptsx', { generation: 1, limit: 5 })).resolves.toMatchObject({
           matches: [expect.objectContaining({ path: 'src/App.tsx' })],
         });

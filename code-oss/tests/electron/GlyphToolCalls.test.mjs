@@ -1,6 +1,6 @@
 import { test as it } from './GlyphWorkbench.fixture.mjs';
 
-// Pending black-box contracts: the Electron fixture currently streams text only.
+// Pending black-box contracts: these scenarios still need production UI wiring.
 // Enable these with scripted provider tool calls through the production runtime,
 // observable workbench results, and disposable workspace/process fixtures.
 // Existing runtime unit tests do not establish desktop end-to-end coverage.
@@ -38,47 +38,6 @@ it.describe('Pending Shell List (list_shells)', () => {
   );
   it.fixme('reports an empty shell list without inventing a session or showing another chat’s shells', async () => {});
   it.fixme('reflects command completion and removes closed shells when the agent lists shells again', async () => {});
-});
-
-it.describe('Pending List File (list_project_files)', () => {
-  it.fixme(
-    'returns matching workspace file paths for a glob and directory filter and lets the agent cite those paths',
-    async () => {},
-  );
-  it.fixme('distinguishes an empty match set from a truncated list when the result limit is reached', async () => {});
-  it.fixme(
-    'excludes ignored and sensitive files and refuses paths or symlinks outside the authorized workspace',
-    async () => {},
-  );
-  it.fixme(
-    'qualifies matching paths by workspace root when two roots contain the same relative filename',
-    async () => {},
-  );
-});
-
-it.describe('Pending Read File (read_project_file)', () => {
-  it.fixme(
-    'returns the requested file or line range and lets the agent identify the source path and lines',
-    async () => {},
-  );
-  it.fixme('reads unsaved editor text instead of stale disk content without saving the document', async () => {});
-  it.fixme(
-    'reports a missing or denied file without exposing other files or fabricating file contents',
-    async () => {},
-  );
-});
-
-it.describe('Pending Search Contents (search_project_contents)', () => {
-  it.fixme(
-    'finds literal and regular-expression matches with source paths, line numbers, and requested context',
-    async () => {},
-  );
-  it.fixme(
-    'honors case sensitivity, path filters, and result limits and distinguishes no matches from truncation',
-    async () => {},
-  );
-  it.fixme('searches unsaved editor text and suppresses stale disk matches for that same file', async () => {});
-  it.fixme('reports an invalid search expression without ending the chat or exposing excluded files', async () => {});
 });
 
 it.describe('Pending Propose Patch (propose_patch)', () => {

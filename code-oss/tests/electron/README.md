@@ -81,6 +81,15 @@ browser runner's headless setting. macOS opens automated application windows.
 
 ## Coverage and pending work
 
+`GlyphProjectTools.test.mjs` covers the eleven rank-4 file listing, reading, and
+content-search contracts through the production runtime and native index. Assertions
+inspect the tool output delivered to the scripted provider as well as the rendered
+answer. Tests edit real Code OSS buffers, verify that searches replace stale disk
+matches, check that disk bytes stay unchanged, and cover ignored/sensitive files,
+outside-workspace symlinks, limits, invalid regex recovery, and duplicate paths in
+multiple roots. `workspaceFiles` and `additionalRoots` seed files before Electron
+starts so native index discovery is deterministic.
+
 `GlyphChats.test.mjs` covers the two rank-3 contracts and their switching/error
 regressions. Chats are created through the UI using the production runtime. The
 tests switch between persisted conversations, recover the selected chat after

@@ -40,6 +40,7 @@ enum Request {
     Initialize(InitializeParams),
     Search(SearchParams),
     Glob(GlobParams),
+    FilterPaths(Vec<String>),
     ContentSearch(ContentSearchParams),
     Cancel(CancelParams),
     Refresh,
@@ -265,6 +266,9 @@ fn service_loop(
                         result_response(id, service.search(params, latest_generation)),
                         false,
                     ),
+                    Request::FilterPaths(paths) => {
+                        (result_response(id, service.filter_paths(paths)), false)
+                    }
                     Request::Glob(params) => (result_response(id, service.glob(params)), false),
                     Request::ContentSearch(params) => {
                         let context = match service.content_search_context() {
@@ -373,6 +377,11 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
         )?),
         "search" => Request::Search(decode_params(
             "search",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
+        "filterPaths" => Request::FilterPaths(decode_params(
+            "filterPaths",
             envelope.params,
             Some(envelope.id.clone()),
         )?),

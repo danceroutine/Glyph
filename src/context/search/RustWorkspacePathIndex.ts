@@ -27,6 +27,7 @@ enum PathIndexMethod {
   INITIALIZE = 'initialize',
   SEARCH = 'search',
   GLOB = 'glob',
+  FILTER_PATHS = 'filterPaths',
   CONTENT_SEARCH = 'contentSearch',
   CANCEL = 'cancel',
   REFRESH = 'refresh',
@@ -145,9 +146,11 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   private initializing: Promise<WorkspacePathIndexState> | undefined;
   private disposing: Promise<void> | undefined;
   private disposed = false;
+  private readonly readContentOverrides: RustWorkspacePathIndexConfiguration['readContentOverrides'];
 
   constructor(options: RustWorkspacePathIndexConfiguration, processFactory: ProcessFactory = startProcess) {
-    const { accessPolicy = new WorkspaceAccessPolicy(), ...rawOptions } = options;
+    const { accessPolicy = new WorkspaceAccessPolicy(), readContentOverrides, ...rawOptions } = options;
+    this.readContentOverrides = readContentOverrides;
     const parsed = rustWorkspacePathIndexOptionsSchema.parse(rawOptions);
     this.options = {
       ...parsed,
@@ -216,9 +219,18 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     const { signal, ...serializableOptions } = options;
     const resolvedOptions = workspaceContentSearchOptionsSchema.parse(serializableOptions);
     if (!this.initialized) await this.initialize(signal);
-    return contentSearchResultSchema.parse(
-      await this.request(PathIndexMethod.CONTENT_SEARCH, { pattern, ...resolvedOptions }, signal),
-    );
+    const overrides = await this.readContentOverrides?.(signal);
+    signal?.throwIfAborted();
+    const params = { pattern, ...resolvedOptions, ...(overrides ? { overrides } : {}) };
+    if (Buffer.byteLength(JSON.stringify(params)) > 900 * 1024)
+      throw new Error('Editor search snapshots exceed the native request budget. Narrow the open working set.');
+    return contentSearchResultSchema.parse(await this.request(PathIndexMethod.CONTENT_SEARCH, params, signal));
+  }
+
+  /** Metadata-only intersection with the catalog, including ignore and sensitive-file exclusions. */
+  async filterPaths(paths: readonly string[], signal?: AbortSignal): Promise<readonly string[]> {
+    if (!this.initialized) await this.initialize(signal);
+    return z.array(z.string()).parse(await this.request(PathIndexMethod.FILTER_PATHS, paths, signal));
   }
 
   async refresh(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
