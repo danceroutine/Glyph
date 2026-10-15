@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphUsageSummary } from './GlyphUsageSummary.tsx';
+import { workbenchClassName } from './GlyphWorkbench.tsx';
 
 const meta = {
   title: 'Glyph/Conversation usage',
@@ -16,7 +17,7 @@ const meta = {
   },
   decorators: [
     Story => (
-      <div class="glyph-workbench">
+      <div class={`glyph-workbench ${workbenchClassName}`}>
         <Story />
       </div>
     ),

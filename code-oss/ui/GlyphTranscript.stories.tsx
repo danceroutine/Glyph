@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphTranscript } from './GlyphTranscript.tsx';
+import { workbenchClassName } from './GlyphWorkbench.tsx';
 import { conversation } from '#code-oss/storybook/fixtures.ts';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
@@ -11,7 +12,7 @@ const meta = {
   args: { entries: conversation },
   decorators: [
     Story => (
-      <div class="glyph-workbench">
+      <div class={`glyph-workbench ${workbenchClassName}`}>
         <Story />
       </div>
     ),

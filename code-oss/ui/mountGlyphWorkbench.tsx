@@ -1,7 +1,6 @@
 import { render } from 'preact';
 import type { GlyphWorkbenchMount } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { GlyphWorkbench } from './GlyphWorkbench.tsx';
-import './glyphWorkbench.css';
 
 /** Unmounting through Preact releases component effects when Code OSS disposes the pane. */
 export const mountGlyphWorkbench: GlyphWorkbenchMount = (container, state, actions) => {

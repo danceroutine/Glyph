@@ -1,6 +1,12 @@
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphTurnProgress } from './GlyphTurnProgress.tsx';
+import { css } from './emotion.ts';
+
+const styles = {
+  root: css({ flex: 1, minHeight: 0, overflowY: 'auto', padding: 12 }),
+  entry: css({ marginBottom: 12, whiteSpace: 'pre-wrap', userSelect: 'text' }),
+};
 
 interface GlyphTranscriptProps {
   readonly entries: readonly GlyphTranscriptEntry[];
@@ -14,9 +20,9 @@ export function GlyphTranscript({ entries }: GlyphTranscriptProps) {
     if (element) element.scrollTop = element.scrollHeight;
   }, [entries]);
   return (
-    <div class="glyph-transcript" ref={transcript} role="log" aria-label="Glyph conversation">
+    <div class={`glyph-transcript ${styles.root}`} ref={transcript} role="log" aria-label="Glyph conversation">
       {entries.map(entry => (
-        <div class={`glyph-entry ${entry.role}`} key={entry.id}>
+        <div class={`glyph-entry ${entry.role} ${styles.entry}`} key={entry.id}>
           <strong>{roleLabel(entry.role)}</strong>
           {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
           <div>{entry.text}</div>

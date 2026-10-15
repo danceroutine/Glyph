@@ -451,7 +451,7 @@ cancel behavior.
 
 Stories live beside their components in `code-oss/ui/`; shared fixtures and
 preview configuration live in `code-oss/storybook/`. The stories import the
-production components and CSS. The preview stylesheet approximates the native pane's
+production components, including their Emotion styles. The preview stylesheet approximates the native pane's
 inherited theme variables and typography. Check native styles, workbench
 shortcuts, editor selection, pane lifecycle, and host communication in Code OSS.
 Storybook does not implement the currently missing account/approval/proposal UI.
@@ -460,6 +460,13 @@ Storybook does not implement the currently missing account/approval/proposal UI.
 pnpm code-oss:check:storybook
 pnpm storybook:build
 ```
+
+Component styles live alongside their markup and use `css` from `./emotion.ts`.
+Define static styles at module scope and keep theme colors as `var(--vscode-...)`
+references so workbench theme changes apply without regenerating styles. The shared
+Emotion instance inserts CSS as style-element text so Code OSS can copy it into
+auxiliary windows. The UI bundle includes Emotion; upstream needs no additional
+dependency or CSS import.
 
 The static build goes to ignored `.artifacts/storybook/`. Storybook's Vite
 configuration resolves `#src` and `#code-oss` to editable source and uses a separate Preact

@@ -13,7 +13,6 @@ import { IViewDescriptorService } from '#vs/workbench/common/views.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
 import type { GlyphWorkbenchView } from '#glyph/workbench/GlyphWorkbenchView.js';
 import { mountGlyphWorkbench } from './ui/mountGlyphWorkbench.js';
-import './ui/mountGlyphWorkbench.css';
 
 /**
  * Hosts Glyph in the native auxiliary bar, sharing the workbench's focus,

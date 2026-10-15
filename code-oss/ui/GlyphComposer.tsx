@@ -2,6 +2,34 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchSelection } from '#src/desktop/workbench/GlyphWorkbenchSelection.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { css } from './emotion.ts';
+
+const styles = {
+  root: css({
+    padding: 8,
+    borderTop: '1px solid var(--vscode-panel-border)',
+    '& button': { marginTop: 8 },
+  }),
+  unsent: css({
+    maxHeight: 160,
+    overflowY: 'auto',
+    marginBottom: 8,
+    '& pre': { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', font: 'inherit' },
+  }),
+  context: css({
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: 11,
+    marginBottom: 6,
+  }),
+  input: css({
+    boxSizing: 'border-box',
+    width: '100%',
+    resize: 'vertical',
+    color: 'var(--vscode-input-foreground)',
+    background: 'var(--vscode-input-background)',
+    border: '1px solid var(--vscode-input-border, transparent)',
+  }),
+};
 
 interface GlyphComposerProps {
   readonly status: GlyphWorkbenchStatus;
@@ -36,9 +64,9 @@ export function GlyphComposer({ status, selection, actions }: GlyphComposerProps
     if (!active) await model.submit(text => actions.send(text));
   };
   return (
-    <div class="glyph-composer">
+    <div class={`glyph-composer ${styles.root}`}>
       {unsent.length > 0 && (
-        <section class="glyph-unsent" aria-label="Unsent messages">
+        <section class={`glyph-unsent ${styles.unsent}`} aria-label="Unsent messages">
           <div>Unsent messages</div>
           {unsent.map((text, index) => (
             <div key={index}>
@@ -50,12 +78,13 @@ export function GlyphComposer({ status, selection, actions }: GlyphComposerProps
           ))}
         </section>
       )}
-      <div class="glyph-context-chip">
+      <div class={`glyph-context-chip ${styles.context}`}>
         {selection
           ? `Context: ${selection.path} (${selection.text.length} chars, v${selection.version})`
           : 'No editor selection attached'}
       </div>
       <textarea
+        class={styles.input}
         ref={composer}
         rows={4}
         placeholder="Ask Glyph about this project"

@@ -1,9 +1,29 @@
 import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
+import { css } from './emotion.ts';
+
+const styles = {
+  root: css({
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: 12,
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+    padding: '8px 12px',
+    borderTop: '1px solid var(--vscode-panel-border)',
+    maxHeight: '35%',
+    overflowY: 'auto',
+    '& dl': { display: 'grid', gridTemplateColumns: '1fr auto', gap: '4px 12px', fontVariantNumeric: 'tabular-nums' },
+    '& dd': { margin: 0, textAlign: 'right' },
+  }),
+  summary: css({
+    cursor: 'pointer',
+    ':focus-visible': { outline: '1px solid var(--vscode-focusBorder)', outlineOffset: 2 },
+  }),
+};
 
 export function GlyphUsageSummary({ usage }: { readonly usage: GlyphUsage | undefined }) {
   return (
-    <details class="glyph-usage" aria-label="Conversation token usage">
-      <summary>
+    <details class={`glyph-usage ${styles.root}`} aria-label="Conversation token usage">
+      <summary class={styles.summary}>
         {usage
           ? `${usage.totalTokens.toLocaleString()} reported tokens${usage.unreportedTurns ? ' · incomplete' : ''}`
           : 'Token usage unavailable'}
