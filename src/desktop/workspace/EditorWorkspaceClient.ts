@@ -6,6 +6,8 @@ import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEdit
  * mutation-owning renderer implements this port because editor models live there.
  */
 export interface EditorWorkspaceClient {
+  /** Resolves physical path aliases through the host's metadata-only workspace policy. */
+  canonicalPath(path: string): Promise<string>;
   request(request: GlyphEditorRequest, signal?: AbortSignal): Promise<GlyphEditorResponse>;
   listPaths(
     maxFiles: number,

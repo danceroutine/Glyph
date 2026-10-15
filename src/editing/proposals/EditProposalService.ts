@@ -108,7 +108,12 @@ export class EditProposalService {
   async proposePatch(patch: string, signal?: AbortSignal): Promise<EditProposal> {
     signal?.throwIfAborted();
     this.enforceRawLimit(Buffer.byteLength(patch));
-    const files = parsePatch(patch);
+    // Patch expansion loads and may retain editor models. Validate the entire
+    // normalized path graph and file count before performing any source reads.
+    const files = await this.preflightFiles(
+      parsePatch(patch).map(file => ({ ...file, new_path: file.targetPath ?? null })),
+      signal,
+    );
     const structured: StructuredProposal = { files: [] };
     for (const file of files) {
       signal?.throwIfAborted();
@@ -216,7 +221,7 @@ export class EditProposalService {
       structured.files.push({
         operation: file.operation,
         path: file.path,
-        new_path: file.targetPath ?? null,
+        new_path: file.new_path,
         base_revision: file.revision,
         content: proposed,
         byte_order_mark: file.byteOrderMark ?? base.byteOrderMark,
@@ -232,20 +237,7 @@ export class EditProposalService {
     signal?: AbortSignal,
   ): Promise<EditProposal> {
     signal?.throwIfAborted();
-    if (input.files.length === 0)
-      throw new EditError(EditFailureReason.EMPTY, 'An edit proposal must contain at least one file.');
-    if (input.files.length > this.configuration.maxFiles) {
-      throw new EditError(
-        EditFailureReason.LIMIT_EXCEEDED,
-        `Proposal exceeds the ${this.configuration.maxFiles}-file limit.`,
-      );
-    }
-    const normalized = input.files.map(file => ({
-      ...file,
-      path: this.workspace.normalizePath(file.path),
-      new_path: file.new_path === null ? null : this.workspace.normalizePath(file.new_path),
-    }));
-    validatePathGraph(normalized, this.workspace.caseSensitive);
+    const normalized = await this.preflightFiles(input.files, signal);
 
     const plans: FileEditPlan[] = [];
     const identities = new Set<string>();
@@ -470,6 +462,41 @@ export class EditProposalService {
       );
     }
   }
+
+  /** Both proposal formats must be independently reviewable before loading files. */
+  private async preflightFiles<T extends Pick<StructuredFile, 'operation' | 'path' | 'new_path'>>(
+    files: readonly T[],
+    signal?: AbortSignal,
+  ): Promise<T[]> {
+    if (files.length === 0)
+      throw new EditError(EditFailureReason.EMPTY, 'An edit proposal must contain at least one file.');
+    if (files.length > this.configuration.maxFiles) {
+      throw new EditError(
+        EditFailureReason.LIMIT_EXCEEDED,
+        `Proposal exceeds the ${this.configuration.maxFiles}-file limit.`,
+      );
+    }
+    const normalized = files.map(file => ({
+      ...file,
+      path: this.workspace.normalizePath(file.path),
+      new_path: file.new_path === null ? null : this.workspace.normalizePath(file.new_path),
+    }));
+    validatePathGraph(normalized, this.workspace.caseSensitive);
+    const canonical = [];
+    for (const file of normalized) {
+      signal?.throwIfAborted();
+      canonical.push({
+        operation: file.operation,
+        path: await this.workspace.canonicalPath(file.path),
+        new_path: file.new_path === null ? null : await this.workspace.canonicalPath(file.new_path),
+      });
+    }
+    signal?.throwIfAborted();
+    // The adapter has already applied its casing rules. Root prefixes in the
+    // user-facing namespace are aliases, not distinct mutation resources.
+    validatePathGraph(canonical, true);
+    return normalized;
+  }
 }
 
 function toFileEditPlan(
@@ -539,7 +566,10 @@ function toStructuralItem(
   };
 }
 
-function validatePathGraph(files: StructuredFile[], caseSensitive: boolean): void {
+function validatePathGraph(
+  files: readonly Pick<StructuredFile, 'operation' | 'path' | 'new_path'>[],
+  caseSensitive: boolean,
+): void {
   const sources = new Set<string>();
   const touched = new Set<string>();
   for (const file of files) {
@@ -585,6 +615,21 @@ function validatePathGraph(files: StructuredFile[], caseSensitive: boolean): voi
       throw new EditError(EditFailureReason.AMBIGUOUS, 'Rename chains and swaps are not supported in one proposal.', {
         path: file.path,
       });
+    }
+  }
+  // Every touched path denotes a file, whereas each of its ancestors must be
+  // a directory. Include sources and destinations: deleting or renaming an
+  // ancestor first would require ordering that individual review decisions do
+  // not guarantee. Segment boundaries keep unrelated names such as a and ab valid.
+  for (const path of touched) {
+    for (let separator = path.indexOf('/'); separator !== -1; separator = path.indexOf('/', separator + 1)) {
+      const ancestor = path.slice(0, separator);
+      if (touched.has(ancestor)) {
+        throw new EditError(EditFailureReason.AMBIGUOUS, 'Proposal contains incompatible file and directory paths.', {
+          path,
+          source: ancestor,
+        });
+      }
     }
   }
 }

@@ -37,7 +37,7 @@ export class ShellCommandAuthorizer {
     signal: AbortSignal,
     context: ShellAuthorizationContext = { background: false, existingTerminal: false },
   ): Promise<ShellExecutionAuthorization> {
-    return this.enqueue(async () => {
+    return this.enqueue(signal, async () => {
       // Queued commands may be cancelled while a previous permission is being
       // decided. Neither a saved grant nor a later dialog answer revives them.
       signal.throwIfAborted();
@@ -91,13 +91,26 @@ export class ShellCommandAuthorizer {
     });
   }
 
-  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(operation, operation);
-    this.queue = result.then(
-      () => {},
-      () => {},
-    );
-    return result;
+  private enqueue<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      if (signal.aborted) return reject(signal.reason);
+      const abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      const start = () => {
+        signal.removeEventListener('abort', abort);
+        signal.throwIfAborted();
+        return operation();
+      };
+      const result = this.queue.then(start, start);
+      // A queued caller can stop waiting without releasing the preceding
+      // approval or policy save. Once started, the operation owns cancellation
+      // so an already dispatched save still drains before later grants run.
+      this.queue = result.then(
+        () => {},
+        () => {},
+      );
+      void result.then(resolve, reject);
+    });
   }
 
   private async persist(policy: ShellPermissionPolicy): Promise<void> {

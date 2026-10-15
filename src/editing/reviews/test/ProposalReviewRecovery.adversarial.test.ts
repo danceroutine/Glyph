@@ -14,6 +14,7 @@ import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationO
 import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { EditError } from '#src/editing/errors/EditError.js';
@@ -878,6 +879,72 @@ describe(ProposalReviewManager, () => {
       await expect(readFile(join(fixture.root, 'file.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
+    it.each([
+      { name: 'an unsupported source', error: new EditError(EditFailureReason.UNSUPPORTED, 'Parent became a file.') },
+      { name: 'a changed source', error: new EditError(EditFailureReason.STALE, 'Source changed before deletion.') },
+      { name: 'an oversized source', error: new WorkspaceReadLimitError('file.txt', 64, 65) },
+      {
+        name: 'a vanished source',
+        error: Object.assign(new Error('Source vanished before unlink.'), { code: 'ENOENT' }),
+      },
+    ])('retains an interrupted rename as stale when cleanup encounters $name', async ({ error }) => {
+      const fixture = await createFixture();
+      const proposal = await proposeRename(fixture);
+      markApplying(proposal);
+      await fixture.store.save([proposal], fixture.root);
+      await link(join(fixture.root, 'file.txt'), join(fixture.root, 'renamed.txt'));
+      const remove = vi.spyOn(fixture.workspace, 'delete').mockRejectedValue(error);
+      const checkpoint = new FileProposalReviewStore(fixture.state);
+      const recovered = new ProposalReviewManager(fixture.workspace, checkpoint);
+
+      await expect(recovered.initialize()).resolves.toBeUndefined();
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(recovered.pendingResults).toEqual([]);
+      const [stored] = await checkpoint.load(fixture.root);
+      expect(stored?.files[0]).toMatchObject({
+        sourcePath: 'file.txt',
+        targetPath: 'renamed.txt',
+        currentPath: 'file.txt',
+        currentRevision: proposal.files[0]!.currentRevision,
+        applicability: EditApplicabilityState.STALE,
+        applyingItemId: null,
+        items: [{ decision: EditDecisionState.PENDING }],
+      });
+      await recovered.rejectAll();
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(recovered.pendingResults[0]?.items[0]?.decision).toBe(EditDecisionState.REJECTED);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
+      expect(await readFile(join(fixture.root, 'renamed.txt'), 'utf8')).toBe('base');
+    });
+
+    it.each([
+      { name: 'permission denial', error: Object.assign(new Error('Permission denied.'), { code: 'EACCES' }) },
+      {
+        name: 'an operation permission denial',
+        error: Object.assign(new Error('Operation denied.'), { code: 'EPERM' }),
+      },
+      { name: 'checkpoint failure', error: new EditError(EditFailureReason.PERSISTENCE, 'Checkpoint failed.') },
+      { name: 'an unexpected failure', error: new Error('Unexpected cleanup failure.') },
+    ])('does not hide $name from interrupted rename cleanup', async ({ error }) => {
+      const fixture = await createFixture();
+      const proposal = await proposeRename(fixture);
+      markApplying(proposal);
+      await fixture.store.save([proposal], fixture.root);
+      await link(join(fixture.root, 'file.txt'), join(fixture.root, 'renamed.txt'));
+      vi.spyOn(fixture.workspace, 'delete').mockRejectedValue(error);
+      const checkpoint = new FileProposalReviewStore(fixture.state);
+      const save = vi.spyOn(checkpoint, 'save');
+      const recovered = new ProposalReviewManager(fixture.workspace, checkpoint);
+
+      await expect(recovered.initialize()).rejects.toBe(error);
+      expect(save).not.toHaveBeenCalled();
+      expect(recovered.pendingResults).toEqual([]);
+      expect((await checkpoint.load(fixture.root))[0]?.files[0]).toMatchObject({
+        applyingItemId: proposal.files[0]!.applyingItemId,
+        items: [{ decision: EditDecisionState.PENDING }],
+      });
+    });
+
     it('rejects a malformed checkpoint without touching the workspace', async () => {
       const fixture = await createFixture();
       await writeFile(join(fixture.state, 'active-proposal-review.json'), '{"schemaVersion":2,"proposals":[');
@@ -972,6 +1039,10 @@ class CountingWorkspaceTextStore implements WorkspaceTextStore {
   replaceCalls = 0;
 
   constructor(private readonly delegate: WorkspaceTextStore) {}
+
+  canonicalPath(path: string): Promise<string> {
+    return this.delegate.canonicalPath(path);
+  }
 
   exists(path: string): Promise<boolean> {
     return this.delegate.exists(path);

@@ -217,7 +217,7 @@ export class TerminalApplication {
     const signal = AbortSignal.any([this.shutdown, this.activeRequest.signal]);
     this.ui.beginAssistantResponse();
     try {
-      await this.flushReviewResults();
+      await this.flushReviewResults(signal);
       const request = await this.glyph.resolveChatRequest(
         prompt,
         attachmentPaths.map(path => ({ path })),
@@ -233,7 +233,9 @@ export class TerminalApplication {
     } finally {
       this.activeRequest = undefined;
     }
-    if (!this.shutdown.aborted) await this.reviewPending();
+    // A cancelled receipt waiter must return control to the prompt instead of
+    // immediately joining the same persistence work through automatic review.
+    if (!signal.aborted) await this.reviewPending();
   }
 
   private async nextActivity(
@@ -311,8 +313,8 @@ export class TerminalApplication {
     await this.flushReviewResults();
   }
 
-  private async flushReviewResults(): Promise<void> {
-    await this.glyph.commitReviewResults(this.requireConversation());
+  private async flushReviewResults(signal: AbortSignal = this.shutdown): Promise<void> {
+    await this.glyph.commitReviewResults(this.requireConversation(), { signal });
   }
 
   private requireConversation(): ChatSession {

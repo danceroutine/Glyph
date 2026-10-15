@@ -17,6 +17,11 @@ import type { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.j
 import type { ChatSessionSummary } from '#src/chat/sessions/ChatSessionRecord.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 
+interface ReviewResultDestination {
+  readonly id?: string;
+  recordContext(events: readonly ChatContextEvent[]): void | Promise<void>;
+}
+
 const emptyUsage = (): Usage => ({
   inputTokens: 0,
   cachedInputTokens: 0,
@@ -35,6 +40,7 @@ export class GlyphService {
   private readonly aggregateUsage = emptyUsage();
   private acquired = false;
   private traceEnabled: boolean;
+  private readonly reviewDeliveries = new Set<Promise<void>>();
 
   constructor(
     private readonly backend: ChatBackend,
@@ -115,6 +121,9 @@ export class GlyphService {
   async dispose(): Promise<void> {
     if (!this.acquired) return;
     this.acquired = false;
+    // Cancelling a turn releases its waiter, but an admitted receipt save must
+    // settle before its chat store closes. Failed deliveries remain retryable.
+    await Promise.allSettled(this.reviewDeliveries);
     try {
       await this.pathIndex?.dispose();
     } finally {
@@ -150,14 +159,52 @@ export class GlyphService {
     return this.instantiateConversation(account, model);
   }
 
-  async commitReviewResults(conversation: {
-    readonly id?: string;
-    recordContext(events: readonly ChatContextEvent[]): void | Promise<void>;
-  }): Promise<void> {
+  /** Concurrent hosts deliver only the current chat's receipts; terminal review can drain all owners. */
+  async commitReviewResults(
+    conversation: ReviewResultDestination,
+    options: { readonly currentChatOnly?: boolean; readonly signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const { signal, currentChatOnly = false } = options;
+    signal?.throwIfAborted();
+    if (currentChatOnly && !conversation.id) throw new Error('Chat-scoped review delivery requires a chat id.');
+    const delivery = this.deliverReviewResults(conversation, currentChatOnly, signal);
+    this.reviewDeliveries.add(delivery);
+    const settled = () => {
+      this.reviewDeliveries.delete(delivery);
+    };
+    void delivery.then(settled, settled);
+    if (!signal) return delivery;
+    return new Promise<void>((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+      void delivery.then(
+        () => {
+          signal.removeEventListener('abort', abort);
+          resolve();
+        },
+        error => {
+          signal.removeEventListener('abort', abort);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  private async deliverReviewResults(
+    conversation: ReviewResultDestination,
+    currentChatOnly: boolean,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (!this.proposalReviews) return;
     await this.proposalReviews.flushPendingCheckpoint();
-    if (this.proposalReviews.pendingResults.length === 0) return;
-    const results = this.proposalReviews.pendingResults;
+    signal?.throwIfAborted();
+    // Foreign receipts stay pending for their owner. Legacy receipts without an
+    // owner require explicit workspace-wide delivery, never a guessed chat.
+    // Another chat's active tool/question cannot gate this turn.
+    const results = this.proposalReviews.pendingResults.filter(
+      result => !currentChatOnly || result.origin?.chatId === conversation.id,
+    );
     const groups = new Map<string, typeof results>();
     for (const result of results) {
       const key = result.origin
@@ -166,6 +213,7 @@ export class GlyphService {
       groups.set(key, [...(groups.get(key) ?? []), result]);
     }
     for (const group of groups.values()) {
+      signal?.throwIfAborted();
       const origin = group[0]?.origin;
       let destination = conversation;
       if (origin && conversation.id !== origin.chatId) {
@@ -183,6 +231,8 @@ export class GlyphService {
           payload: result,
         })),
       );
+      // Once dispatched, complete the receipt handshake even if its caller
+      // stops waiting: acknowledge only after chat history is durably saved.
       await this.proposalReviews.acknowledgeResults(group.map(result => result.id));
     }
   }

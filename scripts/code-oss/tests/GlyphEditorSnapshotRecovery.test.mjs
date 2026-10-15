@@ -46,7 +46,8 @@ beforeAll(async () => {
             contents: `
               const service = () => {};
               export { service as IModelService, service as IWorkspaceTrustManagementService,
-                service as IBulkEditService, service as ITextModelService, service as IWorkspaceContextService };
+                service as IBulkEditService, service as ITextModelService, service as IWorkspaceContextService,
+                service as IUserDataProfileService };
               export class ResourceTextEdit {
                 constructor(resource, edit, version) { Object.assign(this, { resource, edit, version }); }
               }
@@ -88,6 +89,7 @@ describe('Editor snapshot recovery', () => {
       },
     };
     const workspace = new api.EditorWorkspaceTextStore('/workspace', false, {
+      canonicalPath: async path => `/workspace/${path}`,
       listPaths: async () => ({ files: ['a.ts'], truncated: false }),
       request: request => fixture.adapter.handle(request),
     });
@@ -352,12 +354,15 @@ function editorFixture({ caseSensitive = false, diskSize = 4 } = {}) {
       getWorkspaceFolder: () => root,
       isInsideWorkspace: uri => uri.path.startsWith('/workspace/'),
       onDidChangeWorkspaceFolders: Event.None,
+      onDidChangeWorkspaceName: Event.None,
+      onDidChangeWorkbenchState: Event.None,
     },
     { getModel: uri => (uri.toString() === model.uri.toString() ? model : null) },
     { isDirty: () => true },
     { isWorkspaceTrusted: () => true },
     fileService,
     identity,
+    { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: Event.None },
   );
   return {
     adapter,

@@ -303,6 +303,10 @@ class ControllableWorkspaceTextStore implements WorkspaceTextStore {
 
   constructor(private readonly delegate: FileSystemWorkspaceTextStore) {}
 
+  canonicalPath(path: string): Promise<string> {
+    return this.delegate.canonicalPath(path);
+  }
+
   exists(path: string): Promise<boolean> {
     return this.delegate.exists(path);
   }

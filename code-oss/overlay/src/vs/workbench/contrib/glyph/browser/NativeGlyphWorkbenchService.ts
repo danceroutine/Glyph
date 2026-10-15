@@ -5,11 +5,12 @@ import { generateUuid } from '#vs/base/common/uuid.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { IWorkspaceContextService } from '#vs/platform/workspace/common/workspace.js';
 import { IWorkspaceTrustManagementService } from '#vs/platform/workspace/common/workspaceTrust.js';
+import { IUserDataProfileService } from '#vs/workbench/services/userDataProfile/common/userDataProfile.js';
 import { GlyphWorkbenchProjection } from '#glyph/workbench/GlyphWorkbenchProjection.js';
 import { GlyphHostEventType } from '#glyph/protocol/events/GlyphHostEvent.js';
 import { GlyphRunStatus } from '#glyph/protocol/events/GlyphRunProjection.js';
 import { GlyphHostStatus } from '#glyph/protocol/events/GlyphHostStatus.js';
-import { GlyphWorkbenchCommandType } from '#glyph/protocol/GlyphWorkbenchCommand.js';
+import { GlyphWorkbenchCommandType, type GlyphWorkbenchCommand } from '#glyph/protocol/GlyphWorkbenchCommand.js';
 import {
   GlyphContextAttachmentKind,
   type GlyphContextAttachment,
@@ -34,7 +35,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private pendingRunId: string | undefined;
   private creatingChat = false;
   private sending = false;
-  private workspaceChanged = false;
+  private sessionChanged = false;
+  private invalidationMessage = 'Workspace changed. Reload the window to reconnect Glyph.';
+  private readonly profileId: string;
+  private readonly workspaceBinding: string;
   private readonly prompts = new Map<string, string>();
   private readonly errors: GlyphTranscriptEntry[] = [];
 
@@ -42,20 +46,21 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     @IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
     @IWorkspaceTrustManagementService private readonly workspaceTrustService: IWorkspaceTrustManagementService,
     @IInstantiationService instantiationService: IInstantiationService,
+    @IUserDataProfileService private readonly userDataProfileService: IUserDataProfileService,
   ) {
     super();
+    this.profileId = this.userDataProfileService.currentProfile.id;
+    this.workspaceBinding = this.currentWorkspaceBinding();
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
     this.client = this._register(new GlyphDesktopClient(request => editor.handle(request)));
-    this._register(
-      this.workspaceContextService.onDidChangeWorkspaceFolders(() => {
-        this.workspaceChanged = true;
-        // Detach the old runtime too: its index and shell authority still name
-        // the original roots even though the editor has already changed folders.
-        // TODO: Negotiate a replacement host/editor binding without a window reload.
-        this.client.dispose();
-        this.report(new Error('Workspace folders changed. Reload the window to reconnect Glyph.'));
-      }),
-    );
+    this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => this.invalidateSession()));
+    for (const event of [
+      this.workspaceContextService.onDidChangeWorkspaceName,
+      this.workspaceContextService.onDidChangeWorkbenchState,
+    ]) {
+      this._register(event(() => this.invalidateChangedSession()));
+    }
+    this._register(this.userDataProfileService.onDidChangeCurrentProfile(() => this.invalidateChangedSession()));
     this._register(
       this.client.onDidDisconnect(error => {
         editor.invalidate();
@@ -70,6 +75,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     );
     this._register(
       this.client.onDidReceiveEvent(envelope => {
+        if (this.invalidateChangedSession()) return;
         const event = envelope.event;
         this.projection.accept(event);
         switch (event.type) {
@@ -90,12 +96,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     );
     this._register(
       this.workspaceTrustService.onDidChangeTrust(() => {
-        if (this.workspaceChanged) return;
+        if (this.invalidateChangedSession()) return;
         editor.invalidate();
-        void this.client
-          .connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted())
-          .then(() => this.hydrateSelectedChat())
-          .catch(error => this.report(error));
+        void this.connect().catch(error => this.report(error));
       }),
     );
     if (this.workspaceRoots().length > 0) void this.connect().catch(error => this.report(error));
@@ -141,6 +144,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
 
   /** Human decisions keep their distinct state instead of looking like ordinary streaming. */
   private workbenchStatus(activeStatus: GlyphRunStatus | undefined): GlyphWorkbenchStatus {
+    if (this.sessionChanged) return GlyphWorkbenchStatus.DISCONNECTED;
     switch (activeStatus) {
       case GlyphRunStatus.WAITING_FOR_QUESTION:
         return GlyphWorkbenchStatus.WAITING_FOR_QUESTION;
@@ -154,15 +158,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   async connect(): Promise<void> {
-    if (this.workspaceChanged) throw new Error('Workspace folders changed. Reload the window to reconnect Glyph.');
+    this.assertSessionBinding();
     await this.client.connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted());
+    this.assertSessionBinding();
     await this.hydrateSelectedChat();
   }
 
   /** Replacement runtimes recover durable history separately from their live-run snapshot. */
   private async hydrateSelectedChat(): Promise<void> {
     if (this.selectedChatId && !this.projection.state.runs.some(run => run.chatId === this.selectedChatId)) {
-      await this.client.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
+      await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
     }
   }
   setSelection(selection: GlyphWorkbenchSelection | undefined): void {
@@ -171,6 +176,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   async send(text: string): Promise<void> {
+    // Retained runs belong to the retired workspace. Reject before the active
+    // run guard so the composer retains a prompt submitted after invalidation.
+    this.assertSessionBinding();
     const prompt = text.trim();
     if (
       !prompt ||
@@ -197,7 +205,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.pendingRunId = runId;
       this.prompts.set(runId, prompt);
       this.changeEmitter.fire(this.state);
-      await this.client.request({
+      await this.request({
         type: GlyphWorkbenchCommandType.SEND,
         chatId,
         runId,
@@ -214,28 +222,70 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     }
   }
 
+  private currentWorkspaceBinding(): string {
+    const workspace = this.workspaceContextService.getWorkspace();
+    return JSON.stringify([
+      workspace.id,
+      workspace.configuration?.toString(),
+      workspace.folders.map(folder => [folder.name, folder.uri.toString()]),
+    ]);
+  }
+
+  private invalidateChangedSession(): boolean {
+    if (this.userDataProfileService.currentProfile.id !== this.profileId)
+      this.invalidateSession('Profile changed. Reload the window to reconnect Glyph.');
+    if (this.currentWorkspaceBinding() !== this.workspaceBinding) this.invalidateSession();
+    return this.sessionChanged;
+  }
+
+  private assertSessionBinding(): void {
+    if (this.invalidateChangedSession()) throw new Error(this.invalidationMessage);
+  }
+
+  private async request(command: GlyphWorkbenchCommand): Promise<void> {
+    this.assertSessionBinding();
+    await this.client.connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted());
+    // Configuration initialization delays workspace events. Recheck the live
+    // identity after attachment settles, immediately before dispatching work.
+    this.assertSessionBinding();
+    return this.client.request(command);
+  }
+
+  private invalidateSession(message = 'Workspace changed. Reload the window to reconnect Glyph.'): void {
+    if (this.sessionChanged) return;
+    this.sessionChanged = true;
+    this.invalidationMessage = message;
+    this.selection = undefined;
+    this.pendingRunId = undefined;
+    // Saving a workspace or switching profiles can change its storage identity
+    // while retaining the renderer. Retire the runtime and its editor capabilities;
+    // the replacement binding is established when the window reloads.
+    this.client.dispose();
+    this.report(new Error(this.invalidationMessage));
+  }
+
   cancel(): void {
     const run = this.projection.state.runs.find(run => run.chatId === this.selectedChatId && isActive(run.status));
     const runId = run?.runId ?? this.pendingRunId;
     if (!runId || !this.selectedChatId) return;
-    void this.client
-      .request({ type: GlyphWorkbenchCommandType.CANCEL_RUN, chatId: this.selectedChatId, runId })
-      .catch(error => this.report(error));
+    void this.request({ type: GlyphWorkbenchCommandType.CANCEL_RUN, chatId: this.selectedChatId, runId }).catch(error =>
+      this.report(error),
+    );
   }
 
   async selectAccount(provider: string, accountId: string): Promise<void> {
     await this.connect();
-    await this.client.request({ type: GlyphWorkbenchCommandType.SELECT_ACCOUNT, accountProvider: provider, accountId });
-    await this.client.request({ type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT, afterSequence: 0 });
+    await this.request({ type: GlyphWorkbenchCommandType.SELECT_ACCOUNT, accountProvider: provider, accountId });
+    await this.request({ type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT, afterSequence: 0 });
   }
   async selectModel(model: string): Promise<void> {
-    await this.client.request({ type: GlyphWorkbenchCommandType.SELECT_MODEL, model });
+    await this.request({ type: GlyphWorkbenchCommandType.SELECT_MODEL, model });
   }
   async createChat(provider: string, accountId: string, model: string): Promise<void> {
     await this.connect();
     this.creatingChat = true;
     try {
-      await this.client.request({
+      await this.request({
         type: GlyphWorkbenchCommandType.CREATE_CHAT,
         accountProvider: provider,
         accountId,
@@ -247,15 +297,15 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
   async openChat(chatId: string): Promise<void> {
     await this.connect();
-    await this.client.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId });
+    await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId });
     this.selectedChatId = chatId;
     this.changeEmitter.fire(this.state);
   }
   answerQuestion(chatId: string, runId: string, questionId: string, answer: unknown): Promise<void> {
-    return this.client.request({ type: GlyphWorkbenchCommandType.ANSWER_QUESTION, chatId, runId, questionId, answer });
+    return this.request({ type: GlyphWorkbenchCommandType.ANSWER_QUESTION, chatId, runId, questionId, answer });
   }
   decideApproval(chatId: string, runId: string, approvalId: string, approved: boolean): Promise<void> {
-    return this.client.request({
+    return this.request({
       type: GlyphWorkbenchCommandType.DECIDE_APPROVAL,
       chatId,
       runId,
@@ -264,10 +314,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     });
   }
   acceptProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void> {
-    return this.client.request({ type: GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM, chatId, proposalId, itemId });
+    return this.request({ type: GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM, chatId, proposalId, itemId });
   }
   rejectProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void> {
-    return this.client.request({ type: GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM, chatId, proposalId, itemId });
+    return this.request({ type: GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM, chatId, proposalId, itemId });
   }
 
   private workspaceRoots() {

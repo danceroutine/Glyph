@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { OverlappingWorkspaceFixture } from '#src/workspace/tests/fixtures/OverlappingWorkspaceFixture.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { TextDocument } from '#src/editing/documents/TextDocument.js';
@@ -32,6 +33,264 @@ afterEach(async () => {
 });
 
 describe(EditProposalService, () => {
+  describe('proposal preflight', () => {
+    it.each(['\ud800', '\udc00'].flatMap(path => ['structured', 'patch'].map(format => ({ path, format }))))(
+      'rejects malformed Unicode filenames %j in $format proposals before their encoded aliases can be staged',
+      async ({ path, format }) => {
+        const { service, workspace } = await fixture('base');
+        const exists = vi.spyOn(workspace, 'exists');
+        expect(Buffer.from(path)).toEqual(Buffer.from('\ufffd'));
+        const paths = [path, '\ufffd'];
+        const proposal =
+          format === 'structured'
+            ? service.proposeStructured({ files: paths.map(value => structuredCreate(value)) })
+            : service.proposePatch(
+                [
+                  '*** Begin Patch',
+                  ...paths.flatMap(value => [`*** Add File: ${value}`, '+new']),
+                  '*** End Patch',
+                ].join('\n'),
+              );
+        await expect(proposal).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+        expect(exists).not.toHaveBeenCalled();
+      },
+    );
+
+    it('preserves emoji and distinct well-formed Unicode spellings in prospective filenames', async () => {
+      const { service } = await fixture('base', {}, { caseSensitive: true });
+      const paths = ['🧪.txt', 'é.txt', 'e\u0301.txt', '\ufffd.txt'];
+      const proposal = await service.proposeStructured({ files: paths.map(path => structuredCreate(path)) });
+      expect(proposal.files.map(file => file.targetPath)).toEqual(paths);
+    });
+
+    it.each(
+      [
+        { paths: ['repo/pkg/a', 'pkg/a'], caseSensitive: true, name: 'duplicate prospective files' },
+        { paths: ['repo/pkg/a', 'pkg/a/b'], caseSensitive: true, name: 'physical ancestors' },
+        { paths: ['pkg/a/b', 'repo/pkg/a'], caseSensitive: true, name: 'physical ancestors in reverse order' },
+        { paths: ['repo/pkg/A', 'pkg/a'], caseSensitive: false, name: 'case-insensitive prospective aliases' },
+      ].flatMap(example => ['structured', 'patch'].map(format => ({ ...example, format }))),
+    )(
+      'rejects $name across overlapping roots in $format proposals before reading sources',
+      async ({ paths, caseSensitive, format }) => {
+        const base = await fixture('base');
+        await mkdir(join(base.workspace.root, 'pkg'));
+        const workspace = new OverlappingWorkspaceFixture(base.workspace.root, caseSensitive);
+        const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
+        const read = vi.spyOn(workspace, 'readOptional');
+        const exists = vi.spyOn(workspace, 'exists');
+        const pending =
+          format === 'structured'
+            ? service.proposeStructured({ files: paths.map(path => structuredCreate(path)) })
+            : service.proposePatch(
+                ['*** Begin Patch', ...paths.flatMap(path => [`*** Add File: ${path}`, '+new']), '*** End Patch'].join(
+                  '\n',
+                ),
+              );
+        await expect(pending).rejects.toMatchObject({ reason: EditFailureReason.AMBIGUOUS });
+        expect(read).not.toHaveBeenCalled();
+        expect(exists).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['pkg/a', 'pkg/a/b'])('rejects an aliased rename destination %s before source reads', async target => {
+      const base = await fixture('base');
+      await mkdir(join(base.workspace.root, 'pkg'));
+      const workspace = new OverlappingWorkspaceFixture(base.workspace.root);
+      const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
+      const read = vi.spyOn(workspace, 'readOptional');
+      await expect(
+        service.proposeStructured({
+          files: [
+            structuredCreate('repo/pkg/a'),
+            {
+              ...structuredCreate('repo/file.txt'),
+              operation: EditOperation.RENAME,
+              new_path: target,
+              base_revision: 'base',
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.AMBIGUOUS });
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('allows distinct prospective files and non-segment prefixes across overlapping roots', async () => {
+      const base = await fixture('base');
+      await mkdir(join(base.workspace.root, 'pkg'));
+      const workspace = new OverlappingWorkspaceFixture(base.workspace.root);
+      const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
+      const paths = ['repo/pkg/A', 'pkg/a/file', 'pkg/ab', 'repo/other'];
+      const proposal = await service.proposeStructured({ files: paths.map(path => structuredCreate(path)) });
+      expect(proposal.files.map(file => file.targetPath)).toEqual(paths);
+    });
+
+    it.each([
+      { paths: ['a', 'a/b'], name: 'a parent before its child' },
+      { paths: ['a/b', 'a'], name: 'a child before its parent' },
+      { paths: ['dir/a/deep/b', 'dir/a'], name: 'a deeper descendant before its parent' },
+      { paths: ['dir/a', 'dir/a/deep/b'], name: 'a parent before its deeper descendant' },
+    ])('rejects creating $name before looking up any files', async ({ paths }) => {
+      const { service, workspace } = await fixture('base');
+      const read = vi.spyOn(workspace, 'readOptional');
+      const exists = vi.spyOn(workspace, 'exists');
+      await expect(
+        service.proposeStructured({ files: paths.map(path => structuredCreate(path)) }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.AMBIGUOUS });
+      expect(read).not.toHaveBeenCalled();
+      expect(exists).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { operation: EditOperation.UPDATE, path: 'a/b', new_path: null },
+      { operation: EditOperation.DELETE, path: 'a/b', new_path: null },
+      { operation: EditOperation.RENAME, path: 'a/b', new_path: 'elsewhere' },
+      { operation: EditOperation.RENAME, path: 'elsewhere', new_path: 'a/b' },
+    ])('rejects a created ancestor of a $operation source or destination before reading it', async file => {
+      const { service, workspace } = await fixture('base');
+      const read = vi.spyOn(workspace, 'readOptional');
+      const exists = vi.spyOn(workspace, 'exists');
+      await expect(
+        service.proposeStructured({
+          files: [structuredCreate('a'), { ...structuredCreate(file.path), ...file, base_revision: 'base' }],
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.AMBIGUOUS });
+      expect(read).not.toHaveBeenCalled();
+      expect(exists).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { path: 'a', target: 'a/b' },
+      { path: 'a/b', target: 'a' },
+    ])('rejects a rename between an ancestor and descendant: $path to $target', async ({ path, target }) => {
+      const { service, workspace } = await fixture('base');
+      const read = vi.spyOn(workspace, 'readOptional');
+      await expect(
+        service.proposeStructured({
+          files: [
+            { ...structuredCreate(path), operation: EditOperation.RENAME, new_path: target, base_revision: 'base' },
+          ],
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.AMBIGUOUS });
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('rejects differently cased ancestors on case-insensitive workspaces', async () => {
+      const { service, workspace } = await fixture('base', {}, { caseSensitive: false });
+      const exists = vi.spyOn(workspace, 'exists');
+      await expect(
+        service.proposeStructured({ files: [structuredCreate('Folder'), structuredCreate('folder/file')] }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.AMBIGUOUS });
+      expect(exists).not.toHaveBeenCalled();
+    });
+
+    it('allows sibling paths, non-segment prefixes, and distinct casing on case-sensitive workspaces', async () => {
+      const { service } = await fixture('base', {}, { caseSensitive: true });
+      const paths = ['Folder', 'folder/file', 'folder/other', 'folders'];
+      const proposal = await service.proposeStructured({ files: paths.map(path => structuredCreate(path)) });
+      expect(proposal.files.map(file => file.targetPath)).toEqual(paths);
+    });
+
+    it.each(['Add', 'Update', 'Delete', 'Rename'])(
+      'rejects an oversized %s patch before any source or occupancy reads',
+      async operation => {
+        const { service, workspace } = await fixture('base\n');
+        const base = await workspace.read('file.txt');
+        const read = vi.spyOn(workspace, 'readOptional').mockResolvedValue(base);
+        const exists = vi.spyOn(workspace, 'exists').mockResolvedValue(false);
+        const header = operation === 'Rename' ? 'Update' : operation;
+        const entries = Array.from({ length: 1_000 }, (_, index) => [
+          `*** ${header} File: source-${index}`,
+          ...(operation === 'Add' ? ['+next'] : [`*** Revision: ${base.revision}`]),
+          ...(operation === 'Rename' ? [`*** Move to: target-${index}`] : []),
+          ...(['Update', 'Rename'].includes(operation) ? ['@@', '-base', '+next'] : []),
+        ]).flat();
+        const patch = ['*** Begin Patch', ...entries, '*** End Patch'].join('\n');
+        expect(Buffer.byteLength(patch)).toBeLessThan(configuration.maxRawProposalBytes);
+        await expect(service.proposePatch(patch)).rejects.toMatchObject({ reason: EditFailureReason.LIMIT_EXCEEDED });
+        expect(read).not.toHaveBeenCalled();
+        expect(exists).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      {
+        name: 'an updated descendant after a created file',
+        entries: ['*** Add File: a', '+new', '*** Update File: a/b', '*** Revision: base', '@@', '-base', '+next'],
+      },
+      {
+        name: 'an updated descendant before a created file',
+        entries: ['*** Update File: a/b', '*** Revision: base', '@@', '-base', '+next', '*** Add File: a', '+new'],
+      },
+      {
+        name: 'a rename destination under another created file',
+        entries: [
+          '*** Update File: original',
+          '*** Revision: base',
+          '*** Move to: a/b',
+          '@@',
+          '-base',
+          '+next',
+          '*** Add File: a',
+          '+new',
+        ],
+      },
+      {
+        name: 'a created descendant depending on a prior file deletion',
+        entries: ['*** Delete File: a', '*** Revision: base', '*** Add File: a/b', '+new'],
+      },
+      {
+        name: 'a duplicate deletion',
+        entries: ['*** Delete File: a', '*** Revision: base', '*** Delete File: a', '*** Revision: base'],
+      },
+    ])('rejects $name before expanding patch source content', async ({ entries }) => {
+      const { service, workspace } = await fixture('base');
+      const read = vi.spyOn(workspace, 'readOptional');
+      const exists = vi.spyOn(workspace, 'exists');
+      await expect(
+        service.proposePatch(['*** Begin Patch', ...entries, '*** End Patch'].join('\n')),
+      ).rejects.toMatchObject({ reason: EditFailureReason.AMBIGUOUS });
+      expect(read).not.toHaveBeenCalled();
+      expect(exists).not.toHaveBeenCalled();
+    });
+
+    it('rejects conflicting rename destinations before reading either source', async () => {
+      const { service, workspace } = await fixture('base');
+      const read = vi.spyOn(workspace, 'readOptional');
+      await expect(
+        service.proposeStructured({
+          files: ['a', 'a/b'].map((target, index) => ({
+            ...structuredCreate(`source-${index}`),
+            operation: EditOperation.RENAME,
+            new_path: target,
+            base_revision: 'base',
+          })),
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.AMBIGUOUS });
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('compiles a patch at the exact file-count limit with unrelated sources and destinations', async () => {
+      const { service, workspace } = await fixture('base\n', { maxFiles: 2 });
+      const base = await workspace.read('file.txt');
+      const proposal = await service.proposePatch(
+        [
+          '*** Begin Patch',
+          '*** Update File: file.txt',
+          `*** Revision: ${base.revision}`,
+          '*** Move to: renamed.txt',
+          '@@',
+          '-base',
+          '+next',
+          '*** Add File: nested/new.txt',
+          '+new',
+          '*** End Patch',
+        ].join('\n'),
+      );
+      expect(proposal.files.map(file => file.targetPath)).toEqual(['renamed.txt', 'nested/new.txt']);
+    });
+  });
+
   it('tokenizes patch source once and composes all hunks without recopying the full file', async () => {
     const lines = Array.from({ length: 128 }, (_, index) => `line${String(index).padStart(4, '0')}${'x'.repeat(119)}`);
     const text = lines.join('\n') + '\n';
@@ -811,11 +1070,12 @@ describe(EditProposalService, () => {
 async function fixture(
   text: string,
   overrides: Partial<EditingConfiguration> = {},
+  workspaceOptions: { caseSensitive?: boolean } = {},
 ): Promise<{ service: EditProposalService; workspace: FileSystemWorkspaceTextStore }> {
   const root = await mkdtemp(join(tmpdir(), 'proposal-service-'));
   directories.push(root);
   await writeFile(join(root, 'file.txt'), text);
-  const workspace = new FileSystemWorkspaceTextStore(root);
+  const workspace = new FileSystemWorkspaceTextStore(root, workspaceOptions);
   return {
     workspace,
     service: new EditProposalService(
@@ -826,5 +1086,17 @@ async function fixture(
       () => `id-${Math.random()}`,
       () => new Date(0),
     ),
+  };
+}
+
+function structuredCreate(path: string) {
+  return {
+    operation: EditOperation.CREATE,
+    path,
+    new_path: null,
+    base_revision: null,
+    content: 'new',
+    byte_order_mark: false,
+    edits: [],
   };
 }

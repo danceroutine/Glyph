@@ -18,6 +18,43 @@ const form = {
   ],
 };
 describe(DesktopInteractionBroker, () => {
+  it('cancels a queued decision without answering or bypassing the decision already displayed for its run', async () => {
+    const events: GlyphHostEvent[] = [];
+    const broker = new DesktopInteractionBroker(event => events.push(event));
+    const firstController = new AbortController();
+    const queuedController = new AbortController();
+    const lastController = new AbortController();
+    const identity = { chatId: 'chat', runId: 'run' };
+    const first = broker.run(identity, () => broker.present(form, firstController.signal)).catch(error => error);
+    let queuedError: unknown;
+    const queued = broker
+      .run(identity, () => broker.present(form, queuedController.signal))
+      .catch(error => {
+        queuedError = error;
+      });
+    const last = broker.run(identity, () => broker.present(form, lastController.signal)).catch(error => error);
+    try {
+      const cancelled = new Error('Queued question cancelled.');
+      queuedController.abort(cancelled);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect.soft(queuedError).toBe(cancelled);
+      expect(events).toHaveLength(1);
+      const question = events[0];
+      if (question?.type !== GlyphHostEventType.QUESTION) throw new Error('Expected the first question.');
+      const answer = { answers: [{ questionId: 'color', type: QuestionAnswerType.SELECTION, optionIds: ['red'] }] };
+      broker.answer({ ...identity, id: question.question.id, kind: 'question', value: answer });
+      await expect(first).resolves.toEqual(answer);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(events).toHaveLength(2);
+      expect(firstController.signal.aborted).toBe(false);
+    } finally {
+      firstController.abort();
+      queuedController.abort();
+      lastController.abort();
+      await Promise.all([first, queued, last]);
+    }
+  });
+
   it('queues concurrent human decisions so the recoverable run exposes every question in order', async () => {
     const events: GlyphHostEvent[] = [];
     const broker = new DesktopInteractionBroker(event => events.push(event));

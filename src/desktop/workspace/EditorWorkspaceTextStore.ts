@@ -8,6 +8,7 @@ import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
+import { assertWellFormedWorkspacePath } from '#src/workspace/assertWellFormedWorkspacePath.js';
 import type { GlyphDocumentToken } from '#src/desktop/protocol/connection/GlyphDocumentToken.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 import type { GlyphEditorTextSnapshot } from '#src/desktop/protocol/editor/GlyphEditorTextSnapshot.js';
@@ -37,7 +38,9 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     readonly root: string,
     readonly caseSensitive: boolean,
     private readonly client: EditorWorkspaceClient,
-  ) {}
+  ) {
+    assertWellFormedWorkspacePath(root);
+  }
 
   list(
     maxFiles: number,
@@ -48,6 +51,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   normalizePath(input: string): string {
+    assertWellFormedWorkspacePath(input);
     if (!input || isAbsolute(input) || input.includes('\0')) throw malformedPath(input);
     const candidate = resolve(this.root, input);
     const fromRoot = relative(resolve(this.root), candidate);
@@ -55,6 +59,10 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       throw malformedPath(input);
     }
     return fromRoot.split(sep).join('/');
+  }
+
+  canonicalPath(input: string): Promise<string> {
+    return this.client.canonicalPath(this.normalizePath(input));
   }
 
   async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {

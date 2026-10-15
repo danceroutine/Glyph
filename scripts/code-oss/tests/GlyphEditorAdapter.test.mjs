@@ -36,7 +36,8 @@ async function adapterModule() {
         const service = () => {};
         export { service as IModelService,
           service as IWorkspaceTrustManagementService, service as IBulkEditService,
-          service as ITextModelService, service as IWorkspaceContextService, service as IUriIdentityService };
+          service as ITextModelService, service as IWorkspaceContextService, service as IUriIdentityService,
+          service as IUserDataProfileService };
         export class ResourceTextEdit { constructor(resource, edit, version) { Object.assign(this, { resource, edit, version }); } }
         export class UndoRedoGroup { id = 1; }
         export const EditSources = { unknown: metadata => ({ metadata }) };
@@ -76,12 +77,15 @@ describe('Editor workspace binding', () => {
           getWorkspaceFolder: () => root,
           isInsideWorkspace: () => true,
           onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+          onDidChangeWorkspaceName: () => ({ dispose() {} }),
+          onDidChangeWorkbenchState: () => ({ dispose() {} }),
         },
         { getModel: () => (kind === 'live' ? {} : null) },
         {},
         { isWorkspaceTrusted: () => trusted },
         { exists },
         { asCanonicalUri: resource => resource },
+        { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
       );
       try {
         const response = await adapter.handle({ type: 'exists', path: 'target.txt', operationId: 'occupancy' });
@@ -124,12 +128,15 @@ describe('Editor workspace binding', () => {
         getWorkspaceFolder: uri => folders.find(folder => uri.path.startsWith(`${folder.uri.path}/`)),
         isInsideWorkspace: () => true,
         onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+        onDidChangeWorkspaceName: () => ({ dispose() {} }),
+        onDidChangeWorkbenchState: () => ({ dispose() {} }),
       },
       { getModels: () => models },
       { isDirty: () => true },
       { isWorkspaceTrusted: () => true },
       {},
       { asCanonicalUri: resource => resource },
+      { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
     );
     try {
       const response = await adapter.handle({ type: 'list_working_copies', operationId: 'list' });
@@ -234,12 +241,15 @@ describe('Editor workspace binding', () => {
           getWorkspace: () => ({ id: 'workspace', folders: [{ name: 'workspace', uri: URI.file('/workspace') }] }),
           isInsideWorkspace: () => true,
           onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+          onDidChangeWorkspaceName: () => ({ dispose() {} }),
+          onDidChangeWorkbenchState: () => ({ dispose() {} }),
         },
         { getModels: () => [model] },
         { isDirty: () => true },
         { isWorkspaceTrusted: () => true },
         {},
         { asCanonicalUri: resource => resource },
+        { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
       );
       try {
         const before = await adapter.read('file.ts');
@@ -388,6 +398,88 @@ describe('Editor workspace binding', () => {
     }
   });
 
+  it.each(['name', 'state', 'configuration', 'profile'])(
+    'cancels a prepared edit when the session %s changes without changing its folders',
+    async change => {
+      const fixture = await pendingEdit();
+      try {
+        const applying = fixture.apply();
+        await fixture.entered.promise;
+        fixture.changeWorkspace(change);
+        fixture.write.resolve();
+        fixture.finish.resolve();
+        const result = await applying;
+        expect.soft(fixture.text()).toBe('original');
+        expect(result).toMatchObject({ ok: false, error: { code: 'WORKSPACE_CHANGED' } });
+        expect(await fixture.adapter.inspectReceipt('edit')).toBeUndefined();
+      } finally {
+        fixture.adapter.dispose();
+      }
+    },
+  );
+
+  it.each(['name', 'state', 'configuration', 'profile'])(
+    'keeps completed edit evidence inspectable when the session %s changes before the reply',
+    async change => {
+      const fixture = await pendingEdit();
+      try {
+        const applying = fixture.apply();
+        await fixture.entered.promise;
+        fixture.write.resolve();
+        await fixture.written.promise;
+        fixture.changeWorkspace(change);
+        fixture.finish.resolve();
+        expect(await applying).toMatchObject({
+          ok: false,
+          error: { code: 'WORKSPACE_CHANGED' },
+          receipt: { state: 'applied' },
+        });
+        expect(fixture.text()).toBe('replacement');
+        expect(await fixture.adapter.handle({ type: 'inspect_mutation_receipt', operationId: 'edit' })).toMatchObject({
+          ok: true,
+          receipt: { operationId: 'edit', state: 'applied', beforeRevision: fixture.before.contentRevision },
+        });
+      } finally {
+        fixture.adapter.dispose();
+      }
+    },
+  );
+
+  it.each(['display', 'profile metadata'])(
+    'preserves an edit when a %s event does not change its binding',
+    async change => {
+      const fixture = await pendingEdit();
+      try {
+        const applying = fixture.apply();
+        await fixture.entered.promise;
+        fixture.changeWorkspace(change);
+        fixture.write.resolve();
+        fixture.finish.resolve();
+        expect(await applying).toMatchObject({ ok: true, receipt: { state: 'applied' } });
+        expect(fixture.text()).toBe('replacement');
+      } finally {
+        fixture.adapter.dispose();
+      }
+    },
+  );
+
+  it('rejects editor operations under a changed profile before its notification arrives', async () => {
+    const fixture = await pendingEdit();
+    try {
+      fixture.changeWorkspace('profile pending notification');
+      fixture.write.resolve();
+      fixture.finish.resolve();
+      const response = await fixture.apply();
+      expect(response).toMatchObject({ ok: false, error: { code: 'WORKSPACE_CHANGED' } });
+      expect(fixture.launch).not.toHaveBeenCalled();
+      expect(fixture.text()).toBe('original');
+    } finally {
+      fixture.write.resolve();
+      fixture.finish.resolve();
+      fixture.adapter.dispose();
+    }
+  });
+
   it('retains an applied receipt when a folder is removed after the write but before Bulk Edit returns', async () => {
     const fixture = await pendingEdit();
     try {
@@ -423,6 +515,8 @@ describe('Editor workspace binding', () => {
         listeners.add(callback);
         return { dispose: () => listeners.delete(callback) };
       },
+      onDidChangeWorkspaceName: () => ({ dispose() {} }),
+      onDidChangeWorkbenchState: () => ({ dispose() {} }),
     };
     const reference = vi.fn(async uri => ({
       object: {
@@ -445,6 +539,7 @@ describe('Editor workspace binding', () => {
       { isWorkspaceTrusted: () => true },
       {},
       { asCanonicalUri: resource => resource },
+      { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
     );
     try {
       const before = await adapter.read('A/file.ts');
@@ -490,7 +585,13 @@ async function pendingEdit({
   const written = Promise.withResolvers();
   const finish = Promise.withResolvers();
   let folders = [{ name: 'A', uri: URI.file('/workspace/A') }];
+  let workspaceId = 'workspace';
+  let profileId = 'profile';
+  let configuration = URI.file('/workspace/original.code-workspace');
   const folderListeners = new Set();
+  const nameListeners = new Set();
+  const stateListeners = new Set();
+  const profileListeners = new Set();
   const contentListeners = new Set();
   let text = initial;
   let version = 1;
@@ -524,11 +625,19 @@ async function pendingEdit({
     { createModelReference: async () => ({ object: { textEditorModel: model }, dispose() {} }) },
     { apply: launch },
     {
-      getWorkspace: () => ({ id: 'workspace', folders }),
+      getWorkspace: () => ({ id: workspaceId, configuration, folders }),
       isInsideWorkspace: () => folders.length > 0,
       onDidChangeWorkspaceFolders: listener => {
         folderListeners.add(listener);
         return { dispose: () => folderListeners.delete(listener) };
+      },
+      onDidChangeWorkspaceName: listener => {
+        nameListeners.add(listener);
+        return { dispose: () => nameListeners.delete(listener) };
+      },
+      onDidChangeWorkbenchState: listener => {
+        stateListeners.add(listener);
+        return { dispose: () => stateListeners.delete(listener) };
       },
     },
     { getModels: () => [model] },
@@ -536,6 +645,15 @@ async function pendingEdit({
     { isWorkspaceTrusted: () => true },
     {},
     { asCanonicalUri: resource => resource },
+    {
+      get currentProfile() {
+        return { id: profileId };
+      },
+      onDidChangeCurrentProfile: listener => {
+        profileListeners.add(listener);
+        return { dispose: () => profileListeners.delete(listener) };
+      },
+    },
   );
   const before = await adapter.read('file.ts');
   return {
@@ -547,6 +665,17 @@ async function pendingEdit({
     written,
     finish,
     text: () => text,
+    changeWorkspace: change => {
+      if (change.startsWith('profile')) {
+        if (change !== 'profile metadata') profileId = 'replacement-profile';
+        if (change !== 'profile pending notification') for (const listener of profileListeners) listener();
+        return;
+      }
+      if (change === 'name' || change === 'state') workspaceId = 'replacement-workspace';
+      if (change === 'configuration') configuration = URI.file('/workspace/replacement.code-workspace');
+      const listeners = change === 'state' ? stateListeners : nameListeners;
+      for (const listener of listeners) listener();
+    },
     removeFolder: () => {
       folders = [];
       for (const listener of folderListeners) listener({});

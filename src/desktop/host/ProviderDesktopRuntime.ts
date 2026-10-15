@@ -40,6 +40,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private models: readonly Model[] = [];
   private selectedModel: Model | undefined;
   private disposed = false;
+  private disposal: Promise<void> | undefined;
+  private discovery = new AbortController();
   private readonly commands = new Set<Promise<void>>();
   private readonly unsubscribe: (() => void) | undefined;
 
@@ -100,7 +102,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     switch (command.type) {
       case GlyphWorkbenchCommandType.SELECT_ACCOUNT: {
         const account = this.account(command.accountProvider, command.accountId);
-        const models = await glyph.listModels(account);
+        const signal = this.discovery.signal;
+        const models = await glyph.listModels(account, signal);
+        signal.throwIfAborted();
         this.selectedAccount = account;
         this.models = models;
         this.selectedModel = models[0];
@@ -122,13 +126,18 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       case GlyphWorkbenchCommandType.CREATE_CHAT: {
         const account = this.account(command.accountProvider, command.accountId);
-        const models = await glyph.listModels(account);
+        const signal = this.discovery.signal;
+        const models = await glyph.listModels(account, signal);
+        signal.throwIfAborted();
         const model = models.find(value => value.slug === command.model);
         if (!model) throw new Error('The selected model is unavailable.');
         this.selectedAccount = account;
         this.models = models;
         this.selectedModel = model;
         const session = await glyph.createChat(account, model);
+        // An admitted checkpoint must settle, but its departed renderer should
+        // not receive a late chat-selection event from the completed command.
+        signal.throwIfAborted();
         this.sessions.set(session.id, session);
         this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
         return;
@@ -224,18 +233,27 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     if (command.type === GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM)
       await reviews.acceptInReview(command.proposalId, command.itemId);
     else await reviews.rejectInReview(command.proposalId, command.itemId);
-    await glyph.commitReviewResults(session);
+    await glyph.commitReviewResults(session, { currentChatOnly: true });
   }
 
   /** Pending prompts are cancelled when their owning renderer disappears. */
   async connectionLost(windowId: string): Promise<void> {
     if (windowId !== this.options.ownerWindowId) return;
+    const discovery = this.discovery;
+    // A renderer reload can reuse this runtime. New commands get a fresh
+    // discovery scope while in-flight requests retain the cancelled one.
+    this.discovery = new AbortController();
+    discovery.abort(new Error('Model discovery cancelled because the owning window disconnected.'));
     for (const run of this.active.values()) run.controller.abort(new Error('The owning window disconnected.'));
     await Promise.allSettled([...this.active.values()].map(run => run.completion));
   }
 
   /** Settle active operations before closing their shell and persistence dependencies. */
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    return (this.disposal ??= this.stop());
+  }
+
+  private async stop(): Promise<void> {
     this.disposed = true;
     await this.connectionLost(this.options.ownerWindowId);
     // Proposal decisions checkpoint after their editor side effect. Closing
@@ -299,7 +317,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     });
     try {
       // Review decisions must enter provider history before the next turn can reason about the files.
-      await this.options.glyph.commitReviewResults(session);
+      await this.options.glyph.commitReviewResults(session, { currentChatOnly: true, signal });
+      signal.throwIfAborted();
       // Bind tool prompts to this exact run so another chat cannot answer them.
       const result = await this.options.interactions.run(command, () =>
         session.send(

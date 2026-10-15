@@ -10,6 +10,10 @@ import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 import { isSafeShellCommand } from '#src/shell/isSafeShellCommand.js';
 import type { ShellPermissionPresenter } from '#src/shell/ShellPermissionPresenter.js';
 import type { ShellPermissionStore } from '#src/shell/ShellPermissionStore.js';
+import { DesktopInteractionBroker } from '#src/desktop/host/DesktopInteractionBroker.js';
+import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
+import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import type { ShellWorkingDirectoryResolver } from '#src/shell/ShellWorkingDirectoryResolver.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -19,6 +23,105 @@ afterEach(async () => {
 
 describe(ShellCommandAuthorizer, () => {
   describe(ShellCommandAuthorizer.prototype.authorize, () => {
+    it('cancels a queued chat shell command before another chat answers its approval', async () => {
+      const events: GlyphHostEvent[] = [];
+      const broker = new DesktopInteractionBroker(event => events.push(event));
+      const save = vi.fn<ShellPermissionStore['save']>();
+      const authorizer = new ShellCommandAuthorizer('project', store(undefined, save), broker);
+      const launch = vi.fn(() => {
+        throw new Error('No shell process should launch in this fixture.');
+      });
+      const manager = new ShellSessionManager(
+        authorizer,
+        { resolve: async () => '/project' } as ShellWorkingDirectoryResolver,
+        { launch },
+      );
+      const firstController = new AbortController();
+      const queuedController = new AbortController();
+      const first = broker
+        .run({ chatId: 'first', runId: 'first-run' }, () =>
+          manager.execute('first command', { signal: firstController.signal, ownerChatId: 'first' }),
+        )
+        .catch(error => error);
+      let queuedError: unknown;
+      const queued = broker
+        .run({ chatId: 'queued', runId: 'queued-run' }, () =>
+          manager.execute('queued command', { signal: queuedController.signal, ownerChatId: 'queued' }),
+        )
+        .catch(error => {
+          queuedError = error;
+        });
+      try {
+        await flushQueue();
+        expect(events).toHaveLength(1);
+        const cancelled = new Error('Queued chat cancelled.');
+        queuedController.abort(cancelled);
+        await flushQueue();
+        expect.soft(queuedError).toBe(cancelled);
+        expect(firstController.signal.aborted).toBe(false);
+        expect(events).toHaveLength(1);
+        const approval = events[0];
+        if (approval?.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected the first chat approval.');
+        broker.answer({
+          chatId: 'first',
+          runId: 'first-run',
+          id: approval.approval.id,
+          kind: 'approval',
+          value: false,
+        });
+        expect(await first).toEqual(expect.objectContaining({ message: expect.stringContaining('denied') }));
+        await queued;
+        expect(events).toHaveLength(1);
+        expect(manager.sessionsFor('queued')).toEqual([]);
+        expect(launch).not.toHaveBeenCalled();
+        expect(save).not.toHaveBeenCalled();
+      } finally {
+        firstController.abort();
+        queuedController.abort();
+        await Promise.all([first, queued]);
+        await manager.dispose();
+      }
+    });
+
+    it('cancels a queued caller without releasing a preceding policy save or reordering later authorization', async () => {
+      let finishSave = () => {};
+      const saveGate = new Promise<void>(resolve => {
+        finishSave = resolve;
+      });
+      const save = vi.fn<ShellPermissionStore['save']>(() => saveGate);
+      const presentShellPermission = vi.fn(async () => ShellPermissionDecision.ALLOW_EVERYTHING);
+      const authorizer = new ShellCommandAuthorizer('project', store(undefined, save), { presentShellPermission });
+      const first = authorizer.authorize('first command', '/project', signal());
+      const controller = new AbortController();
+      let queuedError: unknown;
+      const queued = authorizer.authorize('cancelled command', '/project', controller.signal).catch(error => {
+        queuedError = error;
+      });
+      let followingSettled = false;
+      const following = authorizer.authorize('following command', '/project', signal()).then(value => {
+        followingSettled = true;
+        return value;
+      });
+      try {
+        await flushQueue();
+        expect(save).toHaveBeenCalledOnce();
+        const cancelled = new Error('Cancelled while queued behind persistence.');
+        controller.abort(cancelled);
+        await flushQueue();
+        expect.soft(queuedError).toBe(cancelled);
+        expect(followingSettled).toBe(false);
+        expect(authorizer.mode).toBe(ShellPermissionMode.ASK);
+        expect(presentShellPermission).toHaveBeenCalledOnce();
+      } finally {
+        finishSave();
+        await Promise.all([first, queued, following]);
+      }
+      expect(authorizer.mode).toBe(ShellPermissionMode.ALLOW_EVERYTHING);
+      expect(await following).toEqual({ sandboxProfile: ShellSandboxProfile.FULL_ACCESS });
+      expect(presentShellPermission).toHaveBeenCalledOnce();
+      expect(save).toHaveBeenCalledOnce();
+    });
+
     it.each([
       ShellPermissionDecision.ALLOW_ONCE,
       ShellPermissionDecision.ALWAYS_ALLOW,
@@ -410,4 +513,8 @@ async function temporaryDirectory(): Promise<string> {
 
 function signal(): AbortSignal {
   return new AbortController().signal;
+}
+
+function flushQueue(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve));
 }

@@ -7,6 +7,7 @@ import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
 import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';
+import { assertWellFormedWorkspacePath } from './assertWellFormedWorkspacePath.ts';
 
 interface NamedWorkspaceTextStore {
   readonly name: string;
@@ -26,6 +27,7 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
 
   constructor(context: ProjectContext, roots: readonly NamedWorkspaceTextStore[]) {
     if (roots.length === 0) throw new Error('A multi-root workspace requires at least one root.');
+    for (const root of roots) assertWellFormedWorkspacePath(root.name);
     this.root = context.workspaceFile ? dirname(context.workspaceFile) : roots[0]!.store.root;
     this.caseSensitive = roots.every(root => root.store.caseSensitive);
     this.mutationConsistency = roots.every(
@@ -41,6 +43,11 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
     const route = this.route(input, true);
     if (!route.relativePath) return route.name;
     return this.join(route.name, route.store.normalizePath(route.relativePath));
+  }
+
+  canonicalPath(path: string): Promise<string> {
+    const route = this.fileRoute(path);
+    return route.store.canonicalPath(route.relativePath);
   }
 
   async list(
@@ -143,6 +150,7 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   private route(input: string, allowRoot: boolean): { name: string; relativePath: string; store: WorkspaceTextStore } {
+    assertWellFormedWorkspacePath(input);
     if (!input || input.startsWith('/') || input.includes('\0')) {
       throw new EditError(EditFailureReason.MALFORMED, 'Workspace paths must begin with a folder name.', {
         path: input,

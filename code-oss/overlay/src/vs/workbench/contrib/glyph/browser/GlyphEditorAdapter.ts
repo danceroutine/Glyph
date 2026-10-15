@@ -10,6 +10,7 @@ import {
   TextFileOperationResult,
 } from '#vs/workbench/services/textfile/common/textfiles.js';
 import { IWorkspaceTrustManagementService } from '#vs/platform/workspace/common/workspaceTrust.js';
+import { IUserDataProfileService } from '#vs/workbench/services/userDataProfile/common/userDataProfile.js';
 import { FileOperationResult, IFileService, toFileOperationResult } from '#vs/platform/files/common/files.js';
 import { IUriIdentityService } from '#vs/platform/uriIdentity/common/uriIdentity.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#glyph/protocol/editor/GlyphEditorRequest.js';
@@ -60,6 +61,7 @@ export class GlyphEditorAdapter extends Disposable {
     @IWorkspaceTrustManagementService private readonly trustService: IWorkspaceTrustManagementService,
     @IFileService private readonly fileService: IFileService,
     @IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
+    @IUserDataProfileService private readonly userDataProfileService: IUserDataProfileService,
   ) {
     super();
     this.workspaceBinding = this.currentWorkspaceBinding();
@@ -69,6 +71,19 @@ export class GlyphEditorAdapter extends Disposable {
         this.invalidate();
       }),
     );
+    for (const changed of [
+      this.workspaceContextService.onDidChangeWorkspaceName,
+      this.workspaceContextService.onDidChangeWorkbenchState,
+      this.userDataProfileService.onDidChangeCurrentProfile,
+    ]) {
+      this._register(
+        changed(() => {
+          if (this.workspaceChanged || this.currentWorkspaceBinding() === this.workspaceBinding) return;
+          this.workspaceChanged = true;
+          this.invalidate();
+        }),
+      );
+    }
   }
 
   /** Serializes failures at the process boundary while keeping typed errors inside the adapter. */
@@ -496,12 +511,17 @@ export class GlyphEditorAdapter extends Disposable {
 
   private currentWorkspaceBinding(): string {
     const workspace = this.workspaceContextService.getWorkspace();
-    return JSON.stringify([workspace.id, workspace.folders.map(folder => [folder.name, folder.uri.toString()])]);
+    return JSON.stringify([
+      this.userDataProfileService.currentProfile.id,
+      workspace.id,
+      workspace.configuration?.toString(),
+      workspace.folders.map(folder => [folder.name, folder.uri.toString()]),
+    ]);
   }
 
   private assertWorkspaceBinding(): void {
     // Host paths use the namespace negotiated when this adapter was created.
-    // Never reinterpret one under a different root count, name, URI, or order.
+    // Never reinterpret one under a different identity, root count, name, URI, or order.
     if (this.workspaceChanged || this.currentWorkspaceBinding() !== this.workspaceBinding) {
       this.workspaceChanged = true;
       this.invalidate();

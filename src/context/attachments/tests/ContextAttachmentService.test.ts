@@ -21,6 +21,10 @@ class MutableWorkspaceTextStore implements WorkspaceTextStore {
 
   constructor(readonly caseSensitive = true) {}
 
+  async canonicalPath(path: string): Promise<string> {
+    return `${this.root}/${this.key(this.normalizePath(path))}`;
+  }
+
   async exists(path: string): Promise<boolean> {
     return this.snapshots.has(this.key(this.normalizePath(path)));
   }

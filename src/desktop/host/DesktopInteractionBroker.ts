@@ -140,18 +140,30 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     // here so a reconnect snapshot never loses an unanswered form.
     const key = `${identity.chatId}\0${identity.runId}`;
     const previous = this.queues.get(key);
-    const result = previous
-      ? previous.then(() => this.waitNow(id, identity, kind, signal, parse, publish))
-      : this.waitNow(id, identity, kind, signal, parse, publish);
-    const settled = result.then(
-      () => {},
-      () => {},
-    );
-    this.queues.set(key, settled);
-    void settled.then(() => {
-      if (this.queues.get(key) === settled) this.queues.delete(key);
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(signal.reason ?? new Error('Run cancelled.'));
+      if (previous) {
+        if (signal.aborted) abort();
+        else signal.addEventListener('abort', abort, { once: true });
+      }
+      const start = () => {
+        signal.removeEventListener('abort', abort);
+        return this.waitNow(id, identity, kind, signal, parse, publish);
+      };
+      const result = previous ? previous.then(start) : start();
+      // Keep the queue tied to the displayed decision, not to a queued caller
+      // cancelling its wait. Otherwise a later question could replace the
+      // still-unanswered form in the run's recoverable state.
+      const settled = result.then(
+        () => {},
+        () => {},
+      );
+      this.queues.set(key, settled);
+      void settled.then(() => {
+        if (this.queues.get(key) === settled) this.queues.delete(key);
+      });
+      void result.then(resolve, reject);
     });
-    return result;
   }
 
   private waitNow<T>(

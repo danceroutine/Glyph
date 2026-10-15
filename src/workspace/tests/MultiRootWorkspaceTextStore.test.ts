@@ -6,6 +6,7 @@ import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTextStore.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 
 const temporaryPaths: string[] = [];
 
@@ -14,6 +15,27 @@ afterEach(async () => {
 });
 
 describe(MultiRootWorkspaceTextStore, () => {
+  it.each(['\ud800', '\udc00'])('rejects malformed Unicode workspace qualifiers %j', async name => {
+    const root = await fixture();
+    expect(
+      () =>
+        new MultiRootWorkspaceTextStore(
+          {
+            id: 'workspace',
+            mutationIdentity: 'roots',
+            kind: ProjectContextKind.WORKSPACE,
+            name: 'fixture',
+            authority: 'file',
+            roots: [{ name, path: root }],
+          },
+          [{ name, store: new FileSystemWorkspaceTextStore(root) }],
+        ),
+    ).toThrow();
+    const store = workspaceStore(root, root, root);
+    await expect(store.read(`api/${name}`)).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    expect(() => store.normalizePath(name)).toThrow();
+  });
+
   it('namespaces discovery and text mutations by workspace folder', async () => {
     const root = await fixture();
     const api = join(root, 'api');

@@ -15,7 +15,7 @@ import {
   writeFile,
   type FileHandle,
 } from 'node:fs/promises';
-import { dirname, isAbsolute, matchesGlob, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, matchesGlob, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
@@ -25,6 +25,7 @@ import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts'
 import { WorkspaceAccessPolicy } from './policy/WorkspaceAccessPolicy.ts';
 import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import { WorkspaceReadLimitError } from './WorkspaceReadLimitError.ts';
+import { assertWellFormedWorkspacePath } from './assertWellFormedWorkspacePath.ts';
 
 const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
@@ -44,6 +45,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   private readonly options: ResolvedOptions;
 
   constructor(root: string, options: FileSystemWorkspaceTextStoreOptions = {}) {
+    assertWellFormedWorkspacePath(root);
     const { caseSensitive, excludedPaths, accessPolicy } = fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
     this.root = resolve(root);
     this.caseSensitive = caseSensitive ?? (process.platform !== 'win32' && process.platform !== 'darwin');
@@ -61,6 +63,32 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       });
     }
     return normalized;
+  }
+
+  async canonicalPath(input: string): Promise<string> {
+    const path = this.normalizePath(input);
+    await this.assertNoSymlinkSegments(path, true);
+    const root = await realpath(this.root);
+    let cursor = resolve(this.root, path);
+    const missing: string[] = [];
+    for (;;) {
+      try {
+        // Canonicalize the nearest existing ancestor so aliases also collide
+        // before a new file (or its parent directories) has been created.
+        const existing = await realpath(cursor);
+        const canonical = resolve(existing, ...missing);
+        assertInsideRoot(root, canonical, path);
+        this.normalizePath(relative(root, canonical));
+        const key = canonical.split(sep).join('/');
+        return this.caseSensitive ? key : key.toLocaleLowerCase('en-US');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || cursor === this.root) {
+          throw classifyPathError(error, path);
+        }
+        missing.unshift(basename(cursor));
+        cursor = dirname(cursor);
+      }
+    }
   }
 
   async list(
@@ -129,7 +157,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           { cause: error },
         );
       }
-      throw error;
+      throw classifyPathError(error, path);
     }
     try {
       const info = await handle.stat();
@@ -163,7 +191,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw error;
+      throw classifyPathError(error, path);
     }
   }
 
@@ -180,19 +208,25 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
 
   private async inspectReadPath(input: string) {
     const path = this.normalizePath(input);
-    await this.assertNoSymlinkSegments(path, false);
-    const absolute = resolve(this.root, path);
-    const link = await lstat(absolute);
-    if (link.isSymbolicLink())
-      throw new EditError(EditFailureReason.UNSUPPORTED, 'Symbolic links are not supported.', { path });
-    if (!link.isFile())
-      throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
-    const resolvedRoot = await realpath(this.root);
-    const resolvedFile = await realpath(absolute);
-    assertInsideRoot(resolvedRoot, resolvedFile, path);
-    // Check the filesystem's spelling too: aliases must not bypass the policy.
-    this.normalizePath(relative(resolvedRoot, resolvedFile));
-    return { path, resolvedFile, identity: `${link.dev}:${link.ino}` };
+    try {
+      await this.assertNoSymlinkSegments(path, false);
+      const absolute = resolve(this.root, path);
+      const link = await lstat(absolute);
+      if (link.isSymbolicLink())
+        throw new EditError(EditFailureReason.UNSUPPORTED, 'Symbolic links are not supported.', { path });
+      if (!link.isFile())
+        throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
+      const resolvedRoot = await realpath(this.root);
+      const resolvedFile = await realpath(absolute);
+      assertInsideRoot(resolvedRoot, resolvedFile, path);
+      // Check the filesystem's spelling too: aliases must not bypass the policy.
+      this.normalizePath(relative(resolvedRoot, resolvedFile));
+      return { path, resolvedFile, identity: `${link.dev}:${link.ino}` };
+    } catch (error) {
+      // An ancestor can change after its earlier inspection. Preserve that as
+      // an unsupported resource, never as proof of an absent child or a delete.
+      throw classifyPathError(error, path);
+    }
   }
 
   async readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {
@@ -200,7 +234,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       return await this.read(path, options);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      throw error;
+      throw classifyPathError(error, path);
     }
   }
 
@@ -229,7 +263,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           { cause: error },
         );
       }
-      throw error;
+      throw classifyPathError(error, path);
     }
   }
 
@@ -252,9 +286,11 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       await chmod(temporary, current.mode);
       await this.assertRevision(path, expectedRevision);
       await rename(temporary, absolute);
+    } catch (error) {
+      throw classifyPathError(error, path);
     } finally {
       await unlink(temporary).catch(error => {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
       });
     }
     return this.read(path);
@@ -289,14 +325,18 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           { cause: error },
         );
       }
-      throw error;
+      throw classifyPathError(error, target);
     }
   }
 
   async delete(input: string, expectedRevision: string): Promise<void> {
     const path = this.normalizePath(input);
     await this.assertRevision(path, expectedRevision);
-    await unlink(resolve(this.root, path));
+    try {
+      await unlink(resolve(this.root, path));
+    } catch (error) {
+      throw classifyPathError(error, path);
+    }
   }
 
   private async readBounded(handle: FileHandle, path: string, maxBytes: number, size: number): Promise<Buffer> {
@@ -339,26 +379,41 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           throw new EditError(EditFailureReason.UNSUPPORTED, 'A parent path is not a directory.');
         break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw classifyPathError(error, relative(this.root, directory));
+        }
         missing.push(cursor);
         cursor = dirname(cursor);
       }
     }
-    for (const path of missing.reverse()) await mkdir(path);
+    for (const path of missing.reverse()) {
+      try {
+        await mkdir(path);
+      } catch (error) {
+        throw classifyPathError(error, relative(this.root, path));
+      }
+    }
     return missing;
   }
 
   private async assertNoSymlinkSegments(path: string, allowMissing: boolean): Promise<void> {
     let cursor = this.root;
-    for (const part of path.split('/')) {
+    const segments = path.split('/');
+    for (const [index, part] of segments.entries()) {
       cursor = resolve(cursor, part);
       try {
-        if ((await lstat(cursor)).isSymbolicLink()) {
+        const info = await lstat(cursor);
+        if (info.isSymbolicLink()) {
           throw new EditError(EditFailureReason.UNSUPPORTED, 'Symbolic links are not supported.', { path });
+        }
+        // Only the leaf may be a file. Returning "missing" for a child of a
+        // regular file would authorize an impossible CREATE or editor read.
+        if (index < segments.length - 1 && !info.isDirectory()) {
+          throw new EditError(EditFailureReason.UNSUPPORTED, 'A parent path is not a directory.', { path });
         }
       } catch (error) {
         if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
-        throw error;
+        throw classifyPathError(error, path);
       }
     }
   }
@@ -384,6 +439,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
 }
 
 function normalizeProjectPath(root: string, input: string): string {
+  assertWellFormedWorkspacePath(input);
   if (!input || isAbsolute(input) || input.includes('\0')) {
     throw new EditError(EditFailureReason.MALFORMED, 'Path must be a non-empty project-relative path.', {
       path: input,
@@ -401,6 +457,12 @@ function normalizeProjectPath(root: string, input: string): string {
 function toBytes(text: string, byteOrderMark: boolean): Buffer {
   const content = Buffer.from(text, 'utf8');
   return byteOrderMark ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), content]) : content;
+}
+
+/** ENOTDIR is inaccessible hierarchy, not evidence that a reviewed child was deleted. */
+function classifyPathError(error: unknown, path: string): unknown {
+  if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'ENOTDIR') return error;
+  return new EditError(EditFailureReason.UNSUPPORTED, 'A parent path is not a directory.', { path }, { cause: error });
 }
 
 function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string): WorkspaceTextSnapshot {
@@ -449,7 +511,7 @@ async function rollbackDirectories(paths: string[]): Promise<void> {
     try {
       await rmdir(path);
     } catch (error) {
-      if (!['ENOENT', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      if (!['ENOENT', 'ENOTDIR', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
     }
   }
 }

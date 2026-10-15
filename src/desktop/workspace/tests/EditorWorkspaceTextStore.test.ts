@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 import type { GlyphEditorTextSnapshot } from '#src/desktop/protocol/editor/GlyphEditorTextSnapshot.js';
@@ -11,10 +11,40 @@ import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationCo
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 
 describe(EditorWorkspaceTextStore, () => {
+  it.each(['\ud800', '\udc00', 'folder/\ud800.txt', 'folder/\udc00.txt'])(
+    'rejects malformed Unicode path %j before metadata or editor requests',
+    async path => {
+      const client = new FixtureEditorClient('base');
+      const canonical = vi.spyOn(client, 'canonicalPath');
+      const request = vi.spyOn(client, 'request');
+      const store = new EditorWorkspaceTextStore('/project', true, client);
+      await expect(store.read(path)).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+      expect(() => store.canonicalPath(path)).toThrow();
+      expect(() => new EditorWorkspaceTextStore(`/project/${path}`, true, client)).toThrow();
+      expect(canonical).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses host canonical metadata for prospective path claims without loading editor snapshots', async () => {
+    const canonicalPath = vi.fn(async (_path: string) => '/canonical/project/new/file');
+    const request = vi.fn<EditorWorkspaceClient['request']>();
+    const store = new EditorWorkspaceTextStore('/project', true, {
+      canonicalPath,
+      request,
+      listPaths: async () => ({ files: [], truncated: false }),
+    });
+    await expect(store.canonicalPath('new/./file')).resolves.toBe('/canonical/project/new/file');
+    expect(canonicalPath).toHaveBeenCalledWith('new/file');
+    expect(() => store.canonicalPath('../escape')).toThrow();
+    expect(canonicalPath).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
+  });
   it.each([true, false, undefined])(
     'requires explicit editor occupancy (%s) without requesting a text snapshot',
     async exists => {
       const store = new EditorWorkspaceTextStore('/project', true, {
+        canonicalPath: async path => `/project/${path}`,
         listPaths: async () => ({ files: [], truncated: false }),
         request: async request => {
           expect(request).toMatchObject({ type: GlyphEditorRequestType.EXISTS, path: 'file.ts' });
@@ -28,6 +58,7 @@ describe(EditorWorkspaceTextStore, () => {
   );
   it('passes read budgets to the editor and preserves budget failures for attachment callers', async () => {
     const store = new EditorWorkspaceTextStore('/project', true, {
+      canonicalPath: async path => `/project/${path}`,
       listPaths: async () => ({ files: [], truncated: false }),
       request: async request => {
         expect(request).toMatchObject({ type: GlyphEditorRequestType.READ_SNAPSHOT, path: 'file.ts', maxBytes: 32 });
@@ -111,6 +142,10 @@ class FixtureEditorClient implements EditorWorkspaceClient {
   private version = 1;
 
   constructor(private text: string) {}
+
+  async canonicalPath(path: string): Promise<string> {
+    return `/project/${path}`;
+  }
 
   setText(text: string): void {
     this.text = text;

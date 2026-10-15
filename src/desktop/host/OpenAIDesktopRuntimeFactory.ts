@@ -120,6 +120,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         caseSensitive: disk.caseSensitive,
       });
       const workspace = new EditorWorkspaceTextStore(root.path, disk.caseSensitive, {
+        canonicalPath: path => disk.canonicalPath(path),
         listPaths: (limit, glob = '**/*', targetDirectory) =>
           index.glob(glob, { limit, ...(targetDirectory ? { targetDirectory } : {}) }),
         request: async (request, signal) => {

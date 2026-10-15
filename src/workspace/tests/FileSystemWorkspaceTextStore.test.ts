@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +14,47 @@ afterEach(async () => {
 });
 
 describe(FileSystemWorkspaceTextStore, () => {
+  it.each(['\ud800', '\udc00', 'folder/\ud800.txt', 'folder/\udc00.txt'])(
+    'rejects malformed Unicode path %j before resolving a filesystem key',
+    async path => {
+      const root = await mkdtemp(join(tmpdir(), 'workspace-malformed-path-'));
+      directories.push(root);
+      const store = new FileSystemWorkspaceTextStore(root);
+      await expect(store.canonicalPath(path)).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+      expect(() => store.normalizePath(path)).toThrow();
+      expect(() => new FileSystemWorkspaceTextStore(join(root, path))).toThrow();
+    },
+  );
+
+  it('resolves prospective paths through root aliases without reading content or creating parents', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workspace-canonical-'));
+    directories.push(root);
+    await mkdir(join(root, 'repo', 'pkg'), { recursive: true });
+    await symlink(join(root, 'repo', 'pkg'), join(root, 'alias'));
+    const parent = new FileSystemWorkspaceTextStore(join(root, 'repo'));
+    const child = new FileSystemWorkspaceTextStore(join(root, 'alias'));
+    const read = vi.spyOn(parent, 'read');
+    const canonical = await parent.canonicalPath('pkg/new/deep/file.txt');
+    expect(canonical).toBe(await child.canonicalPath('new/deep/file.txt'));
+    await expect(realpath(join(root, 'repo', 'pkg', 'new'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('preserves path policy, directory boundaries, and child-symlink exclusions when resolving prospective paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workspace-canonical-policy-'));
+    directories.push(root);
+    await mkdir(join(root, 'directory'));
+    await writeFile(join(root, 'file'), 'base');
+    await symlink(join(root, 'directory'), join(root, 'alias'));
+    const store = new FileSystemWorkspaceTextStore(root, { caseSensitive: false });
+    for (const path of ['.ENV', 'alias/new', 'file/new']) {
+      await expect(store.canonicalPath(path)).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    }
+    await expect(store.canonicalPath('../outside')).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    expect(await store.canonicalPath('New/Child')).toBe(await store.canonicalPath('new/child'));
+    expect(await store.canonicalPath('new')).not.toBe(await store.canonicalPath('newer'));
+  });
+
   it('checks occupied and missing targets using metadata while retaining policy and symlink exclusions', async () => {
     const root = await mkdtemp(join(tmpdir(), 'workspace-exists-'));
     directories.push(root);

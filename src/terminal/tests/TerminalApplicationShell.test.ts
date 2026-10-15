@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { installShutdownHandlers } from '#src/terminal/installShutdownHandlers.js';
 import { ShutdownSignal } from '#src/terminal/ShutdownSignal.js';
-import type { GlyphService } from '#src/application/GlyphService.js';
+import { GlyphService } from '#src/application/GlyphService.js';
+import type { ChatBackend } from '#src/chat/ChatBackend.js';
+import { NullLogger } from '#src/observability/NullLogger.js';
+import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import type { EditReviewResult } from '#src/editing/reviews/EditReviewResult.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
+import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
 import type { ChatSession } from '#src/chat/sessions/ChatSession.js';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
@@ -21,6 +28,109 @@ const projectContext = {
 };
 
 describe(TerminalApplication, () => {
+  it.each(['request cancellation', 'application shutdown'] as const)(
+    'releases the terminal turn during receipt persistence on %s while disposal drains the save',
+    async cancellation => {
+      const owner = chat('owner');
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      owner.recordContext.mockImplementation(async () => gate);
+      const backend: ChatBackend = {
+        accounts: [],
+        presentation: {
+          name: 'fixture',
+          welcome: '',
+          usageDescription: '',
+          accountsHeading: '',
+          addAccountLabel: '',
+          activeAccessLabel: '',
+        },
+        initialize: async () => {},
+        dispose: vi.fn(async () => {}),
+        signIn: async () => {
+          throw new Error('No authentication expected.');
+        },
+        acknowledgeNotice: async () => {},
+        listModels: async () => [],
+        createProvider: () => {
+          throw new Error('No provider expected.');
+        },
+        logout: async () => true,
+        redact: value => value,
+      };
+      const reviews = new ProposalReviewManager(new FileSystemWorkspaceTextStore('/inert'), {
+        load: async () => [],
+        save: async () => {},
+        clear: async () => {},
+      });
+      let pending: readonly EditReviewResult[] = [
+        {
+          schemaVersion: 1,
+          id: 'receipt',
+          reviewId: 'proposal',
+          origin: { chatId: 'owner', accountProvider: 'fixture', accountId: 'account' },
+          items: [
+            {
+              itemId: 'item',
+              fileId: 'file',
+              kind: EditReviewItemKind.TEXT,
+              decision: EditDecisionState.REJECTED,
+              affectedPaths: ['a.ts'],
+              resultingRevision: null,
+            },
+          ],
+        },
+      ];
+      vi.spyOn(reviews, 'pendingResults', 'get').mockImplementation(() => pending);
+      const acknowledge = vi.spyOn(reviews, 'acknowledgeResults').mockImplementation(async () => {
+        pending = [];
+      });
+      const service = new GlyphService(backend, new NullLogger(), {}, reviews);
+      await service.initialize();
+      const delivery = vi.spyOn(service, 'commitReviewResults');
+      const ui = {
+        beginAssistantResponse: vi.fn(),
+        showTurnCompleted: vi.fn(),
+        showTurnFailed: vi.fn(),
+      } as unknown as TerminalUI;
+      const shutdown = new AbortController();
+      const application = new TerminalApplication(service, ui, shutdown.signal, { projectContext });
+      setConversation(application, owner.session);
+      let completed = false;
+      const sending = (application as unknown as { send(text: string, paths: readonly string[]): Promise<void> })
+        .send('Continue', [])
+        .then(() => {
+          completed = true;
+        });
+      let stopping: Promise<void> | undefined;
+      try {
+        await vi.waitFor(() => expect(owner.recordContext).toHaveBeenCalledOnce());
+        if (cancellation === 'application shutdown') shutdown.abort();
+        else application.active!.abort();
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(completed).toBe(true);
+        expect(application.active).toBeUndefined();
+        expect(delivery).toHaveBeenCalledOnce();
+        expect(delivery.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+        expect(delivery.mock.calls[0]?.[1]?.currentChatOnly).toBeUndefined();
+        expect(owner.send).not.toHaveBeenCalled();
+        expect(acknowledge).not.toHaveBeenCalled();
+        stopping = service.dispose();
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(backend.dispose).not.toHaveBeenCalled();
+        release();
+        await stopping;
+        expect(acknowledge).toHaveBeenCalledWith(['receipt']);
+        expect(backend.dispose).toHaveBeenCalledOnce();
+      } finally {
+        release();
+        await sending;
+        await (stopping ?? service.dispose());
+      }
+    },
+  );
   it('synchronizes the global trace setting when activating a cached chat', () => {
     const cached = chat('cached');
     const setTraceEnabled = vi.fn();
@@ -233,7 +343,7 @@ describe(TerminalApplication, () => {
         ui,
         expect.any(AbortSignal),
       );
-      expect(commitReviewResults).toHaveBeenCalledWith(owner.session);
+      expect(commitReviewResults).toHaveBeenCalledWith(owner.session, { signal: expect.any(AbortSignal) });
       // A wake must not transfer the preserved prompt into its owning chat.
       expect(ui.showChatActivated).toHaveBeenLastCalledWith(current.session.summary, current.session.transcript);
       expect(setOwnerChat).toHaveBeenLastCalledWith('current-chat');

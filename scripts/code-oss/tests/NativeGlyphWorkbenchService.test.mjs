@@ -76,7 +76,7 @@ it('rehydrates saved conversation history after both trust revocation and restor
           builder.onLoad({ filter: /.*/, namespace: 'services' }, args => ({
             contents: args.path.endsWith('GlyphDesktopClient.js')
               ? 'export class GlyphDesktopClient { constructor() { Object.assign(this, globalThis.__glyphWorkbenchFixture); } dispose() {} }'
-              : 'const service = () => {}; export { service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as GlyphWorkbenchService };',
+              : 'const service = () => {}; export { service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService };',
           }));
           builder.onResolve({ filter: /^#glyph\// }, args => ({
             path: resolve('src/desktop', args.path.slice(7).replace(/\.js$/, '.ts')),
@@ -94,6 +94,8 @@ it('rehydrates saved conversation history after both trust revocation and restor
         folders: [{ name: 'project', uri: { scheme: 'file', fsPath: '/project', toString: () => 'file:///project' } }],
       }),
       onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+      onDidChangeWorkspaceName: () => ({ dispose() {} }),
+      onDidChangeWorkbenchState: () => ({ dispose() {} }),
     },
     {
       isWorkspaceTrusted: () => trusted,
@@ -103,6 +105,7 @@ it('rehydrates saved conversation history after both trust revocation and restor
       },
     },
     { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {} }) },
+    { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
   );
   try {
     await vi.waitFor(() => expect(service.state.transcript.some(entry => entry.text === 'Saved answer')).toBe(true));

@@ -127,6 +127,7 @@ function proposalFixture() {
   const workspace = {
     caseSensitive: true,
     normalizePath: (path: string) => path,
+    canonicalPath: async (path: string) => `/fixture/${path}`,
     read,
     readOptional: read,
     exists,

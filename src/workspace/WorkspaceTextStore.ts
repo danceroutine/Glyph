@@ -20,6 +20,12 @@ export interface WorkspaceTextStore {
     targetDirectory?: string,
   ): Promise<{ files: string[]; truncated: boolean }>;
   normalizePath(path: string): string;
+  /**
+   * Resolves existing or prospective files to an absolute, slash-delimited path
+   * for collision checks, including ancestor conflicts. Keys use the adapter's
+   * filesystem casing rules; snapshot identities additionally detect hard links.
+   */
+  canonicalPath(path: string): Promise<string>;
   /** Checks occupancy without reading content; directories and binary files also occupy a target. */
   exists(path: string): Promise<boolean>;
   read(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot>;

@@ -496,8 +496,7 @@ export class ProposalReviewManager {
         for (const path of new Set(paths)) {
           // Collision detection must agree with the workspace's path identity;
           // case folding would merge distinct resources on a case-sensitive store.
-          const normalized = path;
-          const key = this.workspace.caseSensitive ? normalized : normalized.toLocaleLowerCase('en-US');
+          const key = await this.workspace.canonicalPath(path);
           const existing = claimedPaths.get(key);
           if (existing && (existing.reviewId !== review.id || existing.fileId !== file.id)) {
             if (
@@ -521,6 +520,16 @@ export class ProposalReviewManager {
             file,
             virtual: canBatchTextChanges(file) ? simulatePendingTextChanges(file) : file.current,
           });
+        }
+      }
+    }
+    // Separately valid proposals can still require the same path to be both a
+    // file and a directory. Reject the whole queue before its first mutation,
+    // regardless of arrival order, using the same casing policy as exact claims.
+    for (const [path, claim] of claimedPaths) {
+      for (let separator = path.indexOf('/'); separator !== -1; separator = path.indexOf('/', separator + 1)) {
+        if (claimedPaths.has(path.slice(0, separator))) {
+          throw queuedPathConflict(claim.reviewId, claim.file, path);
         }
       }
     }
@@ -578,7 +587,19 @@ export class ProposalReviewManager {
       }
       if (current && target && current.identity === target.identity && current.revision === file.currentRevision) {
         const operationId = `${review.id}:${file.id}:${item.id}:rename_cleanup`;
-        await this.workspace.delete(file.currentPath, current.revision, { operationId, undoGroupId: operationId });
+        try {
+          await this.workspace.delete(file.currentPath, current.revision, { operationId, undoGroupId: operationId });
+        } catch (error) {
+          const sourceVanished =
+            typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+          if (!isUnreviewableSnapshot(error) && !sourceVanished) throw error;
+          // The source may change after both snapshots were inspected. A
+          // rejected cleanup is not a completed rename: retain both paths and
+          // the pending decision, and stop automatically retrying its deletion.
+          file.applicability = EditApplicabilityState.STALE;
+          file.applyingItemId = null;
+          return true;
+        }
         after = target;
       } else if (!current) after = target;
     }

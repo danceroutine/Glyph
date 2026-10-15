@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { OverlappingWorkspaceFixture } from '#src/workspace/tests/fixtures/OverlappingWorkspaceFixture.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
@@ -34,6 +35,37 @@ const configuration: EditingConfiguration = {
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
 
 describe(ProposalReviewManager, () => {
+  it.each(['\ud800', '\udc00'])(
+    'retains a persisted malformed filename %j as a stale and rejectable review',
+    async path => {
+      const { service, workspace } = await fixture('');
+      const proposal = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'valid.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'new',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      const file = proposal.files[0]!;
+      Object.assign(file, { sourcePath: path, targetPath: path, currentPath: path });
+      const manager = new ProposalReviewManager(workspace, {
+        load: async () => [proposal],
+        save: async () => {},
+        clear: async () => {},
+      });
+      await manager.initialize();
+      expect(manager.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+      await manager.rejectAll();
+      expect(manager.pendingResults[0]?.items[0]?.decision).toBe(EditDecisionState.REJECTED);
+    },
+  );
+
   it.each([
     { label: 'accepts distinct case-sensitive filenames together', first: 'foo.ts', second: 'Foo.ts', alias: false },
     {
@@ -75,6 +107,7 @@ describe(ProposalReviewManager, () => {
       caseSensitive: true,
       mutationConsistency: WorkspaceMutationConsistency.ATOMIC_VERSIONED,
       normalizePath: path => path,
+      canonicalPath: async path => `/fixture/${path}`,
       exists: async path => files.has(path),
       list: async () => ({ files: [...files.keys()], truncated: false }),
       read: async path => snapshot(path),
@@ -378,6 +411,212 @@ describe(ProposalReviewManager, () => {
   });
 
   describe(ProposalReviewManager.prototype.acceptAll, () => {
+    it.each(['pkg/new', 'pkg/new/file'])(
+      'performs zero mutations when a rename claims a created physical path at %s',
+      async target => {
+        const base = await fixture('base');
+        await mkdir(join(base.root, 'pkg'));
+        await writeFile(join(base.root, 'pkg', 'source.txt'), 'base');
+        const workspace = new OverlappingWorkspaceFixture(base.root);
+        const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
+        const manager = new ProposalReviewManager(
+          workspace,
+          new FileProposalReviewStore(base.state),
+          new NullLogger(),
+          8,
+        );
+        const source = await workspace.read('pkg/source.txt');
+        await manager.stage(
+          await service.proposeStructured({
+            files: [
+              {
+                operation: EditOperation.CREATE,
+                path: 'repo/pkg/new',
+                new_path: null,
+                base_revision: null,
+                content: 'new',
+                byte_order_mark: null,
+                edits: [],
+              },
+            ],
+          }),
+        );
+        await manager.stage(
+          await service.proposeStructured({
+            files: [
+              {
+                operation: EditOperation.RENAME,
+                path: 'pkg/source.txt',
+                new_path: target,
+                base_revision: source.revision,
+                content: null,
+                byte_order_mark: null,
+                edits: [],
+              },
+            ],
+          }),
+        );
+        const create = vi.spyOn(workspace, 'create');
+        const rename = vi.spyOn(workspace, 'rename');
+        await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.DECISION_CONFLICT });
+        expect(create).not.toHaveBeenCalled();
+        expect(rename).not.toHaveBeenCalled();
+        expect(await workspace.read('pkg/source.txt')).toMatchObject({ text: 'base' });
+      },
+    );
+
+    it.each(
+      [
+        { paths: ['repo/pkg/a', 'pkg/a'], name: 'duplicate prospective files' },
+        { paths: ['repo/pkg/a', 'pkg/a/b'], name: 'physical ancestors' },
+        { paths: ['pkg/a/b', 'repo/pkg/a'], name: 'physical ancestors in reverse order' },
+      ].flatMap(example => [false, true].map(combined => ({ ...example, combined }))),
+    )(
+      'performs zero mutations for $name across overlapping roots when combined review is $combined',
+      async ({ paths, combined }) => {
+        const base = await fixture('');
+        await mkdir(join(base.root, 'pkg'));
+        const workspace = new OverlappingWorkspaceFixture(base.root);
+        const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
+        const manager = new ProposalReviewManager(
+          workspace,
+          new FileProposalReviewStore(base.state),
+          new NullLogger(),
+          8,
+        );
+        const proposals = await Promise.all(
+          paths.map(path =>
+            service.proposeStructured({
+              files: [
+                {
+                  operation: EditOperation.CREATE,
+                  path,
+                  new_path: null,
+                  base_revision: null,
+                  content: 'new',
+                  byte_order_mark: null,
+                  edits: [],
+                },
+              ],
+            }),
+          ),
+        );
+        if (combined) await manager.stage({ ...proposals[0]!, files: proposals.flatMap(proposal => proposal.files) });
+        else for (const proposal of proposals) await manager.stage(proposal);
+        const create = vi.spyOn(workspace, 'create');
+        await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.DECISION_CONFLICT });
+        expect(create).not.toHaveBeenCalled();
+        expect(manager.pendingResults).toEqual([]);
+        expect(manager.pendingChangeCount).toBe(2);
+      },
+    );
+
+    it.each([
+      { paths: ['a', 'a/b'], name: 'a parent followed by its child', caseSensitive: true },
+      { paths: ['a/b', 'a'], name: 'a child followed by its parent', caseSensitive: true },
+      { paths: ['a/deep/b', 'a'], name: 'a deep child followed by its parent', caseSensitive: true },
+      { paths: ['A', 'a/b'], name: 'case-insensitive parent aliases', caseSensitive: false },
+    ])('performs zero mutations when queued proposals create $name', async ({ paths, caseSensitive }) => {
+      const { manager, service, workspace } = await fixture('', 8, { caseSensitive });
+      for (const path of paths) {
+        await manager.stage(
+          await service.proposeStructured({
+            files: [
+              {
+                operation: EditOperation.CREATE,
+                path,
+                new_path: null,
+                base_revision: null,
+                content: 'new',
+                byte_order_mark: null,
+                edits: [],
+              },
+            ],
+          }),
+        );
+      }
+      const create = vi.spyOn(workspace, 'create');
+
+      await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.DECISION_CONFLICT });
+      expect(create).not.toHaveBeenCalled();
+      expect(manager.pendingResults).toEqual([]);
+      expect(manager.pendingChangeCount).toBe(2);
+      await manager.rejectAll();
+    });
+
+    it('accepts queued sibling paths and case-distinct ancestors without false collisions', async () => {
+      const { manager, service, workspace } = await fixture('', 8, { caseSensitive: true });
+      const paths = ['A', 'a/b', 'a/c', 'ab'];
+      for (const path of paths) {
+        await manager.stage(
+          await service.proposeStructured({
+            files: [
+              {
+                operation: EditOperation.CREATE,
+                path,
+                new_path: null,
+                base_revision: null,
+                content: 'new',
+                byte_order_mark: null,
+                edits: [],
+              },
+            ],
+          }),
+        );
+      }
+      // Simulate the declared case-sensitive store independently of the host volume.
+      const snapshots = new Map(
+        manager.activeReviews.flatMap(review => review.files.map(file => [file.targetPath, file.proposed] as const)),
+      );
+      const create = vi.spyOn(workspace, 'create').mockImplementation(async path => snapshots.get(path)!);
+      await manager.acceptAll();
+      expect(create.mock.calls.map(([path]) => path)).toEqual(paths);
+      expect(manager.pendingChangeCount).toBe(0);
+    });
+
+    it.each([false, true])(
+      'rejects a queued rename destination under a created file before mutations when rename arrives first is %s',
+      async renameFirst => {
+        const { manager, service, workspace } = await fixture('base');
+        const base = await workspace.read('file.txt');
+        const creation = await service.proposeStructured({
+          files: [
+            {
+              operation: EditOperation.CREATE,
+              path: 'a',
+              new_path: null,
+              base_revision: null,
+              content: 'new',
+              byte_order_mark: null,
+              edits: [],
+            },
+          ],
+        });
+        const rename = await service.proposeStructured({
+          files: [
+            {
+              operation: EditOperation.RENAME,
+              path: 'file.txt',
+              new_path: 'a/b',
+              base_revision: base.revision,
+              content: null,
+              byte_order_mark: null,
+              edits: [],
+            },
+          ],
+        });
+        for (const proposal of renameFirst ? [rename, creation] : [creation, rename]) await manager.stage(proposal);
+        const create = vi.spyOn(workspace, 'create');
+        const move = vi.spyOn(workspace, 'rename');
+
+        await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.DECISION_CONFLICT });
+        expect(create).not.toHaveBeenCalled();
+        expect(move).not.toHaveBeenCalled();
+        expect(manager.pendingResults).toEqual([]);
+        expect(manager.pendingChangeCount).toBe(2);
+      },
+    );
+
     it.each(['large file', 'binary file', 'directory'] as const)(
       'rejects a rename collision with a %s using metadata before reading its content or writing any file',
       async collision => {
@@ -787,12 +1026,12 @@ describe(ProposalReviewManager, () => {
   });
 });
 
-async function fixture(text: string, maxActiveReviews = 8) {
+async function fixture(text: string, maxActiveReviews = 8, workspaceOptions: { caseSensitive?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'edit-session-root-'));
   const state = await mkdtemp(join(tmpdir(), 'edit-session-state-'));
   directories.push(root, state);
   if (text !== '') await writeFile(join(root, 'file.txt'), text);
-  const workspace = new FileSystemWorkspaceTextStore(root);
+  const workspace = new FileSystemWorkspaceTextStore(root, workspaceOptions);
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
   const manager = new ProposalReviewManager(
     workspace,
