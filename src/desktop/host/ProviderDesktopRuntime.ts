@@ -213,7 +213,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           ...command,
           id: command.approvalId,
           kind: 'approval',
-          value: command.approved,
+          value: command.decision,
         });
         this.resumeRun(command.runId);
         return;

@@ -455,7 +455,7 @@ describe(GlyphDesktopHost, () => {
     expect(fixture.events('owner').map(event => event.sequence)).toEqual([1, 2, 3, 4, 5]);
   });
 
-  it('rejects spoofed connection authority and incompatible protocol versions', async () => {
+  it.each([1, 999])('rejects spoofed connection authority and incompatible protocol version %s', async version => {
     const fixture = new HostFixture();
     fixture.connect('owner', owner);
     await fixture.host.receive('owner', {
@@ -464,7 +464,7 @@ describe(GlyphDesktopHost, () => {
     });
     await fixture.host.receive('owner', {
       ...request(owner, 'version', { type: GlyphWorkbenchCommandType.LIST_CHATS }),
-      protocolVersion: 999 as typeof GLYPH_DESKTOP_PROTOCOL_VERSION,
+      protocolVersion: version as typeof GLYPH_DESKTOP_PROTOCOL_VERSION,
     });
 
     expect(errorCodes(fixture.events('owner'))).toEqual(['UNAUTHORIZED', 'PROTOCOL_MISMATCH']);

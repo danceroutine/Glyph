@@ -10,6 +10,7 @@ import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 import { isSafeShellCommand } from '#src/shell/isSafeShellCommand.js';
 import type { ShellPermissionPresenter } from '#src/shell/ShellPermissionPresenter.js';
 import type { ShellPermissionStore } from '#src/shell/ShellPermissionStore.js';
+import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import { DesktopInteractionBroker } from '#src/desktop/host/DesktopInteractionBroker.js';
 import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
@@ -67,7 +68,7 @@ describe(ShellCommandAuthorizer, () => {
           runId: 'first-run',
           id: approval.approval.id,
           kind: 'approval',
-          value: false,
+          value: GlyphApprovalDecision.DENY,
         });
         expect(await first).toEqual(expect.objectContaining({ message: expect.stringContaining('denied') }));
         await queued;

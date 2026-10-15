@@ -81,6 +81,16 @@ browser runner's headless setting. macOS opens automated application windows.
 
 ## Coverage and pending work
 
+`GlyphInteractions.test.mjs` covers the eight rank-5 question and approval contracts
+plus queued forms, remembered grants, and interruption regressions. Questions exercise
+single/multiple choices and Other text, duplicate submission, cancellation, and the
+exact tool result returned to the requesting provider turn. Approval tests execute a
+real sandboxed command against an isolated marker file, verify no write before approval
+or after denial, and distinguish one-time approval from an exact command/directory
+grant persisted across a host restart. Renderer reload and host failure remove stale
+controls without resuming their interrupted runs. Browser component tests separately
+cover failed acknowledgments, draft retention while switching chats, and read-only controls.
+
 `GlyphProjectTools.test.mjs` covers the eleven rank-4 file listing, reading, and
 content-search contracts through the production runtime and native index. Assertions
 inspect the tool output delivered to the scripted provider as well as the rendered
@@ -135,8 +145,8 @@ production startup without an account.
 
 The pending groups use `it.fixme` deliberately (`it` aliases Playwright's test API).
 Those descriptions are visible in test discovery and reports, but they are
-specifications, not passing tests. They cover account and model selection,
-questions, approvals, tools, usage, attachments, proposals, and guarded editing/Undo.
+specifications, not passing tests. Remaining groups cover additional tools,
+usage metering, attachments, proposals, and guarded editing/Undo.
 Enable a pending contract when the user-facing feature exists, then replace the
 empty body with interactions and assertions. Hidden-service calls do not satisfy
 the black-box contract.

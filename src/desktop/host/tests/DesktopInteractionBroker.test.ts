@@ -1,3 +1,4 @@
+import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import { describe, expect, it } from 'vitest';
 import { DesktopInteractionBroker } from '#src/desktop/host/DesktopInteractionBroker.js';
 import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
@@ -126,7 +127,67 @@ describe(DesktopInteractionBroker, () => {
     );
     const event = events[0];
     if (event?.type !== GlyphHostEventType.APPROVAL) throw new Error('Approval was not published');
-    broker.answer({ chatId: 'chat', runId: 'run', id: event.approval.id, kind: 'approval', value: true });
+    broker.answer({
+      chatId: 'chat',
+      runId: 'run',
+      id: event.approval.id,
+      kind: 'approval',
+      value: GlyphApprovalDecision.ALLOW_ONCE,
+    });
     await expect(result).resolves.toBe(ShellPermissionDecision.ALLOW_ONCE);
+  });
+  it('limits remembered approvals to the explicit desktop choices and rejects replay or wrong-run decisions', async () => {
+    const events: GlyphHostEvent[] = [];
+    const broker = new DesktopInteractionBroker(event => events.push(event));
+    const result = broker.run({ chatId: 'chat', runId: 'run' }, () =>
+      broker.presentShellPermission(
+        { command: 'echo approved', workingDirectory: '/project' },
+        new AbortController().signal,
+      ),
+    );
+    const event = events[0];
+    if (event?.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected approval');
+    expect(event.approval).toMatchObject({
+      command: 'echo approved',
+      workingDirectory: '/project',
+      canRemember: true,
+      sandboxed: true,
+    });
+    const input = {
+      chatId: 'chat',
+      runId: 'run',
+      id: event.approval.id,
+      kind: 'approval' as const,
+      value: GlyphApprovalDecision.ALWAYS_ALLOW,
+    };
+    expect(() => broker.answer({ ...input, value: ShellPermissionDecision.ALLOW_EVERYTHING })).toThrow();
+    expect(() => broker.answer({ ...input, value: ShellPermissionDecision.ALLOW_OUTSIDE_SANDBOX_ONCE })).toThrow();
+    expect(() => broker.answer({ ...input, runId: 'other' })).toThrow('no longer pending');
+    broker.answer(input);
+    await expect(result).resolves.toBe(ShellPermissionDecision.ALWAYS_ALLOW);
+    expect(() => broker.answer(input)).toThrow('no longer pending');
+  });
+
+  it('rejects a late approval after cancellation without granting permission', async () => {
+    const events: GlyphHostEvent[] = [];
+    const broker = new DesktopInteractionBroker(event => events.push(event));
+    const controller = new AbortController();
+    const result = broker.run({ chatId: 'chat', runId: 'run' }, () =>
+      broker.presentShellPermission({ command: 'echo cancelled', workingDirectory: '/project' }, controller.signal),
+    );
+    const rejected = expect(result).rejects.toThrow('cancelled');
+    controller.abort(new Error('cancelled'));
+    await rejected;
+    const event = events[0];
+    if (event?.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected approval');
+    expect(() =>
+      broker.answer({
+        chatId: 'chat',
+        runId: 'run',
+        id: event.approval.id,
+        kind: 'approval',
+        value: GlyphApprovalDecision.ALLOW_ONCE,
+      }),
+    ).toThrow('no longer pending');
   });
 });

@@ -1,3 +1,4 @@
+import type { GlyphApprovalDecision } from '#glyph/protocol/GlyphApprovalDecision.js';
 import { IStorageService, StorageScope, StorageTarget } from '#vs/platform/storage/common/storage.js';
 import type { GlyphModelSummary } from '#glyph/protocol/events/GlyphModelSummary.js';
 import { Emitter } from '#vs/base/common/event.js';
@@ -460,13 +461,13 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   answerQuestion(chatId: string, runId: string, questionId: string, answer: unknown): Promise<void> {
     return this.request({ type: GlyphWorkbenchCommandType.ANSWER_QUESTION, chatId, runId, questionId, answer });
   }
-  decideApproval(chatId: string, runId: string, approvalId: string, approved: boolean): Promise<void> {
+  decideApproval(chatId: string, runId: string, approvalId: string, decision: GlyphApprovalDecision): Promise<void> {
     return this.request({
       type: GlyphWorkbenchCommandType.DECIDE_APPROVAL,
       chatId,
       runId,
       approvalId,
-      approved,
+      decision,
     });
   }
   acceptProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void> {

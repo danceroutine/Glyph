@@ -1,4 +1,7 @@
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import type { QuestionAnswer } from '#src/interaction/questions/QuestionAnswer.js';
+import { GlyphQuestionCard } from './GlyphQuestionCard.tsx';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { GlyphComposer } from './GlyphComposer.tsx';
@@ -70,6 +73,19 @@ export function GlyphWorkbench({ state, actions }: GlyphWorkbenchProps) {
   }, []);
   const toggle = useRef<HTMLButtonElement>(null);
   const chat = state.chats.find(value => value.id === state.selectedChatId);
+  const questionRun = state.runs.find(
+    run => run.chatId === state.selectedChatId && run.status === GlyphRunStatus.WAITING_FOR_QUESTION,
+  );
+  const approvalRun = state.runs.find(
+    run => run.chatId === state.selectedChatId && run.status === GlyphRunStatus.WAITING_FOR_APPROVAL,
+  );
+  const questionDrafts = useRef(new Map<string, readonly QuestionAnswer[]>());
+  useEffect(() => {
+    const pending = new Set(
+      state.runs.filter(run => run.status === GlyphRunStatus.WAITING_FOR_QUESTION).map(run => run.question?.id),
+    );
+    for (const id of questionDrafts.current.keys()) if (!pending.has(id)) questionDrafts.current.delete(id);
+  }, [state.runs]);
   const closeHistory = () => {
     setHistoryOpen(false);
     toggle.current?.focus();
@@ -120,12 +136,29 @@ export function GlyphWorkbench({ state, actions }: GlyphWorkbenchProps) {
       </header>
       <div class={styles.body}>
         <main class={styles.conversation} aria-label="Current conversation" inert={historyOpen && !wide}>
-          <GlyphTranscript entries={state.transcript} />
+          <GlyphTranscript
+            entries={state.transcript}
+            actions={actions}
+            readOnly={state.readOnly}
+            {...(approvalRun ? { pendingApproval: approvalRun } : {})}
+          />
           {state.selectedChatId && <GlyphUsageSummary usage={state.usage[state.selectedChatId]} />}
           {state.navigationError && (
             <div class={styles.error} role="alert">
               {state.navigationError}
             </div>
+          )}
+          {questionRun?.question && (
+            <GlyphQuestionCard
+              key={questionRun.question.id}
+              request={questionRun.question}
+              chatId={questionRun.chatId}
+              runId={questionRun.runId}
+              actions={actions}
+              disabled={state.readOnly}
+              initialAnswers={questionDrafts.current.get(questionRun.question.id) ?? []}
+              onDraftChange={answers => questionDrafts.current.set(questionRun.question!.id, answers)}
+            />
           )}
           <GlyphComposer
             status={state.status}

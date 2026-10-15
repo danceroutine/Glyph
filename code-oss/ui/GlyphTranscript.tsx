@@ -1,3 +1,6 @@
+import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { GlyphApprovalCard } from './GlyphApprovalCard.tsx';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphTurnProgress } from './GlyphTurnProgress.tsx';
@@ -10,10 +13,13 @@ const styles = {
 
 interface GlyphTranscriptProps {
   readonly entries: readonly GlyphTranscriptEntry[];
+  readonly pendingApproval?: GlyphRunProjection;
+  readonly actions?: Pick<GlyphWorkbenchViewActions, 'decideApproval'>;
+  readonly readOnly?: boolean;
 }
 
 /** Stable turn keys preserve DOM identity instead of recreating the transcript on each delta. */
-export function GlyphTranscript({ entries }: GlyphTranscriptProps) {
+export function GlyphTranscript({ entries, pendingApproval, actions, readOnly = false }: GlyphTranscriptProps) {
   const transcript = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = transcript.current;
@@ -26,6 +32,16 @@ export function GlyphTranscript({ entries }: GlyphTranscriptProps) {
           <strong>{roleLabel(entry.role)}</strong>
           {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
           <div>{entry.text}</div>
+          {pendingApproval?.runId === entry.id && pendingApproval.approval && actions && (
+            <GlyphApprovalCard
+              key={pendingApproval.approval.id}
+              request={pendingApproval.approval}
+              chatId={pendingApproval.chatId}
+              runId={pendingApproval.runId}
+              actions={actions}
+              disabled={readOnly}
+            />
+          )}
         </div>
       ))}
     </div>

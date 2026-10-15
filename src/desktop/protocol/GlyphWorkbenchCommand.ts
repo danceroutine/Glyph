@@ -1,3 +1,4 @@
+import type { GlyphApprovalDecision } from './GlyphApprovalDecision.ts';
 import type { GlyphWorkspaceRoot } from './connection/GlyphWorkspaceRoot.ts';
 import type { GlyphContextAttachment } from './connection/GlyphContextAttachment.ts';
 
@@ -71,7 +72,7 @@ export type GlyphWorkbenchCommand =
       readonly chatId: string;
       readonly runId: string;
       readonly approvalId: string;
-      readonly approved: boolean;
+      readonly decision: GlyphApprovalDecision;
     }
   | {
       readonly type: GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM;

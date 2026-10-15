@@ -268,7 +268,7 @@ it.each(
     ...[
       ['selectModel', ['other'], 'select_model'],
       ['answerQuestion', ['chat', 'run', 'question', {}], 'answer_question'],
-      ['decideApproval', ['chat', 'run', 'approval', true], 'decide_approval'],
+      ['decideApproval', ['chat', 'run', 'approval', 'allow_once'], 'decide_approval'],
       ['acceptProposalItem', ['chat', 'proposal', 'item'], 'accept_proposal_item'],
       ['rejectProposalItem', ['chat', 'proposal', 'item'], 'reject_proposal_item'],
       ['cancel', [], 'cancel_run'],

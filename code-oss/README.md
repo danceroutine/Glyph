@@ -63,8 +63,15 @@ incomplete. A collapsible history panel on the right lists searchable saved chat
 and pins the account control to the bottom; model selection sits with the composer.
 The panel opens beside the conversation when wide enough and as a drawer when narrow.
 Drafts remain separate while switching chats, and workspace storage remembers the
-selected conversation across reloads. Human-decision forms and proposal controls
-remain follow-up components.
+selected conversation across reloads. Questions appear above the composer with single
+or multiple choices, Other text, step navigation, and explicit submission. Cancelling
+an unanswered form cancels its turn. Shell approvals appear inline with the command
+and working directory: Run permits one invocation, Skip declines it, and Always Run
+remembers that exact command in that directory while retaining the sandbox. Question
+drafts survive chat switches within the mounted pane; failed submissions remain
+editable. Reloading the owning window cancels its run and removes pending decisions.
+Proposal controls remain follow-up components. Desktop protocol v2 replaces boolean
+approval payloads with explicit decisions; rebuild the host and workbench together.
 Indexed content search uses authorized live editor snapshots in place of disk text,
 including when an unsaved edit removes every match. The Rust matcher applies the
 same filters, context, and pagination to both sources. Snapshot transfer is bounded
@@ -86,8 +93,9 @@ Run `pnpm code-oss:test:integration --list` to browse the behavior inventory:
 - [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs): runnable workbench flows and pending chat, editor, hook, and cross-chat workflows.
 - [GlyphRecovery.test.mjs](tests/electron/GlyphRecovery.test.mjs): production-runtime partial-answer recovery, crash recovery with durable history, and second-window ownership protection.
 - [GlyphScriptedProvider.test.mjs](tests/electron/GlyphScriptedProvider.test.mjs): scripted provider calls through the real agent/tool loop and editor RPC, with recorded continuation assertions.
+- [GlyphInteractions.test.mjs](tests/electron/GlyphInteractions.test.mjs): questions, command approvals, remembered grants, cancellation, and decision lifecycle.
 - [GlyphProjectTools.test.mjs](tests/electron/GlyphProjectTools.test.mjs): file listing, live editor reads/search, exclusions, limits, and multi-root paths.
-- [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): pending shell, proposal, question, and reviewed file creation/deletion contracts.
+- [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): pending shell, proposal, and reviewed file creation/deletion contracts.
 - [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs): Plan Mode, blocking/background sub-agents, action items, web fetch/search, and shell wake conditions.
 - [GlyphBrowserAutomation.test.mjs](tests/electron/GlyphBrowserAutomation.test.mjs): CDP lifecycle, DOM inspection/highlighting, input, screenshots, and browser feedback.
 - [GlyphMcp.test.mjs](tests/electron/GlyphMcp.test.mjs): human/agent installation and configuration, authentication, tool discovery/calls, resources/prompts, and optional or revision-dependent capabilities.
@@ -344,7 +352,7 @@ inert shell streams, and deferred credentials. It does not require live provider
 
 The acknowledged editing-workflow blockers remain explicit fixmes:
 
-- Question and approval forms and proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).
+- Proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).
 - Structural create/delete/rename review and application: the structural mutation, Create File, and Delete File groups in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
 - Desktop background-shell wake delivery: `Pending background shells with agent-configured wake conditions` in [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs).
 
@@ -462,7 +470,8 @@ preview configuration live in `code-oss/storybook/`. The stories import the
 production components, including their Emotion styles. The preview stylesheet approximates the native pane's
 inherited theme variables and typography. Check native styles, workbench
 shortcuts, editor selection, pane lifecycle, and host communication in Code OSS.
-Storybook does not implement the currently missing account/approval/proposal UI.
+Interaction stories cover questions, command approvals, read-only ownership, and failed submissions.
+Stories use preview callbacks; verify actual continuation and command execution in Electron.
 
 ```sh
 pnpm code-oss:check:storybook

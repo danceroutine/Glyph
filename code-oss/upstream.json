@@ -4,6 +4,6 @@
   "commit": "2a59476c9bfcb90b3ddc372c36762471b7dfad1c",
   "archiveSha256": "52951e359476a04f13a8f7b0ec0d77cbd71b69c742ecf2df83079f00fca05697",
   "node": "24.18.0",
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "inspectedAt": "2026-10-08"
 }

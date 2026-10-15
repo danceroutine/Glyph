@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readEditorContentOverrides } from '../readEditorContentOverrides.ts';
+import { readEditorContentOverrides } from '#src/desktop/workspace/readEditorContentOverrides.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 import type { GlyphEditorTextSnapshot } from '#src/desktop/protocol/editor/GlyphEditorTextSnapshot.js';

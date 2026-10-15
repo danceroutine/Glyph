@@ -1,3 +1,4 @@
+import type { GlyphApprovalDecision } from '#glyph/protocol/GlyphApprovalDecision.js';
 import { Event } from '#vs/base/common/event.js';
 import { createDecorator } from '#vs/platform/instantiation/common/instantiation.js';
 import type { GlyphWorkbenchSelection } from '#glyph/workbench/GlyphWorkbenchSelection.js';
@@ -22,7 +23,7 @@ export interface GlyphWorkbenchService {
   createChat(provider: string, accountId: string, model: string): Promise<void>;
   openChat(chatId: string): Promise<void>;
   answerQuestion(chatId: string, runId: string, questionId: string, answer: unknown): Promise<void>;
-  decideApproval(chatId: string, runId: string, approvalId: string, approved: boolean): Promise<void>;
+  decideApproval(chatId: string, runId: string, approvalId: string, decision: GlyphApprovalDecision): Promise<void>;
   acceptProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void>;
   rejectProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void>;
 }

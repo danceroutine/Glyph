@@ -1,3 +1,4 @@
+import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -95,8 +96,8 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
       'approval',
       signal,
       value => {
-        if (typeof value !== 'boolean') throw new Error('An approval must be a boolean.');
-        return value ? ShellPermissionDecision.ALLOW_ONCE : ShellPermissionDecision.DENY;
+        const decision = z.enum(GlyphApprovalDecision).parse(value);
+        return GLYPH_APPROVAL_TO_SHELL_PERMISSION[decision];
       },
       () =>
         this.emit({
@@ -107,6 +108,9 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
             title: 'Allow shell command?',
             detail: `${request.command}\nWorking directory: ${request.workingDirectory}`,
             sandboxed: true,
+            command: request.command,
+            workingDirectory: request.workingDirectory,
+            canRemember: true,
           },
         }),
     );
@@ -205,3 +209,9 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     });
   }
 }
+
+const GLYPH_APPROVAL_TO_SHELL_PERMISSION: Record<GlyphApprovalDecision, ShellPermissionDecision> = {
+  [GlyphApprovalDecision.DENY]: ShellPermissionDecision.DENY,
+  [GlyphApprovalDecision.ALLOW_ONCE]: ShellPermissionDecision.ALLOW_ONCE,
+  [GlyphApprovalDecision.ALWAYS_ALLOW]: ShellPermissionDecision.ALWAYS_ALLOW,
+};

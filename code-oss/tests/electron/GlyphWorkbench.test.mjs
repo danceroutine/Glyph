@@ -185,20 +185,9 @@ it.describe('The production runtime with no configured account', () => {
 // calling hidden services would bypass the behavior this suite promises to it.
 it.describe('Pending desktop product contracts', () => {
   it.fixme(
-    'renders a host question as an accessible answer form with a submit control connected to the waiting run',
-    async () => {},
-  );
-  it.fixme(
-    'renders a host approval with the requested operation and separate allow and deny controls connected to the waiting run',
-    async () => {},
-  );
-  it.fixme(
     'renders proposal diffs with per-item accept and reject controls whose decisions are reflected in the review state',
     async () => {},
   );
-  it.fixme('resumes a waiting answer after the user answers its question', async () => {});
-  it.fixme('runs a requested operation only after the user approves it', async () => {});
-  it.fixme('continues safely when the user declines an approval request', async () => {});
   it.fixme('attaches the selected unsaved editor text to the next message', async () => {});
   it.fixme('shows a proposed change without modifying the working copy before acceptance', async () => {});
   it.fixme('applies an accepted proposal to the live editor and supports Undo', async () => {});

@@ -71,18 +71,6 @@ it.describe('Pending Propose Edits (propose_edits)', () => {
   );
 });
 
-it.describe('Pending Propose Question (propose_question)', () => {
-  it.fixme(
-    'shows the proposed questions and choices and waits for the user before continuing the answer',
-    async () => {},
-  );
-  it.fixme('returns selected choices and Other free-text answers to the requesting run exactly once', async () => {});
-  it.fixme(
-    'cancels a waiting question with its run and rejects a late answer instead of reviving the cancelled run',
-    async () => {},
-  );
-});
-
 // Create/delete are staged file operations in patch/structured-edit proposals,
 // not separate registered project tool names. Desktop application is still pending.
 it.describe('Pending structural file mutations through a reviewed proposal', () => {

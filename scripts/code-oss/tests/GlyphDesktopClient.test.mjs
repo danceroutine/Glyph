@@ -1,3 +1,4 @@
+import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#src/desktop/protocol/GlyphDesktopProtocolVersion.js';
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -57,7 +58,13 @@ describe('Glyph desktop connection attachment', () => {
         emit(event) {
           this.dispatchEvent(
             new MessageEvent('message', {
-              data: { ...identity, protocolVersion: 1, hostGeneration: 'host', sequence: ++sequence, event },
+              data: {
+                ...identity,
+                protocolVersion: GLYPH_DESKTOP_PROTOCOL_VERSION,
+                hostGeneration: 'host',
+                sequence: ++sequence,
+                event,
+              },
             }),
           );
         }
@@ -135,7 +142,7 @@ describe('Glyph desktop connection attachment', () => {
             new MessageEvent('message', {
               data: {
                 ...identity,
-                protocolVersion: 1,
+                protocolVersion: GLYPH_DESKTOP_PROTOCOL_VERSION,
                 hostGeneration: 'host',
                 sequence: requests.length,
                 event: {
@@ -176,7 +183,13 @@ describe('Glyph desktop connection attachment', () => {
       emit(event) {
         this.dispatchEvent(
           new MessageEvent('message', {
-            data: { ...identity, protocolVersion: 1, hostGeneration: 'host', sequence: ++sequence, event },
+            data: {
+              ...identity,
+              protocolVersion: GLYPH_DESKTOP_PROTOCOL_VERSION,
+              hostGeneration: 'host',
+              sequence: ++sequence,
+              event,
+            },
           }),
         );
       }

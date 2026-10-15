@@ -1,3 +1,4 @@
+export * from './GlyphApprovalDecision.ts';
 export * from './GlyphDesktopError.ts';
 export * from './GlyphDesktopProtocolVersion.ts';
 export * from './GlyphRequestEnvelope.ts';
