@@ -3,6 +3,7 @@ import type { GlyphRequestEnvelope } from '#src/desktop/protocol/GlyphRequestEnv
 import { DeterministicDesktopRuntimeFactory } from './DeterministicDesktopRuntime.ts';
 import { GlyphDesktopHost } from './GlyphDesktopHost.ts';
 import { OpenAIDesktopRuntimeFactory } from './OpenAIDesktopRuntimeFactory.ts';
+import { ScriptedDesktopTransport } from './ScriptedDesktopTransport.ts';
 import { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
 import {
   GlyphTransportMessageType,
@@ -40,7 +41,11 @@ const parentPort = (process as UtilityProcess).parentPort;
 if (!parentPort) throw new Error('The Glyph desktop host must run as an Electron utility process.');
 
 const editors = new EditorRpcRouter();
-const production = new OpenAIDesktopRuntimeFactory(editors);
+const transport =
+  process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'scripted'
+    ? new ScriptedDesktopTransport(process.env.GLYPH_DESKTOP_TEST_PROVIDER_URL ?? '').fetch
+    : undefined;
+const production = new OpenAIDesktopRuntimeFactory(editors, transport);
 const host = new GlyphDesktopHost(
   process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'deterministic' ? new DeterministicDesktopRuntimeFactory() : production,
 );

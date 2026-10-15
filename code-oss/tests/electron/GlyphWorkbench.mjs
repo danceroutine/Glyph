@@ -52,6 +52,30 @@ export class GlyphWorkbench {
     return duplicate;
   }
 
+  async reload() {
+    const reloaded = this.page.waitForEvent('domcontentloaded');
+    await this.command('Developer: Reload Window');
+    await reloaded;
+    await this.open();
+  }
+
+  /** Fault injection is limited to the named utility child of this isolated test application. */
+  async crashHost() {
+    const pid = await this.application.evaluate(({ app }) => {
+      const hosts = app
+        .getAppMetrics()
+        .filter(metric => metric.type === 'Utility' && metric.name?.startsWith('glyphHost-'));
+      if (hosts.length !== 1) throw new Error(`Expected one fixture Glyph host, found ${hosts.length}.`);
+      process.kill(hosts[0].pid, 'SIGKILL');
+      return hosts[0].pid;
+    });
+    await expect
+      .poll(() =>
+        this.application.evaluate(({ app }, pid) => app.getAppMetrics().some(metric => metric.pid === pid), pid),
+      )
+      .toBe(false);
+  }
+
   async waitForResponse(index = 0) {
     await expect(this.assistantEntries.nth(index)).toContainText(
       'The packaged Glyph host is connected through the native utility-process transport.',

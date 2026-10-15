@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron, expect, test as base } from './playwright.mjs';
 import { GlyphWorkbench } from './GlyphWorkbench.mjs';
+import { ScriptedProvider } from './ScriptedProvider.mjs';
 
 const sourceRoot = fileURLToPath(new URL('../../../.code-oss/src', import.meta.url));
 
@@ -11,7 +12,19 @@ const sourceRoot = fileURLToPath(new URL('../../../.code-oss/src', import.meta.u
 export const test = base.extend({
   trustedWorkspace: [true, { option: true }],
   productionRuntime: [false, { option: true }],
-  glyph: async ({ trustedWorkspace, productionRuntime }, use, testInfo) => {
+  scriptedProvider: [false, { option: true }],
+  provider: async ({ scriptedProvider }, use) => {
+    if (!scriptedProvider) return use(undefined);
+    const provider = new ScriptedProvider();
+    await provider.start();
+    try {
+      await use(provider);
+      provider.assertConsumed();
+    } finally {
+      await provider.close();
+    }
+  },
+  glyph: async ({ trustedWorkspace, productionRuntime, provider }, use, testInfo) => {
     // macOS Unix socket paths are limited to 103 bytes. Descriptive test titles
     // belong in the report, not in Code OSS's user-data directory path.
     const sandbox = await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'glyph-e2e-'));
@@ -59,11 +72,39 @@ export const test = base.extend({
       'VSCODE_IPC_HOOK',
       'CHAT_MODEL',
       'GLYPH_DESKTOP_TEST_RUNTIME',
+      'GLYPH_DESKTOP_TEST_PROVIDER_URL',
       ...Object.keys(env).filter(key => key.startsWith('OPENAI_')),
     ]) {
       delete env[key];
     }
-    if (!productionRuntime) env.GLYPH_DESKTOP_TEST_RUNTIME = 'deterministic';
+    if (provider) {
+      env.GLYPH_DESKTOP_TEST_RUNTIME = 'scripted';
+      env.GLYPH_DESKTOP_TEST_PROVIDER_URL = provider.url;
+      await mkdir(env.GLYPH_CONFIG_DIR, { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(env.GLYPH_CONFIG_DIR, 'accounts.json'),
+        JSON.stringify({
+          version: 1,
+          hostId: 'urn:uuid:electron-fixture',
+          accounts: [
+            {
+              clientId: 'electron-fixture',
+              subject: 'electron-fixture',
+              email: 'fixture@example.invalid',
+              planNoticeSeen: true,
+              tokens: {
+                accessToken: 'glyph-electron-fixture-token',
+                refreshToken: 'unused-fixture-refresh',
+                idToken: 'unused-fixture-id',
+                expiresAt: Date.now() + 3_600_000,
+                scopes: ['chatgpt.tokens.use.direct'],
+              },
+            },
+          ],
+        }),
+        { mode: 0o600 },
+      );
+    } else if (!productionRuntime) env.GLYPH_DESKTOP_TEST_RUNTIME = 'deterministic';
     let application;
     let page;
     try {
@@ -98,6 +139,7 @@ export const test = base.extend({
       page.on('console', message => logs.push(`[renderer ${message.type()}] ${message.text()}\n`));
       page.on('pageerror', error => logs.push(`[renderer error] ${error.stack}\n`));
       const glyph = new GlyphWorkbench(page, application);
+      glyph.workspace = workspace;
       await glyph.open();
       await use(glyph);
       expect(await readFile(join(workspace, 'example.txt'), 'utf8')).toBe('Untouched integration fixture.\n');
@@ -127,6 +169,24 @@ export const test = base.extend({
         await application.close().catch(() => application.process().kill());
       }
       await writeFile(testInfo.outputPath('electron.log'), logs.join(''));
+      if (provider) {
+        await writeFile(
+          testInfo.outputPath('provider-requests.json'),
+          JSON.stringify(
+            provider.requests.map(request => ({
+              body: request.body,
+              completed: request.completed,
+              closed: request.closed,
+            })),
+            null,
+            2,
+          ),
+        );
+        await testInfo.attach('Scripted provider requests', {
+          path: testInfo.outputPath('provider-requests.json'),
+          contentType: 'application/json',
+        });
+      }
       await testInfo.attach('Electron log', { path: testInfo.outputPath('electron.log'), contentType: 'text/plain' });
       await cp(join(sandbox, 'logs'), testInfo.outputPath('logs'), { recursive: true }).catch(() => {});
       await cp(join(sandbox, 'crashes'), testInfo.outputPath('crashes'), { recursive: true }).catch(() => {});

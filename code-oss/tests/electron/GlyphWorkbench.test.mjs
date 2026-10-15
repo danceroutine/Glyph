@@ -196,8 +196,6 @@ it.describe('Pending desktop product contracts', () => {
     'renders proposal diffs with per-item accept and reject controls whose decisions are reflected in the review state',
     async () => {},
   );
-  it.fixme('restores a partial answer without duplicating streamed text after reconnecting', async () => {});
-  it.fixme('recovers from a stopped utility host and clearly explains the interrupted answer', async () => {});
   it.fixme('shows saved chats and opens the selected chat with its conversation history', async () => {});
   it.fixme('lets the user choose a connected account and model before starting a new chat', async () => {});
   it.fixme('shows reasoning and tool progress while an answer is running', async () => {});
@@ -209,7 +207,6 @@ it.describe('Pending desktop product contracts', () => {
   it.fixme('applies an accepted proposal to the live editor and supports Undo', async () => {});
   it.fixme('rejects a proposal without changing the editor or the file on disk', async () => {});
   it.fixme('refuses to apply a proposal after the user changes the referenced editor content', async () => {});
-  it.fixme('keeps a second window read-only while another window owns the same workspace', async () => {});
   it.fixme(
     'moves an oversized pasted text block into a separately inspectable attachment instead of filling the composer text area',
     async () => {},

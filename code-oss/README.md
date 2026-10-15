@@ -64,13 +64,17 @@ buffers. These are product gaps, not capabilities proved by the smoke fixture.
 `pnpm code-oss:test:integration` runs the Playwright Electron suite against the
 compiled application with isolated profiles and workspaces. Most cases select
 the deterministic runtime explicitly with `GLYPH_DESKTOP_TEST_RUNTIME=deterministic`;
-production-startup cases do not. Pending behavior tests describe unfinished
+production-startup cases do not. Recovery and provider/tool-loop cases select
+`GLYPH_DESKTOP_TEST_RUNTIME=scripted`, which drives the production services with
+a local Responses server and fabricated credentials. Pending behavior tests describe unfinished
 product workflows and are reported separately from passing tests. See
 `code-oss/tests/electron/` for the coverage descriptions.
 
 Run `pnpm code-oss:test:integration --list` to browse the behavior inventory:
 
 - [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs): runnable workbench flows and pending chat, editor, hook, and cross-chat workflows.
+- [GlyphRecovery.test.mjs](tests/electron/GlyphRecovery.test.mjs): production-runtime partial-answer recovery, crash recovery with durable history, and second-window ownership protection.
+- [GlyphScriptedProvider.test.mjs](tests/electron/GlyphScriptedProvider.test.mjs): scripted provider calls through the real agent/tool loop and editor RPC, with recorded continuation assertions.
 - [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): shell, project read/search, proposal, question, and reviewed file creation/deletion contracts.
 - [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs): Plan Mode, blocking/background sub-agents, action items, web fetch/search, and shell wake conditions.
 - [GlyphBrowserAutomation.test.mjs](tests/electron/GlyphBrowserAutomation.test.mjs): CDP lifecycle, DOM inspection/highlighting, input, screenshots, and browser feedback.

@@ -1,3 +1,4 @@
+import type OpenAI from 'openai';
 import type { ChatProviderFactory } from '#src/chat/ChatProviderFactory.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { ConfigurationProvider } from '#src/configuration/ConfigurationProvider.js';
@@ -11,6 +12,7 @@ export class OpenAIProviderFactory implements ChatProviderFactory<() => Promise<
     private readonly projectRoot: string,
     private readonly configuration: ConfigurationProvider,
     private readonly tools?: ToolRuntime,
+    private readonly client?: OpenAI,
   ) {}
 
   create(model: string, token: () => Promise<string>, state?: ChatProviderState): OpenAIProvider {
@@ -21,7 +23,7 @@ export class OpenAIProviderFactory implements ChatProviderFactory<() => Promise<
         instructions: new ProjectAgentInstructions(this.configuration.chat.instructions).render(),
       },
       token,
-      undefined,
+      this.client,
       this.tools ?? new ProjectAccess(this.projectRoot),
       state,
     );

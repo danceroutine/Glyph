@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import OpenAI from 'openai';
 import { realpath } from 'node:fs/promises';
 import { dirname, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,7 +54,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   private readonly accounts = new OpenAIAccountService(new FileOpenAIAccountStore(this.configuration.stateDirectory));
   private initialized: Promise<void> | undefined;
 
-  constructor(private readonly editors: EditorRpcRouter) {}
+  constructor(
+    private readonly editors: EditorRpcRouter,
+    private readonly transport?: typeof fetch,
+  ) {}
 
   async create(input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]): Promise<ProviderDesktopRuntime> {
     await (this.initialized ??= this.accounts.initialize().catch(error => {
@@ -192,12 +196,24 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       new ShellToolRuntime(shells),
     ]);
     const store = this.accounts.borrowStore();
-    const http = new FetchHttpClient(logger);
+    const http = new FetchHttpClient(logger, this.transport);
+    const client = this.transport
+      ? new OpenAI({
+          // The provider replaces this placeholder with the account's token on every request.
+          apiKey: 'injected-transport',
+          baseURL: configuration.openAI.resource,
+          organization: null,
+          project: null,
+          maxRetries: 0,
+          logLevel: 'off',
+          fetch: this.transport,
+        })
+      : undefined;
     const backend = new OpenAIBackend(
       store,
       new OpenAISession(store, new OpenAIAuthenticationClient(configuration.openAI, http), configuration.openAI),
       new OpenAIModelCatalog(configuration.openAI, http),
-      new OpenAIProviderFactory(root.path, configuration, tools),
+      new OpenAIProviderFactory(root.path, configuration, tools, client),
       configuration.openAI,
     );
     const glyph = new GlyphService(

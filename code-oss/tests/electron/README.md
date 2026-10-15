@@ -22,6 +22,29 @@ sandbox and removes inherited `CHAT_MODEL` and `OPENAI_*` environment variables.
 The production test therefore uses an empty account store and sends no provider
 request.
 
+Tests that need real provider/tool/persistence behavior use
+`it.use({ scriptedProvider: true })`. This keeps the production composition,
+OpenAI adapter, agent loop, editor RPC, and SQLite chat store. Only the HTTP
+transport changes: catalog and Responses requests go to an isolated local
+server, using a fabricated account in the test's temporary state directory.
+The transport rejects unexpected destinations and redirects without falling
+back to a live provider. The application environment selects it explicitly with
+`GLYPH_DESKTOP_TEST_RUNTIME=scripted` and `GLYPH_DESKTOP_TEST_PROVIDER_URL`.
+
+The `provider` fixture accepts scripted rounds through `provider.enqueue(...)`.
+A round can contain text `chunks`, Responses `output` items (including tool
+calls), and `hold: true` to pause completion until `provider.release(index)`.
+Tests wait for observable output or recorded requests instead of racing a
+fixed response delay. The server survives utility-host restarts, records each
+request body and stream closure, and rejects extra requests. Unconsumed rounds
+also fail the test. `provider-requests.json` is attached to the report so tool
+results and provider history can be inspected directly.
+
+`GlyphScriptedProvider.test.mjs` proves the seam by requesting a real project
+file read through the production agent and asserting its unique fixture content
+in the next provider request. Future tool contracts should use this path and
+assert the recorded continuation as well as visible workbench behavior.
+
 ## Run
 
 After bootstrapping and installing Code OSS:
@@ -53,6 +76,21 @@ browser runner's headless setting. macOS opens automated application windows.
 
 ## Coverage and pending work
 
+`GlyphRecovery.test.mjs` contains the executable rank-1 contracts: partial-answer
+recovery after renderer reload, interrupted-answer diagnostics and durable
+history after utility-host failure, and preventing a second window from running
+another agent against the owner's files. These tests use the scripted provider
+through the production runtime. Renderer disconnect cancels its running answer;
+reconnect restores the retained partial text without automatically resending it.
+A utility-host crash restores completed durable turns; uncheckpointed streaming
+text is not durable and the interrupted provider request is not automatically retried.
+
+Code OSS's "Duplicate As Workspace in New Window" creates a distinct workspace
+identity with overlapping roots. The Electron ownership case verifies that this
+window is denied agent execution while preserving its draft and the owner's
+running turn. Same-identity read-only peers are additionally covered by the host
+unit tests; overlapping workspace identities do not inherit each other's chats.
+
 `GlyphWorkbench.test.mjs` is the executable coverage inventory. Its descriptions
 state user-visible behavior, including native sidebar discovery, complete and
 partial responses, keyboard submission, multiline input, empty submissions,
@@ -63,9 +101,8 @@ production startup without an account.
 
 The pending groups use `it.fixme` deliberately (`it` aliases Playwright's test API).
 Those descriptions are visible in test discovery and reports, but they are
-specifications, not passing tests. They cover partial-answer replay, utility-host
-recovery, account and model selection, questions, approvals, tools, usage,
-attachments, proposals, guarded editing/Undo, and multiple-window ownership.
+specifications, not passing tests. They cover account and model selection,
+questions, approvals, tools, usage, attachments, proposals, and guarded editing/Undo.
 Enable a pending contract when the user-facing feature exists, then replace the
 empty body with interactions and assertions. Hidden-service calls do not satisfy
 the black-box contract.
