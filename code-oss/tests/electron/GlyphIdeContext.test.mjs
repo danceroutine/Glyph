@@ -122,8 +122,10 @@ it.describe('Pending intelligent context discovery and RAG', () => {
     'expands a retrieved passage to its enclosing symbol or relevant dependencies within the configured context budget',
     async () => {},
   );
+  // Lexical search's rank-7 contract is covered in GlyphProjectTools.test.mjs.
+  // This remaining contract requires the future semantic/symbol retrieval path.
   it.fixme(
-    'prefers current unsaved editor text over stale indexed contents and removes obsolete matches from that file',
+    'prefers current unsaved editor text over stale semantic and symbol retrieval passages and removes obsolete chunks from that file',
     async () => {},
   );
   it.fixme(

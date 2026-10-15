@@ -273,6 +273,56 @@ describe(RustWorkspacePathIndex, () => {
       await search.dispose();
     });
 
+    it.each(['unavailable', 'cancelled', 'oversized'] as const)(
+      'does not fall back to disk after %s editor snapshots and permits a later search',
+      async failure => {
+        const worker = new FakeWorker(request => {
+          if (request.method === 'initialize')
+            return { root: '/project', fileCount: 1, fromCache: false, truncated: false, durationMilliseconds: 1 };
+          if (request.method === 'contentSearch')
+            return {
+              outputMode: 'content',
+              matches: [],
+              searchedFiles: 1,
+              skippedFiles: 0,
+              indexTruncated: false,
+              truncated: false,
+              nextOffset: null,
+            };
+          if (request.method === 'shutdown') return { shutdown: true };
+          throw new Error(`Unexpected method ${request.method}`);
+        });
+        const controller = new AbortController();
+        const readContentOverrides = vi.fn(async (): Promise<Readonly<Record<string, string>>> => {
+          if (failure === 'unavailable') throw new Error('Snapshot unavailable');
+          if (failure === 'cancelled') controller.abort(new Error('Search stopped'));
+          return { 'a.ts': failure === 'oversized' ? 'x'.repeat(900 * 1024) : 'late text' };
+        });
+        const index = new RustWorkspacePathIndex(
+          { binaryPath: '/bin/index', root: '/project', readContentOverrides },
+          () => worker,
+        );
+        try {
+          await expect(index.searchContents('needle', { signal: controller.signal })).rejects.toThrow(
+            failure === 'unavailable'
+              ? 'Snapshot unavailable'
+              : failure === 'cancelled'
+                ? 'Search stopped'
+                : 'request budget',
+          );
+          expect(worker.requests.map(request => request.method)).toEqual(['initialize']);
+          readContentOverrides.mockResolvedValue({ 'a.ts': '' });
+          await expect(index.searchContents('needle', {})).resolves.toMatchObject({ matches: [] });
+          expect(worker.requests.at(-1)).toMatchObject({
+            method: 'contentSearch',
+            params: { overrides: { 'a.ts': '' } },
+          });
+        } finally {
+          await index.dispose();
+        }
+      },
+    );
+
     it('cancels an in-flight native content search when its abort signal fires', async () => {
       const worker = new FakeWorker(request => {
         if (request.method === 'initialize') {

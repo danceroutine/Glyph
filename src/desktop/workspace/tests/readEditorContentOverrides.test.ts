@@ -3,6 +3,7 @@ import { readEditorContentOverrides } from '#src/desktop/workspace/readEditorCon
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 import type { GlyphEditorTextSnapshot } from '#src/desktop/protocol/editor/GlyphEditorTextSnapshot.js';
+import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
 
 function snapshot(path: string, text: string): GlyphEditorTextSnapshot {
   return {
@@ -57,6 +58,66 @@ describe(readEditorContentOverrides, () => {
     test.validateAccess.mockRejectedValue(new Error('Symlink denied'));
     await expect(test.read()).rejects.toThrow('Symlink denied');
     expect(test.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains an empty editor snapshot so disk matches cannot reappear', async () => {
+    await expect(fixture('').read()).resolves.toEqual({ 'a.ts': '' });
+  });
+
+  it('identifies the file and limit when a live buffer exceeds its byte budget', async () => {
+    const test = fixture();
+    test.request.mockImplementation(async command => {
+      if (command.type === GlyphEditorRequestType.LIST_WORKING_COPY_PATHS)
+        return { operationId: command.operationId, ok: true, workingCopyPaths: ['one/a.ts'] };
+      if (command.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Unexpected request');
+      return {
+        operationId: command.operationId,
+        ok: false,
+        error: { code: GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED, message: 'READ_LIMIT_EXCEEDED', retryable: false },
+      };
+    });
+    await expect(test.read()).rejects.toThrow(
+      'Editor search snapshot for one/a.ts exceeds the 512 KiB per-file limit.',
+    );
+  });
+
+  it.each(['failed', 'missing', 'wrong path'] as const)(
+    'refuses a %s snapshot after successful discovery',
+    async failure => {
+      const test = fixture();
+      test.request.mockImplementation(async command => {
+        if (command.type === GlyphEditorRequestType.LIST_WORKING_COPY_PATHS)
+          return { operationId: command.operationId, ok: true, workingCopyPaths: ['one/a.ts'] };
+        if (command.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Unexpected request');
+        return {
+          operationId: command.operationId,
+          ok: failure !== 'failed',
+          ...(failure === 'wrong path' ? { snapshot: snapshot('two/a.ts', 'wrong root') } : {}),
+        };
+      });
+      await expect(test.read()).rejects.toThrow('snapshot is unavailable');
+    },
+  );
+
+  it('refuses text when physical access changes while the snapshot is being read', async () => {
+    const test = fixture();
+    test.validateAccess.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Path replaced'));
+    await expect(test.read()).rejects.toThrow('Path replaced');
+    expect(test.request).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards a snapshot returned after cancellation', async () => {
+    const test = fixture();
+    const controller = new AbortController();
+    test.request.mockImplementation(async command => {
+      if (command.type === GlyphEditorRequestType.LIST_WORKING_COPY_PATHS)
+        return { operationId: command.operationId, ok: true, workingCopyPaths: ['one/a.ts'] };
+      if (command.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Unexpected request');
+      controller.abort(new Error('Search stopped'));
+      return { operationId: command.operationId, ok: true, snapshot: snapshot('one/a.ts', 'late text') };
+    });
+    await expect(test.read(controller.signal)).rejects.toThrow('Search stopped');
+    expect(test.validateAccess).toHaveBeenCalledTimes(1);
   });
 
   it('fails explicitly on unavailable snapshots, cancellation, and aggregate overflow', async () => {

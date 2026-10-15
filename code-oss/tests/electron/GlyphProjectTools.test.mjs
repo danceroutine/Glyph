@@ -30,11 +30,13 @@ const search = (pattern, options = {}) => [
 
 async function runTools(glyph, provider, calls, answer = 'The requested project tools finished.') {
   const ids = calls.map(() => randomUUID());
+  const requestCount = provider.requests.length;
   provider.enqueue(
     { output: calls.map(([name, args], index) => ScriptedProvider.tool(name, args, { callId: ids[index] })) },
     { chunks: [answer] },
   );
   await glyph.send('Inspect these workspace files.');
+  await expect.poll(() => provider.requests.length).toBe(requestCount + 2);
   await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
   await expect(glyph.assistantEntries.last().locator('div')).toHaveText(answer);
   const input = provider.requests.at(-1).body.input;
@@ -45,12 +47,16 @@ async function runTools(glyph, provider, calls, answer = 'The requested project 
   });
 }
 
-async function editFile(glyph, path, text) {
+async function openFile(glyph, path) {
   await glyph.page.keyboard.press('ControlOrMeta+p');
   const input = glyph.page.locator('.quick-input-widget input');
   await input.fill(path);
   await glyph.page.keyboard.press('Enter');
   await expect(glyph.page.locator('.editor-instance .monaco-editor').first()).toBeVisible();
+}
+
+async function editFile(glyph, path, text) {
+  await openFile(glyph, path);
   await glyph.page.keyboard.press('ControlOrMeta+a');
   await glyph.page.keyboard.insertText(text);
   await expect(glyph.page.locator('.tab.dirty').first()).toBeVisible();
@@ -246,6 +252,136 @@ it.describe('Project file discovery and reads', () => {
     expect(valid.matches).toHaveLength(3);
     expect(excluded.matches).toEqual([]);
   });
+
+  it('paginates mixed saved and unsaved matches consistently across filters and output modes', async ({
+    glyph,
+    provider,
+  }) => {
+    await editFile(glyph, join(glyph.workspace, 'src/alpha.ts'), 'before\nNeedle live\nneedle lower\nafter');
+    await editFile(glyph, join(glyph.workspace, 'docs/alpha.md'), 'Needle live documentation');
+    const options = { path: 'src', file_glob: '*.ts', file_type: 'ts', case_sensitive: false, limit: 1 };
+    const [first, second, third, exhausted, exact, regex, multiline, counts, files] = await runTools(glyph, provider, [
+      search('needle', options),
+      search('needle', { ...options, offset: 1 }),
+      search('needle', { ...options, offset: 2 }),
+      search('needle', { ...options, offset: 3 }),
+      search('Needle', { ...options, case_sensitive: true, limit: 10 }),
+      search('N[a-z]+ live', { ...options, pattern_kind: 'regular_expression' }),
+      search('live\\nneedle', { ...options, pattern_kind: 'regular_expression', multiline: true }),
+      search('needle', { ...options, output_mode: 'count', limit: 10 }),
+      search('needle', { ...options, output_mode: 'files_with_matches', offset: 1 }),
+    ]);
+    expect(first).toMatchObject({ matches: [{ path: 'src/alpha.ts', line: 2 }], truncated: true, nextOffset: 1 });
+    expect(second).toMatchObject({ matches: [{ path: 'src/alpha.ts', line: 3 }], truncated: true, nextOffset: 2 });
+    expect(third).toMatchObject({ matches: [{ path: 'src/beta.ts', line: 1 }], truncated: false, nextOffset: null });
+    expect(exhausted).toMatchObject({ matches: [], truncated: false, nextOffset: null });
+    expect(exact.matches.map(match => [match.path, match.line])).toEqual([
+      ['src/alpha.ts', 2],
+      ['src/beta.ts', 1],
+    ]);
+    expect(regex.matches).toMatchObject([{ path: 'src/alpha.ts', line: 2, matchedText: 'Needle live' }]);
+    expect(multiline.matches).toMatchObject([
+      { path: 'src/alpha.ts', line: 2, endLine: 3, matchedText: 'live\nneedle' },
+    ]);
+    expect(counts.counts).toEqual([
+      { path: 'src/alpha.ts', count: 2 },
+      { path: 'src/beta.ts', count: 1 },
+    ]);
+    expect(files).toMatchObject({ files: ['src/beta.ts'], truncated: false, nextOffset: null });
+    expect(await readFile(join(glyph.workspace, 'src/alpha.ts'), 'utf8')).toContain('Needle café');
+    expect(await readFile(join(glyph.workspace, 'docs/alpha.md'), 'utf8')).toBe('Needle documentation\n');
+  });
+
+  it('refreshes search after edits, save, and revert without resurrecting obsolete matches', async ({
+    glyph,
+    provider,
+  }) => {
+    const path = join(glyph.workspace, 'src/alpha.ts');
+    await editFile(glyph, path, 'Needle first edit');
+    const [first] = await runTools(glyph, provider, [search('Needle', { path: 'src/alpha.ts' })]);
+    expect(first.matches.map(match => match.lineText)).toEqual(['Needle first edit']);
+
+    await editFile(glyph, path, 'Needle second edit');
+    const [second, obsolete] = await runTools(glyph, provider, [
+      search('Needle', { path: 'src/alpha.ts' }),
+      search('first edit'),
+    ]);
+    expect(second.matches.map(match => match.lineText)).toEqual(['Needle second edit']);
+    expect(obsolete.matches).toEqual([]);
+    await openFile(glyph, path);
+    await glyph.page.keyboard.press('ControlOrMeta+s');
+    await expect.poll(() => readFile(path, 'utf8')).toBe('Needle second edit');
+    await expect(glyph.page.locator('.tab.dirty')).toHaveCount(0);
+    await glyph.command('Focus Glyph');
+    const [saved] = await runTools(glyph, provider, [search('Needle', { path: 'src/alpha.ts' })]);
+    expect(saved.matches).toEqual(second.matches);
+
+    await editFile(glyph, path, 'No matching text remains');
+    const [empty] = await runTools(glyph, provider, [search('Needle', { path: 'src/alpha.ts' })]);
+    expect(empty).toMatchObject({ matches: [], truncated: false });
+    await openFile(glyph, path);
+    await glyph.command('File: Revert File');
+    await expect(glyph.page.locator('.tab.dirty')).toHaveCount(0);
+    await glyph.command('Focus Glyph');
+    const [reverted] = await runTools(glyph, provider, [search('Needle', { path: 'src/alpha.ts' })]);
+    expect(reverted.matches).toEqual(second.matches);
+    expect(await readFile(path, 'utf8')).toBe('Needle second edit');
+  });
+});
+
+it.describe('Bounded editor search', () => {
+  it.use({
+    scriptedProvider: true,
+    workspaceFiles: {
+      'large.txt': 'Needle disk\n' + ('x'.repeat(99) + '\n').repeat(5200),
+      'one.txt': 'Needle one\n' + ('x'.repeat(99) + '\n').repeat(4000),
+      'two.txt': 'Needle two\n' + ('x'.repeat(99) + '\n').repeat(4000),
+    },
+  });
+
+  it('reports oversized editor snapshots instead of silently searching stale disk text and recovers after revert', async ({
+    glyph,
+    provider,
+  }) => {
+    const path = join(glyph.workspace, 'large.txt');
+    await openFile(glyph, path);
+    await glyph.page.keyboard.press('ControlOrMeta+End');
+    await glyph.page.keyboard.insertText(('y'.repeat(99) + '\n').repeat(100));
+    await expect(glyph.page.locator('.tab.dirty')).toHaveCount(1);
+    await glyph.command('Focus Glyph');
+    const [oversized] = await runTools(glyph, provider, [search('Needle', { path: 'large.txt' })]);
+    expect(oversized.error).toMatchObject({ message: expect.stringMatching(/large\.txt.*512 KiB/) });
+    expect(oversized.matches).toBeUndefined();
+    expect(await readFile(path, 'utf8')).not.toContain('y');
+    await openFile(glyph, path);
+    await glyph.command('File: Revert File');
+    await expect(glyph.page.locator('.tab.dirty')).toHaveCount(0);
+    await glyph.command('Focus Glyph');
+    const [recovered] = await runTools(glyph, provider, [search('Needle', { path: 'large.txt' })]);
+    expect(recovered.matches).toMatchObject([{ path: 'large.txt', line: 1, matchedText: 'Needle' }]);
+  });
+
+  it('reports aggregate snapshot overflow without partial search results and recovers when buffers shrink', async ({
+    glyph,
+    provider,
+  }) => {
+    for (const file of ['one.txt', 'two.txt']) {
+      await openFile(glyph, join(glyph.workspace, file));
+      await glyph.page.keyboard.press('ControlOrMeta+End');
+      await glyph.page.keyboard.insertText('unsaved');
+    }
+    await expect(glyph.page.locator('.tab.dirty')).toHaveCount(2);
+    await glyph.command('Focus Glyph');
+    const [overflow] = await runTools(glyph, provider, [search('Needle')]);
+    expect(overflow.error).toMatchObject({ message: expect.stringContaining('aggregate byte budget') });
+    expect(overflow.matches).toBeUndefined();
+    for (const file of ['one.txt', 'two.txt']) {
+      await editFile(glyph, join(glyph.workspace, file), 'Needle live');
+      expect(await readFile(join(glyph.workspace, file), 'utf8')).not.toContain('unsaved');
+    }
+    const [recovered] = await runTools(glyph, provider, [search('Needle live')]);
+    expect(recovered.matches.map(match => match.path)).toEqual(['one.txt', 'two.txt']);
+  });
 });
 
 it.describe('Bounded file listing', () => {
@@ -291,6 +427,33 @@ it.describe('Multi-root file discovery', () => {
       ['workspace/shared.txt', 'First root marker'],
     ]);
     expect(stale.matches).toEqual([]);
+    expect(await readFile(join(glyph.rootPaths[1], 'shared.txt'), 'utf8')).toBe('Second root marker');
+  });
+
+  it('keeps dirty same-named files isolated across root filters and paginated search results', async ({
+    glyph,
+    provider,
+  }) => {
+    await editFile(glyph, join(glyph.rootPaths[0], 'shared.txt'), 'live first root');
+    await editFile(glyph, join(glyph.rootPaths[1], 'shared.txt'), 'live second root');
+    const [first, second, scoped, globbed, stale] = await runTools(glyph, provider, [
+      search('live', { limit: 1 }),
+      search('live', { limit: 1, offset: 1 }),
+      search('live', { path: 'second/shared.txt' }),
+      search('live', { file_glob: 'workspace/*.txt' }),
+      search('root marker'),
+    ]);
+    const combined = [...first.matches, ...second.matches].map(match => [match.path, match.lineText]).sort();
+    expect(combined).toEqual([
+      ['second/shared.txt', 'live second root'],
+      ['workspace/shared.txt', 'live first root'],
+    ]);
+    expect(first).toMatchObject({ truncated: true, nextOffset: 1 });
+    expect(second).toMatchObject({ truncated: false, nextOffset: null });
+    expect(scoped.matches.map(match => match.path)).toEqual(['second/shared.txt']);
+    expect(globbed.matches.map(match => match.path)).toEqual(['workspace/shared.txt']);
+    expect(stale.matches).toEqual([]);
+    expect(await readFile(join(glyph.rootPaths[0], 'shared.txt'), 'utf8')).toBe('First root marker');
     expect(await readFile(join(glyph.rootPaths[1], 'shared.txt'), 'utf8')).toBe('Second root marker');
   });
 });

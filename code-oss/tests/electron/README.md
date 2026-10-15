@@ -108,6 +108,14 @@ outside-workspace symlinks, limits, invalid regex recovery, and duplicate paths 
 multiple roots. `workspaceFiles` and `additionalRoots` seed files before Electron
 starts so native index discovery is deterministic.
 
+Rank 7 builds on that existing live-buffer search path. Five additional regressions
+exercise mixed saved/unsaved results with filters, regex, pagination, and output
+modes; successive edits, save, and revert; same-named dirty files in multiple roots;
+and per-file/aggregate snapshot budgets with recovery. Oversized snapshots return
+an explicit error without partial results or a stale disk fallback. The remaining
+unsaved-buffer contract in `GlyphIdeContext.test.mjs` concerns future semantic and
+symbol retrieval, which lexical-search coverage does not establish.
+
 `GlyphChats.test.mjs` covers the two rank-3 contracts and their switching/error
 regressions. Chats are created through the UI using the production runtime. The
 tests switch between persisted conversations, recover the selected chat after

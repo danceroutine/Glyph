@@ -3,6 +3,7 @@ import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWork
 import type { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
+import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
 
 /** Transfer only catalog-approved, physically validated live text; never fall back after a failed snapshot. */
 export async function readEditorContentOverrides(
@@ -36,6 +37,8 @@ export async function readEditorContentOverrides(
       signal,
     );
     signal?.throwIfAborted();
+    if (!response.ok && response.error?.code === GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED)
+      throw new Error(`Editor search snapshot for ${rootPrefix + path} exceeds the 512 KiB per-file limit.`);
     if (!response.ok || !response.snapshot || response.snapshot.path !== rootPrefix + path)
       throw new Error(response.error?.message ?? 'An editor search snapshot is unavailable.');
     await disk.validateAccess(path);
