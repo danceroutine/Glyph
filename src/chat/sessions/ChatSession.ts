@@ -5,7 +5,13 @@ import type { ChatResponseStream } from '#src/chat/ChatResponseStream.js';
 import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
 import type { ChatTurnResult } from '#src/chat/ChatTurnResult.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
-import type { ChatSessionRecord, ChatSessionSummary, ChatTranscriptTurn } from './ChatSessionRecord.ts';
+import type {
+  ChatSessionRecord,
+  ChatSessionSummary,
+  ChatTranscriptTurn,
+  ChatToolSummary,
+} from './ChatSessionRecord.ts';
+import { toChatUsage, type ChatUsage } from './ChatUsage.ts';
 
 type Checkpoint = (
   providerState: ReturnType<ChatConversation['exportState']>,
@@ -42,6 +48,10 @@ export class ChatSession {
 
   get transcript(): readonly ChatTranscriptTurn[] {
     return this.record().transcript;
+  }
+
+  get usage(): ChatUsage {
+    return toChatUsage(this.transcript);
   }
 
   async reset(): Promise<void> {
@@ -100,10 +110,24 @@ export class ChatSession {
     let durableState = previousState;
     let assistantText = '';
     let reasoningSummary = '';
+    const tools = new Map<string, ChatToolSummary>();
     const recordingResponse: ChatResponseStream = {
       push: part => {
-        if (part.type === ChatResponsePartType.TEXT) assistantText += part.value;
-        if (part.type === ChatResponsePartType.REASONING_SUMMARY) reasoningSummary += part.value;
+        switch (part.type) {
+          case ChatResponsePartType.TEXT:
+            assistantText += part.value;
+            break;
+          case ChatResponsePartType.REASONING_SUMMARY:
+            reasoningSummary += part.value;
+            break;
+          case ChatResponsePartType.TOOL: {
+            const { callId, name, phase } = part.activity;
+            tools.set(callId, { callId, name, phase });
+            break;
+          }
+          case ChatResponsePartType.DIAGNOSTIC:
+            break;
+        }
         response.push(part);
       },
     };
@@ -135,6 +159,8 @@ export class ChatSession {
         attachmentPaths: request.attachments.map(attachment => attachment.path),
         assistantText,
         reasoningSummary,
+        ...(result.usage ? { usage: result.usage } : {}),
+        tools: [...tools.values()],
         createdAt: new Date().toISOString(),
       });
       return result;

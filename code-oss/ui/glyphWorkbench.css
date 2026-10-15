@@ -45,3 +45,52 @@
 .glyph-workbench button {
   margin-top: 8px;
 }
+.glyph-workbench .glyph-turn-progress,
+.glyph-workbench .glyph-usage {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.glyph-workbench .glyph-reasoning p {
+  white-space: pre-wrap;
+}
+.glyph-workbench summary {
+  cursor: pointer;
+}
+.glyph-workbench summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+.glyph-workbench .glyph-tools {
+  padding: 0;
+  list-style: none;
+}
+.glyph-workbench .glyph-tools li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0;
+}
+.glyph-workbench .glyph-tool-status {
+  flex-shrink: 0;
+}
+.glyph-workbench .glyph-tools li[aria-busy='true'] .glyph-tool-status {
+  color: var(--vscode-progressBar-background);
+}
+.glyph-workbench .glyph-usage {
+  padding: 8px 12px;
+  border-top: 1px solid var(--vscode-panel-border);
+  max-height: 35%;
+  overflow-y: auto;
+}
+.glyph-workbench .glyph-usage dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  font-variant-numeric: tabular-nums;
+}
+.glyph-workbench .glyph-usage dd {
+  margin: 0;
+  text-align: right;
+}

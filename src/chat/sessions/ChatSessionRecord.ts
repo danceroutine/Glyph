@@ -1,10 +1,17 @@
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
+import type { TurnUsage } from '#src/chat/TurnUsage.js';
+import type { ToolActivity } from '#src/chat/ToolActivity.js';
+
+/** Compact activity history, without retaining tool arguments or output a second time. */
+export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'>;
 
 export interface ChatTranscriptTurn {
   readonly userText: string;
   readonly attachmentPaths: readonly string[];
   readonly assistantText: string;
   readonly reasoningSummary: string;
+  readonly usage?: TurnUsage;
+  readonly tools?: readonly ChatToolSummary[];
   readonly createdAt: string;
 }
 

@@ -40,6 +40,11 @@ request body and stream closure, and rejects extra requests. Unconsumed rounds
 also fail the test. `provider-requests.json` is attached to the report so tool
 results and provider history can be inspected directly.
 
+Rounds also accept `reasoning: string[]` and
+`usage: { input, cached, output, reasoning, total }`. Set `usage: null` to
+exercise a missing report. Held rounds stream reasoning/text immediately and
+publish their usage only when released.
+
 `GlyphScriptedProvider.test.mjs` proves the seam by requesting a real project
 file read through the production agent and asserting its unique fixture content
 in the next provider request. Future tool contracts should use this path and
@@ -75,6 +80,16 @@ needed. Electron supplies Chromium. On Linux, provide a display, for example
 browser runner's headless setting. macOS opens automated application windows.
 
 ## Coverage and pending work
+
+`GlyphProgress.test.mjs` contains the three rank-2 contracts: streaming reasoning
+summaries and tool activity, all five conversation token counters, and cumulative
+usage across turns and reconnects. It exercises real file reads and a waiting
+question tool, cancellation, renderer reload, and utility-host restart. Completed
+turns persist compact tool summaries and usage atomically with their transcript.
+Totals count reported usage for saved, completed turns; failed or interrupted
+turns are excluded, and older or unreported turns are explicitly marked as missing
+usage. Reconnect replaces totals instead of adding them again. Cached input and
+reasoning tokens remain included in input and output respectively.
 
 `GlyphRecovery.test.mjs` contains the executable rank-1 contracts: partial-answer
 recovery after renderer reload, interrupted-answer diagnostics and durable

@@ -23,6 +23,13 @@ import { GlyphProposalApplicability } from '#src/desktop/protocol/events/GlyphPr
 import type { GlyphProposalSummary } from '#src/desktop/protocol/events/GlyphProposalSummary.js';
 import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
 
+const TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS = {
+  [ToolActivityPhase.STARTED]: GlyphToolActivityStatus.STARTED,
+  [ToolActivityPhase.COMPLETED]: GlyphToolActivityStatus.COMPLETED,
+  [ToolActivityPhase.FAILED]: GlyphToolActivityStatus.FAILED,
+  [ToolActivityPhase.INTERRUPTED]: GlyphToolActivityStatus.INTERRUPTED,
+} as const satisfies Record<ToolActivityPhase, GlyphToolActivityStatus>;
+
 interface ActiveRun {
   readonly controller: AbortController;
   readonly completion: Promise<void>;
@@ -144,6 +151,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       case GlyphWorkbenchCommandType.OPEN_CHAT: {
         const session = this.session(command.chatId);
+        this.publishUsage(session);
         // Durable history seeds an empty projection only; replay must not duplicate live turns.
         if (!this.active.has(session.id) && ![...this.runs.values()].some(run => run.chatId === session.id)) {
           session.transcript.forEach((turn, index) =>
@@ -153,7 +161,11 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               userText: turn.userText,
               text: turn.assistantText,
               reasoning: turn.reasoningSummary,
-              tools: [],
+              tools: (turn.tools ?? []).map(tool => ({
+                id: tool.callId,
+                name: tool.name,
+                status: TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[tool.phase],
+              })),
               status: GlyphRunStatus.COMPLETED,
             }),
           );
@@ -320,7 +332,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       await this.options.glyph.commitReviewResults(session, { currentChatOnly: true, signal });
       signal.throwIfAborted();
       // Bind tool prompts to this exact run so another chat cannot answer them.
-      const result = await this.options.interactions.run(command, () =>
+      await this.options.interactions.run(command, () =>
         session.send(
           {
             text: command.text,
@@ -338,10 +350,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       );
       const run = this.runs.get(command.runId)!;
       this.setRun({ ...run, status: signal.aborted ? GlyphRunStatus.CANCELLED : GlyphRunStatus.COMPLETED });
-      if (result.usage) {
-        this.usageByChat[command.chatId] = result.usage;
-        this.publish({ type: GlyphHostEventType.USAGE, chatId: command.chatId, usage: result.usage });
-      }
+      this.publishUsage(session);
       this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
     } catch (error) {
       const run = this.runs.get(command.runId)!;
@@ -362,13 +371,13 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       const activity = {
         id: part.activity.callId,
         name: part.activity.name,
-        status:
-          part.activity.phase === ToolActivityPhase.STARTED
-            ? GlyphToolActivityStatus.STARTED
-            : GlyphToolActivityStatus.COMPLETED,
+        status: TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[part.activity.phase],
         ...(part.activity.output ? { summary: part.activity.output } : {}),
       };
-      this.runs.set(runId, { ...run, tools: [...run.tools.filter(tool => tool.id !== activity.id), activity] });
+      const tools = run.tools.some(tool => tool.id === activity.id)
+        ? run.tools.map(tool => (tool.id === activity.id ? activity : tool))
+        : [...run.tools, activity];
+      this.runs.set(runId, { ...run, tools });
       this.publish({ type: GlyphHostEventType.TOOL_ACTIVITY, chatId: run.chatId, runId, activity });
       return;
     }
@@ -392,6 +401,12 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       case ChatResponsePartType.DIAGNOSTIC:
         return GlyphResponseDeltaKind.DIAGNOSTIC;
     }
+  }
+
+  private publishUsage(session: ChatSession): void {
+    const usage = session.usage;
+    this.usageByChat[session.id] = usage;
+    this.publish({ type: GlyphHostEventType.USAGE, chatId: session.id, usage });
   }
 
   /** A removed review still needs a final projection that retires its pending buttons. */

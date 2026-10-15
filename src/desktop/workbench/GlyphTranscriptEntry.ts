@@ -1,12 +1,15 @@
+import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+
 export enum GlyphTranscriptRole {
   USER = 'user',
   ASSISTANT = 'assistant',
   DIAGNOSTIC = 'diagnostic',
 }
 
-/** Renderable conversation projection kept deliberately independent of host DTOs. */
+/** Renderable conversation entry with optional assistant-turn progress. */
 export interface GlyphTranscriptEntry {
   readonly id: string;
   readonly role: GlyphTranscriptRole;
   readonly text: string;
+  readonly progress?: Pick<GlyphRunProjection, 'reasoning' | 'tools' | 'status'>;
 }

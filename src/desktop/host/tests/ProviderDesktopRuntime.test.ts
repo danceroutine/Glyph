@@ -19,6 +19,7 @@ import type { GlyphWorkbenchCommand } from '#src/desktop/protocol/GlyphWorkbench
 import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
+import type { Usage } from '#src/chat/Usage.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
 import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
@@ -31,7 +32,7 @@ const usage = { inputTokens: 2, outputTokens: 3, cachedInputTokens: 0, reasoning
 type SendOptions = Parameters<ChatProvider['send']>[1];
 
 async function fixture(
-  send: (options: SendOptions, interactions: DesktopInteractionBroker) => Promise<void>,
+  send: (options: SendOptions, interactions: DesktopInteractionBroker) => Promise<void | Usage | null>,
   ownerWindowId = 'owner',
   reviews?: ProposalReviewManager,
 ) {
@@ -84,8 +85,8 @@ async function fixture(
         },
         reset: () => {},
         send: async (_request, options) => {
-          await send(options, interactions);
-          return { usage, responseId: 'response' };
+          const reported = await send(options, interactions);
+          return { usage: reported === undefined ? usage : reported, responseId: 'response' };
         },
       };
     },
@@ -189,6 +190,138 @@ function reviewFixture() {
 }
 
 describe(ProviderDesktopRuntime, () => {
+  it('totals saved turns per chat and replaces totals on repeated open, including missing reports', async () => {
+    let reports = 0;
+    const harness = await fixture(async () => (++reports === 2 ? null : usage));
+    const other = await harness.glyph.createChat(harness.glyph.accounts[0]!, { slug: 'model', name: 'Model' });
+    try {
+      for (const [index, chatId] of [harness.chatId, harness.chatId, other.id, harness.chatId].entries()) {
+        await harness.runtime.handle({
+          type: Command.SEND,
+          chatId,
+          runId: `run-${index}`,
+          text: 'Continue',
+          attachments: [],
+        });
+        await vi.waitFor(async () =>
+          expect((await harness.runtime.snapshot()).runs[index]?.status).toBe(GlyphRunStatus.COMPLETED),
+        );
+      }
+      const expected = {
+        inputTokens: 4,
+        outputTokens: 6,
+        cachedInputTokens: 0,
+        reasoningTokens: 2,
+        totalTokens: 10,
+        unreportedTurns: 1,
+      };
+      for (let i = 0; i < 2; i++) {
+        await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
+        expect((await harness.runtime.snapshot()).usageByChat).toEqual({
+          [harness.chatId]: expected,
+          [other.id]: { ...usage, unreportedTurns: 0 },
+        });
+      }
+      expect(harness.saved.get(harness.chatId)?.transcript.map(turn => turn.usage)).toEqual([usage, undefined, usage]);
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('does not publish or count a completed provider result when its transcript checkpoint fails', async () => {
+    const harness = await fixture(async () => {});
+    const save = harness.store.save;
+    harness.store.save = async () => {
+      throw new Error('disk unavailable');
+    };
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'failed-save',
+        text: 'First',
+        attachments: [],
+      });
+      await vi.waitFor(async () =>
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED),
+      );
+      expect(harness.events.filter(event => event.type === GlyphHostEventType.USAGE)).toEqual([]);
+      expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(0);
+      harness.store.save = save;
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'saved',
+        text: 'Next',
+        attachments: [],
+      });
+      await vi.waitFor(async () =>
+        expect((await harness.runtime.snapshot()).runs[1]?.status).toBe(GlyphRunStatus.COMPLETED),
+      );
+      expect((await harness.runtime.snapshot()).usageByChat?.[harness.chatId]).toEqual({
+        ...usage,
+        unreportedTurns: 0,
+      });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('keeps tool call order stable and restores compact progress from completed turns', async () => {
+    const harness = await fixture(async options => {
+      for (const [callId, phase] of [
+        ['first', ToolActivityPhase.STARTED],
+        ['second', ToolActivityPhase.STARTED],
+        ['second', ToolActivityPhase.FAILED],
+        ['first', ToolActivityPhase.COMPLETED],
+      ] as const)
+        options.onToolActivity?.({
+          callId,
+          name: 'read',
+          phase,
+          arguments: '{}',
+          output: 'large output is not copied into transcript',
+        });
+    });
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'tools',
+        text: 'Read',
+        attachments: [],
+      });
+      await vi.waitFor(async () =>
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
+      );
+      const expected = [
+        { id: 'first', name: 'read', status: 'completed' },
+        { id: 'second', name: 'read', status: 'failed' },
+      ];
+      expect((await harness.runtime.snapshot()).runs[0]?.tools).toMatchObject(expected);
+      expect(harness.saved.get(harness.chatId)?.transcript[0]?.tools).toEqual([
+        { callId: 'first', name: 'read', phase: ToolActivityPhase.COMPLETED },
+        { callId: 'second', name: 'read', phase: ToolActivityPhase.FAILED },
+      ]);
+      const restored = new ProviderDesktopRuntime({
+        glyph: harness.glyph,
+        interactions: new DesktopInteractionBroker(() => {}),
+        shellSessions: harness.shells,
+        emit: () => {},
+        ownerWindowId: 'owner',
+      });
+      await restored.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
+      await restored.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
+      const snapshot = await restored.snapshot();
+      expect(snapshot.runs).toHaveLength(1);
+      expect(snapshot.runs[0]?.tools).toEqual(expected);
+      expect(snapshot.usageByChat?.[harness.chatId]).toEqual({ ...usage, unreportedTurns: 0 });
+      await restored.dispose();
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
   it('leaves ownerless legacy receipts for explicit workspace-wide delivery instead of attributing them to concurrent chats', async () => {
     const { reviews, stage } = reviewFixture();
     const harness = await fixture(async () => {}, 'owner', reviews);
@@ -762,7 +895,10 @@ describe(ProviderDesktopRuntime, () => {
         reasoning: 'Summary',
         tools: [{ id: 'tool' }],
       });
-      expect((await harness.runtime.snapshot()).usageByChat?.[harness.chatId]).toEqual(usage);
+      expect((await harness.runtime.snapshot()).usageByChat?.[harness.chatId]).toEqual({
+        ...usage,
+        unreportedTurns: 0,
+      });
     } finally {
       await harness.runtime.dispose();
     }

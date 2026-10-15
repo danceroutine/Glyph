@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { z } from 'zod';
+import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import { PersistenceError } from '#src/errors/PersistenceError.js';
 import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import { ProjectContextIdentity } from '#src/project/context/ProjectContextIdentity.js';
@@ -23,9 +24,37 @@ const transcriptTurnSchema = z
     attachmentPaths: z.array(z.string().min(1)),
     assistantText: z.string(),
     reasoningSummary: z.string(),
+    usage: z
+      .object({
+        inputTokens: z.number().int().nonnegative(),
+        cachedInputTokens: z.number().int().nonnegative(),
+        outputTokens: z.number().int().nonnegative(),
+        reasoningTokens: z.number().int().nonnegative(),
+        totalTokens: z.number().int().nonnegative(),
+        incomplete: z.boolean().optional(),
+      })
+      .strict()
+      .transform(({ incomplete, ...usage }) => ({ ...usage, ...(incomplete === undefined ? {} : { incomplete }) }))
+      .optional(),
+    tools: z
+      .array(
+        z
+          .object({
+            callId: z.string(),
+            name: z.string(),
+            phase: z.enum(ToolActivityPhase),
+          })
+          .strict(),
+      )
+      .optional(),
     createdAt: z.iso.datetime(),
   })
-  .strict();
+  .strict()
+  .transform(({ usage, tools, ...turn }) => ({
+    ...turn,
+    ...(usage === undefined ? {} : { usage }),
+    ...(tools === undefined ? {} : { tools }),
+  }));
 
 const legacyRecordSchema = z
   .object({
@@ -96,6 +125,8 @@ interface TurnRow {
   readonly assistant_text: string;
   readonly reasoning_summary: string;
   readonly created_at: string;
+  readonly usage: string | null;
+  readonly tools: string | null;
 }
 
 /** SQLite-backed project-context catalog with atomic per-chat checkpoints. */
@@ -155,7 +186,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         .prepare('SELECT * FROM chats WHERE project_context_id = ? ORDER BY updated_at DESC')
         .all(projectContextId) as ChatRow[];
       const turns = database.prepare(
-        'SELECT user_text, attachment_paths, assistant_text, reasoning_summary, created_at FROM chat_turns WHERE chat_id = ? ORDER BY position',
+        'SELECT user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
       );
       return chats.map(row => toRecord(row, turns.all(row.id) as TurnRow[]));
     } catch (error) {
@@ -252,6 +283,17 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         PRIMARY KEY (chat_id, position)
       );
     `);
+    // Take the write reservation before inspecting columns: another workspace
+    // may open this shared catalog at the same time during an upgrade.
+    database
+      .transaction(() => {
+        const columns = database.prepare('PRAGMA table_info(chat_turns)').all() as { name: string }[];
+        for (const column of ['usage', 'tools']) {
+          if (!columns.some(value => value.name === column))
+            database.exec(`ALTER TABLE chat_turns ADD COLUMN ${column} TEXT`);
+        }
+      })
+      .immediate();
   }
 
   private async migrateLegacyCatalog(database: Database.Database, authority: string): Promise<void> {
@@ -362,8 +404,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
     database.prepare('DELETE FROM chat_turns WHERE chat_id = ?').run(record.id);
     const insertTurn = database.prepare(
       `INSERT INTO chat_turns(
-         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     record.transcript.forEach((turn, position) =>
       insertTurn.run(
@@ -374,6 +416,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         turn.assistantText,
         turn.reasoningSummary,
         turn.createdAt,
+        turn.usage ? JSON.stringify(turn.usage) : null,
+        turn.tools ? JSON.stringify(turn.tools) : null,
       ),
     );
   })();
@@ -400,6 +444,8 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
       assistantText: turn.assistant_text,
       reasoningSummary: turn.reasoning_summary,
       createdAt: turn.created_at,
+      ...(turn.usage === null ? {} : { usage: JSON.parse(turn.usage) as unknown }),
+      ...(turn.tools === null ? {} : { tools: JSON.parse(turn.tools) as unknown }),
     })),
   });
 }

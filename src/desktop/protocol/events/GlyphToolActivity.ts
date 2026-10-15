@@ -2,6 +2,7 @@ export enum GlyphToolActivityStatus {
   STARTED = 'started',
   COMPLETED = 'completed',
   FAILED = 'failed',
+  INTERRUPTED = 'interrupted',
 }
 
 export interface GlyphToolActivity {

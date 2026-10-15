@@ -112,7 +112,12 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       const prompt = run.userText ?? this.prompts.get(run.runId);
       return [
         ...(prompt ? [{ id: `${run.runId}:user`, role: GlyphTranscriptRole.USER, text: prompt }] : []),
-        { id: run.runId, role: GlyphTranscriptRole.ASSISTANT, text: run.text },
+        {
+          id: run.runId,
+          role: GlyphTranscriptRole.ASSISTANT,
+          text: run.text,
+          progress: { reasoning: run.reasoning, tools: run.tools, status: run.status },
+        },
         ...(run.terminalMessage
           ? [{ id: `${run.runId}:terminal`, role: GlyphTranscriptRole.DIAGNOSTIC, text: run.terminalMessage }]
           : []),

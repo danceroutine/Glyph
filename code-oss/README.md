@@ -55,7 +55,10 @@ inference account/model when starting a conversation.
 
 The workbench service projects snapshots, questions, approvals, tool activity,
 usage, and proposals and exposes their interaction commands. The Preact sidebar
-currently renders the transcript and composer. Account selection, human-decision
+renders the transcript, expandable reasoning summaries, tool progress, and
+conversation token usage alongside the composer. Completed-turn usage and compact
+tool summaries survive host restarts; missing historical usage is marked as
+incomplete. Account selection, human-decision
 forms, and proposal controls remain follow-up components.
 Structural file mutations are not yet supported by the editor-backed text
 store, and indexed content search still reads disk rather than merging dirty

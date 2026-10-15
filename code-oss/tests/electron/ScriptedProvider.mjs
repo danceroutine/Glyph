@@ -82,13 +82,16 @@ export class ScriptedProvider {
             error: null,
             incomplete_details: null,
             output: round.output ?? [ScriptedProvider.message(text, messageId)],
-            usage: {
-              input_tokens: 3,
-              input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
-              output_tokens: 2,
-              output_tokens_details: { reasoning_tokens: 0 },
-              total_tokens: 5,
-            },
+            usage:
+              round.usage === null
+                ? null
+                : {
+                    input_tokens: round.usage?.input ?? 3,
+                    input_tokens_details: { cached_tokens: round.usage?.cached ?? 0, cache_write_tokens: 0 },
+                    output_tokens: round.usage?.output ?? 2,
+                    output_tokens_details: { reasoning_tokens: round.usage?.reasoning ?? 0 },
+                    total_tokens: round.usage?.total ?? 5,
+                  },
           },
         });
         response.end();
@@ -98,6 +101,15 @@ export class ScriptedProvider {
     response.on('close', () => (record.closed = true));
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     response.flushHeaders();
+    for (const delta of round.reasoning ?? []) {
+      event({
+        type: 'response.reasoning_summary_text.delta',
+        item_id: `reasoning-${id}`,
+        output_index: 0,
+        summary_index: 0,
+        delta,
+      });
+    }
     for (const delta of round.chunks ?? []) {
       event({ type: 'response.output_text.delta', item_id: messageId, output_index: 0, content_index: 0, delta });
     }

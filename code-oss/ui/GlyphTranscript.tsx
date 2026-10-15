@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
+import { GlyphTurnProgress } from './GlyphTurnProgress.tsx';
 
 interface GlyphTranscriptProps {
   readonly entries: readonly GlyphTranscriptEntry[];
@@ -17,6 +18,7 @@ export function GlyphTranscript({ entries }: GlyphTranscriptProps) {
       {entries.map(entry => (
         <div class={`glyph-entry ${entry.role}`} key={entry.id}>
           <strong>{roleLabel(entry.role)}</strong>
+          {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
           <div>{entry.text}</div>
         </div>
       ))}

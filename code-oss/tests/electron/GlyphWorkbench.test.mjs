@@ -198,7 +198,6 @@ it.describe('Pending desktop product contracts', () => {
   );
   it.fixme('shows saved chats and opens the selected chat with its conversation history', async () => {});
   it.fixme('lets the user choose a connected account and model before starting a new chat', async () => {});
-  it.fixme('shows reasoning and tool progress while an answer is running', async () => {});
   it.fixme('resumes a waiting answer after the user answers its question', async () => {});
   it.fixme('runs a requested operation only after the user approves it', async () => {});
   it.fixme('continues safely when the user declines an approval request', async () => {});
@@ -283,14 +282,6 @@ it.describe('Pending context compaction', () => {
 });
 
 it.describe('Pending usage metering and settings', () => {
-  it.fixme(
-    'shows input, cached input, output, reasoning, and total token usage for the selected conversation',
-    async () => {},
-  );
-  it.fixme(
-    'updates usage after a turn and restores the same totals after reconnecting without double-counting',
-    async () => {},
-  );
   it.fixme(
     'lets the user rebind send, queue, interrupt, and steer shortcuts through the workbench keyboard shortcut settings',
     async () => {},

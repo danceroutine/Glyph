@@ -126,11 +126,13 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       }
       turn = await this.adapter.beginTurn(this.state, request, context(0));
       let totalUsage: Usage | null = null;
+      let usageIncomplete = false;
       let round = 0;
       for (;;) {
         round += 1;
         const step = await this.adapter.streamStep(turn, context(round));
         turn = step.turn;
+        usageIncomplete ||= step.usage === null;
         totalUsage = addUsage(totalUsage, step.usage);
         if (step.toolCalls.length === 0) {
           if (!step.hasVisibleOutput) {
@@ -140,7 +142,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           }
           this.state = this.adapter.commit(turn);
           trace('history.committed', { state: this.state }, round);
-          return { responseId: step.responseId, usage: totalUsage };
+          return {
+            responseId: step.responseId,
+            usage: totalUsage && usageIncomplete ? { ...totalUsage, incomplete: true } : totalUsage,
+          };
         }
         this.state = this.adapter.commit(turn);
         hasToolCheckpoint = true;
@@ -168,11 +173,13 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                 trace('tool.call', { call }, round);
                 reportToolActivity({ phase: ToolActivityPhase.STARTED, ...activity });
                 let output: string;
+                let phase = ToolActivityPhase.COMPLETED;
                 try {
                   output = options.toolContext
                     ? await this.tools.execute(call.name, call.input, signal, options.toolContext)
                     : await this.tools.execute(call.name, call.input, signal);
                 } catch (error) {
+                  phase = signal.aborted ? ToolActivityPhase.INTERRUPTED : ToolActivityPhase.FAILED;
                   output = toolInterruptionOutput(
                     signal.aborted ? 'TOOL_EXECUTION_INTERRUPTED' : 'TOOL_EXECUTION_FAILED',
                     signal.aborted
@@ -183,7 +190,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                   if (signal.aborted) interrupted ??= error;
                 }
                 trace('tool.result', { namespace: call.namespace, name: call.name, callId: call.id, output }, round);
-                reportToolActivity({ phase: ToolActivityPhase.COMPLETED, ...activity, output });
+                reportToolActivity({ phase, ...activity, output });
                 return { call, output } satisfies AgentToolResult;
               }),
             );

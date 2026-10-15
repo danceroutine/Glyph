@@ -6,6 +6,8 @@ import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
+import type { ToolActivity } from '#src/chat/ToolActivity.js';
 import { AgentRuntime } from '#src/chat/runtime/AgentRuntime.js';
 import type {
   AgentModelAdapter,
@@ -176,6 +178,18 @@ class TwoToolClaudeAdapter extends ClaudeShapedAdapter {
 }
 
 describe(AgentRuntime, () => {
+  it.each([0, 1])('marks a multi-request turn incomplete when round %s has no usage report', async missingRound => {
+    const adapter = new ClaudeShapedAdapter();
+    const streamStep = adapter.streamStep.bind(adapter);
+    adapter.streamStep = async (turn, context) => {
+      const step = await streamStep(turn, context);
+      return turn.round === missingRound ? { ...step, usage: null } : step;
+    };
+    const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, { definitions: [], execute: async () => 'file' });
+    const result = await runtime.send('Read the file', { signal: new AbortController().signal, onText: () => {} });
+    expect(result.usage).toEqual({ ...(missingRound === 0 ? usage(8, 2) : usage(5, 3)), incomplete: true });
+  });
+
   it('supports Claude-shaped messages while keeping tool execution provider-independent', async () => {
     const adapter = new ClaudeShapedAdapter();
     const tools: ToolRuntime = {
@@ -274,17 +288,20 @@ describe(AgentRuntime, () => {
     };
     const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, tools);
     const checkpoints: ChatProviderState[] = [];
+    const activity: ToolActivity[] = [];
 
     await expect(
       runtime.send('Run until ready.', {
         signal: controller.signal,
         onText: () => {},
+        onToolActivity: item => activity.push(item),
         onStateCheckpoint: state => {
           checkpoints.push(state);
         },
       }),
     ).rejects.toThrow('Response cancelled');
 
+    expect(activity.map(item => item.phase)).toEqual([ToolActivityPhase.STARTED, ToolActivityPhase.INTERRUPTED]);
     expect(checkpoints).toHaveLength(2);
     const result = messagesFrom(checkpoints[1]!).at(-1) as {
       readonly content: readonly Extract<ClaudeBlock, { type: 'tool_result' }>[];
@@ -316,15 +333,23 @@ describe(AgentRuntime, () => {
     };
     const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, tools);
     const checkpoints: ChatProviderState[] = [];
+    const activity: ToolActivity[] = [];
 
     await runtime.send('Run both.', {
       signal: new AbortController().signal,
       onText: () => {},
+      onToolActivity: item => activity.push(item),
       onStateCheckpoint: state => {
         checkpoints.push(state);
       },
     });
 
+    expect(
+      activity.filter(item => item.phase !== ToolActivityPhase.STARTED).map(item => [item.callId, item.phase]),
+    ).toEqual([
+      ['toolu_2', ToolActivityPhase.FAILED],
+      ['toolu_1', ToolActivityPhase.COMPLETED],
+    ]);
     expect(checkpoints).toHaveLength(2);
     expect(secondObservedFirstPending).toBe(true);
     const failed = messagesFrom(checkpoints[1]!).at(-1) as {

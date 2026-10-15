@@ -1,6 +1,6 @@
-import type { Usage } from './Usage.ts';
+import type { TurnUsage } from './TurnUsage.ts';
 
 export interface TurnResult {
-  usage: Usage | null;
+  usage: TurnUsage | null;
   responseId: string;
 }
