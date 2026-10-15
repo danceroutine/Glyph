@@ -80,6 +80,16 @@ describe('proposal review entries', () => {
 });
 
 describe(renderEntry, () => {
+  it('renders encoding and text changes together without claiming the text is unchanged', () => {
+    const fixture = createProposalReviewFixture();
+    const file = fixture.proposal.files[0]!;
+    file.proposed = { ...file.proposed, byteOrderMark: true };
+    const result = renderEntry(file, file.items[0]!, ReviewViewMode.FOCUSED, false);
+    expect(result.lines).toContain('Encoding: UTF-8 → UTF-8 with BOM');
+    expect(result.lines.join('\n')).toContain('new');
+    expect(result.lines).not.toContain('Text content unchanged');
+  });
+
   it.each([ReviewViewMode.FOCUSED, ReviewViewMode.FULL_FILE])(
     'renders a 150000-line file in %s mode without argument-limit errors',
     mode => {

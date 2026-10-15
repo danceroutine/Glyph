@@ -75,7 +75,7 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
   };
 
   const answer = (value: QuestionAnswer): void => {
-    if (settled.current || answeredQuestion.current === questionIndex) return;
+    // The input handler checks settlement before dispatching either answer path.
     answeredQuestion.current = questionIndex;
     const completed = [...answers.current, value];
     answers.current = completed;

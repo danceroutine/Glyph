@@ -26,8 +26,10 @@ describe(WiredPromptEditor, () => {
       view.stdin.write('!');
       view.stdin.write('\r');
       view.stdin.write('\r');
+      view.stdin.write('\x1b[200~late paste\x1b[201~');
       await tick();
       expect(complete).toHaveBeenCalledExactlyOnceWith({ prompt: 'hello world agai!', attachmentPaths: [] });
+      expect(view.lastFrame()).not.toContain('late paste');
     } finally {
       view.unmount();
     }

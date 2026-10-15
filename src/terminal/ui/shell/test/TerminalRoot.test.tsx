@@ -9,6 +9,43 @@ import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 
 describe(TerminalRoot, () => {
   describe('rendering', () => {
+    it('keeps an intermediate page pinned while new output arrives and resumes following at the bottom', async () => {
+      const transcript = (extra = '') => (
+        <TerminalRoot
+          pagingActive
+          height={4}
+          entries={[{ id: 1, content: <Text>{'one\ntwo\nthree\nfour\nfive\nsix\nseven' + extra}</Text> }]}
+          response={undefined}
+          interaction={<Text>prompt</Text>}
+        />
+      );
+      const view = render(transcript());
+      try {
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('seven'));
+        for (let n = 0; n < 2; n++) {
+          view.stdin.write('\x1b[5~');
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('one'));
+        view.stdin.write('\x1b[6~');
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('five'));
+        expect(view.lastFrame()).not.toContain('seven');
+        view.rerender(transcript('\neight'));
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(view.lastFrame()).toContain('three');
+        expect(view.lastFrame()).not.toContain('eight');
+        for (let n = 0; n < 2; n++) {
+          view.stdin.write('\x1b[6~');
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('eight'));
+        view.rerender(transcript('\neight\nnine'));
+        await vi.waitFor(() => expect(view.lastFrame()).toContain('nine'));
+      } finally {
+        view.unmount();
+      }
+    });
+
     it('opens a different conversation at its newest message instead of retaining the previous scroll offset', async () => {
       const rows = (id: number, text: string) => (
         <TerminalRoot

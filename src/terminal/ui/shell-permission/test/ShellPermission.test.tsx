@@ -1,5 +1,5 @@
 import { render } from 'ink-testing-library';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
 import { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.js';
 import { ShellPermissionMode } from '#src/shell/ShellPermissionPolicy.js';
@@ -8,8 +8,34 @@ import type { TerminalShellPermissionRequest } from '#src/terminal/ui/shell-perm
 import { WiredShellPermission } from '#src/terminal/ui/shell-permission/ShellPermission.wired.js';
 import { Box } from 'ink';
 
+const terminalSize = vi.hoisted(() => ({ rows: 24, columns: 80 }));
+vi.mock('ink', async () => ({
+  ...(await vi.importActual<typeof import('ink')>('ink')),
+  useWindowSize: () => terminalSize,
+}));
+afterEach(() => Object.assign(terminalSize, { rows: 24, columns: 80 }));
+
 describe(WiredShellPermission, () => {
   describe('interaction', () => {
+    it.each([
+      { rows: 15, columns: 80 },
+      { rows: 24, columns: 39 },
+    ])('blocks approval but permits denial in a $columns by $rows terminal', async size => {
+      Object.assign(terminalSize, size);
+      const complete = vi.fn();
+      const view = render(<WiredShellPermission request={request(complete)} />);
+      try {
+        expect(view.lastFrame()).toContain('Resize terminal');
+        await write(view, '1');
+        await write(view, '\r');
+        expect(complete).not.toHaveBeenCalled();
+        await writeEscape(view);
+        expect(complete).toHaveBeenCalledExactlyOnceWith(ShellPermissionDecision.DENY);
+      } finally {
+        view.unmount();
+      }
+    });
+
     it('ignores key-release events instead of navigating, authorizing, or interrupting', async () => {
       const complete = vi.fn();
       const interrupt = vi.fn();
@@ -163,6 +189,9 @@ describe(WiredShellPermission, () => {
         for (let n = 0; n < 10; n++) await write(view, '\u001b[6~');
         expect(view.lastFrame()).toContain('echo harmless-29');
         expect(view.lastFrame()).toContain('› 1. Allow once');
+        for (let n = 0; n < 10; n++) await write(view, '\u001b[5~');
+        expect(view.lastFrame()).toContain('echo harmless-0');
+        expect(view.lastFrame()).not.toContain('echo harmless-29');
         expect(complete).not.toHaveBeenCalled();
         await write(view, '\r');
         expect(complete).toHaveBeenCalledWith(ShellPermissionDecision.ALLOW_ONCE);

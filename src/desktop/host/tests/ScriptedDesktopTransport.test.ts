@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ScriptedDesktopTransport } from '../ScriptedDesktopTransport.ts';
+import { ScriptedDesktopTransport } from '#src/desktop/host/ScriptedDesktopTransport.js';
 
 afterEach(() => vi.unstubAllGlobals());
 

@@ -7,6 +7,118 @@ import { createProposalReviewFixture } from './ProposalReviewFixture.ts';
 
 describe(WiredProposalReview, () => {
   describe('interaction', () => {
+    it('does not retry persistence after a deferred review receives an external decision', async () => {
+      const fixture = createProposalReviewFixture();
+      const flush = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(fixture.manager, 'hasPendingCheckpoint', { value: true });
+      fixture.manager.flushPendingCheckpoint = flush;
+      const complete = vi.fn();
+      const request = { id: 1, manager: fixture.manager, complete, interrupt: vi.fn() };
+      const view = render(<WiredProposalReview request={request} />);
+      try {
+        await tick();
+        view.stdin.write('q');
+        expect(complete).toHaveBeenCalledExactlyOnceWith();
+        fixture.proposal.files[0]!.items[0]!.decision = EditDecisionState.REJECTED;
+        view.rerender(<WiredProposalReview request={{ ...request }} />);
+        await tick();
+        expect(flush).not.toHaveBeenCalled();
+        expect(complete).toHaveBeenCalledOnce();
+      } finally {
+        view.unmount();
+      }
+    });
+
+    it.each([new Error('save unavailable'), 'save unavailable'])(
+      'keeps a recovered decision open after a save failure and completes only after retry (%s)',
+      async failure => {
+        const fixture = createProposalReviewFixture();
+        fixture.proposal.files[0]!.items[0]!.decision = EditDecisionState.ACCEPTED;
+        let pending = true;
+        let finish!: () => void;
+        const flush = vi
+          .fn()
+          .mockRejectedValueOnce(failure)
+          .mockImplementationOnce(
+            () =>
+              new Promise<void>(resolve => {
+                finish = () => {
+                  pending = false;
+                  resolve();
+                };
+              }),
+          );
+        Object.defineProperty(fixture.manager, 'hasPendingCheckpoint', { get: () => pending });
+        fixture.manager.flushPendingCheckpoint = flush;
+        const complete = vi.fn();
+        const request = { id: 1, manager: fixture.manager, complete, interrupt: vi.fn() };
+        const view = render(<WiredProposalReview request={request} />);
+        try {
+          await vi.waitFor(() => expect(view.lastFrame()).toContain('Error: save unavailable'));
+          expect(view.lastFrame()).toContain('R retry save');
+          expect(complete).not.toHaveBeenCalled();
+          view.stdin.write('y');
+          expect(fixture.accept).not.toHaveBeenCalled();
+          view.stdin.write('r');
+          view.stdin.write('r');
+          await vi.waitFor(() => expect(view.lastFrame()).toContain('Saving…'));
+          expect(flush).toHaveBeenCalledTimes(2);
+          expect(complete).not.toHaveBeenCalled();
+          finish();
+          await vi.waitFor(() => expect(complete).toHaveBeenCalledExactlyOnceWith({ accepted: 1, rejected: 0 }));
+          expect(view.lastFrame()).toContain('Review complete');
+        } finally {
+          finish?.();
+          view.unmount();
+        }
+      },
+    );
+
+    it('ignores a decision already settled outside the displayed frame', async () => {
+      const fixture = createProposalReviewFixture();
+      const view = render(
+        <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
+      );
+      try {
+        await tick();
+        fixture.proposal.files[0]!.items[0]!.decision = EditDecisionState.REJECTED;
+        view.stdin.write('y');
+        expect(fixture.accept).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+      }
+    });
+
+    it('ignores a rejected decision after its review has been replaced', async () => {
+      const fixture = createProposalReviewFixture();
+      const next = createProposalReviewFixture();
+      let fail!: (error: Error) => void;
+      fixture.accept.mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            fail = reject;
+          }),
+      );
+      const complete = vi.fn();
+      const view = render(
+        <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete, interrupt: vi.fn() }} />,
+      );
+      try {
+        await tick();
+        view.stdin.write('y');
+        view.rerender(
+          <WiredProposalReview request={{ id: 2, manager: next.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
+        );
+        await tick();
+        fail(new Error('old review failure'));
+        await tick();
+        expect(view.lastFrame()).not.toContain('old review failure');
+        expect(complete).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+      }
+    });
+
     it('does not decide the old or undisplayed change when navigation and acceptance arrive in one frame', async () => {
       const fixture = createProposalReviewFixture();
       const first = fixture.proposal.files[0]!.items[0]!;

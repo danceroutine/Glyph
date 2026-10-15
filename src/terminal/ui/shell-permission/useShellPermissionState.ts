@@ -53,7 +53,7 @@ export function useShellPermissionState(request: TerminalShellPermissionRequest,
   const { rows, columns } = useWindowSize();
   const settled = useRef(false);
   const choose = (decision: ShellPermissionDecision): void => {
-    if (settled.current) return;
+    // The input handler checks settlement before dispatching a choice.
     if (decision !== ShellPermissionDecision.DENY && (rows < 16 || columns < 40)) return;
     // Claim the interaction before its callback can trigger another input or
     // render: a request can authorize or interrupt, never both or twice.

@@ -13,7 +13,8 @@ export function getPromptViewport(input: {
   const width = Math.max(1, input.columns - PromptLayout.railHorizontalPadding * 2);
   const wrap = (text: string) => wrapAnsi(text, width, { hard: true, trim: false, wordWrap: false }).split('\n');
   const prefix = wrap(input.prefix);
-  const lastWidth = stringWidth(prefix.at(-1) ?? '');
+  // Splitting a string always produces at least one line, including for empty input.
+  const lastWidth = stringWidth(prefix.at(-1)!);
   const cursorRow = prefix.length - 1 + Math.floor(lastWidth / width);
   const budget = Math.max(1, Math.min(6, Math.floor(input.rows / 2) - input.overhead));
   // The trailing space reserves the caret cell after an exactly full row.
