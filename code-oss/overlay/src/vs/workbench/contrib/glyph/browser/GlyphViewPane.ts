@@ -54,10 +54,17 @@ export class GlyphViewPane extends ViewPane {
     super.renderBody(container);
     // Dispose the old root before mounting if Code OSS recreates this body.
     this.view.clear();
+    const service = this.glyphService;
     this.view.value = mountGlyphWorkbench(container, this.glyphService.state, {
-      composer: this.glyphService.composer,
+      get composer() {
+        return service.composer;
+      },
       send: text => this.glyphService.send(text),
       cancel: () => this.glyphService.cancel(),
+      newChat: () => this.glyphService.newChat(),
+      openChat: id => this.glyphService.openChat(id),
+      selectAccount: (provider, id) => this.glyphService.selectAccount(provider, id),
+      selectModel: model => this.glyphService.selectModel(model),
     });
   }
 }

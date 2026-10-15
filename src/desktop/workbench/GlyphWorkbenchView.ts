@@ -12,6 +12,10 @@ export interface GlyphWorkbenchViewActions {
   readonly composer: GlyphComposerState;
   send(text: string): Promise<void>;
   cancel(): void;
+  newChat(): void;
+  openChat(chatId: string): Promise<void>;
+  selectAccount(provider: string, accountId: string): Promise<void>;
+  selectModel(model: string): Promise<void>;
 }
 
 export type GlyphWorkbenchMount = (

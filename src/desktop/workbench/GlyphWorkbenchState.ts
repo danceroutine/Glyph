@@ -18,4 +18,7 @@ export interface GlyphWorkbenchState extends GlyphDesktopSnapshot {
   readonly selection?: GlyphWorkbenchSelection;
   readonly selectedChatId?: string;
   readonly usage: Readonly<Record<string, GlyphUsage>>;
+  readonly navigationPending?: boolean;
+  readonly catalogPending?: boolean;
+  readonly navigationError?: string;
 }

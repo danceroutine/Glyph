@@ -30,3 +30,52 @@ export const Streaming: Story = {
   args: { state: workbenchState({ transcript: conversation, status: GlyphWorkbenchStatus.STREAMING }) },
 };
 export const SendFailure: Story = { args: { actions: failingActions } };
+
+const savedChat = {
+  id: 'settings',
+  title: 'Review the settings migration',
+  accountProvider: 'fixture',
+  accountId: 'personal',
+  modelSlug: 'balanced',
+  updatedAt: new Date().toISOString(),
+  turnCount: 4,
+};
+const navigationState = workbenchState({
+  accounts: [
+    { provider: 'fixture', id: 'personal', label: 'developer@example.invalid', connected: true, inferenceAccess: true },
+  ],
+  models: [
+    { slug: 'balanced', name: 'Balanced' },
+    { slug: 'deep', name: 'Deep reasoning' },
+  ],
+  selectedAccount: { provider: 'fixture', id: 'personal' },
+  selectedModel: 'balanced',
+  chats: [
+    savedChat,
+    {
+      ...savedChat,
+      id: 'rendering',
+      title: 'Investigate rendering performance',
+      updatedAt: new Date(Date.now() - 86400000).toISOString(),
+    },
+  ],
+});
+const expandHistory = async ({ canvasElement }: { canvasElement: HTMLElement }) => {
+  canvasElement.querySelector<HTMLButtonElement>('button[aria-label="Chat history"]')?.click();
+};
+export const ChatHistory: Story = {
+  args: { state: { ...navigationState, selectedChatId: 'settings', transcript: conversation } },
+  play: expandHistory,
+};
+export const NewChatSetup: Story = { args: { state: navigationState }, play: expandHistory };
+const { selectedModel: _selectedModel, ...withoutModel } = navigationState;
+export const LoadingModels: Story = {
+  args: { state: { ...withoutModel, models: [], catalogPending: true } },
+  play: expandHistory,
+};
+export const CatalogFailure: Story = {
+  args: {
+    state: { ...withoutModel, models: [], navigationError: 'Could not load models. Choose an account to retry.' },
+  },
+  play: expandHistory,
+};

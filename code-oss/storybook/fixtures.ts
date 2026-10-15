@@ -42,6 +42,10 @@ export const previewActions: GlyphWorkbenchViewActions = {
   composer: new GlyphComposerState(),
   send: async () => {},
   cancel: () => {},
+  newChat: () => {},
+  openChat: async () => {},
+  selectAccount: async () => {},
+  selectModel: async () => {},
 };
 
 export const failingActions: GlyphWorkbenchViewActions = {

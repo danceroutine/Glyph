@@ -4,6 +4,19 @@ import assert from 'node:assert/strict';
 
 /** Local Responses wire fixture, controlled by the test rather than by application internals. */
 export class ScriptedProvider {
+  constructor(
+    accounts = [
+      {
+        subject: 'electron-fixture',
+        email: 'fixture@example.invalid',
+        token: 'glyph-electron-fixture-token',
+        models: [{ slug: 'fixture-model', name: 'Scripted model' }],
+      },
+    ],
+  ) {
+    this.accounts = accounts;
+  }
+
   rounds = [];
   requests = [];
   errors = [];
@@ -41,13 +54,14 @@ export class ScriptedProvider {
   }
 
   async handle(request, response) {
-    assert.equal(request.headers.authorization, 'Bearer glyph-electron-fixture-token');
+    const account = this.accounts.find(value => request.headers.authorization === `Bearer ${value.token}`);
+    assert.ok(account, 'Unknown fixture account.');
     if (request.method === 'GET' && request.url === '/v1/models') {
-      response
-        .writeHead(200, { 'content-type': 'application/json' })
-        .end(
-          JSON.stringify({ models: [{ slug: 'fixture-model', display_name: 'Scripted model', visibility: 'list' }] }),
-        );
+      response.writeHead(200, { 'content-type': 'application/json' }).end(
+        JSON.stringify({
+          models: account.models.map(model => ({ slug: model.slug, display_name: model.name, visibility: 'list' })),
+        }),
+      );
       return;
     }
     assert.equal(request.method, 'POST');
@@ -55,7 +69,10 @@ export class ScriptedProvider {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    assert.equal(body.model, 'fixture-model');
+    assert.ok(
+      account.models.some(model => model.slug === body.model),
+      'Model does not belong to the selected account.',
+    );
     assert.equal(body.stream, true);
     const round = this.rounds.shift();
     assert.ok(round, 'Unexpected extra provider request.');
@@ -65,6 +82,7 @@ export class ScriptedProvider {
     const event = value => response.write(`data: ${JSON.stringify({ ...value, sequence_number: sequence++ })}\n\n`);
     const record = {
       body,
+      account: account.subject,
       closed: false,
       completed: false,
       finish: () => {
@@ -77,7 +95,7 @@ export class ScriptedProvider {
             id,
             object: 'response',
             created_at: 0,
-            model: 'fixture-model',
+            model: body.model,
             status: 'completed',
             error: null,
             incomplete_details: null,

@@ -50,16 +50,21 @@ and the native sandbox inside the utility process.
 Normal launches compose Glyph's existing account, provider, chat persistence,
 proposal-review, and sandbox services in the utility host. Reads and text edits
 use renderer RPC to the live Code OSS models. Accounts come from Glyph's
-configured state directory; the sidebar currently uses the first available
-inference account/model when starting a conversation.
+configured state directory. New conversations start with an eligible account/model
+and expose both choices before sending. Saved conversations retain their original
+account and model.
 
 The workbench service projects snapshots, questions, approvals, tool activity,
 usage, and proposals and exposes their interaction commands. The Preact sidebar
 renders the transcript, expandable reasoning summaries, tool progress, and
 conversation token usage alongside the composer. Completed-turn usage and compact
 tool summaries survive host restarts; missing historical usage is marked as
-incomplete. Account selection, human-decision
-forms, and proposal controls remain follow-up components.
+incomplete. A collapsible history panel on the right lists searchable saved chats
+and pins the account control to the bottom; model selection sits with the composer.
+The panel opens beside the conversation when wide enough and as a drawer when narrow.
+Drafts remain separate while switching chats, and workspace storage remembers the
+selected conversation across reloads. Human-decision forms and proposal controls
+remain follow-up components.
 Structural file mutations are not yet supported by the editor-backed text
 store, and indexed content search still reads disk rather than merging dirty
 buffers. These are product gaps, not capabilities proved by the smoke fixture.

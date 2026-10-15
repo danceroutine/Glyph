@@ -14,6 +14,7 @@ export interface GlyphWorkbenchService {
   readonly state: GlyphWorkbenchState;
   send(text: string): Promise<void>;
   cancel(): void;
+  newChat(): void;
   setSelection(selection: GlyphWorkbenchSelection | undefined): void;
   connect(): Promise<void>;
   selectAccount(provider: string, accountId: string): Promise<void>;

@@ -31,7 +31,7 @@ export enum GlyphHostEventType {
 export type GlyphHostEvent =
   | GlyphCommandResultHostEvent
   | { readonly type: GlyphHostEventType.INITIAL_STATE; readonly state: GlyphDesktopSnapshot }
-  | { readonly type: GlyphHostEventType.CHAT_UPDATED; readonly chat: GlyphChatSummary }
+  | { readonly type: GlyphHostEventType.CHAT_UPDATED; readonly chat: GlyphChatSummary; readonly creationId?: string }
   | {
       readonly type: GlyphHostEventType.RESPONSE_DELTA;
       readonly chatId: string;

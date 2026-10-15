@@ -196,8 +196,6 @@ it.describe('Pending desktop product contracts', () => {
     'renders proposal diffs with per-item accept and reject controls whose decisions are reflected in the review state',
     async () => {},
   );
-  it.fixme('shows saved chats and opens the selected chat with its conversation history', async () => {});
-  it.fixme('lets the user choose a connected account and model before starting a new chat', async () => {});
   it.fixme('resumes a waiting answer after the user answers its question', async () => {});
   it.fixme('runs a requested operation only after the user approves it', async () => {});
   it.fixme('continues safely when the user declines an approval request', async () => {});

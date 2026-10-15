@@ -81,6 +81,16 @@ browser runner's headless setting. macOS opens automated application windows.
 
 ## Coverage and pending work
 
+`GlyphChats.test.mjs` covers the two rank-3 contracts and their switching/error
+regressions. Chats are created through the UI using the production runtime. The
+tests switch between persisted conversations, recover the selected chat after
+reload and host restart, preserve separate in-memory drafts while switching, and
+verify that background completions do not steal selection. Account tests use
+`scriptedAccounts` to provide distinct fabricated credentials and model catalogs;
+the recorded request identifies the selected fixture account and model. An empty
+catalog leaves the draft intact. Fixture account arrays use Playwright's
+`[accounts, { scope: 'test' }]` option syntax.
+
 `GlyphProgress.test.mjs` contains the three rank-2 contracts: streaming reasoning
 summaries and tool activity, all five conversation token counters, and cumulative
 usage across turns and reconnects. It exercises real file reads and a waiting

@@ -82,3 +82,29 @@ it('preserves production styles when style elements are cloned into another docu
     await page.close();
   }
 });
+
+it('places history beside a wide conversation and uses a dismissible drawer in a narrow pane', async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  try {
+    await page.setContent('<div id="root" style="width:900px;height:600px"></div>');
+    await page.addScriptTag({ content: script });
+    const toggle = page.getByRole('button', { name: 'Chat history', exact: true });
+    await toggle.click();
+    const history = page.getByRole('complementary', { name: 'Chat history' });
+    await expect(history).toHaveCSS('position', 'static');
+    const historyBox = await history.boundingBox();
+    const accountBox = await page.locator('.glyph-account-picker').boundingBox();
+    expect(Math.abs(accountBox.y + accountBox.height - historyBox.y - historyBox.height)).toBeLessThan(2);
+    await page.locator('#root').evaluate(element => {
+      element.style.width = '320px';
+    });
+    await expect(history).toHaveCSS('position', 'absolute');
+    await page.getByRole('searchbox', { name: 'Search chats' }).focus();
+    await page.keyboard.press('Escape');
+    await expect(history).toHaveCount(0);
+    await expect(toggle).toBeFocused();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  } finally {
+    await page.close();
+  }
+});

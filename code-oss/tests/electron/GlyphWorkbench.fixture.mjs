@@ -13,9 +13,10 @@ export const test = base.extend({
   trustedWorkspace: [true, { option: true }],
   productionRuntime: [false, { option: true }],
   scriptedProvider: [false, { option: true }],
-  provider: async ({ scriptedProvider }, use) => {
+  scriptedAccounts: [undefined, { option: true }],
+  provider: async ({ scriptedProvider, scriptedAccounts }, use) => {
     if (!scriptedProvider) return use(undefined);
-    const provider = new ScriptedProvider();
+    const provider = new ScriptedProvider(scriptedAccounts);
     await provider.start();
     try {
       await use(provider);
@@ -86,21 +87,19 @@ export const test = base.extend({
         JSON.stringify({
           version: 1,
           hostId: 'urn:uuid:electron-fixture',
-          accounts: [
-            {
-              clientId: 'electron-fixture',
-              subject: 'electron-fixture',
-              email: 'fixture@example.invalid',
-              planNoticeSeen: true,
-              tokens: {
-                accessToken: 'glyph-electron-fixture-token',
-                refreshToken: 'unused-fixture-refresh',
-                idToken: 'unused-fixture-id',
-                expiresAt: Date.now() + 3_600_000,
-                scopes: ['chatgpt.tokens.use.direct'],
-              },
+          accounts: provider.accounts.map(account => ({
+            clientId: 'electron-fixture',
+            subject: account.subject,
+            email: account.email,
+            planNoticeSeen: true,
+            tokens: {
+              accessToken: account.token,
+              refreshToken: 'unused-fixture-refresh',
+              idToken: 'unused-fixture-id',
+              expiresAt: Date.now() + 3_600_000,
+              scopes: ['chatgpt.tokens.use.direct'],
             },
-          ],
+          })),
         }),
         { mode: 0o600 },
       );

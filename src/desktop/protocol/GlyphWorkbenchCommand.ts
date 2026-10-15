@@ -39,6 +39,7 @@ export type GlyphWorkbenchCommand =
     }
   | {
       readonly type: GlyphWorkbenchCommandType.CREATE_CHAT;
+      readonly creationId?: string;
       readonly accountProvider: string;
       readonly accountId: string;
       readonly model: string;

@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchSelection } from '#src/desktop/workbench/GlyphWorkbenchSelection.js';
@@ -32,13 +33,15 @@ const styles = {
 };
 
 interface GlyphComposerProps {
+  readonly disabled?: boolean;
+  readonly modelControl?: ComponentChildren;
   readonly status: GlyphWorkbenchStatus;
   readonly selection: GlyphWorkbenchSelection | undefined;
   readonly actions: GlyphWorkbenchViewActions;
 }
 
 /** Renders the window-owned draft without tying its lifetime to the pane. */
-export function GlyphComposer({ status, selection, actions }: GlyphComposerProps) {
+export function GlyphComposer({ status, selection, actions, disabled, modelControl }: GlyphComposerProps) {
   const model = actions.composer;
   const [state, setState] = useState(model.snapshot);
   useLayoutEffect(() => {
@@ -61,7 +64,7 @@ export function GlyphComposer({ status, selection, actions }: GlyphComposerProps
     composer.current?.focus();
   };
   const submit = async () => {
-    if (!active) await model.submit(text => actions.send(text));
+    if (!active && !disabled) await model.submit(text => actions.send(text));
   };
   return (
     <div class={`glyph-composer ${styles.root}`}>
@@ -98,7 +101,8 @@ export function GlyphComposer({ status, selection, actions }: GlyphComposerProps
           }
         }}
       />
-      <button type="button" onClick={() => (active ? actions.cancel() : void submit())}>
+      {modelControl}
+      <button type="button" disabled={!active && disabled} onClick={() => (active ? actions.cancel() : void submit())}>
         {active ? 'Cancel' : 'Send (⌘/Ctrl+Enter)'}
       </button>
       {error && <div role="alert">{error}</div>}

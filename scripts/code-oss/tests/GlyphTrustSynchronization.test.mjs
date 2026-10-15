@@ -47,7 +47,7 @@ async function modules() {
           });
           builder.onLoad({ filter: /.*/, namespace: 'services' }, () => ({
             contents:
-              'const service = () => {}; export { service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService };',
+              'const service = () => {}; export { service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
           }));
           builder.onResolve({ filter: /^#(glyph|src)\// }, args => ({
             path: resolve(
@@ -102,6 +102,7 @@ it('loads saved history through the latest untrusted attachment when revocation 
   let trusted = true;
   let onTrust;
   const service = new NativeGlyphWorkbenchService(
+    { get: () => undefined, store: () => {} },
     {
       getWorkspace: () => ({
         folders: [{ name: 'project', uri: { scheme: 'file', fsPath: '/project', toString: () => 'file:///project' } }],
@@ -191,6 +192,7 @@ it.each(['handshake', 'attach acknowledgement'])(
     let trusted = true;
     let onTrust;
     const service = new NativeGlyphWorkbenchService(
+      { get: () => undefined, store: () => {} },
       {
         getWorkspace: () => ({
           folders: [
@@ -378,6 +380,7 @@ it.each(
   };
   const invalidate = vi.fn();
   const service = new NativeGlyphWorkbenchService(
+    { get: () => undefined, store: () => {} },
     {
       getWorkspace: () => ({
         id: workspaceId,

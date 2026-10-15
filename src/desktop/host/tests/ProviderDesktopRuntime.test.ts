@@ -190,6 +190,71 @@ function reviewFixture() {
 }
 
 describe(ProviderDesktopRuntime, () => {
+  it('keeps the latest account catalog when an older discovery finishes later', async () => {
+    const harness = await fixture(async () => {});
+    const first = harness.backend.accounts[0]!;
+    const second = { ...first, id: 'second', label: 'Second' };
+    Object.defineProperty(harness.backend, 'accounts', { value: [first, second] });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    harness.backend.listModels = async account => {
+      if (account.id === first.id) await gate;
+      return [{ slug: `${account.id}-model`, name: account.id }];
+    };
+    try {
+      const pending = harness.runtime.handle({
+        type: Command.SELECT_ACCOUNT,
+        accountProvider: 'fixture',
+        accountId: first.id,
+      });
+      await harness.runtime.handle({ type: Command.SELECT_ACCOUNT, accountProvider: 'fixture', accountId: second.id });
+      release();
+      await pending;
+      expect(await harness.runtime.snapshot()).toMatchObject({
+        selectedAccount: { id: second.id },
+        selectedModel: 'second-model',
+        models: [{ slug: 'second-model' }],
+      });
+      await harness.runtime.handle({ type: Command.SELECT_MODEL, model: 'second-model' });
+      await expect(harness.runtime.handle({ type: Command.SELECT_MODEL, model: 'account-model' })).rejects.toThrow(
+        'available model',
+      );
+    } finally {
+      release();
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('correlates the created chat with its request while ordinary chat updates remain uncorrelated', async () => {
+    const harness = await fixture(async () => {});
+    try {
+      await harness.runtime.handle({
+        type: Command.CREATE_CHAT,
+        creationId: 'create-choice',
+        accountProvider: 'fixture',
+        accountId: 'account',
+        model: 'model',
+      });
+      const created = harness.events.filter(
+        event => event.type === GlyphHostEventType.CHAT_UPDATED && event.creationId === 'create-choice',
+      );
+      expect(created).toHaveLength(1);
+      const event = created[0]!;
+      if (event.type !== GlyphHostEventType.CHAT_UPDATED) throw new Error('Expected chat');
+      expect(event.chat.id).not.toBe(harness.chatId);
+      await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: event.chat.id });
+      expect(harness.events.at(-1)).toMatchObject({
+        type: GlyphHostEventType.CHAT_UPDATED,
+        chat: { id: event.chat.id },
+      });
+      expect(harness.events.at(-1)).not.toHaveProperty('creationId');
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
   it('totals saved turns per chat and replaces totals on repeated open, including missing reports', async () => {
     let reports = 0;
     const harness = await fixture(async () => (++reports === 2 ? null : usage));

@@ -1,3 +1,5 @@
+import { IStorageService, StorageScope, StorageTarget } from '#vs/platform/storage/common/storage.js';
+import type { GlyphModelSummary } from '#glyph/protocol/events/GlyphModelSummary.js';
 import { Emitter } from '#vs/base/common/event.js';
 import { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
@@ -24,7 +26,13 @@ import type { GlyphWorkbenchSelection } from '#glyph/workbench/GlyphWorkbenchSel
 
 /** Adapts the host's recoverable state and commands to the workbench interaction port. */
 export class NativeGlyphWorkbenchService extends Disposable implements GlyphWorkbenchService {
-  readonly composer = new GlyphComposerState();
+  private readonly composers = new Map<string, GlyphComposerState>();
+  get composer(): GlyphComposerState {
+    const key = this.selectedChatId ?? '';
+    let composer = this.composers.get(key);
+    if (!composer) this.composers.set(key, (composer = new GlyphComposerState()));
+    return composer;
+  }
   declare readonly _serviceBrand: undefined;
   private readonly changeEmitter = this._register(new Emitter<GlyphWorkbenchState>());
   readonly onDidChangeState = this.changeEmitter.event;
@@ -33,7 +41,20 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private selection: GlyphWorkbenchSelection | undefined;
   private selectedChatId: string | undefined;
   private pendingRunId: string | undefined;
-  private creatingChat = false;
+  private pendingCreation: string | undefined;
+  private selectionInitialized = false;
+  private draftAccount: { readonly provider: string; readonly id: string } | undefined;
+  private draftModel: string | undefined;
+  private draftModels: readonly GlyphModelSummary[] = [];
+  private catalogPending = false;
+  private modelPending = false;
+  private modelRevision = 0;
+  private modelOperation: Promise<void> | undefined;
+  private catalogOperation: Promise<void> | undefined;
+  private catalogRevision = 0;
+  private navigationRevision = 0;
+  private navigationPending = false;
+  private navigationError: string | undefined;
   private sending = false;
   private sessionChanged = false;
   private invalidationMessage = 'Workspace changed. Reload the window to reconnect Glyph.';
@@ -43,12 +64,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private readonly errors: GlyphTranscriptEntry[] = [];
 
   constructor(
+    @IStorageService private readonly storageService: IStorageService,
     @IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
     @IWorkspaceTrustManagementService private readonly workspaceTrustService: IWorkspaceTrustManagementService,
     @IInstantiationService instantiationService: IInstantiationService,
     @IUserDataProfileService private readonly userDataProfileService: IUserDataProfileService,
   ) {
     super();
+    const savedChat = this.storageService.get('glyph.selectedChat', StorageScope.WORKSPACE);
+    this.selectionInitialized = savedChat !== undefined;
+    this.selectedChatId = savedChat || undefined;
     this.profileId = this.userDataProfileService.currentProfile.id;
     this.workspaceBinding = this.currentWorkspaceBinding();
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
@@ -80,12 +105,22 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         this.projection.accept(event);
         switch (event.type) {
           case GlyphHostEventType.INITIAL_STATE:
-            if (!event.state.chats.some(chat => chat.id === this.selectedChatId))
+            if (
+              !this.selectionInitialized ||
+              (this.selectedChatId && !event.state.chats.some(chat => chat.id === this.selectedChatId))
+            ) {
               this.selectedChatId = event.state.chats[0]?.id;
+              this.selectionInitialized = true;
+            }
             this.pendingRunId = undefined;
             break;
           case GlyphHostEventType.CHAT_UPDATED:
-            if (this.creatingChat || !this.selectedChatId) this.selectedChatId = event.chat.id;
+            if (this.pendingCreation && event.creationId === this.pendingCreation) {
+              const composer = this.composer;
+              this.composers.delete('');
+              this.composers.set(event.chat.id, composer);
+              this.selectChat(event.chat.id);
+            }
             break;
           case GlyphHostEventType.RUN_STATE:
             if (event.run.runId === this.pendingRunId) this.pendingRunId = undefined;
@@ -105,7 +140,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   get state(): GlyphWorkbenchState {
-    const snapshot = this.projection.state;
+    const { selectedAccount: _account, selectedModel: _model, models: _models, ...snapshot } = this.projection.state;
     const runs = snapshot.runs.filter(run => run.chatId === this.selectedChatId);
     const active = runs.find(run => isActive(run.status));
     const transcript: GlyphTranscriptEntry[] = runs.flatMap(run => {
@@ -131,6 +166,12 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       });
     return {
       ...snapshot,
+      models: this.draftModels,
+      ...(this.draftAccount ? { selectedAccount: this.draftAccount } : {}),
+      ...(this.draftModel ? { selectedModel: this.draftModel } : {}),
+      catalogPending: this.catalogPending || this.modelPending,
+      navigationPending: this.navigationPending || this.sending,
+      ...(this.navigationError ? { navigationError: this.navigationError } : {}),
       status: this.workbenchStatus(active?.status),
       transcript: [
         ...transcript,
@@ -167,6 +208,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     await this.client.connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted());
     this.assertSessionBinding();
     await this.hydrateSelectedChat();
+    if (!this.selectedChatId && !this.draftAccount && !this.catalogPending) {
+      const account = this.projection.state.accounts.find(value => value.connected && value.inferenceAccess);
+      if (account) await this.selectAccount(account.provider, account.id);
+    }
   }
 
   /** Replacement runtimes recover durable history separately from their live-run snapshot. */
@@ -188,6 +233,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     if (
       !prompt ||
       this.sending ||
+      this.navigationPending ||
       this.pendingRunId ||
       this.projection.state.runs.some(run => run.chatId === this.selectedChatId && isActive(run.status))
     )
@@ -197,12 +243,13 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       await this.connect();
       if (this.projection.state.readOnly) throw new Error('Another window owns this workspace’s Glyph session.');
       if (!this.selectedChatId) {
-        const account = this.projection.state.accounts.find(account => account.connected && account.inferenceAccess);
+        await this.catalogOperation;
+        await this.modelOperation;
+        const account = this.draftAccount;
         if (!account) throw new Error('Sign in to a Glyph account with inference access before sending a message.');
-        await this.selectAccount(account.provider, account.id);
-        const model = this.projection.state.models[0];
-        if (!model) throw new Error('No models are available for the selected account.');
-        await this.createChat(account.provider, account.id, model.slug);
+        if (!this.draftModel)
+          throw new Error(this.navigationError ?? 'No models are available for the selected account.');
+        await this.createChat(account.provider, account.id, this.draftModel);
       }
       const chatId = this.selectedChatId;
       if (!chatId) throw new Error('Create or open a chat before sending.');
@@ -224,6 +271,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       throw error;
     } finally {
       this.sending = false;
+      this.changeEmitter.fire(this.state);
     }
   }
 
@@ -278,34 +326,137 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     );
   }
 
-  async selectAccount(provider: string, accountId: string): Promise<void> {
-    await this.connect();
-    await this.request({ type: GlyphWorkbenchCommandType.SELECT_ACCOUNT, accountProvider: provider, accountId });
-    await this.request({ type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT, afterSequence: 0 });
+  /** Draft setup belongs to this window; saved chats retain their original account/model. */
+  selectAccount(provider: string, accountId: string): Promise<void> {
+    if (this.selectedChatId) return Promise.resolve();
+    const revision = ++this.catalogRevision;
+    this.modelOperation = undefined;
+    this.modelRevision++;
+    this.modelPending = false;
+    this.draftAccount = { provider, id: accountId };
+    this.draftModel = undefined;
+    this.draftModels = [];
+    this.catalogPending = true;
+    this.navigationError = undefined;
+    this.changeEmitter.fire(this.state);
+    return (this.catalogOperation = this.loadModels(provider, accountId, revision));
   }
-  async selectModel(model: string): Promise<void> {
-    await this.request({ type: GlyphWorkbenchCommandType.SELECT_MODEL, model });
+
+  private async loadModels(provider: string, accountId: string, revision: number): Promise<void> {
+    try {
+      await this.request({ type: GlyphWorkbenchCommandType.SELECT_ACCOUNT, accountProvider: provider, accountId });
+      if (revision !== this.catalogRevision) return;
+      await this.request({ type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT, afterSequence: 0 });
+      if (revision !== this.catalogRevision) return;
+      this.draftModels = this.projection.state.models;
+      this.draftModel = this.draftModels[0]?.slug;
+      if (!this.draftModel) this.navigationError = 'No models are available for this account.';
+    } catch (error) {
+      if (revision === this.catalogRevision)
+        this.navigationError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (revision === this.catalogRevision) {
+        this.catalogPending = false;
+        this.changeEmitter.fire(this.state);
+      }
+    }
   }
+
+  selectModel(model: string): Promise<void> {
+    this.modelPending = true;
+    this.changeEmitter.fire(this.state);
+    return (this.modelOperation = this.changeModel(model, this.catalogRevision, ++this.modelRevision));
+  }
+
+  private async changeModel(model: string, revision: number, modelRevision: number): Promise<void> {
+    try {
+      await this.connect();
+      if (revision !== this.catalogRevision || modelRevision !== this.modelRevision) return;
+      const account = this.draftAccount;
+      const selected = this.projection.state.selectedAccount;
+      // A replacement host has no catalog even when this window still owns a draft.
+      if (account && (selected?.provider !== account.provider || selected?.id !== account.id)) {
+        await this.request({
+          type: GlyphWorkbenchCommandType.SELECT_ACCOUNT,
+          accountProvider: account.provider,
+          accountId: account.id,
+        });
+        if (revision !== this.catalogRevision || modelRevision !== this.modelRevision) return;
+        await this.request({ type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT, afterSequence: 0 });
+      }
+      if (revision !== this.catalogRevision || modelRevision !== this.modelRevision) return;
+      await this.request({ type: GlyphWorkbenchCommandType.SELECT_MODEL, model });
+      this.assertSessionBinding();
+      if (revision !== this.catalogRevision || modelRevision !== this.modelRevision) return;
+      this.draftModel = model;
+      this.navigationError = undefined;
+    } catch (error) {
+      if (revision === this.catalogRevision && modelRevision === this.modelRevision) {
+        this.draftModel = undefined;
+        this.navigationError = error instanceof Error ? error.message : String(error);
+      }
+      throw error;
+    } finally {
+      if (modelRevision === this.modelRevision) this.modelPending = false;
+      this.changeEmitter.fire(this.state);
+    }
+  }
+
+  newChat(): void {
+    if (this.invalidateChangedSession()) return;
+    if (this.sending) return;
+    this.navigationRevision++;
+    this.navigationPending = false;
+    this.navigationError = undefined;
+    this.selectChat(undefined);
+    this.changeEmitter.fire(this.state);
+    void this.connect().catch(error => this.report(error));
+  }
+
   async createChat(provider: string, accountId: string, model: string): Promise<void> {
-    await this.connect();
-    this.creatingChat = true;
+    const creationId = generateUuid();
+    this.pendingCreation = creationId;
     try {
       await this.request({
         type: GlyphWorkbenchCommandType.CREATE_CHAT,
+        creationId,
         accountProvider: provider,
         accountId,
         model,
       });
+      if (!this.selectedChatId) throw new Error('The new chat was not acknowledged. Try again.');
     } finally {
-      this.creatingChat = false;
+      this.pendingCreation = undefined;
     }
   }
+
   async openChat(chatId: string): Promise<void> {
-    await this.connect();
-    await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId });
-    this.selectedChatId = chatId;
+    if (this.sending) return;
+    const revision = ++this.navigationRevision;
+    this.navigationPending = true;
+    this.navigationError = undefined;
     this.changeEmitter.fire(this.state);
+    try {
+      await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId });
+      this.assertSessionBinding();
+      if (revision === this.navigationRevision) this.selectChat(chatId);
+    } catch (error) {
+      if (revision === this.navigationRevision)
+        this.navigationError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (revision === this.navigationRevision) {
+        this.navigationPending = false;
+        this.changeEmitter.fire(this.state);
+      }
+    }
   }
+
+  private selectChat(chatId: string | undefined): void {
+    this.selectedChatId = chatId;
+    this.selectionInitialized = true;
+    this.storageService.store('glyph.selectedChat', chatId ?? '', StorageScope.WORKSPACE, StorageTarget.MACHINE);
+  }
+
   answerQuestion(chatId: string, runId: string, questionId: string, answer: unknown): Promise<void> {
     return this.request({ type: GlyphWorkbenchCommandType.ANSWER_QUESTION, chatId, runId, questionId, answer });
   }

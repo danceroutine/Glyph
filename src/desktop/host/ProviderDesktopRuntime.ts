@@ -49,6 +49,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private disposed = false;
   private disposal: Promise<void> | undefined;
   private discovery = new AbortController();
+  private accountSelectionRevisionNumber = 0;
   private readonly commands = new Set<Promise<void>>();
   private readonly unsubscribe: (() => void) | undefined;
 
@@ -108,10 +109,13 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     const glyph = this.options.glyph;
     switch (command.type) {
       case GlyphWorkbenchCommandType.SELECT_ACCOUNT: {
+        const selection = ++this.accountSelectionRevisionNumber;
         const account = this.account(command.accountProvider, command.accountId);
         const signal = this.discovery.signal;
         const models = await glyph.listModels(account, signal);
         signal.throwIfAborted();
+        // During the await, the user may have selected again, so we need to check the revision number again
+        if (selection !== this.accountSelectionRevisionNumber) return;
         this.selectedAccount = account;
         this.models = models;
         this.selectedModel = models[0];
@@ -146,7 +150,11 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         // not receive a late chat-selection event from the completed command.
         signal.throwIfAborted();
         this.sessions.set(session.id, session);
-        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
+        this.publish({
+          type: GlyphHostEventType.CHAT_UPDATED,
+          chat: session.summary,
+          ...(command.creationId ? { creationId: command.creationId } : {}),
+        });
         return;
       }
       case GlyphWorkbenchCommandType.OPEN_CHAT: {

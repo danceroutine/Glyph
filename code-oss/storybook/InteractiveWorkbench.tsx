@@ -3,7 +3,7 @@ import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState
 import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphWorkbench } from '#code-oss/ui/GlyphWorkbench.tsx';
-import { conversation, selection, workbenchState } from './fixtures.ts';
+import { conversation, selection, workbenchState, previewActions } from './fixtures.ts';
 
 /** A local simulation for UI iteration. It never connects to the desktop host. */
 export function InteractiveWorkbench() {
@@ -36,6 +36,7 @@ export function InteractiveWorkbench() {
     <GlyphWorkbench
       state={state}
       actions={{
+        ...previewActions,
         composer,
         send: async text => {
           const turn = ++nextTurn.current;
