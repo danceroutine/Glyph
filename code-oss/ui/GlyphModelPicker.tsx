@@ -1,25 +1,25 @@
 import type { GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
-import { css } from './emotion.ts';
+import { css, tokens, space } from './design-system/index.ts';
 
 const style = css({
   display: 'flex',
   alignItems: 'center',
-  gap: 8,
-  marginTop: 8,
-  color: 'var(--vscode-descriptionForeground)',
-  fontSize: 12,
+  gap: tokens.space.md,
+  marginTop: tokens.space.md,
+  color: tokens.text.muted,
+  fontSize: tokens.font.size.detail,
   '& select': {
     minWidth: 0,
     maxWidth: '100%',
-    border: '1px solid var(--vscode-dropdown-border, transparent)',
-    borderRadius: 4,
-    padding: '4px 6px',
+    border: tokens.dropdown.border,
+    borderRadius: tokens.dropdown.radius,
+    padding: space('xs', 'sm'),
     font: 'inherit',
-    color: 'var(--vscode-foreground)',
-    background: 'var(--vscode-dropdown-background)',
+    color: tokens.dropdown.foreground,
+    background: tokens.dropdown.background,
   },
-  '& select:focus-visible': { outline: '1px solid var(--vscode-focusBorder)' },
+  '& select:focus-visible': { outline: tokens.focus.ring },
 });
 
 export function GlyphModelPicker({

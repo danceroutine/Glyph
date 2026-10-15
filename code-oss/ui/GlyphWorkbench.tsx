@@ -9,7 +9,7 @@ import { GlyphTranscript } from './GlyphTranscript.tsx';
 import { GlyphUsageSummary } from './GlyphUsageSummary.tsx';
 import { GlyphChatHistory } from './GlyphChatHistory.tsx';
 import { GlyphModelPicker } from './GlyphModelPicker.tsx';
-import { css } from './emotion.ts';
+import { css, tokens, space } from './design-system/index.ts';
 
 /** Also used by standalone component stories to reproduce the pane layout. */
 export const workbenchClassName = css({
@@ -29,9 +29,9 @@ const styles = {
   header: css({
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
-    padding: '8px 12px',
-    borderBottom: '1px solid var(--vscode-panel-border)',
+    gap: tokens.space.md,
+    padding: space('md', 'lg'),
+    borderBottom: tokens.border.default,
   }),
   title: css({
     flex: 1,
@@ -39,23 +39,23 @@ const styles = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    fontWeight: 600,
+    fontWeight: tokens.font.weight.semibold,
   }),
   button: css({
     display: 'grid',
     placeItems: 'center',
-    padding: 5,
+    padding: tokens.space.xs,
     border: 0,
-    borderRadius: 4,
+    borderRadius: tokens.button.radius,
     background: 'transparent',
-    color: 'var(--vscode-foreground)',
+    color: tokens.text.primary,
     cursor: 'pointer',
-    ':hover': { background: 'var(--vscode-toolbar-hoverBackground)' },
-    ':focus-visible': { outline: '1px solid var(--vscode-focusBorder)' },
+    ':hover': { background: tokens.button.quiet.hoverBackground },
+    ':focus-visible': { outline: tokens.focus.ring },
   }),
   body: css({ position: 'relative', display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }),
   conversation: css({ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }),
-  error: css({ padding: '8px 12px', color: 'var(--vscode-errorForeground)', overflowWrap: 'anywhere' }),
+  error: css({ padding: space('md', 'lg'), color: tokens.text.error, overflowWrap: 'anywhere' }),
 };
 
 /** Projects host updates without replacing the window-owned composer state. */
@@ -66,9 +66,9 @@ export function GlyphWorkbench({ state, actions }: GlyphWorkbenchProps) {
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
-    const observer = new ResizeObserver(() => setWide(element.clientWidth >= 680));
+    const observer = new ResizeObserver(() => setWide(element.clientWidth >= tokens.layout.widePane));
     observer.observe(element);
-    setWide(element.clientWidth >= 680);
+    setWide(element.clientWidth >= tokens.layout.widePane);
     return () => observer.disconnect();
   }, []);
   const toggle = useRef<HTMLButtonElement>(null);
@@ -91,7 +91,7 @@ export function GlyphWorkbench({ state, actions }: GlyphWorkbenchProps) {
     toggle.current?.focus();
   };
   const openedChat = () => {
-    if ((root.current?.clientWidth ?? 0) < 680) closeHistory();
+    if ((root.current?.clientWidth ?? 0) < tokens.layout.widePane) closeHistory();
   };
   return (
     <div

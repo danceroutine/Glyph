@@ -1,22 +1,27 @@
 import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
-import { css } from './emotion.ts';
+import { css, tokens, space } from './design-system/index.ts';
 
 const styles = {
   root: css({
-    color: 'var(--vscode-descriptionForeground)',
-    fontSize: 12,
+    color: tokens.text.muted,
+    fontSize: tokens.font.size.detail,
     whiteSpace: 'normal',
     overflowWrap: 'anywhere',
-    padding: '8px 12px',
-    borderTop: '1px solid var(--vscode-panel-border)',
+    padding: space('md', 'lg'),
+    borderTop: tokens.border.default,
     maxHeight: '35%',
     overflowY: 'auto',
-    '& dl': { display: 'grid', gridTemplateColumns: '1fr auto', gap: '4px 12px', fontVariantNumeric: 'tabular-nums' },
-    '& dd': { margin: 0, textAlign: 'right' },
+    '& dl': {
+      display: 'grid',
+      gridTemplateColumns: '1fr auto',
+      gap: space('xs', 'lg'),
+      fontVariantNumeric: 'tabular-nums',
+    },
+    '& dd': { margin: tokens.space.none, textAlign: 'right' },
   }),
   summary: css({
     cursor: 'pointer',
-    ':focus-visible': { outline: '1px solid var(--vscode-focusBorder)', outlineOffset: 2 },
+    ':focus-visible': { outline: tokens.focus.ring, outlineOffset: tokens.focus.offset },
   }),
 };
 

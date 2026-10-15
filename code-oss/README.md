@@ -467,7 +467,7 @@ cancel behavior.
 
 Stories live beside their components in `code-oss/ui/`; shared fixtures and
 preview configuration live in `code-oss/storybook/`. The stories import the
-production components, including their Emotion styles. The preview stylesheet approximates the native pane's
+production components, including their Emotion styles. The shared design system's preview theme approximates the native pane's
 inherited theme variables and typography. Check native styles, workbench
 shortcuts, editor selection, pane lifecycle, and host communication in Code OSS.
 Interaction stories cover questions, command approvals, read-only ownership, and failed submissions.
@@ -478,12 +478,66 @@ pnpm code-oss:check:storybook
 pnpm storybook:build
 ```
 
-Component styles live alongside their markup and use `css` from `./emotion.ts`.
-Define static styles at module scope and keep theme colors as `var(--vscode-...)`
-references so workbench theme changes apply without regenerating styles. The shared
-Emotion instance inserts CSS as style-element text so Code OSS can copy it into
-auxiliary windows. The UI bundle includes Emotion; upstream needs no additional
-dependency or CSS import.
+### Shared design system
+
+The desktop UI and Storybook share `code-oss/ui/design-system/`. Import styles,
+tokens, and utilities from its `index.ts`:
+
+```ts
+import { css, tokens, space } from './design-system/index.ts';
+
+const card = css({
+  padding: space('md', 'lg'),
+  border: tokens.border.default,
+  borderRadius: tokens.card.radius,
+  background: tokens.surface.pane,
+  color: tokens.text.primary,
+  fontSize: tokens.font.size.body,
+  ':focus-visible': {
+    outline: tokens.focus.ring,
+    outlineOffset: tokens.focus.offset,
+  },
+});
+```
+
+The foundation has three layers:
+
+- `atoms.ts` owns the atomic color palette, spacing, radii, typography, border
+  widths, and opacity. Spacing, radii, and font sizes use T-shirt names. Use
+  `tokens.space.md` for an Emotion length or `space('md', 'lg')` for a CSS
+  shorthand. The helper accepts one to four known sizes. Spacing runs from `xxs`
+  to `xxxl`, with `none` and `hairline` for zero and one pixel. Color ramps use hue
+  and shade, such as `atoms.color.blue[400]`, without assigning component roles.
+- `codeOssTheme.ts` owns the supported host variables, optional-variable
+  fallbacks, and complete light/dark preview values drawn from the atomic palette.
+  Definitions are nested by component, such as `button.foreground`; dotted native
+  IDs become CSS property names only during serialization. This is the only place that
+  constructs CSS variable references. Native Code OSS supplies the actual colors,
+  including custom and high-contrast themes; preview values are installed only
+  on Storybook's stage. They are approximations, not a replacement native theme.
+- `tokens.ts` groups component roles at the top level: `tokens.dropdown` owns its
+  foreground, background, border, and radius; `tokens.button` owns its primary,
+  secondary, and quiet appearance. Text, surfaces, spacing, focus, typography,
+  and shared borders remain universal groups. Composite tokens
+  such as `tokens.input.border` and `tokens.focus.ring` avoid string assembly in
+  components. `conditions.widePane` and `tokens.layout.widePane` share the same
+  responsive threshold between CSS and behavior.
+
+Use semantic tokens in components. Add a role here when needed rather than
+embedding a host variable or a literal theme color in a component. Keep local
+layout rules such as flex behavior, percentages, and content-specific dimensions
+beside the markup. Token paths and spacing arguments are checked by TypeScript;
+Emotion still accepts ordinary CSS for those local rules.
+
+**Glyph / Design system / Tokens** provides a theme-switchable color and spacing
+reference. Add a host variable's light and dark preview values together so new
+semantic roles also work in standalone stories.
+
+Define static styles at module scope. Token colors remain live CSS references,
+so workbench theme changes apply without regenerating styles. The shared Emotion
+instance inserts CSS as style-element text so Code OSS can copy it into auxiliary
+windows. The UI bundle includes Emotion; upstream needs no additional dependency
+or CSS import. The terminal's Ink renderer remains a separate rendering target.
 
 The static build goes to ignored `.artifacts/storybook/`. Storybook's Vite
 configuration resolves `#src` and `#code-oss` to editable source and uses a separate Preact

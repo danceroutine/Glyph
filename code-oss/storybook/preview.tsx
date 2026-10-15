@@ -1,5 +1,5 @@
 import type { Preview } from '@storybook/preact-vite';
-import './preview.css';
+import { stageClassName, frameClassName } from './previewStyles.ts';
 
 const preview: Preview = {
   parameters: { layout: 'fullscreen' },
@@ -31,8 +31,8 @@ const preview: Preview = {
   },
   decorators: [
     (Story, context) => (
-      <div class="glyph-story-stage" data-theme={context.globals.theme}>
-        <div class="glyph-story-frame" style={{ width: `${context.globals.paneWidth}px` }}>
+      <div class={`glyph-story-stage ${stageClassName}`} data-theme={context.globals.theme}>
+        <div class={`glyph-story-frame ${frameClassName}`} style={{ width: `${context.globals.paneWidth}px` }}>
           <Story />
         </div>
       </div>

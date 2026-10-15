@@ -3,57 +3,62 @@ import type { GlyphQuestionRequest } from '#src/desktop/protocol/events/GlyphQue
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import type { QuestionAnswer } from '#src/interaction/questions/QuestionAnswer.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
-import { css } from './emotion.ts';
+import { css, tokens, space } from './design-system/index.ts';
 import { decisionStyles as shared } from './GlyphDecisionStyles.ts';
 import { useGlyphDecision } from './useGlyphDecision.ts';
 
 const styles = {
   root: css({
-    margin: '8px 12px',
+    margin: space('md', 'lg'),
     flexShrink: 0,
     maxHeight: '55%',
     overflowY: 'auto',
-    borderColor: 'var(--vscode-editorWarning-foreground, #a18a36)',
+    borderColor: tokens.text.warning,
   }),
   body: css({
-    padding: '0 14px',
+    padding: space('none', 'lg'),
     border: 0,
-    margin: 0,
+    margin: tokens.space.none,
     minWidth: 0,
-    '& legend': { fontWeight: 600, fontSize: 14, padding: '8px 0', lineHeight: 1.5 },
+    '& legend': {
+      fontWeight: tokens.font.weight.semibold,
+      fontSize: tokens.font.size.heading,
+      padding: space('md', 'none'),
+      lineHeight: tokens.font.lineHeight.normal,
+    },
   }),
   choice: css({
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
-    padding: '7px 8px',
-    borderRadius: 5,
+    gap: tokens.space.md,
+    padding: space('md', 'md'),
+    borderRadius: tokens.list.radius,
     cursor: 'pointer',
-    ':hover': { background: 'var(--vscode-list-hoverBackground)' },
+    ':hover': { background: tokens.list.hoverBackground },
     '&:has(input:checked)': {
-      background: 'var(--vscode-list-activeSelectionBackground)',
-      color: 'var(--vscode-list-activeSelectionForeground)',
+      background: tokens.list.selected.background,
+      color: tokens.list.selected.foreground,
     },
-    '& input': { accentColor: 'var(--vscode-focusBorder)', margin: 0 },
+    '& input': { accentColor: tokens.focus.color, margin: tokens.space.none },
   }),
   badge: css({
-    fontSize: 11,
-    border: '1px solid var(--vscode-panel-border, #555)',
-    borderRadius: 3,
-    padding: '1px 5px',
+    fontSize: tokens.font.size.caption,
+    border: tokens.border.default,
+    borderRadius: tokens.badge.radius,
+    padding: space('hairline', 'xs'),
   }),
   other: css({
     display: 'block',
     boxSizing: 'border-box',
     width: '100%',
-    margin: '8px 0',
+    margin: space('md', 'none'),
     minHeight: 64,
     resize: 'vertical',
-    padding: 8,
-    borderRadius: 5,
-    border: '1px solid var(--vscode-input-border, #555)',
-    color: 'var(--vscode-input-foreground)',
-    background: 'var(--vscode-input-background)',
+    padding: tokens.space.md,
+    borderRadius: tokens.input.radius,
+    border: tokens.input.strongBorder,
+    color: tokens.input.foreground,
+    background: tokens.input.background,
   }),
 };
 

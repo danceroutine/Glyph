@@ -3,32 +3,32 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchSelection } from '#src/desktop/workbench/GlyphWorkbenchSelection.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
-import { css } from './emotion.ts';
+import { css, tokens } from './design-system/index.ts';
 
 const styles = {
   root: css({
-    padding: 8,
-    borderTop: '1px solid var(--vscode-panel-border)',
-    '& button': { marginTop: 8 },
+    padding: tokens.space.md,
+    borderTop: tokens.border.default,
+    '& button': { marginTop: tokens.space.md },
   }),
   unsent: css({
     maxHeight: 160,
     overflowY: 'auto',
-    marginBottom: 8,
+    marginBottom: tokens.space.md,
     '& pre': { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', font: 'inherit' },
   }),
   context: css({
-    color: 'var(--vscode-descriptionForeground)',
-    fontSize: 11,
-    marginBottom: 6,
+    color: tokens.text.muted,
+    fontSize: tokens.font.size.caption,
+    marginBottom: tokens.space.sm,
   }),
   input: css({
     boxSizing: 'border-box',
     width: '100%',
     resize: 'vertical',
-    color: 'var(--vscode-input-foreground)',
-    background: 'var(--vscode-input-background)',
-    border: '1px solid var(--vscode-input-border, transparent)',
+    color: tokens.input.foreground,
+    background: tokens.input.background,
+    border: tokens.input.border,
   }),
 };
 

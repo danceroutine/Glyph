@@ -1,23 +1,23 @@
 import type { GlyphApprovalRequest } from '#src/desktop/protocol/events/GlyphApprovalRequest.js';
 import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
-import { css } from './emotion.ts';
+import { css, tokens, space } from './design-system/index.ts';
 import { decisionStyles as shared } from './GlyphDecisionStyles.ts';
 import { useGlyphDecision } from './useGlyphDecision.ts';
 
 const styles = {
-  root: css({ marginTop: 12 }),
+  root: css({ marginTop: tokens.space.lg }),
   command: css({
-    margin: 0,
-    padding: '12px 14px',
-    borderTop: '1px solid var(--vscode-panel-border, #555)',
+    margin: tokens.space.none,
+    padding: space('lg', 'lg'),
+    borderTop: tokens.border.default,
     whiteSpace: 'pre-wrap',
     overflowWrap: 'anywhere',
-    fontFamily: 'var(--vscode-editor-font-family, monospace)',
-    fontSize: 13,
+    fontFamily: tokens.font.family.code,
+    fontSize: tokens.font.size.body,
     userSelect: 'text',
   }),
-  detail: css({ padding: '0 14px', whiteSpace: 'pre-wrap' }),
+  detail: css({ padding: space('none', 'lg'), whiteSpace: 'pre-wrap' }),
 };
 
 export function GlyphApprovalCard({

@@ -1,40 +1,45 @@
 import type { GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
-import { css } from './emotion.ts';
+import { css, tokens, space } from './design-system/index.ts';
 
 const styles = {
   root: css({
-    padding: 12,
-    borderTop: '1px solid var(--vscode-panel-border)',
+    padding: tokens.space.lg,
+    borderTop: tokens.border.default,
     display: 'flex',
-    gap: 10,
+    gap: tokens.space.md,
     alignItems: 'center',
   }),
   avatar: css({
-    borderRadius: '50%',
+    borderRadius: tokens.avatar.radius,
     width: 30,
     height: 30,
     display: 'grid',
     placeItems: 'center',
     flexShrink: 0,
-    background: 'var(--vscode-button-secondaryBackground)',
-    color: 'var(--vscode-button-secondaryForeground)',
-    fontSize: 12,
+    background: tokens.button.secondary.background,
+    color: tokens.button.secondary.foreground,
+    fontSize: tokens.font.size.detail,
   }),
   identity: css({ minWidth: 0, flex: 1 }),
   select: css({
     width: '100%',
     minWidth: 0,
     font: 'inherit',
-    color: 'var(--vscode-foreground)',
-    background: 'var(--vscode-dropdown-background)',
-    border: '1px solid var(--vscode-dropdown-border, transparent)',
-    borderRadius: 4,
-    padding: '5px 2px',
-    ':focus-visible': { outline: '1px solid var(--vscode-focusBorder)' },
+    color: tokens.dropdown.foreground,
+    background: tokens.dropdown.background,
+    border: tokens.dropdown.border,
+    borderRadius: tokens.dropdown.radius,
+    padding: space('xs', 'xxs'),
+    ':focus-visible': { outline: tokens.focus.ring },
     ':disabled': { opacity: 1 },
   }),
-  detail: css({ fontSize: 11, color: 'var(--vscode-descriptionForeground)', marginTop: 4, overflowWrap: 'anywhere' }),
+  detail: css({
+    fontSize: tokens.font.size.caption,
+    color: tokens.text.muted,
+    marginTop: tokens.space.xs,
+    overflowWrap: 'anywhere',
+  }),
 };
 
 export function GlyphAccountPicker({

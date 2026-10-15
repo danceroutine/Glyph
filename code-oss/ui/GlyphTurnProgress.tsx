@@ -1,28 +1,28 @@
 import type { GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
-import { css } from './emotion.ts';
+import { css, tokens, space } from './design-system/index.ts';
 
 const styles = {
   root: css({
-    color: 'var(--vscode-descriptionForeground)',
-    fontSize: 12,
+    color: tokens.text.muted,
+    fontSize: tokens.font.size.detail,
     whiteSpace: 'normal',
     overflowWrap: 'anywhere',
   }),
   reasoning: css({ '& p': { whiteSpace: 'pre-wrap' } }),
   summary: css({
     cursor: 'pointer',
-    ':focus-visible': { outline: '1px solid var(--vscode-focusBorder)', outlineOffset: 2 },
+    ':focus-visible': { outline: tokens.focus.ring, outlineOffset: tokens.focus.offset },
   }),
   tools: css({
-    padding: 0,
+    padding: tokens.space.none,
     listStyle: 'none',
-    '& li': { display: 'flex', justifyContent: 'space-between', gap: 8, margin: '4px 0' },
+    '& li': { display: 'flex', justifyContent: 'space-between', gap: tokens.space.md, margin: space('xs', 'none') },
   }),
   toolStatus: css({
     flexShrink: 0,
-    'li[aria-busy="true"] &': { color: 'var(--vscode-progressBar-background)' },
+    'li[aria-busy="true"] &': { color: tokens.progress.foreground },
   }),
 };
 

@@ -4,11 +4,11 @@ import { GlyphApprovalCard } from './GlyphApprovalCard.tsx';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphTurnProgress } from './GlyphTurnProgress.tsx';
-import { css } from './emotion.ts';
+import { css, tokens } from './design-system/index.ts';
 
 const styles = {
-  root: css({ flex: 1, minHeight: 0, overflowY: 'auto', padding: 12 }),
-  entry: css({ marginBottom: 12, whiteSpace: 'pre-wrap', userSelect: 'text' }),
+  root: css({ flex: 1, minHeight: 0, overflowY: 'auto', padding: tokens.space.lg }),
+  entry: css({ marginBottom: tokens.space.lg, whiteSpace: 'pre-wrap', userSelect: 'text' }),
 };
 
 interface GlyphTranscriptProps {
