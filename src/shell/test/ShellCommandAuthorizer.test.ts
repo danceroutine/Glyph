@@ -19,6 +19,102 @@ afterEach(async () => {
 
 describe(ShellCommandAuthorizer, () => {
   describe(ShellCommandAuthorizer.prototype.authorize, () => {
+    it.each([
+      ShellPermissionDecision.ALLOW_ONCE,
+      ShellPermissionDecision.ALWAYS_ALLOW,
+      ShellPermissionDecision.ALLOW_SAFE,
+      ShellPermissionDecision.ALLOW_OUTSIDE_SANDBOX_ONCE,
+      ShellPermissionDecision.ALLOW_EVERYTHING,
+    ])('does not authorize or persist %s returned after its request is cancelled', async decision => {
+      const controller = new AbortController();
+      const save = vi.fn<ShellPermissionStore['save']>();
+      const authorizer = new ShellCommandAuthorizer('project', store(undefined, save), {
+        presentShellPermission: async () => {
+          controller.abort(new Error('Permission cancelled.'));
+          return decision;
+        },
+      });
+      await expect(authorizer.authorize('echo test', '/project', controller.signal)).rejects.toThrow(
+        'Permission cancelled.',
+      );
+      expect(save).not.toHaveBeenCalled();
+      expect(authorizer.mode).toBe(ShellPermissionMode.ASK);
+    });
+
+    it('does not load or reuse saved full access for an already cancelled command', async () => {
+      const load = vi.fn<ShellPermissionStore['load']>(async () => ({
+        schemaVersion: 2,
+        projectContextId: 'project',
+        mode: ShellPermissionMode.ALLOW_EVERYTHING,
+        allowedCommands: [],
+      }));
+      const presentShellPermission = vi.fn<ShellPermissionPresenter['presentShellPermission']>();
+      const authorizer = new ShellCommandAuthorizer('project', { load, save: vi.fn() }, { presentShellPermission });
+      await expect(
+        authorizer.authorize('echo test', '/project', AbortSignal.abort(new Error('Already cancelled.'))),
+      ).rejects.toThrow('Already cancelled.');
+      expect(load).not.toHaveBeenCalled();
+      expect(presentShellPermission).not.toHaveBeenCalled();
+    });
+
+    it('checks cancellation after policy loading before granting saved access', async () => {
+      const controller = new AbortController();
+      const authorizer = new ShellCommandAuthorizer(
+        'project',
+        {
+          load: async () => {
+            controller.abort(new Error('Cancelled while loading.'));
+            return {
+              schemaVersion: 2,
+              projectContextId: 'project',
+              mode: ShellPermissionMode.ALLOW_EVERYTHING,
+              allowedCommands: [],
+            };
+          },
+          save: vi.fn(),
+        },
+        { presentShellPermission: vi.fn() },
+      );
+      await expect(authorizer.authorize('echo test', '/project', controller.signal)).rejects.toThrow(
+        'Cancelled while loading.',
+      );
+    });
+
+    it('skips a cancelled queued command after another request grants full access', async () => {
+      let resolveChoice: (decision: ShellPermissionDecision) => void = () => {};
+      const choice = new Promise<ShellPermissionDecision>(resolve => {
+        resolveChoice = resolve;
+      });
+      const presentShellPermission = vi.fn(() => choice);
+      const save = vi.fn<ShellPermissionStore['save']>();
+      const authorizer = new ShellCommandAuthorizer('project', store(undefined, save), { presentShellPermission });
+      const first = authorizer.authorize('echo first', '/project', signal());
+      const controller = new AbortController();
+      const queued = authorizer.authorize('echo second', '/project', controller.signal);
+      const rejected = expect(queued).rejects.toThrow('Queued command cancelled.');
+      controller.abort(new Error('Queued command cancelled.'));
+      resolveChoice(ShellPermissionDecision.ALLOW_EVERYTHING);
+      await first;
+      await rejected;
+      expect(presentShellPermission).toHaveBeenCalledOnce();
+      expect(save).toHaveBeenCalledOnce();
+    });
+
+    it('finishes an already dispatched policy save but does not authorize its cancelled command', async () => {
+      const controller = new AbortController();
+      const save = vi.fn<ShellPermissionStore['save']>(async () => {
+        controller.abort(new Error('Cancelled while saving.'));
+      });
+      const authorizer = new ShellCommandAuthorizer('project', store(undefined, save), {
+        presentShellPermission: async () => ShellPermissionDecision.ALLOW_EVERYTHING,
+      });
+      await expect(authorizer.authorize('echo test', '/project', controller.signal)).rejects.toThrow(
+        'Cancelled while saving.',
+      );
+      expect(save).toHaveBeenCalledOnce();
+      expect(authorizer.mode).toBe(ShellPermissionMode.ALLOW_EVERYTHING);
+    });
+
     it('asks again after workspace roots change without inheriting a previous scope grant', async () => {
       const directory = await mkdtemp(join(tmpdir(), 'glyph-permission-scope-'));
       temporaryDirectories.push(directory);

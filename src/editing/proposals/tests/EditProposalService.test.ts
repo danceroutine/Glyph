@@ -6,6 +6,7 @@ import { NullLogger } from '#src/observability/NullLogger.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
+import { TextDocument } from '#src/editing/documents/TextDocument.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
@@ -31,6 +32,80 @@ afterEach(async () => {
 });
 
 describe(EditProposalService, () => {
+  it('tokenizes patch source once and composes all hunks without recopying the full file', async () => {
+    const lines = Array.from({ length: 128 }, (_, index) => `line${String(index).padStart(4, '0')}${'x'.repeat(119)}`);
+    const text = lines.join('\n') + '\n';
+    const { service, workspace } = await fixture(text);
+    const base = await workspace.read('file.txt');
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      `*** Revision: ${base.revision}`,
+      ...lines.flatMap(line => ['@@', `-${line}`, `+${line.replace('line', 'LINE')}`]),
+      '*** End Patch',
+    ].join('\n');
+    const originalSlice = String.prototype.slice;
+    let copiedCharacters = 0;
+    const slice = vi.spyOn(String.prototype, 'slice').mockImplementation(function (
+      this: string,
+      start?: number,
+      end?: number,
+    ) {
+      const result = originalSlice.call(this, start, end);
+      if (this.length === text.length) copiedCharacters += result.length;
+      return result;
+    });
+    try {
+      const proposal = await service.proposePatch(patch);
+      expect(proposal.files[0]!.proposed.text).toBe(text.replaceAll('line', 'LINE'));
+      expect(proposal.files[0]!.items).toHaveLength(1);
+    } finally {
+      slice.mockRestore();
+    }
+    expect(copiedCharacters).toBeLessThanOrEqual(text.length * 2);
+  });
+
+  it('compiles a thousand small ranged edits in a 512 KiB file using one source index and one review hunk', async () => {
+    const { service, workspace } = await fixture('x'.repeat(512 * 1024));
+    const base = await workspace.read('file.txt');
+    const edits = Array.from({ length: 1_000 }, (_, index) => ({
+      range: {
+        start: { line: 0, character: index * 512 },
+        end: { line: 0, character: index * 512 + 1 },
+      },
+      expected_text: 'x',
+      replacement_text: 'y',
+    }));
+    const input = {
+      files: [
+        {
+          operation: EditOperation.UPDATE,
+          path: 'file.txt',
+          new_path: null,
+          base_revision: base.revision,
+          content: null,
+          byte_order_mark: null,
+          edits,
+        },
+      ],
+    };
+    expect(Buffer.byteLength(JSON.stringify(input))).toBeLessThan(configuration.maxRawProposalBytes);
+    const index = vi.spyOn(
+      TextDocument.prototype as unknown as { lineRanges(): { start: number; end: number }[] },
+      'lineRanges',
+    );
+    try {
+      const proposal = await service.proposeStructured(input);
+      expect(index).toHaveBeenCalledTimes(1);
+      const file = proposal.files[0]!;
+      expect(file.items).toHaveLength(1);
+      expect(file.proposed.text).toBe(('y' + 'x'.repeat(511)).repeat(1_000) + 'x'.repeat(512 * 24));
+      expect(file.proposed.byteLength).toBe(base.byteLength);
+    } finally {
+      index.mockRestore();
+    }
+  });
+
   it('allows removing a BOM from an empty file even when the resulting and changed-text budgets are one byte', async () => {
     const { service, workspace } = await fixture('', { maxResultingBytesPerFile: 1, maxChangedBytes: 1 });
     await writeFile(join(workspace.root, 'file.txt'), Buffer.from([0xef, 0xbb, 0xbf]));
@@ -282,7 +357,7 @@ describe(EditProposalService, () => {
   });
 
   describe(EditProposalService.prototype.proposeStructured, () => {
-    it('applies zero-based UTF-16 edits in reverse source order without normalizing text', async () => {
+    it('applies unsorted zero-based UTF-16 edits against the unchanged base without normalizing text', async () => {
       const { service, workspace } = await fixture('a😀b\r\nmiddle\r\nlast');
       const base = await workspace.read('file.txt');
 
@@ -469,6 +544,128 @@ describe(EditProposalService, () => {
   });
 
   describe(EditProposalService.prototype.proposePatch, () => {
+    it('stops expensive partial-context matching inside its time budget', async () => {
+      const { service, workspace } = await fixture('same\n'.repeat(200), { diffBudgetMs: 20 });
+      const base = await workspace.read('file.txt');
+      const patch = [
+        '*** Begin Patch',
+        '*** Update File: file.txt',
+        `*** Revision: ${base.revision}`,
+        '@@',
+        ...Array.from({ length: 100 }, () => ' same'),
+        '-missing',
+        '+replacement',
+        '*** End Patch',
+      ].join('\n');
+      let time = 0;
+      const clock = vi.spyOn(performance, 'now').mockImplementation(() => ++time);
+      try {
+        await expect(service.proposePatch(patch)).rejects.toMatchObject({
+          reason: EditFailureReason.LIMIT_EXCEEDED,
+          message: 'Patch matching exceeded the configured time budget.',
+        });
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('shares one matching deadline across every hunk in a file', async () => {
+      const lines = Array.from({ length: 20 }, (_, index) => `line-${index}`);
+      const { service, workspace } = await fixture(lines.join('\n') + '\n', { diffBudgetMs: 15 });
+      const base = await workspace.read('file.txt');
+      const patch = [
+        '*** Begin Patch',
+        '*** Update File: file.txt',
+        `*** Revision: ${base.revision}`,
+        ...lines.flatMap(line => ['@@', `-${line}`, `+changed-${line}`]),
+        '*** End Patch',
+      ].join('\n');
+      let time = 0;
+      const clock = vi.spyOn(performance, 'now').mockImplementation(() => ++time);
+      try {
+        await expect(service.proposePatch(patch)).rejects.toMatchObject({
+          reason: EditFailureReason.LIMIT_EXCEEDED,
+          message: 'Patch matching exceeded the configured time budget.',
+        });
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('checks cancellation during a long contextual match', async () => {
+      const { service, workspace } = await fixture('same\n'.repeat(200));
+      const base = await workspace.read('file.txt');
+      const patch = [
+        '*** Begin Patch',
+        '*** Update File: file.txt',
+        `*** Revision: ${base.revision}`,
+        '@@',
+        ...Array.from({ length: 100 }, () => ' same'),
+        '-missing',
+        '+replacement',
+        '*** End Patch',
+      ].join('\n');
+      const controller = new AbortController();
+      const cancellation = new Error('Cancelled during patch matching.');
+      let checks = 0;
+      const clock = vi.spyOn(performance, 'now').mockImplementation(() => {
+        if (++checks === 12) controller.abort(cancellation);
+        return 0;
+      });
+      try {
+        await expect(service.proposePatch(patch, controller.signal)).rejects.toBe(cancellation);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('composes out-of-order hunks while preserving untouched mixed line endings and the BOM', async () => {
+      const { service, workspace } = await fixture('\uFEFFalpha\r\nbeta\rgamma\n');
+      const base = await workspace.read('file.txt');
+      const proposal = await service.proposePatch(
+        [
+          '*** Begin Patch',
+          '*** Update File: file.txt',
+          `*** Revision: ${base.revision}`,
+          '*** Line Ending: LF',
+          '@@',
+          '-gamma',
+          '+GAMMA',
+          '@@',
+          '-alpha',
+          '+ALPHA',
+          '*** End Patch',
+        ].join('\n'),
+      );
+      expect(proposal.files[0]!.proposed).toMatchObject({ text: 'ALPHA\nbeta\rGAMMA\n', byteOrderMark: true });
+    });
+
+    it('rejects overlapping contextual hunks before composing their replacements', async () => {
+      const { service, workspace } = await fixture('a\nb\nc\n');
+      const base = await workspace.read('file.txt');
+      await expect(
+        service.proposePatch(
+          [
+            '*** Begin Patch',
+            '*** Update File: file.txt',
+            `*** Revision: ${base.revision}`,
+            '@@',
+            ' a',
+            '-b',
+            '+B',
+            '@@',
+            '-b',
+            '+B',
+            ' c',
+            '*** End Patch',
+          ].join('\n'),
+        ),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Patch hunks overlap in the base file.',
+      });
+    });
+
     it('compiles a strict contextual patch to the same proposed bytes as structured edits', async () => {
       const { service, workspace } = await fixture('one\ntwo\nthree\n');
       const base = await workspace.read('file.txt');
@@ -561,6 +758,25 @@ describe(EditProposalService, () => {
         reason: EditFailureReason.AMBIGUOUS,
         details: { candidates: [1, 2] },
       });
+    });
+
+    it('reports two ambiguity witnesses without allocating every repeated contextual match', async () => {
+      const { service, workspace } = await fixture('same\n'.repeat(200));
+      const base = await workspace.read('file.txt');
+      await expect(
+        service.proposePatch(
+          [
+            '*** Begin Patch',
+            '*** Update File: file.txt',
+            `*** Revision: ${base.revision}`,
+            '@@',
+            ...Array.from({ length: 49 }, () => ' same'),
+            '-same',
+            '+changed',
+            '*** End Patch',
+          ].join('\n'),
+        ),
+      ).rejects.toMatchObject({ reason: EditFailureReason.AMBIGUOUS, details: { candidates: [1, 2] } });
     });
 
     it('enforces exact raw and resulting-byte boundaries', async () => {

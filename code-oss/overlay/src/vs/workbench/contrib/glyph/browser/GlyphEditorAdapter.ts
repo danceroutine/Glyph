@@ -4,9 +4,14 @@ import { generateUuid } from '#vs/base/common/uuid.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
 import { CancellationTokenSource } from '#vs/base/common/cancellation.js';
 import { IModelService } from '#vs/editor/common/services/model.js';
-import { ITextFileService } from '#vs/workbench/services/textfile/common/textfiles.js';
+import {
+  ITextFileService,
+  TextFileOperationError,
+  TextFileOperationResult,
+} from '#vs/workbench/services/textfile/common/textfiles.js';
 import { IWorkspaceTrustManagementService } from '#vs/platform/workspace/common/workspaceTrust.js';
 import { FileOperationResult, IFileService, toFileOperationResult } from '#vs/platform/files/common/files.js';
+import { IUriIdentityService } from '#vs/platform/uriIdentity/common/uriIdentity.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#glyph/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#glyph/protocol/editor/GlyphEditorResponse.js';
 import { GlyphWorkingCopyPatternKind } from '#glyph/protocol/editor/GlyphWorkingCopySearchOptions.js';
@@ -54,6 +59,7 @@ export class GlyphEditorAdapter extends Disposable {
     @ITextFileService private readonly textFileService: ITextFileService,
     @IWorkspaceTrustManagementService private readonly trustService: IWorkspaceTrustManagementService,
     @IFileService private readonly fileService: IFileService,
+    @IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
   ) {
     super();
     this.workspaceBinding = this.currentWorkspaceBinding();
@@ -159,8 +165,25 @@ export class GlyphEditorAdapter extends Disposable {
 
   private errorCode(error: unknown): GlyphDesktopErrorCode {
     if (error instanceof GlyphEditorAdapterError) return error.code;
-    if (error instanceof Error && toFileOperationResult(error) === FileOperationResult.FILE_NOT_FOUND)
-      return GlyphDesktopErrorCode.NOT_FOUND;
+    // A resource becoming non-text is a stale review, not a broken transport.
+    // Keep permission and unexpected failures fatal instead of treating them as
+    // missing/unsupported files and allowing recovery to infer a completed edit.
+    if (
+      TextFileOperationError.isTextFileOperationError(error) &&
+      error.textFileOperationResult === TextFileOperationResult.FILE_IS_BINARY
+    ) {
+      return GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE;
+    }
+    if (error instanceof Error) {
+      switch (toFileOperationResult(error)) {
+        case FileOperationResult.FILE_NOT_FOUND:
+          return GlyphDesktopErrorCode.NOT_FOUND;
+        case FileOperationResult.FILE_IS_DIRECTORY:
+        case FileOperationResult.FILE_NOT_DIRECTORY:
+        case FileOperationResult.FILE_TOO_LARGE:
+          return GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE;
+      }
+    }
     return GlyphDesktopErrorCode.INTERNAL;
   }
 
@@ -370,7 +393,12 @@ export class GlyphEditorAdapter extends Disposable {
     if (!folder || folder.uri.scheme !== 'file') {
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     }
-    const resource = URI.joinPath(folder.uri, folders.length > 1 ? segments.join('/') : path);
+    // Match the model resolver's canonical identity before any cache, occupancy,
+    // or byte-budget lookup. A dirty model is authoritative even when the caller
+    // uses another spelling on a case-insensitive filesystem.
+    const resource = this.uriIdentityService.asCanonicalUri(
+      URI.joinPath(folder.uri, folders.length > 1 ? segments.join('/') : path),
+    );
     if (!this.workspaceContextService.isInsideWorkspace(resource)) {
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     }

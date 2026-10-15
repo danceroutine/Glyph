@@ -38,6 +38,14 @@ export interface UsePromptEditorStateOptions {
   railTop: number | undefined;
 }
 
+interface PromptInteraction {
+  readonly text: string;
+  readonly cursor: number;
+  readonly selectedMatch: number;
+  readonly attachments: readonly string[];
+  readonly dismissedCompletion: string | undefined;
+}
+
 export function usePromptEditorState({
   request,
   interrupt,
@@ -45,38 +53,55 @@ export function usePromptEditorState({
   railTop,
 }: UsePromptEditorStateOptions): PromptEditorState {
   const pendingChanges = request.pendingChanges ?? 0;
-  const [text, setText] = useState('');
-  const [cursor, setCursor] = useState(0);
+  const [interaction, setInteraction] = useState<PromptInteraction>({
+    text: '',
+    cursor: 0,
+    selectedMatch: 0,
+    attachments: [],
+    dismissedCompletion: undefined,
+  });
+  const current = useRef(interaction);
+  const settled = useRef(false);
+  const update = (changes: Partial<PromptInteraction>): void => {
+    // Ink batches input events before React renders. Editing, completion, and
+    // submission must share the latest transition rather than a frame snapshot.
+    current.current = { ...current.current, ...changes };
+    setInteraction(current.current);
+  };
+  const { text, cursor, selectedMatch, attachments, dismissedCompletion } = interaction;
   const [completion, setCompletion] = useState<{
     signature: string;
     files: WorkspacePathIndex;
     matches: readonly FileSearchMatch[];
   }>();
-  const [selectedMatch, setSelectedMatch] = useState(0);
-  const [attachments, setAttachments] = useState<readonly string[]>([]);
-  const [dismissedCompletion, setDismissedCompletion] = useState<string>();
   const [searchError, setSearchError] = useState('');
   const generation = useRef(0);
   const promptText = formatPromptText(text, attachments, cursor);
-  const mention = promptText.cursorTouchesAttachment ? undefined : activeMention(text, cursor);
+  const getCompletions = (value: PromptInteraction) => {
+    const { text, cursor, attachments, dismissedCompletion } = value;
+    const formatted = formatPromptText(text, attachments, cursor);
+    const mention = formatted.cursorTouchesAttachment ? undefined : activeMention(text, cursor);
+    // Revalidate against current input both when rendering and when selecting.
+    // A query can change and receive Tab before another render or search effect.
+    const matches =
+      completion?.signature === mention?.signature &&
+      completion?.files === request.files &&
+      mention?.signature !== dismissedCompletion
+        ? (completion?.matches ?? [])
+        : [];
+    const commandQuery = activeSlashCommand(text, cursor);
+    const commandMatches =
+      commandQuery && commandQuery.signature !== dismissedCompletion ? searchTerminalCommands(commandQuery.query) : [];
+    return { mention, matches, commandQuery, commandMatches };
+  };
+  const { mention, matches, commandQuery, commandMatches } = getCompletions(interaction);
   const mentionSignature = mention?.signature;
-  // Selection is bound during render, not just in the effect: input can arrive
-  // after a query changes but before its new asynchronous search has settled.
-  const matches =
-    completion?.signature === mentionSignature &&
-    completion?.files === request.files &&
-    mentionSignature !== dismissedCompletion
-      ? (completion?.matches ?? [])
-      : [];
-  const commandQuery = activeSlashCommand(text, cursor);
-  const commandMatches =
-    commandQuery && commandQuery.signature !== dismissedCompletion ? searchTerminalCommands(commandQuery.query) : [];
   const { columns, rows } = useWindowSize();
   const { setCursorPosition } = useCursor();
 
   useEffect(() => {
     setCompletion(undefined);
-    setSelectedMatch(0);
+    update({ selectedMatch: 0 });
     setSearchError('');
     const files = request.files;
     if (!files || !mention || mention.signature === dismissedCompletion) return;
@@ -96,7 +121,7 @@ export function usePromptEditorState({
           return;
         const safeMatches = result.matches.filter(match => isSafeAttachmentPath(match.path));
         setCompletion({ signature: mention.signature, files, matches: safeMatches });
-        setSelectedMatch(value => Math.min(value, Math.max(0, safeMatches.length - 1)));
+        update({ selectedMatch: Math.min(current.current.selectedMatch, Math.max(0, safeMatches.length - 1)) });
         setSearchError('');
       })
       .catch((error: unknown) => {
@@ -130,33 +155,39 @@ export function usePromptEditorState({
   }
 
   const updateText = (next: string, nextCursor: number): void => {
-    setText(next);
-    setCursor(nextCursor);
-    setAttachments(current => current.filter(path => containsAttachment(next, path)));
-    setDismissedCompletion(undefined);
-    setSelectedMatch(0);
+    update({
+      text: next,
+      cursor: nextCursor,
+      attachments: current.current.attachments.filter(path => containsAttachment(next, path)),
+      dismissedCompletion: undefined,
+      selectedMatch: 0,
+    });
   };
 
   const completeSelectedCommand = (): boolean => {
-    const candidate = commandMatches[selectedMatch];
+    const candidate = getCompletions(current.current).commandMatches[current.current.selectedMatch];
     if (!candidate) return false;
     updateText(`${candidate.value} `, candidate.value.length + 1);
     return true;
   };
 
   const attachSelected = (): boolean => {
+    const { text, selectedMatch } = current.current;
+    const { matches, mention: active } = getCompletions(current.current);
     const candidate = matches[selectedMatch];
-    const active = activeMention(text, cursor);
     if (!candidate || !active) return false;
     const next = `${text.slice(0, active.start)}@${candidate.path} ${text.slice(active.end)}`;
     updateText(next, active.start + candidate.path.length + 2);
-    setAttachments(current => (current.includes(candidate.path) ? current : [...current, candidate.path]));
+    const attachments = current.current.attachments;
+    if (!attachments.includes(candidate.path)) update({ attachments: [...attachments, candidate.path] });
     setCompletion(undefined);
     return true;
   };
 
   usePaste(
     value => {
+      if (settled.current) return;
+      const { text, cursor } = current.current;
       const safe = value.replace(/[\r\n]+/gu, ' ');
       updateText(`${text.slice(0, cursor)}${safe}${text.slice(cursor)}`, cursor + safe.length);
     },
@@ -165,7 +196,9 @@ export function usePromptEditorState({
 
   useInput(
     (input, key) => {
-      if (key.eventType === 'release') return;
+      if (key.eventType === 'release' || settled.current) return;
+      const { text, cursor, selectedMatch, attachments } = current.current;
+      const { mention, matches, commandQuery, commandMatches } = getCompletions(current.current);
       if (key.ctrl && input.toLowerCase() === 'c') {
         interrupt();
         return;
@@ -173,7 +206,7 @@ export function usePromptEditorState({
       if (key.escape) {
         const completion = commandQuery ?? mention;
         if (completion) {
-          setDismissedCompletion(completion.signature);
+          update({ dismissedCompletion: completion.signature });
           setCompletion(undefined);
         }
         return;
@@ -182,10 +215,12 @@ export function usePromptEditorState({
       if (key.return && request.acceptsSubmission) {
         const command = commandMatches[selectedMatch];
         if (command) {
+          settled.current = true;
           request.complete({ prompt: command.value, attachmentPaths: [] });
           return;
         }
         if (attachSelected()) return;
+        settled.current = true;
         request.complete({ prompt: text.trim(), attachmentPaths: [...attachments] });
         return;
       }
@@ -193,17 +228,17 @@ export function usePromptEditorState({
       if (key.tab && attachSelected()) return;
       const edit = editPrompt(input, key, text, cursor);
       if (edit) {
-        if (edit.text === text) setCursor(edit.cursor);
+        if (edit.text === text) update({ cursor: edit.cursor });
         else updateText(edit.text, edit.cursor);
         return;
       }
       const completionCount = commandQuery ? commandMatches.length : matches.length;
       if (key.upArrow && !key.ctrl && !key.meta && !key.super && completionCount > 0) {
-        setSelectedMatch(value => Math.max(0, value - 1));
+        update({ selectedMatch: Math.max(0, selectedMatch - 1) });
         return;
       }
       if (key.downArrow && !key.ctrl && !key.meta && !key.super && completionCount > 0) {
-        setSelectedMatch(value => Math.min(completionCount - 1, value + 1));
+        update({ selectedMatch: Math.min(completionCount - 1, selectedMatch + 1) });
         return;
       }
       if (isPrintableInput(input, key.ctrl, key.meta)) {

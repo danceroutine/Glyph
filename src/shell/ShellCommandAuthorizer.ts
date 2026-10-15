@@ -38,7 +38,11 @@ export class ShellCommandAuthorizer {
     context: ShellAuthorizationContext = { background: false, existingTerminal: false },
   ): Promise<ShellExecutionAuthorization> {
     return this.enqueue(async () => {
+      // Queued commands may be cancelled while a previous permission is being
+      // decided. Neither a saved grant nor a later dialog answer revives them.
+      signal.throwIfAborted();
       await this.initialize();
+      signal.throwIfAborted();
       const normalized = normalizeCommand(command);
       if (this.policy.mode === ShellPermissionMode.ALLOW_EVERYTHING)
         return authorization(ShellSandboxProfile.FULL_ACCESS);
@@ -56,6 +60,7 @@ export class ShellCommandAuthorizer {
       )
         return authorization(ShellSandboxProfile.READ_ONLY);
       const decision = await this.presenter.presentShellPermission({ command: normalized, workingDirectory }, signal);
+      signal.throwIfAborted();
       switch (decision) {
         case ShellPermissionDecision.ALLOW_ONCE:
           return authorization(ShellSandboxProfile.WORKSPACE_WRITE);
@@ -64,9 +69,11 @@ export class ShellCommandAuthorizer {
             ...this.policy,
             allowedCommands: uniqueGrants([...this.policy.allowedCommands, { command: normalized, workingDirectory }]),
           });
+          signal.throwIfAborted();
           return authorization(ShellSandboxProfile.WORKSPACE_WRITE);
         case ShellPermissionDecision.ALLOW_SAFE:
           await this.persist({ ...this.policy, mode: ShellPermissionMode.ALLOW_SAFE });
+          signal.throwIfAborted();
           return authorization(
             !context.background && !context.existingTerminal && isSafeShellCommand(normalized)
               ? ShellSandboxProfile.READ_ONLY
@@ -76,6 +83,7 @@ export class ShellCommandAuthorizer {
           return authorization(ShellSandboxProfile.FULL_ACCESS);
         case ShellPermissionDecision.ALLOW_EVERYTHING:
           await this.persist({ ...this.policy, mode: ShellPermissionMode.ALLOW_EVERYTHING });
+          signal.throwIfAborted();
           return authorization(ShellSandboxProfile.FULL_ACCESS);
         case ShellPermissionDecision.DENY:
           throw new Error('The user denied permission to execute this shell command.');

@@ -9,5 +9,11 @@ export interface WiredShellPermissionProps {
 }
 
 export function WiredShellPermission({ request, active = true }: WiredShellPermissionProps): ReactElement {
-  return <ShellPermission key={request.id} {...useShellPermissionState(request, active)} active={active} />;
+  // Key the owner of selection and settlement, not just its presentation. A
+  // replacement request must not inherit an earlier command's authorization.
+  return <ShellPermissionInteraction key={request.id} request={request} active={active} />;
+}
+
+function ShellPermissionInteraction({ request, active = true }: WiredShellPermissionProps): ReactElement {
+  return <ShellPermission {...useShellPermissionState(request, active)} active={active} />;
 }

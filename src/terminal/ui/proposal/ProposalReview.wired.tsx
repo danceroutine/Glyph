@@ -8,6 +8,10 @@ export interface WiredProposalReviewProps {
 }
 
 export function WiredProposalReview({ request }: WiredProposalReviewProps): ReactElement {
+  return <ProposalReviewInteraction key={request.id} request={request} />;
+}
+
+function ProposalReviewInteraction({ request }: WiredProposalReviewProps): ReactElement {
   const state = useProposalReviewState(request);
   return <ProposalReview {...state} />;
 }

@@ -13,6 +13,97 @@ vi.mock('ink', async () => ({
 }));
 
 describe(WiredPromptEditor, () => {
+  it('submits all rapid text, paste, and editing inputs before the next render', async () => {
+    const complete = vi.fn();
+    const view = render(
+      <WiredPromptEditor request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete }} interrupt={vi.fn()} />,
+    );
+    try {
+      await tick();
+      view.stdin.write('hello');
+      view.stdin.write('\x1b[200~ world\nagain\x1b[201~');
+      view.stdin.write('\x7f');
+      view.stdin.write('!');
+      view.stdin.write('\r');
+      view.stdin.write('\r');
+      await tick();
+      expect(complete).toHaveBeenCalledExactlyOnceWith({ prompt: 'hello world agai!', attachmentPaths: [] });
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('does not attach stale results when editing the query and completing in one input batch', async () => {
+    const complete = vi.fn();
+    const files = fileSearch(async (query, { generation }) => ({
+      query,
+      generation,
+      fileCount: 1,
+      matches: [{ path: 'apple.ts', score: 1, indices: [] }],
+    }));
+    const view = render(
+      <WiredPromptEditor
+        request={{ id: 1, label: 'you> ', acceptsSubmission: true, files, complete }}
+        interrupt={vi.fn()}
+      />,
+    );
+    try {
+      await write(view, '@a');
+      await vi.waitFor(() => expect(view.lastFrame()).toContain('apple.ts'));
+      view.stdin.write('b');
+      view.stdin.write('\t');
+      view.stdin.write('\r');
+      await tick();
+      expect(complete).toHaveBeenCalledExactlyOnceWith({ prompt: '@ab', attachmentPaths: [] });
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('attaches the newly highlighted file and submits it when Down, Tab, and Enter arrive together', async () => {
+    const complete = vi.fn();
+    const files = fileSearch(async (query, { generation }) => ({
+      query,
+      generation,
+      fileCount: 2,
+      matches: ['apple.ts', 'apricot.ts'].map(path => ({ path, score: 1, indices: [] })),
+    }));
+    const view = render(
+      <WiredPromptEditor
+        request={{ id: 1, label: 'you> ', acceptsSubmission: true, files, complete }}
+        interrupt={vi.fn()}
+      />,
+    );
+    try {
+      await write(view, '@a');
+      await vi.waitFor(() => expect(view.lastFrame()).toContain('apricot.ts'));
+      view.stdin.write('\x1b[B');
+      view.stdin.write('\t');
+      view.stdin.write('\r');
+      await tick();
+      expect(complete).toHaveBeenCalledExactlyOnceWith({ prompt: '@apricot.ts', attachmentPaths: ['apricot.ts'] });
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('executes the newly highlighted slash command exactly once before a render', async () => {
+    const complete = vi.fn();
+    const view = render(
+      <WiredPromptEditor request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete }} interrupt={vi.fn()} />,
+    );
+    try {
+      await write(view, '/tr');
+      view.stdin.write('\x1b[B');
+      view.stdin.write('\r');
+      view.stdin.write('\r');
+      await tick();
+      expect(complete).toHaveBeenCalledExactlyOnceWith({ prompt: '/trace on', attachmentPaths: [] });
+    } finally {
+      view.unmount();
+    }
+  });
+
   it('does not attach a previous query’s file while a newer completion search is pending', async () => {
     const complete = vi.fn();
     const files = fileSearch(async (query, options) => {

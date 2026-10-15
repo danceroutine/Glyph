@@ -16,12 +16,15 @@ interface TextDocumentEdit {
  * ranged-edit composition, independent of filesystem and review concerns.
  */
 export class TextDocument {
+  private lines: readonly { start: number; end: number }[] | undefined;
+
   constructor(
     private readonly path: string,
     private readonly text: string,
   ) {}
 
   apply(edits: readonly TextDocumentEdit[]): string {
+    if (edits.length === 0) return this.text;
     const resolved = edits
       .map(edit => {
         const start = this.offsetAt(edit.range.start.line, edit.range.start.character);
@@ -52,15 +55,24 @@ export class TextDocument {
       }
     }
 
-    let result = this.text;
-    for (const edit of [...resolved].reverse()) {
-      result = result.slice(0, edit.start) + edit.replacement + result.slice(edit.end);
+    // Every offset belongs to the immutable base. Copy each untouched span
+    // once instead of rebuilding the full document for each replacement.
+    const parts: string[] = [];
+    let offset = 0;
+    for (const edit of resolved) {
+      parts.push(this.text.slice(offset, edit.start), edit.replacement);
+      offset = edit.end;
     }
-    return result;
+    parts.push(this.text.slice(offset));
+    return parts.join('');
   }
 
   private offsetAt(line: number, character: number): number {
-    const range = this.lineRanges()[line];
+    if (!Number.isSafeInteger(line) || line < 0 || !Number.isSafeInteger(character) || character < 0) {
+      throw new EditError(EditFailureReason.INCONSISTENT, 'Edit position is outside Base.', { path: this.path });
+    }
+    // This document never changes, so every edit endpoint can share its index.
+    const range = (this.lines ??= this.lineRanges())[line];
     if (!range || character > range.end - range.start) {
       throw new EditError(EditFailureReason.INCONSISTENT, 'Edit position is outside Base.', { path: this.path });
     }

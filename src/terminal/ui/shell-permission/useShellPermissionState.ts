@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useCursor, useInput, useWindowSize } from 'ink';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
 import type { TerminalShellPermissionRequest } from './ShellPermissionRequest.ts';
@@ -51,26 +51,41 @@ export interface ShellPermissionState {
 
 export function useShellPermissionState(request: TerminalShellPermissionRequest, active = true): ShellPermissionState {
   const { rows, columns } = useWindowSize();
+  const settled = useRef(false);
   const choose = (decision: ShellPermissionDecision): void => {
-    if (decision === ShellPermissionDecision.DENY || (rows >= 16 && columns >= 40)) request.complete(decision);
+    if (settled.current) return;
+    if (decision !== ShellPermissionDecision.DENY && (rows < 16 || columns < 40)) return;
+    // Claim the interaction before its callback can trigger another input or
+    // render: a request can authorize or interrupt, never both or twice.
+    settled.current = true;
+    request.complete(decision);
   };
   const { setCursorPosition } = useCursor();
   setCursorPosition(undefined);
   const [highlightedChoice, setHighlightedChoice] = useState(0);
+  const currentChoice = useRef(highlightedChoice);
+  const highlight = (index: number): void => {
+    // Navigation and Enter can arrive in the same Ink/React batch. Permission
+    // decisions must observe that navigation, not the previous rendered choice.
+    currentChoice.current = index;
+    setHighlightedChoice(index);
+  };
 
   useInput(
     (input, key) => {
+      if (settled.current || key.eventType === 'release') return;
       if (key.ctrl && input.toLowerCase() === 'c') {
+        settled.current = true;
         request.interrupt();
         return;
       }
       if (key.escape) {
-        request.complete(ShellPermissionDecision.DENY);
+        choose(ShellPermissionDecision.DENY);
         return;
       }
-      if (key.upArrow) setHighlightedChoice(index => Math.max(0, index - 1));
-      else if (key.downArrow) setHighlightedChoice(index => Math.min(choices.length - 1, index + 1));
-      else if (key.return) choose(choices[highlightedChoice]!.decision);
+      if (key.upArrow) highlight(Math.max(0, currentChoice.current - 1));
+      else if (key.downArrow) highlight(Math.min(choices.length - 1, currentChoice.current + 1));
+      else if (key.return) choose(choices[currentChoice.current]!.decision);
       else {
         const number = Number(input);
         if (Number.isInteger(number) && number >= 1 && number <= choices.length) {

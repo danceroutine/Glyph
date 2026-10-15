@@ -1,12 +1,149 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
+import { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.js';
+import { ShellPermissionMode } from '#src/shell/ShellPermissionPolicy.js';
+import type { ShellPermissionStore } from '#src/shell/ShellPermissionStore.js';
 import type { TerminalShellPermissionRequest } from '#src/terminal/ui/shell-permission/ShellPermissionRequest.js';
 import { WiredShellPermission } from '#src/terminal/ui/shell-permission/ShellPermission.wired.js';
 import { Box } from 'ink';
 
 describe(WiredShellPermission, () => {
   describe('interaction', () => {
+    it('ignores key-release events instead of navigating, authorizing, or interrupting', async () => {
+      const complete = vi.fn();
+      const interrupt = vi.fn();
+      const view = render(<WiredShellPermission request={{ ...request(complete), interrupt }} />);
+      try {
+        await write(view, '\x1b[1;1:3B');
+        expect(view.lastFrame()).toContain('› 1. Allow once');
+        view.stdin.write('\x1b[53;1:3u');
+        view.stdin.write('\x1b[13;1:3u');
+        view.stdin.write('\x1b[99;5:3u');
+        await tick();
+        expect(complete).not.toHaveBeenCalled();
+        expect(interrupt).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+      }
+    });
+
+    it('denies without persisting unrestricted access when Down and Enter arrive before a render', async () => {
+      let view: ReturnType<typeof render> | undefined;
+      const save = vi.fn<ShellPermissionStore['save']>();
+      const presentShellPermission = vi.fn(
+        () =>
+          new Promise<ShellPermissionDecision>(complete => {
+            view?.unmount();
+            view = render(<WiredShellPermission request={request(complete)} />);
+          }),
+      );
+      const authorizer = new ShellCommandAuthorizer(
+        'project',
+        { load: async () => undefined, save },
+        { presentShellPermission },
+      );
+      try {
+        const authorization = authorizer.authorize('echo first', '/project', new AbortController().signal);
+        const rejected = expect(authorization).rejects.toThrow('denied permission');
+        await vi.waitFor(() => expect(view).toBeDefined());
+        for (let index = 0; index < 4; index++) await write(view!, '\x1b[B');
+        expect(view!.lastFrame()).toContain('› 5. Allow everything');
+        view!.stdin.write('\x1b[B');
+        view!.stdin.write('\r');
+        await rejected;
+        expect(save).not.toHaveBeenCalled();
+        expect(authorizer.mode).toBe(ShellPermissionMode.ASK);
+
+        const subsequent = authorizer.authorize('echo second', '/project', new AbortController().signal);
+        const subsequentDenied = expect(subsequent).rejects.toThrow('denied permission');
+        await vi.waitFor(() => expect(presentShellPermission).toHaveBeenCalledTimes(2));
+        await write(view!, '6');
+        await subsequentDenied;
+        expect(save).not.toHaveBeenCalled();
+      } finally {
+        view?.unmount();
+      }
+    });
+
+    it('accumulates rapid navigation and confirms the final permission choice', async () => {
+      const complete = vi.fn();
+      const view = render(<WiredShellPermission request={request(complete)} />);
+      try {
+        await tick();
+        for (let index = 0; index < 5; index++) view.stdin.write('\x1b[B');
+        view.stdin.write('\r');
+        await tick();
+        expect(complete).toHaveBeenCalledExactlyOnceWith(ShellPermissionDecision.DENY);
+      } finally {
+        view.unmount();
+      }
+    });
+
+    it.each(['Enter', 'number', 'Escape'] as const)(
+      'settles %s once and ignores later approval keys and interrupts',
+      async submit => {
+        const complete = vi.fn();
+        const interrupt = vi.fn();
+        const view = render(<WiredShellPermission request={{ ...request(complete), interrupt }} />);
+        try {
+          await tick();
+          if (submit === 'Escape') await writeEscape(view);
+          else view.stdin.write(submit === 'Enter' ? '\r' : '6');
+          view.stdin.write('5');
+          view.stdin.write('\r');
+          view.stdin.write('\x03');
+          await tick();
+          expect(complete).toHaveBeenCalledExactlyOnceWith(
+            submit === 'Enter' ? ShellPermissionDecision.ALLOW_ONCE : ShellPermissionDecision.DENY,
+          );
+          expect(interrupt).not.toHaveBeenCalled();
+        } finally {
+          view.unmount();
+        }
+      },
+    );
+
+    it('does not authorize after interruption even when approval input arrives before a render', async () => {
+      const complete = vi.fn();
+      const interrupt = vi.fn();
+      const view = render(<WiredShellPermission request={{ ...request(complete), interrupt }} />);
+      try {
+        await tick();
+        view.stdin.write('\x03');
+        view.stdin.write('5');
+        view.stdin.write('\r');
+        view.stdin.write('\x03');
+        await tick();
+        expect(interrupt).toHaveBeenCalledOnce();
+        expect(complete).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+      }
+    });
+
+    it.each([false, true])(
+      'resets selection and settlement for a replacement request after settled=%s',
+      async settled => {
+        const complete = vi.fn();
+        const nextComplete = vi.fn();
+        const view = render(<WiredShellPermission request={request(complete)} />);
+        try {
+          for (let index = 0; index < 4; index++) await write(view, '\x1b[B');
+          expect(view.lastFrame()).toContain('› 5. Allow everything');
+          if (settled) await write(view, '\r');
+          view.rerender(<WiredShellPermission request={{ ...request(nextComplete), id: 2 }} />);
+          await tick();
+          expect(view.lastFrame()).toContain('› 1. Allow once');
+          await write(view, '\r');
+          expect(nextComplete).toHaveBeenCalledExactlyOnceWith(ShellPermissionDecision.ALLOW_ONCE);
+          expect(complete).toHaveBeenCalledTimes(settled ? 1 : 0);
+        } finally {
+          view.unmount();
+        }
+      },
+    );
+
     it('keeps the approval choice visible and pages through every line of a long command before Enter', async () => {
       const complete = vi.fn();
       const permission = {
@@ -85,8 +222,6 @@ describe(WiredShellPermission, () => {
       await write(active, 'x');
       await write(active, '0');
       await write(active, '7');
-      await write(active, '\x03');
-      expect(interrupt).toHaveBeenCalledOnce();
       await writeEscape(active);
       expect(complete).toHaveBeenCalledWith(ShellPermissionDecision.DENY);
       active.unmount();
@@ -105,6 +240,10 @@ function request(complete: TerminalShellPermissionRequest['complete']): Terminal
 
 async function write(view: ReturnType<typeof render>, input: string): Promise<void> {
   view.stdin.write(input);
+  await tick();
+}
+
+async function tick(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
 }
 

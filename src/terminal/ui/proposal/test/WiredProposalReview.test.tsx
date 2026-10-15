@@ -7,6 +7,135 @@ import { createProposalReviewFixture } from './ProposalReviewFixture.ts';
 
 describe(WiredProposalReview, () => {
   describe('interaction', () => {
+    it('does not decide the old or undisplayed change when navigation and acceptance arrive in one frame', async () => {
+      const fixture = createProposalReviewFixture();
+      const first = fixture.proposal.files[0]!.items[0]!;
+      fixture.proposal.files[0]!.items.push({ ...first, id: 'second', sourceStart: 4, sourceEnd: 7 });
+      const view = render(
+        <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
+      );
+      try {
+        await tick();
+        view.stdin.write('\x1b[C');
+        view.stdin.write('y');
+        expect(fixture.accept).not.toHaveBeenCalled();
+        await tick();
+        view.stdin.write('y');
+        await waitUntil(() => fixture.accept.mock.calls.length === 1);
+        expect(fixture.accept).toHaveBeenCalledWith('proposal', 'second');
+      } finally {
+        view.unmount();
+      }
+    });
+
+    it('claims an in-flight decision synchronously before repeated or opposite decision keys', async () => {
+      const fixture = createProposalReviewFixture();
+      let finish!: () => void;
+      fixture.accept.mockImplementation(
+        () =>
+          new Promise<void>(resolve => {
+            finish = resolve;
+          }),
+      );
+      const complete = vi.fn();
+      const view = render(
+        <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete, interrupt: vi.fn() }} />,
+      );
+      try {
+        await tick();
+        view.stdin.write('y');
+        view.stdin.write('y');
+        view.stdin.write('n');
+        view.stdin.write('q');
+        expect(fixture.accept).toHaveBeenCalledTimes(1);
+        expect(fixture.reject).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+      } finally {
+        finish?.();
+        view.unmount();
+      }
+    });
+
+    it.each(['q', '\x03'])(
+      'settles a deferred or interrupted review once and ignores later decisions (%j)',
+      async key => {
+        const fixture = createProposalReviewFixture();
+        const complete = vi.fn();
+        const interrupt = vi.fn();
+        const view = render(<WiredProposalReview request={{ id: 1, manager: fixture.manager, complete, interrupt }} />);
+        try {
+          await tick();
+          view.stdin.write(key);
+          view.stdin.write(key);
+          view.stdin.write('y');
+          expect(complete).toHaveBeenCalledTimes(1);
+          expect(interrupt).toHaveBeenCalledTimes(key === '\x03' ? 1 : 0);
+          expect(fixture.accept).not.toHaveBeenCalled();
+        } finally {
+          view.unmount();
+        }
+      },
+    );
+
+    it('starts a replacement review with fresh selection, completion, and progress state', async () => {
+      const first = createProposalReviewFixture();
+      const next = createProposalReviewFixture();
+      const complete = vi.fn();
+      const view = render(
+        <WiredProposalReview request={{ id: 1, manager: first.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
+      );
+      try {
+        await tick();
+        view.stdin.write('q');
+        view.rerender(<WiredProposalReview request={{ id: 2, manager: next.manager, complete, interrupt: vi.fn() }} />);
+        await tick();
+        view.stdin.write('q');
+        expect(complete).toHaveBeenCalledTimes(1);
+      } finally {
+        view.unmount();
+      }
+    });
+
+    it('does not complete a replaced review when its earlier decision finally finishes', async () => {
+      const first = createProposalReviewFixture();
+      const next = createProposalReviewFixture();
+      const firstComplete = vi.fn();
+      const nextComplete = vi.fn();
+      let finish!: () => void;
+      first.accept.mockImplementation(
+        () =>
+          new Promise<void>(resolve => {
+            finish = resolve;
+          }),
+      );
+      const view = render(
+        <WiredProposalReview
+          request={{ id: 1, manager: first.manager, complete: firstComplete, interrupt: vi.fn() }}
+        />,
+      );
+      try {
+        await tick();
+        view.stdin.write('y');
+        expect(first.accept).toHaveBeenCalledTimes(1);
+        view.rerender(
+          <WiredProposalReview
+            request={{ id: 2, manager: next.manager, complete: nextComplete, interrupt: vi.fn() }}
+          />,
+        );
+        await tick();
+        (first.manager.activeReviews as EditProposal[]).splice(0);
+        finish();
+        await tick();
+        expect(firstComplete).not.toHaveBeenCalled();
+        expect(nextComplete).not.toHaveBeenCalled();
+        view.stdin.write('q');
+        expect(nextComplete).toHaveBeenCalledTimes(1);
+      } finally {
+        finish?.();
+        view.unmount();
+      }
+    });
+
     it('completes an empty review', async () => {
       const complete = vi.fn();
       const fixture = createProposalReviewFixture();

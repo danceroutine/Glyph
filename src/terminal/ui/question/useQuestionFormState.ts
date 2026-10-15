@@ -131,7 +131,7 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
 
   useInput(
     (input, key) => {
-      if (settled.current) return;
+      if (settled.current || key.eventType === 'release') return;
       if (key.ctrl && input.toLowerCase() === 'c') {
         settled.current = true;
         request.interrupt();

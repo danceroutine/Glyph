@@ -6,6 +6,48 @@ import { WiredQuestionForm } from '#src/terminal/ui/question/QuestionForm.wired.
 
 describe(WiredQuestionForm, () => {
   describe('interaction', () => {
+    it.each([
+      ['Down', '\x1b[1;1:3B'],
+      ['Enter', '\x1b[13;1:3u'],
+      ['Ctrl+C', '\x1b[99;5:3u'],
+    ])('ignores a %s release without navigating, submitting, or interrupting', async (_key, input) => {
+      const complete = vi.fn();
+      const interrupt = vi.fn();
+      const view = render(
+        <WiredQuestionForm request={{ ...request(complete, [question('choice', false)]), interrupt }} />,
+      );
+      try {
+        await write(view, input);
+        expect(complete).not.toHaveBeenCalled();
+        expect(interrupt).not.toHaveBeenCalled();
+        await write(view, '\r');
+        expect(complete).toHaveBeenCalledExactlyOnceWith({
+          answers: [{ questionId: 'choice', type: QuestionAnswerType.SELECTION, optionIds: ['first'] }],
+        });
+      } finally {
+        view.unmount();
+      }
+    });
+
+    it('does not edit an Other answer on character and Backspace releases', async () => {
+      const complete = vi.fn();
+      const view = render(<WiredQuestionForm request={request(complete, [question('choice', false)])} />);
+      try {
+        await write(view, '\x1b[B');
+        await write(view, '\x1b[B');
+        await write(view, '\r');
+        await write(view, 'answer');
+        await write(view, '\x1b[127;1:3u');
+        await write(view, '\x1b[120;1:3u');
+        await write(view, '\r');
+        expect(complete).toHaveBeenCalledExactlyOnceWith({
+          answers: [{ questionId: 'choice', type: QuestionAnswerType.OTHER, text: 'answer' }],
+        });
+      } finally {
+        view.unmount();
+      }
+    });
+
     it.each(['Enter', 'navigation'] as const)(
       'waits for the selection to render after %s reveals a long question',
       async reveal => {

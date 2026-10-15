@@ -152,12 +152,36 @@ export class EditProposalService {
         });
         continue;
       }
-      let proposed = base.text;
+      const matchingDeadline = performance.now() + this.configuration.diffBudgetMs;
+      const checkMatchingBudget = (): void => {
+        signal?.throwIfAborted();
+        if (performance.now() >= matchingDeadline) {
+          throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'Patch matching exceeded the configured time budget.', {
+            path: file.path,
+          });
+        }
+      };
+      const lines = exactPatchLines(base.text);
+      checkMatchingBudget();
+      const lineEnding = file.lineEnding ?? dominantLineEnding(lines);
+      const startsByText = new Map<string, number[]>();
+      for (const [index, line] of lines.entries()) {
+        if (index % 64 === 0) checkMatchingBudget();
+        const starts = startsByText.get(line.text);
+        if (starts) starts.push(index);
+        else startsByText.set(line.text, [index]);
+      }
       const replacements: { start: number; end: number; text: string }[] = [];
       for (const hunk of file.hunks) {
+        checkMatchingBudget();
         const oldLogical = hunk.lines.filter(line => line.prefix !== '+').map(line => line.text);
-        const lineEnding = file.lineEnding ?? dominantLineEnding(base.text);
-        const candidates = findHunkMatches(base.text, oldLogical);
+        const candidates = findHunkMatches({
+          lines,
+          startsByText,
+          expectedLines: oldLogical,
+          checkBudget: checkMatchingBudget,
+        });
+        checkMatchingBudget();
         if (candidates.length === 0) {
           throw new EditError(EditFailureReason.INCONSISTENT, 'Patch context does not exactly match the base file.', {
             path: file.path,
@@ -166,24 +190,29 @@ export class EditProposalService {
         if (candidates.length > 1) {
           throw new EditError(EditFailureReason.AMBIGUOUS, 'Patch context matches more than one location.', {
             path: file.path,
-            candidates: candidates.map(candidate => lineAt(base.text, candidate.start)),
+            candidates: candidates.map(candidate => candidate.line + 1),
             retry: 'Include more unique context or use structured coordinates.',
           });
         }
         const match = candidates[0]!;
         const replacement = renderHunk(hunk, match, lineEnding, match.end === base.text.length);
-        if (replacements.some(prior => match.start < prior.end && match.end > prior.start)) {
+        replacements.push({ start: match.start, end: match.end, text: replacement });
+      }
+      // Resolve every match against Base, then compose each untouched span once.
+      // Sorting also makes overlap validation linear in the number of hunks.
+      const parts: string[] = [];
+      let offset = 0;
+      for (const change of replacements.sort((left, right) => left.start - right.start)) {
+        if (change.start < offset) {
           throw new EditError(EditFailureReason.INCONSISTENT, 'Patch hunks overlap in the base file.', {
             path: file.path,
           });
         }
-        replacements.push({ start: match.start, end: match.end, text: replacement });
+        parts.push(base.text.slice(offset, change.start), change.text);
+        offset = change.end;
       }
-      // Resolve every source span before any replacement can manufacture new
-      // matches. Reverse application preserves the revision-checked offsets.
-      for (const change of replacements.sort((left, right) => right.start - left.start))
-        proposed = proposed.slice(0, change.start) + change.text + proposed.slice(change.end);
-      proposed = applyFinalNewline(proposed, file.noFinalNewline);
+      parts.push(base.text.slice(offset));
+      const proposed = applyFinalNewline(parts.join(''), file.noFinalNewline);
       structured.files.push({
         operation: file.operation,
         path: file.path,
@@ -668,19 +697,44 @@ interface ExactPatchLine {
 }
 
 interface PatchHunkMatch {
+  readonly line: number;
   readonly start: number;
   readonly end: number;
   readonly lines: readonly ExactPatchLine[];
 }
 
-function findHunkMatches(text: string, expectedLines: readonly string[]): PatchHunkMatch[] {
+function findHunkMatches({
+  lines,
+  startsByText,
+  expectedLines,
+  checkBudget,
+}: {
+  readonly lines: readonly ExactPatchLine[];
+  readonly startsByText: ReadonlyMap<string, readonly number[]>;
+  readonly expectedLines: readonly string[];
+  readonly checkBudget: () => void;
+}): PatchHunkMatch[] {
   if (expectedLines.length === 0) return [];
-  const lines = exactPatchLines(text);
   const matches: PatchHunkMatch[] = [];
-  for (let start = 0; start + expectedLines.length <= lines.length; start++) {
+  for (const start of startsByText.get(expectedLines[0]!) ?? []) {
+    checkBudget();
+    if (start + expectedLines.length > lines.length) continue;
+    let matchesContext = true;
+    for (let index = 0; index < expectedLines.length; index++) {
+      // One candidate can itself contain thousands of shared-prefix lines.
+      // Check inside it, rather than waiting for that expensive comparison to end.
+      if (index % 64 === 0) checkBudget();
+      if (lines[start + index]!.text !== expectedLines[index]) {
+        matchesContext = false;
+        break;
+      }
+    }
+    if (!matchesContext) continue;
     const candidate = lines.slice(start, start + expectedLines.length);
-    if (!candidate.every((line, index) => line.text === expectedLines[index])) continue;
-    matches.push({ start: candidate[0]!.start, end: candidate.at(-1)!.end, lines: candidate });
+    matches.push({ line: start, start: candidate[0]!.start, end: candidate.at(-1)!.end, lines: candidate });
+    // Two locations already prove ambiguity. Keep useful witnesses without
+    // allocating overlapping context arrays for every occurrence in the file.
+    if (matches.length === 2) break;
   }
   return matches;
 }
@@ -733,14 +787,11 @@ function exactPatchLines(text: string): ExactPatchLine[] {
   return lines;
 }
 
-function lineAt(text: string, offset: number): number {
-  return text.slice(0, offset).split(/\r\n|\r|\n/).length;
-}
-
-function dominantLineEnding(text: string): '\n' | '\r\n' | '\r' {
-  const matches = text.match(/\r\n|\r|\n/g) ?? [];
+function dominantLineEnding(lines: readonly ExactPatchLine[]): '\n' | '\r\n' | '\r' {
   const counts = new Map<string, number>();
-  for (const value of matches) counts.set(value, (counts.get(value) ?? 0) + 1);
+  for (const { lineEnding } of lines) {
+    if (lineEnding) counts.set(lineEnding, (counts.get(lineEnding) ?? 0) + 1);
+  }
   return ([...counts].sort((left, right) => right[1] - left[1])[0]?.[0] as '\n' | '\r\n' | '\r' | undefined) ?? '\n';
 }
 

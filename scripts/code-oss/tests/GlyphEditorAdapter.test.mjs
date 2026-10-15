@@ -22,7 +22,11 @@ async function adapterModule() {
         name: 'editor-fixture-services',
         setup(builder) {
           builder.onResolve({ filter: /^#vs\// }, args => {
-            if (args.path.startsWith('#vs/base/'))
+            if (
+              args.path.startsWith('#vs/base/') ||
+              args.path === '#vs/platform/files/common/files.js' ||
+              args.path === '#vs/workbench/services/textfile/common/textfiles.js'
+            )
               return { path: resolve('.code-oss/src/src/vs', args.path.slice(4).replace(/\.js$/, '.ts')) };
             return { path: args.path, namespace: 'services' };
           });
@@ -30,11 +34,9 @@ async function adapterModule() {
             loader: 'js',
             contents: `
         const service = () => {};
-        export { service as IModelService, service as ITextFileService, service as IFileService,
+        export { service as IModelService,
           service as IWorkspaceTrustManagementService, service as IBulkEditService,
-          service as ITextModelService, service as IWorkspaceContextService };
-        export const FileOperationResult = { FILE_NOT_FOUND: 1 };
-        export const toFileOperationResult = () => -1;
+          service as ITextModelService, service as IWorkspaceContextService, service as IUriIdentityService };
         export class ResourceTextEdit { constructor(resource, edit, version) { Object.assign(this, { resource, edit, version }); } }
         export class UndoRedoGroup { id = 1; }
         export const EditSources = { unknown: metadata => ({ metadata }) };
@@ -79,6 +81,7 @@ describe('Editor workspace binding', () => {
         {},
         { isWorkspaceTrusted: () => trusted },
         { exists },
+        { asCanonicalUri: resource => resource },
       );
       try {
         const response = await adapter.handle({ type: 'exists', path: 'target.txt', operationId: 'occupancy' });
@@ -126,6 +129,7 @@ describe('Editor workspace binding', () => {
       { isDirty: () => true },
       { isWorkspaceTrusted: () => true },
       {},
+      { asCanonicalUri: resource => resource },
     );
     try {
       const response = await adapter.handle({ type: 'list_working_copies', operationId: 'list' });
@@ -235,6 +239,7 @@ describe('Editor workspace binding', () => {
         { isDirty: () => true },
         { isWorkspaceTrusted: () => true },
         {},
+        { asCanonicalUri: resource => resource },
       );
       try {
         const before = await adapter.read('file.ts');
@@ -439,6 +444,7 @@ describe('Editor workspace binding', () => {
       { isDirty: () => true },
       { isWorkspaceTrusted: () => true },
       {},
+      { asCanonicalUri: resource => resource },
     );
     try {
       const before = await adapter.read('A/file.ts');
@@ -529,6 +535,7 @@ async function pendingEdit({
     { isDirty: () => true },
     { isWorkspaceTrusted: () => true },
     {},
+    { asCanonicalUri: resource => resource },
   );
   const before = await adapter.read('file.ts');
   return {
