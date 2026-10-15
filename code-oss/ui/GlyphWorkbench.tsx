@@ -8,7 +8,7 @@ interface GlyphWorkbenchProps {
   readonly actions: GlyphWorkbenchViewActions;
 }
 
-/** Keeps local composition state mounted as authoritative host state streams in. */
+/** Projects host updates without replacing the window-owned composer state. */
 export function GlyphWorkbench({ state, actions }: GlyphWorkbenchProps) {
   // TODO: Add account/model, question, approval, tool, and proposal components
   // against the existing workbench interaction port.

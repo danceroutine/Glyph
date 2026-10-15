@@ -40,11 +40,11 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
   const rendered = entry
     ? wrapReviewLines(
         renderEntry(entry.file, entry.item, viewMode, process.env.NO_COLOR === undefined),
-        Math.max(38, columns - 2),
+        Math.max(1, columns - 2),
       )
     : { lines: [], focusLine: 0 };
   const diagnosticLines = diagnostic ? 1 : 0;
-  const pageSize = Math.max(3, rows - 4 - diagnosticLines);
+  const pageSize = Math.max(1, rows - 4 - diagnosticLines);
   const maxScroll = Math.max(0, rendered.lines.length - pageSize);
   const visibleScroll = clamp(scroll, 0, maxScroll);
   const completeReview = useCallback((): void => {
@@ -53,9 +53,20 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
     request.complete({ ...totals.current });
   }, [request]);
 
+  const retryPersistence = useCallback((): void => {
+    setBusy(true);
+    void request.manager
+      .flushPendingCheckpoint()
+      .then(() => setDiagnostic(''))
+      .catch((error: unknown) => setDiagnostic(error instanceof Error ? error.message : String(error)))
+      .finally(() => setBusy(false));
+  }, [request.manager]);
+
   useEffect(() => {
-    if (!busy && entries.length === 0) completeReview();
-  }, [busy, completeReview, entries.length]);
+    if (busy || entries.length !== 0) return;
+    if (!request.manager.hasPendingCheckpoint) completeReview();
+    else if (!diagnostic) retryPersistence();
+  }, [busy, completeReview, entries.length, diagnostic, request.manager, retryPersistence]);
 
   useEffect(() => {
     setSelection(value => clamp(value, 0, Math.max(0, entries.length - 1)));
@@ -82,7 +93,15 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
           setSelection(value => Math.min(value, Math.max(0, pendingReviewEntries(queue.current).length - 1)));
         }
       })
-      .catch((error: unknown) => setDiagnostic(error instanceof Error ? error.message : String(error)))
+      .catch((error: unknown) => {
+        // A failed checkpoint can follow a successful edit. Keep its decision
+        // in the receipt totals while persistence remains visibly unfinished.
+        totals.current = {
+          accepted: queue.current.filter(value => value.item.decision === EditDecisionState.ACCEPTED).length,
+          rejected: queue.current.filter(value => value.item.decision === EditDecisionState.REJECTED).length,
+        };
+        setDiagnostic(error instanceof Error ? error.message : String(error));
+      })
       .finally(() => setBusy(false));
   };
 
@@ -95,6 +114,10 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
     }
     if (key.escape || input.toLowerCase() === 'q') {
       request.complete();
+      return;
+    }
+    if (input.toLowerCase() === 'r' && request.manager.hasPendingCheckpoint) {
+      retryPersistence();
       return;
     }
     if (input.toLowerCase() === 'y') {
@@ -119,6 +142,17 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
   });
 
   if (!entry) {
+    if (request.manager.hasPendingCheckpoint) {
+      return {
+        rows,
+        header: 'Review checkpoint pending',
+        diagnostic: diagnostic ? `Error: ${sanitizeText(diagnostic)}` : '',
+        visibleLines: ['The edit is applied, but its result has not been saved.'],
+        navigationHelp: '',
+        decisionHelp: busy ? 'Saving…' : 'R retry save  Esc/Q defer',
+        complete: false,
+      };
+    }
     return {
       rows,
       header: `Review complete — ${totals.current.accepted} accepted, ${totals.current.rejected} rejected`,

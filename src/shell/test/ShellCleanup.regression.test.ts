@@ -9,7 +9,7 @@ import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 
 describe('Shell cleanup after parent exit', () => {
-  it('[round3-05] returns a completed foreground command without a grace-period delay when no descendants remain', async () => {
+  it('returns a completed foreground command without a grace-period delay when no descendants remain', async () => {
     vi.useFakeTimers();
     const child = new ChildProcess();
     const pipes = { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() };
@@ -60,12 +60,12 @@ describe('Shell cleanup after parent exit', () => {
     }
   });
   it.each([
-    { operation: 'close', closedPipes: false, review: 'review-08' },
-    { operation: 'dispose', closedPipes: false, review: 'review-08' },
-    { operation: 'close', closedPipes: true, review: 'round2-08' },
-    { operation: 'dispose', closedPipes: true, review: 'round2-08' },
+    { operation: 'close', closedPipes: false },
+    { operation: 'dispose', closedPipes: false },
+    { operation: 'close', closedPipes: true },
+    { operation: 'dispose', closedPipes: true },
   ])(
-    '[$review] escalates $operation to SIGKILL after parent exit even when descendant pipes are closed: $closedPipes',
+    'escalates $operation to SIGKILL after parent exit even when descendant pipes are closed: $closedPipes',
     async ({ operation, closedPipes }) => {
       vi.useFakeTimers();
       // No process is spawned or signalled: this models Node's distinct exit

@@ -101,7 +101,7 @@ async function fixture(send: (options: SendOptions, interactions: DesktopInterac
 }
 
 describe(ProviderDesktopRuntime, () => {
-  it('[round7-01] cancels an active provider turn and terminates background shells during trust-boundary disposal', async () => {
+  it('cancels an active provider turn and terminates background shells during trust-boundary disposal', async () => {
     const harness = await fixture(async options => {
       await new Promise<void>((_resolve, reject) => {
         if (options.signal.aborted) reject(options.signal.reason);
@@ -120,7 +120,7 @@ describe(ProviderDesktopRuntime, () => {
     expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
   });
 
-  it('[round7-12] drains an admitted proposal decision before disposing its chat storage', async () => {
+  it('drains an admitted proposal decision before disposing its chat storage', async () => {
     const harness = await fixture(async () => {});
     let finish!: () => void;
     const gate = new Promise<void>(resolve => {

@@ -11,6 +11,21 @@ import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationCo
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 
 describe(EditorWorkspaceTextStore, () => {
+  it.each([true, false, undefined])(
+    'requires explicit editor occupancy (%s) without requesting a text snapshot',
+    async exists => {
+      const store = new EditorWorkspaceTextStore('/project', true, {
+        listPaths: async () => ({ files: [], truncated: false }),
+        request: async request => {
+          expect(request).toMatchObject({ type: GlyphEditorRequestType.EXISTS, path: 'file.ts' });
+          return { operationId: 'exists', ok: true, ...(exists === undefined ? {} : { exists }) };
+        },
+      });
+      if (exists === undefined)
+        await expect(store.exists('file.ts')).rejects.toMatchObject({ reason: EditFailureReason.INCONSISTENT });
+      else await expect(store.exists('file.ts')).resolves.toBe(exists);
+    },
+  );
   it('passes read budgets to the editor and preserves budget failures for attachment callers', async () => {
     const store = new EditorWorkspaceTextStore('/project', true, {
       listPaths: async () => ({ files: [], truncated: false }),

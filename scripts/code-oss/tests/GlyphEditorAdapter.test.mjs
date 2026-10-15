@@ -51,10 +51,51 @@ async function adapterModule() {
 }
 
 describe('Editor workspace binding', () => {
+  it.each(['disk', 'live', 'missing', 'revoked', 'folders changed'])(
+    'checks %s target occupancy without reading or resolving text',
+    async kind => {
+      const { GlyphEditorAdapter, URI } = await adapterModule();
+      const root = { name: 'workspace', uri: URI.file('/workspace') };
+      let folders = [root];
+      let trusted = true;
+      const resolveModel = vi.fn(() => {
+        throw new Error('Occupancy must not load contents');
+      });
+      const exists = vi.fn(async () => {
+        if (kind === 'revoked') trusted = false;
+        if (kind === 'folders changed') folders = [{ name: 'other', uri: URI.file('/other') }];
+        return kind !== 'missing';
+      });
+      const adapter = new GlyphEditorAdapter(
+        { createModelReference: resolveModel },
+        {},
+        {
+          getWorkspace: () => ({ id: 'workspace', folders }),
+          getWorkspaceFolder: () => root,
+          isInsideWorkspace: () => true,
+          onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+        },
+        { getModel: () => (kind === 'live' ? {} : null) },
+        {},
+        { isWorkspaceTrusted: () => trusted },
+        { exists },
+      );
+      try {
+        const response = await adapter.handle({ type: 'exists', path: 'target.txt', operationId: 'occupancy' });
+        if (kind === 'revoked') expect(response.error.code).toBe('UNTRUSTED_WORKSPACE');
+        else if (kind === 'folders changed') expect(response.error.code).toBe('WORKSPACE_CHANGED');
+        else expect(response).toMatchObject({ ok: true, exists: kind !== 'missing' });
+        expect(resolveModel).not.toHaveBeenCalled();
+        if (kind === 'live') expect(exists).not.toHaveBeenCalled();
+      } finally {
+        adapter.dispose();
+      }
+    },
+  );
   it.each([
     ['A', 'A/B'],
     ['app', 'app'],
-  ])('[round8-03] round-trips distinct files when folder display names are %s and %s', async (first, second) => {
+  ])('round-trips distinct files when folder display names are %s and %s', async (first, second) => {
     const { GlyphEditorAdapter, URI } = await adapterModule();
     const folders = [
       { name: first, uri: URI.file('/workspace/one') },
@@ -95,7 +136,7 @@ describe('Editor workspace binding', () => {
       adapter.dispose();
     }
   });
-  it('[round8-07] rejects an unsupported EOL-only conversion instead of accepting an unchanged model', async () => {
+  it('rejects an unsupported EOL-only conversion instead of accepting an unchanged model', async () => {
     const edit = await pendingEdit({ initial: 'line\n', replacement: 'line\r\n' });
     edit.write.resolve();
     edit.finish.resolve();
@@ -110,7 +151,7 @@ describe('Editor workspace binding', () => {
       edit.adapter.dispose();
     }
   });
-  it('[round9-07] refuses a mixed EOL conversion that the editor would normalize into an unchanged document', async () => {
+  it('refuses a mixed EOL conversion that the editor would normalize into an unchanged document', async () => {
     const edit = await pendingEdit({ initial: 'one\ntwo\n', replacement: 'one\r\ntwo\n' });
     edit.write.resolve();
     edit.finish.resolve();
@@ -124,89 +165,109 @@ describe('Editor workspace binding', () => {
       edit.adapter.dispose();
     }
   });
-  it('[round5-02] records the actual pinned editor result when applying an edit also trims automatic whitespace', async () => {
-    const { GlyphEditorAdapter, URI } = await adapterModule();
-    const built = await build({
-      entryPoints: ['.code-oss/src/src/vs/editor/test/common/testTextModel.ts'],
-      bundle: true,
-      write: false,
-      platform: 'node',
-      format: 'esm',
-      tsconfigRaw: { compilerOptions: { experimentalDecorators: true } },
-      loader: { '.css': 'empty' },
-    });
-    const { createTextModel } = await import(
-      `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`
-    );
-    const resource = URI.file('/workspace/file.ts');
-    const model = createTextModel('hello\n\nend', null, { trimAutoWhitespace: true }, resource);
-    model.pushEditOperations(
-      null,
-      [
-        {
-          range: { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 1 },
-          text: '    ',
-          isAutoWhitespaceEdit: true,
-        },
-      ],
-      () => null,
-    );
-    const adapter = new GlyphEditorAdapter(
-      { createModelReference: async () => ({ object: { textEditorModel: model }, dispose() {} }) },
-      {
-        apply: async (_edits, options) => {
-          // Bulk Edit minimizes a whole-document replacement in the active editor.
-          model.pushEditOperations(
-            null,
-            [
-              {
-                range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 6 },
-                text: 'HELLO',
-              },
-            ],
-            () => null,
-            undefined,
-            options.reason,
-          );
-          return { isApplied: true };
-        },
-      },
-      {
-        getWorkspace: () => ({ id: 'workspace', folders: [{ name: 'workspace', uri: URI.file('/workspace') }] }),
-        isInsideWorkspace: () => true,
-        onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
-      },
-      { getModels: () => [model] },
-      { isDirty: () => true },
-      { isWorkspaceTrusted: () => true },
-      {},
-    );
-    try {
-      const before = await adapter.read('file.ts');
-      expect(before.text).toBe('hello\n    \nend');
-      const response = await adapter.handle({
-        type: 'apply_text_mutation',
-        mutation: {
-          operationId: 'trim',
-          path: 'file.ts',
-          text: 'HELLO\n    \nend',
-          byteOrderMark: false,
-          undoGroupId: 'trim',
-          expectedContentRevision: before.contentRevision,
-          expectedToken: before.token,
-        },
+  it.each([false, true])(
+    'preserves literal leading U+FEFF (%s) and records automatic whitespace normalization',
+    async literalPrefix => {
+      const { GlyphEditorAdapter, URI } = await adapterModule();
+      const built = await build({
+        entryPoints: ['.code-oss/src/src/vs/editor/test/common/testTextModel.ts'],
+        bundle: true,
+        write: false,
+        platform: 'node',
+        format: 'esm',
+        tsconfigRaw: { compilerOptions: { experimentalDecorators: true } },
+        loader: { '.css': 'empty' },
       });
-      expect(model.getValue()).toBe('HELLO\n\nend');
-      expect(response).toMatchObject({ ok: true, snapshot: { text: 'HELLO\n\nend' }, receipt: { state: 'applied' } });
-      expect(response.receipt.afterRevision).toBe(response.snapshot.contentRevision);
-      expect((await adapter.inspectReceipt('trim')).afterRevision).toBe(response.snapshot.contentRevision);
-    } finally {
-      adapter.dispose();
-      model.dispose();
-    }
-  });
+      const { createTextModel } = await import(
+        `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`
+      );
+      const resource = URI.file('/workspace/file.ts');
+      const model = createTextModel('hello\n\nend', null, { trimAutoWhitespace: true }, resource);
+      const prefix = literalPrefix ? '\uFEFF' : '';
+      if (literalPrefix)
+        model.pushEditOperations(
+          null,
+          [{ range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }, text: prefix }],
+          () => null,
+        );
+      model.pushEditOperations(
+        null,
+        [
+          {
+            range: { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 1 },
+            text: '    ',
+            isAutoWhitespaceEdit: true,
+          },
+        ],
+        () => null,
+      );
+      const adapter = new GlyphEditorAdapter(
+        { createModelReference: async () => ({ object: { textEditorModel: model }, dispose() {} }) },
+        {
+          apply: async (_edits, options) => {
+            // Bulk Edit minimizes a whole-document replacement in the active editor.
+            model.pushEditOperations(
+              null,
+              [
+                {
+                  range: {
+                    startLineNumber: 1,
+                    startColumn: 1 + prefix.length,
+                    endLineNumber: 1,
+                    endColumn: 6 + prefix.length,
+                  },
+                  text: 'HELLO',
+                },
+              ],
+              () => null,
+              undefined,
+              options.reason,
+            );
+            return { isApplied: true };
+          },
+        },
+        {
+          getWorkspace: () => ({ id: 'workspace', folders: [{ name: 'workspace', uri: URI.file('/workspace') }] }),
+          isInsideWorkspace: () => true,
+          onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+        },
+        { getModels: () => [model] },
+        { isDirty: () => true },
+        { isWorkspaceTrusted: () => true },
+        {},
+      );
+      try {
+        const before = await adapter.read('file.ts');
+        expect(before.text).toBe(`${prefix}hello\n    \nend`);
+        expect(before.byteOrderMark).toBe(false);
+        const response = await adapter.handle({
+          type: 'apply_text_mutation',
+          mutation: {
+            operationId: 'trim',
+            path: 'file.ts',
+            text: `${prefix}HELLO\n    \nend`,
+            byteOrderMark: false,
+            undoGroupId: 'trim',
+            expectedContentRevision: before.contentRevision,
+            expectedToken: before.token,
+          },
+        });
+        expect(model.getValue()).toBe(`${prefix}HELLO\n\nend`);
+        expect(response).toMatchObject({
+          ok: true,
+          snapshot: { text: `${prefix}HELLO\n\nend`, byteOrderMark: false },
+          receipt: { state: 'applied' },
+        });
+        expect(response.receipt.afterRevision).toBe(response.snapshot.contentRevision);
+        expect((await adapter.inspectReceipt('trim')).afterRevision).toBe(response.snapshot.contentRevision);
+      } finally {
+        adapter.dispose();
+        model.dispose();
+      }
+    },
+  );
 
-  it('[round4-01] does not claim an unrelated matching user edit when Bulk Edit rejects its stale version', async () => {
+  it('does not claim an unrelated matching user edit when Bulk Edit rejects its stale version', async () => {
     const fixture = await pendingEdit({ sourceTagged: false, failAfterWrite: true });
     try {
       fixture.write.resolve();
@@ -220,7 +281,7 @@ describe('Editor workspace binding', () => {
   });
 
   it.each([false, true])(
-    '[round4-01] preserves uncertain evidence when a cancelled fallback loses the edit source, including failure: %s',
+    'preserves uncertain evidence when a cancelled fallback loses the edit source, including failure: %s',
     async failAfterWrite => {
       const fixture = await pendingEdit({ sourceTagged: false, failAfterWrite });
       try {
@@ -238,7 +299,7 @@ describe('Editor workspace binding', () => {
     },
   );
 
-  it('[round4-01] records a successful no-op without inventing a model change', async () => {
+  it('records a successful no-op without inventing a model change', async () => {
     const fixture = await pendingEdit({ replacement: 'original' });
     try {
       fixture.write.resolve();
@@ -258,7 +319,7 @@ describe('Editor workspace binding', () => {
     }
   });
 
-  it('[round4-01] records the actual editor newline convention in an applied receipt', async () => {
+  it('records the actual editor newline convention in an applied receipt', async () => {
     const fixture = await pendingEdit({ eol: '\r\n', replacement: 'first\nsecond' });
     try {
       fixture.write.resolve();
@@ -275,7 +336,7 @@ describe('Editor workspace binding', () => {
     }
   });
 
-  it('[round4-01] returns an applied receipt for a completed edit and never reapplies its operation id', async () => {
+  it('returns an applied receipt for a completed edit and never reapplies its operation id', async () => {
     const fixture = await pendingEdit();
     try {
       fixture.write.resolve();
@@ -289,26 +350,23 @@ describe('Editor workspace binding', () => {
     }
   });
 
-  it.each(['invalidate', 'dispose'])(
-    '[round4-01] cancels a queued edit when the adapter receives %s',
-    async operation => {
-      const fixture = await pendingEdit();
-      try {
-        const applying = fixture.apply();
-        await fixture.entered.promise;
-        fixture.adapter[operation]();
-        fixture.write.resolve();
-        fixture.finish.resolve();
-        expect((await applying).ok).toBe(false);
-        expect(fixture.text()).toBe('original');
-        expect(await fixture.adapter.inspectReceipt('edit')).toBeUndefined();
-      } finally {
-        fixture.adapter.dispose();
-      }
-    },
-  );
+  it.each(['invalidate', 'dispose'])('cancels a queued edit when the adapter receives %s', async operation => {
+    const fixture = await pendingEdit();
+    try {
+      const applying = fixture.apply();
+      await fixture.entered.promise;
+      fixture.adapter[operation]();
+      fixture.write.resolve();
+      fixture.finish.resolve();
+      expect((await applying).ok).toBe(false);
+      expect(fixture.text()).toBe('original');
+      expect(await fixture.adapter.inspectReceipt('edit')).toBeUndefined();
+    } finally {
+      fixture.adapter.dispose();
+    }
+  });
 
-  it('[round4-01] cancels a prepared edit when its folder is removed before the model write', async () => {
+  it('cancels a prepared edit when its folder is removed before the model write', async () => {
     const fixture = await pendingEdit();
     try {
       const applying = fixture.apply();
@@ -325,7 +383,7 @@ describe('Editor workspace binding', () => {
     }
   });
 
-  it('[round4-01] retains an applied receipt when a folder is removed after the write but before Bulk Edit returns', async () => {
+  it('retains an applied receipt when a folder is removed after the write but before Bulk Edit returns', async () => {
     const fixture = await pendingEdit();
     try {
       const applying = fixture.apply();
@@ -349,7 +407,7 @@ describe('Editor workspace binding', () => {
     }
   });
 
-  it('[round3-03] refuses old host paths after folder removal instead of reading or editing a nested namesake', async () => {
+  it('refuses old host paths after folder removal instead of reading or editing a nested namesake', async () => {
     const { GlyphEditorAdapter, URI } = await adapterModule();
     let folders = ['A', 'B'].map(name => ({ name, uri: URI.file(`/workspace/${name}`) }));
     const listeners = new Set();

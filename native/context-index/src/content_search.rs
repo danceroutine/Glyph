@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
@@ -455,7 +456,8 @@ impl<'a> ResultAccumulator<'a> {
             truncated: self.has_more || self.index_truncated,
             next_offset: self
                 .has_more
-                .then_some(self.params.offset.saturating_add(returned)),
+                .then_some(self.params.offset.saturating_add(returned))
+                .filter(|next| returned > 0 && *next <= MAX_OFFSET),
         };
         match self.params.output_mode {
             ContentSearchOutputMode::Content => ContentSearchResult::Content {
@@ -576,7 +578,57 @@ fn read_searchable_file(root: &Path, relative: &str, max_file_bytes: u64) -> Res
     if canonical != candidate || !canonical.starts_with(root) {
         return Err(());
     }
-    let bytes = fs::read(canonical).map_err(|_| ())?;
+    open_searchable_file(&canonical, &link, max_file_bytes)
+}
+
+fn open_searchable_file(
+    path: &Path,
+    expected: &fs::Metadata,
+    max_file_bytes: u64,
+) -> Result<String, ()> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Path inspection cannot prevent a later replacement. Do not follow a
+        // replacement symlink or wait on a replacement FIFO before fstat can
+        // reject it. O_NONBLOCK does not change regular-file read semantics.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|_| ())?;
+    read_opened_searchable_file(file, expected, max_file_bytes)
+}
+
+fn read_opened_searchable_file(
+    file: fs::File,
+    _expected: &fs::Metadata,
+    max_file_bytes: u64,
+) -> Result<String, ()> {
+    let opened = file.metadata().map_err(|_| ())?;
+    if !opened.is_file() || opened.len() > max_file_bytes {
+        return Err(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // The path may have been replaced after inspection. Never read bytes
+        // from a different file merely because it occupies the same pathname.
+        if opened.dev() != _expected.dev() || opened.ino() != _expected.ino() {
+            return Err(());
+        }
+    }
+    read_searchable_text(file, max_file_bytes)
+}
+
+fn read_searchable_text(reader: impl Read, max_file_bytes: u64) -> Result<String, ()> {
+    let mut bytes = Vec::new();
+    // Descriptor metadata is only an early rejection: a file can grow during
+    // this read. One extra byte detects overflow without loading the remainder.
+    reader
+        .take(max_file_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
     if bytes.len() as u64 > max_file_bytes || bytes.contains(&0) {
         return Err(());
     }
@@ -798,8 +850,116 @@ mod tests {
 
     use super::*;
 
+    #[cfg(unix)]
     #[test]
-    fn round7_unicode_empty_matches_never_slice_inside_a_codepoint() {
+    fn refuses_a_symlink_inserted_at_the_inspected_path_even_to_the_original_file() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("file.txt");
+        let previous = directory.path().join("previous.txt");
+        write(&path, "initial").unwrap();
+        let expected = fs::symlink_metadata(&path).unwrap();
+        fs::rename(&path, &previous).unwrap();
+        std::os::unix::fs::symlink(previous, &path).unwrap();
+        assert!(open_searchable_file(&path, &expected, 32).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_fifo_inserted_at_the_inspected_path_without_waiting_for_a_writer() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::time::Duration;
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("file.txt");
+        write(&path, "initial").unwrap();
+        let expected = fs::symlink_metadata(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the owned CString remains alive and is NUL-terminated. This
+        // creates only a private empty FIFO in the disposable test directory.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let (sender, receiver) = mpsc::channel();
+        let worker_path = path.clone();
+        let worker = thread::spawn(move || {
+            sender
+                .send(open_searchable_file(&worker_path, &expected, 32))
+                .unwrap();
+        });
+        let result = receiver.recv_timeout(Duration::from_millis(500));
+        if result.is_err() {
+            // Unblock the old implementation so a regression reports failure
+            // instead of leaving a reader thread behind or hanging the suite.
+            let _rescue = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&path)
+                .unwrap();
+            worker.join().unwrap();
+        } else {
+            worker.join().unwrap();
+        }
+        assert_eq!(result.unwrap(), Err(()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_different_file_replacing_the_inspected_path_before_open() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("file.txt");
+        write(&path, "initial").unwrap();
+        let expected = fs::symlink_metadata(&path).unwrap();
+        fs::rename(&path, directory.path().join("previous.txt")).unwrap();
+        write(&path, "replacement").unwrap();
+        let replacement = fs::File::open(&path).unwrap();
+        assert!(read_opened_searchable_file(replacement, &expected, 32).is_err());
+    }
+
+    #[test]
+    fn stops_reading_after_the_budget_and_one_overflow_byte() {
+        let mut reader = std::io::Cursor::new(vec![b'x'; 128]);
+        assert!(read_searchable_text(&mut reader, 8).is_err());
+        assert_eq!(reader.position(), 9);
+    }
+
+    #[test]
+    fn accepts_exactly_budgeted_text_and_rejects_overflow_without_decoding_it() {
+        assert_eq!(
+            read_searchable_text(&b"needle"[..], 6),
+            Ok("needle".to_owned())
+        );
+        assert_eq!(read_searchable_text(&b""[..], 0), Ok(String::new()));
+        assert!(read_searchable_text(&b"x"[..], 0).is_err());
+        assert_eq!(
+            read_searchable_text(&b"\xef\xbb\xbfneedle"[..], 9),
+            Ok("needle".to_owned())
+        );
+        assert!(read_searchable_text(&b"\xef\xbb\xbfneedle"[..], 8).is_err());
+        assert!(read_searchable_text(&b"bad\0text"[..], 8).is_err());
+        assert!(read_searchable_text(&b"\xff"[..], 1).is_err());
+    }
+
+    #[test]
+    fn preserves_the_last_allowed_page_without_advertising_an_invalid_cursor() {
+        let text = "needle\n".repeat(MAX_OFFSET as usize + 2);
+        let (_directory, search) = context(&[("many.txt", &text)]);
+        let mut params = parameters(ContentSearchOutputMode::Content);
+        params.offset = MAX_OFFSET;
+        params.limit = 1;
+        let ContentSearchResult::Content { matches, metadata } =
+            search.search(params, &AtomicBool::new(false)).unwrap()
+        else {
+            panic!("content expected");
+        };
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line, MAX_OFFSET + 1);
+        assert!(metadata.truncated);
+        assert_eq!(metadata.next_offset, None);
+    }
+
+    #[test]
+    fn unicode_empty_matches_never_slice_inside_a_codepoint() {
         for multiline in [false, true] {
             let mut params = parameters(ContentSearchOutputMode::Content);
             params.pattern = "a*".to_owned();
@@ -819,7 +979,7 @@ mod tests {
     }
 
     #[test]
-    fn round7_buffers_match_locations_without_copying_megabytes_of_repeated_context() {
+    fn buffers_match_locations_without_copying_megabytes_of_repeated_context() {
         let mut params = parameters(ContentSearchOutputMode::Content);
         params.lines_before = 20;
         params.lines_after = 20;
@@ -854,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn round7_materializes_only_budgeted_context_and_resumes_the_next_match() {
+    fn materializes_only_budgeted_context_and_resumes_the_next_match() {
         let text = format!("needle {}\n", "x".repeat(2048)).repeat(80);
         let (_directory, search) = context(&[("context.txt", &text)]);
         let mut params = parameters(ContentSearchOutputMode::Content);

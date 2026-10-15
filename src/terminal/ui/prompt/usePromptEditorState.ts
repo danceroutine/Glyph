@@ -47,7 +47,11 @@ export function usePromptEditorState({
   const pendingChanges = request.pendingChanges ?? 0;
   const [text, setText] = useState('');
   const [cursor, setCursor] = useState(0);
-  const [matches, setMatches] = useState<readonly FileSearchMatch[]>([]);
+  const [completion, setCompletion] = useState<{
+    signature: string;
+    files: WorkspacePathIndex;
+    matches: readonly FileSearchMatch[];
+  }>();
   const [selectedMatch, setSelectedMatch] = useState(0);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
   const [dismissedCompletion, setDismissedCompletion] = useState<string>();
@@ -56,6 +60,14 @@ export function usePromptEditorState({
   const promptText = formatPromptText(text, attachments, cursor);
   const mention = promptText.cursorTouchesAttachment ? undefined : activeMention(text, cursor);
   const mentionSignature = mention?.signature;
+  // Selection is bound during render, not just in the effect: input can arrive
+  // after a query changes but before its new asynchronous search has settled.
+  const matches =
+    completion?.signature === mentionSignature &&
+    completion?.files === request.files &&
+    mentionSignature !== dismissedCompletion
+      ? (completion?.matches ?? [])
+      : [];
   const commandQuery = activeSlashCommand(text, cursor);
   const commandMatches =
     commandQuery && commandQuery.signature !== dismissedCompletion ? searchTerminalCommands(commandQuery.query) : [];
@@ -63,13 +75,11 @@ export function usePromptEditorState({
   const { setCursorPosition } = useCursor();
 
   useEffect(() => {
+    setCompletion(undefined);
+    setSelectedMatch(0);
+    setSearchError('');
     const files = request.files;
-    if (!files || !mention || mention.signature === dismissedCompletion) {
-      setMatches([]);
-      setSelectedMatch(0);
-      setSearchError('');
-      return;
-    }
+    if (!files || !mention || mention.signature === dismissedCompletion) return;
     const currentGeneration = (searchGenerations.get(files) ?? 0) + 1;
     searchGenerations.set(files, currentGeneration);
     generation.current = currentGeneration;
@@ -77,15 +87,22 @@ export function usePromptEditorState({
     void files
       .search(mention.query, { generation: currentGeneration, limit: SEARCH_LIMIT, signal: controller.signal })
       .then(result => {
-        if (result.generation !== generation.current) return;
+        if (
+          controller.signal.aborted ||
+          result.generation !== currentGeneration ||
+          result.generation !== generation.current ||
+          result.query !== mention.query
+        )
+          return;
         const safeMatches = result.matches.filter(match => isSafeAttachmentPath(match.path));
-        setMatches(safeMatches);
+        setCompletion({ signature: mention.signature, files, matches: safeMatches });
         setSelectedMatch(value => Math.min(value, Math.max(0, safeMatches.length - 1)));
         setSearchError('');
       })
       .catch((error: unknown) => {
-        if (currentGeneration !== generation.current || isSilentSearchCancellation(error)) return;
-        setMatches([]);
+        if (controller.signal.aborted || currentGeneration !== generation.current || isSilentSearchCancellation(error))
+          return;
+        setCompletion(undefined);
         setSearchError(error instanceof Error ? error.message : 'File search failed.');
       });
     return () => controller.abort();
@@ -134,7 +151,7 @@ export function usePromptEditorState({
     const next = `${text.slice(0, active.start)}@${candidate.path} ${text.slice(active.end)}`;
     updateText(next, active.start + candidate.path.length + 2);
     setAttachments(current => (current.includes(candidate.path) ? current : [...current, candidate.path]));
-    setMatches([]);
+    setCompletion(undefined);
     return true;
   };
 
@@ -157,7 +174,7 @@ export function usePromptEditorState({
         const completion = commandQuery ?? mention;
         if (completion) {
           setDismissedCompletion(completion.signature);
-          setMatches([]);
+          setCompletion(undefined);
         }
         return;
       }

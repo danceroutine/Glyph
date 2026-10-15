@@ -14,14 +14,18 @@ beforeAll(async () => {
       contents: `
         import { h, render } from 'preact';
         import { GlyphComposer } from './code-oss/ui/GlyphComposer.tsx';
+        import { GlyphComposerState } from './src/desktop/workbench/GlyphComposerState.ts';
         const calls = [];
         const pending = [];
         const actions = {
+          composer: new GlyphComposerState(),
           send(text) { calls.push(text); return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
           cancel() {}
         };
         window.composerTest = {
           calls,
+          unmount() { render(null, document.getElementById('root')); },
+          mount() { render(h(GlyphComposer, { status: 'ready', selection: undefined, actions }), document.getElementById('root')); },
           reject() { pending.shift().reject(new Error('Connection unavailable')); },
           resolve() { pending.shift().resolve(); }
         };
@@ -42,7 +46,29 @@ afterAll(async () => {
 });
 
 describe('GlyphComposer draft recovery', () => {
-  it('[round6-02] retains a failed message separately from a newer draft and lets the user edit either without losing the other', async () => {
+  it.each(['before', 'after'])(
+    'retains the draft and recovered message when send fails %s pane disposal',
+    async when => {
+      const page = await browser.newPage();
+      try {
+        await page.setContent('<div id="root"></div>');
+        await page.addScriptTag({ content: script });
+        const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+        await composer.fill('Original message');
+        await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+        await composer.fill('Newer draft');
+        if (when === 'before') await page.evaluate(() => window.composerTest.reject());
+        await page.evaluate(() => window.composerTest.unmount());
+        if (when === 'after') await page.evaluate(() => window.composerTest.reject());
+        await page.evaluate(() => window.composerTest.mount());
+        await expect(composer).toHaveValue('Newer draft', { timeout: 500 });
+        await expect(page.getByRole('region', { name: 'Unsent messages' })).toContainText('Original message');
+      } finally {
+        await page.close();
+      }
+    },
+  );
+  it('retains a failed message separately from a newer draft and lets the user edit either without losing the other', async () => {
     const page = await browser.newPage();
     try {
       await page.setContent('<div id="root"></div>');
@@ -88,7 +114,7 @@ describe('GlyphComposer draft recovery', () => {
     }
   });
 
-  it('[round6-02] preserves every rejected message through successive failures without sending a newer draft implicitly', async () => {
+  it('preserves every rejected message through successive failures without sending a newer draft implicitly', async () => {
     const page = await browser.newPage();
     try {
       await page.setContent('<div id="root"></div>');

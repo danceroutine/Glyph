@@ -3,6 +3,7 @@ import type { GlyphWorkingCopySearchOptions } from './GlyphWorkingCopySearchOpti
 
 /** Operations the utility host may ask the live Code OSS editor to perform. */
 export enum GlyphEditorRequestType {
+  EXISTS = 'exists',
   READ_SNAPSHOT = 'read_snapshot',
   LIST_WORKING_COPIES = 'list_working_copies',
   SEARCH_WORKING_COPIES = 'search_working_copies',
@@ -12,6 +13,7 @@ export enum GlyphEditorRequestType {
 
 /** Closed renderer-side RPC union; requests remain structured-clone-safe DTOs. */
 export type GlyphEditorRequest =
+  | { readonly type: GlyphEditorRequestType.EXISTS; readonly operationId: string; readonly path: string }
   | {
       readonly type: GlyphEditorRequestType.READ_SNAPSHOT;
       readonly operationId: string;

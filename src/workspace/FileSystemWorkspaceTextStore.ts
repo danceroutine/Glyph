@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import {
   chmod,
   link,
   lstat,
   mkdir,
   open,
-  readFile,
   readdir,
   realpath,
   rename,
@@ -13,6 +13,7 @@ import {
   stat,
   unlink,
   writeFile,
+  type FileHandle,
 } from 'node:fs/promises';
 import { dirname, isAbsolute, matchesGlob, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
@@ -109,12 +110,61 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
-    const { path, resolvedFile, mode, identity } = await this.inspectReadPath(input);
-    const bytes =
-      options.maxBytes === undefined
-        ? await readFile(resolvedFile)
-        : await this.readBounded(resolvedFile, path, options.maxBytes);
-    return toSnapshot(path, bytes, mode, identity);
+    const { path, resolvedFile, identity } = await this.inspectReadPath(input);
+    // Inspection and open are separate operations. Do not follow a replacement
+    // link or block opening a replacement FIFO before descriptor validation.
+    const flags =
+      process.platform === 'win32'
+        ? constants.O_RDONLY
+        : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+    let handle: FileHandle;
+    try {
+      handle = await open(resolvedFile, flags);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+        throw new EditError(
+          EditFailureReason.UNSUPPORTED,
+          'Symbolic links are not supported.',
+          { path },
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) {
+        throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
+      }
+      if (`${info.dev}:${info.ino}` !== identity) {
+        throw new EditError(EditFailureReason.STALE, 'The file changed while opening it for reading.', { path });
+      }
+      // Keep loading bound to the same validated descriptor even if the path is
+      // renamed again. A snapshot's mode and identity describe these bytes.
+      const bytes =
+        options.maxBytes === undefined
+          ? await handle.readFile()
+          : await this.readBounded(handle, path, options.maxBytes, info.size);
+      return toSnapshot(path, bytes, info.mode & 0o777, identity);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** Collision checks need path metadata, never a decoded text snapshot. */
+  async exists(input: string): Promise<boolean> {
+    const path = this.normalizePath(input);
+    try {
+      await this.assertNoSymlinkSegments(path, false);
+      const resolvedRoot = await realpath(this.root);
+      const resolvedPath = await realpath(resolve(this.root, path));
+      assertInsideRoot(resolvedRoot, resolvedPath, path);
+      this.normalizePath(relative(resolvedRoot, resolvedPath));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
   }
 
   /** Enforces disk access policy without loading stale content ahead of an authoritative editor read. */
@@ -142,7 +192,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     assertInsideRoot(resolvedRoot, resolvedFile, path);
     // Check the filesystem's spelling too: aliases must not bypass the policy.
     this.normalizePath(relative(resolvedRoot, resolvedFile));
-    return { path, resolvedFile, mode: link.mode & 0o777, identity: `${link.dev}:${link.ino}` };
+    return { path, resolvedFile, identity: `${link.dev}:${link.ino}` };
   }
 
   async readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {
@@ -155,6 +205,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async create(input: string, text: string, byteOrderMark: boolean, mode = 0o644): Promise<WorkspaceTextSnapshot> {
+    assertSupportedText(text, input);
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const absolute = resolve(this.root, path);
@@ -191,6 +242,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     // POSIX filesystems do not expose compare-and-swap replacement by content
     // revision. The second check narrows, but cannot eliminate, the interval in
     // which a non-cooperating external writer can be overwritten by rename(2).
+    assertSupportedText(text, input);
     const path = this.normalizePath(input);
     const current = await this.assertRevision(path, expectedRevision);
     const absolute = resolve(this.root, path);
@@ -213,7 +265,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const target = this.normalizePath(targetInput);
     await this.assertRevision(source, expectedRevision);
     await this.assertNoSymlinkSegments(target, true);
-    if (await this.readOptional(target)) {
+    if (await this.exists(target)) {
       throw new EditError(EditFailureReason.STALE, 'The rename target now exists.', {
         path: target,
         retry: 'Choose a different target or submit a new proposal.',
@@ -247,28 +299,22 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     await unlink(resolve(this.root, path));
   }
 
-  private async readBounded(absolute: string, path: string, maxBytes: number): Promise<Buffer> {
+  private async readBounded(handle: FileHandle, path: string, maxBytes: number, size: number): Promise<Buffer> {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error('Read budget must be a non-negative integer.');
-    const handle = await open(absolute, 'r');
-    try {
-      const info = await handle.stat();
-      if (info.size > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, info.size);
-      // A file can grow after stat. Read at most one byte beyond the budget,
-      // never an unbounded readFile followed by a post-allocation size check.
-      const chunks: Buffer[] = [];
-      let length = 0;
-      while (length <= maxBytes) {
-        const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes - length + 1));
-        const { bytesRead } = await handle.read(buffer);
-        if (bytesRead === 0) return Buffer.concat(chunks, length);
-        length += bytesRead;
-        if (length > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, length);
-        chunks.push(buffer.subarray(0, bytesRead));
-      }
-      throw new WorkspaceReadLimitError(path, maxBytes, length);
-    } finally {
-      await handle.close();
+    if (size > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, size);
+    // A file can grow after stat. Read at most one byte beyond the budget,
+    // never an unbounded readFile followed by a post-allocation size check.
+    const chunks: Buffer[] = [];
+    let length = 0;
+    while (length <= maxBytes) {
+      const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes - length + 1));
+      const { bytesRead } = await handle.read(buffer);
+      if (bytesRead === 0) return Buffer.concat(chunks, length);
+      length += bytesRead;
+      if (length > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, length);
+      chunks.push(buffer.subarray(0, bytesRead));
     }
+    throw new WorkspaceReadLimitError(path, maxBytes, length);
   }
 
   private async assertRevision(path: string, expected: string): Promise<WorkspaceTextSnapshot> {
@@ -384,6 +430,17 @@ function assertInsideRoot(root: string, candidate: string, path: string): void {
   const fromRoot = relative(root, candidate);
   if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
     throw new EditError(EditFailureReason.UNSUPPORTED, 'Path escapes the project root.', { path });
+  }
+}
+
+/** Reject unsupported bytes before creating directories or opening a write handle. */
+function assertSupportedText(text: string, path: string): void {
+  if (text.includes('\0'))
+    throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
+  // In Unicode mode valid pairs are one code point and do not match. UTF-8
+  // encoding must never silently replace a reviewed lone surrogate with U+FFFD.
+  if (/[\uD800-\uDFFF]/u.test(text)) {
+    throw new EditError(EditFailureReason.UNSUPPORTED, 'Text contains an unpaired UTF-16 surrogate.', { path });
   }
 }
 

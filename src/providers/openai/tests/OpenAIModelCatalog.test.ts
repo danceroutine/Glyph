@@ -13,6 +13,40 @@ const configuration: OpenAIConfiguration = {
 
 describe(OpenAIModelCatalog, () => {
   describe(OpenAIModelCatalog.prototype.list, () => {
+    it('does not start an HTTP request after its discovery signal was already cancelled', async () => {
+      const get = vi.fn<HttpClient['get']>();
+      const catalog = new OpenAIModelCatalog(configuration, { get, post: vi.fn() });
+      const cancellation = new AbortController();
+      cancellation.abort(new Error('Discovery cancelled.'));
+      await expect(catalog.list('oauth-token', cancellation.signal)).rejects.toThrow('Discovery cancelled.');
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    it('does not publish a catalog response that completes after cancellation', async () => {
+      let release!: () => void;
+      const get = vi.fn<HttpClient['get']>(
+        () =>
+          new Promise(resolve => {
+            release = () =>
+              resolve({
+                ok: true,
+                status: 200,
+                headers: new Headers(),
+                body: {
+                  models: [{ slug: 'late', display_name: 'Late', visibility: 'list' }],
+                },
+              });
+          }),
+      );
+      const catalog = new OpenAIModelCatalog(configuration, { get, post: vi.fn() });
+      const cancellation = new AbortController();
+      const pending = catalog.list('oauth-token', cancellation.signal);
+      cancellation.abort(new Error('Discovery cancelled.'));
+      release();
+      await expect(pending).rejects.toThrow('Discovery cancelled.');
+      expect(get.mock.calls[0]?.[1]?.signal).toBe(cancellation.signal);
+    });
+
     it('uses an OAuth token and preserves visible model ordering', async () => {
       const get = vi.fn<HttpClient['get']>(async () => ({
         ok: true,

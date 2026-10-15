@@ -188,7 +188,7 @@ describe(WiredResponse, () => {
 });
 
 describe(ToolActivity, () => {
-  it('[round11-02] sanitizes the complete tool error before Ink interprets its formatting', () => {
+  it('sanitizes the complete tool error before Ink interprets its formatting', () => {
     const activity = {
       phase: ToolActivityPhase.COMPLETED,
       name: 'read',

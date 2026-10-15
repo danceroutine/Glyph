@@ -26,7 +26,6 @@ import type {
 } from '#src/chat/runtime/AgentModelAdapter.js';
 
 interface OpenAITurn {
-  readonly client: OpenAI;
   readonly input: ResponseInputItem[];
 }
 
@@ -88,12 +87,18 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     return stateFrom(history);
   }
 
-  async beginTurn(state: ChatProviderState, request: ChatRequest, context: AgentTurnContext): Promise<OpenAITurn> {
-    const accessToken = await this.token();
-    context.trace('authentication.resolved', { accessToken: '[REDACTED]' });
+  async beginTurn(state: ChatProviderState, request: ChatRequest): Promise<OpenAITurn> {
+    return { input: [...historyFrom(state), toUserInput(request)] };
+  }
+
+  /** Tool execution and human decisions can outlive a token, so authenticate every model request. */
+  private async requestClient(context: AgentTurnContext): Promise<OpenAI> {
+    const accessToken = await this.awaitCredentials(context.signal);
+    context.trace('authentication.resolved', { accessToken: '[REDACTED]' }, context.round);
     context.signal.throwIfAborted();
-    const client =
-      this.client ??
+    // Never mutate an injected transport's credentials: another conversation may share it.
+    return (
+      this.client?.withOptions({ apiKey: accessToken }) ??
       new OpenAI({
         apiKey: accessToken,
         baseURL: 'https://api.openai.com/v1',
@@ -101,11 +106,28 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
         project: null,
         maxRetries: 0,
         logLevel: 'off',
-      });
-    return { client, input: [...historyFrom(state), toUserInput(request)] };
+      })
+    );
+  }
+
+  /** Cancel this turn's wait, not the refresh shared by other conversations. */
+  private awaitCredentials(signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      void Promise.resolve()
+        .then(() => {
+          signal.throwIfAborted();
+          return this.token();
+        })
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener('abort', abort));
+    });
   }
 
   async streamStep(turn: OpenAITurn, context: AgentTurnContext): Promise<AgentTurnStep<OpenAITurn>> {
+    const client = await this.requestClient(context);
     const request = {
       model: this.model,
       instructions: this.configuration.instructions,
@@ -125,7 +147,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
       data: stream,
       response: httpResponse,
       request_id: requestId,
-    } = await turn.client.responses.create(request, { signal: context.signal }).withResponse();
+    } = await client.responses.create(request, { signal: context.signal }).withResponse();
     context.trace(
       'response.http',
       {

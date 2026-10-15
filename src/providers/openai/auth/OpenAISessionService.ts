@@ -3,6 +3,7 @@ import type { OpenAIAccount } from './OpenAIAccount.ts';
 
 /** Authentication-session port consumed by the provider-neutral application service. */
 export interface OpenAISessionService {
+  dispose(): Promise<void>;
   signIn(existing?: OpenAIAccount, consent?: boolean, authorize?: AuthorizationHandler): Promise<OpenAIAccount>;
   accessToken(account: OpenAIAccount): Promise<string>;
   logout(account: OpenAIAccount): Promise<boolean>;

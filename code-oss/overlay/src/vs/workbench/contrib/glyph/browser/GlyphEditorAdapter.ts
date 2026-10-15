@@ -78,6 +78,8 @@ export class GlyphEditorAdapter extends Disposable {
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       switch (request.type) {
+        case GlyphEditorRequestType.EXISTS:
+          return { operationId, ok: true, exists: await this.exists(request.path) };
         case GlyphEditorRequestType.READ_SNAPSHOT:
           return { operationId, ok: true, snapshot: await this.read(request.path, request.maxBytes) };
         case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
@@ -108,6 +110,16 @@ export class GlyphEditorAdapter extends Disposable {
       .getModels()
       .filter(model => model.uri.scheme === 'file' && this.workspaceContextService.isInsideWorkspace(model.uri));
     return Promise.all(models.map(model => this.snapshot(this.pathFor(model.uri), model)));
+  }
+
+  /** Unsaved live models occupy a target too, without resolving or reading new models. */
+  private async exists(path: string): Promise<boolean> {
+    const resource = this.resolve(path);
+    const exists = this.modelService.getModel(resource) !== null || (await this.fileService.exists(resource));
+    this.assertWorkspaceBinding();
+    if (!this.trustService.isWorkspaceTrusted())
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+    return exists;
   }
 
   /** Search the same live text that reads return, including unsaved edits. */
@@ -259,9 +271,8 @@ export class GlyphEditorAdapter extends Disposable {
         // Capture bytes and version together at the real edit boundary. Code OSS
         // can normalize more than newlines (for example trim automatic whitespace),
         // so the requested replacement is not an authoritative post-edit snapshot.
-        const value = model.getValue(undefined, true);
-        const byteOrderMark = value.startsWith('\uFEFF');
-        const text = byteOrderMark ? value.slice(1) : value;
+        const text = model.getValue();
+        const byteOrderMark = model.getValue(undefined, true).length > text.length;
         if (attributed) this.receipts.set(mutation.operationId, receipt);
         else observed = receipt;
         receiptWrites.push(
@@ -378,9 +389,10 @@ export class GlyphEditorAdapter extends Disposable {
       incarnation: this.incarnation(model),
       version: model.getVersionId(),
     };
-    const value = model.getValue(undefined, true);
-    const byteOrderMark = value.startsWith('\uFEFF');
-    const text = byteOrderMark ? value.slice(1) : value;
+    // preserveBOM adds encoding metadata; a literal leading U+FEFF is already
+    // part of getValue() and must remain document content, including in receipts.
+    const text = model.getValue();
+    const byteOrderMark = model.getValue(undefined, true).length > text.length;
     const bytes = new TextEncoder().encode(text);
     if (maxBytes !== undefined) this.assertReadBudget(bytes.byteLength + (byteOrderMark ? 3 : 0), maxBytes);
     const contentRevision = await sha256(text, byteOrderMark);

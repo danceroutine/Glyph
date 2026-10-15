@@ -27,6 +27,7 @@ export class OpenAIBackend implements ChatBackend {
   } as const;
 
   private acquired = false;
+  private readonly discoveryLifetime = new AbortController();
 
   constructor(
     private readonly store: OpenAIAccountStore,
@@ -58,8 +59,12 @@ export class OpenAIBackend implements ChatBackend {
   }
 
   async dispose(): Promise<void> {
+    // Discovery belongs to this backend, not the shared account store. Closing
+    // one workspace cancels its catalog requests without cancelling peer refreshes.
+    this.discoveryLifetime.abort(new Error('Model discovery stopped with its backend.'));
     if (!this.acquired) return;
     this.acquired = false;
+    await this.session.dispose();
     await this.store.release();
   }
 
@@ -90,12 +95,37 @@ export class OpenAIBackend implements ChatBackend {
     await this.store.save();
   }
 
-  async listModels(account: ChatAccount): Promise<Model[]> {
+  async listModels(account: ChatAccount, cancellation?: AbortSignal): Promise<Model[]> {
+    const lifetimes = [this.discoveryLifetime.signal];
+    if (cancellation) lifetimes.push(cancellation);
+    if (this.store.lifetimeSignal) lifetimes.push(this.store.lifetimeSignal);
+    const signal = AbortSignal.any(lifetimes);
+    signal.throwIfAborted();
     const value = this.resolve(account);
     if (!this.hasInferenceAccess(value)) {
       throw new AuthenticationError('Sign-in completed, but ChatGPT plan usage was not granted.');
     }
-    return this.models.list(await this.session.accessToken(value));
+    const token = await this.awaitDiscoveryCredentials(value, signal);
+    signal.throwIfAborted();
+    const models = await this.models.list(token, signal);
+    signal.throwIfAborted();
+    return models;
+  }
+
+  /** Abandon this caller's wait while a shared account refresh can still serve its peers. */
+  private awaitDiscoveryCredentials(account: OpenAIAccount, signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      void Promise.resolve()
+        .then(() => {
+          signal.throwIfAborted();
+          return this.session.accessToken(account);
+        })
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener('abort', abort));
+    });
   }
 
   createProvider(account: ChatAccount, model: Model, state?: ChatProviderState): ChatProvider {

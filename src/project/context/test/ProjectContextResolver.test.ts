@@ -12,6 +12,15 @@ afterEach(async () => {
 });
 
 describe(ProjectContextResolver, () => {
+  it.each(['local', 'ssh:this-host'])(
+    'rejects remote folder URIs rather than reusing their local pathname under %s',
+    async authority => {
+      const root = await fixture();
+      const manifest = join(root, 'remote.code-workspace');
+      await writeFile(manifest, JSON.stringify({ folders: [{ uri: `vscode-remote://ssh-remote+other-host${root}` }] }));
+      await expect(ProjectContextResolver.workspace(manifest, root, authority)).rejects.toThrow(/unsupported.*URI/i);
+    },
+  );
   it('uses the opened folder itself as the inherited chat context', async () => {
     const root = await fixture();
     const nested = join(root, 'packages', 'app');
@@ -93,7 +102,7 @@ describe(ProjectContextResolver, () => {
     await expect(ProjectContextResolver.workspace(duplicate, root)).rejects.toThrow('duplicate folder name');
   });
 
-  it('resolves a remote workspace URI against the filesystem of the SSH host running Glyph', async () => {
+  it('requires a real remote filesystem binding even when the supplied authority resembles the URI host', async () => {
     const root = await fixture();
     const remoteRoot = join(root, 'remote-repository');
     await mkdir(remoteRoot);
@@ -101,12 +110,9 @@ describe(ProjectContextResolver, () => {
     const uri = `vscode-remote://ssh-remote+example${remoteRoot}`;
     await writeFile(manifest, JSON.stringify({ folders: [{ name: 'remote', uri }] }));
 
-    const context = await ProjectContextResolver.workspace(manifest, root, 'ssh:example');
-
-    expect(context).toMatchObject({
-      authority: 'ssh:example',
-      roots: [{ name: 'remote', path: await realpath(remoteRoot) }],
-    });
+    await expect(ProjectContextResolver.workspace(manifest, root, 'ssh:example')).rejects.toThrow(
+      'unsupported folder URI',
+    );
   });
 });
 

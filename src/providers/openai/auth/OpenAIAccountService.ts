@@ -8,17 +8,29 @@ import type { OpenAIAccountStore } from './OpenAIAccountStore.ts';
 export class OpenAIAccountService {
   private initialized = false;
   private readonly borrowed: OpenAIAccountStore;
+  private lifetime = new AbortController();
+  private readonly saves = new Set<Promise<void>>();
 
   constructor(private readonly store: OpenAIAccountStore) {
+    const lifetimeSignal = (): AbortSignal => this.lifetime.signal;
     this.borrowed = {
       get state() {
         return store.state;
       },
+      get lifetimeSignal() {
+        return lifetimeSignal();
+      },
       acquire: async () => this.requireInitialized(),
       load: async () => this.requireInitialized(),
-      save: () => {
+      save: async () => {
         this.requireInitialized();
-        return store.save();
+        const pending = store.save();
+        this.saves.add(pending);
+        try {
+          await pending;
+        } finally {
+          this.saves.delete(pending);
+        }
       },
       release: async () => {},
     };
@@ -26,6 +38,7 @@ export class OpenAIAccountService {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    this.lifetime = new AbortController();
     await this.store.acquire();
     this.initialized = true;
     try {
@@ -48,7 +61,11 @@ export class OpenAIAccountService {
 
   async dispose(): Promise<void> {
     if (!this.initialized) return;
+    // No late network completion may start a save after shutdown begins. Writes
+    // already handed to the store still own its lock until they have settled.
+    this.lifetime.abort(new Error('The shared account store has stopped.'));
     this.initialized = false;
+    await Promise.allSettled(this.saves);
     await this.store.release();
   }
 

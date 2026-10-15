@@ -25,6 +25,84 @@ async function fixture(): Promise<{ access: ProjectAccess; root: string }> {
 }
 
 describe(ProjectAccess, () => {
+  it('counts escaped and multibyte text in the read-result budget', async () => {
+    const workspace = new FileSystemWorkspaceTextStore('/fixture');
+    const text = '😀\t"\\\n'.repeat(30_000);
+    vi.spyOn(workspace, 'read').mockResolvedValue({
+      path: 'escaped.txt',
+      text,
+      byteOrderMark: false,
+      mode: 0o644,
+      identity: 'fixture',
+      revision: 'revision',
+      byteLength: Buffer.byteLength(text),
+    });
+    const result = await new ProjectAccess('/fixture', {}, workspace).execute(
+      'read_project_file',
+      JSON.stringify({ path: 'escaped.txt', start_line: null, end_line: null }),
+    );
+    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(512 * 1024);
+    const page = JSON.parse(result);
+    expect(page.nextStartLine).toBeGreaterThan(1);
+    expect(page.lines[0].content).toBe('😀\t"\\');
+  });
+
+  it('bounds serialized line metadata and numbered content and exposes the next unread line', async () => {
+    const workspace = new FileSystemWorkspaceTextStore('/fixture');
+    vi.spyOn(workspace, 'read').mockResolvedValue({
+      path: 'many-lines.txt',
+      text: '\n'.repeat(512 * 1024),
+      byteOrderMark: false,
+      mode: 0o644,
+      identity: 'fixture',
+      revision: 'revision',
+      byteLength: 512 * 1024,
+    });
+    const access = new ProjectAccess('/fixture', {}, workspace);
+    const read = (start_line: number) =>
+      access.execute('read_project_file', JSON.stringify({ path: 'many-lines.txt', start_line, end_line: null }));
+    const result = await read(1);
+    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(512 * 1024);
+    const page = JSON.parse(result);
+    expect(page.truncated).toBe(true);
+    expect(page.nextStartLine).toBe(page.endLine + 1);
+    const next = JSON.parse(await read(page.nextStartLine));
+    expect(next.lines[0].number).toBe(page.nextStartLine);
+    expect(next.endLine).toBeGreaterThan(page.endLine);
+  });
+
+  it('forwards listing cancellation to the native index without waiting for a worker reply', async () => {
+    let release!: () => void;
+    const glob = vi.fn(
+      (_pattern: string, options: { signal?: AbortSignal }) =>
+        new Promise<{ files: string[]; truncated: boolean }>((resolve, reject) => {
+          release = () => resolve({ files: [], truncated: false });
+          options.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+        }),
+    );
+    const access = new ProjectAccess('/fixture', {}, undefined, { glob });
+    const controller = new AbortController();
+    let outcome: unknown;
+    const listing = access
+      .execute('list_project_files', '{"glob_pattern":"**/*","target_directory":null}', controller.signal)
+      .then(
+        value => {
+          outcome = value;
+        },
+        error => {
+          outcome = error;
+        },
+      );
+    const cancelled = new Error('Listing cancelled');
+    controller.abort(cancelled);
+    try {
+      await vi.waitFor(() => expect(outcome).toBe(cancelled), { timeout: 100 });
+      expect(glob.mock.calls[0]?.[1].signal).toBe(controller.signal);
+    } finally {
+      release();
+      await listing;
+    }
+  });
   describe(ProjectAccess.prototype.execute, () => {
     it('finds project files by glob while excluding generated and dependency directories', async () => {
       const { access, root } = await fixture();

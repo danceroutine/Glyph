@@ -64,7 +64,7 @@ export class GlyphService {
     return { ...this.aggregateUsage };
   }
 
-  async initialize(): Promise<void> {
+  async initialize({ workspaceTrusted = true }: { workspaceTrusted?: boolean } = {}): Promise<void> {
     if (this.acquired) return;
     await this.backend.initialize();
     this.acquired = true;
@@ -73,9 +73,13 @@ export class GlyphService {
     try {
       chatSessionsStarted = this.chatSessions !== undefined;
       await this.chatSessions?.initialize();
-      await this.proposalReviews?.initialize();
-      pathIndexStarted = this.pathIndex !== undefined;
-      await this.pathIndex?.initialize();
+      await this.proposalReviews?.initialize({ reconcileWorkspace: workspaceTrusted });
+      // Untrusted desktop runtimes expose persisted conversations only. Native
+      // indexing and recovery reads begin in the replacement trusted runtime.
+      if (workspaceTrusted) {
+        pathIndexStarted = this.pathIndex !== undefined;
+        await this.pathIndex?.initialize();
+      }
     } catch (error) {
       this.acquired = false;
       const cleanupFailures: unknown[] = [];
@@ -138,8 +142,8 @@ export class GlyphService {
     await this.backend.acknowledgeNotice(account);
   }
 
-  async listModels(account: ChatAccount): Promise<Model[]> {
-    return this.backend.listModels(account);
+  async listModels(account: ChatAccount, signal?: AbortSignal): Promise<Model[]> {
+    return this.backend.listModels(account, signal);
   }
 
   createConversation(account: ChatAccount, model: Model): ChatConversation {
@@ -150,7 +154,9 @@ export class GlyphService {
     readonly id?: string;
     recordContext(events: readonly ChatContextEvent[]): void | Promise<void>;
   }): Promise<void> {
-    if (!this.proposalReviews || this.proposalReviews.pendingResults.length === 0) return;
+    if (!this.proposalReviews) return;
+    await this.proposalReviews.flushPendingCheckpoint();
+    if (this.proposalReviews.pendingResults.length === 0) return;
     const results = this.proposalReviews.pendingResults;
     const groups = new Map<string, typeof results>();
     for (const result of results) {

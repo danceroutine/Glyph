@@ -9,25 +9,157 @@ import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.
 import type { WorkspacePathIndexState } from '#src/context/search/WorkspacePathIndexState.js';
 
 describe(MultiRootWorkspacePathIndex, () => {
-  it.each(['app', '🧪/app'])(
-    '[round11-03] offsets native code-point highlights through an emoji root for %s',
-    async query => {
-      const native = new FixtureIndex('root', 'app.ts', 10);
-      vi.spyOn(native, 'search').mockResolvedValue({
-        generation: 1,
-        query: 'app',
-        fileCount: 1,
-        matches: [{ path: 'app.ts', score: 10, indices: [0, 1, 2] }],
+  it.each([-1, 0, 100001])('keeps a full result without offering its unusable native cursor %s', async nextOffset => {
+    const api = new FixtureIndex('api', 'found.ts', 1);
+    vi.spyOn(api, 'searchContents').mockResolvedValue({
+      outputMode: 'files_with_matches',
+      files: ['found.ts'],
+      searchedFiles: 1,
+      skippedFiles: 0,
+      indexTruncated: false,
+      truncated: true,
+      nextOffset,
+    });
+    const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
+    await expect(index.searchContents('x', { outputMode: 'files_with_matches', limit: 1 })).resolves.toMatchObject({
+      files: ['api/found.ts'],
+      truncated: true,
+      nextOffset: null,
+    });
+  });
+
+  it.each(['content', 'files_with_matches', 'count'] as const)(
+    'continues %s search after an incomplete empty root without losing its warning',
+    async outputMode => {
+      const incomplete = new FixtureIndex('incomplete', 'omitted.ts', 1);
+      const later = new FixtureIndex('later', 'found.ts', 1);
+      const metadata = {
+        searchedFiles: 0,
+        skippedFiles: 0,
+        indexTruncated: true,
+        truncated: true,
+        nextOffset: null,
+      };
+      vi.spyOn(incomplete, 'searchContents').mockImplementation(async () => {
+        switch (outputMode) {
+          case 'content':
+            return { outputMode, matches: [], ...metadata };
+          case 'files_with_matches':
+            return { outputMode, files: [], ...metadata };
+          case 'count':
+            return { outputMode, counts: [], ...metadata };
+        }
       });
-      const index = new MultiRootWorkspacePathIndex('workspace', [{ name: '🧪', index: native }]);
-      const result = await index.search(query, { generation: 1 });
-      expect(result.matches[0]).toEqual({ path: '🧪/app.ts', score: 10, indices: [2, 3, 4] });
-      const match = result.matches[0]!;
-      expect(match.indices.map(position => Array.from(match.path)[position]).join('')).toBe('app');
+      const laterSearch = vi.spyOn(later, 'searchContents');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'incomplete', index: incomplete },
+        { name: 'later', index: later },
+      ]);
+      const result = await index.searchContents('value', { outputMode, limit: 1 });
+      expect(laterSearch).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ indexTruncated: true, truncated: true, nextOffset: null });
+      switch (result.outputMode) {
+        case 'content':
+          expect(result.matches.map(match => match.path)).toEqual(['later/found.ts']);
+          break;
+        case 'files_with_matches':
+          expect(result.files).toEqual(['later/found.ts']);
+          break;
+        case 'count':
+          expect(result.counts.map(count => count.path)).toEqual(['later/found.ts']);
+          break;
+      }
     },
   );
 
-  it('[round3-04] returns the requested match at the maximum offset without fetching an invalid extra page', async () => {
+  it('retains incomplete-index warnings while paging through available matches in later roots', async () => {
+    const incomplete = new FixtureIndex('incomplete', 'omitted.ts', 1);
+    vi.spyOn(incomplete, 'searchContents').mockResolvedValue({
+      outputMode: 'files_with_matches',
+      files: [],
+      searchedFiles: 0,
+      skippedFiles: 0,
+      indexTruncated: true,
+      truncated: true,
+      nextOffset: null,
+    });
+    const later = new FixtureIndex('later', 'found.ts', 1);
+    vi.spyOn(later, 'searchContents').mockImplementation(async (_pattern, options) => {
+      const offset = options.offset ?? 0;
+      const files = ['first.ts', 'second.ts'].slice(offset, offset + (options.limit ?? 100));
+      const nextOffset = offset + files.length < 2 ? offset + files.length : null;
+      return {
+        outputMode: 'files_with_matches',
+        files,
+        searchedFiles: 2,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: nextOffset !== null,
+        nextOffset,
+      };
+    });
+    const index = new MultiRootWorkspacePathIndex('workspace', [
+      { name: 'incomplete', index: incomplete },
+      { name: 'later', index: later },
+    ]);
+    await expect(index.searchContents('x', { outputMode: 'files_with_matches', limit: 1 })).resolves.toMatchObject({
+      files: ['later/first.ts'],
+      indexTruncated: true,
+      truncated: true,
+      nextOffset: 1,
+    });
+    await expect(
+      index.searchContents('x', { outputMode: 'files_with_matches', limit: 1, offset: 1 }),
+    ).resolves.toMatchObject({
+      files: ['later/second.ts'],
+      indexTruncated: true,
+      truncated: true,
+      nextOffset: null,
+    });
+  });
+
+  it.each(['beyond ceiling', 'unavailable'] as const)(
+    'keeps a partial page when its native continuation is %s',
+    async cursor => {
+      const api = new FixtureIndex('api', 'file.ts', 1);
+      const search = vi.spyOn(api, 'searchContents').mockImplementation(async (_pattern, options) => {
+        const { offset, limit } = workspaceContentSearchOptionsSchema.parse(options);
+        const count = offset < 100000 ? limit : 1;
+        const nextOffset = offset >= 100000 && cursor === 'unavailable' ? null : offset + count;
+        return {
+          outputMode: 'files_with_matches',
+          files: Array.from({ length: count }, (_, n) => `file-${offset + n}.ts`),
+          searchedFiles: 1,
+          skippedFiles: 0,
+          indexTruncated: false,
+          truncated: true,
+          nextOffset,
+        };
+      });
+      const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
+      await expect(
+        index.searchContents('x', { outputMode: 'files_with_matches', offset: 100000, limit: 2 }),
+      ).resolves.toMatchObject({ files: ['api/file-100000.ts'], truncated: true, nextOffset: null });
+      expect(search.mock.calls.every(([, options]) => (options.offset ?? 0) <= 100000)).toBe(true);
+    },
+  );
+
+  it.each(['app', '🧪/app'])('offsets native code-point highlights through an emoji root for %s', async query => {
+    const native = new FixtureIndex('root', 'app.ts', 10);
+    vi.spyOn(native, 'search').mockResolvedValue({
+      generation: 1,
+      query: 'app',
+      fileCount: 1,
+      matches: [{ path: 'app.ts', score: 10, indices: [0, 1, 2] }],
+    });
+    const index = new MultiRootWorkspacePathIndex('workspace', [{ name: '🧪', index: native }]);
+    const result = await index.search(query, { generation: 1 });
+    expect(result.matches[0]).toEqual({ path: '🧪/app.ts', score: 10, indices: [2, 3, 4] });
+    const match = result.matches[0]!;
+    expect(match.indices.map(position => Array.from(match.path)[position]).join('')).toBe('app');
+  });
+
+  it('returns the requested match at the maximum offset without fetching an invalid extra page', async () => {
     const api = new FixtureIndex('api', 'file.ts', 1);
     const search = vi.spyOn(api, 'searchContents').mockImplementation(async (_pattern, options) => {
       const { offset, limit } = workspaceContentSearchOptionsSchema.parse(options);
@@ -47,7 +179,7 @@ describe(MultiRootWorkspacePathIndex, () => {
     ).resolves.toMatchObject({ files: ['api/file-100000.ts'], truncated: true, nextOffset: null });
     expect(search.mock.calls.every(([, options]) => (options.offset ?? 0) <= 100000)).toBe(true);
   });
-  it('[round2-09] bounds combined content and continues from the first unreturned match across native pages', async () => {
+  it('bounds combined content and continues from the first unreturned match across native pages', async () => {
     const api = new FixtureIndex('api', 'file.ts', 1);
     const search = vi.spyOn(api, 'searchContents').mockImplementation(async (_pattern, options) => {
       const offset = options.offset ?? 0;

@@ -2,11 +2,13 @@ import { Event } from '#vs/base/common/event.js';
 import { createDecorator } from '#vs/platform/instantiation/common/instantiation.js';
 import type { GlyphWorkbenchSelection } from '#glyph/workbench/GlyphWorkbenchSelection.js';
 import type { GlyphWorkbenchState } from '#glyph/workbench/GlyphWorkbenchState.js';
+import type { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
 
 export const GlyphWorkbenchService = createDecorator<GlyphWorkbenchService>('glyphWorkbenchService');
 
 /** Workbench interaction port implemented by the native host-backed adapter. */
 export interface GlyphWorkbenchService {
+  readonly composer: GlyphComposerState;
   readonly _serviceBrand: undefined;
   readonly onDidChangeState: Event<GlyphWorkbenchState>;
   readonly state: GlyphWorkbenchState;

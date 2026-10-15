@@ -114,7 +114,14 @@ export class ShellToolRuntime implements ToolRuntime {
             append_newline: appendNewline,
             wake_on: wakeOn,
           } = writeInputArgumentsSchema.parse(JSON.parse(input));
-          this.sessions.writeInput(terminalId, value, appendNewline, wakeOn ?? undefined, ownerChatId);
+          await this.sessions.writeInput({
+            terminalId,
+            input: value,
+            appendNewline,
+            ...(wakeOn === null ? {} : { wakeOn }),
+            ownerChatId,
+            signal,
+          });
           return JSON.stringify({ terminal_id: terminalId, status: 'input_written' });
         }
         case ShellToolName.CLOSE: {

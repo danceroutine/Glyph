@@ -2,7 +2,7 @@ import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { expect, it, vi } from 'vitest';
 
-it('[round8-09] rehydrates saved conversation history after both trust revocation and restoration', async () => {
+it('rehydrates saved conversation history after both trust revocation and restoration', async () => {
   const listeners = new Set();
   const trustListeners = new Set();
   let trusted = true;

@@ -31,8 +31,53 @@ const configuration: EditingConfiguration = {
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
 
 describe(ProposalReviewManager, () => {
+  it('recovers an insertion collapsed onto a replacement boundary as stale without modifying either pending edit', async () => {
+    const { root, manager, service, workspace, store } = await fixture('first\nmiddle\nlast\n');
+    const proposal = await proposeLineChanges(service, workspace, [
+      { line: 1, expected: '', replacement: 'inserted\n' },
+      { line: 2, expected: 'last', replacement: 'LAST' },
+    ]);
+    const items = proposal.files[0]!.items;
+    expect(items).toHaveLength(2);
+    expect(items[0]!.removedText).toBe('');
+    expect(items[1]!.removedText).toBe('last\n');
+    await manager.stage(proposal);
+    await writeFile(join(root, 'file.txt'), 'first\nlast\n');
+
+    const recovered = new ProposalReviewManager(workspace, store);
+    await expect(recovered.initialize()).resolves.toBeUndefined();
+    const file = recovered.activeReviews[0]!.files[0]!;
+    expect(file.applicability).toBe(EditApplicabilityState.STALE);
+    expect(file.items).toEqual(items);
+    await expect(recovered.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+    await recovered.rejectAll();
+    expect(recovered.activeReviews).toEqual([]);
+    expect((await workspace.read('file.txt')).text).toBe('first\nlast\n');
+  });
+
+  it('recovers collapsed pending edit ranges as stale and leaves them inspectable and rejectable', async () => {
+    const { root, manager, service, workspace, store } = await fixture('left\ntarget\nmiddle\ntarget\nright\n');
+    const proposal = await proposeLineChanges(service, workspace, [
+      { line: 1, expected: 'target', replacement: 'FIRST' },
+      { line: 3, expected: 'target', replacement: 'SECOND' },
+    ]);
+    expect(proposal.files[0]!.items).toHaveLength(2);
+    await manager.stage(proposal);
+    await writeFile(join(root, 'file.txt'), 'left\ntarget\nright\n');
+
+    const recovered = new ProposalReviewManager(workspace, store);
+    await expect(recovered.initialize()).resolves.toBeUndefined();
+    const file = recovered.activeReviews[0]!.files[0]!;
+    expect(file.applicability).toBe(EditApplicabilityState.STALE);
+    expect(file.items.every(item => item.decision === EditDecisionState.PENDING)).toBe(true);
+    await expect(recovered.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+    await recovered.rejectAll();
+    expect(recovered.activeReviews).toEqual([]);
+    expect((await workspace.read('file.txt')).text).toBe('left\ntarget\nright\n');
+  });
+
   describe(ProposalReviewManager.prototype.accept, () => {
-    it('[round9-01] retains a successful acceptance when editor whitespace cleanup conflicts with a remaining hunk', async () => {
+    it('retains a successful acceptance when editor whitespace cleanup conflicts with a remaining hunk', async () => {
       const { manager, service, workspace, store } = await fixture('first\nmiddle\n   \n');
       const replace = workspace.replace.bind(workspace);
       vi.spyOn(workspace, 'replace').mockImplementation((path, revision, text, bom) =>
@@ -58,7 +103,7 @@ describe(ProposalReviewManager, () => {
         EditDecisionState.REJECTED,
       ]);
     });
-    it('[round8-08] applies both the rename and the BOM change when text is otherwise identical', async () => {
+    it('applies both the rename and the BOM change when text is otherwise identical', async () => {
       const { manager, service, workspace, root } = await fixture('same\n');
       const base = await workspace.read('file.txt');
       const proposal = await service.proposeStructured({
@@ -78,7 +123,7 @@ describe(ProposalReviewManager, () => {
       await manager.acceptAll();
       expect(await readFile(join(root, 'renamed.txt'), 'utf8')).toBe('\uFEFFsame\n');
     });
-    it('[round8-02] retries the observed normalized edit checkpoint before allowing rejection of remaining hunks', async () => {
+    it('retries the observed normalized edit checkpoint before allowing rejection of remaining hunks', async () => {
       const { manager, service, workspace, store } = await fixture('first\r\nmiddle\r\nlast\r\n');
       const replace = workspace.replace.bind(workspace);
       let applied = false;
@@ -113,7 +158,7 @@ describe(ProposalReviewManager, () => {
         EditDecisionState.ACCEPTED,
       );
     });
-    it('[round7-03] rebases remaining hunks against the actual CRLF text returned by an editor mutation', async () => {
+    it('rebases remaining hunks against the actual CRLF text returned by an editor mutation', async () => {
       const { manager, service, workspace } = await fixture('first\r\nmiddle\r\nlast\r\n');
       const replace = workspace.replace.bind(workspace);
       vi.spyOn(workspace, 'replace').mockImplementation((path, revision, text, bom) =>

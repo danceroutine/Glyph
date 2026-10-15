@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationOptions.js';
+import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
@@ -302,6 +303,10 @@ class ControllableWorkspaceTextStore implements WorkspaceTextStore {
 
   constructor(private readonly delegate: FileSystemWorkspaceTextStore) {}
 
+  exists(path: string): Promise<boolean> {
+    return this.delegate.exists(path);
+  }
+
   get root(): string {
     return this.delegate.root;
   }
@@ -338,18 +343,18 @@ class ControllableWorkspaceTextStore implements WorkspaceTextStore {
     return this.delegate.normalizePath(path);
   }
 
-  read(path: string): Promise<WorkspaceTextSnapshot> {
-    return this.delegate.read(path);
+  read(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot> {
+    return this.delegate.read(path, options);
   }
 
-  async readOptional(path: string): Promise<WorkspaceTextSnapshot | undefined> {
+  async readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {
     const pending = this.readBarrier;
     if (pending?.path === path) {
       this.readBarrier = undefined;
       pending.barrier.arrive();
       await pending.barrier.released;
     }
-    return this.delegate.readOptional(path);
+    return this.delegate.readOptional(path, options);
   }
 
   async create(

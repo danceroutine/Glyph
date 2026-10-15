@@ -44,8 +44,150 @@ function store(saved: OpenAIAccount): OpenAIAccountStore {
 }
 
 describe(OpenAISession, () => {
+  it('invalidates shared refresh completion when the account owner shuts down', async () => {
+    const saved = account(0);
+    const savedStore = store(saved);
+    const accounts = new OpenAIAccountService(savedStore);
+    await accounts.initialize();
+    const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+    let finish!: () => void;
+    vi.spyOn(authentication, 'refresh').mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finish = () => resolve({ ...saved.tokens!, accessToken: 'late', refreshToken: 'late-refresh' });
+        }),
+    );
+    const session = new OpenAISession(accounts.borrowStore(), authentication, configuration);
+    const pending = session.accessToken(saved).catch(error => error);
+    await accounts.dispose();
+    finish();
+    expect(await pending).toBeInstanceOf(AuthenticationError);
+    expect(saved.tokens?.accessToken).toBe('access-secret');
+    expect(savedStore.save).not.toHaveBeenCalled();
+    expect(savedStore.release).toHaveBeenCalledOnce();
+    await session.dispose();
+  });
+
+  it('drains shared credential persistence before releasing the owner’s lock', async () => {
+    const saved = account(0);
+    const savedStore = store(saved);
+    const accounts = new OpenAIAccountService(savedStore);
+    await accounts.initialize();
+    let finish!: () => void;
+    vi.spyOn(savedStore, 'save').mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finish = resolve;
+        }),
+    );
+    const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+    vi.spyOn(authentication, 'refresh').mockResolvedValue({ ...saved.tokens!, accessToken: 'rotated' });
+    const session = new OpenAISession(accounts.borrowStore(), authentication, configuration);
+    const pending = session.accessToken(saved).catch(error => error);
+    await vi.waitFor(() => expect(savedStore.save).toHaveBeenCalledOnce());
+    const disposing = accounts.dispose();
+    await Promise.resolve();
+    expect(savedStore.release).not.toHaveBeenCalled();
+    finish();
+    await disposing;
+    expect(await pending).toBeInstanceOf(AuthenticationError);
+    expect(savedStore.release).toHaveBeenCalledOnce();
+    await session.dispose();
+  });
+
+  it.each(['initiator', 'peer'] as const)(
+    'keeps shared account refresh alive when its %s workspace is disposed',
+    async disposedWorkspace => {
+      const saved = account(0);
+      const savedStore = store(saved);
+      const accounts = new OpenAIAccountService(savedStore);
+      await accounts.initialize();
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      let finish!: () => void;
+      const refresh = vi.spyOn(authentication, 'refresh').mockImplementation(
+        () =>
+          new Promise(resolve => {
+            finish = () =>
+              resolve({
+                ...saved.tokens!,
+                accessToken: 'rotated',
+                refreshToken: 'rotated-refresh',
+                expiresAt: Number.MAX_SAFE_INTEGER,
+              });
+          }),
+      );
+      const first = new OpenAISession(accounts.borrowStore(), authentication, configuration);
+      const second = new OpenAISession(accounts.borrowStore(), authentication, configuration);
+      const requests = [
+        first.accessToken(saved).catch(error => error),
+        second.accessToken(saved).catch(error => error),
+      ];
+      const disposed = disposedWorkspace === 'initiator' ? first : second;
+      await disposed.dispose();
+      finish();
+      const results = await Promise.all(requests);
+      expect(results[disposedWorkspace === 'initiator' ? 1 : 0]).toBe('rotated');
+      expect(results[disposedWorkspace === 'initiator' ? 0 : 1]).toBeInstanceOf(AuthenticationError);
+      expect(saved.tokens?.refreshToken).toBe('rotated-refresh');
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(savedStore.save).toHaveBeenCalledOnce();
+      await first.dispose();
+      await second.dispose();
+      await accounts.dispose();
+    },
+  );
+
+  it('drains an already-started credential write before session disposal finishes', async () => {
+    const saved = account(0);
+    const savedStore = store(saved);
+    let finish!: () => void;
+    vi.spyOn(savedStore, 'save').mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finish = resolve;
+        }),
+    );
+    const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+    vi.spyOn(authentication, 'refresh').mockResolvedValue({ ...saved.tokens!, accessToken: 'rotated' });
+    const session = new OpenAISession(savedStore, authentication, configuration);
+    const pending = session.accessToken(saved).catch(error => error);
+    await vi.waitFor(() => expect(savedStore.save).toHaveBeenCalledOnce());
+    let disposed = false;
+    const disposing = session.dispose().then(() => {
+      disposed = true;
+    });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+    finish();
+    await disposing;
+    expect(await pending).toBeInstanceOf(AuthenticationError);
+    await expect(session.accessToken(saved)).rejects.toThrow('stopped');
+  });
+
+  it('discards a refresh completed after logout instead of restoring signed-out credentials', async () => {
+    const saved = account(0);
+    const savedStore = store(saved);
+    const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+    let finish!: () => void;
+    const tokens = { ...saved.tokens!, accessToken: 'late-refresh' };
+    vi.spyOn(authentication, 'refresh').mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finish = () => resolve(tokens);
+        }),
+    );
+    vi.spyOn(authentication, 'revoke').mockResolvedValue(true);
+    const session = new OpenAISession(savedStore, authentication, configuration);
+    const pending = session.accessToken(saved).catch(error => error);
+    await session.logout(saved);
+    finish();
+    expect(await pending).toBeInstanceOf(AuthenticationError);
+    expect(saved.tokens).toBeUndefined();
+    expect(savedStore.save).toHaveBeenCalledTimes(1);
+  });
+
   describe(OpenAISession.prototype.accessToken, () => {
-    it('[round2-05] retries saving rotated credentials before allowing another workspace to reuse them', async () => {
+    it('retries saving rotated credentials before allowing another workspace to reuse them', async () => {
       const saved = account(0);
       const savedStore = store(saved);
       const save = vi
@@ -65,7 +207,7 @@ describe(OpenAISession, () => {
       expect(refresh).toHaveBeenCalledOnce();
     });
 
-    it('[review-02] returns each account’s own token when different accounts refresh concurrently', async () => {
+    it('returns each account’s own token when different accounts refresh concurrently', async () => {
       const first = account(0);
       const second = { ...account(0), subject: 'second-subject' };
       const savedStore = store(first);
@@ -87,7 +229,7 @@ describe(OpenAISession, () => {
       expect(refresh).toHaveBeenCalledTimes(2);
     });
 
-    it('[review-02] coalesces refreshes of the same shared account across workspace sessions', async () => {
+    it('coalesces refreshes of the same shared account across workspace sessions', async () => {
       const saved = account(0);
       const accounts = new OpenAIAccountService(store(saved));
       await accounts.initialize();

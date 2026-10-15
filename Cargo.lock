@@ -170,6 +170,7 @@ dependencies = [
  "grep-matcher",
  "grep-regex",
  "ignore",
+ "libc",
  "notify",
  "nucleo",
  "serde",

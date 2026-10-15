@@ -10,7 +10,7 @@ vi.mock('node:fs/promises', async original => ({
 }));
 
 describe(FileOpenAIAccountStore, () => {
-  it('[round2-04] keeps both accounts’ newest credentials when an earlier save is delayed', async () => {
+  it('keeps both accounts’ newest credentials when an earlier save is delayed', async () => {
     const files = new Map<string, string>();
     let release!: () => void;
     let entered!: () => void;

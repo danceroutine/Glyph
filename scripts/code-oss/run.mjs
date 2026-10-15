@@ -16,44 +16,51 @@ const nodeBinary = join(runtimeRoot, 'node_modules', 'node', 'bin', process.plat
 const command = process.argv[2];
 const forwardedArguments = process.argv[3] === '--' ? process.argv.slice(4) : process.argv.slice(3);
 
-await cleanLeakedHooks();
+await main().catch(error => {
+  process.exitCode = error.exitCode ?? 1;
+  console.error(error.message);
+});
 
-if (!(await exists(join(sourceRoot, '.glyph-upstream.json')))) {
-  throw new Error('Run pnpm code-oss:bootstrap first.');
-}
-if (!(await exists(nodeBinary))) {
-  run('npm', ['install', '--prefix', runtimeRoot, `node@${pin.node}`], repositoryRoot, process.env);
-}
+async function main() {
+  await cleanLeakedHooks();
 
-const environment = {
-  ...process.env,
-  PATH: `${dirname(nodeBinary)}${delimiter}${process.env.PATH ?? ''}`,
-};
-// These variables change how upstream's launcher interprets Node/Electron. A
-// developer shell may set them, but forwarding them would make runs non-local.
-delete environment.ELECTRON_RUN_AS_NODE;
-delete environment.VSCODE_CLI;
-delete environment.VSCODE_ESM_ENTRYPOINT;
-delete environment.VSCODE_IPC_HOOK;
+  if (!(await exists(join(sourceRoot, '.glyph-upstream.json')))) {
+    throw new Error('Run pnpm code-oss:bootstrap first.');
+  }
+  if (!(await exists(nodeBinary))) {
+    run('npm', ['install', '--prefix', runtimeRoot, `node@${pin.node}`], repositoryRoot, process.env);
+  }
 
-switch (command) {
-  case 'install':
-    try {
-      run('npm', ['install'], sourceRoot, environment);
-    } finally {
-      // Upstream still depends on Husky 0.13, which walks to the nearest .git
-      // directory and can replace Glyph's hooks from this generated checkout.
-      await cleanLeakedHooks();
-    }
-    break;
-  case 'run':
-    run('npm', ['run', ...forwardedArguments], sourceRoot, environment);
-    break;
-  case 'launch':
-    run('./scripts/code.sh', forwardedArguments, sourceRoot, environment);
-    break;
-  default:
-    throw new Error(`Unknown Code OSS command: ${String(command)}`);
+  const environment = {
+    ...process.env,
+    PATH: `${dirname(nodeBinary)}${delimiter}${process.env.PATH ?? ''}`,
+  };
+  // These variables change how upstream's launcher interprets Node/Electron. A
+  // developer shell may set them, but forwarding them would make runs non-local.
+  delete environment.ELECTRON_RUN_AS_NODE;
+  delete environment.VSCODE_CLI;
+  delete environment.VSCODE_ESM_ENTRYPOINT;
+  delete environment.VSCODE_IPC_HOOK;
+
+  switch (command) {
+    case 'install':
+      try {
+        run('npm', ['install'], sourceRoot, environment);
+      } finally {
+        // Upstream still depends on Husky 0.13, which walks to the nearest .git
+        // directory and can replace Glyph's hooks from this generated checkout.
+        await cleanLeakedHooks();
+      }
+      break;
+    case 'run':
+      run('npm', ['run', ...forwardedArguments], sourceRoot, environment);
+      break;
+    case 'launch':
+      run('./scripts/code.sh', forwardedArguments, sourceRoot, environment);
+      break;
+    default:
+      throw new Error(`Unknown Code OSS command: ${String(command)}`);
+  }
 }
 
 async function cleanLeakedHooks() {
@@ -64,7 +71,11 @@ async function cleanLeakedHooks() {
 function run(executable, arguments_, cwd, env) {
   const result = spawnSync(executable, arguments_, { cwd, env, stdio: 'inherit' });
   if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  // Throw through the install finally block before choosing the process status.
+  if (result.status !== 0)
+    throw Object.assign(new Error(`${executable} failed with status ${result.status}.`), {
+      exitCode: result.status ?? 1,
+    });
 }
 
 async function exists(path) {

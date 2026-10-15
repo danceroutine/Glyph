@@ -95,7 +95,8 @@ async function resolveFolderLocation(
   if ('path' in folder) return canonicalDirectory(resolve(dirname(manifest), folder.path));
   const uri = new URL(folder.uri);
   if (uri.protocol === 'file:') return canonicalDirectory(fileURLToPath(uri));
-  if (uri.protocol === 'vscode-remote:') return canonicalDirectory(decodeURIComponent(uri.pathname));
+  // A remote pathname has no meaning on this host without an authenticated
+  // remote filesystem binding. Never silently reuse a matching local directory.
   throw new ConfigurationError(`Workspace ${manifest} contains unsupported folder URI: ${folder.uri}`);
 }
 

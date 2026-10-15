@@ -21,7 +21,7 @@ const snapshot = (): TerminalRendererSnapshot => ({
 });
 
 describe(WiredTerminalRoot, () => {
-  it('[round10-03] scrolls to the opening of a long question independently of option navigation', async () => {
+  it('scrolls to the opening of a long question independently of option navigation', async () => {
     const state = snapshot();
     const complete = vi.fn();
     state.question = {
@@ -69,7 +69,7 @@ describe(WiredTerminalRoot, () => {
       view.unmount();
     }
   });
-  it('[round9-08] keeps the composer visible with many background terminals and multiline commands', async () => {
+  it('keeps the composer visible with many background terminals and multiline commands', async () => {
     const state = snapshot();
     state.backgroundShells = Array.from({ length: 16 }, (_, n) => ({
       id: `terminal-${n}`,
@@ -99,7 +99,7 @@ describe(WiredTerminalRoot, () => {
     }
   });
 
-  it('[round9-09] follows the caret to the end and back to the beginning of a long unsent prompt', async () => {
+  it('follows the caret to the end and back to the beginning of a long unsent prompt', async () => {
     const state = snapshot();
     const view = render(<WiredTerminalRoot snapshot={state} />);
     try {
@@ -124,7 +124,7 @@ describe(WiredTerminalRoot, () => {
     }
   });
 
-  it('[round9-10] keeps the selected option and confirmation help visible when paging a thirty-option form', async () => {
+  it('keeps the selected option and confirmation help visible when paging a thirty-option form', async () => {
     const state = snapshot();
     const complete = vi.fn();
     state.question = {

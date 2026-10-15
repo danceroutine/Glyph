@@ -62,7 +62,9 @@ export class ProjectToolRuntime implements ToolRuntime {
 
   async execute(name: string, input: string, signal?: AbortSignal, context?: ToolExecutionContext): Promise<string> {
     try {
+      signal?.throwIfAborted();
       await this.logger.debug('ingested', { name, inputBytes: Buffer.byteLength(input) });
+      signal?.throwIfAborted();
       let proposal;
       switch (name) {
         case ProjectToolName.LIST_FILES:
@@ -70,11 +72,12 @@ export class ProjectToolRuntime implements ToolRuntime {
         case ProjectToolName.SEARCH_CONTENTS:
           return this.access.execute(name, input, signal);
         case ProjectToolName.PROPOSE_PATCH:
-          proposal = await this.proposals.proposePatch(input);
+          proposal = await this.proposals.proposePatch(input, signal);
           break;
         case ProjectToolName.PROPOSE_EDITS:
           proposal = await this.proposals.proposeStructured(
             EditProposalService.structuredSchema.parse(JSON.parse(input)),
+            signal,
           );
           break;
         default:
@@ -90,6 +93,10 @@ export class ProjectToolRuntime implements ToolRuntime {
             },
           }
         : proposal;
+      // Compilation does not change durable state, so cancellation may still
+      // discard it. Once staging starts, finish persistence and return its real
+      // result rather than reporting a cancellation that hides a saved review.
+      signal?.throwIfAborted();
       await this.reviews.stage(stagedProposal);
       const queuePosition = this.reviews.activeReviews.findIndex(review => review.id === stagedProposal.id) + 1;
       return JSON.stringify({

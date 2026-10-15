@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
@@ -34,16 +34,38 @@ const configuration: EditingConfiguration = {
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
 
 describe(ProposalReviewManager, () => {
-  it('[round4-03] accepts distinct case-sensitive filenames together without a false collision', async () => {
+  it.each([
+    { label: 'accepts distinct case-sensitive filenames together', first: 'foo.ts', second: 'Foo.ts', alias: false },
+    {
+      label: 'accepts distinct Unicode spellings together without NFC folding',
+      first: 'caf\u00e9.txt',
+      second: 'cafe\u0301.txt',
+      alias: false,
+    },
+    {
+      label: 'rejects real filesystem aliases during compilation and batch acceptance before any write',
+      first: 'caf\u00e9.txt',
+      second: 'cafe\u0301.txt',
+      alias: true,
+    },
+  ])('$label', async ({ first, second, alias }) => {
     // An in-memory case-sensitive filesystem keeps this portable on macOS.
     const files = new Map([
-      ['foo.ts', 'lower'],
-      ['Foo.ts', 'upper'],
+      [first, 'lower'],
+      [second, alias ? 'lower' : 'upper'],
     ]);
     const snapshot = (path: string): WorkspaceTextSnapshot => {
       const text = files.get(path);
       if (text === undefined) throw new Error(`Missing ${path}`);
-      return { path, text, revision: text, identity: path, byteLength: text.length, byteOrderMark: false, mode: 0o644 };
+      return {
+        path,
+        text,
+        revision: text,
+        identity: alias ? 'same-inode' : path,
+        byteLength: text.length,
+        byteOrderMark: false,
+        mode: 0o644,
+      };
     };
     const unsupported = async (): Promise<never> => {
       throw new Error('Unexpected structural mutation');
@@ -53,6 +75,7 @@ describe(ProposalReviewManager, () => {
       caseSensitive: true,
       mutationConsistency: WorkspaceMutationConsistency.ATOMIC_VERSIONED,
       normalizePath: path => path,
+      exists: async path => files.has(path),
       list: async () => ({ files: [...files.keys()], truncated: false }),
       read: async path => snapshot(path),
       readOptional: async path => (files.has(path) ? snapshot(path) : undefined),
@@ -73,7 +96,7 @@ describe(ProposalReviewManager, () => {
       logger,
     );
     await manager.initialize();
-    const proposal = await service.proposeStructured({
+    const input = {
       files: [...files].map(([path, text]) => ({
         operation: EditOperation.UPDATE,
         path,
@@ -89,12 +112,20 @@ describe(ProposalReviewManager, () => {
           },
         ],
       })),
-    });
+    };
+    if (alias) {
+      await expect(service.proposeStructured(input)).rejects.toThrow('same filesystem identity');
+      for (const file of input.files) await manager.stage(await service.proposeStructured({ files: [file] }));
+      await expect(manager.acceptAll()).rejects.toThrow();
+      expect([...files.values()]).toEqual(['lower', 'lower']);
+      return;
+    }
+    const proposal = await service.proposeStructured(input);
     await manager.stage(proposal);
     await manager.acceptAll();
     expect([...files]).toEqual([
-      ['foo.ts', 'LOWER'],
-      ['Foo.ts', 'UPPER'],
+      [first, 'LOWER'],
+      [second, 'UPPER'],
     ]);
     expect(manager.activeReviews).toEqual([]);
   });
@@ -347,6 +378,47 @@ describe(ProposalReviewManager, () => {
   });
 
   describe(ProposalReviewManager.prototype.acceptAll, () => {
+    it.each(['large file', 'binary file', 'directory'] as const)(
+      'rejects a rename collision with a %s using metadata before reading its content or writing any file',
+      async collision => {
+        const { root, manager, service, workspace } = await fixture('source');
+        const base = await workspace.read('file.txt');
+        const proposal = await service.proposeStructured({
+          files: [
+            {
+              operation: EditOperation.RENAME,
+              path: 'file.txt',
+              new_path: 'destination.txt',
+              base_revision: base.revision,
+              content: null,
+              byte_order_mark: null,
+              edits: [],
+            },
+          ],
+        });
+        await manager.stage(proposal);
+        if (collision === 'directory') await mkdir(join(root, 'destination.txt'));
+        else
+          await writeFile(
+            join(root, 'destination.txt'),
+            collision === 'binary file' ? '\0binary' : 'x'.repeat(2 * 1024 * 1024),
+          );
+        const read = workspace.readOptional.bind(workspace);
+        const destinationReads: string[] = [];
+        vi.spyOn(workspace, 'readOptional').mockImplementation((path, options) => {
+          if (path === 'destination.txt') destinationReads.push(path);
+          return read(path, options);
+        });
+        const rename = vi.spyOn(workspace, 'rename');
+
+        await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+        expect(destinationReads).toEqual([]);
+        expect(rename).not.toHaveBeenCalled();
+        expect((await workspace.read('file.txt')).text).toBe('source');
+        expect(proposal.files[0]!.items.every(item => item.decision === EditDecisionState.PENDING)).toBe(true);
+      },
+    );
+
     it('preflights every pending file and performs zero writes when a later file is stale', async () => {
       const { root, state } = await fixture('ignored');
       await writeFile(join(root, 'a.txt'), 'a');

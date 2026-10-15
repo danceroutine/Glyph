@@ -1,4 +1,6 @@
 import { render } from 'ink-testing-library';
+import { stripVTControlCharacters } from 'node:util';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
 import { QuestionForm } from '#src/terminal/ui/question/QuestionForm.presentational.js';
@@ -15,6 +17,36 @@ const singleQuestion = {
 } as const;
 
 describe(QuestionForm, () => {
+  it('renders an entire emoji under the freeform cursor without splitting its UTF-16 surrogate pair', async () => {
+    // Ink styles each Text node separately. Exercise real ANSI output even in
+    // non-TTY CI, where disabled colors would conceal split surrogate halves.
+    const { default: chalk } = await import(createRequire(import.meta.resolve('ink')).resolve('chalk'));
+    const previousLevel = chalk.level;
+    chalk.level = 1;
+    const view = render(
+      <QuestionForm
+        title={undefined}
+        question={singleQuestion}
+        questionNumber={1}
+        questionCount={1}
+        highlightedOption={2}
+        selectedOptionIds={[]}
+        enteringOther
+        otherText="😀 answer"
+        otherCursor={0}
+        diagnostic=""
+      />,
+    );
+    try {
+      const encoded = Buffer.from(view.lastFrame() ?? '', 'utf8').toString('utf8');
+      expect(encoded).toContain('\u001b[7m😀');
+      expect(stripVTControlCharacters(encoded)).toContain('other> 😀 answer');
+      expect(encoded).not.toContain('\uFFFD');
+    } finally {
+      view.unmount();
+      chalk.level = previousLevel;
+    }
+  });
   describe('rendering', () => {
     it('renders a default title, single-choice state, an Other editor, and a diagnostic', () => {
       const view = render(

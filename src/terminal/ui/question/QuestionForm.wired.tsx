@@ -9,6 +9,12 @@ export interface WiredQuestionFormProps {
 }
 
 export function WiredQuestionForm({ active = true, request }: WiredQuestionFormProps): ReactElement {
+  // Consecutive requests can replace one another without an empty render in
+  // between. Their answers, input guards, and cursor state must not be reused.
+  return <QuestionFormInteraction key={request.id} active={active} request={request} />;
+}
+
+function QuestionFormInteraction({ active = true, request }: WiredQuestionFormProps): ReactElement {
   const state = useQuestionFormState({ request, active });
   return <QuestionForm {...state} />;
 }

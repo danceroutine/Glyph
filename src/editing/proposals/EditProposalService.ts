@@ -4,7 +4,9 @@ import type { Logger } from '#src/observability/Logger.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
+import { getEditingReadBudget } from '#src/editing/configuration/getEditingReadBudget.js';
 import { TextDocument } from '#src/editing/documents/TextDocument.js';
 import type { TextDiffer } from '#src/editing/documents/TextDiffer.js';
 import { EditError } from '#src/editing/errors/EditError.js';
@@ -89,7 +91,8 @@ export class EditProposalService {
     this.logger = logger.forNamespace('editing.proposal');
   }
 
-  async proposeStructured(raw: unknown): Promise<EditProposal> {
+  async proposeStructured(raw: unknown, signal?: AbortSignal): Promise<EditProposal> {
+    signal?.throwIfAborted();
     const rawBytes = Buffer.byteLength(JSON.stringify(raw));
     this.enforceRawLimit(rawBytes);
     const parsed = structuredEditProposalSchema.safeParse(raw);
@@ -99,14 +102,16 @@ export class EditProposalService {
         `Malformed structured edit proposal:\n${z.prettifyError(parsed.error)}`,
       );
     }
-    return this.compile(parsed.data, 'structured');
+    return this.compile(parsed.data, 'structured', signal);
   }
 
-  async proposePatch(patch: string): Promise<EditProposal> {
+  async proposePatch(patch: string, signal?: AbortSignal): Promise<EditProposal> {
+    signal?.throwIfAborted();
     this.enforceRawLimit(Buffer.byteLength(patch));
     const files = parsePatch(patch);
     const structured: StructuredProposal = { files: [] };
     for (const file of files) {
+      signal?.throwIfAborted();
       if (file.operation === EditOperation.CREATE) {
         const content = (file.content ?? '').replace(/\n/g, file.lineEnding ?? this.configuration.newFileLineEnding);
         structured.files.push({
@@ -120,7 +125,8 @@ export class EditProposalService {
         });
         continue;
       }
-      const base = await this.workspace.read(file.path);
+      const base = await this.readSource(file.path);
+      signal?.throwIfAborted();
       if (!file.revision)
         throw new EditError(
           EditFailureReason.MALFORMED,
@@ -188,10 +194,15 @@ export class EditProposalService {
         edits: [],
       });
     }
-    return this.compile(structured, 'patch');
+    return this.compile(structured, 'patch', signal);
   }
 
-  private async compile(input: StructuredProposal, source: EditProposal['source']): Promise<EditProposal> {
+  private async compile(
+    input: StructuredProposal,
+    source: EditProposal['source'],
+    signal?: AbortSignal,
+  ): Promise<EditProposal> {
+    signal?.throwIfAborted();
     if (input.files.length === 0)
       throw new EditError(EditFailureReason.EMPTY, 'An edit proposal must contain at least one file.');
     if (input.files.length > this.configuration.maxFiles) {
@@ -212,7 +223,9 @@ export class EditProposalService {
     let changedBytes = 0;
     let totalHunks = 0;
     for (const file of normalized) {
-      const plan = await this.compileFile(file);
+      signal?.throwIfAborted();
+      const plan = await this.compileFile(file, signal);
+      signal?.throwIfAborted();
       if (plan.base && identities.has(plan.base.identity)) {
         throw new EditError(
           EditFailureReason.AMBIGUOUS,
@@ -259,25 +272,51 @@ export class EditProposalService {
       hunks: totalHunks,
       changedBytes,
     });
+    signal?.throwIfAborted();
     return proposal;
   }
 
-  private async compileFile(file: StructuredFile): Promise<FileEditPlan> {
-    const existing = await this.workspace.readOptional(file.path);
+  private async compileFile(file: StructuredFile, signal?: AbortSignal): Promise<FileEditPlan> {
+    signal?.throwIfAborted();
+    if (file.operation === EditOperation.CREATE) {
+      const exists = await this.workspace.exists(file.path);
+      signal?.throwIfAborted();
+      if (exists)
+        throw new EditError(EditFailureReason.INCONSISTENT, 'Create target already exists.', { path: file.path });
+      return this.compileCreate(file);
+    }
+    const existing = await this.readSource(file.path);
+    signal?.throwIfAborted();
     switch (file.operation) {
-      case EditOperation.CREATE:
-        return this.compileCreate(file, existing);
       case EditOperation.DELETE:
         return this.compileDelete(file, this.requireExistingBase(file, existing));
       case EditOperation.UPDATE:
       case EditOperation.RENAME:
-        return this.compileTextChange(file, this.requireExistingBase(file, existing));
+        return this.compileTextChange(file, this.requireExistingBase(file, existing), signal);
     }
   }
 
-  private compileCreate(file: StructuredFile, existing: WorkspaceTextSnapshot | undefined): FileEditPlan {
-    if (existing)
-      throw new EditError(EditFailureReason.INCONSISTENT, 'Create target already exists.', { path: file.path });
+  /** Bound source allocation before decoding, hashing, or diffing the snapshot. */
+  private async readSource(path: string): Promise<WorkspaceTextSnapshot> {
+    const maxBytes = getEditingReadBudget(this.configuration);
+    try {
+      const snapshot = await this.workspace.readOptional(path, { maxBytes });
+      if (!snapshot) throw new EditError(EditFailureReason.INCONSISTENT, 'Proposal source does not exist.', { path });
+      return snapshot;
+    } catch (error) {
+      if (error instanceof WorkspaceReadLimitError) {
+        throw new EditError(
+          EditFailureReason.LIMIT_EXCEEDED,
+          `Proposal source exceeds the ${maxBytes}-byte budget.`,
+          { path },
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  }
+
+  private compileCreate(file: StructuredFile): FileEditPlan {
     if (file.base_revision !== null || file.new_path !== null || file.content === null || file.edits.length > 0) {
       throw new EditError(
         EditFailureReason.MALFORMED,
@@ -331,7 +370,12 @@ export class EditProposalService {
     );
   }
 
-  private async compileTextChange(file: StructuredFile, existing: WorkspaceTextSnapshot): Promise<FileEditPlan> {
+  private async compileTextChange(
+    file: StructuredFile,
+    existing: WorkspaceTextSnapshot,
+    signal?: AbortSignal,
+  ): Promise<FileEditPlan> {
+    signal?.throwIfAborted();
     if (file.operation === EditOperation.UPDATE && file.new_path !== null) {
       throw new EditError(EditFailureReason.MALFORMED, 'UPDATE does not accept new_path.', { path: file.path });
     }
@@ -345,8 +389,12 @@ export class EditProposalService {
     }
     const proposedText = file.content ?? new TextDocument(file.path, existing.text).apply(file.edits);
     const target = file.new_path ?? file.path;
-    if (file.operation === EditOperation.RENAME && (await this.workspace.readOptional(target))) {
-      throw new EditError(EditFailureReason.INCONSISTENT, 'Rename target already exists.', { path: target });
+    if (file.operation === EditOperation.RENAME) {
+      const destination = await this.workspace.exists(target);
+      signal?.throwIfAborted();
+      if (destination) {
+        throw new EditError(EditFailureReason.INCONSISTENT, 'Rename target already exists.', { path: target });
+      }
     }
     const proposed = toWorkspaceTextSnapshot(
       target,
@@ -355,8 +403,17 @@ export class EditProposalService {
       existing.mode,
     );
     const fileId = this.createId();
+    if (proposed.byteLength > this.configuration.maxResultingBytesPerFile) {
+      throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'Resulting file exceeds the configured byte limit.', {
+        path: target,
+      });
+    }
     const diffStarted = performance.now();
-    const items = this.differ.createReviewItems(fileId, existing.text, proposedText);
+    signal?.throwIfAborted();
+    const items = this.differ.createReviewItems(fileId, existing.text, proposedText, {
+      timeoutMs: this.configuration.diffBudgetMs,
+    });
+    signal?.throwIfAborted();
     if (performance.now() - diffStarted > this.configuration.diffBudgetMs) {
       throw new EditError(EditFailureReason.LIMIT_EXCEEDED, 'Diff computation exceeded the configured time budget.', {
         path: file.path,
@@ -416,6 +473,12 @@ function toWorkspaceTextSnapshot(
   byteOrderMark: boolean,
   mode: number,
 ): WorkspaceTextSnapshot {
+  if (text.includes('\0')) {
+    throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
+  }
+  if (/[\uD800-\uDFFF]/u.test(text)) {
+    throw new EditError(EditFailureReason.UNSUPPORTED, 'Text contains an unpaired UTF-16 surrogate.', { path });
+  }
   const content = Buffer.from(text, 'utf8');
   const bytes = byteOrderMark ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), content]) : content;
   return {
@@ -451,13 +514,14 @@ function validatePathGraph(files: StructuredFile[], caseSensitive: boolean): voi
   const sources = new Set<string>();
   const touched = new Set<string>();
   for (const file of files) {
-    const sourceNfc = file.path.normalize('NFC');
+    const source = file.path;
     const target = file.new_path ?? file.path;
-    const targetNfc = target.normalize('NFC');
-    const foldedSource = sourceNfc.toLocaleLowerCase('en-US');
-    const foldedTarget = targetNfc.toLocaleLowerCase('en-US');
-    const sourceKey = caseSensitive ? sourceNfc : foldedSource;
-    const targetKey = caseSensitive ? targetNfc : foldedTarget;
+    const foldedSource = source.toLocaleLowerCase('en-US');
+    const foldedTarget = target.toLocaleLowerCase('en-US');
+    // Unicode-equivalent spellings can name different files. Existing aliases
+    // are detected from snapshot identities during compilation, not NFC folding.
+    const sourceKey = caseSensitive ? source : foldedSource;
+    const targetKey = caseSensitive ? target : foldedTarget;
     if (sources.has(sourceKey) || touched.has(sourceKey)) {
       throw new EditError(EditFailureReason.AMBIGUOUS, 'Proposal contains duplicate or aliased file paths.', {
         path: file.path,
@@ -486,7 +550,7 @@ function validatePathGraph(files: StructuredFile[], caseSensitive: boolean): voi
     }
   }
   for (const file of files) {
-    const target = (file.new_path ?? '').normalize('NFC');
+    const target = file.new_path ?? '';
     const targetKey = caseSensitive ? target : target.toLocaleLowerCase('en-US');
     if (file.operation === EditOperation.RENAME && sources.has(targetKey)) {
       throw new EditError(EditFailureReason.AMBIGUOUS, 'Rename chains and swaps are not supported in one proposal.', {

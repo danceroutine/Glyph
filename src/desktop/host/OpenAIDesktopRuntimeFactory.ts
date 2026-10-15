@@ -10,6 +10,7 @@ import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathInd
 import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
 import { ContextAttachmentService } from '#src/context/attachments/ContextAttachmentService.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
+import { getEditingReadBudget } from '#src/editing/configuration/getEditingReadBudget.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
@@ -124,7 +125,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         request: async (request, signal) => {
           // Reuse filesystem policy and symlink checks before granting editor access.
           const path = this.requestPath(request);
-          if (path) await disk.validateAccess(path);
+          if (path) {
+            if (request.type === GlyphEditorRequestType.EXISTS) await disk.exists(path);
+            else await disk.validateAccess(path);
+          }
           const qualified = path && roots.length > 1 ? `${root.name}/${path}` : path;
           const wire = this.withRequestPath(request, qualified);
           const response = await this.editors.request(input.identity, wire, signal);
@@ -157,6 +161,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       logger,
       configuration.editing.maxActiveReviews,
       context.mutationIdentity,
+      { maxReadBytes: getEditingReadBudget(configuration.editing) },
     );
     let runtime: ProviderDesktopRuntime | undefined;
     const interactions = new DesktopInteractionBroker(event => runtime?.publish(event));
@@ -209,7 +214,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       ),
     );
     try {
-      await glyph.initialize();
+      await glyph.initialize({ workspaceTrusted: input.trusted });
     } catch (error) {
       await shells.dispose();
       throw error;
@@ -227,6 +232,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   /** Pathless editor operations must not acquire an invented filesystem target. */
   private requestPath(request: GlyphEditorRequest): string | undefined {
     switch (request.type) {
+      case GlyphEditorRequestType.EXISTS:
       case GlyphEditorRequestType.READ_SNAPSHOT:
         return request.path;
       case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
@@ -240,6 +246,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   private withRequestPath(request: GlyphEditorRequest, path: string | undefined): GlyphEditorRequest {
     if (path === undefined) return request;
     switch (request.type) {
+      case GlyphEditorRequestType.EXISTS:
       case GlyphEditorRequestType.READ_SNAPSHOT:
         return { ...request, path };
       case GlyphEditorRequestType.APPLY_TEXT_MUTATION:

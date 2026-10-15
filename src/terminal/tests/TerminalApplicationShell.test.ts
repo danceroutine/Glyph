@@ -21,7 +21,7 @@ const projectContext = {
 };
 
 describe(TerminalApplication, () => {
-  it('[round7-05] synchronizes the global trace setting when activating a cached chat', () => {
+  it('synchronizes the global trace setting when activating a cached chat', () => {
     const cached = chat('cached');
     const setTraceEnabled = vi.fn();
     cached.session.setTraceEnabled = setTraceEnabled;
@@ -35,7 +35,7 @@ describe(TerminalApplication, () => {
     expect(setTraceEnabled).toHaveBeenCalledWith(false);
   });
 
-  it('[round7-09] leaves another account wake queued until that account becomes active', async () => {
+  it('leaves another account wake queued until that account becomes active', async () => {
     const wake = wakeEvent({ ownerChatId: 'account-a-chat' });
     const queue = [wake];
     const shell = {
@@ -59,7 +59,7 @@ describe(TerminalApplication, () => {
 
   describe('background shell wake handling', () => {
     it.each(['wake persistence', 'request preparation', 'active inference'] as const)(
-      '[round11-01] prevents uncancelled inference after shutdown during %s',
+      'prevents uncancelled inference after shutdown during %s',
       async stage => {
         const owner = chat('owner');
         const shutdown = new AbortController();
@@ -187,7 +187,7 @@ describe(TerminalApplication, () => {
       await expect(nextActivity(application)).resolves.toEqual({ action });
     });
 
-    it('[round9-05] records a wake in its owning chat then restores the chat that owns the unfinished prompt', async () => {
+    it('records a wake in its owning chat then restores the chat that owns the unfinished prompt', async () => {
       const wake = wakeEvent({ ownerChatId: 'owner-chat' });
       const owner = chat('owner-chat');
       const current = chat('current-chat');
@@ -234,7 +234,7 @@ describe(TerminalApplication, () => {
         expect.any(AbortSignal),
       );
       expect(commitReviewResults).toHaveBeenCalledWith(owner.session);
-      // [round9-05] A wake must not transfer the preserved prompt into its owning chat.
+      // A wake must not transfer the preserved prompt into its owning chat.
       expect(ui.showChatActivated).toHaveBeenLastCalledWith(current.session.summary, current.session.transcript);
       expect(setOwnerChat).toHaveBeenLastCalledWith('current-chat');
     });

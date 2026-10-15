@@ -21,6 +21,10 @@ class MutableWorkspaceTextStore implements WorkspaceTextStore {
 
   constructor(readonly caseSensitive = true) {}
 
+  async exists(path: string): Promise<boolean> {
+    return this.snapshots.has(this.key(this.normalizePath(path)));
+  }
+
   set(path: string, text: string, revision: string, byteOrderMark = false): void {
     const normalized = this.normalizePath(path);
     const content = Buffer.from(text, 'utf8');

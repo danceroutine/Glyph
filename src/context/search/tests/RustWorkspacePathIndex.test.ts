@@ -7,7 +7,7 @@ import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePa
 
 describe(RustWorkspacePathIndex, () => {
   describe('protocol', () => {
-    it('[round8-05] starts a clean response stream after a worker dies mid-message and ignores late old-worker data', async () => {
+    it('starts a clean response stream after a worker dies mid-message and ignores late old-worker data', async () => {
       const old = new FakeWorker(() => NO_RESPONSE);
       const next = new FakeWorker(request =>
         request.method === 'shutdown'
@@ -36,7 +36,7 @@ describe(RustWorkspacePathIndex, () => {
         await index.dispose();
       }
     });
-    it('[round7-02] consumes worker stdin errors and rejects outstanding requests instead of crashing the host', async () => {
+    it('consumes worker stdin errors and rejects outstanding requests instead of crashing the host', async () => {
       const worker = new FakeWorker(() => NO_RESPONSE);
       const index = new RustWorkspacePathIndex(
         { binaryPath: '/fixture', root: '/project', cachePath: '/cache' },

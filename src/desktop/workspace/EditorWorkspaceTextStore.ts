@@ -69,6 +69,20 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     return this.remember(snapshot);
   }
 
+  async exists(input: string): Promise<boolean> {
+    const path = this.normalizePath(input);
+    const response = await this.client.request({
+      type: GlyphEditorRequestType.EXISTS,
+      operationId: randomUUID(),
+      path,
+    });
+    if (!response.ok) throw responseError(response, path);
+    if (typeof response.exists !== 'boolean') {
+      throw new EditError(EditFailureReason.INCONSISTENT, 'The editor did not return path occupancy.', { path });
+    }
+    return response.exists;
+  }
+
   async readOptional(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot | undefined> {
     const path = this.normalizePath(input);
     const response = await this.client.request({

@@ -31,7 +31,43 @@ const openAIAccount: OpenAIAccount = {
 };
 
 describe(OpenAIBackend, () => {
-  it('[review-04] uses replacement sign-in credentials in an already-created chat provider', async () => {
+  it('invalidates unfinished authentication before releasing the account store on shutdown', async () => {
+    const account = structuredClone(openAIAccount);
+    account.tokens!.expiresAt = 0;
+    const store: OpenAIAccountStore = {
+      state: { version: 1, hostId: 'host', accounts: [account] },
+      acquire: vi.fn(async () => {}),
+      load: vi.fn(async () => {}),
+      save: vi.fn(async () => {}),
+      release: vi.fn(async () => {}),
+    };
+    const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+    let finish!: () => void;
+    vi.spyOn(authentication, 'refresh').mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finish = () => resolve({ ...account.tokens!, accessToken: 'late' });
+        }),
+    );
+    const session = new OpenAISession(store, authentication, configuration);
+    const backend = new OpenAIBackend(
+      store,
+      session,
+      { list: vi.fn(async () => []) },
+      { create: vi.fn() },
+      configuration,
+    );
+    await backend.initialize();
+    const pending = session.accessToken(account).catch(error => error);
+    await backend.dispose();
+    expect(store.release).toHaveBeenCalledOnce();
+    finish();
+    expect(await pending).toBeInstanceOf(Error);
+    expect(store.save).not.toHaveBeenCalled();
+    expect(account.tokens?.accessToken).toBe('secret-access-token');
+  });
+
+  it('uses replacement sign-in credentials in an already-created chat provider', async () => {
     const original = structuredClone(openAIAccount);
     const state: OpenAISavedState = { version: 1, hostId: 'host', accounts: [original] };
     const store: OpenAIAccountStore = {
@@ -80,6 +116,7 @@ describe(OpenAIBackend, () => {
       release: vi.fn(async () => {}),
     };
     const session: OpenAISessionService = {
+      dispose: vi.fn(async () => {}),
       signIn: vi.fn(async (_existing, _consent, authorize) => {
         await authorize?.({ url: 'https://auth.example.test/authorize' });
         return openAIAccount;
@@ -109,7 +146,7 @@ describe(OpenAIBackend, () => {
     expect(JSON.stringify(account)).not.toContain('secret-access-token');
 
     expect(await backend.listModels(account)).toEqual([{ slug: 'model-a', name: 'Model A' }]);
-    expect(models.list).toHaveBeenCalledWith('secret-access-token');
+    expect(models.list).toHaveBeenCalledWith('secret-access-token', expect.any(AbortSignal));
     expect(backend.createProvider(account, { slug: 'model-a', name: 'Model A' })).toBe(provider);
     const credential = providers.create.mock.calls[0]?.[1];
     await expect(credential?.()).resolves.toBe('secret-access-token');

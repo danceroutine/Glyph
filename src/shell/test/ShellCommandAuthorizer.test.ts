@@ -19,7 +19,7 @@ afterEach(async () => {
 
 describe(ShellCommandAuthorizer, () => {
   describe(ShellCommandAuthorizer.prototype.authorize, () => {
-    it('[round9-04] asks again after workspace roots change without inheriting a previous scope grant', async () => {
+    it('asks again after workspace roots change without inheriting a previous scope grant', async () => {
       const directory = await mkdtemp(join(tmpdir(), 'glyph-permission-scope-'));
       temporaryDirectories.push(directory);
       const permissions = new FileShellPermissionStore(directory);
@@ -214,7 +214,7 @@ describe(ShellCommandAuthorizer, () => {
 
 describe(isSafeShellCommand, () => {
   it.each(['cat .ENV', 'cat private.PEM', 'head config/.Env.production', 'cat .NETRC'])(
-    '[round3-01] does not automatically approve a differently cased sensitive path in %s',
+    'does not automatically approve a differently cased sensitive path in %s',
     command => {
       expect(isSafeShellCommand(command)).toBe(false);
     },

@@ -76,6 +76,11 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
     return this.prefix(route.name, await route.store.read(route.relativePath, options));
   }
 
+  exists(path: string): Promise<boolean> {
+    const route = this.fileRoute(path);
+    return route.store.exists(route.relativePath);
+  }
+
   async readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {
     const route = this.fileRoute(path);
     const snapshot = await route.store.readOptional(route.relativePath, options);

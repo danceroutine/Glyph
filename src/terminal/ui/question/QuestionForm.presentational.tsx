@@ -78,7 +78,8 @@ export function QuestionForm(props: QuestionFormProps): ReactElement {
 }
 
 function OtherAnswerEditor({ text, cursor }: { text: string; cursor: number }): ReactElement {
-  const current = text.slice(cursor, cursor + 1);
+  const point = text.codePointAt(cursor);
+  const current = point === undefined ? '' : String.fromCodePoint(point);
   return (
     <Text wrap="hard">
       <Text bold color="cyan">

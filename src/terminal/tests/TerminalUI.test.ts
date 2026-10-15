@@ -281,7 +281,7 @@ describe(TerminalUI, () => {
       );
     });
 
-    it('[round11-02] sanitizes the complete tool error including codes, messages, and nested details in plain output', () => {
+    it('sanitizes the complete tool error including codes, messages, and nested details in plain output', () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
       try {

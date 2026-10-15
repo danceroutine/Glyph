@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { stripVTControlCharacters } from 'node:util';
+import { TerminalControlFilter } from './TerminalControlFilter.ts';
 import type { ShellCommandAuthorizer } from './ShellCommandAuthorizer.ts';
 import type { ShellCommandResult } from './ShellCommandResult.ts';
 import type { ShellSessionRegistry } from './ShellSessionRegistry.ts';
@@ -31,6 +32,21 @@ interface ExecuteShellCommandOptions {
   readonly timeoutMs?: number;
   readonly signal: AbortSignal;
   readonly ownerChatId?: string;
+}
+
+interface WriteShellInputOptions {
+  readonly terminalId: string;
+  readonly input: string;
+  readonly appendNewline: boolean;
+  readonly wakeOn?: string;
+  readonly ownerChatId?: string;
+  readonly signal?: AbortSignal;
+}
+
+interface PendingShellInput {
+  /** True while the replacement transaction owns output observation. */
+  readonly observe: (output: string) => boolean;
+  readonly fail: (error: Error) => void;
 }
 
 /** Owns authorized shell processes, output observation, wake events, and deterministic cleanup. */
@@ -143,16 +159,15 @@ export class ShellSessionManager implements ShellSessionRegistry {
     }
   }
 
-  writeInput(
-    terminalId: string,
-    input: string,
-    appendNewline: boolean,
-    wakeOn?: string,
-    ownerChatId = this.ownerChatId,
-  ): void {
+  async writeInput(options: WriteShellInputOptions): Promise<void> {
+    options.signal?.throwIfAborted();
     this.assertAvailable();
-    const terminal = this.requireTerminal(terminalId, ownerChatId);
-    terminal.writeInput(`${input}${appendNewline ? '\n' : ''}`, wakeOn);
+    const terminal = this.requireTerminal(options.terminalId, options.ownerChatId ?? this.ownerChatId);
+    await terminal.writeInput({
+      input: `${options.input}${options.appendNewline ? '\n' : ''}`,
+      wakeOn: options.wakeOn,
+      signal: options.signal,
+    });
   }
 
   async close(terminalId: string, ownerChatId = this.ownerChatId): Promise<void> {
@@ -236,6 +251,7 @@ class ManagedShellSession {
   private processExited: Promise<void> | undefined;
   private readonly groupCleanups = new Map<ChildProcess, Promise<void>>();
   private active: RunningCommand | undefined;
+  private commandGeneration = 0;
   private command = '';
   private status = ShellSessionStatus.IDLE;
   private background: boolean;
@@ -243,6 +259,7 @@ class ManagedShellSession {
   private exitCode: number | undefined;
   private wakePattern: string | undefined;
   private wakeScanTail = '';
+  private pendingInput: PendingShellInput | undefined;
 
   constructor(private readonly options: ManagedShellSessionOptions) {
     this.background = options.background;
@@ -265,14 +282,6 @@ class ManagedShellSession {
 
   setBackground(background: boolean): void {
     this.background = background;
-  }
-
-  setWakePattern(pattern: string): void {
-    const normalized = pattern.trim();
-    if (!normalized) throw new Error('Shell wake pattern cannot be empty.');
-    this.wakePattern = normalized;
-    this.wakeScanTail = '';
-    this.options.changed();
   }
 
   execute({
@@ -303,6 +312,7 @@ class ManagedShellSession {
       throw error;
     }
     this.child = child;
+    this.commandGeneration++;
     // A subscription and its partial match belong to one command, not the
     // reusable terminal. Omission means no wake subscription for this launch.
     this.wakePattern = wakePattern;
@@ -310,10 +320,15 @@ class ManagedShellSession {
     child.stdout!.setEncoding('utf8');
     child.stderr!.setEncoding('utf8');
     child.stdin!.on('error', () => {
-      // Process exit is authoritative; a racing interactive write can observe EPIPE first.
+      // Pending writes report errors to their callers. Keep a listener after
+      // cancellation/teardown so a late EPIPE cannot become an uncaught error.
     });
-    child.stdout!.on('data', value => this.appendOutput(String(value)));
-    child.stderr!.on('data', value => this.appendOutput(String(value)));
+    // Each pipe has its own control stream; a split escape on stderr must not
+    // consume unrelated stdout. New commands start with fresh parser state.
+    const stdout = new TerminalControlFilter();
+    const stderr = new TerminalControlFilter();
+    child.stdout!.on('data', value => this.appendOutput(String(value), stdout.push(String(value))));
+    child.stderr!.on('data', value => this.appendOutput(String(value), stderr.push(String(value))));
     this.options.changed();
     const completion = new Promise<{ output: string; exitCode: number }>((resolve, reject) => {
       this.active = { output: '', sandboxProfile: authorization.sandboxProfile, resolve, reject };
@@ -346,7 +361,15 @@ class ManagedShellSession {
     return completion;
   }
 
-  writeInput(input: string, wakeOn?: string): void {
+  async writeInput({
+    input,
+    wakeOn,
+    signal,
+  }: {
+    readonly input: string;
+    readonly wakeOn: string | undefined;
+    readonly signal: AbortSignal | undefined;
+  }): Promise<void> {
     if (this.status !== ShellSessionStatus.RUNNING) {
       throw new Error(
         'Raw shell input is only allowed while a command is running. Use execute_shell for a new command.',
@@ -357,12 +380,108 @@ class ManagedShellSession {
         'Raw input to a full-access command is not authorized. Close it and use execute_shell so the complete command can be reviewed.',
       );
     }
-    // A rejected input must not mutate the running command's subscription.
-    if (wakeOn !== undefined) this.setWakePattern(wakeOn);
-    this.child?.stdin?.write(input);
+    if (this.pendingInput) throw new Error('Another shell input write is awaiting completion.');
+    const child = this.child;
+    const active = this.active;
+    const commandGeneration = this.commandGeneration;
+    const stdin = child?.stdin;
+    if (!child || !active || !stdin || stdin.destroyed || stdin.writableEnded || !stdin.writable) {
+      throw new Error('The shell input pipe is closed.');
+    }
+    const pattern = wakeOn?.trim();
+    if (pattern !== undefined && !pattern) throw new Error('Shell wake pattern cannot be empty.');
+    signal?.throwIfAborted();
+    await new Promise<void>((resolve, reject) => {
+      let finished = false;
+      let cancelled = false;
+      let scanTail = '';
+      let matched = false;
+      const previousPattern = this.wakePattern;
+      let previousScanTail = this.wakeScanTail;
+      let previousMatched = false;
+      let restored = false;
+      const restorePrevious = (): void => {
+        if (restored || pattern === undefined) return;
+        restored = true;
+        // A natural exit still owes its prior subscription any observed match.
+        // Explicit teardown disarms it; another command must never inherit it.
+        if (this.commandGeneration !== commandGeneration || this.wakePattern !== previousPattern) return;
+        this.wakeScanTail = previousScanTail;
+        if (previousMatched && previousPattern) this.matchWake(previousPattern);
+        this.options.changed();
+      };
+      const abort = (): void => {
+        cancelled = true;
+        signal?.removeEventListener('abort', abort);
+        restorePrevious();
+        reject(signal?.reason ?? new Error('Shell input cancelled.'));
+        // Bytes already submitted cannot be retracted. Keep this write busy
+        // until its callback or pipe closure settles the physical operation.
+      };
+      const closed = (): void => finish(new Error('The shell input pipe closed before accepting the input.'));
+      const finish = (error?: Error | null): void => {
+        if (finished) return;
+        finished = true;
+        this.pendingInput = undefined;
+        signal?.removeEventListener('abort', abort);
+        stdin.removeListener('error', finish);
+        stdin.removeListener('close', closed);
+        child.removeListener('error', finish);
+        child.removeListener('close', closed);
+        if (error) {
+          restorePrevious();
+          return reject(error);
+        }
+        if (cancelled) return;
+        if (this.child !== child || this.active !== active) {
+          return reject(new Error('The shell command ended before accepting the input.'));
+        }
+        // Exactly one subscription owns output arriving during the write. Its
+        // replacement commits with accepted bytes; failed/cancelled writes
+        // instead publish the old subscription's buffered match. Both matchers
+        // keep only bounded suffixes, never an unbounded output backlog.
+        if (pattern !== undefined) {
+          this.wakePattern = pattern;
+          this.wakeScanTail = '';
+          this.matchWake(matched ? pattern : scanTail);
+          this.options.changed();
+        }
+        resolve();
+      };
+      this.pendingInput = {
+        fail: finish,
+        observe: output => {
+          if (!pattern || cancelled) return false;
+          if (previousPattern && !previousMatched) {
+            const candidate = `${previousScanTail}${output}`;
+            previousMatched = candidate.includes(previousPattern);
+            previousScanTail = tail(candidate, Math.max(0, previousPattern.length - 1));
+          }
+          if (!matched) {
+            const candidate = `${scanTail}${output}`;
+            matched = candidate.includes(pattern);
+            scanTail = tail(candidate, Math.max(0, pattern.length - 1));
+          }
+          return true;
+        },
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      stdin.once('error', finish);
+      stdin.once('close', closed);
+      child.once('error', finish);
+      child.once('close', closed);
+      try {
+        stdin.write(input, finish);
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   async terminate(): Promise<void> {
+    this.wakePattern = undefined;
+    this.wakeScanTail = '';
+    this.pendingInput?.fail(new Error('The shell terminal is closing.'));
     const child = this.child;
     if (child) this.cleanProcessGroup(child);
     await Promise.all([this.processExited, ...this.groupCleanups.values()]);
@@ -389,18 +508,17 @@ class ManagedShellSession {
     this.groupCleanups.set(child, cleanup);
   }
 
-  private appendOutput(value: string): void {
+  private appendOutput(value: string, clean: string): void {
     if (this.active) this.active.output = tail(`${this.active.output}${value}`, COMMAND_OUTPUT_LIMIT);
     this.outputTail = tail(`${this.outputTail}${value}`, OUTPUT_TAIL_LIMIT);
-    this.matchWake(value);
+    if (!this.pendingInput?.observe(clean)) this.matchWake(clean);
     this.options.changed();
   }
 
   private matchWake(value: string): void {
     const pattern = this.wakePattern;
     if (!pattern) return;
-    const clean = stripVTControlCharacters(value);
-    const candidate = `${this.wakeScanTail}${clean}`;
+    const candidate = `${this.wakeScanTail}${value}`;
     if (candidate.includes(pattern)) {
       this.wakePattern = undefined;
       this.wakeScanTail = '';

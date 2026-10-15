@@ -182,12 +182,15 @@ export class TerminalApplication {
   }
 
   private async selectModel(account: ChatAccount): Promise<void> {
+    this.shutdown.throwIfAborted();
     if (account.notice) {
       await this.ui.acknowledgeAccountNotice(account.notice, this.shutdown);
       await this.glyph.acknowledgeAccountNotice(account);
     }
-    const models = await this.glyph.listModels(account);
+    const models = await this.glyph.listModels(account, this.shutdown);
+    this.shutdown.throwIfAborted();
     const model = await this.ui.chooseModel(models, this.options.configuredModel, this.shutdown);
+    this.shutdown.throwIfAborted();
     this.model = model;
     const existing = this.glyph.listChats(account).find(chat => chat.modelSlug === model.slug);
     const conversation = existing
@@ -214,6 +217,7 @@ export class TerminalApplication {
     const signal = AbortSignal.any([this.shutdown, this.activeRequest.signal]);
     this.ui.beginAssistantResponse();
     try {
+      await this.flushReviewResults();
       const request = await this.glyph.resolveChatRequest(
         prompt,
         attachmentPaths.map(path => ({ path })),

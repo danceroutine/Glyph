@@ -33,15 +33,47 @@ export function transformTextEditRanges(
   currentText: string,
   ranges: readonly TextEditRange[],
 ): readonly TransformedTextEditRange[] | undefined {
-  if (previousText === currentText) return copyRanges(ranges);
   if (!ranges.every(range => isValidRange(previousText, range))) return undefined;
+  const sourceOrder = ranges
+    .map((_range, index) => index)
+    .sort(
+      (left, right) =>
+        ranges[left]!.sourceStart - ranges[right]!.sourceStart || ranges[left]!.sourceEnd - ranges[right]!.sourceEnd,
+    );
+  if (!areOrderedAndDisjoint(sourceOrder.map(index => ranges[index]!))) return undefined;
+  if (previousText === currentText) return copyRanges(ranges);
 
   const anchored = transformWithUniqueAnchors(previousText, currentText, ranges);
-  if (anchored) return anchored;
+  // Individually unique anchors can still collapse two edits onto the same
+  // surviving occurrence, or move them across each other. Validate the batch
+  // before callers mutate their pending ranges or compose a proposed document.
+  if (anchored) return validateMapping(anchored, sourceOrder);
 
   const interveningEdits = findExactInterveningEdits(previousText, currentText);
   if (!interveningEdits) return undefined;
-  return transformWithInterveningEdits(currentText, ranges, interveningEdits);
+  const transformed = transformWithInterveningEdits(currentText, ranges, interveningEdits);
+  if (!transformed) return undefined;
+  return validateMapping(transformed, sourceOrder);
+}
+
+function validateMapping(
+  mapped: TransformedTextEditRange[],
+  sourceOrder: readonly number[],
+): TransformedTextEditRange[] | undefined {
+  return areOrderedAndDisjoint(sourceOrder.map(index => mapped[index]!)) ? mapped : undefined;
+}
+
+function areOrderedAndDisjoint(ranges: readonly TransformedTextEditRange[]): boolean {
+  for (let index = 1; index < ranges.length; index++) {
+    const previous = ranges[index - 1]!;
+    const current = ranges[index]!;
+    // A zero-width insertion at a replacement's start is not an interior
+    // overlap, but applying it first invalidates the replacement's expected
+    // text. Treat every shared start as ambiguous rather than depending on a
+    // caller's item order to compose or accept the edits safely.
+    if (current.sourceStart < previous.sourceEnd || current.sourceStart === previous.sourceStart) return false;
+  }
+  return true;
 }
 
 function copyRanges(ranges: readonly TextEditRange[]): TransformedTextEditRange[] {
@@ -50,6 +82,8 @@ function copyRanges(ranges: readonly TextEditRange[]): TransformedTextEditRange[
 
 function isValidRange(text: string, range: TextEditRange): boolean {
   return (
+    Number.isInteger(range.sourceStart) &&
+    Number.isInteger(range.sourceEnd) &&
     range.sourceStart >= 0 &&
     range.sourceEnd >= range.sourceStart &&
     range.sourceEnd <= text.length &&

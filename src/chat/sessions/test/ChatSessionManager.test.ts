@@ -23,7 +23,7 @@ afterEach(async () => {
 
 describe(ChatSessionManager, () => {
   it.each(['send', 'context', 'reset'] as const)(
-    '[review-11] preserves a human title longer than four words across a %s checkpoint and reload',
+    'preserves a human title longer than four words across a %s checkpoint and reload',
     async operation => {
       const store = new MemoryChatSessionStore();
       const context = await ProjectContextResolver.folder(await projectFixture());

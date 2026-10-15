@@ -15,7 +15,7 @@ const second = { ...first, windowId: 'two' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(WorkspaceOwnershipRegistry, () => {
-  it('[review-07] refuses a second mutation owner for the same directory reached through another symlink', async () => {
+  it('refuses a second mutation owner for the same directory reached through another symlink', async () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-ownership-alias-'));
     try {
       const target = join(root, 'target');

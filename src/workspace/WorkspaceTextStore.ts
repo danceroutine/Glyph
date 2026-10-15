@@ -20,6 +20,8 @@ export interface WorkspaceTextStore {
     targetDirectory?: string,
   ): Promise<{ files: string[]; truncated: boolean }>;
   normalizePath(path: string): string;
+  /** Checks occupancy without reading content; directories and binary files also occupy a target. */
+  exists(path: string): Promise<boolean>;
   read(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot>;
   readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined>;
   create(

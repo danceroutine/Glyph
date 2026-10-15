@@ -1097,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn round2_01_scan_excludes_sensitive_names_using_filesystem_case_policy() {
+    fn scan_excludes_sensitive_names_using_filesystem_case_policy() {
         let directory = tempdir().expect("fixture directory");
         for name in [
             ".ENV",

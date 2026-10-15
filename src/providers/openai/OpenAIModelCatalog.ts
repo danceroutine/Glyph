@@ -11,12 +11,15 @@ export class OpenAIModelCatalog implements ModelCatalog<string> {
     private readonly http: HttpClient,
   ) {}
 
-  async list(accessToken: string): Promise<Model[]> {
+  async list(accessToken: string, signal?: AbortSignal): Promise<Model[]> {
+    signal?.throwIfAborted();
     const response = await this.http.get(`${this.configuration.resource}/models`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       redirect: 'error',
       timeoutMs: this.configuration.requestTimeoutMs,
+      ...(signal ? { signal } : {}),
     });
+    signal?.throwIfAborted();
     if (!response.ok) {
       throw new ProviderError(
         `Model discovery returned HTTP ${response.status}. Check ChatGPT plan permissions or try again later. No API-key fallback is available.`,

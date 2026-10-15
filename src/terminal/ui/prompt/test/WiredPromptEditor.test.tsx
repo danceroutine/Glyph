@@ -13,8 +13,37 @@ vi.mock('ink', async () => ({
 }));
 
 describe(WiredPromptEditor, () => {
+  it('does not attach a previous query’s file while a newer completion search is pending', async () => {
+    const complete = vi.fn();
+    const files = fileSearch(async (query, options) => {
+      if (query === 'ab') return new Promise(() => {});
+      return {
+        query,
+        generation: options.generation,
+        fileCount: 1,
+        matches: [{ path: 'apple.ts', score: 1, indices: [] }],
+      };
+    });
+    const view = render(
+      <WiredPromptEditor
+        request={{ id: 1, label: 'you> ', acceptsSubmission: true, files, complete }}
+        interrupt={vi.fn()}
+      />,
+    );
+    try {
+      await write(view, '@a');
+      await vi.waitFor(() => expect(view.lastFrame()).toContain('apple.ts'));
+      await write(view, 'b');
+      await write(view, '\t');
+      await write(view, '\r');
+      expect(complete).toHaveBeenCalledWith({ prompt: '@ab', attachmentPaths: [] });
+    } finally {
+      view.unmount();
+    }
+  });
+
   describe('interaction', () => {
-    it('[round8-11] places the cursor after a wide character that wraps past an unused final column', async () => {
+    it('places the cursor after a wide character that wraps past an unused final column', async () => {
       const view = render(
         <WiredPromptEditor
           request={{ id: 1, label: 'you> ', acceptsSubmission: true, complete: vi.fn() }}
@@ -29,7 +58,7 @@ describe(WiredPromptEditor, () => {
       }
     });
 
-    it('[round8-04] shows attachment matches immediately after remounting a prompt with the same index', async () => {
+    it('shows attachment matches immediately after remounting a prompt with the same index', async () => {
       let largest = 0;
       const files = fileSearch(async (query, options) => {
         if (options.generation < largest)

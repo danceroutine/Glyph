@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -14,8 +14,54 @@ afterEach(async () => {
 });
 
 describe(FileSystemWorkspaceTextStore, () => {
+  it('checks occupied and missing targets using metadata while retaining policy and symlink exclusions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workspace-exists-'));
+    directories.push(root);
+    await writeFile(join(root, 'binary.txt'), Buffer.from([0, 255]));
+    await mkdir(join(root, 'directory'));
+    await symlink(join(root, 'binary.txt'), join(root, 'alias.txt'));
+    const store = new FileSystemWorkspaceTextStore(root);
+    const read = vi.spyOn(store, 'read');
+    await expect(store.exists('binary.txt')).resolves.toBe(true);
+    await expect(store.exists('directory')).resolves.toBe(true);
+    await expect(store.exists('new/path.txt')).resolves.toBe(false);
+    await expect(store.exists('.env')).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    await expect(store.exists('alias.txt')).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('rejects an occupied rename target without decoding it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workspace-rename-metadata-'));
+    directories.push(root);
+    const store = new FileSystemWorkspaceTextStore(root);
+    const source = await store.create('source.txt', 'base', false);
+    await writeFile(join(root, 'target.txt'), Buffer.from([0, 255]));
+    const read = vi.spyOn(store, 'read');
+    await expect(store.rename('source.txt', 'target.txt', source.revision)).rejects.toMatchObject({
+      reason: EditFailureReason.STALE,
+    });
+    expect(read.mock.calls.some(([path]) => path === 'target.txt')).toBe(false);
+  });
+  it.each(['invalid\0text', '\ud800', '\udc00'])(
+    'rejects unsupported text %j in creates and replacements without modifying the filesystem',
+    async text => {
+      const root = await mkdtemp(join(tmpdir(), 'workspace-nul-mutation-'));
+      directories.push(root);
+      const store = new FileSystemWorkspaceTextStore(root);
+      const base = await store.create('existing.txt', 'original', false);
+      await expect(store.create('new.txt', text, false)).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+      });
+      await expect(readFile(join(root, 'new.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(store.replace('existing.txt', base.revision, text, false)).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+      });
+      expect(await readFile(join(root, 'existing.txt'), 'utf8')).toBe('original');
+    },
+  );
+
   describe(FileSystemWorkspaceTextStore.prototype.read, () => {
-    it('[round9-02] preserves a literal leading U+FEFF after the encoding BOM during an unrelated edit', async () => {
+    it('preserves a literal leading U+FEFF after the encoding BOM during an unrelated edit', async () => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-double-bom-'));
       directories.push(root);
       await writeFile(join(root, 'text.txt'), Buffer.from('efbbbfefbbbf61', 'hex'));
@@ -38,7 +84,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     });
 
     it.each(['.ENV', '.GIT/config'])(
-      '[review-01] refuses protected path %s under case-insensitive policy before returning its contents',
+      'refuses protected path %s under case-insensitive policy before returning its contents',
       async path => {
         const root = await mkdtemp(join(tmpdir(), 'workspace-case-policy-'));
         directories.push(root);

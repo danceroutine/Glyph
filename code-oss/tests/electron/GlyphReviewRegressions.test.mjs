@@ -5,9 +5,7 @@ import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 // until the production implementation satisfies the assertions.
 
 it.describe('Review regressions — utility-host failure', () => {
-  it('[review-05] settles an in-flight send when the utility host exits and leaves the composer usable', async ({
-    glyph,
-  }) => {
+  it('settles an in-flight send when the utility host exits and leaves the composer usable', async ({ glyph }) => {
     await glyph.send('Keep this run active while its host exits.');
     await expect(glyph.sendButton).toHaveText('Cancel');
     await expect(glyph.assistantEntries.first()).toContainText('The packaged');
@@ -16,9 +14,7 @@ it.describe('Review regressions — utility-host failure', () => {
     await expect(glyph.diagnostics).toContainText([/host|disconnect|interrupt/i]);
   });
 
-  it('[review-05] acquires a live connection for a new send after the previous utility host has exited', async ({
-    glyph,
-  }) => {
+  it('acquires a live connection for a new send after the previous utility host has exited', async ({ glyph }) => {
     await glyph.send('Finish before the host exits.');
     await glyph.waitForResponse();
     await crashFixtureHost(glyph);
@@ -37,9 +33,7 @@ it.describe('Review regressions — utility-host failure', () => {
 it.describe('Review regressions — rejected send with no account', () => {
   it.use({ productionRuntime: true });
 
-  it('[round2-06] restarts the production host after a crash without manually removing its credential lock', async ({
-    glyph,
-  }) => {
+  it('restarts the production host after a crash without manually removing its credential lock', async ({ glyph }) => {
     await glyph.send('Initialize the production account store without credentials.');
     await expect(glyph.diagnostics).toContainText([/Sign in.*inference access/]);
     await crashFixtureHost(glyph);
@@ -48,7 +42,7 @@ it.describe('Review regressions — rejected send with no account', () => {
     await expect(glyph.composer).toHaveValue('Reconnect to the production account store.');
   });
 
-  it('[review-10] retains the unsent draft when no account has inference access', async ({ glyph }) => {
+  it('retains the unsent draft when no account has inference access', async ({ glyph }) => {
     const draft = 'Keep this unsent question until I have signed in.';
     await glyph.send(draft);
     await expect(glyph.diagnostics).toContainText([/Sign in.*inference access/]);
@@ -59,9 +53,7 @@ it.describe('Review regressions — rejected send with no account', () => {
 });
 
 it.describe('Review regressions — rejected send from an overlapping workspace', () => {
-  it('[review-10] retains a rejected draft in a second window without changing the original conversation', async ({
-    glyph,
-  }) => {
+  it('retains a rejected draft in a second window without changing the original conversation', async ({ glyph }) => {
     await glyph.send('Keep ownership in this window.');
     await glyph.waitForResponse();
     const duplicate = await glyph.duplicateWorkspace();

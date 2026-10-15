@@ -7,7 +7,7 @@ import { Box } from 'ink';
 
 describe(WiredShellPermission, () => {
   describe('interaction', () => {
-    it('[round8-01] keeps the approval choice visible and pages through every line of a long command before Enter', async () => {
+    it('keeps the approval choice visible and pages through every line of a long command before Enter', async () => {
       const complete = vi.fn();
       const permission = {
         ...request(complete),

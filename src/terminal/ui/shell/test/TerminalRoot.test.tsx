@@ -9,7 +9,7 @@ import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 
 describe(TerminalRoot, () => {
   describe('rendering', () => {
-    it('[round8-10] opens a different conversation at its newest message instead of retaining the previous scroll offset', async () => {
+    it('opens a different conversation at its newest message instead of retaining the previous scroll offset', async () => {
       const rows = (id: number, text: string) => (
         <TerminalRoot
           pagingActive
@@ -30,7 +30,7 @@ describe(TerminalRoot, () => {
         view.unmount();
       }
     });
-    it('[round7-11] lets Page Up reveal older transcript rows and Page Down return to the latest response', async () => {
+    it('lets Page Up reveal older transcript rows and Page Down return to the latest response', async () => {
       const view = render(
         <TerminalRoot
           entries={[{ id: 1, content: <Text>{'oldest\nsecond\nthird\nfourth\nlatest'}</Text> }]}

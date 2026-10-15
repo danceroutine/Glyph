@@ -12,6 +12,7 @@ import type { WorkspacePathIndex } from './context/search/WorkspacePathIndex.ts'
 import { EnvironmentConfigurationProvider } from './configuration/EnvironmentConfigurationProvider.ts';
 import { ConfigurationError } from './errors/ConfigurationError.ts';
 import { EditProposalService } from './editing/proposals/EditProposalService.ts';
+import { getEditingReadBudget } from './editing/configuration/getEditingReadBudget.ts';
 import { ProposalReviewManager } from './editing/reviews/ProposalReviewManager.ts';
 import { FileProposalReviewStore } from './editing/reviews/persistence/FileProposalReviewStore.ts';
 import { JsDiffTextDiffer } from './editing/documents/JsDiffTextDiffer.ts';
@@ -122,6 +123,7 @@ async function main(): Promise<void> {
     logger,
     configuration.editing.maxActiveReviews,
     projectContext.mutationIdentity,
+    { maxReadBytes: getEditingReadBudget(configuration.editing) },
   );
   const projectTools = new ProjectToolRuntime(
     new ProjectAccess(projectContext.roots[0]!.path, {}, workspace, pathIndex),

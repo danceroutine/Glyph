@@ -25,6 +25,10 @@ describe(MultiRootWorkspaceTextStore, () => {
     ]);
     const store = workspaceStore(root, api, web);
 
+    await expect(store.exists('api/src/server.ts')).resolves.toBe(true);
+    await expect(store.exists('web/src/server.ts')).resolves.toBe(false);
+    await expect(store.exists('web/src')).resolves.toBe(true);
+
     await expect(store.list(10, '*.ts')).resolves.toEqual({
       files: ['api/src/server.ts', 'web/src/app.ts'],
       truncated: false,

@@ -14,7 +14,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 describe('Workspace read budgets', () => {
   it.each(['line-range read', 'attachment'] as const)(
-    '[review-09] rejects an oversized %s before an unbounded file read, decode, or hash',
+    'rejects an oversized %s before an unbounded file read, decode, or hash',
     async operation => {
       const root = await mkdtemp(join(tmpdir(), 'glyph-read-budget-'));
       try {

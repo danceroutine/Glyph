@@ -2,6 +2,7 @@ import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/wor
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import type { GlyphWorkbenchSelection } from '#src/desktop/workbench/GlyphWorkbenchSelection.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 
 export const selection: GlyphWorkbenchSelection = {
   uri: 'file:///preview/src/greeting.ts',
@@ -38,12 +39,14 @@ export function workbenchState(overrides: Partial<GlyphWorkbenchState> = {}): Gl
 }
 
 export const previewActions: GlyphWorkbenchViewActions = {
+  composer: new GlyphComposerState(),
   send: async () => {},
   cancel: () => {},
 };
 
 export const failingActions: GlyphWorkbenchViewActions = {
   ...previewActions,
+  composer: new GlyphComposerState(),
   send: async () => {
     throw new Error('Preview send failed. Your draft has been restored; try editing it and sending again.');
   },

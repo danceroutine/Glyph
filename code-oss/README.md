@@ -98,7 +98,7 @@ model response.
 
 ## Review regressions
 
-The `[review-NN]` cases are ordinary executable tests asserting correct behavior.
+The review regressions are ordinary executable tests with behavioral descriptions.
 They reproduce the original defects and pass against the corrected implementations;
 they are not `it.fails`, skips, fixmes, or unconditional failures.
 The review's 11 findings map to these tests:
@@ -137,7 +137,7 @@ authority, including when the original runtime was still initializing.
 
 ### Second-round regressions
 
-The `[round2-NN]` cases (and Rust's `round2_01` case) were first run against
+The cases below were first run against
 the unfixed implementation and failed, then rerun against the fixes. They cover:
 
 | Finding | Regression coverage                                                                                          | Test file                                                                                                                                           |
@@ -154,10 +154,10 @@ the unfixed implementation and failed, then rerun against the fixes. They cover:
 | 10      | Small dirty buffers remain readable over oversized disk files without bypassing exclusions or symlink checks | [OpenAIDesktopRuntimeFactory](../src/desktop/host/tests/OpenAIDesktopRuntimeFactory.test.ts)                                                        |
 
 ```sh
-pnpm exec vitest run --maxWorkers=1 -t '\[round2-'
-cargo test --package glyph-context-index round2_01
+pnpm exec vitest run --maxWorkers=1 src/desktop/host/tests src/providers/openai/auth/tests src/context/search/tests
+cargo test --package glyph-context-index scan_excludes_sensitive_names_using_filesystem_case_policy
 pnpm code-oss:test:aliases
-pnpm code-oss:test:integration --grep '\[round2-'
+pnpm code-oss:test:integration GlyphReviewRegressions
 ```
 
 The peer test bundles the real workbench client with a simulated MessagePort.
@@ -169,7 +169,7 @@ native sandbox enforcement.
 
 ### Third-round regressions
 
-The `[round3-NN]` regressions reproduced all five findings before their fixes:
+These regressions reproduced all five findings before their fixes:
 
 | Finding | Regression coverage                                                                                                     | Test file                                                                                                                  |
 | ------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -190,7 +190,7 @@ sandbox bypass or establish native enforcement evidence.
 
 ### Fourth-round regressions
 
-The `[round4-NN]` tests reproduced the three findings before their fixes:
+These tests reproduced the three findings before their fixes:
 
 - Editor mutations now pass an operation-scoped cancellation token to Bulk Edit. Folder changes, invalidation, and disposal cancel prepared writes. A write that completed before revocation retains its receipt, which remains inspectable without reading the removed workspace. Tests separately gate preparation and completion, including Code OSS's non-authoritative `isApplied` flag.
 - Invalid shell wake patterns release newly allocated terminal slots; repeated failures no longer exhaust capacity.
@@ -200,7 +200,7 @@ Editor regressions are in [GlyphEditorAdapter.test.mjs](../scripts/code-oss/test
 
 ### Fifth-round regressions
 
-The `[round5-NN]` regressions first reproduced these failures:
+These regressions first reproduced these failures:
 
 - A saved workspace can reopen after its folders change even when the previous configuration has pending reviews. Desktop checkpoints now live under their exact mutation scope. Matching legacy checkpoints are copied into scoped storage; the legacy file is preserved, and empty scoped checkpoints prevent settled reviews from being imported again. Restoring the original folders restores their pending reviews. Corrupt checkpoints and foreign checkpoints inside an already scoped directory still fail closed.
 - The editor receipt hashes the actual model change, identified by its edit source, rather than predicting the resulting bytes from the replacement request. The regression uses the pinned Code OSS text model with pending automatic whitespace and verifies both successful application and the resulting receipt hash.
@@ -210,7 +210,7 @@ Coverage lives in the `OpenAIDesktopRuntimeFactory`, `FileProposalReviewStore`, 
 
 ### Sixth-round regressions
 
-The `[round6-NN]` regressions reproduce and guard three additional failures:
+These regressions reproduce and guard three additional failures:
 
 - Desktop chat identity depends on the Electron profile/workspace container, not its folder count. Existing chats under the old single-folder identity migrate atomically into the stable catalog, preserving chat IDs, transcripts, and provider state. Review and shell-permission storage retains its existing locations and mutation-scope checks.
 - When a send fails after the user starts another draft, the original appears under **Unsent messages**. Editing it swaps it with the current draft, preserving both; nothing is automatically retried or queued. If there is no newer draft, the failed message returns directly to the composer. Component tests run the actual Preact view in headless Chromium.
@@ -218,7 +218,7 @@ The `[round6-NN]` regressions reproduce and guard three additional failures:
 
 ### Seventh-round regressions
 
-The `[round7-NN]` cases and Rust's `round7_` cases first reproduced the eleven
+The TypeScript and Rust cases first reproduced the eleven
 review findings and the additional runtime-disposal race:
 
 - Revoking workspace trust drains the owning runtime, including active turns and background shells, before attaching an untrusted replacement. Mutating commands remain blocked until trust is restored.
@@ -238,7 +238,7 @@ native shell-sandbox enforcement or completed desktop review controls.
 
 ### Eighth-round regressions
 
-The `[round8-NN]` regressions cover the next eleven findings:
+These regressions cover the next eleven findings:
 
 - Shell approval dedicates the terminal to a paged command viewport with fixed decision controls. Page Up/Down belongs to that panel while it is open; background-shell summaries return afterward. Approval is disabled when the terminal is too small to review the panel.
 - Successfully observed workspace mutations remain in memory after checkpoint failures. The next queued operation must persist them before it can change a decision; normalized editor text is not compared back to an obsolete prediction.
@@ -255,7 +255,7 @@ command. The EOL limitation has a dedicated Electron FIXME in
 
 ### Ninth-round regressions
 
-The `[round9-NN]` regressions cover the next ten findings:
+These regressions cover the next ten findings:
 
 - Successful editor mutations keep their accepted receipts even when automatic whitespace cleanup conflicts with a remaining hunk. The observed document and stale remaining review survive checkpoint reload; rejection cannot relabel the applied edit.
 - UTF-8 decoding removes only the encoding BOM, preserving a literal leading U+FEFF in document text and subsequent replacements.
@@ -282,7 +282,7 @@ against the previous implementation, then rerun against the fixes:
 - The native index test `settles_an_unpublished_query_when_the_next_generation_repeats_it`
   reproduces an interrupted matcher state and verifies that repeating the query
   publishes the new results instead of returning the previous snapshot.
-- `[round10-03]` renders a long question through the terminal root. Page Up/Down
+- The question-viewport regression renders a long question through the terminal root. Page Up/Down
   scroll the prompt independently, arrow navigation reveals the selected choice,
   and Enter reveals an offscreen choice before allowing confirmation.
 
@@ -292,7 +292,7 @@ that alias. These checks do not exercise live providers or native sandbox enforc
 
 ### Eleventh-round regressions
 
-The `[round11-NN]` cases failed before their fixes and cover:
+These cases failed before their fixes and cover:
 
 - Shutdown while a background wake is being persisted, while its request is
   being prepared, and during inference. No new turn starts after shutdown;
@@ -307,12 +307,100 @@ The `[round11-NN]` cases failed before their fixes and cover:
 These tests use in-memory dependencies and harmless control-character markers;
 they do not call providers or execute shell commands.
 
+### Twelfth-round regressions
+
+These cases reproduce and cover:
+
+- Failed completion checkpoints remain visible, block review-result delivery,
+  and retry on `R` or review reopening without applying the edit twice. Terminal
+  sends also flush outstanding review results before requesting another turn.
+- The window-scoped workbench service owns composer drafts, recovered messages,
+  and pending-send state. Pane disposal does not discard them; failures settling
+  while the pane is unmounted still recover the original message. This does not
+  persist drafts across application shutdown or window reload.
+- Background wake matching retains terminal-control parser state across output
+  chunks, separately for stdout and stderr and freshly for each command.
+- File-listing cancellation reaches the native index, and turn cancellation or
+  timeout interrupts credential waiting without cancelling a shared refresh.
+
+Coverage uses controlled persistence failures, rendered production components,
+inert shell streams, and deferred credentials. It does not require live providers.
+
 The acknowledged editing-workflow blockers remain explicit fixmes:
 
 - Question and approval forms and proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).
 - Structural create/delete/rename review and application: the structural mutation, Create File, and Delete File groups in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
 - Dirty-buffer content search suppressing stale disk matches: `Pending Search Contents` in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
 - Desktop background-shell wake delivery: `Pending background shells with agent-configured wake conditions` in [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs).
+
+### Authentication lifetime, text fidelity, and bounded rendering
+
+Regression coverage now includes refresh completion after logout/shutdown,
+NUL rejection before proposal staging or filesystem mutation, literal leading
+U+FEFF in real editor models, rejection of unbound remote workspace URIs, and
+distinct Unicode filenames without unconditional normalization.
+
+Project reads cap serialized results at 512 KiB, including numbered text and
+line metadata. A `nextStartLine` cursor identifies the next page; a single line
+that cannot fit is rejected explicitly. Review paging uses single-row status
+and keyboard hints so narrow terminals can reach the final change. Question
+cursors style complete Unicode code points. Failed upstream installs unwind
+through Git-hook cleanup before returning the subprocess exit status.
+
+The tests use deferred authentication, disposable files, the pinned editor text
+model, real Ink rendering, and an inert installer subprocess. These checks do
+not establish live-provider behavior or native sandbox enforcement.
+
+### Shared credentials and review correctness
+
+Shared refresh work follows the application-owned account store, so disposing
+one workspace does not discard another workspace's rotated credentials. Store
+shutdown invalidates outstanding refreshes and drains started saves before
+releasing the credential lock.
+
+Reviews recover unsupported current file types as stale instead of blocking
+startup. The terminal diff shows controls as visible symbols (`␛` for ESC),
+literal text U+FEFF as `⟨U+FEFF⟩`, and BOM changes as encoding metadata. Proposal
+compilation and filesystem writes reject unpaired UTF-16 surrogates rather than
+silently replacing them. Autocomplete only selects results bound to the current
+mention and index. Search retains its final valid page at the offset ceiling;
+`truncated: true` with `nextOffset: null` means callers must narrow the query.
+
+### Continuations, trust, and bounded workspace operations
+
+Runtime hardening also covers long-lived turns and trust transitions. Every
+model continuation resolves current credentials; shell input succeeds only
+after its pipe write is acknowledged and failed writes preserve wake settings.
+Untrusted runtimes load persisted chats/reviews without project reconciliation
+or indexing. Granting trust recreates the runtime and reconciles before allowing
+mutations; overlapping attachment changes are serialized by the host.
+Retired connections and host shutdown invalidate queued attachments, preventing
+vanished windows from recreating runtime ownership.
+
+Interrupted rename destinations that become unsupported resources stay stale
+and rejectable. Diff deadlines are enforced inside matching, and oversized
+replacements are rejected before diffing. Native content reads are bounded on
+the opened descriptor; Unix additionally rejects replacement symlinks, detects
+changed file identity, and opens nonblocking to avoid FIFO hangs. These Unix
+checks do not establish equivalent Windows path-race protection. An incomplete
+index retains its warning without suppressing results from later workspace roots.
+Cancelled proposal preparation cannot proceed to diffing or staging after an
+outstanding read completes; already-dispatched checkpoint writes still finish
+and report their durable result.
+
+### Recovery, cancellation, and collision checks
+
+Failed attachments superseded by a newer trust or folder configuration retry
+that configuration on the same live connection. Model discovery carries caller,
+backend, and credential-owner cancellation through to HTTP; cancelling one
+workspace does not cancel a peer's shared credential refresh.
+
+CREATE and rename collision checks use metadata, including live unsaved editor
+models. Proposal compilation and review recovery bound content reads by the
+configured resulting-file plus changed-byte budgets, with three bytes allowed
+for a source BOM that the edit removes. An oversized recovery file
+remains stale and rejectable; it cannot establish that an interrupted mutation
+succeeded. Structural editor mutations remain unsupported.
 
 ## Native Preact view
 
@@ -327,8 +415,9 @@ one local browser ESM module plus CSS, so the application needs no CDN, webview,
 or runtime package resolution. Do not edit those generated bundles.
 
 `GlyphViewPane` mounts the view, forwards service state/actions, and disposes
-the Preact root with the pane. Components own draft state and reconcile keyed
-transcript rows, preserving DOM identity while response text streams in.
+the Preact root with the pane. The window-scoped service owns composer state;
+components reconcile keyed transcript rows, preserving DOM identity while
+response text streams in.
 
 ### Browser iteration with Storybook
 

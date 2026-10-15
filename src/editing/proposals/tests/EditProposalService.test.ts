@@ -1,7 +1,7 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
@@ -10,6 +10,7 @@ import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
+import { renderEntry, ReviewViewMode } from '#src/terminal/ui/proposal/TerminalEditReviewer.js';
 
 const directories: string[] = [];
 const configuration: EditingConfiguration = {
@@ -30,7 +31,227 @@ afterEach(async () => {
 });
 
 describe(EditProposalService, () => {
-  it('[round8-08] retains a BOM-only change as a separate decision when renaming identical text', async () => {
+  it('allows removing a BOM from an empty file even when the resulting and changed-text budgets are one byte', async () => {
+    const { service, workspace } = await fixture('', { maxResultingBytesPerFile: 1, maxChangedBytes: 1 });
+    await writeFile(join(workspace.root, 'file.txt'), Buffer.from([0xef, 0xbb, 0xbf]));
+    const base = await workspace.read('file.txt');
+    await expect(
+      service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.UPDATE,
+            path: 'file.txt',
+            new_path: null,
+            base_revision: base.revision,
+            content: '',
+            byte_order_mark: false,
+            edits: [],
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ files: [{ proposed: { byteOrderMark: false, byteLength: 0 } }] });
+  });
+  it.each(['large text', 'binary', 'directory'])(
+    'rejects a CREATE collision with %s without reading its contents',
+    async kind => {
+      const { service, workspace } = await fixture('base');
+      const path = 'occupied.txt';
+      if (kind === 'directory') await mkdir(join(workspace.root, path));
+      else
+        await writeFile(
+          join(workspace.root, path),
+          kind === 'binary' ? Buffer.from([0, 255]) : 'x'.repeat(2 * 1024 * 1024),
+        );
+      const read = vi.spyOn(workspace, 'read');
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              operation: EditOperation.CREATE,
+              path,
+              new_path: null,
+              base_revision: null,
+              content: 'new',
+              byte_order_mark: false,
+              edits: [],
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({ message: 'Create target already exists.' });
+      expect(read).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a RENAME collision without loading destination content', async () => {
+    const { service, workspace } = await fixture('base');
+    const base = await workspace.read('file.txt');
+    await writeFile(join(workspace.root, 'occupied.txt'), 'x'.repeat(2 * 1024 * 1024));
+    const read = vi.spyOn(workspace, 'read');
+    await expect(
+      service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.RENAME,
+            path: 'file.txt',
+            new_path: 'occupied.txt',
+            base_revision: base.revision,
+            content: null,
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ message: 'Rename target already exists.' });
+    expect(read.mock.calls.some(([path]) => path === 'occupied.txt')).toBe(false);
+  });
+
+  it.each([EditOperation.UPDATE, EditOperation.DELETE, EditOperation.RENAME])(
+    'bounds structured %s source reads before loading or diffing oversized files',
+    async operation => {
+      const { service, workspace } = await fixture('x'.repeat(20), { maxResultingBytesPerFile: 8, maxChangedBytes: 8 });
+      const base = await workspace.read('file.txt');
+      const read = vi.spyOn(workspace, 'read');
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              operation,
+              path: 'file.txt',
+              new_path: operation === EditOperation.RENAME ? 'renamed.txt' : null,
+              base_revision: base.revision,
+              content: operation === EditOperation.UPDATE ? 'small' : null,
+              byte_order_mark: null,
+              edits: [],
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.LIMIT_EXCEEDED });
+      expect(read).toHaveBeenCalledWith('file.txt', { maxBytes: 19 });
+    },
+  );
+
+  it('bounds patch source reads before matching hunks', async () => {
+    const { service, workspace } = await fixture('x'.repeat(20), { maxResultingBytesPerFile: 8, maxChangedBytes: 8 });
+    const base = await workspace.read('file.txt');
+    const read = vi.spyOn(workspace, 'read');
+    await expect(
+      service.proposePatch(`*** Begin Patch\n*** Delete File: file.txt\n*** Revision: ${base.revision}\n*** End Patch`),
+    ).rejects.toMatchObject({ reason: EditFailureReason.LIMIT_EXCEEDED });
+    expect(read).toHaveBeenCalledWith('file.txt', { maxBytes: 19 });
+  });
+
+  it('stops diff computation at its deadline instead of measuring only after completion', async () => {
+    const base = Array.from({ length: 100 }, (_, index) => `old ${index}\n`).join('');
+    const content = Array.from({ length: 100 }, (_, index) => `new ${index}\n`).join('');
+    const { service, workspace } = await fixture(base, { diffBudgetMs: 10 });
+    const snapshot = await workspace.read('file.txt');
+    let time = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => (time += 20));
+    try {
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              operation: EditOperation.UPDATE,
+              path: 'file.txt',
+              new_path: null,
+              base_revision: snapshot.revision,
+              content,
+              byte_order_mark: false,
+              edits: [],
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.LIMIT_EXCEEDED });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('rejects an oversized replacement before spending work on its diff', async () => {
+    const { service, workspace } = await fixture('base', { maxResultingBytesPerFile: 4 });
+    const snapshot = await workspace.read('file.txt');
+    const diff = vi.spyOn(JsDiffTextDiffer.prototype, 'createReviewItems');
+    try {
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              operation: EditOperation.UPDATE,
+              path: 'file.txt',
+              new_path: null,
+              base_revision: snapshot.revision,
+              content: 'too large',
+              byte_order_mark: false,
+              edits: [],
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.LIMIT_EXCEEDED });
+      expect(diff).not.toHaveBeenCalled();
+    } finally {
+      diff.mockRestore();
+    }
+  });
+
+  it.each(
+    [EditOperation.CREATE, EditOperation.UPDATE].flatMap(operation =>
+      [
+        { label: 'NUL', content: 'invalid\0text' },
+        { label: 'an unpaired high surrogate', content: '\ud800' },
+        { label: 'an unpaired low surrogate', content: '\udc00' },
+      ].map(value => ({ operation, ...value })),
+    ),
+  )('rejects $label while compiling $operation before staging a review', async ({ operation, content }) => {
+    const { service, workspace } = await fixture('base');
+    const base = await workspace.read('file.txt');
+    await expect(
+      service.proposeStructured({
+        files: [
+          {
+            operation,
+            path: operation === EditOperation.CREATE ? 'new.txt' : 'file.txt',
+            new_path: null,
+            base_revision: operation === EditOperation.CREATE ? null : base.revision,
+            content,
+            byte_order_mark: false,
+            edits: [],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+  });
+
+  it.each([
+    { base: '', content: '', bom: true, marker: 'Encoding: UTF-8 → UTF-8 with BOM' },
+    { base: '\uFEFFbody', content: 'body', bom: false, marker: 'Encoding: UTF-8 with BOM → UTF-8' },
+    { base: 'body', content: '\u001b[31mbody\u001b[0m', bom: false, marker: '␛[31mbody␛[0m' },
+    { base: 'body', content: '\uFEFFbody', bom: false, marker: '⟨U+FEFF⟩body' },
+  ])('makes byte-level changes visible in a compiled review: $marker', async ({ base, content, bom, marker }) => {
+    const { service, workspace } = await fixture(base);
+    const snapshot = await workspace.read('file.txt');
+    const proposal = await service.proposeStructured({
+      files: [
+        {
+          operation: EditOperation.UPDATE,
+          path: 'file.txt',
+          new_path: null,
+          base_revision: snapshot.revision,
+          content,
+          byte_order_mark: bom,
+          edits: [],
+        },
+      ],
+    });
+    const file = proposal.files[0]!;
+    const rendered = renderEntry(file, file.items[0]!, ReviewViewMode.FULL_FILE, false).lines.join('\n');
+    expect(rendered).toContain(marker);
+    expect(rendered).not.toContain('\u001b');
+    if (snapshot.text === content) expect(rendered).toContain('Text content unchanged');
+    expect(file.proposed.text).toBe(content);
+  });
+
+  it('retains a BOM-only change as a separate decision when renaming identical text', async () => {
     const { service, workspace } = await fixture('same\n');
     const base = await workspace.read('file.txt');
     const proposal = await service.proposeStructured({
@@ -51,7 +272,7 @@ describe(EditProposalService, () => {
       EditReviewItemKind.TEXT,
     ]);
   });
-  it('[round7-10] locates patch hunks in the original base even when an earlier replacement duplicates later context', async () => {
+  it('locates patch hunks in the original base even when an earlier replacement duplicates later context', async () => {
     const { service, workspace } = await fixture('left\nseparator\nright\n');
     const base = await workspace.read('file.txt');
     const proposal = await service.proposePatch(

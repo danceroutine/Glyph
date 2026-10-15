@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useCursor, useInput, usePaste, useWindowSize } from 'ink';
 import type { QuestionAnswer } from '#src/interaction/questions/QuestionAnswer.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
@@ -25,80 +25,101 @@ export interface UseQuestionFormStateOptions {
   readonly active?: boolean;
 }
 
+type QuestionInteraction = Omit<
+  QuestionFormState,
+  'title' | 'question' | 'questionNumber' | 'questionCount' | 'scrollOffset'
+> & {
+  readonly scrollOffset: number | undefined;
+};
+
 /** Owns keyboard interaction and answer progression for a terminal question form. */
 export function useQuestionFormState({ request, active = true }: UseQuestionFormStateOptions): QuestionFormState {
   const { rows, columns } = useWindowSize();
   const { setCursorPosition } = useCursor();
   setCursorPosition(undefined);
   const [questionIndex, setQuestionIndex] = useState(0);
-  const [highlightedOption, setHighlightedOption] = useState(0);
-  const [selectedOptionIds, setSelectedOptionIds] = useState<readonly string[]>([]);
-  const [enteringOther, setEnteringOther] = useState(false);
-  const [otherText, setOtherText] = useState('');
-  const [otherCursor, setOtherCursor] = useState(0);
-  const [diagnostic, setDiagnostic] = useState('');
-  // Open at the question's beginning. Navigation opts back into following the
-  // selected option; paging can then inspect any part of the question again.
-  const [scrollOffset, setScrollOffset] = useState<number | undefined>(0);
+  const [interaction, setInteraction] = useState<QuestionInteraction>(initialInteraction);
+  const current = useRef(interaction);
+  const awaitingReveal = useRef(false);
+  useLayoutEffect(() => {
+    // A hidden choice must actually reach the screen before another Enter may
+    // confirm it; synchronous input state alone is not evidence of visibility.
+    awaitingReveal.current = false;
+  }, [interaction]);
+  const update = (changes: Partial<QuestionInteraction>): void => {
+    // Ink can deliver navigation, typing, paste, and submission in one React
+    // batch. Each input must observe the previous input's committed transition,
+    // not the stale state captured when the last frame was rendered.
+    current.current = { ...current.current, ...changes };
+    setInteraction(current.current);
+  };
   const answers = useRef<QuestionAnswer[]>([]);
+  // Input arrives synchronously, while React commits the next question later.
+  // Claim a question before scheduling that transition so repeated keys cannot
+  // append its answer twice, skip a question, or settle the request twice.
+  const answeredQuestion = useRef<number | undefined>(undefined);
+  const settled = useRef(false);
   const question = request.form.questions[questionIndex]!;
   const otherOption = question.options.length;
 
-  const resetForNextQuestion = (): void => {
-    setHighlightedOption(0);
-    setSelectedOptionIds([]);
-    setEnteringOther(false);
-    setOtherText('');
-    setOtherCursor(0);
-    setDiagnostic('');
-    setScrollOffset(0);
+  const readState = (value: QuestionInteraction): QuestionFormState => {
+    const { scrollOffset, ...fields } = value;
+    return {
+      ...fields,
+      title: request.form.title,
+      question,
+      questionNumber: questionIndex + 1,
+      questionCount: request.form.questions.length,
+      ...(scrollOffset === undefined ? {} : { scrollOffset }),
+    };
   };
 
   const answer = (value: QuestionAnswer): void => {
+    if (settled.current || answeredQuestion.current === questionIndex) return;
+    answeredQuestion.current = questionIndex;
     const completed = [...answers.current, value];
     answers.current = completed;
     if (questionIndex === request.form.questions.length - 1) {
+      settled.current = true;
       request.complete({ answers: completed });
       return;
     }
-    resetForNextQuestion();
-    setQuestionIndex(index => index + 1);
+    update(initialInteraction());
+    setQuestionIndex(questionIndex + 1);
   };
 
   const submitOther = (): void => {
-    const text = otherText.trim();
+    const text = current.current.otherText.trim();
     if (!text) {
-      setDiagnostic('Type an answer before continuing.');
+      update({ diagnostic: 'Type an answer before continuing.' });
       return;
     }
     answer({ questionId: question.id, type: QuestionAnswerType.OTHER, text });
   };
 
   const submitSelection = (): void => {
+    const { highlightedOption, selectedOptionIds } = current.current;
     if (highlightedOption === otherOption) {
-      setEnteringOther(true);
-      setDiagnostic('');
+      update({ enteringOther: true, diagnostic: '' });
       return;
     }
     const highlightedId = question.options[highlightedOption]!.id;
     const optionIds = question.allowMultiple ? selectedOptionIds : [highlightedId];
     if (optionIds.length === 0) {
-      setDiagnostic('Select at least one option before continuing.');
+      update({ diagnostic: 'Select at least one option before continuing.' });
       return;
     }
     answer({ questionId: question.id, type: QuestionAnswerType.SELECTION, optionIds });
   };
 
   const updateOtherText = (text: string, cursor: number): void => {
-    setScrollOffset(undefined);
-    setOtherText(text);
-    setOtherCursor(cursor);
-    setDiagnostic('');
+    update({ scrollOffset: undefined, otherText: text, otherCursor: cursor, diagnostic: '' });
   };
 
   usePaste(
     value => {
-      if (!enteringOther) return;
+      const { enteringOther, otherText, otherCursor } = current.current;
+      if (!enteringOther || settled.current || answeredQuestion.current === questionIndex) return;
       const safe = value.replace(/[\r\n]+/gu, ' ');
       updateOtherText(
         `${otherText.slice(0, otherCursor)}${safe}${otherText.slice(otherCursor)}`,
@@ -110,32 +131,46 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
 
   useInput(
     (input, key) => {
+      if (settled.current) return;
       if (key.ctrl && input.toLowerCase() === 'c') {
+        settled.current = true;
         request.interrupt();
         return;
       }
-      const viewport = getQuestionViewport({ ...state, rows, columns });
+      if (answeredQuestion.current === questionIndex) return;
+      if (key.return && awaitingReveal.current) return;
+      const { enteringOther, otherText, otherCursor, highlightedOption, selectedOptionIds } = current.current;
+      const viewport = getQuestionViewport({ ...readState(current.current), rows, columns });
       if (key.pageUp || key.pageDown) {
         const delta = Math.max(1, viewport.height - 1) * (key.pageDown ? 1 : -1);
-        setScrollOffset(Math.max(0, Math.min(viewport.maximumOffset, viewport.offset + delta)));
+        update({ scrollOffset: Math.max(0, Math.min(viewport.maximumOffset, viewport.offset + delta)) });
         return;
       }
       // Never confirm a choice while paging has hidden it. The first Enter
       // returns to the selection, and a subsequent Enter confirms it.
-      if (key.return && !viewport.focusVisible) {
-        setScrollOffset(undefined);
-        return;
+      if (key.return) {
+        const renderedViewport = getQuestionViewport({ ...readState(interaction), rows, columns });
+        const visibleSelection = getQuestionViewport({
+          ...readState(current.current),
+          rows,
+          columns,
+          scrollOffset: renderedViewport.offset,
+        }).focusVisible;
+        if (!viewport.focusVisible || !visibleSelection) {
+          awaitingReveal.current = true;
+          update({ scrollOffset: undefined });
+          return;
+        }
       }
       if (enteringOther) {
-        setScrollOffset(undefined);
+        update({ scrollOffset: undefined });
         if (key.escape) {
-          setEnteringOther(false);
-          setDiagnostic('');
+          update({ enteringOther: false, diagnostic: '' });
         } else if (key.return) submitOther();
-        else if (key.leftArrow) setOtherCursor(previousCharacterOffset(otherText, otherCursor));
-        else if (key.rightArrow) setOtherCursor(nextCharacterOffset(otherText, otherCursor));
-        else if (key.home || (key.ctrl && input.toLowerCase() === 'a')) setOtherCursor(0);
-        else if (key.end || (key.ctrl && input.toLowerCase() === 'e')) setOtherCursor(otherText.length);
+        else if (key.leftArrow) update({ otherCursor: previousCharacterOffset(otherText, otherCursor) });
+        else if (key.rightArrow) update({ otherCursor: nextCharacterOffset(otherText, otherCursor) });
+        else if (key.home || (key.ctrl && input.toLowerCase() === 'a')) update({ otherCursor: 0 });
+        else if (key.end || (key.ctrl && input.toLowerCase() === 'e')) update({ otherCursor: otherText.length });
         else if (key.backspace) {
           const previous = previousCharacterOffset(otherText, otherCursor);
           if (previous !== otherCursor) {
@@ -155,22 +190,22 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
         return;
       }
       if (key.upArrow) {
-        setScrollOffset(undefined);
-        setHighlightedOption(index => Math.max(0, index - 1));
+        update({ scrollOffset: undefined, highlightedOption: Math.max(0, highlightedOption - 1) });
         return;
       }
       if (key.downArrow) {
-        setScrollOffset(undefined);
-        setHighlightedOption(index => Math.min(otherOption, index + 1));
+        update({ scrollOffset: undefined, highlightedOption: Math.min(otherOption, highlightedOption + 1) });
         return;
       }
       if (input === ' ' && question.allowMultiple && highlightedOption < otherOption) {
-        setScrollOffset(undefined);
         const optionId = question.options[highlightedOption]!.id;
-        setSelectedOptionIds(selected =>
-          selected.includes(optionId) ? selected.filter(id => id !== optionId) : [...selected, optionId],
-        );
-        setDiagnostic('');
+        update({
+          scrollOffset: undefined,
+          selectedOptionIds: selectedOptionIds.includes(optionId)
+            ? selectedOptionIds.filter(id => id !== optionId)
+            : [...selectedOptionIds, optionId],
+          diagnostic: '',
+        });
         return;
       }
       if ((input === ' ' && highlightedOption === otherOption) || key.return) submitSelection();
@@ -178,20 +213,20 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
     { isActive: active },
   );
 
-  const state: QuestionFormState = {
-    title: request.form.title,
-    question,
-    questionNumber: questionIndex + 1,
-    questionCount: request.form.questions.length,
-    highlightedOption,
-    selectedOptionIds,
-    enteringOther,
-    otherText,
-    otherCursor,
-    diagnostic,
-    ...(scrollOffset === undefined ? {} : { scrollOffset }),
+  return readState(interaction);
+}
+
+function initialInteraction(): QuestionInteraction {
+  return {
+    highlightedOption: 0,
+    selectedOptionIds: [],
+    enteringOther: false,
+    otherText: '',
+    otherCursor: 0,
+    diagnostic: '',
+    // Open at the question's beginning; navigation opts into following selection.
+    scrollOffset: 0,
   };
-  return state;
 }
 
 function isPrintableInput(input: string, control: boolean, meta: boolean): boolean {

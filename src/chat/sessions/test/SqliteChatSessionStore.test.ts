@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe(SqliteChatSessionStore, () => {
-  it('[round6-01] merges legacy context chats without changing their transcripts or provider state and can repeat the migration', async () => {
+  it('merges legacy context chats without changing their transcripts or provider state and can repeat the migration', async () => {
     const directory = await fixture('glyph-chat-context-migration-');
     const first = await ProjectContextResolver.folder(await fixture('glyph-old-context-'), 'local');
     const target = await ProjectContextResolver.folder(await fixture('glyph-new-context-'), 'local');

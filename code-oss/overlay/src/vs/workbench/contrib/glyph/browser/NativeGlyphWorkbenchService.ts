@@ -1,4 +1,5 @@
 import { Emitter } from '#vs/base/common/event.js';
+import { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
@@ -22,6 +23,7 @@ import type { GlyphWorkbenchSelection } from '#glyph/workbench/GlyphWorkbenchSel
 
 /** Adapts the host's recoverable state and commands to the workbench interaction port. */
 export class NativeGlyphWorkbenchService extends Disposable implements GlyphWorkbenchService {
+  readonly composer = new GlyphComposerState();
   declare readonly _serviceBrand: undefined;
   private readonly changeEmitter = this._register(new Emitter<GlyphWorkbenchState>());
   readonly onDidChangeState = this.changeEmitter.event;

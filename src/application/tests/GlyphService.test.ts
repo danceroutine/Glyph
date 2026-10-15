@@ -324,6 +324,7 @@ describe(GlyphService, () => {
         };
         const reviews = {
           pendingResults: [result],
+          flushPendingCheckpoint: vi.fn(async () => {}),
           initialize: vi.fn(async () => {}),
           acknowledgeResults: vi.fn(async () => {}),
         } as unknown as ProposalReviewManager;

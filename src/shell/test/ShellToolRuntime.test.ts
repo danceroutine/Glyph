@@ -130,8 +130,21 @@ describe(ShellToolRuntime, () => {
       ).resolves.toContain('closed');
       await expect(runtime.execute(ShellToolName.LIST, '{}', undefined, context)).resolves.toContain('terminal');
 
-      expect(manager.writeInput).toHaveBeenNthCalledWith(1, 'terminal', 'yes', true, undefined, 'chat-one');
-      expect(manager.writeInput).toHaveBeenNthCalledWith(2, 'terminal', '', false, 'ready', 'chat-one');
+      expect(manager.writeInput).toHaveBeenNthCalledWith(1, {
+        terminalId: 'terminal',
+        input: 'yes',
+        appendNewline: true,
+        ownerChatId: 'chat-one',
+        signal: expect.any(AbortSignal),
+      });
+      expect(manager.writeInput).toHaveBeenNthCalledWith(2, {
+        terminalId: 'terminal',
+        input: '',
+        appendNewline: false,
+        wakeOn: 'ready',
+        ownerChatId: 'chat-one',
+        signal: expect.any(AbortSignal),
+      });
       expect(manager.close).toHaveBeenCalledWith('terminal', 'chat-one');
     });
 

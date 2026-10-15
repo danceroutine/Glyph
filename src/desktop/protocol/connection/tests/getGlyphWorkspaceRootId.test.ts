@@ -5,7 +5,7 @@ import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 
 describe(getGlyphWorkspaceRootId, () => {
   it.each(['My Project', 'café', 'mail@project', 'root@file%3A%2F%2F%2Fworkspace%2Fproject'])(
-    '[round9-03] preserves the existing review mutation scope for a unique %s root',
+    'preserves the existing review mutation scope for a unique %s root',
     name => {
       const root = { name, uri: 'file:///workspace/project' };
       const scope = (name: string) =>

@@ -7,7 +7,7 @@ import { FileOpenAIAccountStore } from '#src/providers/openai/auth/FileOpenAIAcc
 
 describe(FileOpenAIAccountStore, () => {
   describe(FileOpenAIAccountStore.prototype.acquire, () => {
-    it('[round2-06] reclaims a crashed owner’s lock but still excludes a live replacement', async () => {
+    it('reclaims a crashed owner’s lock but still excludes a live replacement', async () => {
       const directory = await mkdtemp(join(tmpdir(), 'glyph-crashed-account-lock-'));
       await mkdir(join(directory, 'session.lock'));
       await writeFile(join(directory, 'session.lock', 'pid'), '424242');

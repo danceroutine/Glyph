@@ -62,8 +62,91 @@ async function modules() {
   return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 }
 
+it('loads saved history through the latest untrusted attachment when revocation invalidates initial recovery', async () => {
+  const { NativeGlyphWorkbenchService, GlyphDesktopHost } = await modules();
+  const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
+  const configurations = [];
+  let denyRecovery;
+  const handle = vi.fn(async () => {});
+  const host = new GlyphDesktopHost({
+    create: async configuration => {
+      configurations.push(configuration);
+      if (configurations.length === 1)
+        await new Promise((_resolve, reject) => {
+          denyRecovery = () => reject(new Error('Workspace trust is required to recover this review.'));
+        });
+      return {
+        snapshot: async () => ({ accounts: [], models: [], chats: [{ id: 'saved-chat' }], runs: [], proposals: [] }),
+        handle,
+        connectionLost: async () => {},
+        dispose: async () => {},
+      };
+    },
+  });
+  const tasks = [];
+  class Port extends EventTarget {
+    start() {
+      this.emit({ type: 'glyph_connection_ready', identity, hostGeneration: host.generation });
+    }
+    close() {}
+    postMessage(request) {
+      tasks.push(host.receive('connection', request));
+    }
+    emit(data) {
+      this.dispatchEvent(new MessageEvent('message', { data }));
+    }
+  }
+  const port = new Port();
+  globalThis.__glyphTrustPort = port;
+  host.connect('connection', identity, envelope => port.emit(envelope));
+  let trusted = true;
+  let onTrust;
+  const service = new NativeGlyphWorkbenchService(
+    {
+      getWorkspace: () => ({
+        folders: [{ name: 'project', uri: { scheme: 'file', fsPath: '/project', toString: () => 'file:///project' } }],
+      }),
+      onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+    },
+    {
+      isWorkspaceTrusted: () => trusted,
+      onDidChangeTrust: listener => {
+        onTrust = listener;
+        return { dispose() {} };
+      },
+    },
+    { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {} }) },
+  );
+  const connecting = service.connect().catch(error => error);
+  try {
+    await vi.waitFor(() => expect(denyRecovery).toBeTypeOf('function'));
+    trusted = false;
+    onTrust();
+    denyRecovery();
+    expect(await connecting).toBeUndefined();
+    expect(configurations.map(configuration => configuration.trusted)).toEqual([true, false]);
+    expect(service.state.chats.map(chat => chat.id)).toEqual(['saved-chat']);
+    await expect(
+      service.client.request({
+        type: 'send',
+        chatId: 'saved-chat',
+        runId: 'forbidden',
+        text: 'not authorized',
+        attachments: [],
+      }),
+    ).rejects.toThrow('UNTRUSTED_WORKSPACE');
+    expect(handle.mock.calls.filter(([command]) => command.type === 'send')).toEqual([]);
+  } finally {
+    denyRecovery?.();
+    service.dispose();
+    await Promise.allSettled(tasks);
+    await host.dispose();
+    delete globalThis.__glyphTrustPort;
+  }
+});
+
 it.each(['handshake', 'attach acknowledgement'])(
-  '[round10-01] revokes host authorization when trust changes during %s',
+  'revokes host authorization when trust changes during %s',
   async phase => {
     const { NativeGlyphWorkbenchService, GlyphDesktopHost } = await modules();
     const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };

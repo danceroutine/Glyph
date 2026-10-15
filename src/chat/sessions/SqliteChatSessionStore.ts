@@ -103,6 +103,8 @@ export class SqliteChatSessionStore implements ChatSessionStore {
   private readonly path: string;
   private readonly legacyPath: string;
   private database: Database.Database | undefined;
+  private initialization: Promise<void> | undefined;
+  private disposed = false;
 
   constructor(
     private readonly directory: string,
@@ -115,22 +117,18 @@ export class SqliteChatSessionStore implements ChatSessionStore {
   }
 
   async initialize(context: ProjectContext): Promise<void> {
-    if (!this.database) {
-      try {
-        await mkdir(this.directory, { recursive: true, mode: 0o700 });
-        await chmod(this.directory, 0o700);
-        this.database = new Database(this.path);
-        await chmod(this.path, 0o600);
-        this.configure(this.database);
-        this.createSchema(this.database);
-        await this.migrateLegacyCatalog(this.database, context.authority);
-      } catch (error) {
-        this.database?.close();
-        this.database = undefined;
-        throw new PersistenceError('Could not initialize saved chats.', { cause: error });
-      }
-    }
+    if (this.disposed)
+      throw new PersistenceError('Could not initialize saved chats.', {
+        cause: new Error('Chat storage has stopped.'),
+      });
+    // A connection is not ready until its schema and legacy import are ready.
+    // Share that whole operation when multiple contexts use this store at once.
+    await (this.initialization ??= this.openDatabase(context.authority).catch(error => {
+      this.initialization = undefined;
+      throw error;
+    }));
     try {
+      if (this.disposed) throw new Error('Chat storage has stopped.');
       const database = this.requireDatabase();
       const migration = this.options.contextMigration;
       if (migration && migration.targetId !== context.id)
@@ -174,8 +172,30 @@ export class SqliteChatSessionStore implements ChatSessionStore {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
+    // A late startup must not publish an open handle after disposal returned.
+    await this.initialization?.catch(() => {});
     this.database?.close();
     this.database = undefined;
+    this.initialization = undefined;
+  }
+
+  private async openDatabase(authority: string): Promise<void> {
+    let database: Database.Database | undefined;
+    try {
+      await mkdir(this.directory, { recursive: true, mode: 0o700 });
+      await chmod(this.directory, 0o700);
+      database = new Database(this.path);
+      await chmod(this.path, 0o600);
+      this.configure(database);
+      this.createSchema(database);
+      await this.migrateLegacyCatalog(database, authority);
+      if (this.disposed) throw new Error('Chat storage has stopped.');
+      this.database = database;
+    } catch (error) {
+      database?.close();
+      throw new PersistenceError('Could not initialize saved chats.', { cause: error });
+    }
   }
 
   private configure(database: Database.Database): void {
@@ -244,30 +264,36 @@ export class SqliteChatSessionStore implements ChatSessionStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    database.transaction(() => {
-      for (const legacy of catalog?.chats ?? []) {
-        const context = legacyContext(legacy.scope.root, authority);
-        registerContext(database, context);
-        saveRecord(database, {
-          schemaVersion: 3,
-          id: legacy.id,
-          title: legacy.title,
-          titleOrigin: legacy.titleOrigin,
-          projectContextId: context.id,
-          accountProvider: 'openai',
-          accountId: legacyAccountId(legacy.accountClientId, legacy.accountSubject),
-          modelSlug: legacy.modelSlug,
-          modelName: legacy.modelName,
-          createdAt: legacy.createdAt,
-          updatedAt: legacy.updatedAt,
-          providerState: legacy.providerState,
-          transcript: legacy.transcript,
-        });
-      }
-      database
-        .prepare("INSERT INTO metadata(key, value) VALUES ('legacy_chats_json_migrated', ?)")
-        .run(new Date().toISOString());
-    })();
+    database
+      .transaction(() => {
+        // The legacy read yielded to other workspaces. Check again while holding
+        // the write reservation, before importing anything or publishing a marker.
+        // Otherwise a second importer could overwrite a newer chat checkpoint.
+        if (database.prepare("SELECT value FROM metadata WHERE key = 'legacy_chats_json_migrated'").get()) return;
+        for (const legacy of catalog?.chats ?? []) {
+          const context = legacyContext(legacy.scope.root, authority);
+          registerContext(database, context);
+          saveRecord(database, {
+            schemaVersion: 3,
+            id: legacy.id,
+            title: legacy.title,
+            titleOrigin: legacy.titleOrigin,
+            projectContextId: context.id,
+            accountProvider: 'openai',
+            accountId: legacyAccountId(legacy.accountClientId, legacy.accountSubject),
+            modelSlug: legacy.modelSlug,
+            modelName: legacy.modelName,
+            createdAt: legacy.createdAt,
+            updatedAt: legacy.updatedAt,
+            providerState: legacy.providerState,
+            transcript: legacy.transcript,
+          });
+        }
+        database
+          .prepare("INSERT INTO metadata(key, value) VALUES ('legacy_chats_json_migrated', ?)")
+          .run(new Date().toISOString());
+      })
+      .immediate();
   }
 
   private requireDatabase(): Database.Database {

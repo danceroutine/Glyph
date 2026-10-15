@@ -16,18 +16,23 @@ export function ProposalReview({
   if (complete) return <Text dimColor>{header}</Text>;
   return (
     <Box flexDirection="column" height={rows}>
-      <Text bold color="cyan">
+      {/* Control rows must match the fixed row budget used by review paging. */}
+      <Text bold color="cyan" wrap="truncate">
         {header}
       </Text>
       {diagnostic ? (
-        <Text bold color="red">
-          {diagnostic}
+        <Text bold color="red" wrap="truncate">
+          {diagnostic.replace(/[\r\n]+/g, ' ')}
         </Text>
       ) : null}
       <Text>{visibleLines.join('\n')}</Text>
       <Box flexGrow={1} />
-      <Text dimColor>{navigationHelp}</Text>
-      <Text dimColor>{decisionHelp}</Text>
+      <Text dimColor wrap="truncate">
+        {navigationHelp}
+      </Text>
+      <Text dimColor wrap="truncate">
+        {decisionHelp}
+      </Text>
     </Box>
   );
 }

@@ -11,6 +11,10 @@ import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
 import type { ProviderTraceEntry } from '#src/chat/ProviderTraceEntry.js';
 import { OpenAIProvider } from '#src/providers/openai/OpenAIProvider.js';
+import { OpenAISession } from '#src/providers/openai/auth/OpenAISession.js';
+import { OpenAIAuthenticationClient } from '#src/providers/openai/auth/OpenAIAuthenticationClient.js';
+import type { OpenAIAccount } from '#src/providers/openai/auth/OpenAIAccount.js';
+import type { OpenAIAccountStore } from '#src/providers/openai/auth/OpenAIAccountStore.js';
 
 const configuration: ChatConfiguration = {
   instructions: 'You are a helpful assistant.',
@@ -84,8 +88,213 @@ function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolRu
   };
 }
 const options = () => ({ signal: new AbortController().signal, onText: (_text: string): void => {} });
+const toolCompleted = {
+  ...completed,
+  response: {
+    ...completed.response,
+    output: [
+      {
+        type: 'function_call',
+        id: 'fc_wait',
+        call_id: 'call_wait',
+        status: 'completed',
+        name: 'wait_for_work',
+        arguments: '{}',
+      },
+    ],
+  },
+};
 
 describe(OpenAIProvider, () => {
+  it.each(['default client', 'injected transport'] as const)(
+    'refreshes credentials before a continuation after a long tool wait with the %s',
+    async transport => {
+      let now = Date.now();
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const authConfiguration = {
+        issuer: 'https://auth.example.test',
+        resource: 'https://api.example.test/v1',
+        scopes: 'openid plan',
+        planScope: 'plan',
+        requestTimeoutMs: 30000,
+      };
+      const account: OpenAIAccount = {
+        clientId: 'client',
+        subject: 'subject',
+        email: 'fixture@example.test',
+        tokens: {
+          accessToken: 'original-token',
+          refreshToken: 'original-refresh',
+          idToken: 'id',
+          expiresAt: now + 60000,
+          scopes: ['openid', 'plan'],
+        },
+      };
+      const store: OpenAIAccountStore = {
+        state: { version: 1, hostId: 'host', accounts: [account] },
+        acquire: vi.fn(),
+        load: vi.fn(),
+        save: vi.fn(),
+        release: vi.fn(),
+      };
+      const auth = new OpenAIAuthenticationClient(authConfiguration, { get: vi.fn(), post: vi.fn() });
+      const refresh = vi.spyOn(auth, 'refresh').mockImplementation(async () => ({
+        ...account.tokens!,
+        accessToken: 'renewed-token',
+        refreshToken: 'renewed-refresh',
+        expiresAt: now + 3600000,
+      }));
+      const session = new OpenAISession(store, auth, authConfiguration);
+      const token = vi.fn(() => session.accessToken(account));
+      const authorizations: Array<string | null> = [];
+      const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        authorizations.push(new Headers(init?.headers).get('authorization'));
+        return sse([authorizations.length === 1 ? toolCompleted : completed]);
+      });
+      if (transport === 'default client') vi.stubGlobal('fetch', fetch);
+      const client = transport === 'injected transport' ? new OpenAI({ apiKey: 'unused', fetch }) : undefined;
+      const tools: ToolRuntime = {
+        definitions: [],
+        execute: vi.fn(async () => {
+          now += 90000;
+          return 'work finished';
+        }),
+      };
+      const provider = new OpenAIProvider('model', configuration, token, client, tools);
+      try {
+        await provider.send('Wait for the work and continue.', options());
+        expect(token).toHaveBeenCalledTimes(2);
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(store.save).toHaveBeenCalledOnce();
+        expect(authorizations).toEqual(['Bearer original-token', 'Bearer renewed-token']);
+        expect(tools.execute).toHaveBeenCalledOnce();
+        if (client) expect(client.apiKey).toBe('unused');
+      } finally {
+        await session.dispose();
+        clock.mockRestore();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it('preserves completed tool results when continuation authentication fails and does not execute them again', async () => {
+    const token = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce('initial')
+      .mockRejectedValueOnce(new Error('Authentication is temporarily unavailable.'))
+      .mockResolvedValue('recovered');
+    const requests: Record<string, unknown>[] = [];
+    const client = new OpenAI({
+      apiKey: 'unused',
+      fetch: async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return sse([requests.length === 1 ? toolCompleted : completed]);
+      },
+    });
+    const tools: ToolRuntime = { definitions: [], execute: vi.fn(async () => 'durable tool outcome') };
+    const provider = new OpenAIProvider('model', configuration, token, client, tools);
+    await expect(provider.send('Do the work.', options())).rejects.toThrow('temporarily unavailable');
+    expect(requests).toHaveLength(1);
+    expect(provider.exportState().data).toEqual(
+      expect.objectContaining({
+        history: expect.arrayContaining([
+          { type: 'function_call_output', call_id: 'call_wait', output: 'durable tool outcome' },
+        ]),
+      }),
+    );
+    await provider.send('Continue.', options());
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.input).toEqual(
+      expect.arrayContaining([{ type: 'function_call_output', call_id: 'call_wait', output: 'durable tool outcome' }]),
+    );
+    expect(tools.execute).toHaveBeenCalledOnce();
+  });
+
+  it.each(['cancel', 'timeout'] as const)(
+    'interrupts continuation authentication on %s without discarding completed tools or sending another request',
+    async mode => {
+      let resolveToken!: (token: string) => void;
+      const credentials = new Promise<string>(resolve => {
+        resolveToken = resolve;
+      });
+      const token = vi.fn<() => Promise<string>>().mockResolvedValueOnce('initial').mockReturnValue(credentials);
+      const fetch = vi.fn(async () => sse([fetch.mock.calls.length === 1 ? toolCompleted : completed]));
+      const client = new OpenAI({ apiKey: 'fixture', maxRetries: 0, fetch });
+      const tools: ToolRuntime = { definitions: [], execute: vi.fn(async () => 'completed safely') };
+      const provider = new OpenAIProvider(
+        'model',
+        { ...configuration, timeoutMs: mode === 'timeout' ? 100 : 120000 },
+        token,
+        client,
+        tools,
+      );
+      const controller = new AbortController();
+      let failure: unknown;
+      const sending = provider.send('Do the work.', { ...options(), signal: controller.signal }).catch(error => {
+        failure = error;
+      });
+      try {
+        await vi.waitFor(() => expect(token).toHaveBeenCalledTimes(2), { timeout: 300 });
+        if (mode === 'cancel') controller.abort();
+        await vi.waitFor(() => expect(failure).toBeInstanceOf(Error), { timeout: 300 });
+        expect(fetch).toHaveBeenCalledOnce();
+        expect(provider.exportState().data).toEqual(
+          expect.objectContaining({
+            history: expect.arrayContaining([
+              { type: 'function_call_output', call_id: 'call_wait', output: 'completed safely' },
+            ]),
+          }),
+        );
+        resolveToken('renewed');
+        await sending;
+        await expect(credentials).resolves.toBe('renewed');
+        expect(fetch).toHaveBeenCalledOnce();
+      } finally {
+        resolveToken('renewed');
+        await sending;
+      }
+    },
+  );
+
+  it.each(['cancel', 'timeout'] as const)(
+    'interrupts a credential wait on %s without cancelling shared refresh',
+    async mode => {
+      let resolveToken!: (token: string) => void;
+      const credentials = new Promise<string>(resolve => {
+        resolveToken = resolve;
+      });
+      const token = vi.fn(() => credentials);
+      const fetch = vi.fn(async () => sse([completed]));
+      const client = new OpenAI({ apiKey: 'fixture', maxRetries: 0, fetch });
+      const provider = new OpenAIProvider(
+        'model',
+        { ...configuration, timeoutMs: mode === 'timeout' ? 10 : 120000 },
+        token,
+        client,
+        new CompositeToolRuntime([]),
+      );
+      const controller = new AbortController();
+      let failure: unknown;
+      const sending = provider.send('hello', { ...options(), signal: controller.signal }).catch(error => {
+        failure = error;
+      });
+      try {
+        await vi.waitFor(() => expect(token).toHaveBeenCalledOnce());
+        if (mode === 'cancel') controller.abort();
+        await vi.waitFor(() => expect(failure).toBeInstanceOf(Error), { timeout: 200 });
+        expect(fetch).not.toHaveBeenCalled();
+        resolveToken('refreshed');
+        await sending;
+        // Another caller can still consume the shared result after this turn exits.
+        await expect(credentials).resolves.toBe('refreshed');
+        await provider.send('retry', options());
+        expect(fetch).toHaveBeenCalledOnce();
+      } finally {
+        resolveToken('refreshed');
+        await sending;
+      }
+    },
+  );
   describe(OpenAIProvider.prototype.send, () => {
     it('streams split Unicode, reports usage, replays full state, and resets', async () => {
       const { provider, requests } = harness([

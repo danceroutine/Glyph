@@ -2,6 +2,7 @@ import type { OpenAIAccount } from '#src/providers/openai/auth/OpenAIAccount.js'
 import type { OpenAISessionService } from '#src/providers/openai/auth/OpenAISessionService.js';
 
 export class FixtureOpenAISession implements OpenAISessionService {
+  async dispose(): Promise<void> {}
   constructor(private readonly account: OpenAIAccount) {}
   async signIn(): Promise<OpenAIAccount> {
     return this.account;

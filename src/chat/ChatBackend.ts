@@ -28,7 +28,7 @@ export interface ChatBackend {
     authorize?: ChatAuthorizationHandler,
   ): Promise<ChatAccount>;
   acknowledgeNotice(account: ChatAccount): Promise<void>;
-  listModels(account: ChatAccount): Promise<Model[]>;
+  listModels(account: ChatAccount, signal?: AbortSignal): Promise<Model[]>;
   createProvider(account: ChatAccount, model: Model, state?: ChatProviderState): ChatProvider;
   logout(account: ChatAccount): Promise<boolean>;
   redact(message: string): string;

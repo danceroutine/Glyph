@@ -137,7 +137,7 @@ const definitions: readonly ToolDefinition[] = [
     namespace: ProjectToolNamespace.PROJECT,
     name: ProjectToolName.READ_FILE,
     description:
-      'Read an exact UTF-8 text snapshot inside the project, including its revision, byte-order-mark state, and per-line line-ending metadata. Paths are project-relative. Pass null for both line bounds to read the entire file. Reuse the revision in edit proposals.',
+      'Read a UTF-8 text snapshot inside the project, including revision, byte-order-mark state, and per-line line-ending metadata. Paths are project-relative. Results are bounded to 512 KiB; when nextStartLine is present, request that start_line to continue. Reuse the revision in edit proposals.',
     inputKind: ToolInputKind.JSON,
     parameters: jsonSchema(readProjectFileArguments),
   },
@@ -173,7 +173,9 @@ export class ProjectAccess {
     try {
       switch (name) {
         case ProjectToolName.LIST_FILES:
-          return JSON.stringify(await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments))));
+          return JSON.stringify(
+            await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments)), signal),
+          );
         case ProjectToolName.READ_FILE:
           return JSON.stringify(await this.readFile(readProjectFileArguments.parse(JSON.parse(rawArguments))));
         case ProjectToolName.SEARCH_CONTENTS:
@@ -216,15 +218,17 @@ export class ProjectAccess {
     });
   }
 
-  private async listFiles({
-    glob_pattern: globPattern,
-    target_directory: targetDirectory,
-  }: z.infer<typeof listProjectFilesArguments>): Promise<{ files: string[]; truncated: boolean }> {
+  private async listFiles(
+    { glob_pattern: globPattern, target_directory: targetDirectory }: z.infer<typeof listProjectFilesArguments>,
+    signal?: AbortSignal,
+  ): Promise<{ files: string[]; truncated: boolean }> {
+    signal?.throwIfAborted();
     const normalizedTarget = targetDirectory === null ? undefined : this.workspace.normalizePath(targetDirectory);
     if (this.pathIndex) {
       return this.pathIndex.glob(globPattern, {
         ...(normalizedTarget === undefined ? {} : { targetDirectory: normalizedTarget }),
         limit: this.options.maxFiles,
+        ...(signal ? { signal } : {}),
       });
     }
     return this.workspace.list(this.options.maxFiles, globPattern, normalizedTarget);
@@ -236,6 +240,7 @@ export class ProjectAccess {
     endLine: number;
     totalLines: number;
     truncated: boolean;
+    nextStartLine?: number;
     content: string;
     revision: string;
     byteOrderMark: boolean;
@@ -247,22 +252,41 @@ export class ProjectAccess {
     if (snapshot.byteLength > this.options.maxFileBytes) {
       throw new Error(`File exceeds the ${this.options.maxFileBytes}-byte read limit.`);
     }
-    const lines = toLines(snapshot.text);
-    const endLineLimit = requestedEnd ?? lines.length;
+    const endLineLimit = requestedEnd ?? Number.MAX_SAFE_INTEGER;
     if (endLineLimit < startLine) throw new Error('end_line must be greater than or equal to start_line.');
 
-    const startIndex = startLine - 1;
-    const endLine = Math.min(endLineLimit, lines.length);
-    const selected = startIndex >= lines.length ? [] : lines.slice(startIndex, endLine);
-    const numbered = selected.map(line => `${line.number}: ${line.content}`).join('\n');
+    const selected: { number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }[] = [];
+    const numbered: string[] = [];
+    let totalLines = 0;
+    let budgetFull = false;
+    // Reserve scalar metadata conservatively, then account for both copies of
+    // each line using JSON-escaped byte sizes. Never allocate a whole-file array
+    // of line objects merely to return a small page.
+    let bytes = Buffer.byteLength(JSON.stringify({ path: snapshot.path, revision: snapshot.revision })) + 512;
+    for (const line of toLines(snapshot.text)) {
+      totalLines = line.number;
+      if (line.number < startLine || line.number > endLineLimit || budgetFull) continue;
+      const numberedLine = `${line.number}: ${line.content}`;
+      const added = Buffer.byteLength(JSON.stringify(line)) + Buffer.byteLength(JSON.stringify(numberedLine)) + 3;
+      if (bytes + added > 512 * 1024) {
+        if (!selected.length) throw new Error('This line exceeds the 512 KiB serialized read limit.');
+        budgetFull = true;
+        continue;
+      }
+      bytes += added;
+      selected.push(line);
+      numbered.push(numberedLine);
+    }
+    const endLine = selected.at(-1)?.number ?? Math.min(endLineLimit, totalLines);
 
     return {
       path: snapshot.path,
       startLine,
       endLine,
-      totalLines: lines.length,
-      truncated: endLine < lines.length,
-      content: numbered,
+      totalLines,
+      truncated: endLine < totalLines,
+      ...(budgetFull ? { nextStartLine: endLine + 1 } : {}),
+      content: numbered.join('\n'),
       revision: snapshot.revision,
       byteOrderMark: snapshot.byteOrderMark,
       lines: selected,
@@ -275,18 +299,16 @@ function jsonSchema(schema: z.ZodType): Record<string, unknown> {
   return parameters;
 }
 
-function toLines(text: string): { number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }[] {
-  const lines: { number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }[] = [];
+function* toLines(text: string): Generator<{ number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }> {
   let start = 0;
   let number = 1;
   for (let index = 0; index < text.length; index++) {
     const character = text[index];
     if (character !== '\n' && character !== '\r') continue;
     const lineEnding = character === '\r' && text[index + 1] === '\n' ? '\r\n' : character;
-    lines.push({ number: number++, content: text.slice(start, index), lineEnding });
+    yield { number: number++, content: text.slice(start, index), lineEnding };
     if (lineEnding === '\r\n') index++;
     start = index + 1;
   }
-  lines.push({ number, content: text.slice(start), lineEnding: '' });
-  return lines;
+  yield { number, content: text.slice(start), lineEnding: '' };
 }

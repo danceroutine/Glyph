@@ -10,6 +10,7 @@ import type { GlyphWorkingCopySearchResult } from './GlyphWorkingCopySearchResul
 export interface GlyphEditorResponse {
   readonly operationId: string;
   readonly ok: boolean;
+  readonly exists?: boolean;
   readonly snapshot?: GlyphEditorTextSnapshot;
   readonly workingCopies?: readonly GlyphEditorTextSnapshot[];
   readonly search?: GlyphWorkingCopySearchResult;

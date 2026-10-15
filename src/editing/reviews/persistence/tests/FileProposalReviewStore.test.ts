@@ -6,7 +6,7 @@ import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FilePr
 import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
 
 describe(FileProposalReviewStore, () => {
-  it('[round5-01] isolates mutation scopes, imports matching legacy reviews, and never resurrects a cleared checkpoint', async () => {
+  it('isolates mutation scopes, imports matching legacy reviews, and never resurrects a cleared checkpoint', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'glyph-scoped-reviews-'));
     const proposal: EditProposal = {
       schemaVersion: 1,
@@ -36,7 +36,7 @@ describe(FileProposalReviewStore, () => {
     }
   });
 
-  it('[round5-01] refuses a foreign checkpoint inside an already scoped directory', async () => {
+  it('refuses a foreign checkpoint inside an already scoped directory', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'glyph-scoped-review-binding-'));
     try {
       const store = new FileProposalReviewStore(directory, { mutationScope: 'owner' });
@@ -51,7 +51,7 @@ describe(FileProposalReviewStore, () => {
     }
   });
 
-  it('[round5-01] reports corrupt legacy storage instead of silently discarding it during migration', async () => {
+  it('reports corrupt legacy storage instead of silently discarding it during migration', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'glyph-scoped-review-corruption-'));
     try {
       const path = join(directory, 'active-proposal-review.json');

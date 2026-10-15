@@ -24,7 +24,167 @@ const peer = { ...owner, windowId: 'peer' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(GlyphDesktopHost, () => {
-  it('[round7-01] drains the owning runtime when trust is revoked and rejects further mutations', async () => {
+  it('rejects new commands as soon as host shutdown starts, before runtime disposal finishes', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    const stopping = fixture.host.dispose();
+    await fixture.receive('owner', owner, 'too-late', {
+      type: GlyphWorkbenchCommandType.SEND,
+      chatId: 'chat',
+      runId: 'run',
+      text: 'must not start',
+      attachments: [],
+    });
+    await stopping;
+    expect(fixture.runtime.handle).not.toHaveBeenCalled();
+  });
+
+  it.each(['expiry', 'shutdown'] as const)(
+    'does not resurrect a retired runtime through queued attachment after %s',
+    async retirement => {
+      vi.useFakeTimers();
+      const fixture = new HostFixture();
+      let release!: () => void;
+      const barrier = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      fixture.factory.create.mockImplementationOnce(async () => {
+        await barrier;
+        return fixture.runtime;
+      });
+      fixture.connect('owner', owner);
+      const first = fixture.receive('owner', owner, 'initial', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: false,
+      });
+      const second = fixture.receive('owner', owner, 'grant', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: true,
+      });
+      let shutdown: Promise<void> | undefined;
+      try {
+        if (retirement === 'expiry') {
+          await fixture.host.disconnect('owner');
+          await vi.advanceTimersByTimeAsync(30_000);
+        } else shutdown = fixture.host.dispose();
+        release();
+        await Promise.all([first, second, shutdown]);
+        expect(fixture.factory.create).toHaveBeenCalledOnce();
+        expect(fixture.runtime.dispose).toHaveBeenCalledOnce();
+        if (retirement === 'expiry') {
+          fixture.connect('replacement', peer);
+          await fixture.receive('replacement', peer, 'attach-replacement', {
+            type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+            roots,
+            trusted: true,
+          });
+          expect(
+            fixture.events('replacement').find(event => event.event.type === GlyphHostEventType.INITIAL_STATE)?.event,
+          ).toMatchObject({ state: { ownerWindowId: peer.windowId, readOnly: false } });
+        }
+      } finally {
+        release();
+        await Promise.all([first, second, shutdown]);
+        await fixture.host.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('blocks runtime commands while an attachment snapshot is still pending', async () => {
+    const fixture = new HostFixture();
+    const command = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'first', command);
+    let release!: (value: GlyphRuntimeSnapshot) => void;
+    vi.spyOn(fixture.runtime, 'snapshot').mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          release = resolve;
+        }),
+    );
+    const attaching = fixture.receive('owner', owner, 'again', command);
+    await fixture.receive('owner', owner, 'during', {
+      type: GlyphWorkbenchCommandType.SEND,
+      chatId: 'chat',
+      runId: 'run',
+      text: 'blocked',
+      attachments: [],
+    });
+    expect(fixture.runtime.handle).not.toHaveBeenCalled();
+    release({ accounts: [], models: [], chats: [], proposals: [], runs: [] });
+    await attaching;
+    await fixture.receive('owner', owner, 'after', {
+      type: GlyphWorkbenchCommandType.SEND,
+      chatId: 'chat',
+      runId: 'run',
+      text: 'allowed',
+      attachments: [],
+    });
+    expect(fixture.runtime.handle).toHaveBeenCalledOnce();
+    await fixture.host.dispose();
+  });
+
+  it.each([false, true])(
+    'serializes an overlapping trust change from %s before allowing runtime commands',
+    async initiallyTrusted => {
+      const fixture = new HostFixture();
+      let release!: () => void;
+      const barrier = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      fixture.factory.create.mockImplementationOnce(async () => {
+        await barrier;
+        return fixture.runtime;
+      });
+      fixture.connect('owner', owner);
+      const first = fixture.receive('owner', owner, 'initial', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: initiallyTrusted,
+      });
+      await vi.waitFor(() => expect(fixture.factory.create).toHaveBeenCalledOnce());
+      const second = fixture.receive('owner', owner, 'changed', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: !initiallyTrusted,
+      });
+      release();
+      await Promise.all([first, second]);
+      expect(fixture.factory.create.mock.calls.map(([input]) => input.trusted)).toEqual([
+        initiallyTrusted,
+        !initiallyTrusted,
+      ]);
+      expect(fixture.runtime.dispose).toHaveBeenCalledOnce();
+      await fixture.host.dispose();
+    },
+  );
+
+  it('passes trust into runtime creation and replaces the deferred runtime before granting mutation authority', async () => {
+    const fixture = new HostFixture();
+    const create = vi.spyOn(fixture.factory, 'create');
+    fixture.connect('owner', owner);
+    for (const trusted of [false, true, false]) {
+      await fixture.receive('owner', owner, `trust-${create.mock.calls.length}`, {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted,
+      });
+      expect(create.mock.lastCall?.[0]).toMatchObject({ trusted });
+    }
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(fixture.runtime.dispose).toHaveBeenCalledTimes(2);
+    await fixture.host.dispose();
+  });
+
+  it('drains the owning runtime when trust is revoked and rejects further mutations', async () => {
     const fixture = new HostFixture();
     fixture.connect('owner', owner);
     await fixture.receive('owner', owner, 'attach', {
@@ -49,7 +209,7 @@ describe(GlyphDesktopHost, () => {
     await fixture.host.dispose();
   });
 
-  it('[round2-03] never restores an older streaming snapshot over a completed run emitted during capture', async () => {
+  it('never restores an older streaming snapshot over a completed run emitted during capture', async () => {
     const fixture = new HostFixture();
     fixture.connect('owner', owner);
     await fixture.receive('owner', owner, 'attach', {
@@ -172,7 +332,7 @@ describe(GlyphDesktopHost, () => {
     ).toMatchObject({ state: { readOnly: false, ownerWindowId: peer.windowId } });
   });
 
-  it('[review-06] expires an abandoned connection’s ownership and disposes its runtime so a replacement window can write', async () => {
+  it('expires an abandoned connection’s ownership and disposes its runtime so a replacement window can write', async () => {
     vi.useFakeTimers();
     const fixture = new HostFixture();
     try {

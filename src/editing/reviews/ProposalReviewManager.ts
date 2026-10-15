@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Logger } from '#src/observability/Logger.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import { transformTextEditRanges } from '#src/editing/documents/transformTextEditRanges.js';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
@@ -45,6 +46,7 @@ export class ProposalReviewManager {
     { readonly reviewId: string; readonly decision: EditDecisionState }
   >();
   private readonly logger: Logger;
+  private readonly maxReadBytes: number;
   private readonly listeners = new Set<(change: ProposalReviewChange) => void>();
 
   constructor(
@@ -53,7 +55,12 @@ export class ProposalReviewManager {
     logger: Logger = new NullLogger(),
     private readonly maxActiveReviews = 8,
     private readonly workspaceIdentity = workspace.root,
+    options: { readonly maxReadBytes?: number } = {},
   ) {
+    this.maxReadBytes = options.maxReadBytes ?? 2 * 1024 * 1024 + 3;
+    if (!Number.isSafeInteger(this.maxReadBytes) || this.maxReadBytes < 0) {
+      throw new Error('Review read budget must be a non-negative safe integer.');
+    }
     this.logger = logger.forNamespace('editing.review');
   }
 
@@ -67,6 +74,15 @@ export class ProposalReviewManager {
     // UI decisions may be optimistic while a save is pending. Model-facing
     // receipts must reflect only the last successful checkpoint, never that UI state.
     return structuredClone(this.durableResults);
+  }
+  /** Applied mutations must not be mistaken for completed, durable reviews. */
+  get hasPendingCheckpoint(): boolean {
+    return this.mutationCheckpointPending;
+  }
+
+  /** Joins the decision queue and retries its outstanding checkpoint before continuation. */
+  async flushPendingCheckpoint(): Promise<void> {
+    await this.enqueue(async () => {});
   }
   get pendingChangeCount(): number {
     return this.reviews.reduce(
@@ -89,12 +105,15 @@ export class ProposalReviewManager {
     return () => this.listeners.delete(listener);
   }
 
-  async initialize(): Promise<void> {
+  async initialize({ reconcileWorkspace = true }: { reconcileWorkspace?: boolean } = {}): Promise<void> {
     const stored = await this.store.load(this.workspaceIdentity);
     this.durableResults = structuredClone(stored.flatMap(pendingReviewResults));
     this.reviews = stored.filter(review => !isSettled(review));
     this.completedReviews = stored.filter(isSettled);
     for (const review of this.completedReviews) this.rememberSettledDecisions(review);
+    // Persisted history is safe to display without workspace authority. Do not
+    // read files or finish interrupted mutations until the host grants trust.
+    if (!reconcileWorkspace) return;
     if (this.reviews.length === 0) return;
     for (const review of this.reviews) {
       for (const file of review.files) await this.reconcile(review, file);
@@ -441,7 +460,7 @@ export class ProposalReviewManager {
       const rename = file.items.find(
         item => item.kind === EditReviewItemKind.RENAME && item.decision === EditDecisionState.PENDING,
       );
-      if (rename && (await this.workspace.readOptional(file.targetPath))) throw this.stale(file);
+      if (rename && (await this.workspace.exists(file.targetPath))) throw this.stale(file);
     }
     await this.logWith(this.logger.forNamespace('accept_all'), 'debug', 'preflight_passed', {
       proposalId: proposal.id,
@@ -459,9 +478,17 @@ export class ProposalReviewManager {
         virtual: FileEditPlan['current'];
       }
     >();
+    const claimedIdentities = new Map<string, string>();
     for (const review of reviews) {
       for (const file of review.files) {
         if (!file.items.some(item => item.decision === EditDecisionState.PENDING)) continue;
+        if (file.current) {
+          const previousPath = claimedIdentities.get(file.current.identity);
+          if (previousPath !== undefined && previousPath !== file.currentPath) {
+            throw queuedPathConflict(review.id, file, file.currentPath);
+          }
+          claimedIdentities.set(file.current.identity, file.currentPath);
+        }
         const pendingRename = file.items.some(
           item => item.kind === EditReviewItemKind.RENAME && item.decision === EditDecisionState.PENDING,
         );
@@ -469,7 +496,7 @@ export class ProposalReviewManager {
         for (const path of new Set(paths)) {
           // Collision detection must agree with the workspace's path identity;
           // case folding would merge distinct resources on a case-sensitive store.
-          const normalized = path.normalize('NFC');
+          const normalized = path;
           const key = this.workspace.caseSensitive ? normalized : normalized.toLocaleLowerCase('en-US');
           const existing = claimedPaths.get(key);
           if (existing && (existing.reviewId !== review.id || existing.fileId !== file.id)) {
@@ -503,7 +530,23 @@ export class ProposalReviewManager {
   }
 
   private async reconcile(review: EditProposal, file: FileEditPlan): Promise<void> {
-    const current = await this.workspace.readOptional(file.currentPath);
+    if (file.currentRevision === null && !file.applyingItemId) {
+      if (!(await this.synchronizeNewFile(file))) file.applicability = EditApplicabilityState.STALE;
+      return;
+    }
+    let current: FileEditPlan['current'] | undefined;
+    try {
+      current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxReadBytes });
+    } catch (error) {
+      if (!isUnreviewableSnapshot(error)) throw error;
+      // A path replaced by a directory, binary file, or disallowed resource is
+      // stale, not absent, as is content beyond the recovery read budget or a
+      // file identity that changed while opening. None proves a pending DELETE ran.
+      // Retain the reviewed text so the user can inspect and reject the proposal.
+      file.applicability = EditApplicabilityState.STALE;
+      file.applyingItemId = null;
+      return;
+    }
     const applying = file.applyingItemId ? file.items.find(item => item.id === file.applyingItemId) : undefined;
     if (applying) {
       const recovered = await this.reconcileApplying(review, file, applying, current);
@@ -522,7 +565,17 @@ export class ProposalReviewManager {
   ): Promise<boolean> {
     let after = current ?? null;
     if (item.kind === EditReviewItemKind.RENAME) {
-      const target = (await this.workspace.readOptional(file.targetPath)) ?? null;
+      let target: FileEditPlan['current'];
+      try {
+        target = (await this.workspace.readOptional(file.targetPath, { maxBytes: this.maxReadBytes })) ?? null;
+      } catch (error) {
+        if (!isUnreviewableSnapshot(error)) throw error;
+        // An unreadable destination cannot prove the rename completed. Retain
+        // both paths and allow rejection without retrying destructive cleanup.
+        file.applicability = EditApplicabilityState.STALE;
+        file.applyingItemId = null;
+        return true;
+      }
       if (current && target && current.identity === target.identity && current.revision === file.currentRevision) {
         const operationId = `${review.id}:${file.id}:${item.id}:rename_cleanup`;
         await this.workspace.delete(file.currentPath, current.revision, { operationId, undoGroupId: operationId });
@@ -556,7 +609,22 @@ export class ProposalReviewManager {
   }
 
   private async synchronize(file: FileEditPlan): Promise<void> {
-    const current = await this.workspace.readOptional(file.currentPath);
+    if (file.currentRevision === null) {
+      const ready = await this.synchronizeNewFile(file);
+      if (!ready) file.applicability = EditApplicabilityState.STALE;
+      await this.persist();
+      if (!ready) throw this.stale(file);
+      return;
+    }
+    let current: FileEditPlan['current'] | undefined;
+    try {
+      current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxReadBytes });
+    } catch (error) {
+      if (!isUnreviewableSnapshot(error)) throw error;
+      file.applicability = EditApplicabilityState.STALE;
+      await this.persist();
+      throw this.stale(file);
+    }
     if (this.synchronizeSnapshot(file, current)) {
       await this.persist();
       return;
@@ -564,6 +632,18 @@ export class ProposalReviewManager {
     file.applicability = EditApplicabilityState.STALE;
     await this.persist();
     throw this.stale(file, current?.revision);
+  }
+
+  private async synchronizeNewFile(file: FileEditPlan): Promise<boolean> {
+    // Pending CREATE only needs proof that the path is absent. Content is needed
+    // solely when recovering an applying CREATE to recognize its expected hash.
+    try {
+      if (await this.workspace.exists(file.currentPath)) return false;
+    } catch (error) {
+      if (!isUnreviewableSnapshot(error)) throw error;
+      return false;
+    }
+    return this.synchronizeSnapshot(file, undefined);
   }
 
   private synchronizeSnapshot(file: FileEditPlan, current: FileEditPlan['current'] | undefined): boolean {
@@ -678,6 +758,14 @@ export class ProposalReviewManager {
     this.queue = result.catch(() => {});
     return result;
   }
+}
+
+function isUnreviewableSnapshot(error: unknown): boolean {
+  return (
+    error instanceof WorkspaceReadLimitError ||
+    (error instanceof EditError &&
+      (error.reason === EditFailureReason.UNSUPPORTED || error.reason === EditFailureReason.STALE))
+  );
 }
 
 function isSettled(review: EditProposal): boolean {

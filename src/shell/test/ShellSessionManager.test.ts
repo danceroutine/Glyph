@@ -19,18 +19,25 @@ afterEach(async () => {
 
 describe(ShellSessionManager, () => {
   describe('command lifecycle', () => {
-    it('[round7-08] leaves the wake subscription unchanged when full-access input is rejected', async () => {
+    it('leaves the wake subscription unchanged when full-access input is rejected', async () => {
       const { manager } = await fixture(ShellSandboxProfile.FULL_ACCESS);
       const running = await manager.execute('read value', {
         background: true,
         wakeOn: 'ready',
         signal: new AbortController().signal,
       });
-      expect(() => manager.writeInput(running.terminalId, 'input', true, 'replacement')).toThrow('not authorized');
+      await expect(
+        manager.writeInput({
+          terminalId: running.terminalId,
+          input: 'input',
+          appendNewline: true,
+          wakeOn: 'replacement',
+        }),
+      ).rejects.toThrow('not authorized');
       expect(manager.sessions[0]?.wakePattern).toBe('ready');
     });
 
-    it('[round6-03] does not combine output or inherit a wake condition across separate commands', async () => {
+    it('does not combine output or inherit a wake condition across separate commands', async () => {
       const { manager } = await fixture();
       const wake = vi.fn();
       const stop = manager.onDidWake(wake);
@@ -59,7 +66,7 @@ describe(ShellSessionManager, () => {
       }
     });
 
-    it('[round5-03] keeps the running command wake condition when a second command is rejected as busy', async () => {
+    it('keeps the running command wake condition when a second command is rejected as busy', async () => {
       const { manager } = await fixture(ShellSandboxProfile.WORKSPACE_WRITE);
       const wake = vi.fn();
       const stop = manager.onDidWake(wake);
@@ -77,7 +84,7 @@ describe(ShellSessionManager, () => {
           }),
         ).rejects.toThrow('busy');
         expect.soft(manager.sessions[0]?.wakePattern).toBe('ready');
-        manager.writeInput(running.terminalId, 'continue', true);
+        await manager.writeInput({ terminalId: running.terminalId, input: 'continue', appendNewline: true });
         await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
         expect(wake).toHaveBeenCalledWith(expect.objectContaining({ pattern: 'ready' }));
       } finally {
@@ -85,7 +92,7 @@ describe(ShellSessionManager, () => {
       }
     });
 
-    it('[round4-02] preserves terminal capacity after repeated invalid wake patterns', async () => {
+    it('preserves terminal capacity after repeated invalid wake patterns', async () => {
       const { manager } = await fixture();
       for (let attempt = 0; attempt < 16; attempt++) {
         await expect(
@@ -171,7 +178,12 @@ describe(ShellSessionManager, () => {
         signal: new AbortController().signal,
       });
 
-      manager.writeInput(command.terminalId, 'answer', true, 'got:answer');
+      await manager.writeInput({
+        terminalId: command.terminalId,
+        input: 'answer',
+        appendNewline: true,
+        wakeOn: 'got:answer',
+      });
       await waitUntil(
         () =>
           manager.sessions[0]?.status === ShellSessionStatus.IDLE &&
@@ -180,7 +192,9 @@ describe(ShellSessionManager, () => {
 
       expect(manager.takePendingWake()).toMatchObject({ pattern: 'got:answer' });
       expect(manager.sessions[0]?.outputTail).toContain('got:answer');
-      expect(() => manager.writeInput(command.terminalId, 'next', true)).toThrow('only allowed while');
+      await expect(
+        manager.writeInput({ terminalId: command.terminalId, input: 'next', appendNewline: true }),
+      ).rejects.toThrow('only allowed while');
     });
 
     it('does not treat raw input as authorization for a full-access command', async () => {
@@ -190,9 +204,9 @@ describe(ShellSessionManager, () => {
         signal: new AbortController().signal,
       });
 
-      expect(() => manager.writeInput(command.terminalId, 'unreviewed', true)).toThrow(
-        'complete command can be reviewed',
-      );
+      await expect(
+        manager.writeInput({ terminalId: command.terminalId, input: 'unreviewed', appendNewline: true }),
+      ).rejects.toThrow('complete command can be reviewed');
       await manager.close(command.terminalId);
     });
 
@@ -207,7 +221,9 @@ describe(ShellSessionManager, () => {
       manager.setOwnerChat('chat-two');
       expect(manager.sessions).toEqual([]);
       expect(manager.sessionsFor('chat-two')).toEqual([]);
-      expect(() => manager.writeInput(command.terminalId, 'cross-chat', true)).toThrow('Unknown shell terminal');
+      await expect(
+        manager.writeInput({ terminalId: command.terminalId, input: 'cross-chat', appendNewline: true }),
+      ).rejects.toThrow('Unknown shell terminal');
       await expect(manager.close(command.terminalId)).rejects.toThrow('Unknown shell terminal');
       await expect(
         manager.execute('printf cross-chat', {

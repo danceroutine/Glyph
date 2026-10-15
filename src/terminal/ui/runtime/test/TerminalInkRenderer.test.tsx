@@ -162,7 +162,7 @@ describe(TerminalInkRenderer, () => {
       await expect(prompt).rejects.toThrow('Session closed.');
     });
 
-    it('[round8-11] positions the real 80-column terminal cursor after a wide character wrapped to the next row', async () => {
+    it('positions the real 80-column terminal cursor after a wide character wrapped to the next row', async () => {
       const terminal = new TestTerminal();
       const output = new TestOutput();
       const renderer = new TerminalInkRenderer(terminal, output, output);

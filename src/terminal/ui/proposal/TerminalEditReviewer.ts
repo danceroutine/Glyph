@@ -9,7 +9,7 @@ import type { EditReviewItem } from '#src/editing/reviews/EditReviewItem.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
 import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import type { TerminalUI } from '#src/terminal/TerminalUI.js';
-import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
+import { renderReviewText } from './renderReviewText.ts';
 
 const FOCUSED_CONTEXT_LINES = 4;
 
@@ -147,14 +147,14 @@ export function renderEntry(
   colors: boolean,
 ): RenderedEntry {
   const path = `${file.sourcePath}${file.targetPath !== file.sourcePath ? ` → ${file.targetPath}` : ''}`;
-  const title = style(`${file.operation} ${sanitizeText(path)}`, TerminalReviewColor.HEADING, colors);
+  const title = style(`${file.operation} ${renderReviewText(path)}`, TerminalReviewColor.HEADING, colors);
   if (item.kind === EditReviewItemKind.RENAME && mode === ReviewViewMode.FOCUSED) {
     return {
       lines: [
         title,
         style('Rename path', TerminalReviewColor.DIM, colors),
-        style(`- ${sanitizeText(file.sourcePath)}`, TerminalReviewColor.DELETION, colors),
-        style(`+ ${sanitizeText(file.targetPath)}`, TerminalReviewColor.ADDITION, colors),
+        style(`- ${renderReviewText(file.sourcePath)}`, TerminalReviewColor.DELETION, colors),
+        style(`+ ${renderReviewText(file.targetPath)}`, TerminalReviewColor.ADDITION, colors),
       ],
       focusLine: 2,
     };
@@ -182,10 +182,20 @@ export function renderEntry(
       ? `Full file • selected change ${selectedFileItem}/${file.items.length}`
       : `Focused change ${selectedFileItem}/${file.items.length} • press F for the full file`;
   const lines = [title, style(details, TerminalReviewColor.DIM, colors)];
+  const beforeBom = file.base?.byteOrderMark ?? false;
+  if (beforeBom !== file.proposed.byteOrderMark) {
+    const before = beforeBom ? 'UTF-8 with BOM' : 'UTF-8';
+    const after = file.proposed.byteOrderMark ? 'UTF-8 with BOM' : 'UTF-8';
+    lines.push(style(`Encoding: ${before} → ${after}`, TerminalReviewColor.WARNING, colors));
+    if (file.base?.text === file.proposed.text) lines.push('Text content unchanged');
+  }
+  if ([file.base?.text ?? '', file.proposed.text, path].some(text => text.includes('\u001b'))) {
+    lines.push(style('␛ = ESC (U+001B)', TerminalReviewColor.DIM, colors));
+  }
   if (item.kind === EditReviewItemKind.RENAME) {
     lines.push(
-      style(`- ${sanitizeText(file.sourcePath)}`, TerminalReviewColor.DELETION, colors),
-      style(`+ ${sanitizeText(file.targetPath)}`, TerminalReviewColor.ADDITION, colors),
+      style(`- ${renderReviewText(file.sourcePath)}`, TerminalReviewColor.DELETION, colors),
+      style(`+ ${renderReviewText(file.targetPath)}`, TerminalReviewColor.ADDITION, colors),
       '',
     );
   }
@@ -312,7 +322,7 @@ function renderDiffLine(line: DiffDisplayLine, path: string, lineNumberWidth: nu
 }
 
 function highlightSourceLine(value: string, path: string, colors: boolean): string {
-  const safe = sanitizeText(value);
+  const safe = renderReviewText(value);
   const trailingWhitespace = /[ \t]+$/u.exec(safe)?.[0] ?? '';
   const source = safe.slice(0, safe.length - trailingWhitespace.length).replace(/\t/gu, '→   ');
   const visibleTrailingWhitespace = [...trailingWhitespace]

@@ -8,6 +8,7 @@ export interface GlyphDesktopWorkspaceRuntimeFactory {
   create(input: {
     readonly identity: GlyphConnectionIdentity;
     readonly roots: readonly GlyphWorkspaceRoot[];
+    readonly trusted: boolean;
     readonly emit: (event: GlyphHostEvent) => void;
   }): Promise<GlyphDesktopWorkspaceRuntime>;
 }

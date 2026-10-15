@@ -56,6 +56,7 @@ export class GlyphViewPane extends ViewPane {
     // Dispose the old root before mounting if Code OSS recreates this body.
     this.view.clear();
     this.view.value = mountGlyphWorkbench(container, this.glyphService.state, {
+      composer: this.glyphService.composer,
       send: text => this.glyphService.send(text),
       cancel: () => this.glyphService.cancel(),
     });

@@ -74,7 +74,15 @@ export class GlyphDesktopClient extends Disposable {
       if (!this.port || !this.identity) await this.connectNow(epoch);
       do {
         const attachment = this.attachment!;
-        await this.postRequest({ ...attachment, ...this.cursor.resume });
+        try {
+          await this.postRequest({ ...attachment, ...this.cursor.resume });
+        } catch (error) {
+          // Revoking trust may invalidate recovery reads in the older attach.
+          // Its failure does not reject the newer authority configuration queued
+          // on this same live port; keep all callers waiting for that attempt.
+          if (epoch === this.connectionEpoch && attachment !== this.attachment) continue;
+          throw error;
+        }
         if (epoch !== this.connectionEpoch) throw new Error('The Glyph host connection was superseded.');
         this.appliedAttachment = attachment;
         this.attached = true;

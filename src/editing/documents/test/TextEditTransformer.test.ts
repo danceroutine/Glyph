@@ -3,6 +3,60 @@ import { diffChars } from 'diff';
 import { transformTextEditRanges } from '#src/editing/documents/transformTextEditRanges.js';
 
 describe(transformTextEditRanges, () => {
+  it('rejects a rebase that maps separate edits onto one surviving occurrence', () => {
+    const previous = 'left\ntarget\nmiddle\ntarget\nright\n';
+    const ranges = [range(5, 11, 'target'), range(19, 25, 'target')];
+    expect(transformTextEditRanges(previous, 'left\ntarget\nright\n', ranges)).toBeUndefined();
+  });
+
+  it.each([
+    ['mismatched text', [range(0, 3, 'wrong')]],
+    ['overlapping replacements', [range(0, 2, 'ab'), range(1, 3, 'bc')]],
+    ['duplicate insertions', [range(1, 1, ''), range(1, 1, '')]],
+    ['insertion inside a replacement', [range(0, 3, 'abc'), range(1, 1, '')]],
+    ['fractional offsets', [range(0.5, 2, 'ab')]],
+    ['non-finite offsets', [range(Number.NaN, 2, 'ab')]],
+  ])('rejects %s even when the document is unchanged', (_description, ranges) => {
+    expect(transformTextEditRanges('abc', 'abc', ranges)).toBeUndefined();
+  });
+
+  it('rejects independently anchored edits whose document order has reversed', () => {
+    const first = 'left-one unique\nfirst\nend-one unique\n';
+    const second = 'left-two unique\nsecond\nend-two unique\n';
+    const previous = first + second;
+    const ranges = [
+      range(previous.indexOf('first'), previous.indexOf('first') + 5, 'first'),
+      range(previous.indexOf('second'), previous.indexOf('second') + 6, 'second'),
+    ];
+    expect(transformTextEditRanges(previous, second + first, ranges)).toBeUndefined();
+  });
+
+  it('keeps touching replacements and an insertion at their outer boundary distinct', () => {
+    const ranges = [range(0, 1, 'a'), range(1, 2, 'b'), range(2, 2, '')];
+    expect(transformTextEditRanges('abc', 'abc', ranges)).toEqual([
+      { sourceStart: 0, sourceEnd: 1 },
+      { sourceStart: 1, sourceEnd: 2 },
+      { sourceStart: 2, sourceEnd: 2 },
+    ]);
+  });
+
+  it('rejects insertion points that collapse together after the intervening text is removed', () => {
+    expect(transformTextEditRanges('aXXb', 'ab', [range(1, 1, ''), range(3, 3, '')])).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    'rejects an insertion collapsing onto a replacement start with reversed input order %s',
+    reverse => {
+      const ranges = [range(1, 1, ''), range(3, 4, 'b')];
+      if (reverse) ranges.reverse();
+      expect(transformTextEditRanges('aXXb', 'ab', ranges)).toBeUndefined();
+    },
+  );
+
+  it('rejects a shared insertion and replacement start even when the document is unchanged', () => {
+    expect(transformTextEditRanges('ab', 'ab', [range(1, 1, ''), range(1, 2, 'b')])).toBeUndefined();
+  });
+
   it('keeps ranges unchanged when the document did not change', () => {
     expect(transformTextEditRanges('alpha', 'alpha', [range(0, 5, 'alpha')])).toEqual([
       { sourceStart: 0, sourceEnd: 5 },

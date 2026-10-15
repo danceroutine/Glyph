@@ -881,7 +881,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn round3_01_sensitive_file_policy_rejects_case_variants() {
+    fn sensitive_file_policy_rejects_case_variants() {
         let policy = WorkspaceAccessPolicy::default();
         for name in [
             ".ENV",

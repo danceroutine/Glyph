@@ -109,6 +109,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     let skippedFiles = 0;
     let indexTruncated = false;
     let truncated = false;
+    let hasContinuation = false;
     roots: for (const [rootIndex, [name, index]] of candidates.entries()) {
       let offset = 0;
       while (true) {
@@ -135,6 +136,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
           if (selected.length >= resolved.limit || bytes > remainingBytes) {
             if (selected.length === 0) throw new Error('A content-search entry exceeds the response byte limit.');
             truncated = true;
+            hasContinuation = true;
             break roots;
           }
           selected.push(entry);
@@ -143,10 +145,31 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
         // A full result is complete even if another page exists. Probing that
         // page can fail or exceed the native offset ceiling and lose valid work.
         if (selected.length === resolved.limit) {
-          truncated = page.nextOffset !== null || rootIndex < candidates.length - 1;
+          const laterRoots = rootIndex < candidates.length - 1;
+          const nativeCursorValid =
+            page.nextOffset !== null &&
+            page.nextOffset > offset &&
+            workspaceContentSearchOptionsSchema.shape.offset.safeParse(page.nextOffset).success;
+          hasContinuation = nativeCursorValid || (laterRoots && (!page.truncated || page.indexTruncated));
+          truncated ||= page.truncated || page.nextOffset !== null || laterRoots;
           break roots;
         }
-        if (page.nextOffset === null) break;
+        if (page.nextOffset === null) {
+          if (page.truncated) {
+            truncated = true;
+            // An incomplete index has exhausted its available paths, not the
+            // remaining workspace roots. Keep its warning without inventing a
+            // continuation for the omitted paths.
+            if (!page.indexTruncated) break roots;
+          }
+          break;
+        }
+        if (!workspaceContentSearchOptionsSchema.shape.offset.safeParse(page.nextOffset).success) {
+          // A partial native page may hit its byte budget before our count
+          // limit. Keep collected results when no legal continuation exists.
+          truncated = true;
+          break roots;
+        }
         if (page.nextOffset <= offset) throw new Error('Content search returned a non-advancing page offset.');
         offset = page.nextOffset;
       }
@@ -158,7 +181,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
       skippedFiles,
       indexTruncated,
       truncated,
-      nextOffset: truncated && canContinue ? nextOffset : null,
+      nextOffset: hasContinuation && canContinue ? nextOffset : null,
     };
     switch (resolved.outputMode) {
       case 'content':

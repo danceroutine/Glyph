@@ -442,6 +442,15 @@ ${TERMINAL_HELP}`);
     if (this.renderer) return this.renderer.review(manager, signal, onInterrupt);
     let queue = mergeReviewEntries([], manager.activeReviews);
     while (manager.activeReviews.length > 0) {
+      if (manager.hasPendingCheckpoint) {
+        try {
+          await manager.flushPendingCheckpoint();
+        } catch (error) {
+          this.errorLine(`Error: ${clean(error instanceof Error ? error.message : String(error))}`);
+          if ((await this.ask('Retry saving review? [r/q]: ', signal)).trim().toLowerCase() !== 'r') return;
+        }
+        continue;
+      }
       queue = mergeReviewEntries(queue, manager.activeReviews);
       const entry = pendingReviewEntries(queue)[0];
       if (!entry) return;

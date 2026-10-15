@@ -32,6 +32,8 @@ interface Connection {
   trusted: boolean;
   readOnly: boolean;
   roots: readonly GlyphWorkspaceRoot[];
+  attachmentQueue: Promise<void>;
+  pendingAttachments: number;
 }
 
 interface WorkspaceRuntimeRecord {
@@ -45,6 +47,7 @@ interface WorkspaceRuntimeRecord {
  * renderer-provided ids are checked against it before any command is dispatched.
  */
 export class GlyphDesktopHost {
+  private disposed = false;
   readonly generation: string;
   private readonly connections = new Map<string, Connection>();
   private readonly sessions = new Map<string, Connection>();
@@ -62,6 +65,7 @@ export class GlyphDesktopHost {
   }
 
   connect(connectionId: string, identity: GlyphConnectionIdentity, send: Exclude<Connection['send'], undefined>): void {
+    if (this.disposed) throw new Error('The Glyph desktop host has stopped.');
     if (this.connections.has(connectionId)) throw new Error(`Connection ${connectionId} is already registered.`);
     const key = connectionKey(identity);
     let connection = this.sessions.get(key);
@@ -78,6 +82,8 @@ export class GlyphDesktopHost {
         trusted: false,
         readOnly: true,
         roots: [],
+        attachmentQueue: Promise.resolve(),
+        pendingAttachments: 0,
       };
       this.sessions.set(key, connection);
     }
@@ -118,6 +124,7 @@ export class GlyphDesktopHost {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     for (const timer of this.disconnectTimers.values()) clearTimeout(timer);
     this.disconnectTimers.clear();
     await Promise.allSettled(this.runtimeCreations.values());
@@ -159,14 +166,17 @@ export class GlyphDesktopHost {
       ];
     }
     try {
+      this.assertCurrentConnection(connection);
       switch (request.command.type) {
-        case GlyphWorkbenchCommandType.ATTACH_WORKSPACE:
-          return await this.attach(connection, request.requestId, request.command);
+        case GlyphWorkbenchCommandType.ATTACH_WORKSPACE: {
+          const command = request.command;
+          return await this.transitionAttachment(connection, () => this.attach(connection, request.requestId, command));
+        }
         case GlyphWorkbenchCommandType.REQUEST_SNAPSHOT:
           await this.publishSnapshot(connection);
           return [toCommandResultGlyphHostEvent(request.requestId)];
         case GlyphWorkbenchCommandType.DETACH:
-          await this.detach(connection);
+          await this.transitionAttachment(connection, () => this.detach(connection));
           return [toCommandResultGlyphHostEvent(request.requestId)];
         default:
           return await this.dispatch(connection, request.requestId, request.command);
@@ -182,21 +192,52 @@ export class GlyphDesktopHost {
     }
   }
 
+  /** Serialize trust/ownership changes even when a transport sends overlapping requests. */
+  private async transitionAttachment<T>(connection: Connection, action: () => Promise<T>): Promise<T> {
+    connection.pendingAttachments++;
+    const run = async (): Promise<T> => {
+      this.assertCurrentConnection(connection);
+      return action();
+    };
+    // Start the first transition synchronously so ownership reservations and
+    // stop barriers are visible before another window can attach.
+    const operation = connection.pendingAttachments === 1 ? run() : connection.attachmentQueue.then(run);
+    connection.attachmentQueue = operation.then(
+      () => {},
+      () => {},
+    );
+    try {
+      return await operation;
+    } catch (error) {
+      connection.ready = false;
+      throw error;
+    } finally {
+      connection.pendingAttachments--;
+    }
+  }
+
+  private assertCurrentConnection(connection: Connection): void {
+    if (this.disposed || this.sessions.get(connectionKey(connection.identity)) !== connection) {
+      throw new Error('The workspace connection has ended. Reconnect before attaching.');
+    }
+  }
+
   private async attach(
     connection: Connection,
     requestId: string,
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
   ): Promise<readonly GlyphHostEvent[]> {
     const key = getWorkspaceKey(connection.identity);
-    if (!command.trusted && connection.trusted && !connection.readOnly && connection.attached) {
-      // Trust revocation is a lifecycle boundary, not just a guard on the next
-      // send. Draining/disposal cancels runs and terminates background shells.
+    if (command.trusted !== connection.trusted && !connection.readOnly && connection.attached) {
+      // Trust changes are lifecycle boundaries. Revocation drains tools; a
+      // grant must reconcile deferred reviews before authorizing new mutations.
       connection.trusted = false;
       await this.detach(connection, { notifyOwner: false });
     }
     // New authority cannot overlap a previous owner's asynchronous shutdown.
     const stopping = this.runtimeStops.get(key);
     if (stopping) await stopping;
+    this.assertCurrentConnection(connection);
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {
@@ -208,6 +249,7 @@ export class GlyphDesktopHost {
           .create({
             identity: connection.identity,
             roots: command.roots,
+            trusted: command.trusted,
             emit: event => this.broadcast(key, event),
           })
           .then(runtime => {
@@ -224,6 +266,7 @@ export class GlyphDesktopHost {
       }
       record = await creating;
     }
+    this.assertCurrentConnection(connection);
     if (this.runtimeStops.has(key)) throw new Error('The owning window disconnected during workspace initialization.');
     connection.attached = true;
     connection.ready = true;
@@ -250,7 +293,7 @@ export class GlyphDesktopHost {
     requestId: string,
     command: GlyphRuntimeCommand,
   ): Promise<readonly GlyphHostEvent[]> {
-    if (!connection.attached || !connection.ready) {
+    if (!connection.attached || !connection.ready || connection.pendingAttachments > 0) {
       return [
         toErrorGlyphHostEvent({
           requestId: requestId,
@@ -303,6 +346,7 @@ export class GlyphDesktopHost {
     for (let attempt = 0; attempt < 8; attempt++) {
       const before = connection.journal.watermark;
       const state = await record.runtime.snapshot();
+      this.assertCurrentConnection(connection);
       if (this.runtimes.get(getWorkspaceKey(connection.identity)) !== record || !connection.ready)
         throw new Error('The workspace detached during snapshot capture.');
       if (before !== connection.journal.watermark) continue;

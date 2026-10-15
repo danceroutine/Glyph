@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
+import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphWorkbench } from '#code-oss/ui/GlyphWorkbench.tsx';
 import { conversation, selection, workbenchState } from './fixtures.ts';
 
 /** A local simulation for UI iteration. It never connects to the desktop host. */
 export function InteractiveWorkbench() {
+  const [composer] = useState(() => new GlyphComposerState());
   const [state, setState] = useState(() => workbenchState({ transcript: conversation, selection }));
   const [pending, setPending] = useState<{ id: string; response: string }>();
   const nextTurn = useRef(0);
@@ -34,6 +36,7 @@ export function InteractiveWorkbench() {
     <GlyphWorkbench
       state={state}
       actions={{
+        composer,
         send: async text => {
           const turn = ++nextTurn.current;
           const id = `preview-assistant-${turn}`;
