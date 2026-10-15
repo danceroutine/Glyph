@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
-import { GlyphWorkbench } from '#code-oss/ui/GlyphWorkbench.tsx';
+import { WiredGlyphWorkbench } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.wired.tsx';
 import { conversation, selection, workbenchState, previewActions } from './fixtures.ts';
 
 /** A local simulation for UI iteration. It never connects to the desktop host. */
@@ -33,7 +33,7 @@ export function InteractiveWorkbench() {
   }, [pending]);
 
   return (
-    <GlyphWorkbench
+    <WiredGlyphWorkbench
       state={state}
       actions={{
         ...previewActions,

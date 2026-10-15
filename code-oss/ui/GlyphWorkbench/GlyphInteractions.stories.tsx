@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
-import { GlyphWorkbench } from './GlyphWorkbench.tsx';
+import { WiredGlyphWorkbench } from './GlyphWorkbench.wired.tsx';
 import { previewActions, workbenchState } from '#code-oss/storybook/fixtures.ts';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
@@ -44,10 +44,10 @@ const questions = workbenchState({
 });
 const meta = {
   title: 'Glyph/Interactions',
-  component: GlyphWorkbench,
+  component: WiredGlyphWorkbench,
   args: { state: questions, actions: previewActions },
   argTypes: { actions: { control: false } },
-} satisfies Meta<typeof GlyphWorkbench>;
+} satisfies Meta<typeof WiredGlyphWorkbench>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const Questions: Story = {};

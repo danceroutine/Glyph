@@ -1,9 +1,6 @@
-import type { GlyphApprovalRequest } from '#src/desktop/protocol/events/GlyphApprovalRequest.js';
-import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
-import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
-import { css, tokens, space } from './design-system/index.ts';
-import { decisionStyles as shared } from './GlyphDecisionStyles.ts';
-import { useGlyphDecision } from './useGlyphDecision.ts';
+import type { GlyphApprovalCardState } from './useGlyphApprovalCardState.ts';
+import { css, tokens, space } from '../design-system/index.ts';
+import { decisionStyles as shared } from '../GlyphDecisionStyles.ts';
 
 const styles = {
   root: css({ marginTop: tokens.space.lg }),
@@ -20,23 +17,9 @@ const styles = {
   detail: css({ padding: space('none', 'lg'), whiteSpace: 'pre-wrap' }),
 };
 
-export function GlyphApprovalCard({
-  request,
-  chatId,
-  runId,
-  actions,
-  disabled,
-}: {
-  readonly request: GlyphApprovalRequest;
-  readonly chatId: string;
-  readonly runId: string;
-  readonly actions: Pick<GlyphWorkbenchViewActions, 'decideApproval'>;
-  readonly disabled: boolean;
-}) {
-  const { pending, error, submit } = useGlyphDecision();
-  const decide = (decision: GlyphApprovalDecision) => {
-    if (!disabled) void submit(() => actions.decideApproval(chatId, runId, request.id, decision));
-  };
+export type GlyphApprovalCardProps = GlyphApprovalCardState;
+
+export function GlyphApprovalCard({ request, disabled, pending, error, skip, alwaysRun, run }: GlyphApprovalCardProps) {
   return (
     <section
       class={`glyph-approval-card ${shared.card} ${styles.root}`}
@@ -56,12 +39,7 @@ export function GlyphApprovalCard({
         <p class={`${shared.detail} ${styles.detail}`}>Always Run remembers this exact command in this directory.</p>
       )}
       <div class={shared.actions}>
-        <button
-          class={shared.button}
-          type="button"
-          disabled={disabled || pending}
-          onClick={() => decide(GlyphApprovalDecision.DENY)}
-        >
+        <button class={shared.button} type="button" disabled={disabled || pending} onClick={skip}>
           Skip
         </button>
         {request.canRemember && (
@@ -69,17 +47,12 @@ export function GlyphApprovalCard({
             class={`${shared.button} ${shared.secondary}`}
             type="button"
             disabled={disabled || pending}
-            onClick={() => decide(GlyphApprovalDecision.ALWAYS_ALLOW)}
+            onClick={alwaysRun}
           >
             Always Run
           </button>
         )}
-        <button
-          class={`${shared.button} ${shared.primary}`}
-          type="button"
-          disabled={disabled || pending}
-          onClick={() => decide(GlyphApprovalDecision.ALLOW_ONCE)}
-        >
+        <button class={`${shared.button} ${shared.primary}`} type="button" disabled={disabled || pending} onClick={run}>
           {pending ? 'Submitting…' : 'Run'}
         </button>
       </div>

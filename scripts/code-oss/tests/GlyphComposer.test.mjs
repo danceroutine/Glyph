@@ -13,7 +13,7 @@ beforeAll(async () => {
       resolveDir: process.cwd(),
       contents: `
         import { h, render } from 'preact';
-        import { GlyphComposer } from './code-oss/ui/GlyphComposer.tsx';
+        import { WiredGlyphComposer } from './code-oss/ui/GlyphComposer/GlyphComposer.wired.tsx';
         import { GlyphComposerState } from './src/desktop/workbench/GlyphComposerState.ts';
         const calls = [];
         const pending = [];
@@ -25,11 +25,11 @@ beforeAll(async () => {
         window.composerTest = {
           calls,
           unmount() { render(null, document.getElementById('root')); },
-          mount() { render(h(GlyphComposer, { status: 'ready', selection: undefined, actions }), document.getElementById('root')); },
+          mount() { render(h(WiredGlyphComposer, { status: 'ready', selection: undefined, actions }), document.getElementById('root')); },
           reject() { pending.shift().reject(new Error('Connection unavailable')); },
           resolve() { pending.shift().resolve(); }
         };
-        render(h(GlyphComposer, { status: 'ready', selection: undefined, actions }), document.getElementById('root'));
+        render(h(WiredGlyphComposer, { status: 'ready', selection: undefined, actions }), document.getElementById('root'));
       `,
     },
     bundle: true,
@@ -45,7 +45,7 @@ afterAll(async () => {
   await browser?.close();
 });
 
-describe('GlyphComposer draft recovery', () => {
+describe('WiredGlyphComposer draft recovery', () => {
   it.each(['before', 'after'])(
     'retains the draft and recovered message when send fails %s pane disposal',
     async when => {

@@ -1,14 +1,14 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
-import { GlyphTranscript } from './GlyphTranscript.tsx';
-import { workbenchClassName } from './GlyphWorkbench.tsx';
+import { WiredGlyphTranscript } from './GlyphTranscript.wired.tsx';
+import { workbenchClassName } from '../GlyphWorkbench/GlyphWorkbench.presentational.tsx';
 import { conversation } from '#code-oss/storybook/fixtures.ts';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
 
 const meta = {
   title: 'Glyph/Transcript',
-  component: GlyphTranscript,
+  component: WiredGlyphTranscript,
   args: { entries: conversation },
   decorators: [
     Story => (
@@ -17,7 +17,7 @@ const meta = {
       </div>
     ),
   ],
-} satisfies Meta<typeof GlyphTranscript>;
+} satisfies Meta<typeof WiredGlyphTranscript>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;

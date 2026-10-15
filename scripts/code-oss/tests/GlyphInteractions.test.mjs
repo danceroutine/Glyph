@@ -19,7 +19,12 @@ beforeAll(async () => {
         let state = workbenchState({ selectedChatId: 'chat', status: 'waiting_for_question', runs: [run], transcript: [{ id: 'run', role: 'assistant', text: 'Waiting.' }] });
         window.requests = [];
         const operation = (...args) => { window.requests.push(args); return new Promise((resolve, reject) => { window.fail = () => reject(new Error('Connection interrupted. Try again.')); window.acknowledge = resolve; }); };
-        const view = mountGlyphWorkbench(document.getElementById('root'), state, { ...previewActions, answerQuestion: operation, decideApproval: operation });
+        const view = mountGlyphWorkbench(document.getElementById('root'), state, {
+          ...previewActions, answerQuestion: operation, decideApproval: operation,
+          selectAccount: async (...args) => { window.requests.push(['account', ...args]); },
+          selectModel: async (...args) => { window.requests.push(['model', ...args]); },
+          openChat: async (...args) => { window.requests.push(['open', ...args]); },
+        });
         window.update = patch => { state = { ...state, ...patch }; view.update(state); };
         window.showApproval = () => window.update({ status: 'waiting_for_approval', runs: [{ ...run, status: 'waiting_for_approval', question: undefined, approval: { id: 'approval', title: 'Allow shell command?', detail: 'pwd', command: 'pwd', workingDirectory: '/workspace', sandboxed: true, canRemember: true } }] });
       `,
@@ -119,6 +124,136 @@ it('disables duplicate approval decisions, permits retry after failure, and resp
       ['chat', 'run', 'approval', 'allow_once'],
       ['chat', 'run', 'approval', 'deny'],
     ]);
+  } finally {
+    await page.close();
+  }
+});
+
+it('preserves multi-question selections and free text when navigating backward before submission', async () => {
+  const page = await pageForTest();
+  try {
+    await page.evaluate(() =>
+      window.update({
+        runs: [
+          {
+            chatId: 'chat',
+            runId: 'multi-run',
+            status: 'waiting_for_question',
+            question: {
+              id: 'multi',
+              title: 'Questions',
+              prompt: 'Choose.',
+              questions: [
+                {
+                  id: 'choices',
+                  prompt: 'Pick features',
+                  allowMultiple: true,
+                  options: [
+                    { id: 'a', label: 'First' },
+                    { id: 'b', label: 'Second' },
+                  ],
+                },
+                { id: 'details', prompt: 'Add details', allowMultiple: false, options: [] },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    const form = page.getByRole('form', { name: 'Questions' });
+    const next = form.getByRole('button', { name: 'Continue' });
+    await expect(next).toBeDisabled();
+    await form.getByRole('checkbox', { name: 'First' }).check();
+    await form.getByRole('checkbox', { name: 'Second' }).check();
+    await next.click();
+    const other = form.getByRole('textbox', { name: 'Your answer' });
+    await expect(other).toBeFocused();
+    await other.fill('Keep these details');
+    await form.getByRole('button', { name: 'Back' }).click();
+    await expect(form.getByRole('checkbox', { name: 'First' })).toBeChecked();
+    await form.getByRole('checkbox', { name: 'Second' }).uncheck();
+    await next.click();
+    await expect(other).toHaveValue('Keep these details');
+    await next.click();
+    expect(await page.evaluate(() => window.requests)).toEqual([
+      [
+        'chat',
+        'multi-run',
+        'multi',
+        {
+          answers: [
+            { questionId: 'choices', type: 'SELECTION', optionIds: ['a'] },
+            { questionId: 'details', type: 'OTHER', text: 'Keep these details' },
+          ],
+        },
+      ],
+    ]);
+  } finally {
+    await page.close();
+  }
+});
+
+it('wires account and model choices and opens a filtered history result with focus restored', async () => {
+  const page = await pageForTest();
+  try {
+    await page.evaluate(() =>
+      window.update({
+        selectedChatId: undefined,
+        status: 'ready',
+        runs: [],
+        accounts: [
+          { provider: 'provider', id: 'a', label: 'Account A', connected: true, inferenceAccess: true },
+          { provider: 'provider', id: 'b', label: 'Account B', connected: true, inferenceAccess: true },
+        ],
+        selectedAccount: { provider: 'provider', id: 'a' },
+        selectedModel: 'first',
+        models: [
+          { slug: 'first', name: 'First model' },
+          { slug: 'second', name: 'Second model' },
+        ],
+        chats: [
+          {
+            id: 'saved',
+            title: 'Saved conversation',
+            accountProvider: 'provider',
+            accountId: 'a',
+            modelSlug: 'first',
+            updatedAt: new Date().toISOString(),
+            turnCount: 1,
+          },
+          {
+            id: 'older',
+            title: 'Older conversation',
+            accountProvider: 'provider',
+            accountId: 'b',
+            modelSlug: 'second',
+            updatedAt: '2020-01-01T00:00:00Z',
+            turnCount: 1,
+          },
+        ],
+      }),
+    );
+    await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('second');
+    const toggle = page.getByRole('button', { name: 'Chat history', exact: true });
+    await toggle.click();
+    const account = page.getByRole('combobox', { name: 'Account', exact: true });
+    await account.selectOption(JSON.stringify(['provider', 'b']));
+    const search = page.getByRole('searchbox', { name: 'Search chats' });
+    await search.fill('saved');
+    await expect(page.getByRole('button', { name: 'Older conversation' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Saved conversation' }).click();
+    await expect(search).toHaveCount(0);
+    await expect(toggle).toBeFocused();
+    expect(await page.evaluate(() => window.requests)).toEqual([
+      ['model', 'second'],
+      ['account', 'provider', 'b'],
+      ['open', 'saved'],
+    ]);
+    await page.evaluate(() => window.update({ selectedChatId: 'saved' }));
+    await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toBeDisabled();
+    await toggle.click();
+    await expect(account).toBeDisabled();
+    await expect(account).toHaveValue(JSON.stringify(['provider', 'a']));
   } finally {
     await page.close();
   }

@@ -1,12 +1,12 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
-import { GlyphComposer } from './GlyphComposer.tsx';
-import { workbenchClassName } from './GlyphWorkbench.tsx';
+import { WiredGlyphComposer } from './GlyphComposer.wired.tsx';
+import { workbenchClassName } from '../GlyphWorkbench/GlyphWorkbench.presentational.tsx';
 import { failingActions, previewActions, selection } from '#code-oss/storybook/fixtures.ts';
 
 const meta = {
   title: 'Glyph/Composer',
-  component: GlyphComposer,
+  component: WiredGlyphComposer,
   args: { status: GlyphWorkbenchStatus.READY, selection: undefined, actions: previewActions },
   argTypes: {
     actions: { control: false },
@@ -19,7 +19,7 @@ const meta = {
       </div>
     ),
   ],
-} satisfies Meta<typeof GlyphComposer>;
+} satisfies Meta<typeof WiredGlyphComposer>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;

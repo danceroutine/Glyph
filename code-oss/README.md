@@ -432,6 +432,16 @@ TypeScript configuration uses Preact's JSX runtime without changing the
 terminal's React/Ink configuration or Code OSS's compiler. Shared workbench
 state lives in `src/desktop/workbench/` and is copied into the generated tree.
 
+Each component has a folder named `<Component>` under `code-oss/ui/`, with its
+`.wired.tsx`, `.presentational.tsx`, and `use<Component>State.ts` files as siblings.
+Interactive components follow the terminal UI's separation: the wired component
+calls the state hook and passes its result to the presentational component.
+State hooks own subscriptions, effects, derived state, and host action callbacks.
+Presentational components receive display values, callbacks, refs, and child slots;
+wired components compose those slots. Pure display components, such as turn progress
+and usage summaries, only need a `.presentational.tsx` file. Stories live in their
+component's folder. The mount entry point and interactive stories use the wired components.
+
 `pnpm code-oss:compile` typechecks the UI and reapplies the overlay before
 compiling upstream. Overlay generation bundles Preact and the components into
 one local browser ESM module plus CSS, so the application needs no CDN, webview,
