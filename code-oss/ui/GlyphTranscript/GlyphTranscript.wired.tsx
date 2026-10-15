@@ -1,17 +1,20 @@
+import { WiredGlyphShellCommandCard } from '#code-oss/ui/GlyphShellCommandCard/GlyphShellCommandCard.wired.tsx';
 import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { GlyphTranscript } from './GlyphTranscript.presentational.tsx';
-import { WiredGlyphApprovalCard } from '../GlyphApprovalCard/GlyphApprovalCard.wired.tsx';
+import { WiredGlyphApprovalCard } from '#code-oss/ui/GlyphApprovalCard/GlyphApprovalCard.wired.tsx';
 import { useGlyphTranscriptState, type GlyphTranscriptStateOptions } from './useGlyphTranscriptState.ts';
 
 export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
+  readonly chatId?: string;
   readonly pendingApproval?: GlyphRunProjection;
-  readonly actions?: Pick<GlyphWorkbenchViewActions, 'decideApproval'>;
+  readonly actions?: Pick<GlyphWorkbenchViewActions, 'decideApproval' | 'writeShellInput' | 'stopShell'>;
   readonly readOnly?: boolean;
 }
 
 export function WiredGlyphTranscript({
   entries,
+  chatId,
   pendingApproval,
   actions,
   readOnly = false,
@@ -22,6 +25,18 @@ export function WiredGlyphTranscript({
       {...state}
       entries={state.entries.map(entry => ({
         ...entry,
+        shells:
+          actions && chatId
+            ? entry.shellActivities.map(tool => (
+                <WiredGlyphShellCommandCard
+                  key={tool.id}
+                  activity={tool}
+                  chatId={chatId}
+                  readOnly={readOnly}
+                  actions={actions}
+                />
+              ))
+            : undefined,
         approval:
           pendingApproval?.runId === entry.id && pendingApproval.approval && actions ? (
             <WiredGlyphApprovalCard

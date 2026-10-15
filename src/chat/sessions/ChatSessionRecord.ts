@@ -1,9 +1,12 @@
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { TurnUsage } from '#src/chat/TurnUsage.js';
+import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
 
-/** Compact activity history, without retaining tool arguments or output a second time. */
-export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'>;
+/** Compact activity history with bounded shell display data; provider history owns complete tool results. */
+export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'> & {
+  readonly shell?: ShellCommandSummary;
+};
 
 export interface ChatTranscriptTurn {
   readonly userText: string;

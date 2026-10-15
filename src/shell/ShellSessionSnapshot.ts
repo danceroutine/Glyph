@@ -2,6 +2,7 @@ import type { ShellSessionStatus } from './ShellSessionStatus.ts';
 
 export interface ShellSessionSnapshot {
   readonly id: string;
+  readonly executionId?: string;
   readonly ownerChatId?: string;
   readonly workingDirectory: string;
   readonly command: string;

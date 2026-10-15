@@ -1,7 +1,7 @@
 import type { GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
-import { css, tokens, space } from '../design-system/index.ts';
+import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 
 const styles = {
   root: css({

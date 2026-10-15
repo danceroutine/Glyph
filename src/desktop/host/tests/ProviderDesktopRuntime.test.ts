@@ -1,3 +1,5 @@
+import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 import { describe, expect, it, vi } from 'vitest';
 import { ProviderDesktopRuntime } from '#src/desktop/host/ProviderDesktopRuntime.js';
 import { GlyphDesktopHost } from '#src/desktop/host/GlyphDesktopHost.js';
@@ -117,7 +119,19 @@ async function fixture(
     sessions,
   );
   await glyph.initialize();
-  const shells = { close: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
+  const shellListeners = new Set<() => void>();
+  const shells = {
+    allSessions: [] as ShellSessionSnapshot[],
+    onDidChange: (listener: () => void) => {
+      shellListeners.add(listener);
+      return () => {
+        shellListeners.delete(listener);
+      };
+    },
+    writeInput: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    dispose: vi.fn(async () => {}),
+  };
   runtime = new ProviderDesktopRuntime({
     glyph,
     interactions,
@@ -127,7 +141,20 @@ async function fixture(
   });
   await runtime.handle({ type: Command.CREATE_CHAT, accountProvider: 'fixture', accountId: 'account', model: 'model' });
   const chatId = (await runtime.snapshot()).chats[0]!.id;
-  return { runtime, chatId, saved, events, glyph, shells, backend, store, recorded };
+  return {
+    runtime,
+    chatId,
+    saved,
+    events,
+    glyph,
+    shells,
+    backend,
+    store,
+    recorded,
+    emitShells: () => {
+      for (const listener of shellListeners) listener();
+    },
+  };
 }
 
 function reviewFixture() {
@@ -327,6 +354,59 @@ describe(ProviderDesktopRuntime, () => {
         ...usage,
         unreportedTurns: 0,
       });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('keeps live shells attached to their execution when a provider reuses a call id in later turns', async () => {
+    let sequence = 0;
+    const harness = await fixture(async options => {
+      sequence++;
+      options.onToolActivity?.({
+        callId: 'reused',
+        executionId: `execution-${sequence}`,
+        namespace: 'shell',
+        name: 'execute_shell',
+        arguments: JSON.stringify({ command: `command-${sequence}`, background: true }),
+        phase: ToolActivityPhase.COMPLETED,
+        output: JSON.stringify({ terminal_id: `session-${sequence}`, output: '' }),
+      });
+    });
+    try {
+      for (const runId of ['first', 'second']) {
+        await harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId,
+          text: 'Start a shell',
+          attachments: [],
+        });
+        await vi.waitFor(async () =>
+          expect((await harness.runtime.snapshot()).runs.find(run => run.runId === runId)?.status).toBe(
+            GlyphRunStatus.COMPLETED,
+          ),
+        );
+      }
+      harness.shells.allSessions = [1, 2].map(index => ({
+        id: `session-${index}`,
+        executionId: `execution-${index}`,
+        ownerChatId: harness.chatId,
+        command: `command-${index}`,
+        outputTail: `secret output-${index}`,
+        workingDirectory: '/project',
+        status: ShellSessionStatus.RUNNING,
+        background: true,
+        startedAt: new Date().toISOString(),
+      }));
+      harness.emitShells();
+      expect((await harness.runtime.snapshot()).runs.map(run => run.tools[0]?.shell)).toMatchObject([
+        { sessionId: 'session-1', output: '[REDACTED] output-1', running: true, live: true },
+        { sessionId: 'session-2', output: '[REDACTED] output-2', running: true, live: true },
+      ]);
+      harness.shells.allSessions.shift();
+      harness.emitShells();
+      expect((await harness.runtime.snapshot()).runs.map(run => run.tools[0]?.shell?.live)).toEqual([false, true]);
     } finally {
       await harness.runtime.dispose();
     }

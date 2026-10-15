@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { ProviderError } from '#src/errors/ProviderError.js';
 import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
@@ -168,6 +169,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                   ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
                   name: call.name,
                   callId: call.id,
+                  executionId: randomUUID(),
                   arguments: call.input,
                 };
                 trace('tool.call', { call }, round);
@@ -176,7 +178,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                 let phase = ToolActivityPhase.COMPLETED;
                 try {
                   output = options.toolContext
-                    ? await this.tools.execute(call.name, call.input, signal, options.toolContext)
+                    ? await this.tools.execute(call.name, call.input, signal, {
+                        ...options.toolContext,
+                        executionId: activity.executionId,
+                      })
                     : await this.tools.execute(call.name, call.input, signal);
                 } catch (error) {
                   phase = signal.aborted ? ToolActivityPhase.INTERRUPTED : ToolActivityPhase.FAILED;

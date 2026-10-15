@@ -455,7 +455,7 @@ describe(GlyphDesktopHost, () => {
     expect(fixture.events('owner').map(event => event.sequence)).toEqual([1, 2, 3, 4, 5]);
   });
 
-  it.each([1, 999])('rejects spoofed connection authority and incompatible protocol version %s', async version => {
+  it.each([1, 2, 999])('rejects spoofed connection authority and incompatible protocol version %s', async version => {
     const fixture = new HostFixture();
     fixture.connect('owner', owner);
     await fixture.host.receive('owner', {

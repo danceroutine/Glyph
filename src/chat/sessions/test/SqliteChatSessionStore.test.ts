@@ -29,7 +29,19 @@ describe(SqliteChatSessionStore, () => {
     database.exec('ALTER TABLE chat_turns DROP COLUMN tools');
     database.close();
     const usage = { inputTokens: 100, cachedInputTokens: 30, outputTokens: 40, reasoningTokens: 10, totalTokens: 140 };
-    const tool = { callId: 'call', name: 'read_project_file', phase: ToolActivityPhase.COMPLETED };
+    const tool = {
+      callId: 'call',
+      name: 'execute_shell',
+      phase: ToolActivityPhase.COMPLETED,
+      shell: {
+        command: 'pwd',
+        output: '/project\n',
+        workingDirectory: '/project',
+        sessionId: 'session',
+        exitCode: 0,
+        background: false,
+      },
+    };
     for (let attempt = 0; attempt < 2; attempt++) {
       const store = new SqliteChatSessionStore(directory);
       try {

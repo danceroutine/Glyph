@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { WiredGlyphTranscript } from './GlyphTranscript.wired.tsx';
-import { workbenchClassName } from '../GlyphWorkbench/GlyphWorkbench.presentational.tsx';
+import { workbenchClassName } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.presentational.tsx';
 import { conversation } from '#code-oss/storybook/fixtures.ts';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';

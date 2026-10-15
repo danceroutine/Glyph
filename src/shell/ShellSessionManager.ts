@@ -25,6 +25,7 @@ interface RunningCommand {
 }
 
 interface ExecuteShellCommandOptions {
+  readonly executionId?: string;
   readonly terminalId?: string;
   readonly workingDirectory?: string;
   readonly background?: boolean;
@@ -65,6 +66,10 @@ export class ShellSessionManager implements ShellSessionRegistry {
     private readonly now: () => Date = () => new Date(),
     private readonly maxSessions = DEFAULT_MAX_SESSIONS,
   ) {}
+
+  get allSessions(): readonly ShellSessionSnapshot[] {
+    return [...this.terminals.values()].map(terminal => terminal.snapshot);
+  }
 
   get sessions(): readonly ShellSessionSnapshot[] {
     return [...this.terminals.values()]
@@ -132,7 +137,12 @@ export class ShellSessionManager implements ShellSessionRegistry {
     try {
       // Configuration can fail before launch too; it must release a newly
       // allocated terminal just like a synchronous process-launch failure.
-      completion = terminal.execute({ command, authorization, wakeOn: options.wakeOn });
+      completion = terminal.execute({
+        command,
+        authorization,
+        wakeOn: options.wakeOn,
+        executionId: options.executionId,
+      });
     } catch (error) {
       if (!existing) {
         this.terminals.delete(terminal.snapshot.id);
@@ -146,11 +156,16 @@ export class ShellSessionManager implements ShellSessionRegistry {
       });
       terminal.setBackground(true);
       this.changed();
-      return { terminalId: terminal.snapshot.id, status: 'backgrounded', output: terminal.snapshot.outputTail };
+      return {
+        terminalId: terminal.snapshot.id,
+        workingDirectory,
+        status: 'backgrounded',
+        output: terminal.snapshot.outputTail,
+      };
     }
     try {
       const result = await waitForCommand(completion, options.signal, options.timeoutMs);
-      return { terminalId: terminal.snapshot.id, status: 'completed', ...result };
+      return { terminalId: terminal.snapshot.id, workingDirectory, status: 'completed', ...result };
     } catch (error) {
       if (existing) await terminal.terminate();
       throw error;
@@ -253,6 +268,7 @@ class ManagedShellSession {
   private active: RunningCommand | undefined;
   private commandGeneration = 0;
   private command = '';
+  private executionId: string | undefined;
   private status = ShellSessionStatus.IDLE;
   private background: boolean;
   private outputTail = '';
@@ -268,6 +284,7 @@ class ManagedShellSession {
   get snapshot(): ShellSessionSnapshot {
     return {
       id: this.options.id,
+      ...(this.executionId ? { executionId: this.executionId } : {}),
       ...(this.options.ownerChatId ? { ownerChatId: this.options.ownerChatId } : {}),
       workingDirectory: this.options.workingDirectory,
       command: this.command,
@@ -288,8 +305,10 @@ class ManagedShellSession {
     command,
     authorization,
     wakeOn,
+    executionId,
   }: {
     readonly command: string;
+    readonly executionId?: string | undefined;
     readonly authorization: ShellExecutionAuthorization;
     readonly wakeOn: string | undefined;
   }): Promise<{ output: string; exitCode: number }> {
@@ -301,6 +320,8 @@ class ManagedShellSession {
     const wakePattern = wakeOn?.trim();
     if (wakePattern !== undefined && !wakePattern) throw new Error('Shell wake pattern cannot be empty.');
     this.command = normalized;
+    this.executionId = executionId;
+    this.outputTail = '';
     this.status = ShellSessionStatus.RUNNING;
     this.exitCode = undefined;
     let child: ChildProcess;

@@ -1,5 +1,6 @@
 /** Host-owned provenance supplied to tools independently of any model provider protocol. */
 export interface ToolExecutionContext {
+  readonly executionId?: string;
   readonly chat?: {
     readonly id: string;
     readonly accountProvider: string;

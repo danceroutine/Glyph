@@ -1,5 +1,5 @@
 import type { GlyphChatHistoryState } from './useGlyphChatHistoryState.ts';
-import { css, tokens, space, conditions } from '../design-system/index.ts';
+import { css, tokens, space, conditions } from '#code-oss/ui/design-system/index.ts';
 import type { ComponentChildren } from 'preact';
 
 const styles = {

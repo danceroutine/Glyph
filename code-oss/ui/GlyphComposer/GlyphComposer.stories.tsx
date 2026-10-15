@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { WiredGlyphComposer } from './GlyphComposer.wired.tsx';
-import { workbenchClassName } from '../GlyphWorkbench/GlyphWorkbench.presentational.tsx';
+import { workbenchClassName } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.presentational.tsx';
 import { failingActions, previewActions, selection } from '#code-oss/storybook/fixtures.ts';
 
 const meta = {

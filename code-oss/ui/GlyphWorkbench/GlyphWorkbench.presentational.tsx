@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import type { GlyphWorkbenchState } from './useGlyphWorkbenchState.ts';
-import { css, tokens, space } from '../design-system/index.ts';
+import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 
 /** Also used by standalone component stories to reproduce the pane layout. */
 export const workbenchClassName = css({

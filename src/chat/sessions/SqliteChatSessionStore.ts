@@ -1,3 +1,4 @@
+import { shellCommandSummarySchema } from '#src/shell/ShellCommandSummary.js';
 import { chmod, mkdir, readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
@@ -43,8 +44,10 @@ const transcriptTurnSchema = z
             callId: z.string(),
             name: z.string(),
             phase: z.enum(ToolActivityPhase),
+            shell: shellCommandSummarySchema.optional(),
           })
-          .strict(),
+          .strict()
+          .transform(({ shell, ...tool }) => ({ ...tool, ...(shell === undefined ? {} : { shell }) })),
       )
       .optional(),
     createdAt: z.iso.datetime(),

@@ -1,6 +1,6 @@
 import type { GlyphApprovalCardState } from './useGlyphApprovalCardState.ts';
-import { css, tokens, space } from '../design-system/index.ts';
-import { decisionStyles as shared } from '../GlyphDecisionStyles.ts';
+import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
+import { decisionStyles as shared } from '#code-oss/ui/GlyphDecisionStyles.ts';
 
 const styles = {
   root: css({ marginTop: tokens.space.lg }),

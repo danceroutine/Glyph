@@ -63,6 +63,27 @@ export class GlyphWorkbenchProjection {
       case GlyphHostEventType.HOST_STATUS: {
         this.status = event.status;
         if (event.status === GlyphHostStatus.DISCONNECTED) {
+          this.snapshot = {
+            ...this.snapshot,
+            runs: this.snapshot.runs.map(run => ({
+              ...run,
+              tools: run.tools.map(tool =>
+                tool.shell
+                  ? {
+                      ...tool,
+                      shell: {
+                        ...tool.shell,
+                        live: false,
+                        running: false,
+                        ...(tool.shell.running ? { error: 'Shell interrupted when the host disconnected.' } : {}),
+                      },
+                    }
+                  : tool,
+              ),
+            })),
+          };
+        }
+        if (event.status === GlyphHostStatus.DISCONNECTED) {
           // Streaming and human-decision waits cannot remain actionable after
           // their host disappears. Preserve the partial answer until recovery.
           for (const run of this.snapshot.runs) {

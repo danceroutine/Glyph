@@ -81,6 +81,14 @@ browser runner's headless setting. macOS opens automated application windows.
 
 ## Coverage and pending work
 
+`GlyphShells.test.mjs` covers the fourteen rank-6 execute/input/close/list contracts
+and a direct-user input/close regression. Commands run through the real native sandbox.
+Assertions check streamed output and exit codes, collapsed and expanded cards, restored
+foreground output, approval denial, timeout/cancellation, raw input versus newline,
+unknown/idle sessions, cross-chat rejection, and termination of a real child process.
+Lists retain every session's identity while bounding its output. Provider responses
+are scripted; recorded tool results establish what the agent actually received.
+
 `GlyphInteractions.test.mjs` covers the eight rank-5 question and approval contracts
 plus queued forms, remembered grants, and interruption regressions. Questions exercise
 single/multiple choices and Other text, duplicate submission, cancellation, and the

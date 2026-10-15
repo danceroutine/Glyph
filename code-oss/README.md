@@ -70,8 +70,14 @@ and working directory: Run permits one invocation, Skip declines it, and Always 
 remembers that exact command in that directory while retaining the sandbox. Question
 drafts survive chat switches within the mounted pane; failed submissions remain
 editable. Reloading the owning window cancels its run and removes pending decisions.
-Proposal controls remain follow-up components. Desktop protocol v2 replaces boolean
-approval payloads with explicit decisions; rebuild the host and workbench together.
+Shell tools render as expandable command cards with a three-line output preview.
+Expanded cards show the command, bounded output, working directory, and exit status.
+Live background cards expose input with an explicit newline option and Close shell;
+those controls use the same trust and ownership checks as agent tools. Foreground
+command display data survives host restarts. Background output and process authority
+belong to the live host; restored history never claims an old process is still running.
+Proposal controls remain follow-up components. Desktop protocol v3 adds shell input
+commands; rebuild the host and workbench together.
 Indexed content search uses authorized live editor snapshots in place of disk text,
 including when an unsaved edit removes every match. The Rust matcher applies the
 same filters, context, and pagination to both sources. Snapshot transfer is bounded
@@ -95,7 +101,8 @@ Run `pnpm code-oss:test:integration --list` to browse the behavior inventory:
 - [GlyphScriptedProvider.test.mjs](tests/electron/GlyphScriptedProvider.test.mjs): scripted provider calls through the real agent/tool loop and editor RPC, with recorded continuation assertions.
 - [GlyphInteractions.test.mjs](tests/electron/GlyphInteractions.test.mjs): questions, command approvals, remembered grants, cancellation, and decision lifecycle.
 - [GlyphProjectTools.test.mjs](tests/electron/GlyphProjectTools.test.mjs): file listing, live editor reads/search, exclusions, limits, and multi-root paths.
-- [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): pending shell, proposal, and reviewed file creation/deletion contracts.
+- [GlyphShells.test.mjs](tests/electron/GlyphShells.test.mjs): shell execution, interactive input, process-group cleanup, chat ownership, and bounded session lists.
+- [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): pending proposal and reviewed file creation/deletion contracts.
 - [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs): Plan Mode, blocking/background sub-agents, action items, web fetch/search, and shell wake conditions.
 - [GlyphBrowserAutomation.test.mjs](tests/electron/GlyphBrowserAutomation.test.mjs): CDP lifecycle, DOM inspection/highlighting, input, screenshots, and browser feedback.
 - [GlyphMcp.test.mjs](tests/electron/GlyphMcp.test.mjs): human/agent installation and configuration, authentication, tool discovery/calls, resources/prompts, and optional or revision-dependent capabilities.

@@ -1,5 +1,5 @@
 import type { GlyphComposerState } from './useGlyphComposerState.ts';
-import { css, tokens } from '../design-system/index.ts';
+import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 import type { ComponentChildren } from 'preact';
 
 const styles = {

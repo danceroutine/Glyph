@@ -1,3 +1,4 @@
+import type { GlyphShellCommand } from './GlyphShellCommand.ts';
 export enum GlyphToolActivityStatus {
   STARTED = 'started',
   COMPLETED = 'completed',
@@ -10,4 +11,5 @@ export interface GlyphToolActivity {
   readonly name: string;
   readonly status: GlyphToolActivityStatus;
   readonly summary?: string;
+  readonly shell?: GlyphShellCommand;
 }

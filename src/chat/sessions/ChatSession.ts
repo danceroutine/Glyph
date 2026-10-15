@@ -1,3 +1,4 @@
+import { toShellCommandSummary } from '#src/shell/toShellCommandSummary.js';
 import type { ChatConversation } from '#src/chat/ChatConversation.js';
 import type { ChatRequestInput } from '#src/chat/ChatRequest.js';
 import { toChatRequest } from '#src/chat/ChatRequest.js';
@@ -122,7 +123,8 @@ export class ChatSession {
             break;
           case ChatResponsePartType.TOOL: {
             const { callId, name, phase } = part.activity;
-            tools.set(callId, { callId, name, phase });
+            const shell = toShellCommandSummary(part.activity);
+            tools.set(callId, { callId, name, phase, ...(shell ? { shell } : {}) });
             break;
           }
           case ChatResponsePartType.DIAGNOSTIC:

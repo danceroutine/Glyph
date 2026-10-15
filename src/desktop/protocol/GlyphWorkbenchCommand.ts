@@ -16,6 +16,7 @@ export enum GlyphWorkbenchCommandType {
   DECIDE_APPROVAL = 'decide_approval',
   ACCEPT_PROPOSAL_ITEM = 'accept_proposal_item',
   REJECT_PROPOSAL_ITEM = 'reject_proposal_item',
+  WRITE_SHELL_INPUT = 'write_shell_input',
   STOP_SHELL_SESSION = 'stop_shell_session',
   REQUEST_SNAPSHOT = 'request_snapshot',
   DETACH = 'detach',
@@ -90,6 +91,13 @@ export type GlyphWorkbenchCommand =
       readonly type: GlyphWorkbenchCommandType.STOP_SHELL_SESSION;
       readonly chatId: string;
       readonly sessionId: string;
+    }
+  | {
+      readonly type: GlyphWorkbenchCommandType.WRITE_SHELL_INPUT;
+      readonly chatId: string;
+      readonly sessionId: string;
+      readonly input: string;
+      readonly appendNewline: boolean;
     }
   | { readonly type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT; readonly afterSequence: number }
   | { readonly type: GlyphWorkbenchCommandType.DETACH };

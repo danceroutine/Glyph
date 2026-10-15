@@ -1,5 +1,5 @@
 import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
-import { css, tokens, space } from '../design-system/index.ts';
+import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 
 const styles = {
   root: css({

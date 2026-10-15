@@ -5,6 +5,7 @@ export interface ToolActivity {
   namespace?: string;
   name: string;
   callId: string;
+  executionId?: string;
   arguments: string;
   output?: string;
 }

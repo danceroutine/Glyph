@@ -5,41 +5,6 @@ import { test as it } from './GlyphWorkbench.fixture.mjs';
 // observable workbench results, and disposable workspace/process fixtures.
 // Existing runtime unit tests do not establish desktop end-to-end coverage.
 
-it.describe('Pending Shell Execute (execute_shell)', () => {
-  it.fixme(
-    'runs an approved command in the requested workspace directory and shows its output and exit status',
-    async () => {},
-  );
-  it.fixme('keeps a command from running while approval is pending or after the user denies it', async () => {});
-  it.fixme('shows a nonzero exit as a failed command and lets the agent explain the returned error', async () => {});
-  it.fixme('stops a timed-out or cancelled foreground command and restores an interactive composer', async () => {});
-});
-
-it.describe('Pending Shell Write Input (write_shell_input)', () => {
-  it.fixme('delivers input to the selected running shell and shows the resulting interactive output', async () => {});
-  it.fixme('respects append_newline so typing input and submitting it remain distinct operations', async () => {});
-  it.fixme('reports an unknown or idle shell without starting a command or bypassing command approval', async () => {});
-  it.fixme('refuses to write input to a shell owned by another chat', async () => {});
-});
-
-it.describe('Pending Shell Close (close_shell)', () => {
-  it.fixme(
-    'terminates the selected shell process and its children and removes it from the live shell list',
-    async () => {},
-  );
-  it.fixme('reports an already closed or unknown shell without affecting another running shell', async () => {});
-  it.fixme('refuses to close a shell owned by another chat', async () => {});
-});
-
-it.describe('Pending Shell List (list_shells)', () => {
-  it.fixme(
-    'shows each shell owned by the current chat with its command, directory, status, and bounded recent output',
-    async () => {},
-  );
-  it.fixme('reports an empty shell list without inventing a session or showing another chat’s shells', async () => {});
-  it.fixme('reflects command completion and removes closed shells when the agent lists shells again', async () => {});
-});
-
 it.describe('Pending Propose Patch (propose_patch)', () => {
   it.fixme(
     'renders a strict patch as reviewable file changes and leaves editor buffers and disk unchanged before acceptance',

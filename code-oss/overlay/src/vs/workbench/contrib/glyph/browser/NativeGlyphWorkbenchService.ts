@@ -458,6 +458,12 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.storageService.store('glyph.selectedChat', chatId ?? '', StorageScope.WORKSPACE, StorageTarget.MACHINE);
   }
 
+  writeShellInput(chatId: string, sessionId: string, input: string, appendNewline: boolean): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.WRITE_SHELL_INPUT, chatId, sessionId, input, appendNewline });
+  }
+  stopShell(chatId: string, sessionId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.STOP_SHELL_SESSION, chatId, sessionId });
+  }
   answerQuestion(chatId: string, runId: string, questionId: string, answer: unknown): Promise<void> {
     return this.request({ type: GlyphWorkbenchCommandType.ANSWER_QUESTION, chatId, runId, questionId, answer });
   }

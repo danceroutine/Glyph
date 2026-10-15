@@ -1,7 +1,7 @@
 import type { GlyphApprovalRequest } from '#src/desktop/protocol/events/GlyphApprovalRequest.js';
 import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
-import { useGlyphDecision } from '../useGlyphDecision.ts';
+import { useGlyphDecision } from '#code-oss/ui/useGlyphDecision.ts';
 
 export interface GlyphApprovalCardStateOptions {
   readonly request: GlyphApprovalRequest;

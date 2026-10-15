@@ -34,4 +34,5 @@ export * from './events/GlyphQuestionRequest.ts';
 export * from './events/GlyphResponseDelta.ts';
 export * from './events/GlyphRunProjection.ts';
 export * from './events/GlyphToolActivity.ts';
+export * from './events/GlyphShellCommand.ts';
 export * from './events/GlyphUsage.ts';

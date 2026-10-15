@@ -1,5 +1,5 @@
 import { GlyphChatHistory } from './GlyphChatHistory.presentational.tsx';
-import { WiredGlyphAccountPicker } from '../GlyphAccountPicker/GlyphAccountPicker.wired.tsx';
+import { WiredGlyphAccountPicker } from '#code-oss/ui/GlyphAccountPicker/GlyphAccountPicker.wired.tsx';
 import { useGlyphChatHistoryState, type GlyphChatHistoryStateOptions } from './useGlyphChatHistoryState.ts';
 
 export type WiredGlyphChatHistoryProps = GlyphChatHistoryStateOptions;

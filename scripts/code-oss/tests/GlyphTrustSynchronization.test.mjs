@@ -268,6 +268,8 @@ it.each(
     ...[
       ['selectModel', ['other'], 'select_model'],
       ['answerQuestion', ['chat', 'run', 'question', {}], 'answer_question'],
+      ['writeShellInput', ['chat', 'session', 'input', true], 'write_shell_input'],
+      ['stopShell', ['chat', 'session'], 'stop_shell_session'],
       ['decideApproval', ['chat', 'run', 'approval', 'allow_once'], 'decide_approval'],
       ['acceptProposalItem', ['chat', 'proposal', 'item'], 'accept_proposal_item'],
       ['rejectProposalItem', ['chat', 'proposal', 'item'], 'reject_proposal_item'],

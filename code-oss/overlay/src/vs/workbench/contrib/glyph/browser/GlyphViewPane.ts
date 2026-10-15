@@ -61,6 +61,9 @@ export class GlyphViewPane extends ViewPane {
       },
       send: text => this.glyphService.send(text),
       cancel: () => this.glyphService.cancel(),
+      writeShellInput: (chatId, sessionId, input, appendNewline) =>
+        this.glyphService.writeShellInput(chatId, sessionId, input, appendNewline),
+      stopShell: (chatId, sessionId) => this.glyphService.stopShell(chatId, sessionId),
       answerQuestion: (chatId, runId, questionId, answer) =>
         this.glyphService.answerQuestion(chatId, runId, questionId, answer),
       decideApproval: (chatId, runId, approvalId, decision) =>

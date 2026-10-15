@@ -3,7 +3,7 @@ import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWork
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import type { QuestionAnswer } from '#src/interaction/questions/QuestionAnswer.js';
-import { tokens } from '../design-system/index.ts';
+import { tokens } from '#code-oss/ui/design-system/index.ts';
 
 export interface GlyphWorkbenchStateOptions {
   readonly state: HostWorkbenchState;

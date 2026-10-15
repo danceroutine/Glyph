@@ -1,10 +1,10 @@
 import { GlyphWorkbench } from './GlyphWorkbench.presentational.tsx';
-import { WiredGlyphQuestionCard } from '../GlyphQuestionCard/GlyphQuestionCard.wired.tsx';
-import { WiredGlyphComposer } from '../GlyphComposer/GlyphComposer.wired.tsx';
-import { WiredGlyphTranscript } from '../GlyphTranscript/GlyphTranscript.wired.tsx';
-import { GlyphUsageSummary } from '../GlyphUsageSummary/GlyphUsageSummary.presentational.tsx';
-import { WiredGlyphChatHistory } from '../GlyphChatHistory/GlyphChatHistory.wired.tsx';
-import { WiredGlyphModelPicker } from '../GlyphModelPicker/GlyphModelPicker.wired.tsx';
+import { WiredGlyphQuestionCard } from '#code-oss/ui/GlyphQuestionCard/GlyphQuestionCard.wired.tsx';
+import { WiredGlyphComposer } from '#code-oss/ui/GlyphComposer/GlyphComposer.wired.tsx';
+import { WiredGlyphTranscript } from '#code-oss/ui/GlyphTranscript/GlyphTranscript.wired.tsx';
+import { GlyphUsageSummary } from '#code-oss/ui/GlyphUsageSummary/GlyphUsageSummary.presentational.tsx';
+import { WiredGlyphChatHistory } from '#code-oss/ui/GlyphChatHistory/GlyphChatHistory.wired.tsx';
+import { WiredGlyphModelPicker } from '#code-oss/ui/GlyphModelPicker/GlyphModelPicker.wired.tsx';
 import { useGlyphWorkbenchState, type GlyphWorkbenchStateOptions } from './useGlyphWorkbenchState.ts';
 
 export type WiredGlyphWorkbenchProps = GlyphWorkbenchStateOptions;
@@ -20,6 +20,7 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
       transcript={
         <WiredGlyphTranscript
           entries={state.transcript}
+          {...(state.selectedChatId ? { chatId: state.selectedChatId } : {})}
           actions={actions}
           readOnly={state.readOnly}
           {...(approvalRun ? { pendingApproval: approvalRun } : {})}

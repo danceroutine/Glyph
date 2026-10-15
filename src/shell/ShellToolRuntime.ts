@@ -97,6 +97,7 @@ export class ShellToolRuntime implements ToolRuntime {
             timeout_ms: timeoutMs,
           } = executeArgumentsSchema.parse(JSON.parse(input));
           const result = await this.sessions.execute(command, {
+            ...(context?.executionId ? { executionId: context.executionId } : {}),
             ...(terminalId === null ? {} : { terminalId }),
             ...(workingDirectory === null ? {} : { workingDirectory }),
             background,
@@ -162,6 +163,7 @@ export class ShellToolRuntime implements ToolRuntime {
 function serializeCommandResult(result: Awaited<ReturnType<ShellSessionManager['execute']>>): Record<string, unknown> {
   const serialized: Record<string, unknown> = {
     terminal_id: result.terminalId,
+    ...(result.workingDirectory ? { working_directory: result.workingDirectory } : {}),
     status: result.status,
     output: result.output,
     ...(result.exitCode === undefined ? {} : { exit_code: result.exitCode }),

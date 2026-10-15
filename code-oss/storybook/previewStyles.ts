@@ -1,4 +1,4 @@
-import { css, tokens, space, previewThemeStyles } from '../ui/design-system/index.ts';
+import { css, tokens, space, previewThemeStyles } from '#code-oss/ui/design-system/index.ts';
 
 export const stageClassName = css({
   ...previewThemeStyles('dark'),

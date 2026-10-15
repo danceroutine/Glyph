@@ -3,7 +3,7 @@ import type { GlyphQuestionRequest } from '#src/desktop/protocol/events/GlyphQue
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import type { QuestionAnswer } from '#src/interaction/questions/QuestionAnswer.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
-import { useGlyphDecision } from '../useGlyphDecision.ts';
+import { useGlyphDecision } from '#code-oss/ui/useGlyphDecision.ts';
 
 export interface GlyphQuestionCardStateOptions {
   readonly request: GlyphQuestionRequest;

@@ -1,3 +1,6 @@
+import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
+import { toShellCommandSummary } from '#src/shell/toShellCommandSummary.js';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 import type { GlyphService } from '#src/application/GlyphService.js';
 import type { ChatAccount } from '#src/chat/ChatAccount.js';
 import type { Model } from '#src/chat/Model.js';
@@ -38,6 +41,7 @@ interface ActiveRun {
 
 /** Adapts the existing application service to desktop commands without moving provider logic into Electron. */
 export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
+  private readonly shellCalls = new Map<string, { readonly runId: string; readonly toolId: string }>();
   private readonly runs = new Map<string, GlyphRunProjection>();
   private readonly active = new Map<string, ActiveRun>();
   private readonly sessions = new Map<string, ChatSession>();
@@ -51,17 +55,22 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private discovery = new AbortController();
   private accountSelectionRevisionNumber = 0;
   private readonly commands = new Set<Promise<void>>();
+  private readonly unsubscribeShells: () => void;
   private readonly unsubscribe: (() => void) | undefined;
 
   constructor(
     private readonly options: {
       readonly glyph: GlyphService;
       readonly interactions: DesktopInteractionBroker;
-      readonly shellSessions: Pick<ShellSessionManager, 'close' | 'dispose'>;
+      readonly shellSessions: Pick<
+        ShellSessionManager,
+        'close' | 'dispose' | 'writeInput' | 'allSessions' | 'onDidChange'
+      >;
       readonly emit: (event: GlyphHostEvent) => void;
       readonly ownerWindowId: string;
     },
   ) {
+    this.unsubscribeShells = options.shellSessions.onDidChange(() => this.syncShells());
     this.unsubscribe = options.glyph.proposalReviews?.onDidChange(change => {
       for (const id of change.proposalIds) {
         const proposal = options.glyph.proposalReviews?.get(id);
@@ -173,6 +182,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
                 id: tool.callId,
                 name: tool.name,
                 status: TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[tool.phase],
+                ...(tool.shell ? { shell: { ...this.redactShell(tool.shell), live: false, running: false } } : {}),
               })),
               status: GlyphRunStatus.COMPLETED,
             }),
@@ -218,7 +228,20 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         this.resumeRun(command.runId);
         return;
       }
+      case GlyphWorkbenchCommandType.WRITE_SHELL_INPUT: {
+        this.session(command.chatId);
+        if (command.input.length > 64 * 1024) throw new Error('Shell input exceeds 64 KiB.');
+        await this.options.shellSessions.writeInput({
+          terminalId: command.sessionId,
+          input: command.input,
+          appendNewline: command.appendNewline,
+          ownerChatId: command.chatId,
+          signal: this.discovery.signal,
+        });
+        return;
+      }
       case GlyphWorkbenchCommandType.STOP_SHELL_SESSION: {
+        this.session(command.chatId);
         await this.options.shellSessions.close(command.sessionId, command.chatId);
         return;
       }
@@ -280,6 +303,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     // persistence before those admitted commands settle would lose the outcome.
     await Promise.allSettled(this.commands);
     this.unsubscribe?.();
+    this.unsubscribeShells();
     try {
       await this.options.shellSessions.dispose();
     } finally {
@@ -376,11 +400,36 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private response(runId: string, part: ChatResponsePart): void {
     const run = this.runs.get(runId)!;
     if (part.type === ChatResponsePartType.TOOL) {
+      const previous = run.tools.find(tool => tool.id === part.activity.callId);
+      const parsed = toShellCommandSummary(part.activity);
+      const summary = parsed ? this.redactShell(parsed) : undefined;
+      if (summary && part.activity.executionId)
+        this.shellCalls.set(part.activity.executionId, { runId, toolId: part.activity.callId });
+      const shell = summary
+        ? {
+            ...summary,
+            ...previous?.shell,
+            ...(part.activity.phase === ToolActivityPhase.STARTED ? {} : summary),
+            output:
+              (summary.background || (summary.error && !summary.output)) && previous?.shell
+                ? previous.shell.output
+                : summary.output,
+            live: previous?.shell?.live ?? false,
+            running:
+              part.activity.phase === ToolActivityPhase.STARTED || summary.background
+                ? (previous?.shell?.running ?? false)
+                : false,
+          }
+        : undefined;
       const activity = {
         id: part.activity.callId,
         name: part.activity.name,
-        status: TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[part.activity.phase],
+        status:
+          shell?.error && part.activity.phase === ToolActivityPhase.COMPLETED
+            ? GlyphToolActivityStatus.FAILED
+            : TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[part.activity.phase],
         ...(part.activity.output ? { summary: part.activity.output } : {}),
+        ...(shell ? { shell } : {}),
       };
       const tools = run.tools.some(tool => tool.id === activity.id)
         ? run.tools.map(tool => (tool.id === activity.id ? activity : tool))
@@ -397,6 +446,58 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       reasoning: run.reasoning + (kind === GlyphResponseDeltaKind.REASONING ? value : ''),
     });
     this.publish({ type: GlyphHostEventType.RESPONSE_DELTA, chatId: run.chatId, runId, delta: { kind, value } });
+  }
+
+  private redactShell(summary: ShellCommandSummary): ShellCommandSummary {
+    return {
+      ...summary,
+      command: this.options.glyph.redact(summary.command),
+      output: this.options.glyph.redact(summary.output),
+      ...(summary.error ? { error: this.options.glyph.redact(summary.error) } : {}),
+    };
+  }
+
+  /** Correlate process updates by host-supplied execution id, never by command text. */
+  private syncShells(): void {
+    const sessions = this.options.shellSessions.allSessions;
+    for (const [runId, run] of this.runs) {
+      for (const tool of run.tools) {
+        if (!tool.shell) continue;
+        const session = sessions.find(value => {
+          const owner = value.executionId ? this.shellCalls.get(value.executionId) : undefined;
+          return value.ownerChatId === run.chatId && owner?.runId === runId && owner.toolId === tool.id;
+        });
+        if (!session && !tool.shell.live && !tool.shell.running) continue;
+        const shell = session
+          ? {
+              ...tool.shell,
+              command: this.options.glyph.redact(session.command),
+              workingDirectory: session.workingDirectory,
+              sessionId: session.id,
+              output: this.options.glyph.redact(session.outputTail),
+              background: session.background,
+              live: session.background,
+              running: session.status === ShellSessionStatus.RUNNING,
+              ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }),
+            }
+          : {
+              ...this.redactShell(tool.shell),
+              live: false,
+              running: false,
+            };
+        const activity = {
+          ...tool,
+          shell,
+          status: shell.exitCode !== undefined && shell.exitCode !== 0 ? GlyphToolActivityStatus.FAILED : tool.status,
+        };
+        const current = this.runs.get(runId)!;
+        this.runs.set(runId, {
+          ...current,
+          tools: current.tools.map(value => (value.id === tool.id ? activity : value)),
+        });
+        this.publish({ type: GlyphHostEventType.TOOL_ACTIVITY, chatId: run.chatId, runId, activity });
+      }
+    }
   }
 
   /** Keep provider response categories out of the browser-only protocol. */

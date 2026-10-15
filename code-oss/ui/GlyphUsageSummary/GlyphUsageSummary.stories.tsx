@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphUsageSummary } from './GlyphUsageSummary.presentational.tsx';
-import { workbenchClassName } from '../GlyphWorkbench/GlyphWorkbench.presentational.tsx';
+import { workbenchClassName } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.presentational.tsx';
 
 const meta = {
   title: 'Glyph/Conversation usage',
