@@ -81,6 +81,15 @@ browser runner's headless setting. macOS opens automated application windows.
 
 ## Coverage and pending work
 
+`GlyphTodos.test.mjs` covers the four rank-8 action-item contracts plus malformed
+updates, replacement/clearing, and host-failure recovery. Agent calls use
+`todo.update_todos` through the production runtime and SQLite store. The card
+derives its completed count from the selected chat's saved items, expands upward
+above the composer, and displays distinct read-only statuses. Tests verify live
+updates, stable IDs, completion/cancellation, per-chat isolation, renderer reload,
+and utility-host restart. Browser coverage also checks keyboard interaction,
+literal text, long-list scrolling, and a stationary composer.
+
 `GlyphShells.test.mjs` covers the fourteen rank-6 execute/input/close/list contracts
 and a direct-user input/close regression. Commands run through the real native sandbox.
 Assertions check streamed output and exit codes, collapsed and expanded cards, restored

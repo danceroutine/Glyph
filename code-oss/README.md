@@ -76,6 +76,14 @@ Live background cards expose input with an explicit newline option and Close she
 those controls use the same trust and ownership checks as agent tools. Foreground
 command display data survives host restarts. Background output and process authority
 belong to the live host; restored history never claims an old process is still running.
+The read-only todo card above the composer expands upward and shows pending,
+in-progress, and completed items. Its completed count is derived from the same
+list it renders. The agent's `todo.update_todos` tool merges by stable ID unless
+it explicitly replaces or clears the list. Updates are validated (100 items,
+500 characters per item) and saved per chat before publication; cancellation or
+turn completion never implicitly completes unfinished work. SQLite upgrades
+older catalogs with an optional todo column, and reconnect snapshots carry each
+chat's saved list through the existing chat-update contract.
 Proposal controls remain follow-up components. Desktop protocol v3 adds shell input
 commands; rebuild the host and workbench together.
 Indexed content search uses authorized live editor snapshots in place of disk text,

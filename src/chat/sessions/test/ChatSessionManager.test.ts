@@ -14,6 +14,7 @@ import type { TurnResult } from '#src/chat/TurnResult.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
 import type { ChatSessionRecord } from '#src/chat/sessions/ChatSessionRecord.js';
 import type { ChatSessionStore } from '#src/chat/sessions/ChatSessionStore.js';
+import { TodoStatus } from '#src/todos/TodoStatus.js';
 
 const temporaryPaths: string[] = [];
 
@@ -22,6 +23,85 @@ afterEach(async () => {
 });
 
 describe(ChatSessionManager, () => {
+  it('merges stable todo IDs without losing concurrent checkpoints or another chat’s list', async () => {
+    const store = new MemoryChatSessionStore();
+    const context = await ProjectContextResolver.folder(await projectFixture());
+    const manager = new ChatSessionManager(store, context);
+    await manager.initialize();
+    const first = await manager.create(input(), conversation());
+    const second = await manager.create(input(), conversation());
+    const owner = { id: first.id, accountProvider: 'fixture', accountId: 'account' };
+    const items = [
+      { id: 'a', text: 'First', status: TodoStatus.PENDING },
+      { id: 'b', text: 'Second', status: TodoStatus.IN_PROGRESS },
+    ];
+    await manager.updateTodos(owner, { items, replace: true });
+    const completed = { ...items[0]!, status: TodoStatus.COMPLETED };
+    await Promise.all([
+      first.send('Continue', { push: () => {} }, new AbortController().signal),
+      manager.updateTodos(owner, { items: [completed], replace: false }),
+      manager.updateTodos(
+        { ...owner, id: second.id },
+        { items: [{ ...items[0]!, text: 'Other chat' }], replace: true },
+      ),
+    ]);
+    await manager.updateTodos(owner, { items: [completed], replace: false });
+    expect(first.summary.todos).toEqual([completed, items[1]]);
+    expect(first.transcript).toHaveLength(1);
+    expect(second.summary.todos).toEqual([{ ...items[0], text: 'Other chat' }]);
+    const restored = new ChatSessionManager(store, context);
+    await restored.initialize();
+    expect(restored.list().find(chat => chat.id === first.id)?.todos).toEqual([completed, items[1]]);
+    await manager.updateTodos(owner, { items: [], replace: true });
+    expect(first.summary.todos).toEqual([]);
+    expect(second.summary.todos).toHaveLength(1);
+  });
+
+  it('preserves the last durable todo list on storage failure, cancellation, or wrong account', async () => {
+    const store = new MemoryChatSessionStore();
+    const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+    await manager.initialize();
+    const session = await manager.create(input(), conversation());
+    const owner = { id: session.id, accountProvider: 'fixture', accountId: 'account' };
+    const item = { id: 'a', text: 'Pending work', status: TodoStatus.PENDING };
+    await manager.updateTodos(owner, { items: [item], replace: false });
+    store.failure = new Error('Disk full');
+    await expect(manager.updateTodos(owner, { items: [], replace: true })).rejects.toThrow('Disk full');
+    expect(session.summary.todos).toEqual([item]);
+    store.failure = undefined;
+    await expect(
+      manager.updateTodos(owner, { items: [], replace: true }, AbortSignal.abort(new Error('Cancelled'))),
+    ).rejects.toThrow('Cancelled');
+    await expect(manager.updateTodos({ ...owner, accountId: 'other' }, { items: [], replace: true })).rejects.toThrow(
+      'requesting chat account',
+    );
+    expect(session.summary.todos).toEqual([item]);
+    await session.send('tool then fail', { push: () => {} }, new AbortController().signal).catch(() => {});
+    expect(session.summary.todos).toEqual([item]);
+    await manager.updateTodos(owner, { items: [{ ...item, status: TodoStatus.COMPLETED }], replace: false });
+    expect(session.summary.todos?.[0]?.status).toBe(TodoStatus.COMPLETED);
+  });
+
+  it('bounds the merged todo list before persistence', async () => {
+    const store = new MemoryChatSessionStore();
+    const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+    await manager.initialize();
+    const session = await manager.create(input(), conversation());
+    const owner = { id: session.id, accountProvider: 'fixture', accountId: 'account' };
+    const items = Array.from({ length: 100 }, (_, id) => ({
+      id: String(id),
+      text: 'Task',
+      status: TodoStatus.PENDING,
+    }));
+    await manager.updateTodos(owner, { items, replace: true });
+    const calls = store.saveCalls;
+    await expect(
+      manager.updateTodos(owner, { items: [{ ...items[0]!, id: 'extra' }], replace: false }),
+    ).rejects.toThrow();
+    expect(store.saveCalls).toBe(calls);
+    expect(session.summary.todos).toEqual(items);
+  });
+
   it.each(['send', 'context', 'reset'] as const)(
     'preserves a human title longer than four words across a %s checkpoint and reload',
     async operation => {

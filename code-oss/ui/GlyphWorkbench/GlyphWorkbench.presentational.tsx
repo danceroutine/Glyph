@@ -59,6 +59,7 @@ export type GlyphWorkbenchProps = Pick<
 > & {
   readonly transcript: ComponentChildren;
   readonly usage: ComponentChildren;
+  readonly todos: ComponentChildren;
   readonly question: ComponentChildren;
   readonly composer: ComponentChildren;
   readonly history: ComponentChildren;
@@ -77,6 +78,7 @@ export function GlyphWorkbench({
   closeHistory,
   transcript,
   usage,
+  todos,
   question,
   composer,
   history,
@@ -132,6 +134,7 @@ export function GlyphWorkbench({
             </div>
           )}
           {question}
+          {todos}
           {composer}
         </main>
         {history}

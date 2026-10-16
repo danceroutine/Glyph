@@ -9,6 +9,7 @@ import { PersistenceError } from '#src/errors/PersistenceError.js';
 import { ProjectContextResolver } from '#src/project/context/ProjectContextResolver.js';
 import type { ChatSessionRecord } from '#src/chat/sessions/ChatSessionRecord.js';
 import { SqliteChatSessionStore } from '#src/chat/sessions/SqliteChatSessionStore.js';
+import { TodoStatus } from '#src/todos/TodoStatus.js';
 
 const temporaryPaths: string[] = [];
 
@@ -17,6 +18,38 @@ afterEach(async () => {
 });
 
 describe(SqliteChatSessionStore, () => {
+  it('upgrades catalogs without todos and preserves chat-scoped lists across repeated reopen', async () => {
+    const directory = await fixture('glyph-chat-todos-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-chat-project-'), 'local');
+    const seed = new SqliteChatSessionStore(directory);
+    await seed.initialize(context);
+    await seed.save(record(context.id));
+    await seed.save({ ...record(context.id), id: 'other' });
+    await seed.dispose();
+    const database = new Database(join(directory, 'chats.sqlite3'));
+    database.exec('ALTER TABLE chats DROP COLUMN todos');
+    database.close();
+    const todos = [{ id: 'a', text: 'Resume this work', status: TodoStatus.IN_PROGRESS }];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const store = new SqliteChatSessionStore(directory);
+      try {
+        await store.initialize(context);
+        const records = await store.load(context.id);
+        const first = records.find(value => value.id === record(context.id).id)!;
+        expect(records.find(value => value.id === 'other')?.todos).toBeUndefined();
+        if (attempt === 0) {
+          expect(first.todos).toBeUndefined();
+          await store.save({ ...first, todos });
+        } else {
+          expect(first.todos).toEqual(todos);
+          expect(first.transcript).toEqual(record(context.id).transcript);
+        }
+      } finally {
+        await store.dispose();
+      }
+    }
+  });
+
   it('upgrades an existing turn table without inventing usage and preserves new reports across repeated reopen', async () => {
     const directory = await fixture('glyph-chat-usage-migration-');
     const context = await ProjectContextResolver.folder(await fixture('glyph-chat-project-'), 'local');

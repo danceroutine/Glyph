@@ -2,6 +2,7 @@ import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { TurnUsage } from '#src/chat/TurnUsage.js';
 import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
+import type { TodoItem } from '#src/todos/TodoItem.js';
 
 /** Compact activity history with bounded shell display data; provider history owns complete tool results. */
 export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'> & {
@@ -33,6 +34,7 @@ export interface ChatSessionRecord {
   readonly updatedAt: string;
   readonly providerState: ChatProviderState;
   readonly transcript: readonly ChatTranscriptTurn[];
+  readonly todos?: readonly TodoItem[];
 }
 
 export type ChatSessionSummary = Omit<ChatSessionRecord, 'providerState' | 'transcript'> & {

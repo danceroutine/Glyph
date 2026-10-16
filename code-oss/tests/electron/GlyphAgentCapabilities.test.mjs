@@ -62,16 +62,6 @@ it.describe('Pending background sub-agents', () => {
   );
 });
 
-it.describe('Pending Action Items (Todo List)', () => {
-  it.fixme('shows the agent’s action items with distinct pending, in-progress, and completed states', async () => {});
-  it.fixme('updates an existing action item’s status without duplicating it or losing the other items', async () => {});
-  it.fixme(
-    'keeps unfinished action items visible when a turn ends or is cancelled instead of marking them completed',
-    async () => {},
-  );
-  it.fixme('restores each chat’s action items after reload without mixing lists between chats', async () => {});
-});
-
 it.describe('Pending Web Fetch', () => {
   it.fixme(
     'fetches a requested page and lets the agent cite the final source URL and retrieved content',

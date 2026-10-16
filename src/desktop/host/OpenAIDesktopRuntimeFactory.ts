@@ -37,6 +37,8 @@ import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLaunche
 import { assertShellRuntimePathIsolation } from '#src/shell/ShellRuntimePathPolicy.js';
 import { ShellToolRuntime } from '#src/shell/ShellToolRuntime.js';
 import { CompositeToolRuntime } from '#src/tools/CompositeToolRuntime.js';
+import { TodoToolRuntime } from '#src/todos/TodoToolRuntime.js';
+import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTextStore.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
@@ -192,6 +194,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         accessPolicy: policy,
       }),
     );
+    const sessions = new ChatSessionManager(
+      new SqliteChatSessionStore(configuration.stateDirectory, {
+        contextMigration: { targetId: id, sourceIds: [legacyFolderId] },
+      }),
+      context,
+    );
     const tools = new CompositeToolRuntime([
       new ProjectToolRuntime(
         new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index),
@@ -201,6 +209,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       ),
       new ProposeQuestionToolRuntime(interactions),
       new ShellToolRuntime(shells),
+      new TodoToolRuntime(async (chat, update, signal) => {
+        const summary = await sessions.updateTodos(chat, update, signal);
+        runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+        return summary.todos ?? [];
+      }),
     ]);
     const store = this.accounts.borrowStore();
     const http = new FetchHttpClient(logger, this.transport);
@@ -230,12 +243,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       reviews,
       new ContextAttachmentService(workspace, configuration.contextAttachments),
       index,
-      new ChatSessionManager(
-        new SqliteChatSessionStore(configuration.stateDirectory, {
-          contextMigration: { targetId: id, sourceIds: [legacyFolderId] },
-        }),
-        context,
-      ),
+      sessions,
     );
     try {
       await glyph.initialize({ workspaceTrusted: input.trusted });

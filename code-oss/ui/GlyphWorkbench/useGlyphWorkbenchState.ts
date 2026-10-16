@@ -53,6 +53,7 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
     historyOpen,
     conversationInert: historyOpen && !wide,
     title: chat?.title ?? 'New chat',
+    todos: chat?.todos ?? [],
     newChatDisabled: state.navigationPending || state.readOnly,
     navigationError: state.navigationError,
     newChat: () => actions.newChat(),

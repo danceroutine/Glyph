@@ -7,6 +7,8 @@ import type { ChatSessionRecord, ChatSessionSummary, ChatTranscriptTurn } from '
 import type { ChatSessionStore } from './ChatSessionStore.ts';
 import type { ChatTitleGenerator } from './ChatTitleGenerator.ts';
 import { ExtractiveChatTitleGenerator } from './ExtractiveChatTitleGenerator.ts';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { todoItemsSchema, todoUpdateSchema, type TodoUpdate } from '#src/todos/TodoUpdate.js';
 
 export interface CreateChatSessionInput {
   readonly accountProvider: string;
@@ -99,6 +101,28 @@ export class ChatSessionManager {
         updatedAt: this.now().toISOString(),
       };
       await this.saveWith(record.id, updated);
+      return toSummary(updated);
+    });
+  }
+
+  /** Commit independently of turn completion so cancellation cannot erase accepted progress. */
+  updateTodos(
+    chat: NonNullable<ToolExecutionContext['chat']>,
+    input: TodoUpdate,
+    signal?: AbortSignal,
+  ): Promise<ChatSessionSummary> {
+    this.requireInitialized();
+    const update = todoUpdateSchema.parse(input);
+    return this.enqueue(async () => {
+      signal?.throwIfAborted();
+      const current = this.requireRecord(chat.id);
+      if (current.accountProvider !== chat.accountProvider || current.accountId !== chat.accountId)
+        throw new Error('Todo updates must belong to the requesting chat account.');
+      const byId = new Map((update.replace ? [] : (current.todos ?? [])).map(item => [item.id, item]));
+      for (const item of update.items) byId.set(item.id, item);
+      const todos = todoItemsSchema.parse([...byId.values()]);
+      const updated = { ...current, todos, updatedAt: this.now().toISOString() };
+      await this.saveWith(chat.id, updated);
       return toSummary(updated);
     });
   }

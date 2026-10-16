@@ -1,4 +1,5 @@
 import { GlyphWorkbench } from './GlyphWorkbench.presentational.tsx';
+import { WiredGlyphTodoCard } from '#code-oss/ui/GlyphTodoCard/GlyphTodoCard.wired.tsx';
 import { WiredGlyphQuestionCard } from '#code-oss/ui/GlyphQuestionCard/GlyphQuestionCard.wired.tsx';
 import { WiredGlyphComposer } from '#code-oss/ui/GlyphComposer/GlyphComposer.wired.tsx';
 import { WiredGlyphTranscript } from '#code-oss/ui/GlyphTranscript/GlyphTranscript.wired.tsx';
@@ -10,10 +11,11 @@ import { useGlyphWorkbenchState, type GlyphWorkbenchStateOptions } from './useGl
 export type WiredGlyphWorkbenchProps = GlyphWorkbenchStateOptions;
 
 export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps) {
-  const { questionRun, approvalRun, initialAnswers, onDraftChange, openedChat, ...view } = useGlyphWorkbenchState({
-    state,
-    actions,
-  });
+  const { questionRun, approvalRun, initialAnswers, onDraftChange, openedChat, todos, ...view } =
+    useGlyphWorkbenchState({
+      state,
+      actions,
+    });
   return (
     <GlyphWorkbench
       {...view}
@@ -27,6 +29,7 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
         />
       }
       usage={state.selectedChatId && <GlyphUsageSummary usage={state.usage[state.selectedChatId]} />}
+      todos={todos.length > 0 && <WiredGlyphTodoCard key={state.selectedChatId} items={todos} />}
       question={
         questionRun?.question && (
           <WiredGlyphQuestionCard

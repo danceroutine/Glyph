@@ -40,6 +40,27 @@ const savedChat = {
   updatedAt: new Date().toISOString(),
   turnCount: 4,
 };
+export const Todos: Story = {
+  args: {
+    state: workbenchState({
+      selectedChatId: savedChat.id,
+      chats: [
+        {
+          ...savedChat,
+          todos: [
+            { id: 'inspect', text: 'Inspect the current implementation', status: 'completed' },
+            { id: 'implement', text: 'Implement the requested change', status: 'in_progress' },
+            { id: 'verify', text: 'Verify persistence and chat isolation', status: 'pending' },
+          ],
+        },
+      ],
+      transcript: conversation,
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    canvasElement.querySelector<HTMLButtonElement>('.glyph-todos button')?.click();
+  },
+};
 const navigationState = workbenchState({
   accounts: [
     { provider: 'fixture', id: 'personal', label: 'developer@example.invalid', connected: true, inferenceAccess: true },

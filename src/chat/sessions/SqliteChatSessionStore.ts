@@ -1,4 +1,5 @@
 import { shellCommandSummarySchema } from '#src/shell/ShellCommandSummary.js';
+import { todoItemsSchema } from '#src/todos/TodoUpdate.js';
 import { chmod, mkdir, readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
@@ -104,8 +105,10 @@ const storedRecordSchema = z
     updatedAt: z.iso.datetime(),
     providerState: providerStateSchema,
     transcript: z.array(transcriptTurnSchema),
+    todos: todoItemsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .transform(({ todos, ...record }) => ({ ...record, ...(todos === undefined ? {} : { todos }) }));
 
 interface ChatRow {
   readonly schema_version: number;
@@ -120,6 +123,7 @@ interface ChatRow {
   readonly created_at: string;
   readonly updated_at: string;
   readonly provider_state: string;
+  readonly todos: string | null;
 }
 
 interface TurnRow {
@@ -290,6 +294,9 @@ export class SqliteChatSessionStore implements ChatSessionStore {
     // may open this shared catalog at the same time during an upgrade.
     database
       .transaction(() => {
+        const chatColumns = database.prepare('PRAGMA table_info(chats)').all() as { name: string }[];
+        if (!chatColumns.some(value => value.name === 'todos'))
+          database.exec('ALTER TABLE chats ADD COLUMN todos TEXT');
         const columns = database.prepare('PRAGMA table_info(chat_turns)').all() as { name: string }[];
         for (const column of ['usage', 'tools']) {
           if (!columns.some(value => value.name === column))
@@ -375,8 +382,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         `INSERT INTO chats(
            id, schema_version, project_context_id, title, title_origin,
            account_client_id, account_subject, model_slug, model_name,
-           created_at, updated_at, provider_state
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           created_at, updated_at, provider_state, todos
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            schema_version = excluded.schema_version,
            project_context_id = excluded.project_context_id,
@@ -388,7 +395,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
            model_name = excluded.model_name,
            created_at = excluded.created_at,
            updated_at = excluded.updated_at,
-           provider_state = excluded.provider_state`,
+           provider_state = excluded.provider_state,
+           todos = excluded.todos`,
       )
       .run(
         record.id,
@@ -403,6 +411,7 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         record.createdAt,
         record.updatedAt,
         JSON.stringify(record.providerState),
+        record.todos ? JSON.stringify(record.todos) : null,
       );
     database.prepare('DELETE FROM chat_turns WHERE chat_id = ?').run(record.id);
     const insertTurn = database.prepare(
@@ -441,6 +450,7 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     providerState: JSON.parse(row.provider_state),
+    ...(row.todos === null ? {} : { todos: JSON.parse(row.todos) as unknown }),
     transcript: turns.map(turn => ({
       userText: turn.user_text,
       attachmentPaths: JSON.parse(turn.attachment_paths) as unknown,

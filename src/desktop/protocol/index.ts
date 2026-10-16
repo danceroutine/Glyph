@@ -21,6 +21,7 @@ export * from './editor/GlyphWorkingCopySearchResult.ts';
 export * from './events/GlyphAccountSummary.ts';
 export * from './events/GlyphApprovalRequest.ts';
 export * from './events/GlyphChatSummary.ts';
+export * from './events/GlyphTodoItem.ts';
 export * from './events/GlyphCommandResultHostEvent.ts';
 export * from './events/GlyphDesktopSnapshot.ts';
 export * from './events/GlyphErrorHostEvent.ts';
