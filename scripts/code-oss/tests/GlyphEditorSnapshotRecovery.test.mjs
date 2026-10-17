@@ -47,8 +47,11 @@ beforeAll(async () => {
               const service = () => {};
               export { service as IModelService, service as IWorkspaceTrustManagementService,
                 service as IBulkEditService, service as ITextModelService, service as IWorkspaceContextService,
-                service as IUserDataProfileService };
-              export class ResourceTextEdit {
+                service as IUserDataProfileService, service as IInstantiationService };
+        export const Progress = { None: {} };
+        export class BulkTextEdits {}
+              export const EndOfLineSequence = { LF: 0, CRLF: 1 };
+        export class ResourceTextEdit {
                 constructor(resource, edit, version) { Object.assign(this, { resource, edit, version }); }
               }
               export class UndoRedoGroup { id = 1; }

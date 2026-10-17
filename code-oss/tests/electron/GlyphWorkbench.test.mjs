@@ -183,16 +183,9 @@ it.describe('The production runtime with no configured account', () => {
 // These product contracts intentionally remain visible as pending in --list and
 // the HTML report. Enabling one requires a user-visible control and assertions;
 // calling hidden services would bypass the behavior this suite promises to it.
+// Proposal review contracts now run in GlyphProposals.test.mjs.
 it.describe('Pending desktop product contracts', () => {
-  it.fixme(
-    'renders proposal diffs with per-item accept and reject controls whose decisions are reflected in the review state',
-    async () => {},
-  );
   it.fixme('attaches the selected unsaved editor text to the next message', async () => {});
-  it.fixme('shows a proposed change without modifying the working copy before acceptance', async () => {});
-  it.fixme('applies an accepted proposal to the live editor and supports Undo', async () => {});
-  it.fixme('rejects a proposal without changing the editor or the file on disk', async () => {});
-  it.fixme('refuses to apply a proposal after the user changes the referenced editor content', async () => {});
   it.fixme(
     'moves an oversized pasted text block into a separately inspectable attachment instead of filling the composer text area',
     async () => {},

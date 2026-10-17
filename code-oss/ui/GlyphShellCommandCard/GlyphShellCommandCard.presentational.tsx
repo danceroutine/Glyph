@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from 'lucide-preact';
 import type { GlyphShellCommandCardState } from './useGlyphShellCommandCardState.ts';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 
@@ -107,7 +108,7 @@ export function GlyphShellCommandCard({
       aria-busy={pending}
     >
       <button type="button" class={styles.header} aria-expanded={expanded} onClick={toggle}>
-        <span aria-hidden="true">{expanded ? '⌄' : '›'}</span>
+        {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
         <span class={styles.title}>{shell.command}</span>
         <span class={`${styles.status} ${failed ? styles.error : ''}`}>{status}</span>
       </button>

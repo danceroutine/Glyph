@@ -1,3 +1,4 @@
+import type { GlyphProposalFilePreview } from './GlyphProposalFilePreview.ts';
 import type { GlyphHostStatus } from './GlyphHostStatus.ts';
 import type { GlyphCommandResultHostEvent } from './GlyphCommandResultHostEvent.ts';
 import type { GlyphErrorHostEvent } from './GlyphErrorHostEvent.ts';
@@ -18,6 +19,7 @@ export enum GlyphHostEventType {
   CHAT_UPDATED = 'chat_updated',
   RESPONSE_DELTA = 'response_delta',
   TOOL_ACTIVITY = 'tool_activity',
+  PROPOSAL_PREVIEW = 'proposal_preview',
   PROPOSAL_CHANGED = 'proposal_changed',
   QUESTION = 'question',
   APPROVAL = 'approval',
@@ -29,6 +31,7 @@ export enum GlyphHostEventType {
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | { readonly type: GlyphHostEventType.PROPOSAL_PREVIEW; readonly preview: GlyphProposalFilePreview }
   | GlyphCommandResultHostEvent
   | { readonly type: GlyphHostEventType.INITIAL_STATE; readonly state: GlyphDesktopSnapshot }
   | { readonly type: GlyphHostEventType.CHAT_UPDATED; readonly chat: GlyphChatSummary; readonly creationId?: string }

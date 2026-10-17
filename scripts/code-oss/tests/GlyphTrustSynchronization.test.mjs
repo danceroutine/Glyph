@@ -22,6 +22,13 @@ async function modules() {
       {
         name: 'trust-fixture',
         setup(builder) {
+          builder.onResolve({ filter: /GlyphProposalEditor\.js$/ }, args => ({
+            path: args.path,
+            namespace: 'proposal',
+          }));
+          builder.onLoad({ filter: /.*/, namespace: 'proposal' }, () => ({
+            contents: 'export class GlyphProposalEditor {}',
+          }));
           builder.onResolve({ filter: /GlyphEditorAdapter\.js$/ }, args => ({ path: args.path, namespace: 'editor' }));
           builder.onLoad({ filter: /.*/, namespace: 'editor' }, () => ({
             contents: 'export class GlyphEditorAdapter {}',
@@ -118,7 +125,7 @@ it('loads saved history through the latest untrusted attachment when revocation 
         return { dispose() {} };
       },
     },
-    { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {} }) },
+    { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
     { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
   );
   const connecting = service.connect().catch(error => error);
@@ -210,7 +217,7 @@ it.each(['handshake', 'attach acknowledgement'])(
           return { dispose() {} };
         },
       },
-      { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {} }) },
+      { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
       { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
     );
     try {
@@ -394,7 +401,7 @@ it.each(
       onDidChangeWorkbenchState: subscribe('state'),
     },
     { isWorkspaceTrusted: () => true, onDidChangeTrust: subscribe('trust') },
-    { createInstance: () => ({ invalidate, dispose() {}, handle() {} }) },
+    { createInstance: () => ({ invalidate, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
     {
       get currentProfile() {
         return { id: profileId };

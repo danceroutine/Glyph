@@ -1,3 +1,5 @@
+import { WiredGlyphPendingReviews } from '#code-oss/ui/GlyphPendingReviews/GlyphPendingReviews.wired.tsx';
+import { WiredGlyphProposalPreviews } from '#code-oss/ui/GlyphProposalPreview/GlyphProposalPreview.wired.tsx';
 import { GlyphWorkbench } from './GlyphWorkbench.presentational.tsx';
 import { WiredGlyphTodoCard } from '#code-oss/ui/GlyphTodoCard/GlyphTodoCard.wired.tsx';
 import { WiredGlyphQuestionCard } from '#code-oss/ui/GlyphQuestionCard/GlyphQuestionCard.wired.tsx';
@@ -11,7 +13,7 @@ import { useGlyphWorkbenchState, type GlyphWorkbenchStateOptions } from './useGl
 export type WiredGlyphWorkbenchProps = GlyphWorkbenchStateOptions;
 
 export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps) {
-  const { questionRun, approvalRun, initialAnswers, onDraftChange, openedChat, todos, ...view } =
+  const { questionRun, approvalRun, initialAnswers, onDraftChange, openedChat, todos, proposals, ...view } =
     useGlyphWorkbenchState({
       state,
       actions,
@@ -21,6 +23,17 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
       {...view}
       transcript={
         <WiredGlyphTranscript
+          proposals={
+            state.selectedChatId && (
+              <WiredGlyphProposalPreviews
+                key={state.selectedChatId}
+                chatId={state.selectedChatId}
+                proposals={proposals}
+                readOnly={state.readOnly}
+                actions={actions}
+              />
+            )
+          }
           entries={state.transcript}
           {...(state.selectedChatId ? { chatId: state.selectedChatId } : {})}
           actions={actions}
@@ -29,6 +42,18 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
         />
       }
       usage={state.selectedChatId && <GlyphUsageSummary usage={state.usage[state.selectedChatId]} />}
+      reviews={
+        state.selectedChatId &&
+        proposals.length > 0 && (
+          <WiredGlyphPendingReviews
+            key={state.selectedChatId}
+            chatId={state.selectedChatId}
+            proposals={proposals}
+            readOnly={state.readOnly}
+            actions={actions}
+          />
+        )
+      }
       todos={todos.length > 0 && <WiredGlyphTodoCard key={state.selectedChatId} items={todos} />}
       question={
         questionRun?.question && (

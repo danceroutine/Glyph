@@ -10,4 +10,5 @@ export interface EditReviewItem {
   readonly removedText: string;
   readonly insertedText: string;
   decision: EditDecisionState;
+  rejectionComment?: string | undefined;
 }

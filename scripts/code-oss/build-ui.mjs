@@ -7,6 +7,7 @@ import { join } from 'node:path';
 export async function buildGlyphUi(sourceRoot) {
   const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
   const preactLicense = await readFile(join(repositoryRoot, 'node_modules/preact/LICENSE'), 'utf8');
+  const lucideLicense = await readFile(join(repositoryRoot, 'node_modules/lucide-preact/LICENSE'), 'utf8');
   await build({
     absWorkingDir: repositoryRoot,
     entryPoints: ['code-oss/ui/mountGlyphWorkbench.tsx'],
@@ -20,7 +21,7 @@ export async function buildGlyphUi(sourceRoot) {
     tsconfig: 'code-oss/ui/tsconfig.json',
     sourcemap: true,
     legalComments: 'inline',
-    banner: { js: `/*! Preact\n${preactLicense}\n*/` },
+    banner: { js: `/*! Preact\n${preactLicense}\n*/\n/*! Lucide\n${lucideLicense}\n*/` },
     define: { 'process.env.NODE_ENV': '"production"' },
   });
 }

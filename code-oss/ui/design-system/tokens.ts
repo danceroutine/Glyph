@@ -68,6 +68,8 @@ export const tokens = {
     },
     radius: atoms.radius.sm,
   },
+  review: { keepBackground: codeOss.review.keepBackground, keepForeground: codeOss.review.keepForeground },
+  diff: { added: codeOss.diff.added, removed: codeOss.diff.removed },
   card: { radius: atoms.radius.lg },
   badge: { radius: atoms.radius.xs },
   avatar: { radius: atoms.radius.round },

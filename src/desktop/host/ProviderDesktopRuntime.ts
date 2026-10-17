@@ -10,6 +10,9 @@ import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import type { ChatSession } from '#src/chat/sessions/ChatSession.js';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
+import { ProtocolError } from '#src/errors/ProtocolError.js';
+import { toGlyphProposalFilePreview } from './toGlyphProposalFilePreview.ts';
+import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
 import type { DesktopInteractionBroker } from './DesktopInteractionBroker.ts';
 import type {
@@ -245,6 +248,26 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         await this.options.shellSessions.close(command.sessionId, command.chatId);
         return;
       }
+      case GlyphWorkbenchCommandType.READ_PROPOSAL_FILE: {
+        const session = this.session(command.chatId);
+        const proposal = this.options.glyph.proposalReviews?.get(command.proposalId);
+        if (
+          !proposal ||
+          proposal.origin?.chatId !== session.id ||
+          proposal.origin.accountId !== session.summary.accountId ||
+          proposal.origin.accountProvider !== session.summary.accountProvider
+        )
+          throw new ProtocolError('This proposal does not belong to that chat.');
+        const file = proposal.files.find(file => file.id === command.fileId);
+        if (!file) throw new ProtocolError('This proposal file is no longer available.');
+        if (file.operation !== EditOperation.UPDATE)
+          throw new ProtocolError('Only text changes can be reviewed in the editor.');
+        this.publish({
+          type: GlyphHostEventType.PROPOSAL_PREVIEW,
+          preview: toGlyphProposalFilePreview(proposal.id, file),
+        });
+        return;
+      }
       case GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM:
       case GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM:
         return this.decideProposal(command);
@@ -271,11 +294,11 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       review.origin.accountId !== session.summary.accountId ||
       review.origin.accountProvider !== session.summary.accountProvider
     ) {
-      throw new Error('This proposal does not belong to that chat.');
+      throw new ProtocolError('This proposal does not belong to that chat.');
     }
     if (command.type === GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM)
       await reviews.acceptInReview(command.proposalId, command.itemId);
-    else await reviews.rejectInReview(command.proposalId, command.itemId);
+    else await reviews.rejectInReview(command.proposalId, command.itemId, command.comment);
     await glyph.commitReviewResults(session, { currentChatOnly: true });
   }
 
@@ -552,10 +575,36 @@ function toProposal(proposal: EditProposal): GlyphProposalSummary {
       id: file.id,
       path: file.currentPath,
       proposedUri: `glyph-proposal:/${encodeURIComponent(proposal.id)}/${encodeURIComponent(file.id)}`,
+      textOnly: file.operation === EditOperation.UPDATE,
+      additions: file.items
+        .filter(item => item.decision === EditDecisionState.PENDING)
+        .reduce((sum, item) => sum + changedLines(item.insertedText), 0),
+      deletions: file.items
+        .filter(item => item.decision === EditDecisionState.PENDING)
+        .reduce((sum, item) => sum + changedLines(item.removedText), 0),
+      preview: file.items
+        .filter(item => item.decision === EditDecisionState.PENDING)
+        .flatMap(item => [
+          ...item.removedText
+            .split(/\r\n|\r|\n/)
+            .filter(Boolean)
+            .slice(0, 3)
+            .map(text => ({ added: false, text: text.slice(0, 200) })),
+          ...item.insertedText
+            .split(/\r\n|\r|\n/)
+            .filter(Boolean)
+            .slice(0, 3)
+            .map(text => ({ added: true, text: text.slice(0, 200) })),
+        ])
+        .slice(0, 6),
       pendingItemIds: file.items.filter(item => item.decision === EditDecisionState.PENDING).map(item => item.id),
       applicability:
         Object.values(GlyphProposalApplicability).find(value => value === String(file.applicability).toLowerCase()) ??
         GlyphProposalApplicability.STALE,
     })),
   };
+}
+
+function changedLines(text: string): number {
+  return text ? text.replace(/(?:\r\n|\r|\n)$/, '').split(/\r\n|\r|\n/).length : 0;
 }

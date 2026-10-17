@@ -15,6 +15,12 @@ export interface GlyphWorkbenchService {
   readonly state: GlyphWorkbenchState;
   send(text: string): Promise<void>;
   cancel(): void;
+  reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void>;
+  decideProposalItems(
+    chatId: string,
+    items: readonly { readonly proposalId: string; readonly itemId: string }[],
+    accept: boolean,
+  ): Promise<void>;
   newChat(): void;
   setSelection(selection: GlyphWorkbenchSelection | undefined): void;
   connect(): Promise<void>;

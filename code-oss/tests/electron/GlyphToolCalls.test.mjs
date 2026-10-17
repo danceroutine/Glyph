@@ -5,36 +5,7 @@ import { test as it } from './GlyphWorkbench.fixture.mjs';
 // observable workbench results, and disposable workspace/process fixtures.
 // Existing runtime unit tests do not establish desktop end-to-end coverage.
 
-it.describe('Pending Propose Patch (propose_patch)', () => {
-  it.fixme(
-    'renders a strict patch as reviewable file changes and leaves editor buffers and disk unchanged before acceptance',
-    async () => {},
-  );
-  it.fixme(
-    'applies only accepted patch items to the live editor and reports accepted and rejected items to the agent',
-    async () => {},
-  );
-  it.fixme('rejects malformed patches and stale revisions without partially applying their changes', async () => {});
-});
-
-it.describe('Pending Propose Edits (propose_edits)', () => {
-  it.fixme(
-    'applies explicit LF/CRLF conversions through an undoable editor EOL operation before accepting the proposal',
-    async () => {},
-  );
-  it.fixme(
-    'renders structured range edits at the intended locations while preserving Unicode, whitespace, and line endings',
-    async () => {},
-  );
-  it.fixme(
-    'applies accepted edits as an undoable editor operation and leaves rejected edits unapplied',
-    async () => {},
-  );
-  it.fixme(
-    'refuses invalid ranges or edits based on an older editor version without modifying the document',
-    async () => {},
-  );
-});
+// Text patch and structured edit contracts are executable in GlyphProposals.test.mjs.
 
 // Create/delete are staged file operations in patch/structured-edit proposals,
 // not separate registered project tool names. Desktop application is still pending.

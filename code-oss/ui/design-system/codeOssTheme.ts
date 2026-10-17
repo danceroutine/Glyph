@@ -74,6 +74,14 @@ const definitions = {
     secondaryForeground: hostToken('button.secondaryForeground', palette.neutral[250], palette.neutral[650]),
     secondaryHoverBackground: hostToken('button.secondaryHoverBackground', palette.neutral[600], palette.neutral[250]),
   },
+  review: {
+    keepBackground: hostToken('testing.runAction', palette.green[700], palette.green[700]),
+    keepForeground: hostToken('button.foreground', palette.neutral[0], palette.neutral[0]),
+  },
+  diff: {
+    added: hostToken('gitDecoration.addedResourceForeground', palette.green[400], palette.green[700]),
+    removed: hostToken('gitDecoration.deletedResourceForeground', palette.red[300], palette.red[700]),
+  },
   widget: { shadow: hostToken('widget.shadow', palette.blackAlpha[36], palette.blackAlpha[16]) },
   progressBar: { background: hostToken('progressBar.background', palette.blue[400], palette.blue[650]) },
   font: {

@@ -1,3 +1,4 @@
+import { Terminal } from 'lucide-preact';
 import type { GlyphApprovalCardState } from './useGlyphApprovalCardState.ts';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 import { decisionStyles as shared } from '#code-oss/ui/GlyphDecisionStyles.ts';
@@ -27,7 +28,7 @@ export function GlyphApprovalCard({ request, disabled, pending, error, skip, alw
       aria-busy={pending}
     >
       <header class={shared.header}>
-        <span aria-hidden="true">›_</span>
+        <Terminal size={16} aria-hidden="true" />
         <h3>{request.title}</h3>
         <span class={shared.detail}>Pending approval</span>
       </header>

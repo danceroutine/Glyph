@@ -40,6 +40,7 @@ const reviewItemSchema = z
     removedText: z.string(),
     insertedText: z.string(),
     decision: z.enum(EditDecisionState),
+    rejectionComment: z.string().min(1).max(4000).optional(),
   })
   .strict();
 

@@ -68,6 +68,8 @@ export class GlyphViewPane extends ViewPane {
         this.glyphService.answerQuestion(chatId, runId, questionId, answer),
       decideApproval: (chatId, runId, approvalId, decision) =>
         this.glyphService.decideApproval(chatId, runId, approvalId, decision),
+      reviewProposalFile: (chatId, proposalId, fileId) => service.reviewProposalFile(chatId, proposalId, fileId),
+      decideProposalItems: (chatId, items, accept) => service.decideProposalItems(chatId, items, accept),
       newChat: () => this.glyphService.newChat(),
       openChat: id => this.glyphService.openChat(id),
       selectAccount: (provider, id) => this.glyphService.selectAccount(provider, id),

@@ -217,6 +217,26 @@ function reviewFixture() {
 }
 
 describe(ProviderDesktopRuntime, () => {
+  it('checks proposal ownership before publishing any preview content', async () => {
+    const { reviews, stage } = reviewFixture();
+    const harness = await fixture(async () => {}, 'owner', reviews);
+    try {
+      const staged = await stage('another-chat');
+      const proposal = reviews.get(staged.proposalId)!;
+      await expect(
+        harness.runtime.handle({
+          type: Command.READ_PROPOSAL_FILE,
+          chatId: harness.chatId,
+          proposalId: staged.proposalId,
+          fileId: proposal.files[0]!.id,
+        }),
+      ).rejects.toThrow('This proposal does not belong to that chat.');
+      expect(harness.events.some(event => event.type === GlyphHostEventType.PROPOSAL_PREVIEW)).toBe(false);
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
   it('keeps the latest account catalog when an older discovery finishes later', async () => {
     const harness = await fixture(async () => {});
     const first = harness.backend.accounts[0]!;

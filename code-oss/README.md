@@ -84,8 +84,20 @@ it explicitly replaces or clears the list. Updates are validated (100 items,
 turn completion never implicitly completes unfinished work. SQLite upgrades
 older catalogs with an optional todo column, and reconnect snapshots carry each
 chat's saved list through the existing chat-update contract.
-Proposal controls remain follow-up components. Desktop protocol v3 adds shell input
-commands; rebuild the host and workbench together.
+Text proposals appear as compact transcript previews and a collapsible pending-files
+card above the composer. Review opens a native, read-only inline diff with hunk and
+file navigation. Keep applies the selected pending edits to the live buffer; Undo
+in the review UI dismisses them without applying them. Keep is green; the blue
+speech-bubble action opens a rejection comment field. In the focused review editor,
+⌘N dismisses the selected change, ⌘Y keeps it, and ⌘R opens that field (Ctrl on
+other platforms). These shortcuts do not intercept comment typing. Submitting a
+nonempty comment saves it with the rejection and includes it in the agent's durable
+review receipt; opening or cancelling the field does not decide the change. Accepted edits remain
+undoable through the editor's ordinary Undo command. File and bulk decisions stop
+on failure and retain the remaining review controls. Full file previews are fetched
+on demand, while reconnect snapshots carry bounded snippets and pending item IDs.
+Explicit LF/CRLF conversions use an undoable editor EOL operation. Desktop protocol
+v4 adds proposal-preview requests; rebuild the host and workbench together.
 Indexed content search uses authorized live editor snapshots in place of disk text,
 including when an unsaved edit removes every match. The Rust matcher applies the
 same filters, context, and pagination to both sources. Snapshot transfer is bounded
@@ -110,6 +122,7 @@ Run `pnpm code-oss:test:integration --list` to browse the behavior inventory:
 - [GlyphInteractions.test.mjs](tests/electron/GlyphInteractions.test.mjs): questions, command approvals, remembered grants, cancellation, and decision lifecycle.
 - [GlyphProjectTools.test.mjs](tests/electron/GlyphProjectTools.test.mjs): file listing, live editor reads/search, exclusions, limits, and multi-root paths.
 - [GlyphShells.test.mjs](tests/electron/GlyphShells.test.mjs): shell execution, interactive input, process-group cleanup, chat ownership, and bounded session lists.
+- [GlyphProposals.test.mjs](tests/electron/GlyphProposals.test.mjs): text proposal previews, per-hunk/file decisions, durable receipts, stale-edit protection, EOL conversion, and editor Undo.
 - [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): pending proposal and reviewed file creation/deletion contracts.
 - [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs): Plan Mode, blocking/background sub-agents, action items, web fetch/search, and shell wake conditions.
 - [GlyphBrowserAutomation.test.mjs](tests/electron/GlyphBrowserAutomation.test.mjs): CDP lifecycle, DOM inspection/highlighting, input, screenshots, and browser feedback.
@@ -505,7 +518,9 @@ pnpm storybook:build
 
 ### Shared design system
 
-The desktop UI and Storybook share `code-oss/ui/design-system/`. Import styles,
+The desktop UI and Storybook share `code-oss/ui/design-system/`. Disclosure and
+review icons use bundled `lucide-preact` SVG components; avoid Unicode glyphs for
+controls. Icon-only buttons retain accessible labels and visible focus rings. Import styles,
 tokens, and utilities from its `index.ts`:
 
 ```ts

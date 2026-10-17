@@ -1,3 +1,5 @@
+import { GlyphProposalReviewError } from './GlyphProposalReviewError.js';
+import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
 import type { GlyphApprovalDecision } from '#glyph/protocol/GlyphApprovalDecision.js';
 import { IStorageService, StorageScope, StorageTarget } from '#vs/platform/storage/common/storage.js';
 import type { GlyphModelSummary } from '#glyph/protocol/events/GlyphModelSummary.js';
@@ -19,6 +21,7 @@ import {
   type GlyphContextAttachment,
 } from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import { GlyphDesktopClient } from '#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js';
+import { GlyphProposalEditor } from './GlyphProposalEditor.js';
 import { GlyphEditorAdapter } from './GlyphEditorAdapter.js';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#glyph/workbench/GlyphTranscriptEntry.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
@@ -38,6 +41,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private readonly changeEmitter = this._register(new Emitter<GlyphWorkbenchState>());
   readonly onDidChangeState = this.changeEmitter.event;
   private readonly projection = new GlyphWorkbenchProjection();
+  private readonly proposalEditor: GlyphProposalEditor;
   private readonly client: GlyphDesktopClient;
   private selection: GlyphWorkbenchSelection | undefined;
   private selectedChatId: string | undefined;
@@ -57,6 +61,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private navigationPending = false;
   private navigationError: string | undefined;
   private sending = false;
+  private decidingProposal = false;
   private sessionChanged = false;
   private invalidationMessage = 'Workspace changed. Reload the window to reconnect Glyph.';
   private readonly profileId: string;
@@ -79,6 +84,20 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.workspaceBinding = this.currentWorkspaceBinding();
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
     this.client = this._register(new GlyphDesktopClient(request => editor.handle(request)));
+    this.proposalEditor = this._register(
+      instantiationService.createInstance(GlyphProposalEditor, {
+        state: () => this.state,
+        read: (chatId: string, proposalId: string, fileId: string) =>
+          this.request({ type: GlyphWorkbenchCommandType.READ_PROPOSAL_FILE, chatId, proposalId, fileId }),
+        decide: (
+          chatId: string,
+          items: readonly { proposalId: string; itemId: string }[],
+          accept: boolean,
+          comment?: string,
+        ) => this.decideProposalItems(chatId, items, accept, comment),
+      }),
+    );
+    this._register(this.onDidChangeState(() => this.proposalEditor.changed()));
     this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => this.invalidateSession()));
     for (const event of [
       this.workspaceContextService.onDidChangeWorkspaceName,
@@ -103,6 +122,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.client.onDidReceiveEvent(envelope => {
         if (this.invalidateChangedSession()) return;
         const event = envelope.event;
+        if (event.type === GlyphHostEventType.PROPOSAL_PREVIEW) {
+          this.proposalEditor.acceptPreview(event.preview);
+          return;
+        }
         this.projection.accept(event);
         switch (event.type) {
           case GlyphHostEventType.INITIAL_STATE:
@@ -476,11 +499,36 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       decision,
     });
   }
+  reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void> {
+    return this.proposalEditor.open(chatId, proposalId, fileId);
+  }
+  async decideProposalItems(
+    chatId: string,
+    items: readonly { readonly proposalId: string; readonly itemId: string }[],
+    accept: boolean,
+    comment?: string,
+  ): Promise<void> {
+    if (this.decidingProposal)
+      throw new GlyphProposalReviewError(
+        GlyphDesktopErrorCode.CHAT_BUSY,
+        'Another review decision is still being saved.',
+      );
+    this.decidingProposal = true;
+    try {
+      for (const item of items) {
+        if (accept) await this.acceptProposalItem(chatId, item.proposalId, item.itemId);
+        else await this.rejectProposalItem(chatId, item.proposalId, item.itemId, comment);
+      }
+    } finally {
+      this.decidingProposal = false;
+    }
+    await this.proposalEditor.refresh();
+  }
   acceptProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void> {
     return this.request({ type: GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM, chatId, proposalId, itemId });
   }
-  rejectProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void> {
-    return this.request({ type: GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM, chatId, proposalId, itemId });
+  rejectProposalItem(chatId: string, proposalId: string, itemId: string, comment?: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM, chatId, proposalId, itemId, comment });
   }
 
   private workspaceRoots() {

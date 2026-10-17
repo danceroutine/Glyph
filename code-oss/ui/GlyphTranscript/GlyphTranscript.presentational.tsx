@@ -9,6 +9,7 @@ const styles = {
 };
 
 export interface GlyphTranscriptProps {
+  readonly proposals?: ComponentChildren;
   readonly transcript: GlyphTranscriptState['transcript'];
   readonly entries: readonly (GlyphTranscriptState['entries'][number] & {
     readonly approval?: ComponentChildren;
@@ -17,7 +18,7 @@ export interface GlyphTranscriptProps {
 }
 
 /** Stable turn keys preserve DOM identity across streaming updates. */
-export function GlyphTranscript({ entries, transcript }: GlyphTranscriptProps) {
+export function GlyphTranscript({ entries, transcript, proposals }: GlyphTranscriptProps) {
   return (
     <div class={`glyph-transcript ${styles.root}`} ref={transcript} role="log" aria-label="Glyph conversation">
       {entries.map(entry => (
@@ -29,6 +30,7 @@ export function GlyphTranscript({ entries, transcript }: GlyphTranscriptProps) {
           {entry.shells}
         </div>
       ))}
+      {proposals}
     </div>
   );
 }

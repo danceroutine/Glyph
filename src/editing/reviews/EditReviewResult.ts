@@ -9,6 +9,7 @@ export interface EditReviewResultItem {
   readonly decision: Exclude<EditDecisionState, EditDecisionState.PENDING>;
   readonly affectedPaths: readonly string[];
   readonly resultingRevision: string | null;
+  readonly rejectionComment?: string;
 }
 
 /** Durable, model-facing receipt for one review decision. */

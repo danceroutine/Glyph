@@ -14,6 +14,7 @@ export enum GlyphWorkbenchCommandType {
   CANCEL_RUN = 'cancel_run',
   ANSWER_QUESTION = 'answer_question',
   DECIDE_APPROVAL = 'decide_approval',
+  READ_PROPOSAL_FILE = 'read_proposal_file',
   ACCEPT_PROPOSAL_ITEM = 'accept_proposal_item',
   REJECT_PROPOSAL_ITEM = 'reject_proposal_item',
   WRITE_SHELL_INPUT = 'write_shell_input',
@@ -76,6 +77,12 @@ export type GlyphWorkbenchCommand =
       readonly decision: GlyphApprovalDecision;
     }
   | {
+      readonly type: GlyphWorkbenchCommandType.READ_PROPOSAL_FILE;
+      readonly chatId: string;
+      readonly proposalId: string;
+      readonly fileId: string;
+    }
+  | {
       readonly type: GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM;
       readonly chatId: string;
       readonly proposalId: string;
@@ -83,6 +90,7 @@ export type GlyphWorkbenchCommand =
     }
   | {
       readonly type: GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM;
+      readonly comment?: string;
       readonly chatId: string;
       readonly proposalId: string;
       readonly itemId: string;

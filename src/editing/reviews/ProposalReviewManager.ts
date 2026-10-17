@@ -164,8 +164,8 @@ export class ProposalReviewManager {
   acceptInReview(reviewId: string, itemId: string): Promise<void> {
     return this.decide(itemId, EditDecisionState.ACCEPTED, reviewId);
   }
-  rejectInReview(reviewId: string, itemId: string): Promise<void> {
-    return this.decide(itemId, EditDecisionState.REJECTED, reviewId);
+  rejectInReview(reviewId: string, itemId: string, comment?: string): Promise<void> {
+    return this.decide(itemId, EditDecisionState.REJECTED, reviewId, comment);
   }
 
   async acceptAll(): Promise<void> {
@@ -261,7 +261,7 @@ export class ProposalReviewManager {
     });
   }
 
-  private decide(itemId: string, decision: EditDecisionState, reviewId?: string): Promise<void> {
+  private decide(itemId: string, decision: EditDecisionState, reviewId?: string, comment?: string): Promise<void> {
     return this.enqueue(async () => {
       const settled = this.settledDecisions.get(itemId);
       if (settled && reviewId && settled.reviewId !== reviewId) {
@@ -279,7 +279,7 @@ export class ProposalReviewManager {
       const review = reviewId ? this.requireReviewId(reviewId) : this.findReviewForItem(itemId);
       const file = review.files.find(candidate => candidate.items.some(item => item.id === itemId));
       if (!file) throw new EditError(EditFailureReason.INCONSISTENT, 'Unknown review item.', { hunkId: itemId });
-      await this.applyDecision(review, file, itemId, decision);
+      await this.applyDecision(review, file, itemId, decision, comment);
     });
   }
 
@@ -288,6 +288,7 @@ export class ProposalReviewManager {
     file: FileEditPlan,
     itemId: string,
     decision: EditDecisionState,
+    comment?: string,
   ): Promise<void> {
     const item = file.items.find(candidate => candidate.id === itemId)!;
     if (file.applyingItemId) {
@@ -302,11 +303,21 @@ export class ProposalReviewManager {
       });
     }
     if (decision === EditDecisionState.REJECTED) {
+      if (comment !== undefined && (typeof comment !== 'string' || !comment.trim() || comment.length > 4000)) {
+        throw new EditError(
+          EditFailureReason.INCONSISTENT,
+          'Review comments must contain between 1 and 4000 characters.',
+          { hunkId: item.id },
+        );
+      }
+      const previousComment = item.rejectionComment;
+      item.rejectionComment = comment?.trim();
       item.decision = decision;
       try {
         await this.persist();
       } catch (error) {
         item.decision = EditDecisionState.PENDING;
+        item.rejectionComment = previousComment;
         throw error;
       }
       await this.log('info', 'item.rejected', { proposalId: review.id, fileId: file.id, itemId });
@@ -814,6 +825,7 @@ function reviewResults(review: EditProposal): EditReviewResult[] {
             decision: item.decision as Exclude<EditDecisionState, EditDecisionState.PENDING>,
             affectedPaths: [...new Set([file.sourcePath, file.targetPath, file.currentPath])],
             resultingRevision: file.currentRevision,
+            ...(item.rejectionComment ? { rejectionComment: item.rejectionComment } : {}),
           },
         ],
       })),

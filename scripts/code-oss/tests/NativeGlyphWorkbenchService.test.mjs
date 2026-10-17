@@ -15,6 +15,13 @@ async function modules() {
       {
         name: 'workbench-services',
         setup(builder) {
+          builder.onResolve({ filter: /GlyphProposalEditor\.js$/ }, args => ({
+            path: args.path,
+            namespace: 'proposal',
+          }));
+          builder.onLoad({ filter: /.*/, namespace: 'proposal' }, () => ({
+            contents: 'export class GlyphProposalEditor {}',
+          }));
           builder.onResolve({ filter: /GlyphEditorAdapter\.js$/ }, args => ({ path: args.path, namespace: 'editor' }));
           builder.onLoad({ filter: /.*/, namespace: 'editor' }, () => ({
             contents: 'export class GlyphEditorAdapter {}',
@@ -106,7 +113,7 @@ async function fixture({ chats = [chat('alpha'), chat('beta')], accounts = [], h
         return { dispose() {} };
       },
     },
-    { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {} }) },
+    { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
     { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
   );
   await service.connect();

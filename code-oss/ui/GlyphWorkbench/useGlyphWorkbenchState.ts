@@ -54,6 +54,10 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
     conversationInert: historyOpen && !wide,
     title: chat?.title ?? 'New chat',
     todos: chat?.todos ?? [],
+    proposals: state.proposals.filter(
+      proposal =>
+        proposal.chatId === state.selectedChatId && proposal.files.some(file => file.pendingItemIds.length > 0),
+    ),
     newChatDisabled: state.navigationPending || state.readOnly,
     navigationError: state.navigationError,
     newChat: () => actions.newChat(),

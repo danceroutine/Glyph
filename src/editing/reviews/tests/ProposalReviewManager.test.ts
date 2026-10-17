@@ -35,6 +35,48 @@ const configuration: EditingConfiguration = {
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
 
 describe(ProposalReviewManager, () => {
+  it('persists rejection comments in recovered receipts and rolls them back after a failed save', async () => {
+    const { root, state, service, workspace } = await fixture('base');
+    const store = new FileProposalReviewStore(state);
+    const manager = new ProposalReviewManager(workspace, store);
+    const base = await workspace.read('file.txt');
+    const proposal = await service.proposeStructured({
+      files: [
+        {
+          operation: EditOperation.UPDATE,
+          path: 'file.txt',
+          new_path: null,
+          base_revision: base.revision,
+          content: 'next',
+          byte_order_mark: null,
+          edits: [],
+        },
+      ],
+    });
+    await manager.stage(proposal);
+    const item = proposal.files[0]!.items[0]!;
+    await expect(manager.rejectInReview(proposal.id, item.id, '  ')).rejects.toThrow('Review comments');
+    await expect(manager.rejectInReview(proposal.id, item.id, 'x'.repeat(4001))).rejects.toThrow('Review comments');
+    vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk unavailable'));
+    await expect(manager.rejectInReview(proposal.id, item.id, 'Keep the existing API.')).rejects.toThrow(
+      'disk unavailable',
+    );
+    expect(item.decision).toBe(EditDecisionState.PENDING);
+    expect(item.rejectionComment).toBeUndefined();
+    expect(manager.pendingResults).toEqual([]);
+    await manager.rejectInReview(proposal.id, item.id, '  Keep the existing API.  ');
+    const recovered = new ProposalReviewManager(
+      new FileSystemWorkspaceTextStore(root),
+      new FileProposalReviewStore(state),
+    );
+    await recovered.initialize();
+    expect(recovered.pendingResults[0]?.items[0]).toMatchObject({
+      decision: EditDecisionState.REJECTED,
+      rejectionComment: 'Keep the existing API.',
+    });
+    expect((await workspace.read('file.txt')).text).toBe('base');
+  });
+
   it.each(['\ud800', '\udc00'])(
     'retains a persisted malformed filename %j as a stale and rejectable review',
     async path => {

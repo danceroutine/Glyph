@@ -37,7 +37,10 @@ async function adapterModule() {
         export { service as IModelService,
           service as IWorkspaceTrustManagementService, service as IBulkEditService,
           service as ITextModelService, service as IWorkspaceContextService, service as IUriIdentityService,
-          service as IUserDataProfileService };
+          service as IUserDataProfileService, service as IInstantiationService };
+        export const Progress = { None: {} };
+        export class BulkTextEdits {}
+        export const EndOfLineSequence = { LF: 0, CRLF: 1 };
         export class ResourceTextEdit { constructor(resource, edit, version) { Object.assign(this, { resource, edit, version }); } }
         export class UndoRedoGroup { id = 1; }
         export const EditSources = { unknown: metadata => ({ metadata }) };
@@ -147,17 +150,68 @@ describe('Editor workspace binding', () => {
       adapter.dispose();
     }
   });
-  it('rejects an unsupported EOL-only conversion instead of accepting an unchanged model', async () => {
+  it('applies an explicit EOL-only conversion and records its final bytes', async () => {
     const edit = await pendingEdit({ initial: 'line\n', replacement: 'line\r\n' });
     edit.write.resolve();
     edit.finish.resolve();
     try {
       const response = await edit.apply();
-      expect(response.ok).toBe(false);
-      expect(response.error.code).toBe('UNSUPPORTED_RESOURCE');
-      expect(edit.launch).not.toHaveBeenCalled();
-      expect(edit.text()).toBe('line\n');
-      expect(await edit.adapter.inspectReceipt('edit')).toBeUndefined();
+      expect(response.ok).toBe(true);
+      expect(edit.text()).toBe('line\r\n');
+      expect(response.receipt.state).toBe('applied');
+      expect(response.receipt.afterRevision).toBe(response.snapshot.contentRevision);
+    } finally {
+      edit.adapter.dispose();
+    }
+  });
+  it('uses separately guarded text and EOL edits in one undo group', async () => {
+    const edit = await pendingEdit({ initial: 'line\n', replacement: 'LINE\r\n' });
+    edit.write.resolve();
+    edit.finish.resolve();
+    try {
+      const response = await edit.apply();
+      expect(response.ok).toBe(true);
+      expect(edit.text()).toBe('LINE\r\n');
+      expect(edit.launch).toHaveBeenCalledTimes(2);
+      const [text, eol] = edit.launch.mock.calls;
+      expect(text[0][0].edit.eol).toBeUndefined();
+      expect(eol[0][0].edit).toMatchObject({ text: '', eol: 1 });
+      expect(text[1].undoRedoGroupId).toBe(eol[1].undoRedoGroupId);
+      expect(eol[0][0].version).toBe(text[0][0].version + 1);
+      expect(response.receipt.state).toBe('applied');
+      expect(response.receipt.afterRevision).toBe(response.snapshot.contentRevision);
+    } finally {
+      edit.adapter.dispose();
+    }
+  });
+  it('retains an uncertain receipt when the EOL step fails after changing text', async () => {
+    const edit = await pendingEdit({ initial: 'line\n', replacement: 'LINE\r\n' });
+    const apply = edit.launch.getMockImplementation();
+    edit.launch.mockImplementationOnce(apply).mockImplementationOnce(async (...args) => {
+      await apply(...args);
+      throw new Error('EOL confirmation failed');
+    });
+    edit.write.resolve();
+    edit.finish.resolve();
+    try {
+      expect((await edit.apply()).ok).toBe(false);
+      expect(edit.text()).toBe('LINE\r\n');
+      expect((await edit.adapter.inspectReceipt('edit'))?.state).toBe('unknown');
+    } finally {
+      edit.adapter.dispose();
+    }
+  });
+  it('keeps an untagged EOL observation uncertain until Bulk Edit confirms the guarded operation', async () => {
+    const edit = await pendingEdit({ initial: 'line\n', replacement: 'line\r\n', failAfterWrite: true });
+    try {
+      const applying = edit.apply();
+      await edit.entered.promise;
+      edit.write.resolve();
+      await edit.written.promise;
+      expect((await edit.adapter.inspectReceipt('edit'))?.state).toBe('unknown');
+      edit.finish.resolve();
+      expect((await applying).ok).toBe(false);
+      expect((await edit.adapter.inspectReceipt('edit'))?.state).toBe('unknown');
     } finally {
       edit.adapter.dispose();
     }
@@ -334,7 +388,7 @@ describe('Editor workspace binding', () => {
     }
   });
 
-  it('records the actual editor newline convention in an applied receipt', async () => {
+  it('records the requested uniform newline convention in an applied receipt', async () => {
     const fixture = await pendingEdit({ eol: '\r\n', replacement: 'first\nsecond' });
     try {
       fixture.write.resolve();
@@ -342,7 +396,7 @@ describe('Editor workspace binding', () => {
       const response = await fixture.apply();
       expect(response).toMatchObject({
         ok: true,
-        snapshot: { text: 'first\r\nsecond' },
+        snapshot: { text: 'first\nsecond' },
         receipt: { state: 'applied' },
       });
       expect(response.receipt.afterRevision).toBe(response.snapshot.contentRevision);
@@ -615,6 +669,15 @@ async function pendingEdit({
       version++;
       for (const listener of contentListeners) listener({ detailedReasons: sourceTagged ? [options.reason] : [] });
     }
+    if (!options.token?.isCancellationRequested && _edits[0].edit.eol !== undefined) {
+      const nextEol = _edits[0].edit.eol === 1 ? '\r\n' : '\n';
+      if (eol !== nextEol) {
+        eol = nextEol;
+        text = text.replace(/\r\n|\r|\n/g, eol);
+        version++;
+        for (const listener of contentListeners) listener({ detailedReasons: [], isEolChange: true });
+      }
+    }
     written.resolve();
     await finish.promise;
     if (failAfterWrite) throw new Error('The model changed while Bulk Edit was preparing.');
@@ -653,6 +716,14 @@ async function pendingEdit({
         profileListeners.add(listener);
         return { dispose: () => profileListeners.delete(listener) };
       },
+    },
+    {
+      createInstance: (_constructor, _label, _code, _editor, group, _source, _progress, token, edits) => ({
+        apply: async reason => {
+          const result = await launch(edits, { token, reason, undoRedoGroupId: group.id });
+          return result.isApplied ? [model.uri] : [];
+        },
+      }),
     },
   );
   const before = await adapter.read('file.ts');

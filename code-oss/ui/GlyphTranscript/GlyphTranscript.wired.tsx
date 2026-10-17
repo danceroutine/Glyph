@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact';
 import { WiredGlyphShellCommandCard } from '#code-oss/ui/GlyphShellCommandCard/GlyphShellCommandCard.wired.tsx';
 import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
@@ -6,6 +7,7 @@ import { WiredGlyphApprovalCard } from '#code-oss/ui/GlyphApprovalCard/GlyphAppr
 import { useGlyphTranscriptState, type GlyphTranscriptStateOptions } from './useGlyphTranscriptState.ts';
 
 export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
+  readonly proposals?: ComponentChildren;
   readonly chatId?: string;
   readonly pendingApproval?: GlyphRunProjection;
   readonly actions?: Pick<GlyphWorkbenchViewActions, 'decideApproval' | 'writeShellInput' | 'stopShell'>;
@@ -14,6 +16,7 @@ export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
 
 export function WiredGlyphTranscript({
   entries,
+  proposals,
   chatId,
   pendingApproval,
   actions,
@@ -23,6 +26,7 @@ export function WiredGlyphTranscript({
   return (
     <GlyphTranscript
       {...state}
+      proposals={proposals}
       entries={state.entries.map(entry => ({
         ...entry,
         shells:

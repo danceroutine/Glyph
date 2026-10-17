@@ -17,6 +17,12 @@ export interface GlyphWorkbenchViewActions {
   stopShell(chatId: string, sessionId: string): Promise<void>;
   answerQuestion(chatId: string, runId: string, questionId: string, answer: unknown): Promise<void>;
   decideApproval(chatId: string, runId: string, approvalId: string, decision: GlyphApprovalDecision): Promise<void>;
+  reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void>;
+  decideProposalItems(
+    chatId: string,
+    items: readonly { readonly proposalId: string; readonly itemId: string }[],
+    accept: boolean,
+  ): Promise<void>;
   newChat(): void;
   openChat(chatId: string): Promise<void>;
   selectAccount(provider: string, accountId: string): Promise<void>;

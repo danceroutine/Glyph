@@ -168,10 +168,17 @@ identity, cancellation and reuse, successive turns, window reload and
 conversation restoration, workspace trust, overlapping workspace ownership, and
 production startup without an account.
 
+`GlyphProposals.test.mjs` exercises the text proposal review contracts through the
+scripted provider and production editor adapter: pending previews, per-item and
+per-file Keep/Undo, accepted/rejected receipts in the next provider request,
+invalid ranges and revisions, Unicode/CRLF preservation, explicit EOL conversion,
+normal editor Undo, and review restoration after reload. These replace the text
+proposal placeholders formerly in `GlyphToolCalls` and `GlyphWorkbench`.
+
 The pending groups use `it.fixme` deliberately (`it` aliases Playwright's test API).
 Those descriptions are visible in test discovery and reports, but they are
 specifications, not passing tests. Remaining groups cover additional tools,
-usage metering, attachments, proposals, and guarded editing/Undo.
+attachments, structural file proposals, and additional agent capabilities.
 Enable a pending contract when the user-facing feature exists, then replace the
 empty body with interactions and assertions. Hidden-service calls do not satisfy
 the black-box contract.

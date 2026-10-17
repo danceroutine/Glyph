@@ -29,6 +29,9 @@ importers:
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
+      lucide-preact:
+        specifier: ^1.57.0
+        version: 1.57.0(preact@11.0.1)
       marked:
         specifier: ^18.1.0
         version: 18.1.0
@@ -1762,6 +1765,11 @@ packages:
 
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
+
+  lucide-preact@1.57.0:
+    resolution: {integrity: sha512-SfjifQYoVSYoKjMs1plpTSLgZi+rW2YnmVUXkXP/Jw/jLW9I7OTZ5Ftrahtb+GrwFyCmbS1j1zz3VxW7JLSvjQ==}
+    peerDependencies:
+      preact: ^10.27.2 || ^11.0.0-0
 
   lz-string@1.5.0:
     resolution: {integrity: sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ==}
@@ -3696,6 +3704,10 @@ snapshots:
   lru-cache@5.1.1:
     dependencies:
       yallist: 3.1.1
+
+  lucide-preact@1.57.0(preact@11.0.1):
+    dependencies:
+      preact: 11.0.1
 
   lz-string@1.5.0: {}
 

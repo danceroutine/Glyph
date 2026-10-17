@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from 'lucide-preact';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 import type { GlyphTodoCardState } from './useGlyphTodoCardState.ts';
 
@@ -77,7 +78,7 @@ export function GlyphTodoCard({ expanded, listId, summary, items, toggle }: Glyp
         aria-controls={expanded ? listId : undefined}
         onClick={toggle}
       >
-        <span aria-hidden="true">{expanded ? '⌃' : '›'}</span>
+        {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
         <span aria-live="polite">{summary}</span>
       </button>
     </section>

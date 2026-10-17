@@ -1,3 +1,6 @@
+import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
+import { Progress } from '#vs/platform/progress/common/progress.js';
+import { BulkTextEdits } from '#vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.js';
 import { URI } from '#vs/base/common/uri.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
@@ -18,7 +21,7 @@ import type { GlyphEditorResponse } from '#glyph/protocol/editor/GlyphEditorResp
 import { GlyphWorkingCopyPatternKind } from '#glyph/protocol/editor/GlyphWorkingCopySearchOptions.js';
 import type { GlyphWorkingCopySearchMatch } from '#glyph/protocol/editor/GlyphWorkingCopySearchMatch.js';
 import { ResourceTextEdit, IBulkEditService } from '#vs/editor/browser/services/bulkEditService.js';
-import { ITextModel } from '#vs/editor/common/model.js';
+import { EndOfLineSequence, type ITextModel } from '#vs/editor/common/model.js';
 import { EditSources } from '#vs/editor/common/textModelEditSource.js';
 import { ITextModelService } from '#vs/editor/common/services/resolverService.js';
 import { IWorkspaceContextService } from '#vs/platform/workspace/common/workspace.js';
@@ -62,6 +65,7 @@ export class GlyphEditorAdapter extends Disposable {
     @IFileService private readonly fileService: IFileService,
     @IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
     @IUserDataProfileService private readonly userDataProfileService: IUserDataProfileService,
+    @IInstantiationService private readonly instantiationService: IInstantiationService,
   ) {
     super();
     this.workspaceBinding = this.currentWorkspaceBinding();
@@ -274,23 +278,29 @@ export class GlyphEditorAdapter extends Disposable {
       if (before.byteOrderMark !== mutation.byteOrderMark) {
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
       }
-      // Text models normalize inserted newlines to their current EOL sequence.
-      // Receipt hashes must describe those actual bytes, not the wire spelling.
-      const appliedText = mutation.text.replace(/\r\n|\r|\n/g, model.getEOL());
-      if (mutation.text !== before.text && appliedText === before.text) {
-        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
-      }
-      // Uniform EOL conversions require an explicit model EOL operation, which
-      // this mutation port does not yet support. Never accept a partial conversion.
       const endings = mutation.text.match(/\r\n|\r|\n/g);
-      if (
-        /\r|\n/.test(before.text) &&
-        endings?.length &&
-        endings.every(ending => ending === endings[0]) &&
-        endings[0] !== model.getEOL()
-      ) {
+      const uniformEnding = endings?.length && endings.every(ending => ending === endings[0]) ? endings[0] : undefined;
+      const requestedEol =
+        uniformEnding === '\n' ? EndOfLineSequence.LF : uniformEnding === '\r\n' ? EndOfLineSequence.CRLF : undefined;
+      const appliedText = mutation.text.replace(
+        /\r\n|\r|\n/g,
+        requestedEol === undefined ? model.getEOL() : uniformEnding!,
+      );
+      // Mixed endings cannot express an EOL-only conversion in a text model.
+      if (mutation.text !== before.text && appliedText === before.text)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
-      }
+      const replacementText = mutation.text.replace(/\r\n|\r|\n/g, model.getEOL());
+      // Code OSS stores text offsets using the current EOL. Combining text and
+      // EOL in one stack element corrupts those offsets on Undo. Use separate
+      // version-guarded elements in the same undo group for this case.
+      const separateEol =
+        requestedEol !== undefined && uniformEnding !== model.getEOL() && replacementText !== before.text;
+      const textEdit = {
+        ...(replacementText === before.text
+          ? { range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }, text: '' }
+          : { range: model.getFullModelRange(), text: replacementText }),
+        ...(requestedEol === undefined || separateEol ? {} : { eol: requestedEol }),
+      };
       const afterRevision = await sha256(appliedText, mutation.byteOrderMark);
       // Hashing yields to the renderer. Recheck trust immediately before the
       // edit, since a trust change can invalidate the earlier RPC authorization.
@@ -313,16 +323,35 @@ export class GlyphEditorAdapter extends Disposable {
           observedAt: new Date().toISOString(),
         };
       };
+      let lastAttributedVersion = before.token.version;
+      let foreignChange = false;
+      let pendingEolVersion: number | undefined;
       const changed = model.onDidChangeContent(event => {
         if (model.getVersionId() === before.token.version) return;
+        // EOL events have no source reason. Keep their receipt uncertain until
+        // Bulk Edit succeeds; a competing user EOL change can invalidate its guard.
         const attributed = event.detailedReasons.includes(reason);
-        const receipt = observe(attributed ? GlyphMutationReceiptState.APPLIED : GlyphMutationReceiptState.UNKNOWN);
+        const expectedEolChange =
+          !foreignChange &&
+          event.isEolChange &&
+          requestedEol !== undefined &&
+          model.getVersionId() === lastAttributedVersion + 1 &&
+          model.getValue() === appliedText;
+        if (attributed) lastAttributedVersion = model.getVersionId();
+        else if (expectedEolChange) pendingEolVersion = model.getVersionId();
+        else {
+          foreignChange = true;
+          pendingEolVersion = undefined;
+        }
+        const receipt = observe(
+          attributed && !separateEol ? GlyphMutationReceiptState.APPLIED : GlyphMutationReceiptState.UNKNOWN,
+        );
         // Capture bytes and version together at the real edit boundary. Code OSS
         // can normalize more than newlines (for example trim automatic whitespace),
         // so the requested replacement is not an authoritative post-edit snapshot.
         const text = model.getValue();
         const byteOrderMark = model.getValue(undefined, true).length > text.length;
-        if (attributed) this.receipts.set(mutation.operationId, receipt);
+        if (attributed || expectedEolChange) this.receipts.set(mutation.operationId, receipt);
         else observed = receipt;
         receiptWrites.push(
           sha256(text, byteOrderMark).then(revision => {
@@ -334,26 +363,69 @@ export class GlyphEditorAdapter extends Disposable {
         );
       });
       try {
-        const result = await this.bulkEditService.apply(
-          [
-            // The inner object is Code OSS's ITextEdit data shape; ResourceTextEdit
-            // supplies the resource/version class wrapper required by Bulk Edit.
+        const options = {
+          label: 'Apply Glyph edit',
+          code: 'glyph.applyEdit',
+          undoRedoGroupId: this.undoGroup(mutation.undoGroupId).id,
+          respectAutoSaveConfig: true,
+          token: cancellation.token,
+          reason,
+        };
+        const apply = async (edits: ResourceTextEdit[]) => {
+          if (!separateEol) return this.bulkEditService.apply(edits, options);
+          // BulkEditService only reuses IDs from currently active calls. The
+          // native text-edit primitive accepts our actual group across both calls.
+          const operation = this.instantiationService.createInstance(
+            BulkTextEdits,
+            options.label,
+            options.code,
+            undefined,
+            this.undoGroup(mutation.undoGroupId),
+            undefined,
+            Progress.None,
+            cancellation.token,
+            edits,
+          );
+          return { isApplied: (await operation.apply(reason)).length > 0 };
+        };
+        let result = await apply([
+          // The inner object is Code OSS's ITextEdit data shape; ResourceTextEdit
+          // supplies the resource/version class wrapper required by Bulk Edit.
+          new ResourceTextEdit(resource, textEdit, before.token.version),
+        ]);
+        if (separateEol) {
+          this.assertWorkspaceBinding();
+          if (!this.trustService.isWorkspaceTrusted())
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+          if (
+            !result.isApplied ||
+            cancellation.token.isCancellationRequested ||
+            foreignChange ||
+            model.getVersionId() !== lastAttributedVersion
+          )
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+          result = await apply([
             new ResourceTextEdit(
               resource,
-              { range: model.getFullModelRange(), text: mutation.text },
-              before.token.version,
+              {
+                range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 },
+                text: '',
+                eol: requestedEol,
+              },
+              lastAttributedVersion,
             ),
-          ],
-          {
-            label: 'Apply Glyph edit',
-            code: 'glyph.applyEdit',
-            undoRedoGroupId: this.undoGroup(mutation.undoGroupId).id,
-            respectAutoSaveConfig: true,
-            token: cancellation.token,
-            reason,
-          },
-        );
+          ]);
+        }
         await Promise.all(receiptWrites);
+        const eolReceipt = this.receipts.get(mutation.operationId);
+        if (
+          result.isApplied &&
+          !cancellation.token.isCancellationRequested &&
+          pendingEolVersion !== undefined &&
+          eolReceipt?.appliedToken?.version === pendingEolVersion &&
+          model.getVersionId() === pendingEolVersion
+        )
+          this.receipts.set(mutation.operationId, { ...eolReceipt, state: GlyphMutationReceiptState.APPLIED });
         // Upstream's isApplied describes a nonempty edit list, even when its
         // cancellation check skipped every write. Only an observed change (or
         // a successful no-op) is evidence for an applied receipt.
