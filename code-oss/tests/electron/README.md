@@ -183,6 +183,16 @@ Enable a pending contract when the user-facing feature exists, then replace the
 empty body with interactions and assertions. Hidden-service calls do not satisfy
 the black-box contract.
 
+`GlyphIntegratedBrowser.test.mjs` specifies opening web links inside Glyph and
+browser navigation and lifecycle controls. `GlyphBrowserAnnotations.test.mjs`
+breaks down DOM hover highlighting and selection, Alt/Option-click placement at
+exact document coordinates, numbered comment bubbles with reopening and editing,
+and anchor behavior across layout changes, navigation, and reloads. DOM comments
+follow their selected element; position comments retain their document coordinates.
+These pending UI contracts complement the agent-driven CDP tool contracts in
+`GlyphBrowserAutomation.test.mjs`. Use isolated local fixture pages when enabling
+them; the placeholders do not establish browser or annotation functionality.
+
 The roadmap groups also specify chat annotations, editor Tab completion, inline
 proposal rebuttals, queue/interrupt/steer controls, compaction, usage metering,
 settings, language-server context, and user-authorized cross-chat communication.
