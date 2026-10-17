@@ -1,3 +1,4 @@
+import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { TurnUsage } from '#src/chat/TurnUsage.js';
 import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
@@ -11,6 +12,7 @@ export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'> & 
 
 export interface ChatTranscriptTurn {
   readonly userText: string;
+  readonly attachments?: readonly ContextAttachment[];
   readonly attachmentPaths: readonly string[];
   readonly assistantText: string;
   readonly reasoningSummary: string;

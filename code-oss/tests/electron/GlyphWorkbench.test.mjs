@@ -2,9 +2,10 @@ import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
 it.describe('Glyph in the native Code OSS workbench', () => {
   it('opens the Glyph sidebar from the command palette with an accessible message composer', async ({ glyph }) => {
-    await expect(glyph.composer).toHaveAttribute('placeholder', 'Ask Glyph about this project');
+    await expect(glyph.composer).toBeEditable();
+    await expect(glyph.composer).toHaveAttribute('aria-multiline', 'true');
     await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
-    await expect(glyph.page.locator('.glyph-context-chip')).toHaveText('No editor selection attached');
+    await expect(glyph.page.getByText('No active text editor', { exact: true })).toBeVisible();
   });
 
   it('sends a message to the packaged utility host and renders its complete response exactly once', async ({
@@ -16,7 +17,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await expect(glyph.userEntries.first()).toContainText('Explain this project.');
     await expect(glyph.assistantEntries).toHaveCount(1);
     await expect(glyph.diagnostics).toHaveCount(0);
-    await expect(glyph.composer).toHaveValue('');
+    await expect(glyph.composer).toHaveText('');
   });
 
   it('shows a partial answer while the host is still streaming and restores Send when it finishes', async ({
@@ -37,9 +38,9 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await expect(glyph.assistantEntries.first()).toContainText('The packaged');
     await glyph.composer.fill('Keep this next question as a draft.');
     await glyph.composer.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter');
-    await expect(glyph.composer).toHaveValue('Keep this next question as a draft.');
+    await expect(glyph.composer).toHaveText('Keep this next question as a draft.');
     await glyph.waitForResponse();
-    await expect(glyph.composer).toHaveValue('Keep this next question as a draft.');
+    await expect(glyph.composer).toHaveText('Keep this next question as a draft.');
     await expect(glyph.composer).toBeFocused();
     await expect(glyph.userEntries).toHaveCount(1);
     await glyph.sendButton.click();
@@ -72,7 +73,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await glyph.composer.fill('First line');
     await glyph.composer.press('Enter');
     await glyph.composer.pressSequentially('Second line');
-    await expect(glyph.composer).toHaveValue('First line\nSecond line');
+    await expect(glyph.composer).toHaveText('First line\nSecond line');
     await expect(glyph.userEntries).toHaveCount(0);
     await glyph.sendButton.click();
     await glyph.waitForResponse();

@@ -1,6 +1,18 @@
+import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import { replaceGlyphPromptRange, toGlyphPromptText, type GlyphPromptDocument } from './GlyphPromptDocument.ts';
 /** Window-owned drafts outlive panes, including sends that settle after unmount. */
 export class GlyphComposerState {
-  private value: { draft: string; unsent: readonly string[]; error: string | undefined; submitting: boolean } = {
+  private documents: readonly GlyphPromptDocument[] = [];
+  private value: {
+    document: GlyphPromptDocument;
+    focus: number;
+    draft: string;
+    unsent: readonly string[];
+    error: string | undefined;
+    submitting: boolean;
+  } = {
+    document: { parts: [], from: 0, to: 0 },
+    focus: 0,
     draft: '',
     unsent: [],
     error: undefined,
@@ -17,30 +29,64 @@ export class GlyphComposerState {
     };
   }
   setDraft(draft: string): void {
-    this.update({ draft });
+    this.setDocument({ parts: draft ? [{ type: 'text', text: draft }] : [], from: draft.length, to: draft.length });
+  }
+  setDocument(document: GlyphPromptDocument): void {
+    this.update({ document, draft: toGlyphPromptText(document.parts) });
+  }
+  focus(): void {
+    this.update({ focus: this.value.focus + 1 });
+  }
+  insertAttachments(attachments: readonly GlyphContextAttachment[]): void {
+    this.setDocument(
+      replaceGlyphPromptRange(
+        this.value.document,
+        attachments.map(attachment => ({ type: 'attachment', attachment })),
+      ),
+    );
+    this.focus();
+  }
+  replaceAttachment(id: string, attachment?: GlyphContextAttachment): void {
+    const document = this.value.document;
+    let offset = 0;
+    let from = document.from;
+    let to = document.to;
+    const parts = document.parts.flatMap(part => {
+      const start = offset;
+      offset += part.type === 'text' ? part.text.length : 1;
+      if (part.type !== 'attachment' || part.attachment.id !== id) return [part];
+      if (attachment) return [{ type: 'attachment' as const, attachment }];
+      if (start < document.from) from--;
+      if (start < document.to) to--;
+      return [];
+    });
+    this.setDocument({ parts, from, to });
   }
   editUnsent(index: number): void {
-    const draft = this.value.unsent[index];
-    if (draft === undefined) return;
-    const previous = this.value.draft;
-    this.update({
-      draft,
-      unsent: this.value.unsent.flatMap((text, position) => {
-        if (position !== index) return [text];
-        return previous ? [previous] : [];
-      }),
-    });
+    const document = this.documents[index];
+    if (!document) return;
+    const previous = this.value.document;
+    this.documents = this.documents.flatMap((value, position) =>
+      position !== index ? [value] : previous.parts.length ? [previous] : [],
+    );
+    this.setDocument(document);
+    this.update({ unsent: this.documents.map(value => toGlyphPromptText(value.parts)) });
+    this.focus();
   }
-  async submit(send: (text: string) => Promise<void>): Promise<void> {
+  async submit(send: (text: string, attachments: readonly GlyphContextAttachment[]) => Promise<void>): Promise<void> {
     if (this.value.submitting || !this.value.draft.trim()) return;
-    const text = this.value.draft;
-    this.update({ draft: '', error: undefined, submitting: true });
+    const { document, draft } = this.value;
+    const attachments = document.parts.flatMap(part => (part.type === 'attachment' ? [part.attachment] : []));
+    this.update({ draft: '', document: { parts: [], from: 0, to: 0 }, error: undefined, submitting: true });
     try {
-      await send(text);
+      await send(draft, attachments);
     } catch (error) {
-      // Read current state: a remounted pane may already contain another draft.
-      const recovered = this.value.draft ? { unsent: [...this.value.unsent, text] } : { draft: text };
-      this.update({ ...recovered, error: error instanceof Error ? error.message : String(error) });
+      if (this.value.document.parts.length) this.documents = [...this.documents, document];
+      else this.setDocument(document);
+      this.update({
+        unsent: this.documents.map(value => toGlyphPromptText(value.parts)),
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       this.update({ submitting: false });
     }

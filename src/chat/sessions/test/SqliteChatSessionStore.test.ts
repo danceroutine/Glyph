@@ -50,6 +50,48 @@ describe(SqliteChatSessionStore, () => {
     }
   });
 
+  it('migrates legacy turns and persists exact captured text and provenance after reopen', async () => {
+    const directory = await fixture('glyph-chat-attachments-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-chat-project-'), 'local');
+    const seed = new SqliteChatSessionStore(directory);
+    await seed.initialize(context);
+    await seed.save(record(context.id));
+    await seed.dispose();
+    const database = new Database(join(directory, 'chats.sqlite3'));
+    database.exec('ALTER TABLE chat_turns DROP COLUMN attachments');
+    database.close();
+    const attachments = [
+      {
+        path: 'a.ts',
+        text: '  café 🌱\r\n\tselected',
+        revision: 'exact-hash',
+        byteOrderMark: false,
+        byteLength: Buffer.byteLength('  café 🌱\r\n\tselected'),
+        source: {
+          kind: 'selection' as const,
+          uri: 'file:///project/a.ts',
+          version: 7,
+          revision: 'generation:incarnation:7',
+          range: { start: { line: 2, column: 1 }, end: { line: 3, column: 10 } },
+          side: 'original' as const,
+        },
+      },
+    ];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const store = new SqliteChatSessionStore(directory);
+      try {
+        await store.initialize(context);
+        const loaded = (await store.load(context.id))[0]!;
+        if (attempt === 0) {
+          expect(loaded.transcript[0]?.attachments).toBeUndefined();
+          await store.save({ ...loaded, transcript: [{ ...loaded.transcript[0]!, attachments }] });
+        } else expect(loaded.transcript[0]?.attachments).toEqual(attachments);
+      } finally {
+        await store.dispose();
+      }
+    }
+  });
+
   it('upgrades an existing turn table without inventing usage and preserves new reports across repeated reopen', async () => {
     const directory = await fixture('glyph-chat-usage-migration-');
     const context = await ProjectContextResolver.folder(await fixture('glyph-chat-project-'), 'local');

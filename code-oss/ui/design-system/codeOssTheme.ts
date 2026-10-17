@@ -78,6 +78,15 @@ const definitions = {
     keepBackground: hostToken('testing.runAction', palette.green[700], palette.green[700]),
     keepForeground: hostToken('button.foreground', palette.neutral[0], palette.neutral[0]),
   },
+  context: {
+    fileForeground: hostToken('textLink.foreground', palette.blue[400], palette.blue[650]),
+    skillForeground: hostToken(
+      'editorWarning.foreground',
+      palette.yellow[500],
+      palette.yellow[700],
+      palette.yellow[500],
+    ),
+  },
   diff: {
     added: hostToken('gitDecoration.addedResourceForeground', palette.green[400], palette.green[700]),
     removed: hostToken('gitDecoration.deletedResourceForeground', palette.red[300], palette.red[700]),

@@ -1,3 +1,4 @@
+import type { GlyphAttachmentPreview } from './GlyphAttachmentPreview.ts';
 import type { GlyphToolActivity } from './GlyphToolActivity.ts';
 import type { GlyphQuestionRequest } from './GlyphQuestionRequest.ts';
 import type { GlyphApprovalRequest } from './GlyphApprovalRequest.ts';
@@ -17,6 +18,7 @@ export interface GlyphRunProjection {
   readonly runId: string;
   readonly status: GlyphRunStatus;
   readonly text: string;
+  readonly attachments?: readonly GlyphAttachmentPreview[];
   readonly userText?: string;
   readonly reasoning: string;
   readonly tools: readonly GlyphToolActivity[];

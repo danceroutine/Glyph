@@ -159,6 +159,7 @@ export class ChatSession {
       await this.checkpoint(this.conversation.exportState(), {
         userText: request.text,
         attachmentPaths: request.attachments.map(attachment => attachment.path),
+        ...(request.attachments.length ? { attachments: request.attachments } : {}),
         assistantText,
         reasoningSummary,
         ...(result.usage ? { usage: result.usage } : {}),

@@ -24,6 +24,32 @@ const transcriptTurnSchema = z
   .object({
     userText: z.string(),
     attachmentPaths: z.array(z.string().min(1)),
+    attachments: z
+      .array(
+        z.object({
+          path: z.string(),
+          revision: z.string(),
+          text: z.string(),
+          byteOrderMark: z.boolean(),
+          byteLength: z.number(),
+          source: z
+            .object({
+              kind: z.enum(['selection', 'file']),
+              uri: z.string(),
+              version: z.number(),
+              revision: z.string(),
+              range: z
+                .object({
+                  start: z.object({ line: z.number(), column: z.number() }),
+                  end: z.object({ line: z.number(), column: z.number() }),
+                })
+                .optional(),
+              side: z.enum(['original', 'modified']).optional(),
+            })
+            .optional(),
+        }),
+      )
+      .optional(),
     assistantText: z.string(),
     reasoningSummary: z.string(),
     usage: z
@@ -54,10 +80,29 @@ const transcriptTurnSchema = z
     createdAt: z.iso.datetime(),
   })
   .strict()
-  .transform(({ usage, tools, ...turn }) => ({
+  .transform(({ usage, tools, attachments, ...turn }) => ({
     ...turn,
     ...(usage === undefined ? {} : { usage }),
     ...(tools === undefined ? {} : { tools }),
+    ...(attachments === undefined
+      ? {}
+      : {
+          attachments: attachments.map(({ source, ...attachment }) => ({
+            ...attachment,
+            ...(source === undefined
+              ? {}
+              : {
+                  source: {
+                    kind: source.kind,
+                    uri: source.uri,
+                    version: source.version,
+                    revision: source.revision,
+                    ...(source.range ? { range: source.range } : {}),
+                    ...(source.side ? { side: source.side } : {}),
+                  },
+                }),
+          })),
+        }),
   }));
 
 const legacyRecordSchema = z
@@ -129,6 +174,7 @@ interface ChatRow {
 interface TurnRow {
   readonly user_text: string;
   readonly attachment_paths: string;
+  readonly attachments: string | null;
   readonly assistant_text: string;
   readonly reasoning_summary: string;
   readonly created_at: string;
@@ -193,7 +239,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         .prepare('SELECT * FROM chats WHERE project_context_id = ? ORDER BY updated_at DESC')
         .all(projectContextId) as ChatRow[];
       const turns = database.prepare(
-        'SELECT user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
+        'SELECT user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
       );
       return chats.map(row => toRecord(row, turns.all(row.id) as TurnRow[]));
     } catch (error) {
@@ -298,7 +344,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         if (!chatColumns.some(value => value.name === 'todos'))
           database.exec('ALTER TABLE chats ADD COLUMN todos TEXT');
         const columns = database.prepare('PRAGMA table_info(chat_turns)').all() as { name: string }[];
-        for (const column of ['usage', 'tools']) {
+        for (const column of ['usage', 'tools', 'attachments']) {
           if (!columns.some(value => value.name === column))
             database.exec(`ALTER TABLE chat_turns ADD COLUMN ${column} TEXT`);
         }
@@ -416,8 +462,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
     database.prepare('DELETE FROM chat_turns WHERE chat_id = ?').run(record.id);
     const insertTurn = database.prepare(
       `INSERT INTO chat_turns(
-         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools, attachments
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     record.transcript.forEach((turn, position) =>
       insertTurn.run(
@@ -430,6 +476,7 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         turn.createdAt,
         turn.usage ? JSON.stringify(turn.usage) : null,
         turn.tools ? JSON.stringify(turn.tools) : null,
+        turn.attachments ? JSON.stringify(turn.attachments) : null,
       ),
     );
   })();
@@ -454,6 +501,7 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
     transcript: turns.map(turn => ({
       userText: turn.user_text,
       attachmentPaths: JSON.parse(turn.attachment_paths) as unknown,
+      ...(turn.attachments === null ? {} : { attachments: JSON.parse(turn.attachments) as unknown }),
       assistantText: turn.assistant_text,
       reasoningSummary: turn.reasoning_summary,
       createdAt: turn.created_at,

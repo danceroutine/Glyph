@@ -130,7 +130,8 @@ Run `pnpm code-oss:test:integration --list` to browse the behavior inventory:
 - [GlyphSkills.test.mjs](tests/electron/GlyphSkills.test.mjs): skill discovery, activation, progressive loading, human/agent management, and execution boundaries.
 - [GlyphRules.test.mjs](tests/electron/GlyphRules.test.mjs): always-on, file-pattern, agent-selected, and manual rules with configuration and source visibility.
 - [GlyphAgentsMd.test.mjs](tests/electron/GlyphAgentsMd.test.mjs): root/nested instruction discovery, scope, precedence, refresh, and reviewable edits.
-- [GlyphIdeContext.test.mjs](tests/electron/GlyphIdeContext.test.mjs): active editors, exact selections, diagnostics/symbols, retrieval/indexing, context budgets, and privacy.
+- [GlyphAttachments.test.mjs](tests/electron/GlyphAttachments.test.mjs): inline whole-file and selection badges, dirty and untitled editors, split/diff focus, source previews and refresh, preserved captures after failed sends and reload, and multi-root paths.
+- [GlyphIdeContext.test.mjs](tests/electron/GlyphIdeContext.test.mjs): remaining workspace lifecycle, queued context, diagnostics/symbols, retrieval/indexing, context budgets, and privacy.
 
 The capability files are explicit `it.fixme` inventories, not passing
 integration coverage. Enabling them requires scripted provider tool calls through
@@ -479,6 +480,37 @@ or runtime package resolution. Do not edit those generated bundles.
 the Preact root with the pane. The window-scoped service owns composer state;
 components reconcile keyed transcript rows, preserving DOM identity while
 response text streams in.
+
+### Inline file and selection context
+
+Type `@` in the composer to search workspace files and open text buffers. Use
+Up/Down and Enter to insert a whole-file badge at the caret; Escape dismisses the
+picker. The active editor is an opt-in suggestion. Opening another tab changes
+that suggestion without replacing captures already in the draft.
+
+Select text in the editor and press Cmd+L (Ctrl+L on other platforms), or choose
+**Attach Selection to Glyph** from the editor context menu. Each nonempty cursor
+selection becomes its own inline badge, carrying the exact captured text,
+UTF-16 source range, model revision, and diff side where applicable. Text can
+appear before, between, and after badges. ProseMirror handles composition,
+selection, atomic deletion, plain-text paste, and undo within the composer.
+
+Click a badge to open its source and preview the captured text. A changed, closed,
+or deleted source is reported explicitly. **Refresh capture** replaces only that
+capture; **Remove** leaves the other badges and surrounding draft intact. Capture
+uses unsaved editor contents and never saves the source. Individual captures are
+limited to 512 KiB; a turn accepts up to 32 captures and 2 MiB in total. Oversized
+context produces an error instead of partial transmission.
+
+Per-chat prompt documents retain captures through pane remounts and rejected
+sends. Completed turns persist their captured text and provenance in SQLite;
+expanding a historical attachment never rereads today's file. The yellow skill
+badge is available in Storybook as a visual component. Skill discovery and
+activation remain rank 21.
+
+The existing workspace/profile-change guard still requires a window reload;
+hot reattachment remains an explicit lifecycle contract. Queued delivery remains
+with rank 19; this pass covers editable drafts and failed-send recovery.
 
 ### Browser iteration with Storybook
 

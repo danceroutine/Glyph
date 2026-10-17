@@ -72,7 +72,8 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
       composer={
         <WiredGlyphComposer
           status={state.status}
-          selection={state.selection}
+          key={state.selectedChatId ?? 'draft'}
+          activeContext={state.activeContext}
           actions={actions}
           disabled={!!state.navigationPending || (!state.selectedChatId && !!state.catalogPending)}
           modelControl={<WiredGlyphModelPicker state={state} actions={actions} />}

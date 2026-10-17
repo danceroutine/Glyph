@@ -1,3 +1,5 @@
+import { GlyphContextController } from './GlyphContextController.js';
+import { GlyphContextError } from './GlyphContextError.js';
 import { GlyphProposalReviewError } from './GlyphProposalReviewError.js';
 import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
 import type { GlyphApprovalDecision } from '#glyph/protocol/GlyphApprovalDecision.js';
@@ -16,17 +18,13 @@ import { GlyphHostEventType } from '#glyph/protocol/events/GlyphHostEvent.js';
 import { GlyphRunStatus } from '#glyph/protocol/events/GlyphRunProjection.js';
 import { GlyphHostStatus } from '#glyph/protocol/events/GlyphHostStatus.js';
 import { GlyphWorkbenchCommandType, type GlyphWorkbenchCommand } from '#glyph/protocol/GlyphWorkbenchCommand.js';
-import {
-  GlyphContextAttachmentKind,
-  type GlyphContextAttachment,
-} from '#glyph/protocol/connection/GlyphContextAttachment.js';
+import { type GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import { GlyphDesktopClient } from '#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js';
 import { GlyphProposalEditor } from './GlyphProposalEditor.js';
 import { GlyphEditorAdapter } from './GlyphEditorAdapter.js';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#glyph/workbench/GlyphTranscriptEntry.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
 import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#glyph/workbench/GlyphWorkbenchState.js';
-import type { GlyphWorkbenchSelection } from '#glyph/workbench/GlyphWorkbenchSelection.js';
 
 /** Adapts the host's recoverable state and commands to the workbench interaction port. */
 export class NativeGlyphWorkbenchService extends Disposable implements GlyphWorkbenchService {
@@ -41,13 +39,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private readonly changeEmitter = this._register(new Emitter<GlyphWorkbenchState>());
   readonly onDidChangeState = this.changeEmitter.event;
   private readonly projection = new GlyphWorkbenchProjection();
+  readonly context: GlyphContextController;
+  attachSelection(): Promise<void> {
+    return this.context.attachSelection();
+  }
   private readonly proposalEditor: GlyphProposalEditor;
   private readonly client: GlyphDesktopClient;
-  private selection: GlyphWorkbenchSelection | undefined;
+  private selectionInitialized = false;
   private selectedChatId: string | undefined;
   private pendingRunId: string | undefined;
   private pendingCreation: string | undefined;
-  private selectionInitialized = false;
   private draftAccount: { readonly provider: string; readonly id: string } | undefined;
   private draftModel: string | undefined;
   private draftModels: readonly GlyphModelSummary[] = [];
@@ -84,6 +85,14 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.workspaceBinding = this.currentWorkspaceBinding();
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
     this.client = this._register(new GlyphDesktopClient(request => editor.handle(request)));
+    this.context = this._register(
+      instantiationService.createInstance(
+        GlyphContextController,
+        editor,
+        () => this.composer,
+        () => this.changeEmitter.fire(this.state),
+      ),
+    );
     this.proposalEditor = this._register(
       instantiationService.createInstance(GlyphProposalEditor, {
         state: () => this.state,
@@ -170,7 +179,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     const transcript: GlyphTranscriptEntry[] = runs.flatMap(run => {
       const prompt = run.userText ?? this.prompts.get(run.runId);
       return [
-        ...(prompt ? [{ id: `${run.runId}:user`, role: GlyphTranscriptRole.USER, text: prompt }] : []),
+        ...(prompt
+          ? [
+              {
+                id: `${run.runId}:user`,
+                role: GlyphTranscriptRole.USER,
+                text: prompt,
+                ...(run.attachments ? { attachments: run.attachments } : {}),
+              },
+            ]
+          : []),
         {
           id: run.runId,
           role: GlyphTranscriptRole.ASSISTANT,
@@ -207,7 +225,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         ...this.errors,
       ],
       usage: this.projection.usage,
-      ...(this.selection ? { selection: this.selection } : {}),
+      ...(this.context?.active ? { activeContext: this.context.active } : {}),
       ...(this.selectedChatId ? { selectedChatId: this.selectedChatId } : {}),
     };
   }
@@ -244,12 +262,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
     }
   }
-  setSelection(selection: GlyphWorkbenchSelection | undefined): void {
-    this.selection = selection;
-    this.changeEmitter.fire(this.state);
-  }
-
-  async send(text: string): Promise<void> {
+  async send(text: string, attachments: readonly GlyphContextAttachment[] = []): Promise<void> {
+    const bytes = attachments.reduce(
+      (total, attachment) => total + new TextEncoder().encode(attachment.text).byteLength,
+      0,
+    );
+    if (attachments.length > 32 || bytes > 2 * 1024 * 1024)
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
+        'Reduce the selected context to at most 32 attachments and 2 MiB before sending.',
+      );
     // Retained runs belong to the retired workspace. Reject before the active
     // run guard so the composer retains a prompt submitted after invalidation.
     this.assertSessionBinding();
@@ -286,7 +308,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         chatId,
         runId,
         text: prompt,
-        attachments: this.selection ? [await toAttachment(this.selection)] : [],
+        attachments,
       });
     } catch (error) {
       this.pendingRunId = undefined;
@@ -332,7 +354,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     if (this.sessionChanged) return;
     this.sessionChanged = true;
     this.invalidationMessage = message;
-    this.selection = undefined;
     this.pendingRunId = undefined;
     // Saving a workspace or switching profiles can change its storage identity
     // while retaining the renderer. Retire the runtime and its editor capabilities;
@@ -553,20 +574,4 @@ function isActive(status: GlyphRunStatus): boolean {
     status === GlyphRunStatus.WAITING_FOR_QUESTION ||
     status === GlyphRunStatus.WAITING_FOR_APPROVAL
   );
-}
-async function toAttachment(selection: GlyphWorkbenchSelection): Promise<GlyphContextAttachment> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(selection.text));
-  return {
-    kind: GlyphContextAttachmentKind.SELECTION,
-    uri: selection.uri,
-    path: selection.path,
-    text: selection.text,
-    contentRevision: [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join(''),
-    token: {
-      workspaceGeneration: 'selection-capture',
-      resource: selection.uri,
-      incarnation: selection.uri,
-      version: selection.version,
-    },
-  };
 }

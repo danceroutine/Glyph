@@ -39,14 +39,14 @@ it.describe('Review regressions — rejected send with no account', () => {
     await glyph.crashHost();
     await glyph.send('Reconnect to the production account store.');
     await expect(glyph.diagnostics.filter({ hasText: /Sign in.*inference access/ })).toHaveCount(2);
-    await expect(glyph.composer).toHaveValue('Reconnect to the production account store.');
+    await expect(glyph.composer).toHaveText('Reconnect to the production account store.');
   });
 
   it('retains the unsent draft when no account has inference access', async ({ glyph }) => {
     const draft = 'Keep this unsent question until I have signed in.';
     await glyph.send(draft);
     await expect(glyph.diagnostics).toContainText([/Sign in.*inference access/]);
-    await expect(glyph.composer).toHaveValue(draft);
+    await expect(glyph.composer).toHaveText(draft);
     await expect(glyph.userEntries).toHaveCount(0);
     await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
   });
@@ -60,7 +60,7 @@ it.describe('Review regressions — rejected send from an overlapping workspace'
     const draft = 'Do not discard this question when workspace ownership is denied.';
     await duplicate.send(draft);
     await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
-    await expect(duplicate.composer).toHaveValue(draft);
+    await expect(duplicate.composer).toHaveText(draft);
     await expect(glyph.userEntries).toHaveCount(1);
   });
 });

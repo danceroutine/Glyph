@@ -1,14 +1,27 @@
 import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
-import type { GlyphWorkbenchSelection } from '#src/desktop/workbench/GlyphWorkbenchSelection.js';
+import {
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 
-export const selection: GlyphWorkbenchSelection = {
+export const selection: GlyphContextAttachment = {
   uri: 'file:///preview/src/greeting.ts',
   path: 'src/greeting.ts',
   text: 'export const greet = (name: string) => `Hello, ${name}!`;',
-  version: 3,
+  id: 'preview-selection',
+  kind: GlyphContextAttachmentKind.SELECTION,
+  contentRevision: 'preview-hash',
+  sourceRevision: 'preview:3',
+  token: {
+    workspaceGeneration: 'preview',
+    resource: 'file:///preview/src/greeting.ts',
+    incarnation: 'preview',
+    version: 3,
+  },
+  range: { start: { line: 11, column: 1 }, end: { line: 14, column: 2 } },
 };
 
 export const conversation: readonly GlyphTranscriptEntry[] = [
@@ -39,6 +52,16 @@ export function workbenchState(overrides: Partial<GlyphWorkbenchState> = {}): Gl
 }
 
 export const previewActions: GlyphWorkbenchViewActions = {
+  context: {
+    searchFiles: async query => [selection].filter(file => file.path.includes(query)),
+    captureFile: async () => {
+      const { range: _range, ...file } = selection;
+      return { ...file, id: crypto.randomUUID(), kind: GlyphContextAttachmentKind.FILE };
+    },
+    openAttachment: async () => {},
+    refreshAttachment: async attachment => attachment,
+    checkAttachment: async () => undefined,
+  },
   composer: new GlyphComposerState(),
   send: async () => {},
   cancel: () => {},
@@ -61,3 +84,7 @@ export const failingActions: GlyphWorkbenchViewActions = {
     throw new Error('Preview send failed. Your draft has been restored; try editing it and sending again.');
   },
 };
+
+export const attachedActions: GlyphWorkbenchViewActions = { ...previewActions, composer: new GlyphComposerState() };
+attachedActions.composer.setDraft('Explain ');
+attachedActions.composer.insertAttachments([selection]);

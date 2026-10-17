@@ -36,7 +36,7 @@ export const atoms = {
   fontFamily: { sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", mono: 'monospace' },
   lineHeight: { normal: 1.5 },
   borderWidth: { thin: 1 },
-  opacity: { disabled: 0.5 },
+  opacity: { disabled: 0.5, tint: 0.18 },
 } as const;
 
 export type Space = keyof typeof atoms.space;

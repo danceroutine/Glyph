@@ -1,3 +1,9 @@
+import { registerAction2, Action2, MenuId } from '#vs/platform/actions/common/actions.js';
+import { KeyCode, KeyMod } from '#vs/base/common/keyCodes.js';
+import { KeybindingWeight } from '#vs/platform/keybinding/common/keybindingsRegistry.js';
+import { EditorContextKeys } from '#vs/editor/common/editorContextKeys.js';
+import { IViewsService } from '#vs/workbench/services/views/common/viewsService.js';
+import type { ServicesAccessor } from '#vs/platform/instantiation/common/instantiation.js';
 import { Codicon } from '#vs/base/common/codicons.js';
 import { localize, localize2 } from '#vs/nls.js';
 import { InstantiationType, registerSingleton } from '#vs/platform/instantiation/common/extensions.js';
@@ -50,3 +56,28 @@ const descriptor: IViewDescriptor = {
   openCommandActionDescriptor: { id: 'glyph.focus', title: localize2('glyph.focus', 'Focus Glyph') },
 };
 views.registerViews([descriptor], container);
+
+registerAction2(
+  class extends Action2 {
+    constructor() {
+      super({
+        id: 'glyph.attachSelection',
+        title: localize2('glyph.attachSelection', 'Attach Selection to Glyph'),
+        f1: true,
+        keybinding: {
+          primary: KeyMod.CtrlCmd | KeyCode.KeyL,
+          weight: KeybindingWeight.WorkbenchContrib,
+          when: EditorContextKeys.editorTextFocus,
+        },
+        menu: { id: MenuId.EditorContext, group: 'navigation', order: 20 },
+      });
+    }
+    async run(accessor: ServicesAccessor): Promise<void> {
+      const glyph = accessor.get(GlyphWorkbenchService);
+      const views = accessor.get(IViewsService);
+      await glyph.attachSelection();
+      await views.openView(GlyphViewPane.ID, true);
+      glyph.composer.focus();
+    }
+  },
+);

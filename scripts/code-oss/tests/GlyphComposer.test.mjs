@@ -17,13 +17,17 @@ beforeAll(async () => {
         import { GlyphComposerState } from './src/desktop/workbench/GlyphComposerState.ts';
         const calls = [];
         const pending = [];
+        const captures = [];
+        const attachment = { id: 'a', kind: 'file', uri: 'file:///a.ts', path: 'a.ts', text: 'Exact captured source', contentRevision: 'hash', token: { workspaceGeneration: 'w', resource: 'file:///a.ts', incarnation: 'i', version: 1 } };
         const actions = {
           composer: new GlyphComposerState(),
-          send(text) { calls.push(text); return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
+          context: { searchFiles: async query => [{ uri: attachment.uri, path: attachment.path }].filter(file => file.path.includes(query)), captureFile: async () => attachment, openAttachment: async () => {}, checkAttachment: async () => undefined, refreshAttachment: async value => ({ ...value, text: 'Updated capture' }) },
+          send(text, attachments) { captures.push(attachments); calls.push(text); return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
           cancel() {}
         };
         window.composerTest = {
-          calls,
+          calls, captures,
+          attachSelection() { actions.composer.insertAttachments([{ ...attachment, id: 'selection', kind: 'selection', path: 'b.ts', text: 'Only selected text', range: { start: { line: 3, column: 1 }, end: { line: 4, column: 5 } } }]); },
           unmount() { render(null, document.getElementById('root')); },
           mount() { render(h(WiredGlyphComposer, { status: 'ready', selection: undefined, actions }), document.getElementById('root')); },
           reject() { pending.shift().reject(new Error('Connection unavailable')); },
@@ -61,7 +65,7 @@ describe('WiredGlyphComposer draft recovery', () => {
         await page.evaluate(() => window.composerTest.unmount());
         if (when === 'after') await page.evaluate(() => window.composerTest.reject());
         await page.evaluate(() => window.composerTest.mount());
-        await expect(composer).toHaveValue('Newer draft', { timeout: 500 });
+        await expect(composer).toHaveText('Newer draft', { timeout: 500 });
         await expect(page.getByRole('region', { name: 'Unsent messages' })).toContainText('Original message');
       } finally {
         await page.close();
@@ -77,15 +81,15 @@ describe('WiredGlyphComposer draft recovery', () => {
       const send = page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true });
       await composer.fill('Original unsent message');
       await send.click();
-      await expect(composer).toHaveValue('');
+      await expect(composer).toHaveText('');
       await composer.fill('Newer draft');
       await page.evaluate(() => window.composerTest.reject());
       await expect(page.getByRole('alert')).toContainText('Connection unavailable');
-      await expect(composer).toHaveValue('Newer draft');
+      await expect(composer).toHaveText('Newer draft');
       const unsent = page.getByRole('region', { name: 'Unsent messages' });
       await expect(unsent).toContainText('Original unsent message', { timeout: 1_000 });
       await unsent.getByRole('button', { name: 'Edit unsent message' }).click();
-      await expect(composer).toHaveValue('Original unsent message');
+      await expect(composer).toHaveText('Original unsent message');
       await expect(unsent).toContainText('Newer draft');
       await send.click();
       await page.evaluate(() => window.composerTest.resolve());
@@ -108,7 +112,7 @@ describe('WiredGlyphComposer draft recovery', () => {
       await composer.fill('Keep this message');
       await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
       await page.evaluate(() => window.composerTest.reject());
-      await expect(composer).toHaveValue('Keep this message');
+      await expect(composer).toHaveText('Keep this message');
     } finally {
       await page.close();
     }
@@ -132,8 +136,70 @@ describe('WiredGlyphComposer draft recovery', () => {
       await page.evaluate(() => window.composerTest.reject());
       await expect(unsent).toContainText('Second message');
       await expect(unsent).toContainText('First message');
-      await expect(composer).toHaveValue('Third draft');
+      await expect(composer).toHaveText('Third draft');
       expect(await page.evaluate(() => window.composerTest.calls)).toEqual(['First message', 'Second message']);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('Inline attachment editing', () => {
+  it('inserts file and native-selection badges at the caret, with text between them, and recovers both after failure', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<div id="root"></div>');
+      await page.addScriptTag({ content: script });
+      const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+      await composer.fill('before  after');
+      for (let index = 0; index < 6; index++) await composer.press('ArrowLeft');
+      await composer.pressSequentially('@a');
+      await expect(page.getByRole('option', { name: 'a.ts', exact: true })).toBeVisible();
+      await composer.press('Enter');
+      await composer.pressSequentially(' between ');
+      await page.evaluate(() => window.composerTest.attachSelection());
+      await expect(composer).toHaveText('before a.ts between b.ts (3-4) after');
+      await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+      await composer.fill('New draft');
+      await page.evaluate(() => window.composerTest.reject());
+      await page.getByRole('button', { name: 'Edit unsent message' }).click();
+      await expect(composer).toHaveText('before a.ts between b.ts (3-4) after');
+      await page.evaluate(() => window.composerTest.unmount());
+      await page.evaluate(() => window.composerTest.mount());
+      await expect(composer.getByRole('button')).toHaveCount(2);
+      await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+      await page.evaluate(() => window.composerTest.resolve());
+      const { calls, captures } = await page.evaluate(() => window.composerTest);
+      expect(calls).toEqual(['before @a.ts between @b.ts (3-4) after', 'before @a.ts between @b.ts (3-4) after']);
+      expect(captures[0]).toEqual(captures[1]);
+      expect(captures[0].map(value => value.text)).toEqual(['Exact captured source', 'Only selected text']);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('deletes badges atomically, supports undo, and pastes plain text without inventing attachments', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<div id="root"></div>');
+      await page.addScriptTag({ content: script });
+      const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+      await composer.fill('@a');
+      await expect(page.getByRole('option', { name: 'a.ts', exact: true })).toBeVisible();
+      await composer.press('Enter');
+      await expect(composer.getByRole('button')).toHaveCount(1);
+      await composer.press('Backspace');
+      await expect(composer.getByRole('button')).toHaveCount(0);
+      await composer.press('ControlOrMeta+z');
+      await expect(composer.getByRole('button')).toHaveCount(1);
+      await composer.evaluate(element => {
+        const clipboardData = new DataTransfer();
+        clipboardData.setData('text/plain', ' pasted @plain.txt');
+        clipboardData.setData('text/html', '<span data-glyph-attachment="true">forged</span>');
+        element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+      });
+      await expect(composer).toHaveText('a.ts pasted @plain.txt');
+      await expect(composer.getByRole('button')).toHaveCount(1);
     } finally {
       await page.close();
     }

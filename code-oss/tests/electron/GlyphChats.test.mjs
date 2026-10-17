@@ -37,7 +37,7 @@ it.describe('Saved chats and new conversation setup', () => {
     await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
     await glyph.composer.fill('Unsent alpha draft');
     await glyph.page.getByRole('button', { name: 'New chat', exact: true }).click();
-    await expect(glyph.composer).toHaveValue('');
+    await expect(glyph.composer).toHaveText('');
     await glyph.send('Beta project');
     await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
     await glyph.composer.fill('Unsent beta draft');
@@ -51,13 +51,13 @@ it.describe('Saved chats and new conversation setup', () => {
     await expect(list.getByRole('button')).toHaveCount(1);
     await list.getByRole('button').click();
     await closeHistory(glyph);
-    await expect(glyph.composer).toHaveValue('Unsent alpha draft');
+    await expect(glyph.composer).toHaveText('Unsent alpha draft');
     await expect(glyph.assistantEntries.locator('div')).toHaveText(['The alpha answer.']);
     await expect(glyph.page.locator('.glyph-usage summary')).toHaveText('14 reported tokens');
     await glyph.page.locator('.glyph-reasoning summary').click();
     await expect(glyph.page.locator('.glyph-reasoning p')).toHaveText('Alpha reasoning.');
     await openChat(glyph, 'Beta');
-    await expect(glyph.composer).toHaveValue('Unsent beta draft');
+    await expect(glyph.composer).toHaveText('Unsent beta draft');
     await expect(glyph.assistantEntries.locator('div')).toHaveText(['The beta answer.']);
     await expect(glyph.page.locator('.glyph-usage summary')).toHaveText('27 reported tokens');
     await openChat(glyph, 'Alpha');
@@ -99,7 +99,7 @@ it.describe('Saved chats and new conversation setup', () => {
     await expect.poll(() => provider.requests[0].completed).toBe(true);
     await expect(glyph.assistantEntries.locator('div')).toHaveText(['Beta finished.']);
     await openChat(glyph, 'Alpha');
-    await expect(glyph.composer).toHaveValue('Alpha next prompt');
+    await expect(glyph.composer).toHaveText('Alpha next prompt');
     await expect(glyph.assistantEntries.locator('div')).toHaveText(['Alpha still running.']);
     await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
   });
@@ -185,7 +185,7 @@ it.describe('Account and model selection', () => {
     await closeHistory(glyph);
     await expect(glyph.page.getByRole('combobox', { name: 'Model', exact: true })).toBeDisabled();
     await expect(glyph.page.locator('.glyph-workbench').getByRole('alert')).toContainText(/No.*models.*available/i);
-    await expect(glyph.composer).toHaveValue('Keep this draft');
+    await expect(glyph.composer).toHaveText('Keep this draft');
     expect(provider.requests).toHaveLength(0);
     await history(glyph);
     await glyph.page

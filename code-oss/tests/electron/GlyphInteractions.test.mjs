@@ -140,7 +140,7 @@ it.describe('Questions and command approvals', () => {
     await glyph.composer.press('ControlOrMeta+Enter');
     await expect(form(glyph)).toBeVisible();
     expect(provider.requests).toHaveLength(1);
-    await expect(glyph.composer).toHaveValue('Keep this as my next message.');
+    await expect(glyph.composer).toHaveText('Keep this as my next message.');
     await form(glyph).getByRole('button', { name: 'Cancel turn' }).click();
     await finished(glyph);
   });

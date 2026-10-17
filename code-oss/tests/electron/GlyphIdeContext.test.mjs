@@ -5,75 +5,18 @@ import { test as it } from './GlyphWorkbench.fixture.mjs';
 // Retrieval cases need deterministic local ranking/embedding fixtures; assertions
 // must cover provenance and omitted data, not just a plausible generated answer.
 
-it.describe('Pending active editor and open-file context', () => {
+// Rank 10 editor/file capture contracts are exercised through the real native
+// editor, inline composer, recorded provider input, and saved chat history in
+// GlyphAttachments.test.mjs. The remaining lifecycle dependencies stay explicit.
+it.describe('Pending context lifecycle contracts', () => {
   it.fixme(
     'reattaches the host and editor to changed workspace folders without a reload and never reinterprets old paths or document tokens under the new roots',
     async () => {},
   );
+  // Editable drafts and failed-send recovery are covered by GlyphAttachments;
+  // actual queued delivery belongs to the rank-19 queue/steering work.
   it.fixme(
-    'shows the active file’s workspace-qualified path and lets the user include or exclude it from the next turn',
-    async () => {},
-  );
-  it.fixme(
-    'captures unsaved active-editor contents with their revision rather than silently substituting the file on disk',
-    async () => {},
-  );
-  it.fixme(
-    'updates automatic context when the user switches editor tabs while keeping explicitly pinned attachments intact',
-    async () => {},
-  );
-  it.fixme(
-    'identifies the focused editor in a split layout instead of taking context from a different visible editor',
-    async () => {},
-  );
-  it.fixme('lets the user choose other open files without automatically sending every tab’s contents', async () => {});
-  it.fixme(
-    'handles an empty editor, untitled buffer, unsupported resource, or deleted file with an explicit context state',
-    async () => {},
-  );
-  it.fixme(
-    'distinguishes same-named files across workspace roots in the context picker and outgoing attachments',
-    async () => {},
-  );
-  it.fixme(
-    'identifies the selected side of a diff editor so original and modified text are not confused',
-    async () => {},
-  );
-});
-
-it.describe('Pending editor selections sent to chat', () => {
-  it.fixme(
-    'offers an editor action and keyboard shortcut to attach highlighted code without submitting the chat draft',
-    async () => {},
-  );
-  it.fixme(
-    'shows a selection pill with filename and range and lets the user preview its exact captured text',
-    async () => {},
-  );
-  it.fixme('preserves whitespace, Unicode, and line breaks in a highlighted passage sent to the agent', async () => {});
-  it.fixme(
-    'attaches multiple noncontiguous selections with separate source ranges instead of merging unrelated text',
-    async () => {},
-  );
-  it.fixme(
-    'lets the user add selections from multiple files and remove one attachment without losing the others or the draft',
-    async () => {},
-  );
-  it.fixme(
-    'opens the attachment’s source location when its pill is clicked and reports a stale or deleted source explicitly',
-    async () => {},
-  );
-  it.fixme(
-    'keeps a captured selection stable after cursor movement and offers an explicit refresh after the source text changes',
-    async () => {},
-  );
-  it.fixme('sends only the selected passage unless the user also authorizes full-file context', async () => {});
-  it.fixme(
-    'records the exact source revision and text sent with a turn so later edits cannot rewrite its attachment history',
-    async () => {},
-  );
-  it.fixme(
-    'preserves selection attachments while a message is queued or edited and does not silently replace them at delivery time',
+    'preserves captured selection attachments while a message is queued and does not silently replace them at delivery time',
     async () => {},
   );
 });

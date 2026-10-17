@@ -85,7 +85,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     const draft = 'Do not run a second agent against these files.';
     await duplicate.send(draft);
     await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
-    await expect(duplicate.composer).toHaveValue(draft);
+    await expect(duplicate.composer).toHaveText(draft);
     await expect(duplicate.assistantEntries).toHaveCount(0);
     await expect(glyph.sendButton).toHaveText('Cancel');
     expect(provider.requests).toHaveLength(1);
@@ -93,7 +93,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     await duplicate.reload();
     await duplicate.send(draft);
     await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
-    await expect(duplicate.composer).toHaveValue(draft);
+    await expect(duplicate.composer).toHaveText(draft);
     expect(provider.requests).toHaveLength(1);
     provider.release(0);
     await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');

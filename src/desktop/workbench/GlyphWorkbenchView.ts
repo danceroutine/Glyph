@@ -1,3 +1,5 @@
+import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import type { GlyphContextActions } from './GlyphContextActions.ts';
 import type { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import type { GlyphWorkbenchState } from './GlyphWorkbenchState.ts';
 import type { GlyphComposerState } from './GlyphComposerState.ts';
@@ -11,7 +13,8 @@ export interface GlyphWorkbenchView {
 /** Callbacks preserve the service's ownership of application behavior. */
 export interface GlyphWorkbenchViewActions {
   readonly composer: GlyphComposerState;
-  send(text: string): Promise<void>;
+  readonly context: GlyphContextActions;
+  send(text: string, attachments?: readonly GlyphContextAttachment[]): Promise<void>;
   cancel(): void;
   writeShellInput(chatId: string, sessionId: string, input: string, appendNewline: boolean): Promise<void>;
   stopShell(chatId: string, sessionId: string): Promise<void>;

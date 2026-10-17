@@ -337,6 +337,7 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
       path: attachment.path,
       revision: attachment.revision,
       byteOrderMark: attachment.byteOrderMark,
+      ...(attachment.source ? { source: attachment.source } : {}),
       text: attachment.text,
     })),
   });

@@ -15,6 +15,13 @@ async function modules() {
       {
         name: 'workbench-services',
         setup(builder) {
+          builder.onResolve({ filter: /GlyphContextController\.js$/ }, args => ({
+            path: args.path,
+            namespace: 'context',
+          }));
+          builder.onLoad({ filter: /.*/, namespace: 'context' }, () => ({
+            contents: 'export class GlyphContextController {}',
+          }));
           builder.onResolve({ filter: /GlyphProposalEditor\.js$/ }, args => ({
             path: args.path,
             namespace: 'proposal',

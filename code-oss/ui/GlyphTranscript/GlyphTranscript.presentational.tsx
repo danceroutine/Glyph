@@ -1,3 +1,4 @@
+import { GlyphCapturedContext } from '#code-oss/ui/GlyphCapturedContext/GlyphCapturedContext.presentational.tsx';
 import type { ComponentChildren } from 'preact';
 import type { GlyphTranscriptState } from './useGlyphTranscriptState.ts';
 import { GlyphTurnProgress } from '#code-oss/ui/GlyphTurnProgress/GlyphTurnProgress.presentational.tsx';
@@ -26,6 +27,9 @@ export function GlyphTranscript({ entries, transcript, proposals }: GlyphTranscr
           <strong>{entry.label}</strong>
           {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
           <div>{entry.text}</div>
+          {entry.attachments?.map((attachment, index) => (
+            <GlyphCapturedContext key={index} attachment={attachment} />
+          ))}
           {entry.approval}
           {entry.shells}
         </div>

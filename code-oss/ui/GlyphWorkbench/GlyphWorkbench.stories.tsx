@@ -6,7 +6,7 @@ import {
   conversation,
   failingActions,
   previewActions,
-  selection,
+  attachedActions,
   workbenchState,
 } from '#code-oss/storybook/fixtures.ts';
 
@@ -24,7 +24,7 @@ export const Interactive: Story = { render: () => <InteractiveWorkbench /> };
 export const Empty: Story = {};
 export const Conversation: Story = { args: { state: workbenchState({ transcript: conversation }) } };
 export const AttachedSelection: Story = {
-  args: { state: workbenchState({ transcript: conversation, selection }) },
+  args: { state: workbenchState({ transcript: conversation }), actions: attachedActions },
 };
 export const Streaming: Story = {
   args: { state: workbenchState({ transcript: conversation, status: GlyphWorkbenchStatus.STREAMING }) },

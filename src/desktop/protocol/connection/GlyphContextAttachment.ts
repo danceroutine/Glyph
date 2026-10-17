@@ -6,8 +6,11 @@ export enum GlyphContextAttachmentKind {
   FILE = 'file',
 }
 
-/** Captures exactly what the user authorized at send time, including its editor capability. */
+/** Immutable text captured when the user attaches context. The token identifies the source model, not permission to edit it. */
 export interface GlyphContextAttachment {
+  readonly id?: string;
+  readonly sourceRevision?: string;
+  readonly side?: 'original' | 'modified';
   readonly kind: GlyphContextAttachmentKind;
   readonly uri: string;
   readonly path: string;

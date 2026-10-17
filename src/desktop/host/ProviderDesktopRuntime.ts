@@ -179,6 +179,17 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               chatId: session.id,
               runId: `${session.id}:history:${index}`,
               userText: turn.userText,
+              ...(turn.attachments
+                ? {
+                    attachments: turn.attachments.map(attachment => ({
+                      path: attachment.path,
+                      text: attachment.text,
+                      revision: attachment.revision,
+                      ...(attachment.source?.range ? { range: attachment.source.range } : {}),
+                      ...(attachment.source?.side ? { side: attachment.source.side } : {}),
+                    })),
+                  }
+                : {}),
               text: turn.assistantText,
               reasoning: turn.reasoningSummary,
               tools: (turn.tools ?? []).map(tool => ({
@@ -377,6 +388,13 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       chatId: command.chatId,
       runId: command.runId,
       userText: command.text,
+      attachments: command.attachments.map(attachment => ({
+        path: attachment.path,
+        text: attachment.text,
+        revision: attachment.contentRevision,
+        ...(attachment.range ? { range: attachment.range } : {}),
+        ...(attachment.side ? { side: attachment.side } : {}),
+      })),
       text: '',
       reasoning: '',
       tools: [],
@@ -395,6 +413,14 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               path: attachment.path,
               text: attachment.text,
               revision: attachment.contentRevision,
+              source: {
+                kind: attachment.kind,
+                uri: attachment.uri,
+                version: attachment.token.version,
+                revision: attachment.sourceRevision ?? attachment.contentRevision,
+                ...(attachment.range ? { range: attachment.range } : {}),
+                ...(attachment.side ? { side: attachment.side } : {}),
+              },
               byteOrderMark: false,
               byteLength: Buffer.byteLength(attachment.text),
             })),

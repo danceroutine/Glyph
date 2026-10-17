@@ -2,6 +2,7 @@ import { atoms } from './atoms.ts';
 import { codeOss } from './codeOssTheme.ts';
 
 const border = (color: string) => `${atoms.borderWidth.thin}px solid ${color}`;
+const tint = (color: string) => `color-mix(in srgb, ${color} ${atoms.opacity.tint * 100}%, transparent)`;
 
 /** Universal roles plus component groups that own all of their visual tokens. */
 export const tokens = {
@@ -69,6 +70,10 @@ export const tokens = {
     radius: atoms.radius.sm,
   },
   review: { keepBackground: codeOss.review.keepBackground, keepForeground: codeOss.review.keepForeground },
+  context: {
+    file: { foreground: codeOss.context.fileForeground, background: tint(codeOss.context.fileForeground) },
+    skill: { foreground: codeOss.context.skillForeground, background: tint(codeOss.context.skillForeground) },
+  },
   diff: { added: codeOss.diff.added, removed: codeOss.diff.removed },
   card: { radius: atoms.radius.lg },
   badge: { radius: atoms.radius.xs },

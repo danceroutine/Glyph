@@ -8,7 +8,7 @@ import { conversation, selection, workbenchState, previewActions } from './fixtu
 /** A local simulation for UI iteration. It never connects to the desktop host. */
 export function InteractiveWorkbench() {
   const [composer] = useState(() => new GlyphComposerState());
-  const [state, setState] = useState(() => workbenchState({ transcript: conversation, selection }));
+  const [state, setState] = useState(() => workbenchState({ transcript: conversation, activeContext: selection }));
   const [pending, setPending] = useState<{ id: string; response: string }>();
   const nextTurn = useRef(0);
 
@@ -38,7 +38,7 @@ export function InteractiveWorkbench() {
       actions={{
         ...previewActions,
         composer,
-        send: async text => {
+        send: async (text, attachments = []) => {
           const turn = ++nextTurn.current;
           const id = `preview-assistant-${turn}`;
           setState(current => ({
@@ -46,7 +46,17 @@ export function InteractiveWorkbench() {
             status: GlyphWorkbenchStatus.STREAMING,
             transcript: [
               ...current.transcript,
-              { id: `preview-user-${turn}`, role: GlyphTranscriptRole.USER, text },
+              {
+                id: `preview-user-${turn}`,
+                role: GlyphTranscriptRole.USER,
+                text,
+                attachments: attachments.map(attachment => ({
+                  path: attachment.path,
+                  text: attachment.text,
+                  revision: attachment.contentRevision,
+                  ...(attachment.range ? { range: attachment.range } : {}),
+                })),
+              },
               { id, role: GlyphTranscriptRole.ASSISTANT, text: '' },
             ],
           }));

@@ -1,3 +1,4 @@
+import type { GlyphAttachmentPreview } from '#src/desktop/protocol/events/GlyphAttachmentPreview.js';
 import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 
 export enum GlyphTranscriptRole {
@@ -11,5 +12,6 @@ export interface GlyphTranscriptEntry {
   readonly id: string;
   readonly role: GlyphTranscriptRole;
   readonly text: string;
+  readonly attachments?: readonly GlyphAttachmentPreview[];
   readonly progress?: Pick<GlyphRunProjection, 'reasoning' | 'tools' | 'status'>;
 }

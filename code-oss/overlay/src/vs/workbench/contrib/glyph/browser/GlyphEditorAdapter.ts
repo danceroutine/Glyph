@@ -1,3 +1,8 @@
+import {
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#glyph/protocol/connection/GlyphContextAttachment.js';
+import type { GlyphTextRange } from '#glyph/protocol/connection/GlyphTextRange.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { Progress } from '#vs/platform/progress/common/progress.js';
 import { BulkTextEdits } from '#vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.js';
@@ -228,6 +233,77 @@ export class GlyphEditorAdapter extends Disposable {
   override dispose(): void {
     this.invalidate();
     super.dispose();
+  }
+
+  contextPath(resource: URI): string {
+    this.assertWorkspaceBinding();
+    if (!['file', 'untitled'].includes(resource.scheme))
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
+    return resource.scheme === 'untitled' ? resource.path.replace(/^\//, '') : this.pathFor(resource);
+  }
+
+  isCurrentContext(model: ITextModel, attachment: GlyphContextAttachment): boolean {
+    return (
+      attachment.token.workspaceGeneration === this.workspaceGeneration &&
+      attachment.token.incarnation === this.incarnation(model) &&
+      attachment.token.version === model.getVersionId()
+    );
+  }
+
+  async captureContext(model: ITextModel, range?: GlyphTextRange): Promise<GlyphContextAttachment> {
+    this.assertWorkspaceBinding();
+    if (!this.trustService.isWorkspaceTrusted())
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+    if (!['file', 'untitled'].includes(model.uri.scheme))
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
+    const path = this.contextPath(model.uri);
+    const token = {
+      workspaceGeneration: this.workspaceGeneration,
+      resource: model.uri.toString(),
+      incarnation: this.incarnation(model),
+      version: model.getVersionId(),
+    };
+    if (!range) this.assertReadBudget(model.getValueLength(), 512 * 1024);
+    if (range) {
+      const { start, end } = range;
+      if (
+        start.line < 1 ||
+        end.line > model.getLineCount() ||
+        start.line > end.line ||
+        start.column < 1 ||
+        end.column < 1 ||
+        start.column > model.getLineMaxColumn(start.line) ||
+        end.column > model.getLineMaxColumn(end.line) ||
+        (start.line === end.line && start.column > end.column)
+      )
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+    }
+    const text = range
+      ? model.getValueInRange({
+          startLineNumber: range.start.line,
+          startColumn: range.start.column,
+          endLineNumber: range.end.line,
+          endColumn: range.end.column,
+        })
+      : model.getValue();
+    this.assertReadBudget(new TextEncoder().encode(text).byteLength, 512 * 1024);
+    const contentRevision = await sha256(text, false);
+    this.assertWorkspaceBinding();
+    if (!this.trustService.isWorkspaceTrusted())
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+    if (token.workspaceGeneration !== this.workspaceGeneration)
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+    return {
+      id: generateUuid(),
+      kind: range ? GlyphContextAttachmentKind.SELECTION : GlyphContextAttachmentKind.FILE,
+      uri: model.uri.toString(),
+      path,
+      text,
+      contentRevision,
+      sourceRevision: `${token.workspaceGeneration}:${token.incarnation}:${token.version}`,
+      token,
+      ...(range ? { range } : {}),
+    };
   }
 
   /** Reads through a model reference so unopened files and dirty open files share one path. */

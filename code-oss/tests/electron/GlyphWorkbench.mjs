@@ -6,7 +6,7 @@ export class GlyphWorkbench {
     this.page = page;
     this.application = application;
     this.composer = page.getByRole('textbox', { name: 'Message Glyph', exact: true });
-    this.sendButton = page.locator('.glyph-composer button');
+    this.sendButton = page.locator('.glyph-composer .glyph-send');
     this.userEntries = page.locator('.glyph-transcript .glyph-entry.user');
     this.assistantEntries = page.locator('.glyph-transcript .glyph-entry.assistant');
     this.diagnostics = page.locator('.glyph-transcript .glyph-entry.diagnostic');

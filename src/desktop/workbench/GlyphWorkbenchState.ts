@@ -1,6 +1,6 @@
+import type { GlyphContextCandidate } from './GlyphContextActions.ts';
 import type { GlyphDesktopSnapshot } from '#src/desktop/protocol/events/GlyphDesktopSnapshot.js';
 import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
-import type { GlyphWorkbenchSelection } from './GlyphWorkbenchSelection.ts';
 import type { GlyphTranscriptEntry } from './GlyphTranscriptEntry.ts';
 
 export enum GlyphWorkbenchStatus {
@@ -15,7 +15,7 @@ export enum GlyphWorkbenchStatus {
 export interface GlyphWorkbenchState extends GlyphDesktopSnapshot {
   readonly status: GlyphWorkbenchStatus;
   readonly transcript: readonly GlyphTranscriptEntry[];
-  readonly selection?: GlyphWorkbenchSelection;
+  readonly activeContext?: GlyphContextCandidate;
   readonly selectedChatId?: string;
   readonly usage: Readonly<Record<string, GlyphUsage>>;
   readonly navigationPending?: boolean;

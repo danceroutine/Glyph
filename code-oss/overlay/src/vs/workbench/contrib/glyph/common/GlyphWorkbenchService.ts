@@ -1,7 +1,8 @@
+import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
+import type { GlyphContextActions } from '#glyph/workbench/GlyphContextActions.js';
 import type { GlyphApprovalDecision } from '#glyph/protocol/GlyphApprovalDecision.js';
 import { Event } from '#vs/base/common/event.js';
 import { createDecorator } from '#vs/platform/instantiation/common/instantiation.js';
-import type { GlyphWorkbenchSelection } from '#glyph/workbench/GlyphWorkbenchSelection.js';
 import type { GlyphWorkbenchState } from '#glyph/workbench/GlyphWorkbenchState.js';
 import type { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
 
@@ -13,7 +14,9 @@ export interface GlyphWorkbenchService {
   readonly _serviceBrand: undefined;
   readonly onDidChangeState: Event<GlyphWorkbenchState>;
   readonly state: GlyphWorkbenchState;
-  send(text: string): Promise<void>;
+  readonly context: GlyphContextActions;
+  attachSelection(): Promise<void>;
+  send(text: string, attachments?: readonly GlyphContextAttachment[]): Promise<void>;
   cancel(): void;
   reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void>;
   decideProposalItems(
@@ -22,7 +25,6 @@ export interface GlyphWorkbenchService {
     accept: boolean,
   ): Promise<void>;
   newChat(): void;
-  setSelection(selection: GlyphWorkbenchSelection | undefined): void;
   connect(): Promise<void>;
   selectAccount(provider: string, accountId: string): Promise<void>;
   selectModel(model: string): Promise<void>;
