@@ -193,11 +193,7 @@ it.describe('Pending desktop product contracts', () => {
   );
 });
 
-it.describe('Pending chat annotations', () => {
-  it.fixme('lets the user highlight part of a prior message and comment on that exact passage', async () => {});
-  it.fixme('attaches each comment together with its highlighted passage to the next outgoing message', async () => {});
-  it.fixme('shows an N Annotations pill on the sent message and lets the user inspect its annotations', async () => {});
-});
+// Chat annotation contracts are exercised in GlyphPlansAnnotations.test.mjs.
 
 it.describe('Pending editor Tab completion', () => {
   it.fixme('offers an inline completion for the current editor context and accepts it with Tab', async () => {});
@@ -207,25 +203,7 @@ it.describe('Pending editor Tab completion', () => {
   );
 });
 
-it.describe('Pending proposal rebuttals', () => {
-  it.fixme(
-    'offers Rebut beside Accept and Reject and opens a focused text input at the inline proposal',
-    async () => {},
-  );
-  it.fixme(
-    'attaches a rebuttal on Enter without applying the proposal and updates the composer’s N comments pill',
-    async () => {},
-  );
-  it.fixme('shows each rebuttal’s filename and comment preview when hovering over the N comments pill', async () => {});
-  it.fixme(
-    'reopens and focuses the corresponding inline rebuttal input when its pill-list entry is clicked',
-    async () => {},
-  );
-  it.fixme(
-    'sends attached rebuttal comments with the next prompt so the agent can revise the rejected changes',
-    async () => {},
-  );
-});
+// Proposal annotation and rebuttal contracts are exercised in GlyphProposals.test.mjs.
 
 it.describe('Pending messages during an active turn', () => {
   it.fixme('queues a message with the queue shortcut without cancelling or steering the active turn', async () => {});

@@ -13,6 +13,9 @@ export function useGlyphModelPickerState({ state, actions }: GlyphModelPickerSta
   const model = chat?.modelSlug ?? state.selectedModel ?? '';
   return {
     model,
+    label:
+      state.models.find(value => value.slug === model)?.name ??
+      (model || (state.catalogPending ? 'Loading models…' : 'No model available')),
     disabled: !!chat || state.catalogPending || state.navigationPending || state.models.length === 0 || state.readOnly,
     models: chat
       ? [{ value: model, label: state.models.find(value => value.slug === model)?.name ?? model }]

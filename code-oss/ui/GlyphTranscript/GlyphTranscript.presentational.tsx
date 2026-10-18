@@ -1,4 +1,5 @@
-import { GlyphCapturedContext } from '#code-oss/ui/GlyphCapturedContext/GlyphCapturedContext.presentational.tsx';
+import { GlyphAnnotationPill } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.presentational.tsx';
+import { GlyphContextBadge } from '#code-oss/ui/GlyphContextBadge/GlyphContextBadge.presentational.tsx';
 import type { ComponentChildren } from 'preact';
 import type { GlyphTranscriptState } from './useGlyphTranscriptState.ts';
 import { GlyphTurnProgress } from '#code-oss/ui/GlyphTurnProgress/GlyphTurnProgress.presentational.tsx';
@@ -26,10 +27,23 @@ export function GlyphTranscript({ entries, transcript, proposals }: GlyphTranscr
         <div class={`glyph-entry ${entry.role} ${styles.entry}`} key={entry.id}>
           <strong>{entry.label}</strong>
           {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
-          <div>{entry.text}</div>
-          {entry.attachments?.map((attachment, index) => (
-            <GlyphCapturedContext key={index} attachment={attachment} />
-          ))}
+          <div data-glyph-source={entry.id} data-kind="chat" data-label={entry.label} data-revision={entry.text.length}>
+            {entry.parts.map((part, index) =>
+              part.type === 'text' ? (
+                part.text
+              ) : (
+                <GlyphContextBadge
+                  key={index}
+                  label={part.label}
+                  title={part.title}
+                  actionLabel="Open"
+                  onClick={() => entry.openAttachment(part.attachment)}
+                />
+              ),
+            )}
+          </div>
+          {entry.options?.annotations && <GlyphAnnotationPill annotations={entry.options.annotations} />}
+          {entry.attachmentError && <p role="alert">{entry.attachmentError}</p>}
           {entry.approval}
           {entry.shells}
         </div>

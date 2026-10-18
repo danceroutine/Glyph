@@ -53,6 +53,7 @@ export function workbenchState(overrides: Partial<GlyphWorkbenchState> = {}): Gl
 
 export const previewActions: GlyphWorkbenchViewActions = {
   context: {
+    selectFiles: async () => [await previewActions.context.captureFile(selection.uri)],
     searchFiles: async query => [selection].filter(file => file.path.includes(query)),
     captureFile: async () => {
       const { range: _range, ...file } = selection;

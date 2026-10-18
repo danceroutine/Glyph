@@ -420,3 +420,36 @@ function usage(inputTokens: number, outputTokens: number) {
     totalTokens: inputTokens + outputTokens,
   };
 }
+
+describe('Plan Mode execution boundary', () => {
+  it.each(['read_project_file', 'list_project_files', 'search_project_contents', 'propose_question', 'save_plan'])(
+    'permits %s while planning',
+    async name => {
+      class PlanningAdapter extends ClaudeShapedAdapter {
+        override async streamStep(turn: ClaudeTurn, context: AgentTurnContext): Promise<AgentTurnStep<ClaudeTurn>> {
+          const step = await super.streamStep(turn, context);
+          return { ...step, toolCalls: step.toolCalls.map(call => ({ ...call, name })) };
+        }
+      }
+      const execute = vi.fn(async () => '{}');
+      const runtime = new AgentRuntime(new PlanningAdapter(), { timeoutMs: 10000 }, { definitions: [], execute });
+      await runtime.send(
+        { text: 'Plan this', attachments: [], mode: 'plan' },
+        { signal: new AbortController().signal, onText: () => {} },
+      );
+      expect(execute).toHaveBeenCalledWith(name, expect.any(String), expect.any(AbortSignal));
+    },
+  );
+
+  it('blocks unlisted capabilities before dispatch and permits execution after an explicit Agent turn', async () => {
+    const adapter = new ClaudeShapedAdapter();
+    const execute = vi.fn(async () => 'tool result');
+    const runtime = new AgentRuntime(adapter, { timeoutMs: 10000 }, { definitions: [], execute });
+    const options = { signal: new AbortController().signal, onText: () => {} };
+    await runtime.send({ text: 'Prepare a plan', attachments: [], mode: 'plan' }, options);
+    expect(execute).not.toHaveBeenCalled();
+    expect(JSON.stringify(runtime.exportState())).toContain('PLAN_MODE_READ_ONLY');
+    await runtime.send({ text: 'Build it', attachments: [], mode: 'agent' }, options);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});

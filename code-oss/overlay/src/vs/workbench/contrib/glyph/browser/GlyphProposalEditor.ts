@@ -1,3 +1,5 @@
+import type { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
+import type { GlyphAnnotation } from '#glyph/protocol/events/GlyphAnnotation.js';
 import { GlyphProposalReviewError } from './GlyphProposalReviewError.js';
 import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
 import { Disposable, DisposableStore, toDisposable } from '#vs/base/common/lifecycle.js';
@@ -20,10 +22,13 @@ import type { GlyphProposalFilePreview } from '#glyph/protocol/events/GlyphPropo
 import { GlyphProposalApplicability } from '#glyph/protocol/events/GlyphProposalFileSummary.js';
 import type { GlyphWorkbenchState } from '#glyph/workbench/GlyphWorkbenchState.js';
 import type { GlyphReviewControls } from '#glyph/workbench/GlyphReviewControls.js';
-import { mountGlyphReview } from './ui/mountGlyphWorkbench.js';
+import { mountGlyphReview, mountGlyphCommentButton } from './ui/mountGlyphWorkbench.js';
 
 interface ReviewActions {
+  composer(): GlyphComposerState;
+  report(error: unknown): void;
   state(): GlyphWorkbenchState;
+  annotate(chatId: string, annotation: GlyphAnnotation): Promise<void>;
   read(chatId: string, proposalId: string, fileId: string): Promise<void>;
   decide(
     chatId: string,
@@ -35,6 +40,7 @@ interface ReviewActions {
 
 /** Read-only native diff models; decisions always go through the host's guarded editor apply. */
 export class GlyphProposalEditor extends Disposable {
+  private readonly annotationWidgets = this._register(new DisposableStore());
   private readonly widgets = this._register(new DisposableStore());
   private current: { chatId: string; proposalId: string; fileId: string } | undefined;
   private preview: GlyphProposalFilePreview | undefined;
@@ -42,6 +48,7 @@ export class GlyphProposalEditor extends Disposable {
   private index = 0;
   private openRevision = 0;
   private readonly models = new Set<string>();
+  private selectionButton: { dispose(): void } | undefined;
   private controls: { update(value: GlyphReviewControls): void }[] = [];
   constructor(
     private readonly actions: ReviewActions,
@@ -64,6 +71,7 @@ export class GlyphProposalEditor extends Disposable {
   }
   async open(chatId: string, proposalId: string, fileId: string): Promise<void> {
     const revision = ++this.openRevision;
+    this.annotationWidgets.clear();
     this.widgets.clear();
     this.controls = [];
     this.current = { chatId, proposalId, fileId };
@@ -98,7 +106,75 @@ export class GlyphProposalEditor extends Disposable {
     diff.updateOptions({ readOnly: true, originalEditable: false, renderSideBySide: false });
     this.editor = diff.getModifiedEditor();
     this.installControls();
+    this.widgets.add(
+      this.editor.onDidChangeCursorSelection(() => {
+        this.selectionButton?.dispose();
+        this.selectionButton = undefined;
+        const selection = this.editor?.getSelection();
+        if (!selection || selection.isEmpty()) return;
+        const node = document.createElement('div');
+        const mounted = mountGlyphCommentButton(node, () => {
+          void this.annotate().catch(error => this.actions.report(error));
+        });
+        const widget: IContentWidget = {
+          getId: () => 'glyph.annotation.selection',
+          getDomNode: () => node,
+          getPosition: () => ({
+            position: selection.getEndPosition(),
+            preference: [ContentWidgetPositionPreference.BELOW],
+          }),
+        };
+        this.editor!.addContentWidget(widget);
+        this.selectionButton = toDisposable(() => {
+          this.editor?.removeContentWidget(widget);
+          mounted.dispose();
+        });
+      }),
+    );
+    this.widgets.add(
+      toDisposable(() => {
+        this.selectionButton?.dispose();
+        this.selectionButton = undefined;
+      }),
+    );
+    const composer = this.actions.composer();
+    this.widgets.add(toDisposable(composer.subscribe(() => this.updateAnnotationMarkers())));
+    this.updateAnnotationMarkers();
     this.reveal();
+  }
+  private updateAnnotationMarkers(): void {
+    this.annotationWidgets.clear();
+    const editor = this.editor,
+      model = editor?.getModel(),
+      current = this.current;
+    if (!editor || !model || !current) return;
+    const composer = this.actions.composer();
+    for (const annotation of composer.snapshot.document.options?.annotations ?? []) {
+      if (
+        annotation.kind !== 'proposal' ||
+        annotation.revision !== `${model.id}:${model.getVersionId()}` ||
+        !annotation.sourceId.startsWith(`${current.proposalId}:${current.fileId}:`) ||
+        model.getValue().slice(annotation.from, annotation.to) !== annotation.quote
+      )
+        continue;
+      const node = document.createElement('div');
+      const mount = mountGlyphCommentButton(node, () => composer.editAnnotation(annotation.id), annotation.order);
+      const widget: IContentWidget = {
+        getId: () => `glyph.annotation.${annotation.id}`,
+        getDomNode: () => node,
+        getPosition: () => ({
+          position: model.getPositionAt(annotation.to),
+          preference: [ContentWidgetPositionPreference.BELOW],
+        }),
+      };
+      editor.addContentWidget(widget);
+      this.annotationWidgets.add(
+        toDisposable(() => {
+          editor.removeContentWidget(widget);
+          mount.dispose();
+        }),
+      );
+    }
   }
   acceptPreview(preview: GlyphProposalFilePreview): void {
     if (preview.proposalId !== this.current?.proposalId || preview.fileId !== this.current.fileId) return;
@@ -180,6 +256,66 @@ export class GlyphProposalEditor extends Disposable {
     await this.refresh();
     this.reveal();
   }
+  async revealAnnotation(annotation: GlyphAnnotation): Promise<{ readonly x: number; readonly y: number } | undefined> {
+    const [proposalId, fileId] = annotation.sourceId.split(':');
+    const proposal = this.actions.state().proposals.find(value => value.id === proposalId);
+    if (!proposal?.chatId || !fileId || !proposalId) return;
+    await this.open(proposal.chatId, proposalId, fileId);
+    const model = this.editor?.getModel();
+    if (
+      !model ||
+      annotation.revision !== `${model.id}:${model.getVersionId()}` ||
+      model.getValue().slice(annotation.from, annotation.to) !== annotation.quote
+    )
+      return;
+    const start = model.getPositionAt(annotation.from),
+      end = model.getPositionAt(annotation.to);
+    this.editor?.setSelection({
+      startLineNumber: start.lineNumber,
+      startColumn: start.column,
+      endLineNumber: end.lineNumber,
+      endColumn: end.column,
+    });
+    this.editor?.revealPositionInCenter(start);
+    const point = this.editor?.getScrolledVisiblePosition(end);
+    const bounds = this.editor?.getDomNode()?.getBoundingClientRect();
+    if (point && bounds) return { x: bounds.left + point.left, y: bounds.top + point.top + point.height };
+    return undefined;
+  }
+
+  private captureAnnotation(comment = ''): GlyphAnnotation | undefined {
+    const current = this.current;
+    const model = this.editor?.getModel();
+    const selected = this.editor?.getSelection();
+    if (!current || !model || this.actions.state().readOnly) return;
+    const item = this.preview?.items[this.index];
+    const range = selected && !selected.isEmpty() ? selected : model.getFullModelRange();
+    const quote = model.getValueInRange(range);
+    if (!quote) return;
+    if (quote.length > 50000)
+      throw new GlyphProposalReviewError(
+        GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
+        'Select a passage shorter than 50,000 characters to annotate.',
+      );
+    return {
+      id: crypto.randomUUID(),
+      order: 1,
+      kind: 'proposal',
+      sourceId: `${current.proposalId}:${current.fileId}:${item?.id ?? ''}`,
+      revision: `${model.id}:${model.getVersionId()}`,
+      label: this.file()?.path ?? 'Proposal',
+      quote,
+      from: model.getOffsetAt(range.getStartPosition()),
+      to: model.getOffsetAt(range.getEndPosition()),
+      comment,
+    };
+  }
+
+  private async annotate(comment = ''): Promise<void> {
+    const annotation = this.captureAnnotation(comment);
+    if (annotation && this.current) await this.actions.annotate(this.current.chatId, annotation);
+  }
+
   private properties(full: boolean): GlyphReviewControls {
     const state = this.actions.state();
     const file = this.file();
@@ -224,13 +360,14 @@ export class GlyphProposalEditor extends Disposable {
               return () => node?.removeEventListener('keydown', listener, true);
             },
             rejectWithComment: async (comment: string) => {
-              // Capture the selected item; a changing projection must never retarget a draft.
+              const annotation = this.captureAnnotation(comment);
               await this.actions.decide(
                 current.chatId,
                 [{ proposalId: current.proposalId, itemId: item.id }],
                 false,
                 comment,
               );
+              if (annotation) await this.actions.annotate(current.chatId, annotation);
               await this.refresh();
               this.reveal();
             },

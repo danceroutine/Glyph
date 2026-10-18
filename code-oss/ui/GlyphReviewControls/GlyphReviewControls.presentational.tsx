@@ -187,6 +187,11 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
             disabled={state.commentPending}
             onInput={event => state.setComment(event.currentTarget.value)}
             onKeyDown={event => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+                event.preventDefault();
+                event.stopPropagation();
+                void state.submitComment();
+              }
               if (event.key === 'Escape') {
                 event.preventDefault();
                 event.stopPropagation();

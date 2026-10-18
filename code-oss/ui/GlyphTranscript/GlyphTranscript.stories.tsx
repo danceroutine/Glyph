@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { WiredGlyphTranscript } from './GlyphTranscript.wired.tsx';
 import { workbenchClassName } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.presentational.tsx';
-import { conversation } from '#code-oss/storybook/fixtures.ts';
+import { conversation, previewActions } from '#code-oss/storybook/fixtures.ts';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
 
@@ -68,5 +68,27 @@ export const LongConversation: Story = {
       role: index % 2 === 0 ? GlyphTranscriptRole.USER : GlyphTranscriptRole.ASSISTANT,
       text: `Message ${index + 1}\n${'Long messages should wrap inside the pane and leave the transcript scrollable. '.repeat(6)}`,
     })),
+  },
+};
+
+export const InlineContext: Story = {
+  args: {
+    actions: previewActions,
+    entries: [
+      {
+        id: 'attachments',
+        role: GlyphTranscriptRole.USER,
+        text: 'Compare @src/greeting.ts (11-12) with @src/other.ts please.',
+        attachments: [
+          {
+            path: 'src/greeting.ts',
+            text: 'Captured selection',
+            revision: '1',
+            range: { start: { line: 11, column: 1 }, end: { line: 12, column: 1 } },
+          },
+          { path: 'src/other.ts', text: 'Captured file', revision: '2' },
+        ],
+      },
+    ],
   },
 };

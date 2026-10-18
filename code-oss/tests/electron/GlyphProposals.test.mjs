@@ -148,6 +148,14 @@ it.describe('Text proposal review', () => {
     await expect(controls(glyph)).toContainText('1 of 1');
     await controls(glyph).getByRole('button', { name: 'Undo', exact: true }).click();
     await expect(pending(glyph)).toHaveCount(0);
+    const annotations = glyph.page.locator('.glyph-composer .glyph-annotation-pill');
+    await expect(annotations).toContainText('1 annotation');
+    await annotations.hover();
+    await expect(annotations).toContainText('Keep the final line unchanged');
+    await annotations.getByRole('button', { name: 'Edit annotation 1' }).click();
+    const annotationInput = glyph.page.getByRole('textbox', { name: 'Annotation comment' });
+    await expect(annotationInput).toHaveValue('Keep the final line unchanged; it is a public contract.');
+    await annotationInput.press('Enter');
     await save(glyph);
     await expect.poll(() => readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe('ONE\nunchanged\nthree\n');
     const count = provider.requests.length;
@@ -204,6 +212,14 @@ it.describe('Text proposal review', () => {
     await glyph.page.screenshot({ path: testInfo.outputPath('review-comment.png') });
     await form.getByRole('button', { name: 'Reject with comment', exact: true }).click();
     await expect(pending(glyph)).toHaveCount(0);
+    const annotations = glyph.page.locator('.glyph-composer .glyph-annotation-pill');
+    await expect(annotations).toContainText('1 annotation');
+    await annotations.hover();
+    await expect(annotations).toContainText('Keep the final line unchanged');
+    await annotations.getByRole('button', { name: 'Edit annotation 1' }).click();
+    const annotationInput = glyph.page.getByRole('textbox', { name: 'Annotation comment' });
+    await expect(annotationInput).toHaveValue('Keep the final line unchanged; it is a public contract.');
+    await annotationInput.press('Enter');
     await save(glyph);
     await expect.poll(() => readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe('ONE\nunchanged\nthree\n');
     const count = provider.requests.length;
@@ -235,6 +251,37 @@ it.describe('Text proposal review', () => {
     await controls(glyph).getByRole('button', { name: 'Undo', exact: true }).focus();
     await glyph.page.keyboard.press('ControlOrMeta+n');
     await expect(pending(glyph)).toHaveCount(0);
+  });
+
+  it('annotates a selected proposal passage without making a review decision and reopens its numbered comment', async ({
+    glyph,
+    provider,
+  }) => {
+    await stage(glyph, provider);
+    await pending(glyph).getByRole('button', { name: 'Review', exact: true }).click();
+    await expect(controls(glyph)).toBeVisible();
+    const editor = glyph.page.locator('.monaco-diff-editor .editor.modified').getByRole('textbox').first();
+    await editor.focus();
+    await glyph.page.keyboard.press('ControlOrMeta+a');
+    await glyph.page.getByRole('button', { name: 'Comment on selection', exact: true }).click();
+    const input = glyph.page.getByRole('textbox', { name: 'Annotation comment' });
+    await input.fill('Explain these changes first.');
+    await input.press('Enter');
+    await expect(pending(glyph)).toBeVisible();
+    expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
+    const marker = glyph.page.locator('.monaco-diff-editor').getByRole('button', { name: 'Edit annotation 1' });
+    await expect(marker).toBeVisible();
+    await marker.click();
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue('Explain these changes first.');
+    await input.fill('Keep the original behavior.');
+    await input.press('Enter');
+    provider.enqueue({ chunks: ['I will revise the proposal.'] });
+    await glyph.send('Revise using this feedback.');
+    await expect(glyph.page.locator('.glyph-transcript')).toContainText('I will revise the proposal.');
+    const prompt = JSON.stringify(provider.requests.at(-1).body.input);
+    expect(prompt).toContain('Keep the original behavior.');
+    expect(prompt).toContain('proposal');
   });
 
   it('rejects malformed patches and stale revisions without partial staging or application', async ({

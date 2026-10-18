@@ -15,6 +15,8 @@ async function modules() {
       {
         name: 'workbench-services',
         setup(builder) {
+          builder.onResolve({ filter: /GlyphPlanEditor\.js$/ }, args => ({ path: args.path, namespace: 'plan' }));
+          builder.onLoad({ filter: /.*/, namespace: 'plan' }, () => ({ contents: 'export class GlyphPlanInput {}' }));
           builder.onResolve({ filter: /GlyphContextController\.js$/ }, args => ({
             path: args.path,
             namespace: 'context',
@@ -41,7 +43,7 @@ async function modules() {
           builder.onLoad({ filter: /.*/, namespace: 'services' }, args => ({
             contents: args.path.endsWith('GlyphDesktopClient.js')
               ? 'export class GlyphDesktopClient { constructor() { Object.assign(this, globalThis.__glyphWorkbenchFixture); } dispose() {} }'
-              : 'const service = () => {}; export { service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
+              : 'const service = () => {}; export { service as IEditorService, service as IOpenerService, service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
           }));
           builder.onResolve({ filter: /^#glyph\// }, args => ({
             path: resolve('src/desktop', args.path.slice(7).replace(/\.js$/, '.ts')),

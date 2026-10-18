@@ -4,24 +4,7 @@ import { test as it } from './GlyphWorkbench.fixture.mjs';
 // Enable each through public workbench controls with deterministic provider,
 // local HTTP, or disposable shell fixtures as appropriate; no live accounts.
 
-it.describe('Pending Plan Mode', () => {
-  it.fixme(
-    'lets the user enter and leave Plan Mode and clearly shows the active mode for the conversation',
-    async () => {},
-  );
-  it.fixme(
-    'lets the agent inspect project context and ask questions while planning without applying edits or running mutating commands',
-    async () => {},
-  );
-  it.fixme(
-    'shows the proposed plan for user review and preserves requested revisions before execution',
-    async () => {},
-  );
-  it.fixme(
-    'requires the user to authorize leaving Plan Mode before executing the plan and retains the approved plan as context',
-    async () => {},
-  );
-});
+// Plan Mode contracts are exercised in GlyphPlansAnnotations.test.mjs.
 
 it.describe('Pending blocking sub-agents', () => {
   it.fixme('shows a delegated task and its running sub-agent while the parent waits for the result', async () => {});

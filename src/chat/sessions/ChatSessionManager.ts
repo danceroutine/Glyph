@@ -1,3 +1,6 @@
+import { PlanError } from '#src/planning/PlanError.js';
+import { planUpdateSchema, type PlanUpdate } from '#src/planning/PlanSchema.js';
+import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import { randomUUID } from 'node:crypto';
 import type { ChatConversation } from '#src/chat/ChatConversation.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
@@ -123,6 +126,73 @@ export class ChatSessionManager {
       const todos = todoItemsSchema.parse([...byId.values()]);
       const updated = { ...current, todos, updatedAt: this.now().toISOString() };
       await this.saveWith(chat.id, updated);
+      return toSummary(updated);
+    });
+  }
+
+  setMode(id: string, mode: 'agent' | 'plan'): Promise<ChatSessionSummary> {
+    return this.enqueue(async () => {
+      if (mode !== 'agent' && mode !== 'plan') throw new PlanError('Unknown conversation mode.');
+      const updated = { ...this.requireRecord(id), mode };
+      await this.saveWith(id, updated);
+      return toSummary(updated);
+    });
+  }
+
+  updatePlan(
+    chat: NonNullable<ToolExecutionContext['chat']>,
+    input: PlanUpdate,
+    signal?: AbortSignal,
+  ): Promise<ChatSessionSummary> {
+    const update = planUpdateSchema.parse(input);
+    return this.enqueue(async () => {
+      signal?.throwIfAborted();
+      const current = this.requireRecord(chat.id);
+      if (current.accountProvider !== chat.accountProvider || current.accountId !== chat.accountId)
+        throw new PlanError('The plan must belong to the requesting chat.');
+      const previous = current.plans?.findLast(plan => plan.id === update.id);
+      if (update.id && (!previous || previous.revision !== update.expectedRevision))
+        throw new PlanError('The plan has changed. Read its current revision before editing.');
+      if ((current.plans?.length ?? 0) >= 100)
+        throw new PlanError('This chat has reached its saved plan revision limit.');
+      const plan: GlyphPlan = {
+        id: previous?.id ?? randomUUID(),
+        revision: (previous?.revision ?? 0) + 1,
+        title: update.title,
+        summary: update.summary,
+        markdown: update.markdown,
+        todos: update.todos,
+        agents: previous?.agents ?? [{ chatId: chat.id, role: 'Author' }],
+      };
+      const updated = { ...current, plans: [...(current.plans ?? []), plan], updatedAt: this.now().toISOString() };
+      await this.saveWith(chat.id, updated);
+      return toSummary(updated);
+    });
+  }
+
+  linkPlan(
+    chatId: string,
+    planId: string,
+    targetChatId: string,
+    role: 'Builder' | 'Reviewer',
+  ): Promise<ChatSessionSummary> {
+    return this.enqueue(async () => {
+      const current = this.requireRecord(chatId);
+      const target = this.requireRecord(targetChatId);
+      if (current.accountId !== target.accountId || current.accountProvider !== target.accountProvider)
+        throw new PlanError('Linked chats must use the same account.');
+      const plan = current.plans?.findLast(value => value.id === planId);
+      if (!plan) throw new PlanError('The plan is unavailable.');
+      const agents = plan.agents.some(agent => agent.chatId === targetChatId)
+        ? plan.agents.map(agent =>
+            agent.chatId === targetChatId && agent.role !== 'Author' ? { ...agent, role } : agent,
+          )
+        : [...plan.agents, { chatId: targetChatId, role }];
+      const updated = {
+        ...current,
+        plans: current.plans!.map(value => (value === plan ? { ...plan, agents } : value)),
+      };
+      await this.saveWith(chatId, updated);
       return toSummary(updated);
     });
   }

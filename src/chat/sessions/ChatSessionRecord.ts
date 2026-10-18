@@ -1,3 +1,5 @@
+import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { TurnUsage } from '#src/chat/TurnUsage.js';
@@ -11,6 +13,7 @@ export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'> & 
 };
 
 export interface ChatTranscriptTurn {
+  readonly options?: GlyphTurnOptions;
   readonly userText: string;
   readonly attachments?: readonly ContextAttachment[];
   readonly attachmentPaths: readonly string[];
@@ -24,6 +27,7 @@ export interface ChatTranscriptTurn {
 /** Durable state required to discover and resume one conversation. */
 export interface ChatSessionRecord {
   readonly schemaVersion: 3;
+  readonly mode?: 'agent' | 'plan';
   readonly id: string;
   readonly title: string;
   readonly titleOrigin: 'placeholder' | 'generated' | 'human';
@@ -36,9 +40,11 @@ export interface ChatSessionRecord {
   readonly updatedAt: string;
   readonly providerState: ChatProviderState;
   readonly transcript: readonly ChatTranscriptTurn[];
+  readonly plans?: readonly GlyphPlan[];
   readonly todos?: readonly TodoItem[];
 }
 
 export type ChatSessionSummary = Omit<ChatSessionRecord, 'providerState' | 'transcript'> & {
+  readonly mode?: 'agent' | 'plan';
   readonly turnCount: number;
 };

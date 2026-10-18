@@ -1,33 +1,42 @@
+import { ChevronDown } from 'lucide-preact';
 import type { GlyphModelPickerState } from './useGlyphModelPickerState.ts';
-import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
+import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 
-const style = css({
-  display: 'flex',
-  alignItems: 'center',
-  gap: tokens.space.md,
-  marginTop: tokens.space.md,
-  color: tokens.text.muted,
-  fontSize: tokens.font.size.detail,
-  '& select': {
+const styles = {
+  root: css({
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.space.xs,
     minWidth: 0,
-    maxWidth: '100%',
-    border: tokens.dropdown.border,
-    borderRadius: tokens.dropdown.radius,
-    padding: space('xs', 'sm'),
+    color: tokens.text.primary,
     font: 'inherit',
-    color: tokens.dropdown.foreground,
+    padding: tokens.space.xs,
+    '&:focus-within': { outline: tokens.focus.ring },
+    '& > span': { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+    '& > svg': { flexShrink: 0, color: tokens.text.muted },
+  }),
+  select: css({
+    position: 'absolute',
+    inset: 0,
+    width: '100%',
+    minWidth: 0,
+    opacity: 0,
     background: tokens.dropdown.background,
-  },
-  '& select:focus-visible': { outline: tokens.focus.ring },
-});
-
+    color: tokens.dropdown.foreground,
+    border: '1px solid transparent',
+    cursor: 'pointer',
+    ':disabled': { cursor: 'default' },
+  }),
+};
 export type GlyphModelPickerProps = GlyphModelPickerState;
-
-export function GlyphModelPicker({ model, disabled, models, selectModel }: GlyphModelPickerProps) {
+export function GlyphModelPicker({ model, label, disabled, models, selectModel }: GlyphModelPickerProps) {
   return (
-    <label class={`glyph-model-picker ${style}`}>
-      Model
+    <label class={`glyph-model-picker ${styles.root}`} title={label}>
+      <span>{label}</span>
+      <ChevronDown size={14} aria-hidden="true" />
       <select
+        class={styles.select}
         aria-label="Model"
         value={model}
         disabled={disabled}

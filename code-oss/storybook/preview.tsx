@@ -24,6 +24,7 @@ const preview: Preview = {
           { value: '280', title: 'Narrow · 280px' },
           { value: '360', title: 'Sidebar · 360px' },
           { value: '600', title: 'Wide · 600px' },
+          { value: '1000', title: 'Editor · 1000px' },
         ],
         dynamicTitle: true,
       },

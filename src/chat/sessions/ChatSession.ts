@@ -158,6 +158,12 @@ export class ChatSession {
     try {
       await this.checkpoint(this.conversation.exportState(), {
         userText: request.text,
+        options: {
+          ...(request.attachmentSpans ? { attachmentSpans: request.attachmentSpans } : {}),
+          ...(request.turnId ? { turnId: request.turnId } : {}),
+          ...(request.mode ? { mode: request.mode } : {}),
+          ...(request.annotations ? { annotations: request.annotations } : {}),
+        },
         attachmentPaths: request.attachments.map(attachment => attachment.path),
         ...(request.attachments.length ? { attachments: request.attachments } : {}),
         assistantText,
@@ -193,5 +199,5 @@ export class ChatSession {
 
 export function toSummary(record: ChatSessionRecord): ChatSessionSummary {
   const { providerState: _, transcript, ...summary } = record;
-  return { ...summary, turnCount: transcript.length };
+  return { ...summary, mode: record.mode ?? transcript.at(-1)?.options?.mode ?? 'agent', turnCount: transcript.length };
 }

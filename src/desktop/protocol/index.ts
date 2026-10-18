@@ -37,3 +37,6 @@ export * from './events/GlyphRunProjection.ts';
 export * from './events/GlyphToolActivity.ts';
 export * from './events/GlyphShellCommand.ts';
 export * from './events/GlyphUsage.ts';
+
+export * from './events/GlyphPlan.ts';
+export * from './events/GlyphAnnotation.ts';

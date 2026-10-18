@@ -1,24 +1,63 @@
+import { GlyphAnnotationPill } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.presentational.tsx';
 import type { ComponentChildren } from 'preact';
-import { FilePlus, RefreshCw, ExternalLink, X } from 'lucide-preact';
+import { RefreshCw, ExternalLink, X, Paperclip, ArrowUp, Square } from 'lucide-preact';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 import type { GlyphComposerState } from './useGlyphComposerState.ts';
 
 const styles = {
-  root: css({ padding: tokens.space.md, borderTop: tokens.border.default, position: 'relative' }),
+  root: css({ padding: tokens.space.md, position: 'relative' }),
+  annotations: css({ padding: '10px 10px 0' }),
+  surface: css({
+    border: tokens.input.strongBorder,
+    borderRadius: tokens.card.radius,
+    background: tokens.input.background,
+    color: tokens.input.foreground,
+  }),
+  controls: css({ display: 'flex', alignItems: 'center', gap: tokens.space.sm, flex: 1, minWidth: 0 }),
+  actions: css({ display: 'flex', alignItems: 'center', gap: tokens.space.sm, flexShrink: 0 }),
+  icon: css({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    flexShrink: 0,
+    padding: 0,
+    border: 0,
+    background: 'transparent',
+    color: tokens.text.muted,
+    cursor: 'pointer',
+    ':focus-visible': { outline: tokens.focus.ring },
+    ':hover': { color: tokens.text.primary },
+    ':disabled': { opacity: tokens.opacity.disabled, cursor: 'default' },
+  }),
+  send: css({
+    borderRadius: '50%',
+    background: tokens.text.primary,
+    color: tokens.input.background,
+    ':hover': { background: tokens.text.primary, color: tokens.input.background },
+  }),
+  hidden: css({
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    padding: 0,
+    overflow: 'hidden',
+    clipPath: 'inset(50%)',
+    whiteSpace: 'nowrap',
+  }),
   input: css({
     boxSizing: 'border-box',
     width: '100%',
     color: tokens.input.foreground,
-    background: tokens.input.background,
-    border: tokens.input.border,
-    borderRadius: tokens.card.radius,
-    padding: tokens.space.md,
+    background: 'transparent',
+    padding: space('lg', 'lg', 'xs'),
     '& .ProseMirror': {
       color: tokens.input.foreground,
-      background: tokens.input.background,
+      background: 'transparent',
       borderColor: 'transparent',
       outline: 'none',
-      minHeight: 80,
+      minHeight: 48,
       maxHeight: 240,
       overflowY: 'auto',
       whiteSpace: 'pre-wrap',
@@ -26,13 +65,12 @@ const styles = {
       font: 'inherit',
     },
     '& .ProseMirror > div:only-child:has(> br:only-child)::before': {
-      content: '"Ask Glyph about this project"',
+      content: '"Plan, build, @ for context"',
       color: tokens.text.muted,
       pointerEvents: 'none',
       position: 'absolute',
     },
     '& .ProseMirror-selectednode': { outline: tokens.focus.ring },
-    ':focus-within': { outline: tokens.focus.ring },
   }),
   button: css({
     display: 'inline-flex',
@@ -50,20 +88,12 @@ const styles = {
     ':focus-visible': { outline: tokens.focus.ring },
     ':disabled': { opacity: tokens.opacity.disabled },
   }),
-  suggestion: css({
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.space.xs,
-    color: tokens.text.muted,
-    fontSize: tokens.font.size.caption,
-    marginBottom: tokens.space.sm,
-  }),
   footer: css({
     display: 'flex',
     alignItems: 'center',
     gap: tokens.space.sm,
     justifyContent: 'space-between',
-    marginTop: tokens.space.sm,
+    padding: space('sm', 'lg', 'lg'),
   }),
   picker: css({
     position: 'absolute',
@@ -109,7 +139,10 @@ const styles = {
     '& pre': { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', font: 'inherit' },
   }),
 };
-export type GlyphComposerProps = GlyphComposerState & { readonly modelControl?: ComponentChildren };
+export type GlyphComposerProps = GlyphComposerState & {
+  readonly modelControl?: ComponentChildren;
+  readonly modeControl: ComponentChildren;
+};
 export function GlyphComposer(state: GlyphComposerProps) {
   return (
     <div class={`glyph-composer ${styles.root}`}>
@@ -161,29 +194,6 @@ export function GlyphComposer(state: GlyphComposerProps) {
           </div>
         </section>
       )}
-      <div class={styles.suggestion}>
-        {state.activeContext ? (
-          <>
-            <span title={state.activeContext.uri}>{state.activeContext.path}</span>
-            {state.activeContext.detail ? (
-              <span>{state.activeContext.detail}</span>
-            ) : (
-              <button
-                class={styles.button}
-                type="button"
-                aria-label={`Attach active file ${state.activeContext.path}`}
-                disabled={state.pending}
-                onClick={state.attachActive}
-              >
-                <FilePlus size={14} />
-                Attach
-              </button>
-            )}
-          </>
-        ) : (
-          <span>No active text editor</span>
-        )}
-      </div>
       {state.query && (
         <div id={state.pickerId} class={styles.picker} role="listbox" aria-label="Files to attach">
           {state.searching ? (
@@ -209,17 +219,53 @@ export function GlyphComposer(state: GlyphComposerProps) {
           )}
         </div>
       )}
-      <div class={styles.input} ref={state.composer} />
-      <div class={styles.footer}>
-        {state.modelControl}
-        <button
-          class={`glyph-send ${styles.button}`}
-          type="button"
-          disabled={!state.active && state.disabled}
-          onClick={state.activate}
-        >
-          {state.active ? 'Cancel' : 'Send (⌘/Ctrl+Enter)'}
-        </button>
+      <div class={`glyph-composer-surface ${styles.surface}`}>
+        {state.annotations.length > 0 && (
+          <div class={styles.annotations}>
+            <GlyphAnnotationPill
+              annotations={state.annotations}
+              edit={state.editAnnotation}
+              remove={state.removeAnnotation}
+            />
+          </div>
+        )}
+        <div class={styles.input} ref={state.composer} />
+        <div class={styles.footer}>
+          <div class={styles.controls}>
+            {state.modeControl}
+            {state.modelControl}
+          </div>
+          <div class={styles.actions}>
+            <button
+              class={styles.icon}
+              type="button"
+              title="Attach file"
+              aria-label="Attach file"
+              disabled={state.pending || state.disabled}
+              onMouseDown={event => event.preventDefault()}
+              onClick={state.attachFile}
+            >
+              <Paperclip size={18} aria-hidden="true" />
+            </button>
+            <button
+              class={`glyph-send ${styles.icon} ${styles.send}`}
+              style={
+                state.mode === 'plan' ? { background: tokens.text.warning, color: tokens.surface.canvas } : undefined
+              }
+              type="button"
+              disabled={!state.active && state.disabled}
+              onClick={state.activate}
+              title={state.active ? 'Cancel' : 'Send (⌘/Ctrl+Enter)'}
+            >
+              {state.active ? (
+                <Square size={13} fill="currentColor" aria-hidden="true" />
+              ) : (
+                <ArrowUp size={18} aria-hidden="true" />
+              )}
+              <span class={styles.hidden}>{state.active ? 'Cancel' : 'Send (⌘/Ctrl+Enter)'}</span>
+            </button>
+          </div>
+        </div>
       </div>
       {state.error && (
         <div class={styles.error} role="alert">

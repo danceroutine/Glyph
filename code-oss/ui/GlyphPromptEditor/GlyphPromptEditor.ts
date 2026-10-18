@@ -71,7 +71,7 @@ export class GlyphPromptEditor {
         'aria-label': 'Message Glyph',
         'aria-multiline': 'true',
         'aria-autocomplete': 'list',
-        'data-placeholder': 'Ask Glyph about this project',
+        'data-placeholder': 'Plan, build, @ for context',
       },
       nodeViews: {
         attachment: node => {

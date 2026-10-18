@@ -1,3 +1,5 @@
+import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
+import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { GlyphContextActions } from './GlyphContextActions.ts';
 import type { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
@@ -14,7 +16,10 @@ export interface GlyphWorkbenchView {
 export interface GlyphWorkbenchViewActions {
   readonly composer: GlyphComposerState;
   readonly context: GlyphContextActions;
-  send(text: string, attachments?: readonly GlyphContextAttachment[]): Promise<void>;
+  send(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
+  selectMode?(mode: 'agent' | 'plan'): Promise<void>;
+  buildPlan?(chatId: string, plan: GlyphPlan, newChat?: boolean): Promise<void>;
+  viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
   cancel(): void;
   writeShellInput(chatId: string, sessionId: string, input: string, appendNewline: boolean): Promise<void>;
   stopShell(chatId: string, sessionId: string): Promise<void>;

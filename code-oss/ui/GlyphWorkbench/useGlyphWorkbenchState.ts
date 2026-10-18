@@ -54,6 +54,16 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
     conversationInert: historyOpen && !wide,
     title: chat?.title ?? 'New chat',
     todos: chat?.todos ?? [],
+    plans: chat?.plans ?? [],
+    plansDisabled:
+      state.readOnly ||
+      state.runs.some(
+        run =>
+          run.chatId === state.selectedChatId &&
+          [GlyphRunStatus.STREAMING, GlyphRunStatus.WAITING_FOR_QUESTION, GlyphRunStatus.WAITING_FOR_APPROVAL].includes(
+            run.status,
+          ),
+      ),
     proposals: state.proposals.filter(
       proposal =>
         proposal.chatId === state.selectedChatId && proposal.files.some(file => file.pendingItemIds.length > 0),

@@ -1,3 +1,5 @@
+import type { GlyphPlan } from './events/GlyphPlan.ts';
+import type { GlyphTurnOptions } from './events/GlyphAnnotation.ts';
 import type { GlyphApprovalDecision } from './GlyphApprovalDecision.ts';
 import type { GlyphWorkspaceRoot } from './connection/GlyphWorkspaceRoot.ts';
 import type { GlyphContextAttachment } from './connection/GlyphContextAttachment.ts';
@@ -11,6 +13,9 @@ export enum GlyphWorkbenchCommandType {
   SELECT_ACCOUNT = 'select_account',
   SELECT_MODEL = 'select_model',
   SEND = 'send',
+  UPDATE_PLAN = 'update_plan',
+  LINK_PLAN = 'link_plan',
+  SET_CHAT_MODE = 'set_chat_mode',
   CANCEL_RUN = 'cancel_run',
   ANSWER_QUESTION = 'answer_question',
   DECIDE_APPROVAL = 'decide_approval',
@@ -28,6 +33,7 @@ export enum GlyphWorkbenchCommandType {
  * through MessagePort without coupling either process to the other's classes.
  */
 export type GlyphWorkbenchCommand =
+  | { readonly type: GlyphWorkbenchCommandType.SET_CHAT_MODE; readonly chatId: string; readonly mode: 'agent' | 'plan' }
   | {
       readonly type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE;
       readonly roots: readonly GlyphWorkspaceRoot[];
@@ -47,6 +53,14 @@ export type GlyphWorkbenchCommand =
       readonly accountId: string;
       readonly model: string;
     }
+  | {
+      readonly type: GlyphWorkbenchCommandType.LINK_PLAN;
+      readonly chatId: string;
+      readonly planId: string;
+      readonly targetChatId: string;
+      readonly role: 'Builder' | 'Reviewer';
+    }
+  | { readonly type: GlyphWorkbenchCommandType.UPDATE_PLAN; readonly chatId: string; readonly plan: GlyphPlan }
   | { readonly type: GlyphWorkbenchCommandType.OPEN_CHAT; readonly chatId: string }
   | {
       readonly type: GlyphWorkbenchCommandType.SELECT_ACCOUNT;
@@ -60,6 +74,7 @@ export type GlyphWorkbenchCommand =
       readonly runId: string;
       readonly text: string;
       readonly attachments: readonly GlyphContextAttachment[];
+      readonly options?: GlyphTurnOptions;
     }
   | { readonly type: GlyphWorkbenchCommandType.CANCEL_RUN; readonly chatId: string; readonly runId: string }
   | {

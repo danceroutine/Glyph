@@ -1,3 +1,4 @@
+import { PlanToolRuntime } from '#src/planning/PlanToolRuntime.js';
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { realpath } from 'node:fs/promises';
@@ -201,6 +202,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       context,
     );
     const tools = new CompositeToolRuntime([
+      new PlanToolRuntime(async (chat, update, signal) => {
+        const summary = await sessions.updatePlan(chat, update, signal);
+        runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+        return summary.plans?.at(-1);
+      }),
       new ProjectToolRuntime(
         new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index),
         new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),

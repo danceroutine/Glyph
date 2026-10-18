@@ -60,7 +60,10 @@ export class GlyphViewPane extends ViewPane {
         return service.composer;
       },
       context: this.glyphService.context,
-      send: (text, attachments) => this.glyphService.send(text, attachments),
+      send: (text, attachments, options) => this.glyphService.send(text, attachments, options),
+      viewPlan: (chatId, plan) => service.viewPlan!(chatId, plan),
+      selectMode: mode => service.selectMode!(mode),
+      buildPlan: (chatId, plan, newChat) => service.buildPlan!(chatId, plan, newChat),
       cancel: () => this.glyphService.cancel(),
       writeShellInput: (chatId, sessionId, input, appendNewline) =>
         this.glyphService.writeShellInput(chatId, sessionId, input, appendNewline),

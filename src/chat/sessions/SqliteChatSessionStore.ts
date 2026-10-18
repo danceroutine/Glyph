@@ -1,3 +1,5 @@
+import { planSchema } from '#src/planning/PlanSchema.js';
+import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
 import { shellCommandSummarySchema } from '#src/shell/ShellCommandSummary.js';
 import { todoItemsSchema } from '#src/todos/TodoUpdate.js';
 import { chmod, mkdir, readFile } from 'node:fs/promises';
@@ -22,6 +24,7 @@ const providerStateSchema = z
 
 const transcriptTurnSchema = z
   .object({
+    options: chatTurnOptionsSchema.optional(),
     userText: z.string(),
     attachmentPaths: z.array(z.string().min(1)),
     attachments: z
@@ -80,7 +83,8 @@ const transcriptTurnSchema = z
     createdAt: z.iso.datetime(),
   })
   .strict()
-  .transform(({ usage, tools, attachments, ...turn }) => ({
+  .transform(({ usage, tools, attachments, options, ...turn }) => ({
+    ...(options ? { options } : {}),
     ...turn,
     ...(usage === undefined ? {} : { usage }),
     ...(tools === undefined ? {} : { tools }),
@@ -138,6 +142,7 @@ const legacyCatalogSchema = z
 const storedRecordSchema = z
   .object({
     schemaVersion: z.literal(3),
+    mode: z.enum(['agent', 'plan']).optional(),
     id: z.string().min(1),
     title: z.string().min(1),
     titleOrigin: z.enum(['placeholder', 'generated', 'human']),
@@ -150,13 +155,20 @@ const storedRecordSchema = z
     updatedAt: z.iso.datetime(),
     providerState: providerStateSchema,
     transcript: z.array(transcriptTurnSchema),
+    plans: z.array(planSchema).max(100).optional(),
     todos: todoItemsSchema.optional(),
   })
   .strict()
-  .transform(({ todos, ...record }) => ({ ...record, ...(todos === undefined ? {} : { todos }) }));
+  .transform(({ todos, plans, mode, ...record }) => ({
+    ...(mode ? { mode } : {}),
+    ...record,
+    ...(plans ? { plans } : {}),
+    ...(todos === undefined ? {} : { todos }),
+  }));
 
 interface ChatRow {
   readonly schema_version: number;
+  readonly mode: string | null;
   readonly id: string;
   readonly title: string;
   readonly title_origin: string;
@@ -168,10 +180,12 @@ interface ChatRow {
   readonly created_at: string;
   readonly updated_at: string;
   readonly provider_state: string;
+  readonly plans: string | null;
   readonly todos: string | null;
 }
 
 interface TurnRow {
+  readonly options: string | null;
   readonly user_text: string;
   readonly attachment_paths: string;
   readonly attachments: string | null;
@@ -239,7 +253,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         .prepare('SELECT * FROM chats WHERE project_context_id = ? ORDER BY updated_at DESC')
         .all(projectContextId) as ChatRow[];
       const turns = database.prepare(
-        'SELECT user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
+        'SELECT options, user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
       );
       return chats.map(row => toRecord(row, turns.all(row.id) as TurnRow[]));
     } catch (error) {
@@ -343,8 +357,11 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         const chatColumns = database.prepare('PRAGMA table_info(chats)').all() as { name: string }[];
         if (!chatColumns.some(value => value.name === 'todos'))
           database.exec('ALTER TABLE chats ADD COLUMN todos TEXT');
+        if (!chatColumns.some(value => value.name === 'mode')) database.exec('ALTER TABLE chats ADD COLUMN mode TEXT');
+        if (!chatColumns.some(value => value.name === 'plans'))
+          database.exec('ALTER TABLE chats ADD COLUMN plans TEXT');
         const columns = database.prepare('PRAGMA table_info(chat_turns)').all() as { name: string }[];
-        for (const column of ['usage', 'tools', 'attachments']) {
+        for (const column of ['usage', 'tools', 'attachments', 'options']) {
           if (!columns.some(value => value.name === column))
             database.exec(`ALTER TABLE chat_turns ADD COLUMN ${column} TEXT`);
         }
@@ -428,8 +445,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         `INSERT INTO chats(
            id, schema_version, project_context_id, title, title_origin,
            account_client_id, account_subject, model_slug, model_name,
-           created_at, updated_at, provider_state, todos
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           created_at, updated_at, provider_state, todos, plans, mode
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            schema_version = excluded.schema_version,
            project_context_id = excluded.project_context_id,
@@ -442,7 +459,9 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
            created_at = excluded.created_at,
            updated_at = excluded.updated_at,
            provider_state = excluded.provider_state,
-           todos = excluded.todos`,
+           todos = excluded.todos,
+           plans = excluded.plans,
+           mode = excluded.mode`,
       )
       .run(
         record.id,
@@ -458,12 +477,14 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         record.updatedAt,
         JSON.stringify(record.providerState),
         record.todos ? JSON.stringify(record.todos) : null,
+        record.plans ? JSON.stringify(record.plans) : null,
+        record.mode ?? null,
       );
     database.prepare('DELETE FROM chat_turns WHERE chat_id = ?').run(record.id);
     const insertTurn = database.prepare(
       `INSERT INTO chat_turns(
-         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools, attachments
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools, attachments, options
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     record.transcript.forEach((turn, position) =>
       insertTurn.run(
@@ -477,6 +498,7 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         turn.usage ? JSON.stringify(turn.usage) : null,
         turn.tools ? JSON.stringify(turn.tools) : null,
         turn.attachments ? JSON.stringify(turn.attachments) : null,
+        turn.options ? JSON.stringify(turn.options) : null,
       ),
     );
   })();
@@ -485,6 +507,7 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
 function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
   return storedRecordSchema.parse({
     schemaVersion: 3,
+    ...(row.mode ? { mode: row.mode } : {}),
     id: row.id,
     title: row.title,
     titleOrigin: row.title_origin,
@@ -497,8 +520,10 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     providerState: JSON.parse(row.provider_state),
+    ...(row.plans == null ? {} : { plans: JSON.parse(row.plans) as unknown }),
     ...(row.todos === null ? {} : { todos: JSON.parse(row.todos) as unknown }),
     transcript: turns.map(turn => ({
+      ...(turn.options == null ? {} : { options: JSON.parse(turn.options) as unknown }),
       userText: turn.user_text,
       attachmentPaths: JSON.parse(turn.attachment_paths) as unknown,
       ...(turn.attachments === null ? {} : { attachments: JSON.parse(turn.attachments) as unknown }),

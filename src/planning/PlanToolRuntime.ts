@@ -1,0 +1,38 @@
+import { z } from 'zod';
+import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import { planUpdateSchema, type PlanUpdate } from './PlanSchema.ts';
+import { PlanError } from './PlanError.ts';
+const { $schema: _, ...parameters } = z.toJSONSchema(planUpdateSchema, { target: 'draft-7' });
+export class PlanToolRuntime implements ToolRuntime {
+  readonly definitions = [
+    {
+      namespace: 'planning',
+      name: 'save_plan',
+      inputKind: ToolInputKind.JSON,
+      parameters,
+      description:
+        'Save a plan for human review. Include Markdown, a short summary and todos. For a new plan pass null id and expectedRevision; to revise use its returned id and revision. This does not execute work or authorize leaving Plan Mode.',
+    },
+  ];
+  constructor(
+    private readonly save: (
+      chat: NonNullable<ToolExecutionContext['chat']>,
+      update: PlanUpdate,
+      signal?: AbortSignal,
+    ) => Promise<unknown>,
+  ) {}
+  async execute(name: string, input: string, signal?: AbortSignal, context?: ToolExecutionContext): Promise<string> {
+    try {
+      signal?.throwIfAborted();
+      if (name !== 'save_plan' || !context?.chat) throw new PlanError('Saving a plan requires its owning chat.');
+      return JSON.stringify(await this.save(context.chat, planUpdateSchema.parse(JSON.parse(input)), signal));
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return JSON.stringify({
+        error: { code: 'PLAN_SAVE_FAILED', message: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+}

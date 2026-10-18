@@ -41,7 +41,7 @@ it('uses live theme variables without styling controls outside Glyph', async () 
     const outside = page.locator('#outside');
     const originalBackground = await outside.evaluate(element => getComputedStyle(element).backgroundColor);
     await page.addScriptTag({ content: script });
-    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    const composer = page.locator('.glyph-composer-surface');
     for (const color of ['rgb(49, 49, 49)', 'rgb(255, 255, 255)']) {
       await page.locator('#root').evaluate((element, value) => {
         element.style.setProperty('--vscode-input-background', value);
@@ -76,10 +76,7 @@ it('preserves production styles when style elements are cloned into another docu
     const clone = page.frameLocator('iframe');
     await expect(clone.locator('.glyph-workbench')).toHaveCSS('display', 'flex');
     await expect(clone.locator('.glyph-composer')).toHaveCSS('padding', '8px');
-    await expect(clone.getByRole('textbox', { name: 'Message Glyph' })).toHaveCSS(
-      'background-color',
-      'rgb(49, 49, 49)',
-    );
+    await expect(clone.locator('.glyph-composer-surface')).toHaveCSS('background-color', 'rgb(49, 49, 49)');
   } finally {
     await page.close();
   }
@@ -104,7 +101,7 @@ it('themes the real controls in Storybook and honors native overrides and option
       await page.locator('#root').evaluate((element, value) => {
         element.dataset.theme = value;
       }, theme);
-      for (const control of [composer, search, model]) {
+      for (const control of [page.locator('.glyph-composer-surface'), search, model]) {
         await expect(control).toHaveCSS('background-color', background);
         await expect(control).toHaveCSS('color', foreground);
       }

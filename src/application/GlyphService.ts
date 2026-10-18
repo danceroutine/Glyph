@@ -1,3 +1,5 @@
+import type { PlanUpdate } from '#src/planning/PlanSchema.js';
+import { PlanError } from '#src/planning/PlanError.js';
 import { ChatConversation } from '#src/chat/ChatConversation.js';
 import type { ChatAccount } from '#src/chat/ChatAccount.js';
 import type { ChatAuthorizationHandler } from '#src/chat/ChatAuthorizationRequest.js';
@@ -52,6 +54,26 @@ export class GlyphService {
     private readonly chatSessions?: ChatSessionManager,
   ) {
     this.traceEnabled = options.traceEnabled ?? true;
+  }
+
+  setChatMode(id: string, mode: 'agent' | 'plan'): Promise<ChatSessionSummary> {
+    if (!this.chatSessions) throw new PlanError('Chat storage is unavailable.');
+    return this.chatSessions.setMode(id, mode);
+  }
+
+  linkPlan(
+    chatId: string,
+    planId: string,
+    targetChatId: string,
+    role: 'Builder' | 'Reviewer',
+  ): Promise<ChatSessionSummary> {
+    if (!this.chatSessions) throw new PlanError('Plan storage is unavailable.');
+    return this.chatSessions.linkPlan(chatId, planId, targetChatId, role);
+  }
+
+  updatePlan(chat: ChatSessionSummary, update: PlanUpdate): Promise<ChatSessionSummary> {
+    if (!this.chatSessions) throw new PlanError('Plan storage is unavailable.');
+    return this.chatSessions.updatePlan(chat, update);
   }
 
   get accounts(): readonly ChatAccount[] {

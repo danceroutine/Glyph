@@ -10,6 +10,10 @@ export async function buildGlyphUi(sourceRoot) {
   const preactLicense = await readFile(join(repositoryRoot, 'node_modules/preact/LICENSE'), 'utf8');
   const lucideLicense = await readFile(join(repositoryRoot, 'node_modules/lucide-preact/LICENSE'), 'utf8');
   const promptLicenses = [];
+  for (const name of ['mermaid', '@dagrejs/dagre', 'marked']) {
+    const license = await readFile(join(repositoryRoot, 'node_modules', name, 'LICENSE'), 'utf8');
+    promptLicenses.push(`/*! ${name}\n${license}\n*/`);
+  }
   const visited = new Set();
   async function readPromptLicense(name, requireFrom) {
     if (visited.has(name)) return;

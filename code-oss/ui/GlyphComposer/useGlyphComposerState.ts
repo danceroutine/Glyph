@@ -9,12 +9,11 @@ import { GlyphComposerError } from './GlyphComposerError.ts';
 export interface GlyphComposerStateOptions {
   readonly disabled?: boolean;
   readonly status: GlyphWorkbenchStatus;
-  readonly activeContext?: GlyphContextCandidate | undefined;
   readonly actions: GlyphWorkbenchViewActions;
 }
 export type GlyphComposerState = ReturnType<typeof useGlyphComposerState>;
 
-export function useGlyphComposerState({ status, actions, disabled, activeContext }: GlyphComposerStateOptions) {
+export function useGlyphComposerState({ status, actions, disabled }: GlyphComposerStateOptions) {
   const model = actions.composer;
   const pickerId = useId();
   const [state, setState] = useState(model.snapshot);
@@ -40,7 +39,7 @@ export function useGlyphComposerState({ status, actions, disabled, activeContext
   ].includes(status);
   const submit = async () => {
     if (!active && !disabled && !busy.current)
-      await model.submit((text, attachments) => actions.send(text, attachments));
+      await model.submit((text, attachments, options) => actions.send(text, attachments, options));
   };
   const perform = async (operation: () => Promise<void>) => {
     if (busy.current) return;
@@ -183,6 +182,15 @@ export function useGlyphComposerState({ status, actions, disabled, activeContext
     else input.removeAttribute('aria-activedescendant');
   }, [pickerId, query, candidates, selected]);
   return {
+    mode: state.document.options?.mode ?? 'agent',
+    setMode: (mode: 'agent' | 'plan') =>
+      perform(async () => {
+        if (actions.selectMode) await actions.selectMode(mode);
+        else model.setMode(mode);
+      }),
+    annotations: state.document.options?.annotations ?? [],
+    editAnnotation: (id: string) => model.editAnnotation(id),
+    removeAnnotation: (id: string) => model.removeAnnotation(id),
     pickerId,
     ...state,
     error: failure ?? state.error,
@@ -196,8 +204,20 @@ export function useGlyphComposerState({ status, actions, disabled, activeContext
     pending,
     preview,
     sourceStatus,
-    activeContext,
     choose,
+    attachFile: () =>
+      perform(async () => {
+        const document = model.snapshot.document;
+        const attachments = await actions.context.selectFiles();
+        if (!isMounted()) return;
+        if (attachments.length) {
+          if (document !== model.snapshot.document)
+            throw new GlyphComposerError('The prompt changed during capture. Choose the files again.');
+          model.insertAttachments(attachments);
+          setQuery(undefined);
+        }
+        editor.current?.focus();
+      }),
     submit,
     updateDraft: (text: string) => model.setDraft(text),
     editUnsent: (index: number) => {
@@ -226,13 +246,6 @@ export function useGlyphComposerState({ status, actions, disabled, activeContext
     openPreview: () =>
       perform(async () => {
         if (preview) await actions.context.openAttachment(preview);
-      }),
-    attachActive: () =>
-      perform(async () => {
-        if (activeContext && !activeContext.detail) {
-          const attachment = await actions.context.captureFile(activeContext.uri);
-          if (isMounted()) model.insertAttachments([attachment]);
-        }
       }),
     activate: () => {
       if (active) actions.cancel();

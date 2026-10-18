@@ -1,3 +1,4 @@
+import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
 import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
 import { toShellCommandSummary } from '#src/shell/toShellCommandSummary.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
@@ -179,10 +180,12 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               chatId: session.id,
               runId: `${session.id}:history:${index}`,
               userText: turn.userText,
+              ...(turn.options ? { options: turn.options } : {}),
               ...(turn.attachments
                 ? {
                     attachments: turn.attachments.map(attachment => ({
                       path: attachment.path,
+                      ...(attachment.source?.uri ? { uri: attachment.source.uri } : {}),
                       text: attachment.text,
                       revision: attachment.revision,
                       ...(attachment.source?.range ? { range: attachment.source.range } : {}),
@@ -205,13 +208,64 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
         return;
       }
+      case GlyphWorkbenchCommandType.SET_CHAT_MODE: {
+        this.session(command.chatId);
+        const chat = await glyph.setChatMode(command.chatId, command.mode);
+        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
+        return;
+      }
+      case GlyphWorkbenchCommandType.LINK_PLAN: {
+        const source = this.session(command.chatId);
+        const target = this.session(command.targetChatId);
+        const plan = source.summary.plans?.findLast(value => value.id === command.planId);
+        if (!plan) throw new ProtocolError('The plan is unavailable.');
+        const summary = await glyph.linkPlan(command.chatId, command.planId, command.targetChatId, command.role);
+        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+        if (command.role === 'Reviewer')
+          this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: await glyph.setChatMode(target.id, 'plan') });
+        await target.recordContext([
+          {
+            schemaVersion: 1,
+            id: `plan:${plan.id}:${plan.revision}:${command.role}`,
+            type: 'plan_reference',
+            payload: { plan, role: command.role, authorization: 'Context only. The human must request execution.' },
+          },
+        ]);
+        return;
+      }
+      case GlyphWorkbenchCommandType.UPDATE_PLAN: {
+        if (this.active.has(command.chatId))
+          throw new ProtocolError('Wait for the active turn before editing the plan.');
+        const session = this.session(command.chatId);
+        const plan = command.plan;
+        const summary = await glyph.updatePlan(session.summary, {
+          id: plan.id,
+          expectedRevision: plan.revision,
+          title: plan.title,
+          summary: plan.summary,
+          markdown: plan.markdown,
+          todos: [...plan.todos],
+        });
+        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+        return;
+      }
       case GlyphWorkbenchCommandType.SEND: {
+        chatTurnOptionsSchema.parse(command.options ?? {});
         if (this.active.has(command.chatId)) throw new Error('This chat already has an active run.');
         if (this.runs.has(command.runId)) throw new Error('This run id has already been used.');
         const session = this.session(command.chatId);
         const controller = new AbortController();
         // Defer execution one microtask so cancellation can always find its controller.
-        const completion = Promise.resolve().then(() => this.send(command, session, controller.signal));
+        const completion = Promise.resolve().then(() =>
+          this.send(
+            {
+              ...command,
+              options: { ...command.options, mode: command.options?.mode ?? session.summary.mode ?? 'agent' },
+            },
+            session,
+            controller.signal,
+          ),
+        );
         this.active.set(command.chatId, { controller, completion, runId: command.runId });
         void completion.finally(() => this.active.delete(command.chatId));
         return;
@@ -388,7 +442,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       chatId: command.chatId,
       runId: command.runId,
       userText: command.text,
+      options: { ...command.options, turnId: command.runId },
       attachments: command.attachments.map(attachment => ({
+        uri: attachment.uri,
         path: attachment.path,
         text: attachment.text,
         revision: attachment.contentRevision,
@@ -409,6 +465,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         session.send(
           {
             text: command.text,
+            ...command.options,
+            turnId: command.runId,
             attachments: command.attachments.map(attachment => ({
               path: attachment.path,
               text: attachment.text,

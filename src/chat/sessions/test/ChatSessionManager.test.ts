@@ -23,6 +23,45 @@ afterEach(async () => {
 });
 
 describe(ChatSessionManager, () => {
+  it('keeps immutable plan revisions, rejects stale edits and links another chat without executing it', async () => {
+    const store = new MemoryChatSessionStore();
+    const context = await ProjectContextResolver.folder(await projectFixture());
+    const manager = new ChatSessionManager(store, context);
+    await manager.initialize();
+    const first = await manager.create(input(), conversation());
+    const second = await manager.create(input(), conversation());
+    const update = {
+      id: null,
+      expectedRevision: null,
+      title: 'Plan',
+      summary: 'Review before build',
+      markdown: '# Plan',
+      todos: [],
+    };
+    const owner = { id: first.id, accountProvider: 'fixture', accountId: 'account' };
+    const created = (await manager.updatePlan(owner, update)).plans![0]!;
+    const revised = await manager.updatePlan(owner, {
+      ...update,
+      id: created.id,
+      expectedRevision: 1,
+      markdown: '# Revised plan',
+    });
+    expect(revised.plans).toHaveLength(2);
+    expect(revised.plans![0]!.markdown).toBe('# Plan');
+    await expect(manager.updatePlan(owner, { ...update, id: created.id, expectedRevision: 1 })).rejects.toThrow(
+      'changed',
+    );
+    const linked = await manager.linkPlan(first.id, created.id, second.id, 'Reviewer');
+    expect(linked.plans!.at(-1)!.agents).toEqual([
+      { chatId: first.id, role: 'Author' },
+      { chatId: second.id, role: 'Reviewer' },
+    ]);
+    expect(second.transcript).toEqual([]);
+    await manager.setMode(second.id, 'plan');
+    expect(second.summary.mode).toBe('plan');
+    await manager.dispose();
+  });
+
   it('merges stable todo IDs without losing concurrent checkpoints or another chat’s list', async () => {
     const store = new MemoryChatSessionStore();
     const context = await ProjectContextResolver.folder(await projectFixture());

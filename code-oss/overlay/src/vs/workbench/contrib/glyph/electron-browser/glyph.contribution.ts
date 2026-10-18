@@ -1,4 +1,7 @@
-import { registerAction2, Action2, MenuId } from '#vs/platform/actions/common/actions.js';
+import { GlyphPlanEditor, GlyphPlanInput } from '#vs/workbench/contrib/glyph/browser/GlyphPlanEditor.js';
+import { EditorPaneDescriptor, IEditorPaneRegistry } from '#vs/workbench/browser/editor.js';
+import { EditorExtensions } from '#vs/workbench/common/editor.js';
+import { registerAction2, Action2 } from '#vs/platform/actions/common/actions.js';
 import { KeyCode, KeyMod } from '#vs/base/common/keyCodes.js';
 import { KeybindingWeight } from '#vs/platform/keybinding/common/keybindingsRegistry.js';
 import { EditorContextKeys } from '#vs/editor/common/editorContextKeys.js';
@@ -63,13 +66,11 @@ registerAction2(
       super({
         id: 'glyph.attachSelection',
         title: localize2('glyph.attachSelection', 'Attach Selection to Glyph'),
-        f1: true,
         keybinding: {
           primary: KeyMod.CtrlCmd | KeyCode.KeyL,
           weight: KeybindingWeight.WorkbenchContrib,
           when: EditorContextKeys.editorTextFocus,
         },
-        menu: { id: MenuId.EditorContext, group: 'navigation', order: 20 },
       });
     }
     async run(accessor: ServicesAccessor): Promise<void> {
@@ -80,4 +81,9 @@ registerAction2(
       glyph.composer.focus();
     }
   },
+);
+
+Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+  EditorPaneDescriptor.create(GlyphPlanEditor, GlyphPlanEditor.ID, 'Glyph Plan'),
+  [new SyncDescriptor(GlyphPlanInput)],
 );

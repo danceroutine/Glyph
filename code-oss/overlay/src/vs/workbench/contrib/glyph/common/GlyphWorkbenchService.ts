@@ -1,3 +1,5 @@
+import type { GlyphTurnOptions } from '#glyph/protocol/events/GlyphAnnotation.js';
+import type { GlyphPlan } from '#glyph/protocol/events/GlyphPlan.js';
 import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import type { GlyphContextActions } from '#glyph/workbench/GlyphContextActions.js';
 import type { GlyphApprovalDecision } from '#glyph/protocol/GlyphApprovalDecision.js';
@@ -16,7 +18,10 @@ export interface GlyphWorkbenchService {
   readonly state: GlyphWorkbenchState;
   readonly context: GlyphContextActions;
   attachSelection(): Promise<void>;
-  send(text: string, attachments?: readonly GlyphContextAttachment[]): Promise<void>;
+  send(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
+  selectMode?(mode: 'agent' | 'plan'): Promise<void>;
+  buildPlan?(chatId: string, plan: GlyphPlan, newChat?: boolean): Promise<void>;
+  viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
   cancel(): void;
   reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void>;
   decideProposalItems(

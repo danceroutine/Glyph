@@ -22,6 +22,8 @@ async function modules() {
       {
         name: 'trust-fixture',
         setup(builder) {
+          builder.onResolve({ filter: /GlyphPlanEditor\.js$/ }, args => ({ path: args.path, namespace: 'plan' }));
+          builder.onLoad({ filter: /.*/, namespace: 'plan' }, () => ({ contents: 'export class GlyphPlanInput {}' }));
           builder.onResolve({ filter: /GlyphContextController\.js$/ }, args => ({
             path: args.path,
             namespace: 'context',
@@ -61,7 +63,7 @@ async function modules() {
           });
           builder.onLoad({ filter: /.*/, namespace: 'services' }, () => ({
             contents:
-              'const service = () => {}; export { service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
+              'const service = () => {}; export { service as IEditorService, service as IOpenerService, service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
           }));
           builder.onResolve({ filter: /^#(glyph|src)\// }, args => ({
             path: resolve(

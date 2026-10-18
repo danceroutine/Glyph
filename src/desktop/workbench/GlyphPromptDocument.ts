@@ -1,3 +1,4 @@
+import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 
 export type GlyphPromptPart =
@@ -5,6 +6,7 @@ export type GlyphPromptPart =
   | { readonly type: 'attachment'; readonly attachment: GlyphContextAttachment };
 
 export interface GlyphPromptDocument {
+  readonly options?: GlyphTurnOptions;
   readonly parts: readonly GlyphPromptPart[];
   /** UTF-16 offsets; an attachment occupies one position. */
   readonly from: number;
@@ -42,6 +44,7 @@ export function replaceGlyphPromptRange(
   const position =
     document.from + parts.reduce((size, part) => size + (part.type === 'text' ? part.text.length : 1), 0);
   return {
+    ...document,
     parts: [...slice(0, document.from), ...parts, ...slice(document.to, Infinity)],
     from: position,
     to: position,

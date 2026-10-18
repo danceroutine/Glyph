@@ -485,11 +485,12 @@ response text streams in.
 
 Type `@` in the composer to search workspace files and open text buffers. Use
 Up/Down and Enter to insert a whole-file badge at the caret; Escape dismisses the
-picker. The active editor is an opt-in suggestion. Opening another tab changes
-that suggestion without replacing captures already in the draft.
+picker. The paperclip opens the system file picker; selected files are inserted
+as badges at the prompt caret, and canceling leaves the draft unchanged. Switching editor
+tabs never attaches context. The mode and model selectors sit together inside the
+composer, with attachment and Send/Stop icons on the right.
 
-Select text in the editor and press Cmd+L (Ctrl+L on other platforms), or choose
-**Attach Selection to Glyph** from the editor context menu. Each nonempty cursor
+Select text in the editor and press Cmd+L (Ctrl+L on other platforms). Each nonempty cursor
 selection becomes its own inline badge, carrying the exact captured text,
 UTF-16 source range, model revision, and diff side where applicable. Text can
 appear before, between, and after badges. ProseMirror handles composition,
@@ -504,7 +505,8 @@ context produces an error instead of partial transmission.
 
 Per-chat prompt documents retain captures through pane remounts and rejected
 sends. Completed turns persist their captured text and provenance in SQLite;
-expanding a historical attachment never rereads today's file. The yellow skill
+sent messages show inline context badges that open the current source document
+at the attached range. Opening a badge does not replace the stored capture. The yellow skill
 badge is available in Storybook as a visual component. Skill discovery and
 activation remain rank 21.
 
@@ -641,3 +643,40 @@ domain state.
 
 The bootstrap rejects a changed archive checksum or a mismatched generated
 revision before applying the overlay.
+
+### Plans and annotations
+
+The composer offers Agent and Plan in a keyboard-accessible icon menu. Agent uses
+a two-star icon; Plan uses a gold pill. Plan mode permits project reads,
+search, questions, todos, and `planning.save_plan`; the provider-independent
+runtime refuses every other tool before dispatch. The selected mode is saved for
+the conversation and restored when reopening it. The human can select Agent or
+use **Build** to authorize execution.
+
+Saved plans have immutable document revisions, a title and summary, Markdown,
+todos, and chat references. **View Plan** opens a native editor document; **Build**
+sends the reviewed revision and its todos as context in Agent mode. The dropdown
+can build in a new linked chat. **New agent** creates a linked reviewer chat with
+durable plan context and a review prompt in its draft. It does not start
+autonomous sub-agent work. Todo edits
+check the expected revision and reject stale writes. Plans and sent annotations
+survive host replacement and application reload through the chat catalog.
+
+The plan viewer renders Markdown without interpreting embedded HTML. Mermaid
+flowcharts render as native SVG with Dagre layout; unsupported diagram types,
+subgraphs, and oversized diagrams remain inspectable as source. Diagram rendering
+does not weaken Code OSS's Trusted Types policy or introduce a webview.
+
+Select text in chat history, a plan, or the native proposal editor to add a comment.
+Enter attaches the comment; Shift+Enter inserts a newline. Numbered markers reopen
+comments, with their tips anchored to the end of the selected passage. The composer
+annotation pill exposes captured quotes, edit, and delete on hover or keyboard focus;
+its X clears all draft annotations. Sent messages retain an inspectable annotation pill.
+A comment records its source, revision, UTF-16 offsets, and exact quote; it never
+rereads a changed source during submission. Drafts retain annotations through pane
+remounts and rejected sends, alongside the existing inline file captures.
+
+Selection comments leave proposals pending. The existing **Reject with comments**
+control and Cmd+R still perform an explicit rejection, attach its comment to the
+draft, and preserve the durable review receipt. Editing the draft annotation does
+not rewrite that earlier review decision.

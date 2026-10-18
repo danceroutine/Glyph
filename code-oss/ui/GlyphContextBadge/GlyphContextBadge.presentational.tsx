@@ -23,15 +23,16 @@ export interface GlyphContextBadgeProps {
   readonly label: string;
   readonly title: string;
   readonly skill?: boolean;
+  readonly actionLabel?: 'Preview' | 'Open';
   readonly onClick?: () => void;
 }
-export function GlyphContextBadge({ label, title, skill, onClick }: GlyphContextBadgeProps) {
+export function GlyphContextBadge({ label, title, skill, onClick, actionLabel = 'Preview' }: GlyphContextBadgeProps) {
   return (
     <button
       type="button"
       class={`${styles.badge} ${skill ? styles.skill : ''}`}
       title={title}
-      aria-label={`Preview ${title}`}
+      aria-label={`${actionLabel} ${title}`}
       onClick={onClick}
     >
       {!skill && <FileText size={14} aria-hidden="true" />}

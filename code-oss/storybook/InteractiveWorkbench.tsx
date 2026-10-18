@@ -3,12 +3,12 @@ import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState
 import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { WiredGlyphWorkbench } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.wired.tsx';
-import { conversation, selection, workbenchState, previewActions } from './fixtures.ts';
+import { conversation, workbenchState, previewActions } from './fixtures.ts';
 
 /** A local simulation for UI iteration. It never connects to the desktop host. */
 export function InteractiveWorkbench() {
   const [composer] = useState(() => new GlyphComposerState());
-  const [state, setState] = useState(() => workbenchState({ transcript: conversation, activeContext: selection }));
+  const [state, setState] = useState(() => workbenchState({ transcript: conversation }));
   const [pending, setPending] = useState<{ id: string; response: string }>();
   const nextTurn = useRef(0);
 

@@ -18,6 +18,68 @@ afterEach(async () => {
 });
 
 describe(SqliteChatSessionStore, () => {
+  it('migrates and reopens plan revisions and exact annotations without rereading the source', async () => {
+    const directory = await fixture('glyph-plans-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-plan-project-'), 'local');
+    const seed = new SqliteChatSessionStore(directory);
+    await seed.initialize(context);
+    await seed.save(record(context.id));
+    await seed.dispose();
+    const database = new Database(join(directory, 'chats.sqlite3'));
+    database.exec(
+      'ALTER TABLE chats DROP COLUMN plans; ALTER TABLE chats DROP COLUMN mode; ALTER TABLE chat_turns DROP COLUMN options',
+    );
+    database.close();
+    const annotation = {
+      id: 'a',
+      order: 1,
+      kind: 'chat' as const,
+      sourceId: 'turn:1',
+      revision: '1',
+      label: 'Glyph',
+      quote: 'café 🌱',
+      from: 2,
+      to: 9,
+      comment: 'Keep this exact quote',
+    };
+    const plan = {
+      id: 'plan',
+      revision: 1,
+      title: 'Plan',
+      summary: 'Summary',
+      markdown: '# Plan',
+      todos: [],
+      agents: [{ chatId: record(context.id).id, role: 'Author' as const }],
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const store = new SqliteChatSessionStore(directory);
+      await store.initialize(context);
+      const loaded = (await store.load(context.id))[0]!;
+      if (attempt === 0)
+        await store.save({
+          ...loaded,
+          plans: [plan],
+          mode: 'plan',
+          transcript: [
+            {
+              ...loaded.transcript[0]!,
+              options: { mode: 'plan', annotations: [annotation], attachmentSpans: [{ from: 4, to: 9 }] },
+            },
+          ],
+        });
+      else {
+        expect(loaded.plans).toEqual([plan]);
+        expect(loaded.mode).toBe('plan');
+        expect(loaded.transcript[0]!.options).toEqual({
+          mode: 'plan',
+          annotations: [annotation],
+          attachmentSpans: [{ from: 4, to: 9 }],
+        });
+      }
+      await store.dispose();
+    }
+  });
+
   it('upgrades catalogs without todos and preserves chat-scoped lists across repeated reopen', async () => {
     const directory = await fixture('glyph-chat-todos-');
     const context = await ProjectContextResolver.folder(await fixture('glyph-chat-project-'), 'local');

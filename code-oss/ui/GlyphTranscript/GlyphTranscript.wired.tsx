@@ -10,7 +10,8 @@ export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
   readonly proposals?: ComponentChildren;
   readonly chatId?: string;
   readonly pendingApproval?: GlyphRunProjection;
-  readonly actions?: Pick<GlyphWorkbenchViewActions, 'decideApproval' | 'writeShellInput' | 'stopShell'>;
+  readonly actions?: Pick<GlyphWorkbenchViewActions, 'decideApproval' | 'writeShellInput' | 'stopShell'> &
+    Partial<Pick<GlyphWorkbenchViewActions, 'context'>>;
   readonly readOnly?: boolean;
 }
 
@@ -22,7 +23,7 @@ export function WiredGlyphTranscript({
   actions,
   readOnly = false,
 }: WiredGlyphTranscriptProps) {
-  const state = useGlyphTranscriptState({ entries });
+  const state = useGlyphTranscriptState({ entries, context: actions?.context });
   return (
     <GlyphTranscript
       {...state}

@@ -18,15 +18,17 @@ beforeAll(async () => {
         const calls = [];
         const pending = [];
         const captures = [];
+        let selectFiles;
         const attachment = { id: 'a', kind: 'file', uri: 'file:///a.ts', path: 'a.ts', text: 'Exact captured source', contentRevision: 'hash', token: { workspaceGeneration: 'w', resource: 'file:///a.ts', incarnation: 'i', version: 1 } };
         const actions = {
           composer: new GlyphComposerState(),
-          context: { searchFiles: async query => [{ uri: attachment.uri, path: attachment.path }].filter(file => file.path.includes(query)), captureFile: async () => attachment, openAttachment: async () => {}, checkAttachment: async () => undefined, refreshAttachment: async value => ({ ...value, text: 'Updated capture' }) },
+          context: { selectFiles: () => new Promise(resolve => { selectFiles = resolve; }), searchFiles: async query => [{ uri: attachment.uri, path: attachment.path }].filter(file => file.path.includes(query)), captureFile: async () => attachment, openAttachment: async () => {}, checkAttachment: async () => undefined, refreshAttachment: async value => ({ ...value, text: 'Updated capture' }) },
           send(text, attachments) { captures.push(attachments); calls.push(text); return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
           cancel() {}
         };
         window.composerTest = {
           calls, captures,
+          selectFiles(cancel = false) { selectFiles(cancel ? [] : [attachment, { ...attachment, id: 'b', uri: 'file:///b.ts', path: 'b.ts' }]); },
           attachSelection() { actions.composer.insertAttachments([{ ...attachment, id: 'selection', kind: 'selection', path: 'b.ts', text: 'Only selected text', range: { start: { line: 3, column: 1 }, end: { line: 4, column: 5 } } }]); },
           unmount() { render(null, document.getElementById('root')); },
           mount() { render(h(WiredGlyphComposer, { status: 'ready', selection: undefined, actions }), document.getElementById('root')); },
@@ -144,7 +146,64 @@ describe('WiredGlyphComposer draft recovery', () => {
   });
 });
 
+describe('Composer mode menu', () => {
+  it('shows mode icons and selection, supports keyboard choice, and dismisses without changing mode', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<div id="root" style="padding-top:200px"></div>');
+      await page.addScriptTag({ content: script });
+      const mode = page.getByRole('combobox', { name: 'Conversation mode' });
+      await expect(mode.locator('.glyph-agent-icon')).toHaveCSS('width', '14px');
+      await expect(mode.locator('.glyph-agent-icon svg')).toHaveCount(2);
+      await mode.click();
+      await expect(mode).toBeFocused();
+      await expect(page.getByRole('option', { name: 'Agent', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await mode.press('ArrowDown');
+      await mode.press('Enter');
+      await expect(mode).toHaveText('Plan');
+      await expect(page.getByRole('listbox', { name: 'Conversation modes' })).toHaveCount(0);
+      await mode.press('ArrowUp');
+      await mode.press('Home');
+      await mode.press('Escape');
+      await expect(mode).toHaveText('Plan');
+      await mode.click();
+      await page.getByRole('option', { name: 'Agent', exact: true }).click();
+      await expect(mode).toHaveText('Agent');
+      await mode.click();
+      await page.getByRole('textbox', { name: 'Message Glyph' }).click();
+      await expect(mode).toHaveAttribute('aria-expanded', 'false');
+    } finally {
+      await page.close();
+    }
+  });
+});
+
 describe('Inline attachment editing', () => {
+  it('inserts files from the system picker at the saved caret and leaves cancellation unchanged', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<div id="root"></div>');
+      await page.addScriptTag({ content: script });
+      const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+      const attach = page.getByRole('button', { name: 'Attach file', exact: true });
+      await composer.fill('before  after');
+      for (let index = 0; index < 6; index++) await composer.press('ArrowLeft');
+      await attach.click();
+      await expect(attach).toBeDisabled();
+      await expect(page.getByRole('listbox', { name: 'Files to attach' })).toHaveCount(0);
+      await page.evaluate(() => window.composerTest.selectFiles(true));
+      await expect(attach).toBeEnabled();
+      await expect(composer).toHaveText('before  after');
+      await attach.click();
+      await page.evaluate(() => window.composerTest.selectFiles());
+      await expect(composer).toHaveText('before a.tsb.ts after');
+      await composer.pressSequentially(' more');
+      await expect(composer).toHaveText('before a.tsb.ts more after');
+    } finally {
+      await page.close();
+    }
+  });
+
   it('inserts file and native-selection badges at the caret, with text between them, and recovers both after failure', async () => {
     const page = await browser.newPage();
     try {

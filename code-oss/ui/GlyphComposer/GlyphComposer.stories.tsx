@@ -1,3 +1,5 @@
+import { GlyphModelPicker } from '#code-oss/ui/GlyphModelPicker/GlyphModelPicker.presentational.tsx';
+import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { WiredGlyphComposer } from './GlyphComposer.wired.tsx';
@@ -7,7 +9,19 @@ import { failingActions, previewActions, attachedActions } from '#code-oss/story
 const meta = {
   title: 'Glyph/Composer',
   component: WiredGlyphComposer,
-  args: { status: GlyphWorkbenchStatus.READY, actions: previewActions },
+  args: {
+    status: GlyphWorkbenchStatus.READY,
+    actions: previewActions,
+    modelControl: (
+      <GlyphModelPicker
+        model="auto"
+        label="Auto"
+        models={[{ value: 'auto', label: 'Auto' }]}
+        disabled={false}
+        selectModel={() => {}}
+      />
+    ),
+  },
   argTypes: {
     actions: { control: false },
     status: { control: 'select', options: Object.values(GlyphWorkbenchStatus) },
@@ -28,3 +42,7 @@ export const Empty: Story = {};
 export const AttachedSelection: Story = { args: { actions: attachedActions } };
 export const Streaming: Story = { args: { status: GlyphWorkbenchStatus.STREAMING } };
 export const SendFailure: Story = { args: { actions: failingActions } };
+
+const planComposer = new GlyphComposerState();
+planComposer.setMode('plan');
+export const Plan: Story = { args: { actions: { ...previewActions, composer: planComposer } } };

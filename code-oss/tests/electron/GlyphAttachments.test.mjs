@@ -51,7 +51,45 @@ it.describe('Explicit editor and file attachments', () => {
       'empty.txt': '',
     },
   });
-  it('inserts an unsaved whole file at the prompt caret and keeps it pinned while the active suggestion changes', async ({
+  it('opens the native file dialog from the paperclip, preserves cancellation, and captures selected files', async ({
+    glyph,
+    provider,
+  }) => {
+    // Stub only the OS dialog boundary: UI activation, native IPC, and file capture stay real.
+    await glyph.application.evaluate(({ dialog }, workspace) => {
+      globalThis.glyphFileDialogs = [];
+      dialog.showOpenDialog = async (_window, options) => {
+        globalThis.glyphFileDialogs.push(options);
+        const canceled = globalThis.glyphFileDialogs.length === 1;
+        return { canceled, filePaths: canceled ? [] : [`${workspace}/alpha.txt`, `${workspace}/empty.txt`] };
+      };
+    }, glyph.workspace);
+    await glyph.composer.fill('before  after');
+    for (let index = 0; index < 6; index++) await glyph.composer.press('ArrowLeft');
+    const attach = glyph.page.getByRole('button', { name: 'Attach file', exact: true });
+    await attach.click();
+    await expect.poll(() => glyph.application.evaluate(() => globalThis.glyphFileDialogs.length)).toBe(1);
+    await expect(attach).toBeEnabled();
+    await expect(glyph.composer).toHaveText('before  after');
+    await attach.click();
+    await expect(glyph.composer).toHaveText('before alpha.txtempty.txt after');
+    await expect(glyph.page.getByRole('listbox', { name: 'Files to attach' })).toHaveCount(0);
+    const dialogs = await glyph.application.evaluate(() => globalThis.glyphFileDialogs);
+    expect(dialogs).toHaveLength(2);
+    expect(dialogs[0]).toMatchObject({
+      title: 'Attach files to Glyph',
+      properties: expect.arrayContaining(['openFile', 'multiSelections']),
+    });
+    expect(dialogs[0].properties).not.toContain('openDirectory');
+    const sent = await send(glyph, provider);
+    expect(sent.files).toMatchObject([
+      { path: 'alpha.txt', text: 'OUTSIDE BEFORE\n  café 🌱\nOUTSIDE AFTER\n' },
+      { path: 'empty.txt', text: '' },
+    ]);
+    expect(sent.prompt).toBe('before @alpha.txt@empty.txt after');
+  });
+
+  it('inserts an unsaved whole file at the prompt caret and keeps it pinned while the active editor changes', async ({
     glyph,
     provider,
   }) => {
@@ -60,7 +98,8 @@ it.describe('Explicit editor and file attachments', () => {
     await glyph.page.keyboard.press('ControlOrMeta+a');
     await glyph.page.keyboard.insertText('UNSAVED café 🌱\nexact buffer');
     await glyph.command('Focus Glyph');
-    await expect(glyph.page.getByRole('button', { name: 'Attach active file alpha.txt', exact: true })).toBeVisible();
+    await expect(glyph.page.getByRole('button', { name: /^Attach active file/ })).toHaveCount(0);
+    await expect(glyph.page.getByText('No active text editor', { exact: true })).toHaveCount(0);
     await glyph.composer.fill('before  after');
     for (let n = 0; n < 6; n++) await glyph.composer.press('ArrowLeft');
     await glyph.composer.pressSequentially('@alpha');
@@ -74,10 +113,15 @@ it.describe('Explicit editor and file attachments', () => {
     await expect(glyph.page.locator('.tab.dirty')).toHaveCount(1);
     await openFile(glyph, join(glyph.workspace, 'beta.txt'));
     await glyph.command('Focus Glyph');
-    await expect(glyph.page.getByRole('button', { name: 'Attach active file beta.txt', exact: true })).toBeVisible();
+    await expect(glyph.page.getByRole('button', { name: /^Attach active file/ })).toHaveCount(0);
     await expect(glyph.composer.getByRole('button', { name: 'Preview alpha.txt' })).toBeVisible();
     const sent = await send(glyph, provider);
     expect(sent.prompt).toBe('before @alpha.txt after');
+    const message = glyph.page.locator('.glyph-entry.user').last();
+    await expect(message.locator('[data-glyph-source]')).toHaveText('before alpha.txt after');
+    await message.getByRole('button', { name: 'Open alpha.txt', exact: true }).click();
+    await expect(glyph.page.locator('.tab.active')).toContainText('alpha.txt');
+    await expect(glyph.page.locator('.editor-instance .view-lines').first()).toContainText('UNSAVED');
     expect(sent.files).toHaveLength(1);
     expect(sent.files[0]).toMatchObject({
       path: 'alpha.txt',
@@ -125,9 +169,13 @@ it.describe('Explicit editor and file attachments', () => {
     await glyph.page.keyboard.insertText('Entirely different current source');
     await glyph.page.keyboard.press('ControlOrMeta+s');
     await glyph.reload();
-    const saved = glyph.page.getByLabel('Captured attachment alpha.txt');
-    await saved.locator('summary').click();
-    await expect(saved.locator('pre')).toHaveText('  zoom 🌱');
+    const message = glyph.page.locator('.glyph-entry.user').last();
+    await expect(message.getByLabel('Captured attachment alpha.txt')).toHaveCount(0);
+    await message.getByRole('button', { name: 'Open alpha.txt (2-2)', exact: true }).click();
+    await expect(glyph.page.locator('.tab.active')).toContainText('alpha.txt');
+    await expect(glyph.page.locator('.editor-instance .view-lines').first()).toContainText(
+      'Entirely different current source',
+    );
   });
 
   it('keeps multiple files independently removable and reports a deleted source while retaining captured bytes', async ({
@@ -150,6 +198,9 @@ it.describe('Explicit editor and file attachments', () => {
     const sent = await send(glyph, provider);
     expect(sent.files.map(file => file.path)).toEqual(['beta.txt']);
     expect(sent.files[0].text).toBe('Other tab is never implicit.\n');
+    const message = glyph.page.locator('.glyph-entry.user').last();
+    await message.getByRole('button', { name: 'Open beta.txt', exact: true }).click();
+    await expect(message.getByRole('alert')).toContainText('Source deleted');
   });
 
   it('captures separate multicursor ranges, preserving Unicode, tabs and CRLF without sending surrounding text', async ({
@@ -224,10 +275,11 @@ it.describe('Explicit editor and file attachments', () => {
     glyph,
     provider,
   }) => {
-    await expect(glyph.page.getByText('No active text editor', { exact: true })).toBeVisible();
     await glyph.composer.fill('Keep this draft');
     await glyph.command('Preferences: Open User Settings (JSON)');
-    await expect(glyph.page.getByText('This resource cannot be attached.', { exact: true })).toBeVisible();
+    await glyph.page.keyboard.press('ControlOrMeta+a');
+    await glyph.page.keyboard.press('ControlOrMeta+l');
+    await expect(glyph.page.locator('.notifications-toasts')).toContainText('UNSUPPORTED_RESOURCE');
     await writeFile(join(glyph.workspace, 'large.txt'), 'x'.repeat(512 * 1024 + 1));
     await glyph.composer.press('ControlOrMeta+a');
     await glyph.composer.press('ArrowRight');
@@ -271,7 +323,7 @@ it.describe('Explicit editor and file attachments', () => {
   }) => {
     await openFile(glyph, join(glyph.workspace, 'empty.txt'));
     await glyph.command('Focus Glyph');
-    await glyph.page.getByRole('button', { name: 'Attach active file empty.txt', exact: true }).click();
+    await chooseFile(glyph, 'empty.txt');
     await expect(glyph.composer.getByRole('button', { name: 'Preview empty.txt', exact: true })).toBeVisible();
     const empty = await send(glyph, provider);
     expect(empty.files).toMatchObject([{ path: 'empty.txt', text: '' }]);

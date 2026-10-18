@@ -1,3 +1,9 @@
+import type { GlyphPlan } from '#glyph/protocol/events/GlyphPlan.js';
+import { GlyphPlanInput } from './GlyphPlanEditor.js';
+import { IEditorService } from '#vs/workbench/services/editor/common/editorService.js';
+import { IOpenerService } from '#vs/platform/opener/common/opener.js';
+import { URI } from '#vs/base/common/uri.js';
+import type { GlyphTurnOptions } from '#glyph/protocol/events/GlyphAnnotation.js';
 import { GlyphContextController } from './GlyphContextController.js';
 import { GlyphContextError } from './GlyphContextError.js';
 import { GlyphProposalReviewError } from './GlyphProposalReviewError.js';
@@ -33,6 +39,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     const key = this.selectedChatId ?? '';
     let composer = this.composers.get(key);
     if (!composer) this.composers.set(key, (composer = new GlyphComposerState()));
+    const chat = this.projection.state.chats.find(value => value.id === key);
+    if (chat?.mode) composer.hydrateMode(chat.mode);
     return composer;
   }
   declare readonly _serviceBrand: undefined;
@@ -76,6 +84,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     @IWorkspaceTrustManagementService private readonly workspaceTrustService: IWorkspaceTrustManagementService,
     @IInstantiationService instantiationService: IInstantiationService,
     @IUserDataProfileService private readonly userDataProfileService: IUserDataProfileService,
+    @IEditorService private readonly editors: IEditorService,
+    @IOpenerService private readonly opener: IOpenerService,
   ) {
     super();
     const savedChat = this.storageService.get('glyph.selectedChat', StorageScope.WORKSPACE);
@@ -86,16 +96,28 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
     this.client = this._register(new GlyphDesktopClient(request => editor.handle(request)));
     this.context = this._register(
-      instantiationService.createInstance(
-        GlyphContextController,
-        editor,
-        () => this.composer,
-        () => this.changeEmitter.fire(this.state),
-      ),
+      instantiationService.createInstance(GlyphContextController, editor, () => this.composer),
     );
     this.proposalEditor = this._register(
       instantiationService.createInstance(GlyphProposalEditor, {
         state: () => this.state,
+        composer: () => this.composer,
+        report: (error: unknown) => this.report(error),
+        annotate: async (
+          chatId: string,
+          annotation: import('#glyph/protocol/events/GlyphAnnotation.js').GlyphAnnotation,
+        ) => {
+          if (this.selectedChatId !== chatId) await this.openChat(chatId);
+          const composer = this.composer;
+          composer.registerAnnotationSource(annotation.sourceId, value => this.proposalEditor.revealAnnotation(value));
+          const ordered = {
+            ...annotation,
+            order:
+              Math.max(0, ...(composer.snapshot.document.options?.annotations ?? []).map(value => value.order)) + 1,
+          };
+          if (ordered.comment) composer.saveAnnotation(ordered);
+          else composer.requestAnnotation(ordered);
+        },
         read: (chatId: string, proposalId: string, fileId: string) =>
           this.request({ type: GlyphWorkbenchCommandType.READ_PROPOSAL_FILE, chatId, proposalId, fileId }),
         decide: (
@@ -182,15 +204,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         ...(prompt
           ? [
               {
-                id: `${run.runId}:user`,
+                id: `${run.options?.turnId ?? run.runId}:user`,
                 role: GlyphTranscriptRole.USER,
                 text: prompt,
+                ...(run.options ? { options: run.options } : {}),
                 ...(run.attachments ? { attachments: run.attachments } : {}),
               },
             ]
           : []),
         {
-          id: run.runId,
+          id: run.options?.turnId ?? run.runId,
           role: GlyphTranscriptRole.ASSISTANT,
           text: run.text,
           progress: { reasoning: run.reasoning, tools: run.tools, status: run.status },
@@ -225,7 +248,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         ...this.errors,
       ],
       usage: this.projection.usage,
-      ...(this.context?.active ? { activeContext: this.context.active } : {}),
       ...(this.selectedChatId ? { selectedChatId: this.selectedChatId } : {}),
     };
   }
@@ -262,7 +284,108 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
     }
   }
-  async send(text: string, attachments: readonly GlyphContextAttachment[] = []): Promise<void> {
+  async selectMode(mode: 'agent' | 'plan'): Promise<void> {
+    const composer = this.composer;
+    if (this.selectedChatId)
+      await this.request({ type: GlyphWorkbenchCommandType.SET_CHAT_MODE, chatId: this.selectedChatId, mode });
+    composer.setMode(mode);
+  }
+
+  async viewPlan(chatId: string, plan: GlyphPlan): Promise<void> {
+    this.composer.registerAnnotationSource(plan.id, async () => {
+      await this.viewPlan(chatId, plan);
+      return undefined;
+    });
+    const read = () => {
+      const chat = this.state.chats.find(chat => chat.id === chatId);
+      const current = chat?.plans?.findLast(value => value.id === plan.id) ?? plan;
+      return {
+        plan: current,
+        modelLabel: this.state.models.find(model => model.slug === chat?.modelSlug)?.name ?? chat?.modelSlug,
+        disabled: this.state.readOnly || this.state.runs.some(run => run.chatId === chatId && isActive(run.status)),
+        agents: current.agents.map(agent => ({
+          ...agent,
+          title: this.state.chats.find(chat => chat.id === agent.chatId)?.title ?? 'Chat unavailable',
+        })),
+      };
+    };
+    await this.editors.openEditor(
+      new GlyphPlanInput(
+        read,
+        {
+          update: value => this.request({ type: GlyphWorkbenchCommandType.UPDATE_PLAN, chatId, plan: value }),
+          build: newChat => this.buildPlan(chatId, read().plan, newChat),
+          newAgent: () => this.linkPlanChat(chatId, read().plan),
+          openChat: id => this.openChat(id),
+          openLink: async href => {
+            if (/^https?:\/\//i.test(href)) {
+              await this.opener.open(URI.parse(href), { allowCommands: false });
+              return;
+            }
+            const path = href.replace(/#L\d+(?:-L?\d+)?$/, '');
+            const root = this.workspaceContextService.getWorkspace().folders[0];
+            if (!root || /^(?:[a-z]+:|\/)|(?:^|\/)\.\.(?:\/|$)/i.test(path))
+              throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This plan link is not a workspace path.');
+            await this.editors.openEditor({ resource: URI.joinPath(root.uri, path) });
+          },
+        },
+        listener => this.onDidChangeState(listener),
+      ),
+      { pinned: true },
+    );
+  }
+
+  private async linkPlanChat(chatId: string, plan: GlyphPlan): Promise<void> {
+    const chat = this.state.chats.find(value => value.id === chatId);
+    if (!chat) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'The plan chat is unavailable.');
+    await this.createChat(chat.accountProvider, chat.accountId, chat.modelSlug);
+    const targetChatId = this.selectedChatId!;
+    await this.request({
+      type: GlyphWorkbenchCommandType.LINK_PLAN,
+      chatId,
+      planId: plan.id,
+      targetChatId,
+      role: 'Reviewer',
+    });
+    this.composer.setMode('plan');
+    this.composer.setDraft(this.planPrompt(plan, 'Review this plan'));
+    this.composer.focus();
+  }
+
+  async buildPlan(chatId: string, plan: GlyphPlan, newChat = false): Promise<void> {
+    const latest = this.state.chats.find(chat => chat.id === chatId)?.plans?.findLast(value => value.id === plan.id);
+    if (!latest || latest.revision !== plan.revision)
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.NOT_FOUND,
+        'The plan changed. Review its current revision before building.',
+      );
+    if (newChat) {
+      await this.linkPlanChat(chatId, plan);
+      this.composer.setDraft('');
+    } else if (this.selectedChatId !== chatId) await this.openChat(chatId);
+    const composer = this.composer;
+    await this.selectMode('agent');
+    const document = composer.snapshot.document;
+    const text = `\n\n${this.planPrompt(plan, 'Build this approved plan')}`;
+    composer.setDocument({ ...document, parts: [...document.parts, { type: 'text', text }] });
+    await this.request({
+      type: GlyphWorkbenchCommandType.LINK_PLAN,
+      chatId,
+      planId: plan.id,
+      targetChatId: this.selectedChatId!,
+      role: 'Builder',
+    });
+    await composer.submit((text, attachments, options) => this.send(text, attachments, options));
+  }
+  private planPrompt(plan: GlyphPlan, intent: string): string {
+    return `${intent}: ${plan.title} (plan ${plan.id}, revision ${plan.revision}).\n\n${plan.markdown}\n\nTodos:\n${plan.todos.map(todo => `- [${todo.completed ? 'x' : ' '}] ${todo.text}`).join('\n')}`;
+  }
+
+  async send(
+    text: string,
+    attachments: readonly GlyphContextAttachment[] = [],
+    options: GlyphTurnOptions = {},
+  ): Promise<void> {
     const bytes = attachments.reduce(
       (total, attachment) => total + new TextEncoder().encode(attachment.text).byteLength,
       0,
@@ -299,6 +422,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       }
       const chatId = this.selectedChatId;
       if (!chatId) throw new Error('Create or open a chat before sending.');
+      if (options.mode && this.state.chats.find(chat => chat.id === chatId)?.mode !== options.mode)
+        await this.request({ type: GlyphWorkbenchCommandType.SET_CHAT_MODE, chatId, mode: options.mode });
       const runId = generateUuid();
       this.pendingRunId = runId;
       this.prompts.set(runId, prompt);
@@ -309,6 +434,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         runId,
         text: prompt,
         attachments,
+        options,
       });
     } catch (error) {
       this.pendingRunId = undefined;
