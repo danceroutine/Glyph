@@ -7,7 +7,7 @@ import { workbenchClassName } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.p
 import { failingActions, previewActions, attachedActions } from '#code-oss/storybook/fixtures.ts';
 
 const meta = {
-  title: 'Glyph/Composer',
+  title: 'Glyph/Chat/Composer',
   component: WiredGlyphComposer,
   args: {
     status: GlyphWorkbenchStatus.READY,
@@ -46,3 +46,16 @@ export const SendFailure: Story = { args: { actions: failingActions } };
 const planComposer = new GlyphComposerState();
 planComposer.setMode('plan');
 export const Plan: Story = { args: { actions: { ...previewActions, composer: planComposer } } };
+
+const markdownComposer = new GlyphComposerState();
+markdownComposer.setDocument({
+  parts: [
+    {
+      type: 'text',
+      text: '## Implementation notes\n\n1. Inspect the **existing behavior**\n2. Add focused tests\n   * Include the failure path\n\n> Keep the change small and reviewable.\n\nUse `pnpm test` to verify.',
+    },
+  ],
+  from: 0,
+  to: 0,
+});
+export const MarkdownDraft: Story = { args: { actions: { ...previewActions, composer: markdownComposer } } };

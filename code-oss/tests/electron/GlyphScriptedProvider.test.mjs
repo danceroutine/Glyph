@@ -22,7 +22,9 @@ it.describe('Scripted provider through the production desktop runtime', () => {
       { chunks: ['The production tool loop returned the file.'] },
     );
     await glyph.send('Read provider-proof.txt.');
-    await expect(glyph.assistantEntries.locator('div')).toHaveText(['The production tool loop returned the file.']);
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText([
+      'The production tool loop returned the file.',
+    ]);
     await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
     await expect(glyph.diagnostics).toHaveCount(0);
     expect(provider.requests).toHaveLength(2);

@@ -129,7 +129,6 @@ export function GlyphWorkbench({
       <div class={styles.body}>
         <main class={styles.conversation} aria-label="Current conversation" inert={conversationInert}>
           {transcript}
-          {usage}
           {navigationError && (
             <div class={styles.error} role="alert">
               {navigationError}
@@ -139,6 +138,7 @@ export function GlyphWorkbench({
           {todos}
           {reviews}
           {composer}
+          {usage}
         </main>
         {history}
       </div>

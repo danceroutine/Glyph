@@ -1,3 +1,4 @@
+import { toGlyphTranscriptParts } from '#glyph/workbench/toGlyphTranscriptParts.js';
 import type { GlyphPlan } from '#glyph/protocol/events/GlyphPlan.js';
 import { GlyphPlanInput } from './GlyphPlanEditor.js';
 import { IEditorService } from '#vs/workbench/services/editor/common/editorService.js';
@@ -171,12 +172,34 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             break;
           case GlyphHostEventType.CHAT_UPDATED:
             if (this.pendingCreation && event.creationId === this.pendingCreation) {
-              const composer = this.composer;
-              this.composers.delete('');
+              const composer = this.selectedChatId ? new GlyphComposerState() : this.composer;
+              if (!this.selectedChatId) this.composers.delete('');
               this.composers.set(event.chat.id, composer);
               this.selectChat(event.chat.id);
             }
             break;
+          case GlyphHostEventType.CHAT_RESTORED: {
+            const composer = this.composers.get(event.chatId);
+            const previews = event.draft.attachments.map(value => ({ ...value, revision: value.contentRevision }));
+            const parts = toGlyphTranscriptParts({
+              id: '',
+              role: GlyphTranscriptRole.USER,
+              text: event.draft.text,
+              ...(event.draft.options ? { options: event.draft.options } : {}),
+              attachments: previews,
+            }).map(part =>
+              part.type === 'text'
+                ? part
+                : {
+                    type: 'attachment' as const,
+                    attachment:
+                      event.draft.attachments[previews.indexOf(part.attachment as (typeof previews)[number])]!,
+                  },
+            );
+            const end = parts.reduce((size, part) => size + (part.type === 'text' ? part.text.length : 1), 0);
+            composer?.restoreDraft({ parts, from: end, to: end, options: { ...event.draft.options } });
+            break;
+          }
           case GlyphHostEventType.RUN_STATE:
             if (event.run.runId === this.pendingRunId) this.pendingRunId = undefined;
             break;
@@ -194,6 +217,18 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     if (this.workspaceRoots().length > 0) void this.connect().catch(error => this.report(error));
   }
 
+  async openLink(href: string): Promise<void> {
+    if (/^https?:\/\//i.test(href)) {
+      await this.opener.open(URI.parse(href), { allowCommands: false });
+      return;
+    }
+    const path = href.replace(/#L\d+(?:-L?\d+)?$/, '');
+    const root = this.workspaceContextService.getWorkspace().folders[0];
+    if (!root || /^(?:[a-z]+:|\/)|(?:^|\/)\.\.(?:\/|$)/i.test(path))
+      throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This link is not a workspace path.');
+    await this.editors.openEditor({ resource: URI.joinPath(root.uri, path) });
+  }
+
   get state(): GlyphWorkbenchState {
     const { selectedAccount: _account, selectedModel: _model, models: _models, ...snapshot } = this.projection.state;
     const runs = snapshot.runs.filter(run => run.chatId === this.selectedChatId);
@@ -207,6 +242,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
                 id: `${run.options?.turnId ?? run.runId}:user`,
                 role: GlyphTranscriptRole.USER,
                 text: prompt,
+                ...(run.createdAt ? { createdAt: run.createdAt } : {}),
+                ...(!active && !this.sending && run.checkpointTurnId ? { checkpointTurnId: run.checkpointTurnId } : {}),
                 ...(run.options ? { options: run.options } : {}),
                 ...(run.attachments ? { attachments: run.attachments } : {}),
               },
@@ -216,6 +253,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           id: run.options?.turnId ?? run.runId,
           role: GlyphTranscriptRole.ASSISTANT,
           text: run.text,
+          ...(run.questionResponses ? { questionResponses: run.questionResponses } : {}),
+          ...(run.createdAt ? { createdAt: run.createdAt } : {}),
+          ...(!active && !this.sending && run.checkpointTurnId ? { checkpointTurnId: run.checkpointTurnId } : {}),
+          ...(run.usage ? { usage: run.usage } : {}),
           progress: { reasoning: run.reasoning, tools: run.tools, status: run.status },
         },
         ...(run.terminalMessage
@@ -317,17 +358,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           build: newChat => this.buildPlan(chatId, read().plan, newChat),
           newAgent: () => this.linkPlanChat(chatId, read().plan),
           openChat: id => this.openChat(id),
-          openLink: async href => {
-            if (/^https?:\/\//i.test(href)) {
-              await this.opener.open(URI.parse(href), { allowCommands: false });
-              return;
-            }
-            const path = href.replace(/#L\d+(?:-L?\d+)?$/, '');
-            const root = this.workspaceContextService.getWorkspace().folders[0];
-            if (!root || /^(?:[a-z]+:|\/)|(?:^|\/)\.\.(?:\/|$)/i.test(path))
-              throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This plan link is not a workspace path.');
-            await this.editors.openEditor({ resource: URI.joinPath(root.uri, path) });
-          },
+          openLink: href => this.openLink(href),
         },
         listener => this.onDidChangeState(listener),
       ),
@@ -599,6 +630,21 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     } finally {
       this.pendingCreation = undefined;
     }
+  }
+
+  async branchChat(chatId: string, turnId: string): Promise<void> {
+    const creationId = generateUuid();
+    if (this.pendingCreation) return;
+    this.pendingCreation = creationId;
+    try {
+      await this.request({ type: GlyphWorkbenchCommandType.BRANCH_CHAT, chatId, turnId, creationId });
+    } finally {
+      this.pendingCreation = undefined;
+    }
+  }
+
+  async restoreCheckpoint(chatId: string, turnId: string): Promise<void> {
+    await this.request({ type: GlyphWorkbenchCommandType.RESTORE_CHECKPOINT, chatId, turnId });
   }
 
   async openChat(chatId: string): Promise<void> {

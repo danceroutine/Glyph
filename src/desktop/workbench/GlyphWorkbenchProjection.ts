@@ -45,6 +45,13 @@ export class GlyphWorkbenchProjection {
         this.snapshot = { ...this.snapshot, chats: upsert(this.snapshot.chats, event.chat, value => value.id) };
         return;
       }
+      case GlyphHostEventType.CHAT_RESTORED: {
+        this.snapshot = {
+          ...this.snapshot,
+          runs: [...this.snapshot.runs.filter(run => run.chatId !== event.chatId), ...event.runs],
+        };
+        return;
+      }
       case GlyphHostEventType.RUN_STATE: {
         this.setRun(event.run);
         return;

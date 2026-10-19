@@ -20,6 +20,9 @@ export interface GlyphWorkbenchViewActions {
   selectMode?(mode: 'agent' | 'plan'): Promise<void>;
   buildPlan?(chatId: string, plan: GlyphPlan, newChat?: boolean): Promise<void>;
   viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
+  branchChat?(chatId: string, turnId: string): Promise<void>;
+  restoreCheckpoint?(chatId: string, turnId: string): Promise<void>;
+  openLink?(href: string): Promise<void>;
   cancel(): void;
   writeShellInput(chatId: string, sessionId: string, input: string, appendNewline: boolean): Promise<void>;
   stopShell(chatId: string, sessionId: string): Promise<void>;

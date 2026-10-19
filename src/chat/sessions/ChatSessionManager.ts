@@ -1,3 +1,4 @@
+import { ChatHistoryError } from './ChatHistoryError.ts';
 import { PlanError } from '#src/planning/PlanError.js';
 import { planUpdateSchema, type PlanUpdate } from '#src/planning/PlanSchema.js';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
@@ -88,6 +89,25 @@ export class ChatSessionManager {
     const existing = this.liveSessions.get(record.id);
     if (existing) return existing;
     return this.remember(this.instantiate(record.id, createConversation(record)));
+  }
+
+  async branch(session: ChatSession, turnId: string, createConversation: ConversationFactory): Promise<ChatSession> {
+    const { record, index, turn } = await session.historyAt(turnId);
+    if (!turn.checkpoints) throw new ChatHistoryError('This message has no saved checkpoint.');
+    const timestamp = this.now().toISOString();
+    const fork: ChatSessionRecord = {
+      ...record,
+      ...turn.checkpoints.after,
+      id: this.createId(),
+      title: `${record.title.slice(0, 70)} · Branch`,
+      titleOrigin: 'human',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      transcript: record.transcript.slice(0, index + 1),
+    };
+    const conversation = createConversation(fork);
+    await this.enqueue(() => this.saveWith(fork.id, fork));
+    return this.remember(this.instantiate(fork.id, conversation));
   }
 
   rename(identifier: string, title: string): Promise<ChatSessionSummary> {
@@ -212,6 +232,15 @@ export class ChatSessionManager {
       () => this.requireRecord(id),
       conversation,
       (providerState, turn, preserveTranscript) => this.checkpoint(id, providerState, turn, preserveTranscript),
+      (snapshot, transcript) =>
+        this.enqueue(() =>
+          this.saveWith(id, {
+            ...this.requireRecord(id),
+            ...snapshot,
+            transcript,
+            updatedAt: this.now().toISOString(),
+          }),
+        ),
     );
   }
 

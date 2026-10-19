@@ -51,6 +51,30 @@ it.describe('Explicit editor and file attachments', () => {
       'empty.txt': '',
     },
   });
+  it('restores inline file badges with their original snapshots after the source changes', async ({
+    glyph,
+    provider,
+  }) => {
+    await glyph.composer.fill('Explain');
+    await chooseFile(glyph, 'alpha.txt');
+    await glyph.composer.pressSequentially(' please');
+    const original = await send(glyph, provider);
+    await expect(glyph.userEntries.getByRole('button', { name: 'Restore checkpoint' })).toHaveCount(1);
+    await writeFile(join(glyph.workspace, 'alpha.txt'), 'Changed after the checkpoint.');
+    await glyph.crashHost();
+    await glyph.reload();
+    await glyph.userEntries.hover();
+    await glyph.userEntries.getByRole('button', { name: 'Restore checkpoint' }).click();
+    await expect(glyph.userEntries).toHaveCount(0);
+    await expect(glyph.composer).toHaveText('Explain alpha.txt please');
+    await expect(glyph.composer.getByRole('button', { name: 'Preview alpha.txt', exact: true })).toBeVisible();
+    const resent = await send(glyph, provider);
+    expect(resent.prompt).toBe(original.prompt);
+    expect(resent.files).toEqual(original.files);
+    expect(resent.files[0].text).toContain('café 🌱');
+    expect(resent.files[0].text).not.toContain('Changed after');
+  });
+
   it('opens the native file dialog from the paperclip, preserves cancellation, and captures selected files', async ({
     glyph,
     provider,

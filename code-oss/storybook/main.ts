@@ -4,6 +4,7 @@ import type { StorybookConfig } from '@storybook/preact-vite';
 
 const config: StorybookConfig = {
   framework: '@storybook/preact-vite',
+  staticDirs: ['../../.artifacts/diagram'],
   stories: ['../ui/**/*.stories.tsx'],
   core: { disableTelemetry: true },
   async viteFinal(config) {

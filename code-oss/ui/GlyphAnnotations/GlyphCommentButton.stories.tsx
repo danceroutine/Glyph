@@ -12,22 +12,23 @@ const prompt = css({
   background: tokens.input.background,
   borderRadius: tokens.card.radius,
 });
-function AnnotationExample({ kind }: { readonly kind: 'chat' | 'plan' }) {
+function AnnotationExample({ kind, empty = false }: { readonly kind: 'chat' | 'plan'; readonly empty?: boolean }) {
   const quote = 'Preserve the original attachments and their exact revisions.';
   const [composer] = useState(() => {
     const composer = new GlyphComposerState();
-    composer.saveAnnotation({
-      id: 'example',
-      order: 1,
-      kind,
-      sourceId: `example-${kind}`,
-      revision: '1',
-      label: kind === 'plan' ? 'Queue composer messages' : 'Assistant reply',
-      quote,
-      from: 0,
-      to: quote.length,
-      comment: 'Include selections from unsaved files too.',
-    });
+    if (!empty)
+      composer.saveAnnotation({
+        id: 'example',
+        order: 1,
+        kind,
+        sourceId: `example-${kind}`,
+        revision: '1',
+        label: kind === 'plan' ? 'Queue composer messages' : 'Assistant reply',
+        quote,
+        from: 0,
+        to: quote.length,
+        comment: 'Include selections from unsaved files too.',
+      });
     return composer;
   });
   const state = useGlyphAnnotationsState(composer, false);
@@ -51,7 +52,7 @@ function AnnotationExample({ kind }: { readonly kind: 'chat' | 'plan' }) {
   );
 }
 const meta = {
-  title: 'Glyph/Annotation Marker',
+  title: 'Glyph/Shared/Annotation Marker',
   component: GlyphCommentButton,
   args: { order: 1, open: () => {} },
   decorators: [
@@ -66,6 +67,6 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 export const Numbered: Story = {};
 export const DoubleDigit: Story = { args: { order: 12 } };
-export const Selection: Story = { render: () => <GlyphCommentButton open={() => {}} /> };
+export const Selection: Story = { render: () => <AnnotationExample kind="chat" empty /> };
 export const InChat: Story = { render: () => <AnnotationExample kind="chat" /> };
 export const InPlan: Story = { render: () => <AnnotationExample kind="plan" /> };

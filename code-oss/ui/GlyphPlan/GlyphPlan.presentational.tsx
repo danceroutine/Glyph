@@ -101,7 +101,7 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
           <ul>
             {state.agents.map(agent => (
               <li key={agent.chatId}>
-                <button class={planStyles.row} onClick={() => state.openChat(agent.chatId)}>
+                <button class={`${planStyles.row} ${planStyles.agentRow}`} onClick={() => state.openChat(agent.chatId)}>
                   <MessageSquare size={16} />
                   <span>
                     {agent.title} · {agent.role}

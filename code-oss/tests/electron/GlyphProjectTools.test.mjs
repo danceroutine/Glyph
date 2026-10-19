@@ -38,7 +38,7 @@ async function runTools(glyph, provider, calls, answer = 'The requested project 
   await glyph.send('Inspect these workspace files.');
   await expect.poll(() => provider.requests.length).toBe(requestCount + 2);
   await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
-  await expect(glyph.assistantEntries.last().locator('div')).toHaveText(answer);
+  await expect(glyph.assistantEntries.last().locator('[data-glyph-source]')).toHaveText(answer);
   const input = provider.requests.at(-1).body.input;
   return ids.map(id => {
     const outputs = input.filter(item => item.type === 'function_call_output' && item.call_id === id);

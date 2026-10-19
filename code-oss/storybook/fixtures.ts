@@ -25,9 +25,15 @@ export const selection: GlyphContextAttachment = {
 };
 
 export const conversation: readonly GlyphTranscriptEntry[] = [
-  { id: 'user-1', role: GlyphTranscriptRole.USER, text: 'How does the Glyph sidebar render?' },
+  {
+    id: 'user-1',
+    checkpointTurnId: 'assistant-1',
+    role: GlyphTranscriptRole.USER,
+    text: 'How does the Glyph sidebar render?',
+  },
   {
     id: 'assistant-1',
+    checkpointTurnId: 'assistant-1',
     role: GlyphTranscriptRole.ASSISTANT,
     text: 'The native pane mounts the Preact view and passes in state and callbacks. The transcript and composer render inside that view.\n\nYou can edit these components in Storybook and check the integration in Code OSS afterward.',
   },
@@ -65,6 +71,8 @@ export const previewActions: GlyphWorkbenchViewActions = {
   },
   composer: new GlyphComposerState(),
   send: async () => {},
+  branchChat: async () => {},
+  restoreCheckpoint: async () => {},
   cancel: () => {},
   writeShellInput: async () => {},
   stopShell: async () => {},

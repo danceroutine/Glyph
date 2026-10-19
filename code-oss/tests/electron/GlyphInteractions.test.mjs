@@ -172,6 +172,11 @@ it.describe('Questions and command approvals', () => {
     await form(glyph).getByRole('button', { name: 'Continue' }).click();
     await form(glyph).getByRole('checkbox', { name: 'Clarity', exact: true }).check();
     await form(glyph).getByRole('checkbox', { name: 'Speed', exact: true }).check();
+    await form(glyph).getByRole('button', { name: 'Previous question' }).click();
+    await expect(form(glyph).getByRole('radio', { name: 'Rust', exact: true })).toBeChecked();
+    await form(glyph).getByRole('button', { name: 'Next question' }).click();
+    await expect(form(glyph).getByRole('checkbox', { name: 'Clarity', exact: true })).toBeChecked();
+    await expect(form(glyph).getByRole('checkbox', { name: 'Speed', exact: true })).toBeChecked();
     await form(glyph).getByRole('button', { name: 'Continue' }).click();
     await form(glyph).getByRole('radio', { name: 'Other…', exact: true }).check();
     await form(glyph).getByRole('textbox', { name: 'Your answer' }).fill('Custom answer — café 🌱');
@@ -186,6 +191,11 @@ it.describe('Questions and command approvals', () => {
       { answers: { language: 'rust', priorities: ['clarity', 'speed'], notes: 'Custom answer — café 🌱' } },
     ]);
     expect(provider.requests).toHaveLength(2);
+    const summaries = glyph.page.getByRole('region', { name: 'Submitted answers' });
+    await expect(summaries.locator('dd')).toHaveText(['Rust', 'Clarity, Speed', 'Custom answer — café 🌱']);
+    await glyph.crashHost();
+    await glyph.reload();
+    await expect(summaries.locator('dd')).toHaveText(['Rust', 'Clarity, Speed', 'Custom answer — café 🌱']);
   });
 
   it('cancels a waiting question with its run and rejects a late answer instead of reviving the cancelled run', async ({
@@ -245,12 +255,18 @@ it.describe('Questions and command approvals', () => {
     await form(glyph).getByRole('radio', { name: 'Rust', exact: true }).check();
     await form(glyph).getByRole('button', { name: 'Continue' }).click();
     await expect(form(glyph)).toContainText('Choose again.');
+    await expect(form(glyph).getByRole('radio', { name: 'Rust', exact: true })).not.toBeChecked();
+    await expect(glyph.page.getByRole('region', { name: 'Submitted answers' }).locator('dd')).toHaveText('Rust');
     await form(glyph).getByRole('radio', { name: 'TypeScript', exact: true }).check();
     provider.enqueue({ chunks: ['Both forms received.'] });
     await form(glyph).getByRole('button', { name: 'Continue' }).click();
     await finished(glyph);
     expect(outputs(provider, 'first')).toEqual([{ answers: { language: 'rust' } }]);
     expect(outputs(provider, 'second')).toEqual([{ answers: { language: 'ts' } }]);
+    await expect(glyph.page.getByRole('region', { name: 'Submitted answers' }).locator('dd')).toHaveText([
+      'Rust',
+      'TypeScript',
+    ]);
     expect(provider.requests).toHaveLength(2);
   });
   it('removes interrupted question and approval controls after reload or host failure', async ({ glyph, provider }) => {

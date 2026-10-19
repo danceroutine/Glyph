@@ -18,6 +18,39 @@ afterEach(async () => {
 });
 
 describe(SqliteChatSessionStore, () => {
+  it('migrates turn checkpoints and preserves their provider history across reopening', async () => {
+    const directory = await fixture('glyph-checkpoints-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-checkpoint-project-'), 'local');
+    const seed = new SqliteChatSessionStore(directory);
+    await seed.initialize(context);
+    await seed.save(record(context.id));
+    await seed.dispose();
+    const database = new Database(join(directory, 'chats.sqlite3'));
+    database.exec('ALTER TABLE chat_turns DROP COLUMN checkpoints');
+    database.close();
+    const source = record(context.id);
+    const checkpoint = { providerState: source.providerState, mode: 'agent' as const, plans: [], todos: [] };
+    const saved = {
+      ...source,
+      transcript: source.transcript.map(turn => ({
+        ...turn,
+        checkpoints: {
+          before: checkpoint,
+          after: { ...checkpoint, providerState: { ...source.providerState, data: { messages: ['first'] } } },
+        },
+      })),
+    };
+    const migrated = new SqliteChatSessionStore(directory);
+    await migrated.initialize(context);
+    expect((await migrated.load(context.id))[0]!.transcript[0]!.checkpoints).toBeUndefined();
+    await migrated.save(saved);
+    await migrated.dispose();
+    const reopened = new SqliteChatSessionStore(directory);
+    await reopened.initialize(context);
+    expect((await reopened.load(context.id))[0]).toEqual(saved);
+    await reopened.dispose();
+  });
+
   it('migrates and reopens plan revisions and exact annotations without rereading the source', async () => {
     const directory = await fixture('glyph-plans-');
     const context = await ProjectContextResolver.folder(await fixture('glyph-plan-project-'), 'local');

@@ -289,6 +289,13 @@ export class GlyphService {
     );
   }
 
+  branchChat(identifier: string, turnId: string, account: ChatAccount): Promise<ChatSession> {
+    const session = this.openChat(identifier, account);
+    return this.requireChatSessions().branch(session, turnId, record =>
+      this.instantiateConversation(account, { slug: record.modelSlug, name: record.modelName }, record.providerState),
+    );
+  }
+
   renameChat(identifier: string, title: string): Promise<ChatSessionSummary> {
     return this.requireChatSessions().rename(identifier, title);
   }

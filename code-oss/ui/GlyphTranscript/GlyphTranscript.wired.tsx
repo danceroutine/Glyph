@@ -1,3 +1,5 @@
+import { WiredGlyphTranscriptContent } from './GlyphTranscriptContent.wired.tsx';
+import { WiredGlyphUsageSummary } from '#code-oss/ui/GlyphUsageSummary/GlyphUsageSummary.wired.tsx';
 import type { ComponentChildren } from 'preact';
 import { WiredGlyphShellCommandCard } from '#code-oss/ui/GlyphShellCommandCard/GlyphShellCommandCard.wired.tsx';
 import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
@@ -11,7 +13,7 @@ export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
   readonly chatId?: string;
   readonly pendingApproval?: GlyphRunProjection;
   readonly actions?: Pick<GlyphWorkbenchViewActions, 'decideApproval' | 'writeShellInput' | 'stopShell'> &
-    Partial<Pick<GlyphWorkbenchViewActions, 'context'>>;
+    Partial<Pick<GlyphWorkbenchViewActions, 'context' | 'openLink' | 'branchChat' | 'restoreCheckpoint'>>;
   readonly readOnly?: boolean;
 }
 
@@ -23,13 +25,24 @@ export function WiredGlyphTranscript({
   actions,
   readOnly = false,
 }: WiredGlyphTranscriptProps) {
-  const state = useGlyphTranscriptState({ entries, context: actions?.context });
+  const state = useGlyphTranscriptState({
+    entries,
+    context: actions?.context,
+    openLink: actions?.openLink,
+    branch: !readOnly && chatId && actions?.branchChat ? turnId => actions.branchChat!(chatId, turnId) : undefined,
+    restore:
+      !readOnly && chatId && actions?.restoreCheckpoint
+        ? turnId => actions.restoreCheckpoint!(chatId, turnId)
+        : undefined,
+  });
   return (
     <GlyphTranscript
       {...state}
       proposals={proposals}
       entries={state.entries.map(entry => ({
         ...entry,
+        content: <WiredGlyphTranscriptContent entry={entry} />,
+        usage: entry.role === 'assistant' ? <WiredGlyphUsageSummary usage={entry.usage} turn /> : undefined,
         shells:
           actions && chatId
             ? entry.shellActivities.map(tool => (

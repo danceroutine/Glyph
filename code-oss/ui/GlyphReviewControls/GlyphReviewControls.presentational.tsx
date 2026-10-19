@@ -39,9 +39,11 @@ const styles = {
     ':disabled': { opacity: tokens.opacity.disabled },
   }),
   commentButton: css({
-    background: tokens.button.background,
-    color: tokens.button.foreground,
-    ':hover': { background: tokens.button.hoverBackground },
+    '&&': {
+      background: tokens.button.background,
+      color: tokens.button.foreground,
+      ':hover': { background: tokens.button.hoverBackground },
+    },
   }),
   keep: css({
     background: tokens.review.keepBackground,

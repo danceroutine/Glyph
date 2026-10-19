@@ -61,6 +61,7 @@ export function useGlyphQuestionCardState({
     question,
     questionNumber: step + 1,
     questionCount: questions.length,
+    nextQuestion: questions[step + 1],
     inputName: `${request.id}:${question.id}`,
     fieldset,
     other,
@@ -86,6 +87,6 @@ export function useGlyphQuestionCardState({
     enterOther: () => update({ questionId: question.id, type: QuestionAnswerType.OTHER, text: '' }),
     updateOther: (text: string) => update({ questionId: question.id, type: QuestionAnswerType.OTHER, text }),
     cancel: () => actions.cancel(),
-    back: () => setStep(step - 1),
+    back: () => setStep(Math.max(0, step - 1)),
   };
 }

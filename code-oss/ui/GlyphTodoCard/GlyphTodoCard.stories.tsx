@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { WiredGlyphTodoCard } from './GlyphTodoCard.wired.tsx';
 
 const meta = {
-  title: 'Glyph/To-dos',
+  title: 'Glyph/Chat/To-dos',
   component: WiredGlyphTodoCard,
   args: {
     items: [

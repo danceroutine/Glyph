@@ -3,7 +3,7 @@ import { useState } from 'preact/hooks';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphAnnotationPill } from './GlyphAnnotations.presentational.tsx';
 const meta = {
-  title: 'Glyph/Annotations',
+  title: 'Glyph/Shared/Annotations',
   component: GlyphAnnotationPill,
   args: {
     annotations: [

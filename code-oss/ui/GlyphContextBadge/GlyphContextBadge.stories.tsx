@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphContextBadge } from './GlyphContextBadge.presentational.tsx';
 
 const meta = {
-  title: 'Glyph/Context Badge',
+  title: 'Glyph/Shared/Context Badge',
   component: GlyphContextBadge,
   args: { label: 'ProviderDesktopRuntime.ts', title: 'src/desktop/host/ProviderDesktopRuntime.ts' },
 } satisfies Meta<typeof GlyphContextBadge>;

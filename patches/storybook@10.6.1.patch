@@ -1,0 +1,13 @@
+diff --git a/dist/core-server/index.js b/dist/core-server/index.js
+index 6aea890e8211917000bae6fb25ff4106e7f24dea..0e210931a66df9612e46279e7baef3e448721b3b 100644
+--- a/dist/core-server/index.js
++++ b/dist/core-server/index.js
+@@ -16591,7 +16591,7 @@ var makeAbsolute = (otherImport, normalizedPath, workingDir) => otherImport.star
+     await this.updateExtracted(
+       async (specifier, absolutePath) => this.isDocsMdx(absolutePath) ? !1 : this.extractStories(specifier, absolutePath, projectTags)
+     ), await this.updateExtracted(
+-      async (specifier, absolutePath) => this.extractDocs(specifier, absolutePath, projectTags)
++      async (specifier, absolutePath) => this.isDocsMdx(absolutePath) ? this.extractDocs(specifier, absolutePath, projectTags) : this.extractStories(specifier, absolutePath, projectTags)
+     );
+     let statsSummary = {};
+     return { entries: this.specifiers.flatMap((specifier) => {

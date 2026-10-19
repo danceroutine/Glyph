@@ -28,6 +28,7 @@ beforeAll(async () => {
         };
         window.composerTest = {
           calls, captures,
+          snapshot: () => actions.composer.snapshot,
           selectFiles(cancel = false) { selectFiles(cancel ? [] : [attachment, { ...attachment, id: 'b', uri: 'file:///b.ts', path: 'b.ts' }]); },
           attachSelection() { actions.composer.insertAttachments([{ ...attachment, id: 'selection', kind: 'selection', path: 'b.ts', text: 'Only selected text', range: { start: { line: 3, column: 1 }, end: { line: 4, column: 5 } } }]); },
           unmount() { render(null, document.getElementById('root')); },
@@ -263,4 +264,98 @@ describe('Inline attachment editing', () => {
       await page.close();
     }
   });
+});
+
+describe('Rich Markdown composer', () => {
+  it('continues and indents lists, exits an empty item, formats blockquotes and emphasis, and sends Markdown', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<div id="root"></div>');
+      await page.addScriptTag({ content: script });
+      const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+      await composer.pressSequentially('1. First');
+      await composer.press('Enter');
+      await composer.pressSequentially('Second');
+      await expect(composer.locator('ol > li')).toHaveCount(2);
+      await composer.press('Tab');
+      await expect(composer.locator('li ol li')).toHaveText('Second');
+      await composer.press('Shift+Tab');
+      await expect(composer.locator('ol > li')).toHaveCount(2);
+      await composer.press('Enter');
+      await composer.press('Enter');
+      await composer.pressSequentially('> Keep **exact** revisions');
+      await expect(composer.locator('blockquote strong')).toHaveText('exact');
+      await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+      const text = await page.evaluate(() => window.composerTest.calls[0]);
+      expect(text).toContain('1. First\n2. Second');
+      expect(text).toContain('> Keep **exact** revisions');
+    } finally {
+      await page.close();
+    }
+  });
+  it('keeps an attachment at the rich-text caret through recovery, re-mounting and Markdown paste', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<div id="root"></div>');
+      await page.addScriptTag({ content: script });
+      const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+      await composer.pressSequentially('> Compare @a');
+      await expect(page.getByRole('option', { name: 'a.ts', exact: true })).toBeVisible();
+      await composer.press('Enter');
+      await composer.pressSequentially(' **carefully**');
+      await page.evaluate(() => window.composerTest.unmount());
+      await page.evaluate(() => window.composerTest.mount());
+      await expect(composer.locator('blockquote button')).toHaveCount(1);
+      await expect(composer.locator('strong')).toHaveText('carefully');
+      await composer.locator('strong').evaluate(element => {
+        element.closest('[contenteditable]').focus();
+        const text = element.firstChild;
+        document.getSelection().collapse(text, text.textContent.length - 1);
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+      await expect.poll(() => page.evaluate(() => window.composerTest.snapshot().document.from)).toBe(22);
+      await page.evaluate(() => window.composerTest.attachSelection());
+      await expect(composer.locator('strong button')).toHaveCount(1);
+      await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+      await page.evaluate(() => window.composerTest.reject());
+      await expect(composer.locator('blockquote button')).toHaveCount(2);
+      await expect(composer.locator('strong')).toContainText('carefullb.ts (3-4)y');
+      await composer.press('ControlOrMeta+a');
+      await composer.evaluate(element => {
+        const clipboardData = new DataTransfer();
+        clipboardData.setData('text/plain', '## Heading\n\n1. One\n2. Two\n\n> A quote');
+        element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+      });
+      await expect(composer.locator('h2')).toHaveText('Heading');
+      await expect(composer.locator('ol li')).toHaveCount(2);
+      await expect(composer.locator('blockquote')).toHaveText('A quote');
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+it('formats typed links and fenced code while preserving literal code and Markdown on submission', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.pressSequentially('[source](src/a.ts)');
+    await expect(composer.locator('.glyph-prompt-link')).toHaveText('source');
+    await composer.press('Enter');
+    await composer.pressSequentially('```ts');
+    await composer.press('Enter');
+    await composer.press('Tab');
+    await composer.pressSequentially('**literal**');
+    await expect(composer.locator('pre code')).toHaveText('  **literal**');
+    await expect(composer.locator('pre strong')).toHaveCount(0);
+    await page.evaluate(() => window.composerTest.unmount());
+    await page.evaluate(() => window.composerTest.mount());
+    await expect(composer.locator('pre code')).toHaveText('  **literal**');
+    await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+    expect(await page.evaluate(() => window.composerTest.calls[0])).toContain('```ts\n  **literal**\n```');
+  } finally {
+    await page.close();
+  }
 });

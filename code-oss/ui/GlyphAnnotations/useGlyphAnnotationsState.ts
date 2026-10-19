@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { GlyphAnnotation } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 
@@ -31,12 +31,20 @@ function findSource(annotation: GlyphAnnotation): HTMLElement | undefined {
     node => node.dataset.glyphSource === annotation.sourceId && node.dataset.revision === annotation.revision,
   );
 }
-function position(annotation: GlyphAnnotation): PositionedAnnotation | undefined {
+function position(annotation: GlyphAnnotation, selection = false): PositionedAnnotation | undefined {
   const source = findSource(annotation);
   const range = source && sourceRange(source, annotation.from, annotation.to);
   if (!range || range.toString() !== annotation.quote) return undefined;
   const rect = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0).at(-1);
   if (!rect || rect.bottom < 0 || rect.top > innerHeight) return undefined;
+  if (selection) {
+    const selectionRect = range.getBoundingClientRect();
+    return {
+      annotation,
+      x: selectionRect.left + selectionRect.width / 2,
+      y: Math.max(8, selectionRect.top - 28),
+    };
+  }
   // The 30px speech bubble points from its lower-left corner to the last selected line.
   return { annotation, x: Math.max(0, Math.min(innerWidth - 30, rect.right - 3)), y: Math.max(0, rect.bottom - 28) };
 }
@@ -47,8 +55,19 @@ export function useGlyphAnnotationsState(composer: GlyphComposerState, disabled:
   const [comment, setComment] = useState('');
   const [markers, setMarkers] = useState<readonly PositionedAnnotation[]>([]);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const editor = useRef<HTMLFormElement>(null);
+  const [editorPosition, setEditorPosition] = useState({ x: 8, y: 8 });
   const annotations = snapshot.document.options?.annotations ?? [];
   useEffect(() => composer.subscribe(() => setSnapshot(composer.snapshot)), [composer]);
+  useLayoutEffect(() => {
+    if (!draft || !editor.current) return;
+    const { width, height } = editor.current.getBoundingClientRect();
+    const above = draft.y - height - 8;
+    setEditorPosition({
+      x: Math.max(8, Math.min(innerWidth - width - 8, draft.x + 30 - width)),
+      y: Math.max(8, Math.min(innerHeight - height - 8, above >= 8 ? above : draft.y + 36)),
+    });
+  }, [draft, comment]);
   useEffect(() => {
     if (!draft) return;
     textarea.current?.focus();
@@ -56,7 +75,7 @@ export function useGlyphAnnotationsState(composer: GlyphComposerState, disabled:
   useEffect(() => {
     const update = () => {
       setMarkers(annotations.flatMap(value => position(value) ?? []));
-      setCandidate(value => (value ? position(value.annotation) : undefined));
+      setCandidate(value => (value ? position(value.annotation, true) : undefined));
       setDraft(value => (value ? (position(value.annotation) ?? value) : undefined));
     };
     update();
@@ -134,7 +153,7 @@ export function useGlyphAnnotationsState(composer: GlyphComposerState, disabled:
         quote,
         comment: '',
       };
-      setCandidate(position(annotation));
+      setCandidate(position(annotation, true));
     };
     document.addEventListener('mouseup', capture);
     document.addEventListener('keyup', capture);
@@ -155,6 +174,8 @@ export function useGlyphAnnotationsState(composer: GlyphComposerState, disabled:
     comment,
     markers,
     textarea,
+    editor,
+    editorPosition,
     disabled,
     setComment,
     open: () => {

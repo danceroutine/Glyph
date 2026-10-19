@@ -1,3 +1,4 @@
+import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
@@ -12,7 +13,16 @@ export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'> & 
   readonly shell?: ShellCommandSummary;
 };
 
+export interface ChatHistoryCheckpoint {
+  readonly providerState: ChatProviderState;
+  readonly plans: readonly GlyphPlan[];
+  readonly todos: readonly TodoItem[];
+  readonly mode: 'agent' | 'plan';
+}
+
 export interface ChatTranscriptTurn {
+  readonly questionResponses?: readonly GlyphQuestionResponse[];
+  readonly checkpoints?: { readonly before: ChatHistoryCheckpoint; readonly after: ChatHistoryCheckpoint };
   readonly options?: GlyphTurnOptions;
   readonly userText: string;
   readonly attachments?: readonly ContextAttachment[];

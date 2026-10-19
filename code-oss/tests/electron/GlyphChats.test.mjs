@@ -21,6 +21,69 @@ async function openChat(glyph, name) {
 it.describe('Saved chats and new conversation setup', () => {
   it.use({ scriptedProvider: true });
 
+  it('branches an answer and restores a user checkpoint with independent durable provider history', async ({
+    glyph,
+    provider,
+  }, testInfo) => {
+    provider.enqueue(
+      { chunks: ['First answer.'] },
+      { chunks: ['Second answer.'] },
+      { chunks: ['Branch answer.'] },
+      { chunks: ['Replacement answer.'] },
+    );
+    await glyph.send('Original first message');
+    await expect(glyph.userEntries).toContainText('Original first message');
+    await expect(glyph.assistantEntries.last().getByRole('button', { name: 'Branch chat' })).toBeVisible();
+    await glyph.send('Original second message');
+    await expect(glyph.assistantEntries.last().getByRole('button', { name: 'Branch chat' })).toBeVisible();
+    await expect(glyph.assistantEntries).toHaveCount(2);
+    await glyph.assistantEntries.first().getByRole('button', { name: 'Branch chat' }).click();
+    await expect(glyph.assistantEntries).toHaveCount(1);
+    await expect(glyph.assistantEntries.first()).toContainText('First answer.');
+    await glyph.send('Branch follow-up');
+    await expect(glyph.assistantEntries.last()).toContainText('Branch answer.');
+    await expect(glyph.assistantEntries.last().getByRole('button', { name: 'Branch chat' })).toBeVisible();
+    const branchInput = JSON.stringify(provider.requests[2].body.input);
+    expect(branchInput).toContain('Original first message');
+    expect(branchInput).not.toContain('Original second message');
+    await glyph.crashHost();
+    await glyph.reload();
+    await expect(glyph.assistantEntries).toHaveCount(2);
+    const list = await history(glyph);
+    await glyph.page.getByRole('searchbox', { name: 'Search chats' }).fill('Original');
+    await list
+      .getByRole('button')
+      .filter({ hasText: 'Original First Message' })
+      .filter({ hasNotText: 'Branch' })
+      .click();
+    await closeHistory(glyph);
+    await expect(glyph.assistantEntries.last()).toContainText('Second answer.');
+    await glyph.composer.fill('Preserve this unsent draft');
+    await glyph.userEntries.last().hover();
+    await glyph.userEntries.last().getByRole('button', { name: 'Restore checkpoint' }).click();
+    await expect(glyph.assistantEntries).toHaveCount(1);
+    await expect(glyph.composer).toHaveText('Original second message');
+    await expect(glyph.page.getByRole('region', { name: 'Unsent messages' })).toContainText(
+      'Preserve this unsent draft',
+    );
+    await glyph.send('Replacement prompt');
+    await expect(glyph.assistantEntries.last()).toContainText('Replacement answer.');
+    await expect(glyph.assistantEntries.last().getByRole('button', { name: 'Branch chat' })).toBeVisible();
+    const restoredInput = JSON.stringify(provider.requests[3].body.input);
+    expect(restoredInput).toContain('Original first message');
+    expect(restoredInput).toContain('Replacement prompt');
+    expect(restoredInput).not.toContain('Original second message');
+    expect(restoredInput).not.toContain('Branch follow-up');
+    await glyph.crashHost();
+    await glyph.reload();
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText([
+      'First answer.',
+      'Replacement answer.',
+    ]);
+    await glyph.userEntries.last().hover();
+    await testInfo.attach('message-actions', { body: await glyph.page.screenshot(), contentType: 'image/png' });
+  });
+
   it('shows saved chats and opens the selected chat with its conversation history', async ({
     glyph,
     provider,
@@ -52,21 +115,33 @@ it.describe('Saved chats and new conversation setup', () => {
     await list.getByRole('button').click();
     await closeHistory(glyph);
     await expect(glyph.composer).toHaveText('Unsent alpha draft');
-    await expect(glyph.assistantEntries.locator('div')).toHaveText(['The alpha answer.']);
-    await expect(glyph.page.locator('.glyph-usage summary')).toHaveText('14 reported tokens');
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['The alpha answer.']);
+    await glyph.page.getByRole('button', { name: 'Conversation token usage' }).click();
+    await expect(glyph.page.getByRole('dialog', { name: 'Conversation token usage' }).locator('dd').last()).toHaveText(
+      '14',
+    );
+    await glyph.page.keyboard.press('Escape');
     await glyph.page.locator('.glyph-reasoning summary').click();
     await expect(glyph.page.locator('.glyph-reasoning p')).toHaveText('Alpha reasoning.');
     await openChat(glyph, 'Beta');
     await expect(glyph.composer).toHaveText('Unsent beta draft');
-    await expect(glyph.assistantEntries.locator('div')).toHaveText(['The beta answer.']);
-    await expect(glyph.page.locator('.glyph-usage summary')).toHaveText('27 reported tokens');
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['The beta answer.']);
+    await glyph.page.getByRole('button', { name: 'Conversation token usage' }).click();
+    await expect(glyph.page.getByRole('dialog', { name: 'Conversation token usage' }).locator('dd').last()).toHaveText(
+      '27',
+    );
+    await glyph.page.keyboard.press('Escape');
     await openChat(glyph, 'Alpha');
     await glyph.reload();
-    await expect(glyph.assistantEntries.locator('div')).toHaveText(['The alpha answer.']);
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['The alpha answer.']);
     await glyph.crashHost();
     await glyph.reload();
-    await expect(glyph.assistantEntries.locator('div')).toHaveText(['The alpha answer.']);
-    await expect(glyph.page.locator('.glyph-usage summary')).toHaveText('14 reported tokens');
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['The alpha answer.']);
+    await glyph.page.getByRole('button', { name: 'Conversation token usage' }).click();
+    await expect(glyph.page.getByRole('dialog', { name: 'Conversation token usage' }).locator('dd').last()).toHaveText(
+      '14',
+    );
+    await glyph.page.keyboard.press('Escape');
     await history(glyph);
     const panel = await glyph.page.locator('.part.auxiliarybar').boundingBox();
     const sashes = await glyph.page.locator('.monaco-sash.vertical').all();
@@ -94,13 +169,13 @@ it.describe('Saved chats and new conversation setup', () => {
     await glyph.page.getByRole('button', { name: 'New chat', exact: true }).click();
     await glyph.send('Beta completed');
     await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
-    await expect(glyph.assistantEntries.locator('div')).toHaveText(['Beta finished.']);
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['Beta finished.']);
     provider.release(0);
     await expect.poll(() => provider.requests[0].completed).toBe(true);
-    await expect(glyph.assistantEntries.locator('div')).toHaveText(['Beta finished.']);
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['Beta finished.']);
     await openChat(glyph, 'Alpha');
     await expect(glyph.composer).toHaveText('Alpha next prompt');
-    await expect(glyph.assistantEntries.locator('div')).toHaveText(['Alpha still running.']);
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['Alpha still running.']);
     await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
   });
 });
@@ -194,7 +269,7 @@ it.describe('Account and model selection', () => {
     await closeHistory(glyph);
     provider.enqueue({ chunks: ['Recovered after selection.'] });
     await glyph.sendButton.click();
-    await expect(glyph.assistantEntries.locator('div')).toHaveText(['Recovered after selection.']);
+    await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['Recovered after selection.']);
     expect(
       provider.requests[0].body.input.some(item => item.role === 'user' && item.content === 'Keep this draft'),
     ).toBe(true);

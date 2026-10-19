@@ -1,29 +1,31 @@
-import { Schema, type Node as PromptNode } from 'prosemirror-model';
+import { promptSchema as schema, parsePrompt, serializePrompt, promptSelection } from './GlyphPromptMarkdown.ts';
+import {
+  inputRules,
+  wrappingInputRule,
+  textblockTypeInputRule,
+  InputRule,
+  undoInputRule,
+} from 'prosemirror-inputrules';
+import { splitListItem, sinkListItem, liftListItem } from 'prosemirror-schema-list';
+import { Slice } from 'prosemirror-model';
 import { EditorState, TextSelection } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { history, undo, redo, closeHistory } from 'prosemirror-history';
 import { keymap } from 'prosemirror-keymap';
-import { baseKeymap } from 'prosemirror-commands';
+import {
+  baseKeymap,
+  chainCommands,
+  liftEmptyBlock,
+  splitBlock,
+  newlineInCode,
+  createParagraphNear,
+  toggleMark,
+} from 'prosemirror-commands';
 import { h, render } from 'preact';
-import type { GlyphPromptDocument, GlyphPromptPart } from '#src/desktop/workbench/GlyphPromptDocument.js';
+import type { GlyphPromptDocument } from '#src/desktop/workbench/GlyphPromptDocument.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { GlyphContextBadge } from '#code-oss/ui/GlyphContextBadge/GlyphContextBadge.presentational.tsx';
 
-const schema = new Schema({
-  nodes: {
-    doc: { content: 'paragraph' },
-    paragraph: { content: 'inline*', whitespace: 'pre', toDOM: () => ['div', 0] },
-    text: { group: 'inline' },
-    attachment: {
-      inline: true,
-      group: 'inline',
-      atom: true,
-      selectable: true,
-      attrs: { attachment: {} },
-      toDOM: node => ['span', { 'data-glyph-attachment': 'true' }, node.attrs.attachment.path],
-    },
-  },
-});
 export interface GlyphPromptQuery {
   readonly text: string;
   readonly from: number;
@@ -36,24 +38,10 @@ interface PromptCallbacks {
   keydown(event: KeyboardEvent): boolean;
   submit(): void;
 }
-function toDocument(parts: readonly GlyphPromptPart[]): PromptNode {
-  return schema.node('doc', null, [
-    schema.node(
-      'paragraph',
-      null,
-      parts.flatMap(part =>
-        part.type === 'text'
-          ? part.text
-            ? [schema.text(part.text)]
-            : []
-          : [schema.node('attachment', { attachment: part.attachment })],
-      ),
-    ),
-  ]);
-}
 /** ProseMirror owns DOM selection, atomic badge deletion, composition and edit history. */
 export class GlyphPromptEditor {
   readonly view: EditorView;
+  private lastDocument: GlyphPromptDocument | undefined;
   // Workbench keybindings also listen for bubbled keydown events. A shortcut
   // already handled by this editor must not run a second command in Code OSS.
   private readonly containKeydown = (event: KeyboardEvent): void => {
@@ -95,46 +83,88 @@ export class GlyphPromptEditor {
         // Clipboard HTML cannot forge trusted context badges.
         const text = event.clipboardData?.getData('text/plain');
         if (text === undefined) return false;
-        view.dispatch(view.state.tr.insertText(text));
+        if (!/[\n*`_>#[\]]/.test(text)) {
+          view.dispatch(view.state.tr.insertText(text));
+          return true;
+        }
+        const parsed = parsePrompt({ parts: [{ type: 'text', text }], from: text.length, to: text.length });
+        view.dispatch(view.state.tr.replaceSelection(Slice.maxOpen(parsed.doc.content)).scrollIntoView());
         return true;
       },
       dispatchTransaction: transaction => {
         const state = this.view.state.apply(transaction);
         this.view.updateState(state);
-        const parts: GlyphPromptPart[] = [];
-        state.doc.firstChild?.forEach(node => {
-          if (node.isText) parts.push({ type: 'text', text: node.text! });
-          else parts.push({ type: 'attachment', attachment: node.attrs.attachment });
-        });
-        callbacks.change({ parts, from: state.selection.from - 1, to: state.selection.to - 1 });
+        this.lastDocument = serializePrompt(state);
+        callbacks.change(this.lastDocument);
         this.updateQuery();
       },
     });
     this.view.dom.addEventListener('keydown', this.containKeydown);
   }
   private state(document: GlyphPromptDocument): EditorState {
-    const doc = toDocument(document.parts);
+    const { doc, from, to } = parsePrompt(document);
     return EditorState.create({
       doc,
-      selection: TextSelection.create(
-        doc,
-        Math.min(document.from + 1, doc.content.size - 1),
-        Math.min(document.to + 1, doc.content.size - 1),
-      ),
+      selection: promptSelection(doc, from, to),
       plugins: [
         history(),
+        inputRules({
+          rules: [
+            wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote!),
+            wrappingInputRule(/^\s*([-+*])\s$/, schema.nodes.bullet_list!, { tight: true }),
+            wrappingInputRule(
+              /^(\d+)\.\s$/,
+              schema.nodes.ordered_list!,
+              match => ({ order: +match[1]!, tight: true }),
+              (match, node) => node.childCount + node.attrs.order === +match[1]!,
+            ),
+            textblockTypeInputRule(/^(#{1,6})\s$/, schema.nodes.heading!, match => ({ level: match[1]!.length })),
+            textblockTypeInputRule(/^```([\w-]*)\s$/, schema.nodes.code_block!, match => ({ params: match[1] })),
+            new InputRule(/\[([^\]]+)\]\(([^()\s]+)\)$/, (state, match, start, end) => {
+              const transaction = state.tr.replaceWith(
+                start,
+                end,
+                schema.text(match[1]!, [schema.marks.link!.create({ href: match[2] })]),
+              );
+              transaction.removeStoredMark(schema.marks.link!);
+              return transaction;
+            }),
+            ...(
+              [
+                ['strong', /\*\*([^*]+)\*\*$/],
+                ['strong', /__([^_]+)__$/],
+                ['em', /(?:^|\s)_([^_]+)_$/],
+                ['em', /(?:^|\s)\*([^*]+)\*$/],
+                ['code', /`([^`]+)`$/],
+              ] as const
+            ).map(
+              ([mark, pattern]) =>
+                new InputRule(pattern, (state, match, start, end) => {
+                  const content = match[1]!;
+                  const prefix = match[0].startsWith(' ') ? 1 : 0;
+                  const transaction = state.tr.replaceWith(
+                    start + prefix,
+                    end,
+                    schema.text(content, [schema.marks[mark]!.create()]),
+                  );
+                  transaction.removeStoredMark(schema.marks[mark]!);
+                  return transaction;
+                }),
+            ),
+          ],
+        }),
         keymap({
           'Mod-a': (state, dispatch) => {
             dispatch?.(state.tr.setSelection(TextSelection.create(state.doc, 1, state.doc.content.size - 1)));
             return true;
           },
           'Mod-z': undo,
-          Backspace: (state, dispatch) => {
+          Backspace: chainCommands(undoInputRule, (state, dispatch) => {
             if (!state.selection.empty || state.selection.$from.nodeBefore?.type !== schema.nodes.attachment)
               return false;
             dispatch?.(state.tr.delete(state.selection.from - 1, state.selection.from));
             return true;
-          },
+          }),
           Delete: (state, dispatch) => {
             if (!state.selection.empty || state.selection.$from.nodeAfter?.type !== schema.nodes.attachment)
               return false;
@@ -147,32 +177,54 @@ export class GlyphPromptEditor {
             this.callbacks.submit();
             return true;
           },
-          Enter: (state, dispatch) => {
-            dispatch?.(state.tr.insertText('\n'));
+          'Mod-b': toggleMark(schema.marks.strong!),
+          'Mod-i': toggleMark(schema.marks.em!),
+          Tab: chainCommands(sinkListItem(schema.nodes.list_item!), (state, dispatch) => {
+            if (state.selection.$from.parent.type !== schema.nodes.code_block) return false;
+            dispatch?.(state.tr.insertText('  '));
+            return true;
+          }),
+          'Shift-Tab': liftListItem(schema.nodes.list_item!),
+          'Shift-Enter': (state, dispatch) => {
+            dispatch?.(state.tr.replaceSelectionWith(schema.nodes.hard_break!.create()).scrollIntoView());
             return true;
           },
+          Enter: chainCommands(
+            (state, dispatch) => {
+              const { $from, empty } = state.selection;
+              const match = /^```([\w-]*)$/.exec($from.parent.textContent);
+              if (!empty || $from.parent.type !== schema.nodes.paragraph || !match) return false;
+              dispatch?.(
+                state.tr
+                  .delete($from.start(), $from.end())
+                  .setBlockType($from.start(), $from.start(), schema.nodes.code_block!, { params: match[1] }),
+              );
+              return true;
+            },
+            newlineInCode,
+            splitListItem(schema.nodes.list_item!),
+            createParagraphNear,
+            liftEmptyBlock,
+            splitBlock,
+          ),
         }),
         keymap(baseKeymap),
       ],
     });
   }
   update(document: GlyphPromptDocument): void {
-    const doc = toDocument(document.parts);
+    if (this.lastDocument && JSON.stringify(document.parts) === JSON.stringify(this.lastDocument.parts)) return;
+    const { doc, from, to } = parsePrompt(document);
     if (!this.view.state.doc.eq(doc)) {
       if (!document.parts.length) this.view.updateState(this.state(document));
       else {
         const transaction = this.view.state.tr.replaceWith(0, this.view.state.doc.content.size, doc.content);
-        transaction.setSelection(
-          TextSelection.create(
-            transaction.doc,
-            Math.min(document.from + 1, transaction.doc.content.size - 1),
-            Math.min(document.to + 1, transaction.doc.content.size - 1),
-          ),
-        );
+        transaction.setSelection(promptSelection(transaction.doc, from, to));
         this.view.updateState(this.view.state.apply(transaction));
       }
       this.updateQuery();
     }
+    this.lastDocument = document;
   }
   insert(attachment: GlyphContextAttachment, query: GlyphPromptQuery): void {
     this.view.dispatch(

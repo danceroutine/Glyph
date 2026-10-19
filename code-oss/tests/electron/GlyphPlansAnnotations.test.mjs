@@ -26,14 +26,16 @@ async function annotate(glyph, source, comment) {
   await source.dblclick({ position: { x: 10, y: 10 } });
   await expect(glyph.page.getByRole('button', { name: 'Comment on selection', exact: true })).toBeVisible();
   const anchor = await glyph.page.evaluate(() => {
-    const rect = [...document.getSelection().getRangeAt(0).getClientRects()]
-      .filter(rect => rect.width > 0 && rect.height > 0)
-      .at(-1);
-    return { x: rect.right, y: rect.bottom };
+    const rect = document.getSelection().getRangeAt(0).getBoundingClientRect();
+    return { left: rect.left, right: rect.right, top: rect.top };
   });
-  const bubble = await glyph.page.getByRole('button', { name: 'Comment on selection', exact: true }).boundingBox();
-  expect(Math.abs(bubble.x + 3 - anchor.x)).toBeLessThan(2);
-  expect(Math.abs(bubble.y + 28 - anchor.y)).toBeLessThan(2);
+  const button = glyph.page.getByRole('button', { name: 'Comment on selection', exact: true });
+  await expect(button).toHaveText('Add to chat');
+  const pill = await button.boundingBox();
+  // The text pill sits above the selection; the numbered marker remains attached to its end.
+  expect(pill.y + pill.height).toBeLessThanOrEqual(anchor.top);
+  expect(anchor.top - pill.y - pill.height).toBeLessThan(12);
+  expect(Math.abs(pill.x + pill.width / 2 - (anchor.left + anchor.right) / 2)).toBeLessThan(1);
   await glyph.page.getByRole('button', { name: 'Comment on selection', exact: true }).click();
   await glyph.page.getByRole('textbox', { name: 'Annotation comment' }).fill(comment);
   await glyph.page.getByRole('textbox', { name: 'Annotation comment' }).press('Enter');

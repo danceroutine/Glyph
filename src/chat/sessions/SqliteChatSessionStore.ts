@@ -22,8 +22,25 @@ const providerStateSchema = z
   })
   .strict();
 
+const historyCheckpointSchema = z
+  .object({
+    providerState: providerStateSchema,
+    plans: z.array(planSchema),
+    todos: todoItemsSchema,
+    mode: z.enum(['agent', 'plan']),
+  })
+  .strict();
+
 const transcriptTurnSchema = z
   .object({
+    checkpoints: z.object({ before: historyCheckpointSchema, after: historyCheckpointSchema }).strict().optional(),
+    questionResponses: z
+      .array(
+        z
+          .object({ id: z.string(), answers: z.array(z.object({ question: z.string(), answer: z.string() }).strict()) })
+          .strict(),
+      )
+      .optional(),
     options: chatTurnOptionsSchema.optional(),
     userText: z.string(),
     attachmentPaths: z.array(z.string().min(1)),
@@ -83,7 +100,9 @@ const transcriptTurnSchema = z
     createdAt: z.iso.datetime(),
   })
   .strict()
-  .transform(({ usage, tools, attachments, options, ...turn }) => ({
+  .transform(({ usage, tools, attachments, options, checkpoints, questionResponses, ...turn }) => ({
+    ...(checkpoints ? { checkpoints } : {}),
+    ...(questionResponses ? { questionResponses } : {}),
     ...(options ? { options } : {}),
     ...turn,
     ...(usage === undefined ? {} : { usage }),
@@ -185,6 +204,8 @@ interface ChatRow {
 }
 
 interface TurnRow {
+  readonly question_responses: string | null;
+  readonly checkpoints: string | null;
   readonly options: string | null;
   readonly user_text: string;
   readonly attachment_paths: string;
@@ -253,7 +274,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         .prepare('SELECT * FROM chats WHERE project_context_id = ? ORDER BY updated_at DESC')
         .all(projectContextId) as ChatRow[];
       const turns = database.prepare(
-        'SELECT options, user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
+        'SELECT question_responses, checkpoints, options, user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
       );
       return chats.map(row => toRecord(row, turns.all(row.id) as TurnRow[]));
     } catch (error) {
@@ -361,7 +382,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         if (!chatColumns.some(value => value.name === 'plans'))
           database.exec('ALTER TABLE chats ADD COLUMN plans TEXT');
         const columns = database.prepare('PRAGMA table_info(chat_turns)').all() as { name: string }[];
-        for (const column of ['usage', 'tools', 'attachments', 'options']) {
+        for (const column of ['usage', 'tools', 'attachments', 'options', 'checkpoints', 'question_responses']) {
           if (!columns.some(value => value.name === column))
             database.exec(`ALTER TABLE chat_turns ADD COLUMN ${column} TEXT`);
         }
@@ -483,8 +504,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
     database.prepare('DELETE FROM chat_turns WHERE chat_id = ?').run(record.id);
     const insertTurn = database.prepare(
       `INSERT INTO chat_turns(
-         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools, attachments, options
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools, attachments, options, checkpoints, question_responses
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     record.transcript.forEach((turn, position) =>
       insertTurn.run(
@@ -499,6 +520,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         turn.tools ? JSON.stringify(turn.tools) : null,
         turn.attachments ? JSON.stringify(turn.attachments) : null,
         turn.options ? JSON.stringify(turn.options) : null,
+        turn.checkpoints ? JSON.stringify(turn.checkpoints) : null,
+        turn.questionResponses ? JSON.stringify(turn.questionResponses) : null,
       ),
     );
   })();
@@ -523,6 +546,8 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
     ...(row.plans == null ? {} : { plans: JSON.parse(row.plans) as unknown }),
     ...(row.todos === null ? {} : { todos: JSON.parse(row.todos) as unknown }),
     transcript: turns.map(turn => ({
+      ...(turn.question_responses == null ? {} : { questionResponses: JSON.parse(turn.question_responses) as unknown }),
+      ...(turn.checkpoints == null ? {} : { checkpoints: JSON.parse(turn.checkpoints) as unknown }),
       ...(turn.options == null ? {} : { options: JSON.parse(turn.options) as unknown }),
       userText: turn.user_text,
       attachmentPaths: JSON.parse(turn.attachment_paths) as unknown,

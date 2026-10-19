@@ -15,7 +15,7 @@ const shell = {
 };
 const activity = { id: 'call-1', name: 'execute_shell', status: GlyphToolActivityStatus.COMPLETED, shell };
 const meta = {
-  title: 'Glyph/Shell command',
+  title: 'Glyph/Chat/Shell command',
   component: WiredGlyphShellCommandCard,
   args: { activity, chatId: 'chat', readOnly: false, actions: previewActions },
 } satisfies Meta<typeof WiredGlyphShellCommandCard>;

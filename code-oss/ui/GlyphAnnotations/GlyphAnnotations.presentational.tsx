@@ -251,9 +251,10 @@ export function GlyphAnnotations(state: GlyphAnnotationsState) {
         <form
           class={styles.editor}
           aria-label="Annotation editor"
+          ref={state.editor}
           style={{
-            left: `${Math.max(8, Math.min(innerWidth - 360, state.draft.x - 320))}px`,
-            top: `${Math.max(8, Math.min(innerHeight - 250, state.draft.y + 12))}px`,
+            left: `${state.editorPosition.x}px`,
+            top: `${state.editorPosition.y}px`,
           }}
           onSubmit={event => {
             event.preventDefault();

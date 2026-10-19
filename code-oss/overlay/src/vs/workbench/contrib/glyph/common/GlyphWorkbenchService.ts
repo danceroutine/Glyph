@@ -21,6 +21,9 @@ export interface GlyphWorkbenchService {
   send(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
   selectMode?(mode: 'agent' | 'plan'): Promise<void>;
   buildPlan?(chatId: string, plan: GlyphPlan, newChat?: boolean): Promise<void>;
+  branchChat?(chatId: string, turnId: string): Promise<void>;
+  restoreCheckpoint?(chatId: string, turnId: string): Promise<void>;
+  openLink?(href: string): Promise<void>;
   viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
   cancel(): void;
   reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void>;

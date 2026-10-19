@@ -109,7 +109,7 @@ function TokenGallery() {
   );
 }
 
-const meta = { title: 'Glyph/Design system', component: TokenGallery } satisfies Meta<typeof TokenGallery>;
+const meta = { title: 'Glyph/Shared/Design system', component: TokenGallery } satisfies Meta<typeof TokenGallery>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const Tokens: Story = {};

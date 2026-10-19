@@ -16,6 +16,8 @@ export interface GlyphContextAttachment {
   readonly path: string;
   readonly text: string;
   readonly contentRevision: string;
-  readonly token: GlyphDocumentToken;
+  /** Historical snapshots have no live editor capability. */
+  readonly token?: GlyphDocumentToken;
+  readonly sourceVersion?: number;
   readonly range?: GlyphTextRange;
 }

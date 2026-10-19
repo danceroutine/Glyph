@@ -1,3 +1,5 @@
+import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
+import type { GlyphUsage } from './GlyphUsage.ts';
 import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { GlyphAttachmentPreview } from './GlyphAttachmentPreview.ts';
 import type { GlyphToolActivity } from './GlyphToolActivity.ts';
@@ -22,6 +24,10 @@ export interface GlyphRunProjection {
   readonly options?: GlyphTurnOptions;
   readonly attachments?: readonly GlyphAttachmentPreview[];
   readonly userText?: string;
+  readonly checkpointTurnId?: string;
+  readonly createdAt?: string;
+  readonly questionResponses?: readonly GlyphQuestionResponse[];
+  readonly usage?: GlyphUsage;
   readonly reasoning: string;
   readonly tools: readonly GlyphToolActivity[];
   readonly question?: GlyphQuestionRequest;

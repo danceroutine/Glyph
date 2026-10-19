@@ -1,5 +1,6 @@
+import { GlyphQuestionResponses } from '#code-oss/ui/GlyphQuestionCard/GlyphQuestionResponses.presentational.tsx';
 import { GlyphAnnotationPill } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.presentational.tsx';
-import { GlyphContextBadge } from '#code-oss/ui/GlyphContextBadge/GlyphContextBadge.presentational.tsx';
+import { Copy, GitFork, Undo2 } from 'lucide-preact';
 import type { ComponentChildren } from 'preact';
 import type { GlyphTranscriptState } from './useGlyphTranscriptState.ts';
 import { GlyphTurnProgress } from '#code-oss/ui/GlyphTurnProgress/GlyphTurnProgress.presentational.tsx';
@@ -7,13 +8,55 @@ import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 
 const styles = {
   root: css({ flex: 1, minHeight: 0, overflowY: 'auto', padding: tokens.space.lg }),
-  entry: css({ marginBottom: tokens.space.lg, whiteSpace: 'pre-wrap', userSelect: 'text' }),
+  entry: css({
+    marginBottom: 28,
+    userSelect: 'text',
+    '&:hover time, &:focus-within time, &:hover .glyph-restore, &:focus-within .glyph-restore': { opacity: 1 },
+  }),
+  bubble: css({
+    position: 'relative',
+    background: tokens.input.background,
+    border: tokens.input.strongBorder,
+    borderRadius: 12,
+    padding: '10px 12px',
+    '&:has(.glyph-restore)': { paddingRight: 38 },
+    '& p:first-child': { marginTop: 0 },
+    '& p:last-child': { marginBottom: 0 },
+  }),
+  answer: css({ padding: '0 10px' }),
+  restore: css({ position: 'absolute', right: 10, top: 10, opacity: 0 }),
+  footer: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 12,
+    color: tokens.text.muted,
+    minHeight: 24,
+    '& time': { opacity: 0, fontSize: tokens.font.size.detail },
+  }),
+  action: css({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    width: 20,
+    height: 24,
+    background: 'transparent',
+    border: 0,
+    color: tokens.text.muted,
+    cursor: 'pointer',
+    ':hover': { color: tokens.text.primary },
+    ':disabled': { opacity: 0.4, cursor: 'default' },
+    ':focus-visible': { outline: tokens.focus.ring },
+  }),
 };
 
 export interface GlyphTranscriptProps {
   readonly proposals?: ComponentChildren;
   readonly transcript: GlyphTranscriptState['transcript'];
-  readonly entries: readonly (GlyphTranscriptState['entries'][number] & {
+  readonly entries: readonly (Omit<GlyphTranscriptState['entries'][number], 'usage'> & {
+    readonly content: ComponentChildren;
+    readonly usage: ComponentChildren;
     readonly approval?: ComponentChildren;
     readonly shells?: ComponentChildren;
   })[];
@@ -25,27 +68,68 @@ export function GlyphTranscript({ entries, transcript, proposals }: GlyphTranscr
     <div class={`glyph-transcript ${styles.root}`} ref={transcript} role="log" aria-label="Glyph conversation">
       {entries.map(entry => (
         <div class={`glyph-entry ${entry.role} ${styles.entry}`} key={entry.id}>
-          <strong>{entry.label}</strong>
+          {entry.questionResponses?.map(response => (
+            <GlyphQuestionResponses key={response.id} response={response} />
+          ))}
+          {entry.role === 'diagnostic' && <strong>{entry.label}</strong>}
           {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
-          <div data-glyph-source={entry.id} data-kind="chat" data-label={entry.label} data-revision={entry.text.length}>
-            {entry.parts.map((part, index) =>
-              part.type === 'text' ? (
-                part.text
-              ) : (
-                <GlyphContextBadge
-                  key={index}
-                  label={part.label}
-                  title={part.title}
-                  actionLabel="Open"
-                  onClick={() => entry.openAttachment(part.attachment)}
-                />
-              ),
+          <div class={entry.role === 'user' ? styles.bubble : styles.answer}>
+            <div
+              data-glyph-source={entry.id}
+              data-kind="chat"
+              data-label={entry.label}
+              data-revision={entry.text.length}
+            >
+              {entry.content}
+            </div>
+            {entry.role === 'user' && entry.restore && (
+              <button
+                class={`glyph-restore ${styles.action} ${styles.restore}`}
+                type="button"
+                aria-label="Restore checkpoint"
+                title="Restore checkpoint"
+                disabled={entry.historyPending}
+                onClick={entry.restore}
+              >
+                <Undo2 size={15} aria-hidden="true" />
+              </button>
             )}
           </div>
           {entry.options?.annotations && <GlyphAnnotationPill annotations={entry.options.annotations} />}
           {entry.attachmentError && <p role="alert">{entry.attachmentError}</p>}
           {entry.approval}
           {entry.shells}
+          {entry.role === 'assistant' && (
+            <footer class={styles.footer} aria-label="Message actions">
+              <button
+                class={styles.action}
+                type="button"
+                aria-label="Copy message"
+                title="Copy message"
+                onClick={entry.copy}
+              >
+                <Copy size={16} aria-hidden="true" />
+              </button>
+              {entry.branch && (
+                <button
+                  class={styles.action}
+                  type="button"
+                  aria-label="Branch chat"
+                  title="Branch chat"
+                  disabled={entry.historyPending}
+                  onClick={entry.branch}
+                >
+                  <GitFork size={16} aria-hidden="true" />
+                </button>
+              )}
+              {entry.usage}
+              {entry.datetime && (
+                <time dateTime={entry.createdAt} title={entry.datetime}>
+                  {entry.datetime}
+                </time>
+              )}
+            </footer>
+          )}
         </div>
       ))}
       {proposals}

@@ -23,6 +23,56 @@ afterEach(async () => {
 });
 
 describe(ChatSessionManager, () => {
+  it('branches at an answer and restores before a prompt without retaining future provider history', async () => {
+    const store = new MemoryChatSessionStore();
+    const context = await ProjectContextResolver.folder(await projectFixture());
+    const manager = new ChatSessionManager(store, context);
+    await manager.initialize();
+    const session = await manager.create(input(), conversation());
+    const send = (text: string) =>
+      session.send({ text, attachments: [], turnId: text }, { push: () => {} }, new AbortController().signal);
+    await send('first');
+    await send('second');
+    await send('third');
+    const fork = await manager.branch(session, 'first', record => conversation(record.providerState));
+    await fork.send('branch follow-up', { push: () => {} }, new AbortController().signal);
+    expect(providerMessages(store.records.find(record => record.id === fork.id)!)).toEqual([
+      'first',
+      'branch follow-up',
+    ]);
+    expect(session.transcript.map(turn => turn.userText)).toEqual(['first', 'second', 'third']);
+    await session.restoreCheckpoint('second');
+    expect(session.transcript.map(turn => turn.userText)).toEqual(['first']);
+    await send('replacement');
+    expect(providerMessages(store.records.find(record => record.id === session.id)!)).toEqual(['first', 'replacement']);
+    await expect(session.restoreCheckpoint('third')).rejects.toThrow('no longer');
+    const reopened = new ChatSessionManager(store, context);
+    await reopened.initialize();
+    const restored = reopened.open(session.id, record => conversation(record.providerState));
+    await restored.restoreCheckpoint('first');
+    expect(restored.transcript).toEqual([]);
+    expect(providerMessages(store.records.find(record => record.id === session.id)!)).toEqual([]);
+    expect(fork.transcript).toHaveLength(2);
+  });
+
+  it('rolls back a failed restore in both storage and the live provider', async () => {
+    const store = new MemoryChatSessionStore();
+    const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+    await manager.initialize();
+    const session = await manager.create(input(), conversation());
+    await session.send(
+      { text: 'first', attachments: [], turnId: 'first' },
+      { push: () => {} },
+      new AbortController().signal,
+    );
+    store.failure = new Error('Disk full');
+    await expect(session.restoreCheckpoint('first')).rejects.toThrow('Disk full');
+    expect(session.transcript).toHaveLength(1);
+    store.failure = undefined;
+    await session.send('second', { push: () => {} }, new AbortController().signal);
+    expect(providerMessages(store.records[0]!)).toEqual(['first', 'second']);
+  });
+
   it('keeps immutable plan revisions, rejects stale edits and links another chat without executing it', async () => {
     const store = new MemoryChatSessionStore();
     const context = await ProjectContextResolver.folder(await projectFixture());

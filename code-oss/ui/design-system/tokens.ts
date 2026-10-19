@@ -39,6 +39,7 @@ export const tokens = {
   input: {
     background: codeOss.input.background,
     foreground: codeOss.input.foreground,
+    placeholder: `color-mix(in srgb, ${codeOss.input.foreground} 40%, ${codeOss.input.background})`,
     border: border(codeOss.input.border),
     strongBorder: border(codeOss.input.strongBorder),
     radius: atoms.radius.md,

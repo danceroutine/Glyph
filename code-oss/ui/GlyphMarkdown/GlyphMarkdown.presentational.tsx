@@ -3,6 +3,20 @@ import type { ComponentChildren } from 'preact';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 const style = css({
   lineHeight: 1.6,
+  whiteSpace: 'normal',
+  '& > :first-child': { marginTop: 0 },
+  '& > :last-child': { marginBottom: 0 },
+  '& p': { margin: '8px 0' },
+  '& h1': { fontSize: '1.5em', margin: '20px 0 10px' },
+  '& h2': { fontSize: '1.3em', margin: '18px 0 8px' },
+  '& h3': { fontSize: '1.1em', margin: '16px 0 8px' },
+  '& ul, & ol': { paddingLeft: 24 },
+  '& blockquote': {
+    margin: '12px 0',
+    paddingLeft: 12,
+    borderLeft: `2px solid ${tokens.text.muted}`,
+    color: tokens.text.muted,
+  },
   overflowWrap: 'anywhere',
   '& pre': { overflow: 'auto', padding: tokens.space.md, background: tokens.input.background },
   '& code': { fontFamily: tokens.font.family.code },
@@ -15,15 +29,22 @@ export function GlyphMarkdown({
   items,
   openLink,
   diagram,
+  inline,
+  text = value => value,
 }: {
   readonly items: readonly Token[];
   readonly openLink: (href: string) => void;
+  readonly text?: (value: string) => ComponentChildren;
+  readonly inline?: (token: Token) => ComponentChildren;
   readonly diagram: (source: string) => ComponentChildren;
 }) {
   const render = (items: readonly Token[]): ComponentChildren =>
     items.map((token): ComponentChildren => {
-      const children = 'tokens' in token && token.tokens ? render(token.tokens) : 'text' in token ? token.text : '';
+      const children =
+        'tokens' in token && token.tokens ? render(token.tokens) : 'text' in token ? text(token.text) : '';
       switch (token.type) {
+        case 'glyph_context':
+          return inline?.(token);
         case 'heading':
           return token.depth === 1 ? (
             <h1>{children}</h1>
@@ -41,13 +62,13 @@ export function GlyphMarkdown({
         case 'del':
           return <del>{children}</del>;
         case 'codespan':
-          return <code>{token.text}</code>;
+          return <code>{text(token.text)}</code>;
         case 'code':
           return token.lang === 'mermaid' ? (
             diagram(token.text)
           ) : (
             <pre>
-              <code>{token.text}</code>
+              <code>{text(token.text)}</code>
             </pre>
           );
         case 'link':
@@ -64,7 +85,7 @@ export function GlyphMarkdown({
           );
         case 'list':
           return token.ordered ? (
-            <ol>
+            <ol start={token.start || 1}>
               {token.items.map((item: Token) => (
                 <li>{'tokens' in item ? render(item.tokens ?? []) : ''}</li>
               ))}

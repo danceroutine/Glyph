@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { WiredGlyphPlan } from './GlyphPlan.wired.tsx';
 const meta = {
-  title: 'Glyph/Plan',
+  title: 'Glyph/Editor/Plan',
   component: WiredGlyphPlan,
   args: {
     state: {

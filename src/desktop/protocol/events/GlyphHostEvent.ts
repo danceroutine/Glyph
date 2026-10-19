@@ -1,3 +1,5 @@
+import type { GlyphContextAttachment } from '../connection/GlyphContextAttachment.ts';
+import type { GlyphTurnOptions } from './GlyphAnnotation.ts';
 import type { GlyphProposalFilePreview } from './GlyphProposalFilePreview.ts';
 import type { GlyphHostStatus } from './GlyphHostStatus.ts';
 import type { GlyphCommandResultHostEvent } from './GlyphCommandResultHostEvent.ts';
@@ -25,12 +27,23 @@ export enum GlyphHostEventType {
   APPROVAL = 'approval',
   USAGE = 'usage',
   RUN_STATE = 'run_state',
+  CHAT_RESTORED = 'chat_restored',
   HOST_STATUS = 'host_status',
   ERROR = 'error',
 }
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | {
+      readonly type: GlyphHostEventType.CHAT_RESTORED;
+      readonly chatId: string;
+      readonly runs: readonly GlyphRunProjection[];
+      readonly draft: {
+        readonly text: string;
+        readonly attachments: readonly GlyphContextAttachment[];
+        readonly options?: GlyphTurnOptions;
+      };
+    }
   | { readonly type: GlyphHostEventType.PROPOSAL_PREVIEW; readonly preview: GlyphProposalFilePreview }
   | GlyphCommandResultHostEvent
   | { readonly type: GlyphHostEventType.INITIAL_STATE; readonly state: GlyphDesktopSnapshot }

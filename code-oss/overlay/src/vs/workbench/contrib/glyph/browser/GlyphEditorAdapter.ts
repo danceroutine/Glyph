@@ -244,7 +244,7 @@ export class GlyphEditorAdapter extends Disposable {
 
   isCurrentContext(model: ITextModel, attachment: GlyphContextAttachment): boolean {
     return (
-      attachment.token.workspaceGeneration === this.workspaceGeneration &&
+      attachment.token?.workspaceGeneration === this.workspaceGeneration &&
       attachment.token.incarnation === this.incarnation(model) &&
       attachment.token.version === model.getVersionId()
     );

@@ -59,6 +59,11 @@ export class GlyphComposerState {
   setDraft(draft: string): void {
     this.setDocument({ parts: draft ? [{ type: 'text', text: draft }] : [], from: draft.length, to: draft.length });
   }
+  restoreDraft(document: GlyphPromptDocument): void {
+    if (this.value.document.parts.length) this.documents = [...this.documents, this.value.document];
+    this.setDocument(document);
+    this.update({ unsent: this.documents.map(value => toGlyphPromptText(value.parts)) });
+  }
   setDocument(document: GlyphPromptDocument): void {
     document = { ...document, options: document.options ?? this.value.document.options ?? {} };
     this.update({ document, draft: toGlyphPromptText(document.parts) });

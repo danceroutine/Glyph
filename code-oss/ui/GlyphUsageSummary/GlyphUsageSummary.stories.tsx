@@ -1,9 +1,9 @@
 import type { Meta, StoryObj } from '@storybook/preact-vite';
-import { GlyphUsageSummary } from './GlyphUsageSummary.presentational.tsx';
+import { WiredGlyphUsageSummary as GlyphUsageSummary } from './GlyphUsageSummary.wired.tsx';
 import { workbenchClassName } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.presentational.tsx';
 
 const meta = {
-  title: 'Glyph/Conversation usage',
+  title: 'Glyph/Chat/Conversation usage',
   component: GlyphUsageSummary,
   args: {
     usage: {
@@ -33,3 +33,4 @@ export const Unavailable: Story = { args: { usage: undefined } };
 export const ReportedZero: Story = {
   args: { usage: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 } },
 };
+export const TurnMeter: Story = { args: { turn: true } };

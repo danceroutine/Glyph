@@ -64,12 +64,31 @@ const styles = {
       overflowWrap: 'anywhere',
       font: 'inherit',
     },
-    '& .ProseMirror > div:only-child:has(> br:only-child)::before': {
+    '& .ProseMirror > p:only-child:has(> br:only-child)::before': {
       content: '"Plan, build, @ for context"',
-      color: tokens.text.muted,
+      color: tokens.input.placeholder,
       pointerEvents: 'none',
       position: 'absolute',
     },
+    '& .ProseMirror p': { margin: '0 0 6px' },
+    '& .ProseMirror > :last-child': { marginBottom: 0 },
+    '& .ProseMirror ul, & .ProseMirror ol': { margin: '4px 0', paddingLeft: 24 },
+    '& .ProseMirror li > p': { margin: 0 },
+    '& .ProseMirror blockquote': {
+      margin: '6px 0',
+      paddingLeft: 12,
+      borderLeft: `2px solid ${tokens.text.muted}`,
+      color: tokens.text.muted,
+    },
+    '& .ProseMirror h1, & .ProseMirror h2, & .ProseMirror h3': { fontSize: '1.15em', margin: '8px 0' },
+    '& .ProseMirror pre': {
+      whiteSpace: 'pre-wrap',
+      fontFamily: tokens.font.family.code,
+      padding: 8,
+      background: tokens.surface.canvas,
+    },
+    '& .ProseMirror code': { fontFamily: tokens.font.family.code },
+    '& .glyph-prompt-link': { color: tokens.context.file.foreground },
     '& .ProseMirror-selectednode': { outline: tokens.focus.ring },
   }),
   button: css({

@@ -6,7 +6,7 @@ function ModePickerExample({ initial }: { readonly initial: 'agent' | 'plan' }) 
   return <WiredGlyphModePicker mode={mode} change={change} />;
 }
 const meta = {
-  title: 'Glyph/Mode Picker',
+  title: 'Glyph/Chat/Mode Picker',
   component: WiredGlyphModePicker,
   args: { mode: 'agent', change: () => {} },
   decorators: [

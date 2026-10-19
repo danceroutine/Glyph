@@ -8,7 +8,7 @@ import { conversation, workbenchState, previewActions } from './fixtures.ts';
 /** A local simulation for UI iteration. It never connects to the desktop host. */
 export function InteractiveWorkbench() {
   const [composer] = useState(() => new GlyphComposerState());
-  const [state, setState] = useState(() => workbenchState({ transcript: conversation }));
+  const [state, setState] = useState(() => workbenchState({ selectedChatId: 'preview', transcript: conversation }));
   const [pending, setPending] = useState<{ id: string; response: string }>();
   const nextTurn = useRef(0);
 
@@ -38,6 +38,31 @@ export function InteractiveWorkbench() {
       actions={{
         ...previewActions,
         composer,
+        branchChat: async (_chatId, turnId) => {
+          setState(current => ({
+            ...current,
+            selectedChatId: 'branch',
+            transcript: current.transcript.slice(0, current.transcript.findIndex(entry => entry.id === turnId) + 1),
+            chats: [
+              {
+                id: 'branch',
+                title: 'Branched conversation',
+                accountProvider: 'preview',
+                accountId: 'preview',
+                modelSlug: 'preview',
+                updatedAt: new Date().toISOString(),
+                turnCount: 1,
+              },
+            ],
+          }));
+        },
+        restoreCheckpoint: async (_chatId, turnId) => {
+          const index = state.transcript.findIndex(
+            entry => entry.role === GlyphTranscriptRole.USER && entry.checkpointTurnId === turnId,
+          );
+          composer.setDraft(state.transcript[index]!.text);
+          setState(current => ({ ...current, transcript: current.transcript.slice(0, index) }));
+        },
         send: async (text, attachments = []) => {
           const turn = ++nextTurn.current;
           const id = `preview-assistant-${turn}`;

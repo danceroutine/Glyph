@@ -5,7 +5,7 @@ import { GlyphProposalApplicability } from '#src/desktop/protocol/events/GlyphPr
 import { previewActions } from '#code-oss/storybook/fixtures.ts';
 
 const meta = {
-  title: 'Glyph/Pending reviews',
+  title: 'Glyph/Chat/Pending reviews',
   component: WiredGlyphPendingReviews,
   args: {
     chatId: 'chat',

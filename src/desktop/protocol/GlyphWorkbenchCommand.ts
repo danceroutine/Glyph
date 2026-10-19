@@ -10,6 +10,8 @@ export enum GlyphWorkbenchCommandType {
   LIST_CHATS = 'list_chats',
   CREATE_CHAT = 'create_chat',
   OPEN_CHAT = 'open_chat',
+  BRANCH_CHAT = 'branch_chat',
+  RESTORE_CHECKPOINT = 'restore_checkpoint',
   SELECT_ACCOUNT = 'select_account',
   SELECT_MODEL = 'select_model',
   SEND = 'send',
@@ -33,6 +35,13 @@ export enum GlyphWorkbenchCommandType {
  * through MessagePort without coupling either process to the other's classes.
  */
 export type GlyphWorkbenchCommand =
+  | {
+      readonly type: GlyphWorkbenchCommandType.BRANCH_CHAT;
+      readonly chatId: string;
+      readonly turnId: string;
+      readonly creationId: string;
+    }
+  | { readonly type: GlyphWorkbenchCommandType.RESTORE_CHECKPOINT; readonly chatId: string; readonly turnId: string }
   | { readonly type: GlyphWorkbenchCommandType.SET_CHAT_MODE; readonly chatId: string; readonly mode: 'agent' | 'plan' }
   | {
       readonly type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE;

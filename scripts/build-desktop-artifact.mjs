@@ -19,10 +19,15 @@ const codeOssPin = JSON.parse(await readFile(join(repositoryRoot, 'code-oss', 'u
 await rm(staging, { recursive: true, force: true });
 await rm(deployment, { recursive: true, force: true });
 await mkdir(artifactsRoot, { recursive: true });
-execFileSync('pnpm', ['deploy', '--filter', sourcePackage.name, '--prod', '--legacy', deployment], {
-  cwd: repositoryRoot,
-  stdio: 'inherit',
-});
+// Development-only patches (Storybook) are intentionally absent from the production deployment.
+execFileSync(
+  'pnpm',
+  ['deploy', '--filter', sourcePackage.name, '--prod', '--legacy', '--config.allowUnusedPatches=true', deployment],
+  {
+    cwd: repositoryRoot,
+    stdio: 'inherit',
+  },
+);
 // pnpm deploy may include source/build inputs. Move only the resolved production
 // dependency graph, then emit into fresh staging. Copying local dist would
 // retain removed modules and stale casing after protocol migrations.

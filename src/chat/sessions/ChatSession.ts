@@ -1,3 +1,5 @@
+import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
+import { ChatHistoryError } from './ChatHistoryError.ts';
 import { toShellCommandSummary } from '#src/shell/toShellCommandSummary.js';
 import type { ChatConversation } from '#src/chat/ChatConversation.js';
 import type { ChatRequestInput } from '#src/chat/ChatRequest.js';
@@ -7,6 +9,7 @@ import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
 import type { ChatTurnResult } from '#src/chat/ChatTurnResult.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type {
+  ChatHistoryCheckpoint,
   ChatSessionRecord,
   ChatSessionSummary,
   ChatTranscriptTurn,
@@ -29,6 +32,10 @@ export class ChatSession {
     private readonly record: () => ChatSessionRecord,
     private readonly conversation: ChatConversation,
     private readonly checkpoint: Checkpoint,
+    private readonly replaceHistory?: (
+      snapshot: ChatHistoryCheckpoint,
+      turns: readonly ChatTranscriptTurn[],
+    ) => Promise<void>,
   ) {}
 
   get id(): string {
@@ -53,6 +60,51 @@ export class ChatSession {
 
   get usage(): ChatUsage {
     return toChatUsage(this.transcript);
+  }
+
+  /** Serialize history changes with sends and durable tool receipts. */
+  historyAt(turnId: string): Promise<{ record: ChatSessionRecord; index: number; turn: ChatTranscriptTurn }> {
+    return this.enqueue(async () => {
+      await this.persistOutstandingToolState();
+      return this.findHistory(turnId);
+    });
+  }
+
+  restoreCheckpoint(turnId: string): Promise<void> {
+    return this.enqueue(async () => {
+      await this.persistOutstandingToolState();
+      const { record, index, turn } = this.findHistory(turnId);
+      if (!turn.checkpoints || !this.replaceHistory)
+        throw new ChatHistoryError('This message has no saved checkpoint.');
+      const previous = this.conversation.exportState();
+      this.conversation.restoreState(turn.checkpoints.before.providerState);
+      try {
+        await this.replaceHistory(turn.checkpoints.before, record.transcript.slice(0, index));
+      } catch (error) {
+        this.conversation.restoreState(previous);
+        throw error;
+      }
+    });
+  }
+
+  private findHistory(turnId: string) {
+    const record = this.record();
+    const index = record.transcript.findIndex(
+      (turn, position) => (turn.options?.turnId ?? `${record.id}:history:${position}`) === turnId,
+    );
+    const turn = record.transcript[index];
+    if (!turn) throw new ChatHistoryError('This message is no longer in the conversation.');
+    return { record, index, turn };
+  }
+
+  private historySnapshot(): ChatHistoryCheckpoint {
+    const record = this.record();
+    return structuredClone({
+      providerState: this.conversation.exportState(),
+      plans: record.plans ?? [],
+      todos: record.todos ?? [],
+      mode: record.mode ?? 'agent',
+    });
   }
 
   async reset(): Promise<void> {
@@ -96,17 +148,20 @@ export class ChatSession {
     requestInput: ChatRequestInput,
     response: ChatResponseStream,
     signal: AbortSignal,
+    questionResponses?: () => readonly GlyphQuestionResponse[],
   ): Promise<ChatTurnResult> {
-    return this.enqueue(() => this.sendNow(requestInput, response, signal));
+    return this.enqueue(() => this.sendNow(requestInput, response, signal, questionResponses));
   }
 
   private async sendNow(
     requestInput: ChatRequestInput,
     response: ChatResponseStream,
     signal: AbortSignal,
+    questionResponses?: () => readonly GlyphQuestionResponse[],
   ): Promise<ChatTurnResult> {
     await this.persistOutstandingToolState();
     const request = toChatRequest(requestInput);
+    const before = this.historySnapshot();
     const previousState = this.conversation.exportState();
     let durableState = previousState;
     let assistantText = '';
@@ -157,6 +212,8 @@ export class ChatSession {
     }
     try {
       await this.checkpoint(this.conversation.exportState(), {
+        checkpoints: { before, after: this.historySnapshot() },
+        ...(questionResponses ? { questionResponses: questionResponses() } : {}),
         userText: request.text,
         options: {
           ...(request.attachmentSpans ? { attachmentSpans: request.attachmentSpans } : {}),

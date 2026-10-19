@@ -2,7 +2,10 @@ import type { Preview } from '@storybook/preact-vite';
 import { stageClassName, frameClassName } from './previewStyles.ts';
 
 const preview: Preview = {
-  parameters: { layout: 'fullscreen' },
+  parameters: {
+    layout: 'fullscreen',
+    options: { storySort: { order: ['Glyph', ['Chat', 'Shared', 'Editor']] } },
+  },
   initialGlobals: { theme: 'dark', paneWidth: '360' },
   globalTypes: {
     theme: {

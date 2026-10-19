@@ -1,3 +1,4 @@
+import { buildGlyphDiagram } from './build-diagram.mjs';
 import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +7,7 @@ import { createRequire } from 'node:module';
 
 /** Bundles JSX and Preact without adding their tooling or imports to upstream Code OSS. */
 export async function buildGlyphUi(sourceRoot) {
+  await buildGlyphDiagram(join(sourceRoot, 'src/vs/workbench/contrib/glyph/browser/ui'));
   const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
   const preactLicense = await readFile(join(repositoryRoot, 'node_modules/preact/LICENSE'), 'utf8');
   const lucideLicense = await readFile(join(repositoryRoot, 'node_modules/lucide-preact/LICENSE'), 'utf8');

@@ -524,7 +524,7 @@ pnpm install
 pnpm storybook
 ```
 
-Open http://127.0.0.1:6006 and start with **Glyph / Workbench / Interactive**.
+Open http://127.0.0.1:6006 and start with **Glyph / Chat / Workbench / Interactive**.
 Send a message to simulate a streaming reply, type another draft while it
 streams, or cancel the reply. Everything stays in memory; these stories use
 fabricated state and never connect to accounts, models, or the desktop host.
@@ -536,6 +536,10 @@ attached selections, a fixed streaming state, send failures, and long scrolling
 conversations. In **Send Failure**, submit a draft to see the error and draft
 restoration. Fixed stories use inert callbacks; use **Interactive** for send and
 cancel behavior.
+
+Stories are grouped under **Chat**, **Shared**, and **Editor** within **Glyph**.
+Shared contains cross-surface annotation controls, context badges, and design tokens;
+Editor contains plan documents and editor review controls.
 
 Stories live beside their components in `code-oss/ui/`; shared fixtures and
 preview configuration live in `code-oss/storybook/`. The stories import the
@@ -616,7 +620,10 @@ or CSS import. The terminal's Ink renderer remains a separate rendering target.
 The static build goes to ignored `.artifacts/storybook/`. Storybook's Vite
 configuration resolves `#src` and `#code-oss` to editable source and uses a separate Preact
 TypeScript configuration; it does not change the terminal's React runtime or
-the production esbuild bundle. Storybook is pinned to 10.6.1. Its Preact renderer
+the production esbuild bundle. Storybook is pinned to 10.6.1. A pnpm patch keeps
+TSX stories on the CSF indexer if a file changes between indexing passes; without
+it, live refresh can send TypeScript to the MDX parser and leave the sidebar broken.
+`StorybookIndex.test.mjs` covers this race. Its Preact renderer
 still declares a Preact 8/10 peer range, so installation reports a peer warning
 with our Preact 11; verify browser rendering and interactions when upgrading.
 The renderer also requests the optional `@storybook/react-dom-shim` during

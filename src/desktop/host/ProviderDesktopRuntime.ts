@@ -1,3 +1,6 @@
+import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.js';
+import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
+import { GlyphContextAttachmentKind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
 import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
 import { toShellCommandSummary } from '#src/shell/toShellCommandSummary.js';
@@ -48,6 +51,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private readonly shellCalls = new Map<string, { readonly runId: string; readonly toolId: string }>();
   private readonly runs = new Map<string, GlyphRunProjection>();
   private readonly active = new Map<string, ActiveRun>();
+  private readonly historyChanges = new Set<string>();
   private readonly sessions = new Map<string, ChatSession>();
   private readonly proposals = new Map<string, GlyphProposalSummary>();
   private readonly usageByChat: Record<string, GlyphUsage> = {};
@@ -170,40 +174,61 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         });
         return;
       }
+      case GlyphWorkbenchCommandType.BRANCH_CHAT:
+      case GlyphWorkbenchCommandType.RESTORE_CHECKPOINT: {
+        const source = this.session(command.chatId);
+        if (this.active.has(source.id) || this.historyChanges.has(source.id))
+          throw new ProtocolError('Wait for this chat to finish before changing its history.');
+        this.historyChanges.add(source.id);
+        try {
+          if (command.type === GlyphWorkbenchCommandType.BRANCH_CHAT) {
+            const account = this.account(source.summary.accountProvider, source.summary.accountId);
+            const fork = await glyph.branchChat(source.id, command.turnId, account);
+            this.sessions.set(fork.id, fork);
+            this.seedHistory(fork);
+            this.publishUsage(fork);
+            this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: fork.summary, creationId: command.creationId });
+          } else {
+            const { turn } = await source.historyAt(command.turnId);
+            await source.restoreCheckpoint(command.turnId);
+            for (const [id, run] of this.runs) if (run.chatId === source.id) this.runs.delete(id);
+            this.seedHistory(source);
+            this.publish({
+              type: GlyphHostEventType.CHAT_RESTORED,
+              chatId: source.id,
+              runs: [...this.runs.values()].filter(run => run.chatId === source.id),
+              draft: {
+                text: turn.userText,
+                ...(turn.options ? { options: turn.options } : {}),
+                attachments: (turn.attachments ?? []).map(attachment => ({
+                  kind: attachment.source?.range
+                    ? GlyphContextAttachmentKind.SELECTION
+                    : GlyphContextAttachmentKind.FILE,
+                  uri: attachment.source?.uri ?? attachment.path,
+                  path: attachment.path,
+                  text: attachment.text,
+                  contentRevision: attachment.revision,
+                  sourceRevision: attachment.source?.revision ?? attachment.revision,
+                  sourceVersion: attachment.source?.version ?? 0,
+                  ...(attachment.source?.range ? { range: attachment.source.range } : {}),
+                  ...(attachment.source?.side ? { side: attachment.source.side } : {}),
+                })),
+              },
+            });
+            this.publishUsage(source);
+            this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: source.summary });
+          }
+        } finally {
+          this.historyChanges.delete(source.id);
+        }
+        return;
+      }
       case GlyphWorkbenchCommandType.OPEN_CHAT: {
         const session = this.session(command.chatId);
         this.publishUsage(session);
         // Durable history seeds an empty projection only; replay must not duplicate live turns.
         if (!this.active.has(session.id) && ![...this.runs.values()].some(run => run.chatId === session.id)) {
-          session.transcript.forEach((turn, index) =>
-            this.setRun({
-              chatId: session.id,
-              runId: `${session.id}:history:${index}`,
-              userText: turn.userText,
-              ...(turn.options ? { options: turn.options } : {}),
-              ...(turn.attachments
-                ? {
-                    attachments: turn.attachments.map(attachment => ({
-                      path: attachment.path,
-                      ...(attachment.source?.uri ? { uri: attachment.source.uri } : {}),
-                      text: attachment.text,
-                      revision: attachment.revision,
-                      ...(attachment.source?.range ? { range: attachment.source.range } : {}),
-                      ...(attachment.source?.side ? { side: attachment.source.side } : {}),
-                    })),
-                  }
-                : {}),
-              text: turn.assistantText,
-              reasoning: turn.reasoningSummary,
-              tools: (turn.tools ?? []).map(tool => ({
-                id: tool.callId,
-                name: tool.name,
-                status: TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[tool.phase],
-                ...(tool.shell ? { shell: { ...this.redactShell(tool.shell), live: false, running: false } } : {}),
-              })),
-              status: GlyphRunStatus.COMPLETED,
-            }),
-          );
+          this.seedHistory(session);
         }
         this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
         return;
@@ -251,7 +276,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       case GlyphWorkbenchCommandType.SEND: {
         chatTurnOptionsSchema.parse(command.options ?? {});
-        if (this.active.has(command.chatId)) throw new Error('This chat already has an active run.');
+        if (this.active.has(command.chatId) || this.historyChanges.has(command.chatId))
+          throw new ProtocolError('This chat already has an active run or history change.');
         if (this.runs.has(command.runId)) throw new Error('This run id has already been used.');
         const session = this.session(command.chatId);
         const controller = new AbortController();
@@ -282,6 +308,27 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           kind: 'question',
           value: command.answer,
         });
+        // The broker validated ownership, completeness, and choice IDs synchronously.
+        const run = this.runs.get(command.runId)!;
+        const request = run.question!;
+        const result = command.answer as QuestionFormResult;
+        const response = {
+          id: request.id,
+          answers: (request.questions ?? [{ id: request.id, prompt: request.prompt, options: [] }]).map(question => {
+            const answer = result.answers.find(value => value.questionId === question.id)!;
+            return {
+              question: question.prompt,
+              answer:
+                answer.type === QuestionAnswerType.OTHER
+                  ? answer.text.trim()
+                  : question.options
+                      .filter(option => answer.optionIds.includes(option.id))
+                      .map(option => option.label)
+                      .join(', '),
+            };
+          }),
+        };
+        this.runs.set(command.runId, { ...run, questionResponses: [...(run.questionResponses ?? []), response] });
         // Only a broker-validated decision may clear the waiting state.
         this.resumeRun(command.runId);
         return;
@@ -415,6 +462,42 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   }
 
   /** Recheck inference access at use time rather than trusting a previously selected account. */
+  private seedHistory(session: ChatSession): void {
+    session.transcript.forEach((turn, index) =>
+      this.setRun({
+        chatId: session.id,
+        runId: `${session.id}:history:${index}`,
+        userText: turn.userText,
+        createdAt: turn.createdAt,
+        ...(turn.questionResponses ? { questionResponses: turn.questionResponses } : {}),
+        ...(turn.checkpoints ? { checkpointTurnId: turn.options?.turnId ?? `${session.id}:history:${index}` } : {}),
+        ...(turn.usage ? { usage: { ...turn.usage, unreportedTurns: turn.usage.incomplete ? 1 : 0 } } : {}),
+        ...(turn.options ? { options: turn.options } : {}),
+        ...(turn.attachments
+          ? {
+              attachments: turn.attachments.map(attachment => ({
+                path: attachment.path,
+                ...(attachment.source?.uri ? { uri: attachment.source.uri } : {}),
+                text: attachment.text,
+                revision: attachment.revision,
+                ...(attachment.source?.range ? { range: attachment.source.range } : {}),
+                ...(attachment.source?.side ? { side: attachment.source.side } : {}),
+              })),
+            }
+          : {}),
+        text: turn.assistantText,
+        reasoning: turn.reasoningSummary,
+        tools: (turn.tools ?? []).map(tool => ({
+          id: tool.callId,
+          name: tool.name,
+          status: TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[tool.phase],
+          ...(tool.shell ? { shell: { ...this.redactShell(tool.shell), live: false, running: false } } : {}),
+        })),
+        status: GlyphRunStatus.COMPLETED,
+      }),
+    );
+  }
+
   private account(provider: string, id: string): ChatAccount {
     const account = this.options.glyph.accounts.find(value => value.provider === provider && value.id === id);
     if (!account?.connected || !account.inferenceAccess)
@@ -442,6 +525,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       chatId: command.chatId,
       runId: command.runId,
       userText: command.text,
+      createdAt: new Date().toISOString(),
       options: { ...command.options, turnId: command.runId },
       attachments: command.attachments.map(attachment => ({
         uri: attachment.uri,
@@ -474,7 +558,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               source: {
                 kind: attachment.kind,
                 uri: attachment.uri,
-                version: attachment.token.version,
+                version: attachment.token?.version ?? attachment.sourceVersion ?? 0,
                 revision: attachment.sourceRevision ?? attachment.contentRevision,
                 ...(attachment.range ? { range: attachment.range } : {}),
                 ...(attachment.side ? { side: attachment.side } : {}),
@@ -485,10 +569,21 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           },
           { push: part => this.response(command.runId, part) },
           signal,
+          () => this.runs.get(command.runId)?.questionResponses ?? [],
         ),
       );
       const run = this.runs.get(command.runId)!;
-      this.setRun({ ...run, status: signal.aborted ? GlyphRunStatus.CANCELLED : GlyphRunStatus.COMPLETED });
+      const turn = session.transcript.at(-1);
+      this.setRun({
+        ...run,
+        status: signal.aborted ? GlyphRunStatus.CANCELLED : GlyphRunStatus.COMPLETED,
+        ...(turn?.options?.turnId === command.runId
+          ? { createdAt: turn.createdAt, ...(turn.checkpoints ? { checkpointTurnId: command.runId } : {}) }
+          : {}),
+        ...(!signal.aborted && turn?.options?.turnId === command.runId && turn.usage
+          ? { usage: { ...turn.usage, unreportedTurns: turn.usage.incomplete ? 1 : 0 } }
+          : {}),
+      });
       this.publishUsage(session);
       this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
     } catch (error) {

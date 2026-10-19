@@ -142,6 +142,7 @@ export const planStyles = {
     ':focus-visible': { outline: tokens.focus.ring },
     ':disabled': { cursor: 'default' },
   }),
+  agentRow: css({ alignItems: 'center', '& > svg': { marginTop: 0, display: 'block' } }),
   todoForm: css({
     display: 'flex',
     alignItems: 'center',

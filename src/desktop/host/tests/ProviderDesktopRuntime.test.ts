@@ -217,6 +217,59 @@ function reviewFixture() {
 }
 
 describe(ProviderDesktopRuntime, () => {
+  it('publishes independent branches and replaces stale runs on restore, including after reopening', async () => {
+    const harness = await fixture(async options => {
+      options.onText('Answer');
+    });
+    try {
+      for (const runId of ['first', 'second']) {
+        await harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId,
+          text: runId,
+          attachments: [],
+        });
+        await vi.waitFor(async () =>
+          expect((await harness.runtime.snapshot()).runs.find(run => run.runId === runId)?.status).toBe(
+            GlyphRunStatus.COMPLETED,
+          ),
+        );
+      }
+      await harness.runtime.handle({
+        type: Command.BRANCH_CHAT,
+        chatId: harness.chatId,
+        turnId: 'first',
+        creationId: 'fork',
+      });
+      const created = harness.events.find(
+        event => event.type === GlyphHostEventType.CHAT_UPDATED && event.creationId === 'fork',
+      );
+      expect(created?.type).toBe(GlyphHostEventType.CHAT_UPDATED);
+      if (created?.type !== GlyphHostEventType.CHAT_UPDATED) throw new Error('Missing branch event');
+      const forkId = created.chat.id;
+      expect(forkId).not.toBe(harness.chatId);
+      expect(harness.saved.get(forkId)?.transcript.map(turn => turn.userText)).toEqual(['first']);
+      await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: harness.chatId, turnId: 'second' });
+      const restored = harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED);
+      expect(restored).toMatchObject({
+        chatId: harness.chatId,
+        draft: { text: 'second' },
+        runs: [{ checkpointTurnId: 'first' }],
+      });
+      expect((await harness.runtime.snapshot()).runs.filter(run => run.chatId === harness.chatId)).toHaveLength(1);
+      expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(1);
+      expect(harness.saved.get(forkId)?.transcript).toHaveLength(1);
+      await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
+      expect((await harness.runtime.snapshot()).runs.filter(run => run.chatId === harness.chatId)).toHaveLength(1);
+      await expect(
+        harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: harness.chatId, turnId: 'second' }),
+      ).rejects.toThrow('no longer');
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
   it('checks proposal ownership before publishing any preview content', async () => {
     const { reviews, stage } = reviewFixture();
     const harness = await fixture(async () => {}, 'owner', reviews);
@@ -480,6 +533,8 @@ describe(ProviderDesktopRuntime, () => {
       const snapshot = await restored.snapshot();
       expect(snapshot.runs).toHaveLength(1);
       expect(snapshot.runs[0]?.tools).toEqual(expected);
+      expect(snapshot.runs[0]?.usage).toEqual({ ...usage, unreportedTurns: 0 });
+      expect(snapshot.runs[0]?.createdAt).toBe(harness.saved.get(harness.chatId)?.transcript[0]?.createdAt);
       expect(snapshot.usageByChat?.[harness.chatId]).toEqual({ ...usage, unreportedTurns: 0 });
       await restored.dispose();
     } finally {
@@ -1058,6 +1113,8 @@ describe(ProviderDesktopRuntime, () => {
       expect((await harness.runtime.snapshot()).runs[0]).toMatchObject({
         text: 'Answer',
         reasoning: 'Summary',
+        usage: { ...usage, unreportedTurns: 0 },
+        createdAt: harness.saved.get(harness.chatId)?.transcript[0]?.createdAt,
         tools: [{ id: 'tool' }],
       });
       expect((await harness.runtime.snapshot()).usageByChat?.[harness.chatId]).toEqual({
