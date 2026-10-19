@@ -9,7 +9,7 @@ import { GlyphTranscript, GlyphTranscriptMessage } from './GlyphTranscript.prese
 import { useGlyphTranscriptState, type GlyphTranscriptStateOptions } from './useGlyphTranscriptState.ts';
 
 export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
-  readonly proposals?: ComponentChildren;
+  readonly plans?: ComponentChildren;
   readonly chatId?: string;
   readonly pendingApproval?: GlyphRunProjection;
   readonly actions?: GlyphMessageActions;
@@ -18,7 +18,7 @@ export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
 
 export function WiredGlyphTranscript({
   entries,
-  proposals,
+  plans,
   chatId,
   pendingApproval,
   actions,
@@ -36,7 +36,7 @@ export function WiredGlyphTranscript({
         : undefined,
   });
   return (
-    <GlyphTranscript transcript={state.transcript} proposals={proposals}>
+    <GlyphTranscript transcript={state.transcript} plans={plans}>
       {state.entries.map(entry =>
         entry.role === 'assistant' ? (
           <GlyphAgentMessageWithState

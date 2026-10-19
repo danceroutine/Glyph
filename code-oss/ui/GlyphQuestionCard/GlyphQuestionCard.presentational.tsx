@@ -1,3 +1,5 @@
+import { AgentModeID } from '#src/chat/AgentMode.js';
+import { IconButton, Button, ButtonAppearance, ButtonVariant } from '#code-oss/ui/Button/Button.tsx';
 import { MessageCircleQuestion, ChevronUp, ChevronDown } from 'lucide-preact';
 import type { GlyphQuestionCardState } from './useGlyphQuestionCardState.ts';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
@@ -15,16 +17,7 @@ const styles = {
     borderColor: `color-mix(in srgb, ${tokens.text.warning} 35%, transparent)`,
   }),
   counter: css({ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }),
-  navigation: css({
-    border: 0,
-    background: 'transparent',
-    color: tokens.text.muted,
-    padding: 2,
-    display: 'inline-flex',
-    cursor: 'pointer',
-    ':disabled': { opacity: 0.35, cursor: 'default' },
-  }),
-  continue: css({ background: tokens.text.warning, color: '#1e1e1e', ':disabled': { opacity: 0.45 } }),
+
   viewport: css({
     overflowY: 'auto',
     overscrollBehavior: 'contain',
@@ -122,25 +115,23 @@ export function GlyphQuestionCard({
         <MessageCircleQuestion size={18} aria-hidden="true" />
         <h3>{title}</h3>
         <span class={`${shared.detail} ${styles.counter}`} aria-live="polite">
-          <button
-            class={styles.navigation}
+          <IconButton
             type="button"
             aria-label="Previous question"
             disabled={disabled || pending || questionNumber === 1}
             onClick={back}
           >
             <ChevronUp size={16} />
-          </button>
+          </IconButton>
           {questionNumber} of {questionCount}
-          <button
-            class={styles.navigation}
+          <IconButton
             type="button"
             aria-label="Next question"
             disabled={disabled || pending || questionNumber === questionCount}
             onClick={next}
           >
             <ChevronDown size={16} />
-          </button>
+          </IconButton>
         </span>
       </header>
       <div ref={viewport} class={`glyph-question-scroll ${styles.viewport}`} onScroll={trackScroll}>
@@ -210,22 +201,22 @@ export function GlyphQuestionCard({
         )}
       </div>
       <footer class={shared.actions}>
-        <button class={shared.button} type="button" disabled={disabled || pending} onClick={cancel}>
+        <Button appearance={ButtonAppearance.GHOST} type="button" disabled={disabled || pending} onClick={cancel}>
           Cancel turn
-        </button>
+        </Button>
         {questionNumber > 1 && (
-          <button
-            class={`${shared.button} ${shared.secondary}`}
-            type="button"
-            disabled={disabled || pending}
-            onClick={back}
-          >
+          <Button type="button" disabled={disabled || pending} onClick={back}>
             Back
-          </button>
+          </Button>
         )}
-        <button class={`${shared.button} ${styles.continue}`} type="submit" disabled={disabled || pending || !valid}>
+        <Button
+          variant={ButtonVariant.PRIMARY}
+          mode={AgentModeID.PLAN}
+          type="submit"
+          disabled={disabled || pending || !valid}
+        >
           {pending ? 'Submitting…' : 'Continue'}
-        </button>
+        </Button>
       </footer>
       {disabled && <p class={shared.error}>Answer in the window that owns this chat.</p>}
       {error && (

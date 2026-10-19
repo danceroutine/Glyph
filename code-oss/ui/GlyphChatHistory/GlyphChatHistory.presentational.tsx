@@ -1,26 +1,19 @@
+import { Button, ButtonAppearance } from '#code-oss/ui/Button/Button.tsx';
 import type { GlyphChatHistoryState } from './useGlyphChatHistoryState.ts';
-import { css, tokens, space, conditions } from '#code-oss/ui/design-system/index.ts';
+import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 import type { ComponentChildren } from 'preact';
 
 const styles = {
+  newChatLayout: css({ width: '100%', justifyContent: 'flex-start' }),
   root: css({
     display: 'flex',
     flexDirection: 'column',
     minHeight: 0,
-    width: tokens.history.drawerWidth,
-    maxWidth: '100%',
-    position: 'absolute',
-    inset: '0 0 0 auto',
-    zIndex: tokens.history.layer,
+    boxSizing: 'border-box',
+    width: tokens.history.columnWidth,
+    flexShrink: 0,
     background: tokens.surface.pane,
     borderLeft: tokens.border.default,
-    boxShadow: tokens.history.shadow,
-    [conditions.widePane]: {
-      position: 'static',
-      flexShrink: 0,
-      width: tokens.history.columnWidth,
-      boxShadow: 'none',
-    },
   }),
   top: css({ padding: tokens.space.lg, display: 'grid', gap: tokens.space.md }),
   search: css({
@@ -35,17 +28,7 @@ const styles = {
     border: tokens.input.strongBorder,
     ':focus-visible': { outline: tokens.focus.ring },
   }),
-  newChat: css({
-    textAlign: 'left',
-    padding: space('md', 'md'),
-    border: 0,
-    borderRadius: tokens.list.radius,
-    cursor: 'pointer',
-    font: 'inherit',
-    color: tokens.text.primary,
-    background: 'transparent',
-    ':hover': { background: tokens.list.hoverBackground },
-  }),
+
   list: css({ flex: 1, minHeight: 0, overflowY: 'auto', padding: space('none', 'lg', 'lg') }),
   group: css({
     margin: space('lg', 'md', 'sm'),
@@ -54,26 +37,23 @@ const styles = {
     color: tokens.text.muted,
   }),
   item: css({
-    display: 'block',
-    width: '100%',
-    textAlign: 'left',
-    padding: space('md', 'md'),
-    margin: space('xxs', 'none'),
-    border: 0,
-    borderRadius: tokens.list.radius,
-    cursor: 'pointer',
-    font: 'inherit',
-    color: tokens.text.primary,
-    background: 'transparent',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    ':hover': { background: tokens.list.hoverBackground },
-    '&[aria-current="true"]': {
+    '&&': {
+      display: 'block',
+      width: '100%',
+      textAlign: 'left',
+      padding: space('md', 'md'),
+      margin: space('xxs', 'none'),
+      border: 0,
+      borderRadius: tokens.list.radius,
+      color: tokens.text.primary,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    },
+    '&&[aria-current="true"]': {
       background: tokens.list.selected.background,
       color: tokens.list.selected.foreground,
     },
-    ':focus-visible': { outline: tokens.focus.ring, outlineOffset: tokens.focus.inset },
+    ':focus-visible': { outlineOffset: tokens.focus.inset },
   }),
   activity: css({ display: 'inline-block', width: 16, color: tokens.text.muted }),
   empty: css({ padding: tokens.space.md, color: tokens.text.muted }),
@@ -105,9 +85,15 @@ export function GlyphChatHistory({
           value={query}
           onInput={event => setQuery(event.currentTarget.value)}
         />
-        <button class={styles.newChat} type="button" disabled={newChatDisabled} onClick={newChat}>
+        <Button
+          appearance={ButtonAppearance.GHOST}
+          class={styles.newChatLayout}
+          type="button"
+          disabled={newChatDisabled}
+          onClick={newChat}
+        >
           ＋ New chat
-        </button>
+        </Button>
       </div>
       <nav class={styles.list} aria-label="Saved chats" aria-busy={navigationPending}>
         {groups.map(
@@ -116,7 +102,8 @@ export function GlyphChatHistory({
               <section key={group.label} aria-label={group.label}>
                 <h3 class={styles.group}>{group.label}</h3>
                 {group.chats.map(chat => (
-                  <button
+                  <Button
+                    appearance={ButtonAppearance.GHOST}
                     key={chat.id}
                     class={styles.item}
                     type="button"
@@ -128,7 +115,7 @@ export function GlyphChatHistory({
                       {chat.active ? '◌' : '○'}
                     </span>
                     {chat.title}
-                  </button>
+                  </Button>
                 ))}
               </section>
             ),

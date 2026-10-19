@@ -1,3 +1,4 @@
+import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
 import type { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import type { GlyphTurnOptions } from '#glyph/protocol/events/GlyphAnnotation.js';
@@ -37,6 +38,7 @@ export interface GlyphWorkbenchService {
   openLink?(href: string): Promise<void>;
   viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
   cancel(): void;
+  executeReviewCommand(command: GlyphReviewCommand): void;
   reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void>;
   decideProposalItems(
     chatId: string,

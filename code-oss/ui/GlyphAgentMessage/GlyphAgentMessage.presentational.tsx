@@ -1,3 +1,4 @@
+import { IconButton, ButtonSize } from '#code-oss/ui/Button/Button.tsx';
 import { Copy, GitFork } from 'lucide-preact';
 import type { ComponentChildren } from 'preact';
 import { GlyphQuestionResponses } from '#code-oss/ui/GlyphQuestionCard/GlyphQuestionResponses.presentational.tsx';
@@ -17,21 +18,6 @@ const styles = {
     color: tokens.text.muted,
     minHeight: 24,
     '& time': { opacity: 0, fontSize: tokens.font.size.detail },
-  }),
-  action: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 0,
-    width: 20,
-    height: 24,
-    background: 'transparent',
-    border: 0,
-    color: tokens.text.muted,
-    cursor: 'pointer',
-    ':hover': { color: tokens.text.primary },
-    ':disabled': { opacity: 0.4, cursor: 'default' },
-    ':focus-visible': { outline: tokens.focus.ring },
   }),
 };
 
@@ -63,12 +49,19 @@ export function GlyphAgentMessage({ entry, content, usage, approval, shells, mod
       {approval}
       {shells}
       <footer class={styles.footer} aria-label="Message actions">
-        <button class={styles.action} type="button" aria-label="Copy message" title="Copy message" onClick={entry.copy}>
+        <IconButton
+          size={ButtonSize.SMALL}
+          type="button"
+          aria-label="Copy message"
+          title="Copy message"
+          onClick={entry.copy}
+        >
           <Copy size={16} aria-hidden="true" />
-        </button>
+        </IconButton>
         {entry.branch && (
-          <button
-            class={styles.action}
+          <IconButton
+            size={ButtonSize.SMALL}
+
             type="button"
             aria-label="Branch chat"
             title="Branch chat"
@@ -76,7 +69,7 @@ export function GlyphAgentMessage({ entry, content, usage, approval, shells, mod
             onClick={entry.branch}
           >
             <GitFork size={16} aria-hidden="true" />
-          </button>
+          </IconButton>
         )}
         {usage}
         {entry.datetime && (

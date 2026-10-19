@@ -43,7 +43,7 @@ async function modules() {
           builder.onLoad({ filter: /.*/, namespace: 'services' }, args => ({
             contents: args.path.endsWith('GlyphDesktopClient.js')
               ? 'export class GlyphDesktopClient { constructor() { Object.assign(this, globalThis.__glyphWorkbenchFixture); } dispose() {} }'
-              : 'const service = () => {}; export { service as IEditorService, service as IOpenerService, service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
+              : 'const service = () => {}; export { service as IClipboardService, service as IConfigurationService, service as IEditorService, service as IOpenerService, service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
           }));
           builder.onResolve({ filter: /^#glyph\// }, args => ({
             path: resolve('src/desktop', args.path.slice(7).replace(/\.js$/, '.ts')),
@@ -124,6 +124,10 @@ async function fixture({ chats = [chat('alpha'), chat('beta')], accounts = [], h
     },
     { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
     { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
+    { openEditor: vi.fn() },
+    { writeText: vi.fn() },
+    { open: vi.fn() },
+    { getValue: () => undefined, onDidChangeConfiguration: () => ({ dispose() {} }) },
   );
   await service.connect();
   return {
@@ -327,6 +331,48 @@ it('waits for an acknowledged model choice before creating the conversation on s
     expect(test.service.state.catalogPending).toBe(false);
   } finally {
     release();
+    test.dispose();
+  }
+});
+
+it('gives restored captures local IDs so a folder can be refreshed independently', async () => {
+  const test = await fixture();
+  try {
+    const composer = test.service.composer;
+    const folder = {
+      kind: 'folder',
+      uri: 'file:///project/src',
+      path: 'src',
+      text: 'file.ts',
+      contentRevision: 'tree',
+    };
+    const file = {
+      id: 'existing-file',
+      kind: 'file',
+      uri: 'file:///project/src/file.ts',
+      path: 'src/file.ts',
+      text: 'original',
+      contentRevision: 'file',
+    };
+    test.emit({
+      type: 'chat_restored',
+      chatId: 'alpha',
+      runs: [],
+      draft: { text: '@src @src/file.ts', attachments: [folder, file] },
+    });
+    const captures = composer.snapshot.document.parts
+      .filter(part => part.type === 'attachment')
+      .map(part => part.attachment);
+    expect(captures[0].id).toEqual(expect.any(String));
+    expect(captures[0].kind).toBe('folder');
+    expect(captures[1].id).toBe('existing-file');
+    composer.replaceAttachment(captures[0].id, { ...captures[0], text: 'file.ts\nadded.ts' });
+    const refreshed = composer.snapshot.document.parts
+      .filter(part => part.type === 'attachment')
+      .map(part => part.attachment);
+    expect(refreshed[0].text).toContain('added.ts');
+    expect(refreshed[1]).toEqual(file);
+  } finally {
     test.dispose();
   }
 });

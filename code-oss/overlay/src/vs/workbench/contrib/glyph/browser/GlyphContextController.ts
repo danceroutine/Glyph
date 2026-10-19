@@ -1,3 +1,8 @@
+import { dirname } from '#vs/base/common/resources.js';
+import { generateUuid } from '#vs/base/common/uuid.js';
+import { formatFolderContextOutline } from '#glyph/workbench/formatFolderContextOutline.js';
+import { GlyphContextAttachmentKind } from '#glyph/protocol/connection/GlyphContextAttachment.js';
+import { GlyphContextCandidateKind } from '#glyph/workbench/GlyphContextActions.js';
 import type { GlyphAttachmentPreview } from '#glyph/protocol/events/GlyphAttachmentPreview.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
 import { URI } from '#vs/base/common/uri.js';
@@ -11,6 +16,7 @@ import { IWorkspaceContextService } from '#vs/platform/workspace/common/workspac
 import { IWorkspaceTrustManagementService } from '#vs/platform/workspace/common/workspaceTrust.js';
 import { ISearchService, QueryType } from '#vs/workbench/services/search/common/search.js';
 import { IFileService } from '#vs/platform/files/common/files.js';
+import { ICommandService } from '#vs/platform/commands/common/commands.js';
 import { IFileDialogService } from '#vs/platform/dialogs/common/dialogs.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { GlyphContextError } from './GlyphContextError.js';
@@ -35,6 +41,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     @ISearchService private readonly search: ISearchService,
     @IFileService private readonly files: IFileService,
     @IFileDialogService private readonly dialogs: IFileDialogService,
+    @ICommandService private readonly commands: ICommandService,
   ) {
     super();
     const watch = (editor: ICodeEditor) =>
@@ -107,19 +114,53 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       ...result.results.map(match => match.resource),
     ];
     const seen = new Set<string>();
-    return resources
-      .flatMap(uri => {
-        if (!['file', 'untitled'].includes(uri.scheme) || seen.has(uri.toString())) return [];
-        seen.add(uri.toString());
-        try {
-          const path = this.adapter.contextPath(uri);
-          return path.toLowerCase().includes(query.toLowerCase()) ? [{ uri: uri.toString(), path }] : [];
-        } catch {
-          return [];
+    const candidates: GlyphContextCandidate[] = [];
+    const add = (uri: URI, kind: GlyphContextCandidateKind, name?: string) => {
+      if (seen.has(uri.toString())) return;
+      const rawPath = this.adapter.contextPath(uri);
+      const path = kind === GlyphContextCandidateKind.FOLDER ? `${rawPath.replace(/\/$/, '') || '.'}/` : rawPath;
+      if (!`${path} ${name ?? ''}`.toLowerCase().includes(query.toLowerCase())) return;
+      seen.add(uri.toString());
+      candidates.push({
+        uri: uri.toString(),
+        path,
+        kind,
+        ...(name ? { name } : {}),
+        ancestry: (kind === GlyphContextCandidateKind.FOLDER && name ? uri.path : rawPath).split('/').filter(Boolean),
+      });
+    };
+    for (const uri of resources) {
+      if (!['file', 'untitled'].includes(uri.scheme)) continue;
+      try {
+        add(uri, GlyphContextCandidateKind.FILE);
+        const root = this.workspace.getWorkspaceFolder(uri);
+        if (!root || uri.scheme !== 'file') continue;
+        let parent = dirname(uri);
+        while (parent.path.length >= root.uri.path.length) {
+          add(
+            parent,
+            GlyphContextCandidateKind.FOLDER,
+            parent.toString() === root.uri.toString() ? root.name : undefined,
+          );
+          if (parent.toString() === root.uri.toString()) break;
+          const next = dirname(parent);
+          if (next.path === parent.path) break;
+          parent = next;
         }
-      })
-      .slice(0, 50);
+      } catch {
+        /* Closed or out-of-workspace models are not context candidates. */
+      }
+    }
+    // Include root-level empty folders, which cannot be inferred from file search.
+    for (const root of searchedFolders) {
+      add(root.uri, GlyphContextCandidateKind.FOLDER, root.name);
+      const stat = await this.files.resolve(root.uri);
+      for (const child of stat.children ?? [])
+        if (child.isDirectory && !child.isSymbolicLink) add(child.resource, GlyphContextCandidateKind.FOLDER);
+    }
+    return candidates.slice(0, 50);
   }
+
   private async withModel<T>(value: string, capture: (model: ITextModel) => Promise<T>): Promise<T> {
     this.assertTrusted();
     const uri = URI.parse(value);
@@ -159,7 +200,60 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   captureFile(value: string): Promise<GlyphContextAttachment> {
     return this.withModel(value, model => this.adapter.captureContext(model));
   }
-  refreshAttachment(attachment: GlyphContextAttachment): Promise<GlyphContextAttachment> {
+  async captureFolder(value: string): Promise<GlyphContextAttachment> {
+    this.assertTrusted();
+    const uri = URI.parse(value);
+    const path = this.adapter.contextPath(uri) || this.workspace.getWorkspaceFolder(uri)?.name || '.';
+    if (uri.scheme !== 'file')
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
+        'Only workspace folders can be attached.',
+      );
+    const stat = await this.files.stat(uri);
+    if (!stat.isDirectory || stat.isSymbolicLink)
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
+        'Choose a workspace folder, not a symbolic link.',
+      );
+    const workspaceFolder = this.workspace.getWorkspaceFolder(uri)!;
+    let ancestor = dirname(uri);
+    while (ancestor.path.length >= workspaceFolder.uri.path.length && ancestor.toString() !== uri.toString()) {
+      if ((await this.files.stat(ancestor)).isSymbolicLink)
+        throw new GlyphContextError(
+          GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
+          'Folder context cannot traverse symbolic links.',
+        );
+      if (ancestor.toString() === workspaceFolder.uri.toString()) break;
+      const parent = dirname(ancestor);
+      if (parent.path === ancestor.path) break;
+      ancestor = parent;
+    }
+    const result = await this.search.fileSearch({
+      type: QueryType.File,
+      folderQueries: [{ folder: uri, ignoreSymlinks: true }],
+      maxResults: 1000,
+    });
+    const prefix = `${uri.path.replace(/\/$/, '')}/`;
+    const paths = result.results
+      .filter(match => match.resource.path.startsWith(prefix))
+      .map(match => match.resource.path.slice(prefix.length));
+    const text = `Directory tree: ${path}\n(Search-visible paths; file contents are not included.)\n\n${formatFolderContextOutline(paths, result.limitHit)}`;
+    const bytes = new TextEncoder().encode(text);
+    if (bytes.byteLength > 512 * 1024)
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
+        'This folder outline exceeds the attachment limit. Choose a smaller folder.',
+      );
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const contentRevision = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    this.assertTrusted();
+    if ((this.adapter.contextPath(uri) || this.workspace.getWorkspaceFolder(uri)?.name || '.') !== path)
+      throw new GlyphContextError(GlyphDesktopErrorCode.STALE_DOCUMENT, 'The workspace changed during capture.');
+    return { id: generateUuid(), kind: GlyphContextAttachmentKind.FOLDER, uri: value, path, text, contentRevision };
+  }
+  async refreshAttachment(attachment: GlyphContextAttachment): Promise<GlyphContextAttachment> {
+    if (attachment.kind === GlyphContextAttachmentKind.FOLDER)
+      return { ...(await this.captureFolder(attachment.uri)), ...(attachment.id ? { id: attachment.id } : {}) };
     return this.withModel(attachment.uri, async model => ({
       ...(await this.adapter.captureContext(model, attachment.range)),
       ...(attachment.id ? { id: attachment.id } : {}),
@@ -170,6 +264,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     const uri = URI.parse(attachment.uri);
     if (uri.scheme === 'file' && !(await this.files.exists(uri)))
       return 'Source deleted. The captured text is preserved.';
+    if (attachment.kind === GlyphContextAttachmentKind.FOLDER)
+      return 'Captured folder outline. Refresh explicitly to update it.';
     const model = this.models.getModel(uri);
     if (!model) return 'Source closed. The captured text is preserved.';
     if (!this.adapter.isCurrentContext(model, attachment))
@@ -202,6 +298,10 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         GlyphDesktopErrorCode.NOT_FOUND,
         'The untitled source is closed. The captured text is preserved.',
       );
+    if (uri.scheme === 'file' && (await this.files.stat(uri)).isDirectory) {
+      await this.commands.executeCommand('revealInExplorer', uri);
+      return;
+    }
     await this.editors.openEditor({
       resource: uri,
       options: {

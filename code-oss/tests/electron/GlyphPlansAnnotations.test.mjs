@@ -30,7 +30,7 @@ async function annotate(glyph, source, comment) {
     return { left: rect.left, right: rect.right, top: rect.top };
   });
   const button = glyph.page.getByRole('button', { name: 'Comment on selection', exact: true });
-  await expect(button).toHaveText('Add to chat');
+  await expect(button).toHaveText('Add to Chat');
   const pill = await button.boundingBox();
   // The text pill sits above the selection; the numbered marker remains attached to its end.
   expect(pill.y + pill.height).toBeLessThanOrEqual(anchor.top);
@@ -143,7 +143,7 @@ it.describe('Plans and passage annotations', () => {
   it('builds a plan in a separate linked chat and preserves the source conversation', async ({ glyph, provider }) => {
     await createPlan(glyph, provider);
     const card = glyph.page.getByRole('article', { name: 'Plan: Queue messages' });
-    await card.locator('summary').click();
+    await card.getByRole('button', { name: 'Build options', exact: true }).click();
     provider.enqueue({ chunks: ['Building in the linked chat.'] });
     await card.getByRole('button', { name: 'Build in new chat' }).click();
     await expect(glyph.page.locator('.glyph-transcript')).toContainText('Building in the linked chat.');

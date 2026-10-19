@@ -1,3 +1,4 @@
+import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
 import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
 import { IClipboardService } from '#vs/platform/clipboard/common/clipboardService.js';
 import { AgentModeID } from '#glyph/protocol/index.js';
@@ -239,7 +240,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             break;
           case GlyphHostEventType.CHAT_RESTORED: {
             const composer = this.composers.get(event.chatId);
-            const previews = event.draft.attachments.map(value => ({ ...value, revision: value.contentRevision }));
+            const attachments = event.draft.attachments.map(value => ({ ...value, id: value.id ?? generateUuid() }));
+            const previews = attachments.map(value => ({ ...value, revision: value.contentRevision }));
             const parts = toGlyphTranscriptParts({
               id: '',
               role: GlyphTranscriptRole.USER,
@@ -251,8 +253,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
                 ? part
                 : {
                     type: 'attachment' as const,
-                    attachment:
-                      event.draft.attachments[previews.indexOf(part.attachment as (typeof previews)[number])]!,
+                    attachment: attachments[previews.indexOf(part.attachment as (typeof previews)[number])]!,
                   },
             );
             const end = parts.reduce((size, part) => size + (part.type === 'text' ? part.text.length : 1), 0);
@@ -854,6 +855,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       approvalId,
       decision,
     });
+  }
+  executeReviewCommand(command: GlyphReviewCommand): void {
+    this.proposalEditor.executeCommand(command);
   }
   reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void> {
     return this.proposalEditor.open(chatId, proposalId, fileId);

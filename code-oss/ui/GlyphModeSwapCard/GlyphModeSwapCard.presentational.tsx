@@ -1,3 +1,4 @@
+import { Button, ButtonVariant } from '#code-oss/ui/Button/Button.tsx';
 import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { AGENT_MODE_PRESENTATION } from '#code-oss/ui/AgentMode/AgentModePresentation.tsx';
@@ -74,22 +75,24 @@ export function GlyphModeSwapCard({
       {swap.status === GlyphModeSwapStatus.PENDING && (
         <>
           <div class={styles.actions}>
-            <button
+            <Button
               type="button"
-              class={`${shared.button} ${shared.secondary}`}
+
               disabled={disabled || pending || seconds === 0}
               onClick={deny}
             >
               Deny
-            </button>
-            <button
+            </Button>
+            <Button
+              variant={ButtonVariant.PRIMARY}
+              mode={swap.source}
               type="button"
-              class={`${shared.button} ${shared.primary}`}
+
               disabled={disabled || pending || seconds === 0}
               onClick={approve}
             >
               Approve
-            </button>
+            </Button>
           </div>
           {disabled && <p class={styles.note}>Respond in the window that owns this chat.</p>}
           {error && (

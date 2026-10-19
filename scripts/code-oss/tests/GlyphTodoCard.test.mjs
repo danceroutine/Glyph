@@ -42,7 +42,7 @@ afterAll(async () => {
   await browser?.close();
 });
 
-it('expands upward with keyboard access, keeps items read-only, and derives counts from live state', async () => {
+it('opens upward like a drawer with keyboard access, keeps items read-only, and derives live counts', async () => {
   const page = await browser.newPage();
   try {
     await page.setContent('<div id="root"></div>');
@@ -50,10 +50,14 @@ it('expands upward with keyboard access, keeps items read-only, and derives coun
     const card = page.getByRole('region', { name: 'To-dos' });
     const toggle = card.getByRole('button', { name: '1 of 3 To-dos completed' });
     const before = await toggle.boundingBox();
+    const cardBefore = await card.boundingBox();
     const composerBefore = await page.getByRole('textbox', { name: 'Composer' }).boundingBox();
     await toggle.focus();
     await page.keyboard.press('Enter');
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await card.evaluate(element =>
+      Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished)),
+    );
     await expect(card.getByRole('listitem')).toHaveCount(3);
     await expect(card.getByRole('listitem').first()).toContainText('<script>alert(1)</script>');
     await expect(card.getByRole('listitem')).toHaveText(['<script>alert(1)</script>', 'Current work', 'Next work']);
@@ -61,7 +65,12 @@ it('expands upward with keyboard access, keeps items read-only, and derives coun
       await expect(card.getByRole('img', { name: status, exact: true })).toBeVisible();
     await expect(card.locator('script, input, textarea, [contenteditable]')).toHaveCount(0);
     expect((await card.getByRole('list').boundingBox()).y).toBeLessThan(before.y);
-    expect(Math.abs((await toggle.boundingBox()).y - before.y)).toBeLessThan(2);
+    const openToggle = await toggle.boundingBox();
+    const openList = await card.getByRole('list').boundingBox();
+    const openCard = await card.boundingBox();
+    expect(openToggle.y).toBeLessThan(before.y);
+    expect(Math.abs(openToggle.y + openToggle.height - openList.y)).toBeLessThan(2);
+    expect(Math.abs(openCard.y + openCard.height - (cardBefore.y + cardBefore.height))).toBeLessThan(2);
     expect((await page.getByRole('textbox', { name: 'Composer' }).boundingBox()).y).toBe(composerBefore.y);
     await page.evaluate(() =>
       window.update(

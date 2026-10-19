@@ -32,7 +32,8 @@ export function useGlyphAccountPickerState({ state, actions }: GlyphAccountPicke
           : account
             ? 'Connected account'
             : 'Choose an account for new chats',
-    canRetry: !!(!chat && account && !state.catalogPending && state.navigationError && !state.selectedModel),
+    loadingModels: !!(!chat && account && state.catalogPending),
+    canRetry: !!(!chat && account && (state.catalogPending || (state.navigationError && !state.selectedModel))),
     selectAccount: (key: string) => {
       const selected = state.accounts.find(value => JSON.stringify([value.provider, value.id]) === key);
       if (selected) void actions.selectAccount(selected.provider, selected.id);

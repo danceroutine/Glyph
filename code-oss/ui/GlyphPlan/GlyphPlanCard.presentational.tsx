@@ -1,3 +1,4 @@
+import { Button, ButtonAppearance } from '#code-oss/ui/Button/Button.tsx';
 import { GlyphPlanBuild } from './GlyphPlanBuild.presentational.tsx';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import { planStyles } from './GlyphPlan.styles.ts';
@@ -20,9 +21,9 @@ export function GlyphPlanCard({
       <h3>{plan.title}</h3>
       <p>{plan.summary}</p>
       <footer>
-        <button class={`${planStyles.button} ${planStyles.view}`} onClick={view}>
+        <Button appearance={ButtonAppearance.GHOST} onClick={view}>
           View Plan
-        </button>
+        </Button>
         <GlyphPlanBuild build={build} buildNew={buildNew} disabled={disabled} />
       </footer>
     </article>

@@ -12,7 +12,6 @@ export interface GlyphProposalFileSummary {
   readonly pendingItemIds: readonly string[];
   readonly additions?: number;
   readonly deletions?: number;
-  readonly preview?: readonly { readonly added: boolean; readonly text: string }[];
   readonly textOnly?: boolean;
   readonly applicability: GlyphProposalApplicability;
 }

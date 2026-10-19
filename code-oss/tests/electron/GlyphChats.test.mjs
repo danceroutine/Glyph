@@ -180,6 +180,17 @@ it.describe('Saved chats and new conversation setup', () => {
   });
 });
 
+it.describe('Pending chat archiving', () => {
+  it.fixme(
+    'archives a chat from history, hides it from the active chat list, and preserves its conversation in the archive after reload and host restart',
+    async () => {},
+  );
+  it.fixme(
+    'unarchives a chat into the active chat list and resumes the same conversation with its original provider history after reload and host restart',
+    async () => {},
+  );
+});
+
 it.describe('Account and model selection', () => {
   it.use({
     scriptedProvider: true,
@@ -216,7 +227,8 @@ it.describe('Account and model selection', () => {
     await closeHistory(glyph);
     const model = glyph.page.getByRole('combobox', { name: 'Model', exact: true });
     await expect(model).toBeEnabled();
-    await model.selectOption('work-deep');
+    await model.click();
+    await glyph.page.getByRole('option', { name: 'Work deep', exact: true }).click();
     await glyph.composer.fill('Work analysis');
     await history(glyph);
     await testInfo.attach('account-footer', { body: await glyph.page.screenshot(), contentType: 'image/png' });
@@ -230,13 +242,14 @@ it.describe('Account and model selection', () => {
     await history(glyph);
     await account.selectOption({ label: 'personal@example.invalid' });
     await closeHistory(glyph);
-    await expect(model).toHaveValue('personal-model');
+    await expect(model).toHaveText('Personal model');
     provider.enqueue({ chunks: ['Personal answer.'] });
     await glyph.send('Personal analysis');
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
     expect(provider.requests[1]).toMatchObject({ account: 'personal', body: { model: 'personal-model' } });
     await openChat(glyph, 'Work');
-    await expect(model).toHaveValue('work-deep');
+    // The other account's catalog is still loaded, so restored chats display their model slug.
+    await expect(model).toHaveText('work-deep');
     await history(glyph);
     await expect(account.locator('option:checked')).toHaveText('work@example.invalid');
     await expect(account).toBeDisabled();

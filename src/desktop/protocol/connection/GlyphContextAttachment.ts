@@ -4,6 +4,7 @@ import type { GlyphDocumentToken } from './GlyphDocumentToken.ts';
 export enum GlyphContextAttachmentKind {
   SELECTION = 'selection',
   FILE = 'file',
+  FOLDER = 'folder',
 }
 
 /** Immutable text captured when the user attaches context. The token identifies the source model, not permission to edit it. */

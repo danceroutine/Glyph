@@ -1,3 +1,4 @@
+import { Button, ButtonAppearance, ButtonVariant } from '#code-oss/ui/Button/Button.tsx';
 import { Terminal } from 'lucide-preact';
 import type { GlyphApprovalCardState } from './useGlyphApprovalCardState.ts';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
@@ -40,22 +41,17 @@ export function GlyphApprovalCard({ request, disabled, pending, error, skip, alw
         <p class={`${shared.detail} ${styles.detail}`}>Always Run remembers this exact command in this directory.</p>
       )}
       <div class={shared.actions}>
-        <button class={shared.button} type="button" disabled={disabled || pending} onClick={skip}>
+        <Button appearance={ButtonAppearance.GHOST} type="button" disabled={disabled || pending} onClick={skip}>
           Skip
-        </button>
+        </Button>
         {request.canRemember && (
-          <button
-            class={`${shared.button} ${shared.secondary}`}
-            type="button"
-            disabled={disabled || pending}
-            onClick={alwaysRun}
-          >
+          <Button type="button" disabled={disabled || pending} onClick={alwaysRun}>
             Always Run
-          </button>
+          </Button>
         )}
-        <button class={`${shared.button} ${shared.primary}`} type="button" disabled={disabled || pending} onClick={run}>
+        <Button variant={ButtonVariant.PRIMARY} type="button" disabled={disabled || pending} onClick={run}>
           {pending ? 'Submitting…' : 'Run'}
-        </button>
+        </Button>
       </div>
       {disabled && <p class={shared.error}>Approve in the window that owns this chat.</p>}
       {error && (

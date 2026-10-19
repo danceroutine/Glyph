@@ -1,9 +1,14 @@
-import type { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
+import { ScrollType } from '#vs/editor/common/editorCommon.js';
+import { GlyphMarginLane } from '#vs/editor/common/model.js';
+import type { GlyphAnnotationPosition, GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
 import type { GlyphAnnotation } from '#glyph/protocol/events/GlyphAnnotation.js';
 import { GlyphProposalReviewError } from './GlyphProposalReviewError.js';
 import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
 import { Disposable, DisposableStore, toDisposable } from '#vs/base/common/lifecycle.js';
-import { isMacintosh } from '#vs/base/common/platform.js';
+import { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
+import { IKeybindingService } from '#vs/platform/keybinding/common/keybinding.js';
+import { IContextKeyService } from '#vs/platform/contextkey/common/contextkey.js';
+import { addDisposableListener } from '#vs/base/browser/dom.js';
 import { URI } from '#vs/base/common/uri.js';
 import { IModelService } from '#vs/editor/common/services/model.js';
 import { ILanguageService } from '#vs/editor/common/languages/language.js';
@@ -16,13 +21,18 @@ import {
   type ICodeEditor,
   type IViewZone,
   type IContentWidget,
+  type IGlyphMarginWidget,
   type IOverlayWidget,
 } from '#vs/editor/browser/editorBrowser.js';
 import type { GlyphProposalFilePreview } from '#glyph/protocol/events/GlyphProposalFilePreview.js';
 import { GlyphProposalApplicability } from '#glyph/protocol/events/GlyphProposalFileSummary.js';
 import type { GlyphWorkbenchState } from '#glyph/workbench/GlyphWorkbenchState.js';
 import type { GlyphReviewControls } from '#glyph/workbench/GlyphReviewControls.js';
-import { mountGlyphReview, mountGlyphCommentButton } from './ui/mountGlyphWorkbench.js';
+import {
+  mountGlyphReview,
+  mountGlyphCommentButton,
+  mountGlyphEditorAnnotationMarker,
+} from './ui/mountGlyphWorkbench.js';
 
 interface ReviewActions {
   composer(): GlyphComposerState;
@@ -40,12 +50,14 @@ interface ReviewActions {
 
 /** Read-only native diff models; decisions always go through the host's guarded editor apply. */
 export class GlyphProposalEditor extends Disposable {
+  private readonly annotationEditor = this._register(new DisposableStore());
   private readonly annotationWidgets = this._register(new DisposableStore());
   private readonly widgets = this._register(new DisposableStore());
   private current: { chatId: string; proposalId: string; fileId: string } | undefined;
   private preview: GlyphProposalFilePreview | undefined;
   private editor: ICodeEditor | undefined;
   private index = 0;
+  private readonly commandHandlers = new Map<boolean, (command: GlyphReviewCommand) => void>();
   private openRevision = 0;
   private readonly models = new Set<string>();
   private selectionButton: { dispose(): void } | undefined;
@@ -56,8 +68,10 @@ export class GlyphProposalEditor extends Disposable {
     @ILanguageService private readonly languageService: ILanguageService,
     @ITextModelService resolver: ITextModelService,
     @IEditorService private readonly editors: IEditorService,
+    @IKeybindingService private readonly keybindings: IKeybindingService,
   ) {
     super();
+    this._register(this.keybindings.onDidUpdateKeybindings(() => this.refreshControls()));
     this._register(
       resolver.registerTextModelContentProvider('glyph-proposal', {
         provideTextContent: async uri => this.modelService.getModel(uri),
@@ -69,8 +83,18 @@ export class GlyphProposalEditor extends Disposable {
       }),
     );
   }
+  executeCommand(command: GlyphReviewCommand): void {
+    if (command === GlyphReviewCommand.ADD_TO_CHAT) {
+      const selection = this.editor?.getSelection();
+      if (selection && !selection.isEmpty()) void this.annotate().catch(error => this.actions.report(error));
+      return;
+    }
+    const full = ![GlyphReviewCommand.KEEP, GlyphReviewCommand.UNDO, GlyphReviewCommand.COMMENT].includes(command);
+    this.commandHandlers.get(full)?.(command);
+  }
   async open(chatId: string, proposalId: string, fileId: string): Promise<void> {
     const revision = ++this.openRevision;
+    this.annotationEditor.clear();
     this.annotationWidgets.clear();
     this.widgets.clear();
     this.controls = [];
@@ -105,17 +129,29 @@ export class GlyphProposalEditor extends Disposable {
       );
     diff.updateOptions({ readOnly: true, originalEditable: false, renderSideBySide: false });
     this.editor = diff.getModifiedEditor();
+    this.editor.updateOptions({ glyphMargin: true });
     this.installControls();
     this.widgets.add(
       this.editor.onDidChangeCursorSelection(() => {
         this.selectionButton?.dispose();
         this.selectionButton = undefined;
         const selection = this.editor?.getSelection();
-        if (!selection || selection.isEmpty()) return;
+        const snapshot = this.actions.composer().snapshot;
+        if (
+          !selection ||
+          selection.isEmpty() ||
+          snapshot.annotationDraft ||
+          snapshot.editingAnnotation ||
+          snapshot.submitting
+        )
+          return;
         const node = document.createElement('div');
-        const mounted = mountGlyphCommentButton(node, () => {
-          void this.annotate().catch(error => this.actions.report(error));
-        });
+        const mounted = mountGlyphCommentButton(
+          node,
+          () => this.executeCommand(GlyphReviewCommand.ADD_TO_CHAT),
+          undefined,
+          this.keybindings.lookupKeybinding(GlyphReviewCommand.ADD_TO_CHAT)?.getLabel() ?? undefined,
+        );
         const widget: IContentWidget = {
           getId: () => 'glyph.annotation.selection',
           getDomNode: () => node,
@@ -149,6 +185,19 @@ export class GlyphProposalEditor extends Disposable {
       current = this.current;
     if (!editor || !model || !current) return;
     const composer = this.actions.composer();
+    if (!composer.snapshot.annotationDraft && !composer.snapshot.editingAnnotation) this.annotationEditor.clear();
+    if (composer.snapshot.annotationDraft || composer.snapshot.editingAnnotation) {
+      this.selectionButton?.dispose();
+      this.selectionButton = undefined;
+    }
+    if (composer.snapshot.submitting) {
+      this.selectionButton?.dispose();
+      this.selectionButton = undefined;
+      const position = editor.getPosition();
+      if (position) editor.setPosition(position);
+      return;
+    }
+    let hasMarkers = false;
     for (const annotation of composer.snapshot.document.options?.annotations ?? []) {
       if (
         annotation.kind !== 'proposal' ||
@@ -158,20 +207,38 @@ export class GlyphProposalEditor extends Disposable {
       )
         continue;
       const node = document.createElement('div');
-      const mount = mountGlyphCommentButton(node, () => composer.editAnnotation(annotation.id), annotation.order);
-      const widget: IContentWidget = {
+      const mount = mountGlyphEditorAnnotationMarker(node, annotation.order, annotation.comment, () =>
+        composer.editAnnotation(annotation.id),
+      );
+      const anchor = model.getPositionAt(annotation.from);
+      const widget: IGlyphMarginWidget = {
         getId: () => `glyph.annotation.${annotation.id}`,
         getDomNode: () => node,
         getPosition: () => ({
-          position: model.getPositionAt(annotation.to),
-          preference: [ContentWidgetPositionPreference.BELOW],
+          lane: GlyphMarginLane.Right,
+          zIndex: 10 + annotation.order,
+          range: { startLineNumber: anchor.lineNumber, endLineNumber: anchor.lineNumber, startColumn: 1, endColumn: 1 },
         }),
       };
-      editor.addContentWidget(widget);
+      editor.addGlyphMarginWidget(widget);
+      hasMarkers = true;
       this.annotationWidgets.add(
         toDisposable(() => {
-          editor.removeContentWidget(widget);
+          editor.removeGlyphMarginWidget(widget);
           mount.dispose();
+        }),
+      );
+    }
+    // Monaco treats the gutter as decorative. Our buttons are interactive, so
+    // expose it while annotations exist and restore its original state on cleanup.
+    const margin = editor.getDomNode()?.querySelector('.margin');
+    if (hasMarkers && margin) {
+      const hidden = margin.getAttribute('aria-hidden');
+      margin.removeAttribute('aria-hidden');
+      this.annotationWidgets.add(
+        toDisposable(() => {
+          if (hidden === null) margin.removeAttribute('aria-hidden');
+          else margin.setAttribute('aria-hidden', hidden);
         }),
       );
     }
@@ -256,11 +323,16 @@ export class GlyphProposalEditor extends Disposable {
     await this.refresh();
     this.reveal();
   }
-  async revealAnnotation(annotation: GlyphAnnotation): Promise<{ readonly x: number; readonly y: number } | undefined> {
+  async revealAnnotation(annotation: GlyphAnnotation): Promise<GlyphAnnotationPosition | undefined> {
     const [proposalId, fileId] = annotation.sourceId.split(':');
     const proposal = this.actions.state().proposals.find(value => value.id === proposalId);
     if (!proposal?.chatId || !fileId || !proposalId) return;
-    await this.open(proposal.chatId, proposalId, fileId);
+    if (
+      this.current?.proposalId !== proposalId ||
+      this.current.fileId !== fileId ||
+      !this.editor?.getDomNode()?.isConnected
+    )
+      await this.open(proposal.chatId, proposalId, fileId);
     const model = this.editor?.getModel();
     if (
       !model ||
@@ -276,11 +348,73 @@ export class GlyphProposalEditor extends Disposable {
       endLineNumber: end.lineNumber,
       endColumn: end.column,
     });
-    this.editor?.revealPositionInCenter(start);
-    const point = this.editor?.getScrolledVisiblePosition(end);
+    this.editor?.revealPositionInCenterIfOutsideViewport(start, ScrollType.Immediate);
+    const container = this.installAnnotationEditor(start.lineNumber);
+    const point = this.editor?.getScrolledVisiblePosition(start);
     const bounds = this.editor?.getDomNode()?.getBoundingClientRect();
-    if (point && bounds) return { x: bounds.left + point.left, y: bounds.top + point.top + point.height };
+    if (point && bounds)
+      return {
+        ...(container ? { container } : {}),
+        x: bounds.left + point.left,
+        y: bounds.top + point.top + point.height,
+        minX: bounds.left + (this.editor?.getLayoutInfo().contentLeft ?? 0),
+        maxX: bounds.right,
+      };
     return undefined;
+  }
+
+  private installAnnotationEditor(lineNumber: number): HTMLElement | undefined {
+    this.annotationEditor.clear();
+    const editor = this.editor;
+    if (!editor) return;
+    const node = document.createElement('div');
+    node.style.boxSizing = 'border-box';
+    node.style.padding = '8px';
+    node.style.position = 'absolute';
+    const zone: IViewZone = {
+      afterLineNumber: lineNumber - 1,
+      heightInPx: 128,
+      domNode: document.createElement('div'),
+      showInHiddenAreas: true,
+      onDomNodeTop: top => {
+        node.style.top = `${top}px`;
+      },
+    };
+    let id = '';
+    editor.changeViewZones(accessor => {
+      id = accessor.addZone(zone);
+    });
+    const widget: IOverlayWidget = {
+      getId: () => 'glyph.annotation.editor',
+      getDomNode: () => node,
+      getPosition: () => null,
+    };
+    const layout = () => {
+      node.style.width = `${Math.max(0, editor.getLayoutInfo().contentWidth - 16)}px`;
+      node.style.left = `${editor.getLayoutInfo().contentLeft}px`;
+      editor.layoutOverlayWidget(widget);
+    };
+    editor.addOverlayWidget(widget);
+    layout();
+    this.annotationEditor.add(editor.onDidLayoutChange(layout));
+    const observer = new ResizeObserver(() => {
+      const height = Math.max(128, Math.ceil(node.getBoundingClientRect().height));
+      if (zone.heightInPx !== height) {
+        zone.heightInPx = height;
+        editor.changeViewZones(accessor => accessor.layoutZone(id));
+      }
+      node.style.left = `${editor.getLayoutInfo().contentLeft}px`;
+      editor.layoutOverlayWidget(widget);
+    });
+    observer.observe(node);
+    this.annotationEditor.add(
+      toDisposable(() => {
+        observer.disconnect();
+        editor.removeOverlayWidget(widget);
+        editor.changeViewZones(accessor => accessor.removeZone(id));
+      }),
+    );
+    return node;
   }
 
   private captureAnnotation(comment = ''): GlyphAnnotation | undefined {
@@ -331,34 +465,21 @@ export class GlyphProposalEditor extends Disposable {
     const item = this.preview?.items[this.index];
     return {
       itemId: item?.id,
-      shortcutModifier: isMacintosh ? '⌘' : 'Ctrl+',
+      fileComplete: !!file && file.pendingItemIds.length === 0,
+      shortcuts: Object.fromEntries(
+        Object.values(GlyphReviewCommand).flatMap(command => {
+          const label = this.keybindings.lookupKeybinding(command)?.getLabel();
+          return label ? [[command, label]] : [];
+        }),
+      ),
+      registerCommands: handler => {
+        this.commandHandlers.set(full, handler);
+        return () => {
+          if (this.commandHandlers.get(full) === handler) this.commandHandlers.delete(full);
+        };
+      },
       ...(!full && current && item
         ? {
-            registerShortcuts: (handler: (action: 'undo' | 'keep' | 'comment') => void) => {
-              const node = this.editor?.getDomNode();
-              const listener = (event: KeyboardEvent) => {
-                if (
-                  !(isMacintosh ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) ||
-                  event.altKey ||
-                  event.shiftKey
-                )
-                  return;
-                const target = event.target;
-                if (
-                  target instanceof Element &&
-                  target.closest('input, textarea:not(.inputarea), [contenteditable="true"]')
-                )
-                  return;
-                const action = { n: 'undo', y: 'keep', r: 'comment' }[event.key.toLowerCase()] as
-                  'undo' | 'keep' | 'comment' | undefined;
-                if (!action) return;
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                if (!event.repeat) handler(action);
-              };
-              node?.addEventListener('keydown', listener, true);
-              return () => node?.removeEventListener('keydown', listener, true);
-            },
             rejectWithComment: async (comment: string) => {
               const annotation = this.captureAnnotation(comment);
               await this.actions.decide(
@@ -413,6 +534,26 @@ export class GlyphProposalEditor extends Disposable {
   private installControls(): void {
     const editor = this.editor;
     if (!editor) return;
+    const context = editor.invokeWithinContext(accessor => accessor.get(IContextKeyService));
+    const reviewContext = context.createKey<boolean>('glyph.reviewEditor', false);
+    reviewContext.set(true);
+    const textInputContext = context.createKey<boolean>('glyph.reviewTextInput', false);
+    const editorNode = editor.getDomNode();
+    if (editorNode)
+      this.widgets.add(
+        addDisposableListener(editorNode, 'focusin', (event: FocusEvent) => {
+          const target = event.target;
+          textInputContext.set(
+            target instanceof Element && !!target.closest('input, textarea:not(.inputarea), [contenteditable="true"]'),
+          );
+        }),
+      );
+    this.widgets.add(
+      toDisposable(() => {
+        reviewContext.reset();
+        textInputContext.reset();
+      }),
+    );
     const expectedModel = editor.getModel();
     const mounted = [true, false].map(full => {
       const node = document.createElement('div');
@@ -444,11 +585,11 @@ export class GlyphProposalEditor extends Disposable {
       };
       const layout = () => {
         // Widget width is editor geometry; presentation and colors live in Emotion.
-        node.style.width = `${Math.max(0, editor.getLayoutInfo().contentWidth - editor.getLayoutInfo().verticalScrollbarWidth)}px`;
+        node.style.width = `${Math.max(0, (full ? editor.getLayoutInfo().width : editor.getLayoutInfo().contentWidth) - editor.getLayoutInfo().verticalScrollbarWidth)}px`;
         if (full) editor.layoutOverlayWidget(overlay);
         else editor.layoutContentWidget(content);
       };
-      node.style.width = `${Math.max(0, editor.getLayoutInfo().contentWidth - editor.getLayoutInfo().verticalScrollbarWidth)}px`;
+      node.style.width = `${Math.max(0, (full ? editor.getLayoutInfo().width : editor.getLayoutInfo().contentWidth) - editor.getLayoutInfo().verticalScrollbarWidth)}px`;
       if (full) editor.addOverlayWidget(overlay);
       else editor.addContentWidget(content);
       this.widgets.add(editor.onDidLayoutChange(layout));
@@ -477,6 +618,7 @@ export class GlyphProposalEditor extends Disposable {
     this.widgets.add(
       editor.onDidChangeModel(() => {
         if (editor.getModel() !== expectedModel) {
+          this.annotationEditor.clear();
           this.widgets.clear();
           this.controls = [];
           this.editor = undefined;
@@ -485,6 +627,7 @@ export class GlyphProposalEditor extends Disposable {
     );
     this.widgets.add(
       editor.onDidDispose(() => {
+        this.annotationEditor.clear();
         this.widgets.clear();
         this.controls = [];
         this.editor = undefined;
@@ -494,5 +637,10 @@ export class GlyphProposalEditor extends Disposable {
   private refreshControls(): void {
     this.controls[0]?.update(this.properties(true));
     this.controls[1]?.update(this.properties(false));
+    if (this.hunk && this.editor && !this.file()?.pendingItemIds.length) {
+      this.hunk.widget.getDomNode().style.display = 'none';
+      this.hunk.zone.heightInPx = 0;
+      this.editor.changeViewZones(accessor => accessor.layoutZone(this.hunk!.id));
+    }
   }
 }

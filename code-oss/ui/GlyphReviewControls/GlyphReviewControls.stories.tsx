@@ -1,4 +1,6 @@
-import { reviewControlsFixture } from '#code-oss/storybook/fixtures/ViewFixtures.ts';
+import type { ComponentProps } from 'preact';
+import { fn } from 'storybook/test';
+import { reviewControlsFixture, reviewShortcutLabels } from '#code-oss/storybook/fixtures/ViewFixtures.ts';
 import { editorChanges } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
 import { useState } from 'preact/hooks';
 import { FileCode2 } from 'lucide-preact';
@@ -8,18 +10,22 @@ import { WiredGlyphReviewControls } from './GlyphReviewControls.wired.tsx';
 const meta = {
   title: 'Glyph/Editor/Editor review controls',
   component: WiredGlyphReviewControls,
+  globals: { paneWidth: '1000' },
   args: reviewControlsFixture(),
 } satisfies Meta<typeof WiredGlyphReviewControls>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const FileToolbar: Story = {};
-export const Hunk: Story = {
+export const FileComplete: Story = { args: { fileComplete: true, disabled: true, keepDisabled: true } };
+export const InlineDiffControls: Story = {
   render: ({ label, disabled, keepDisabled, previous, next, keep, undo }) => (
     <WiredGlyphReviewControls
       label={label}
       itemId="example-hunk"
-      shortcutModifier="⌘"
-      rejectWithComment={async () => {}}
+      shortcuts={reviewShortcutLabels}
+      rejectWithComment={fn<() => Promise<void>>()
+        .mockName('GlyphReviewControls.rejectWithComment')
+        .mockResolvedValue(undefined)}
       disabled={disabled}
       keepDisabled={keepDisabled}
       previous={previous}
@@ -75,10 +81,24 @@ const editorStyles = {
 const changes = editorChanges;
 function EditorPreview() {
   const [active, setActive] = useState(0);
-  const [decisions, setDecisions] = useState<Record<number, 'keep' | 'undo'>>({});
+  const [activeFile, setActiveFile] = useState(0);
+  const [allDecisions, setDecisions] = useState<Record<string, 'keep' | 'undo'>>({});
+  const decisions = changes.map((_, index) => allDecisions[`${activeFile}:${index}`]);
+  const complete = decisions.every(Boolean);
+  const allComplete = [0, 1].every(file => changes.every((_, index) => allDecisions[`${file}:${index}`]));
+  const decideFile = async (decision: 'keep' | 'undo') => {
+    setDecisions(value => ({
+      ...value,
+      ...Object.fromEntries(changes.map((_, index) => [`${activeFile}:${index}`, decision])),
+    }));
+  };
+  const moveFile = async (amount: number) => {
+    setActiveFile(value => (value + amount + 2) % 2);
+    setActive(0);
+  };
   const [notice, setNotice] = useState('');
   const decide = async (index: number, decision: 'keep' | 'undo', comment?: string) => {
-    setDecisions(value => ({ ...value, [index]: decision }));
+    setDecisions(value => ({ ...value, [`${activeFile}:${index}`]: decision }));
     setNotice(
       comment
         ? `Change ${index + 1} rejected: ${comment}`
@@ -94,26 +114,45 @@ function EditorPreview() {
   return (
     <div class={editorStyles.editor}>
       <header class={editorStyles.tab}>
-        <FileCode2 size={16} /> queue.ts <span>· Modified</span>
+        <FileCode2 size={16} /> {activeFile ? 'worker.ts' : 'queue.ts'}{' '}
+        <span>· {complete ? 'Reviewed' : 'Modified'}</span>
       </header>
       <div class={editorStyles.toolbar}>
         <WiredGlyphReviewControls
           label={`${active + 1} of 2`}
-          fileLabel="1 of 1 Files"
-          disabled={false}
-          keepDisabled={false}
-          previous={() => setActive(0)}
-          next={() => setActive(1)}
-          keepFile={async () => {
-            setDecisions({ 0: 'keep', 1: 'keep' });
+          fileLabel={`${activeFile + 1} of 2 Files`}
+          fileComplete={complete}
+          shortcuts={reviewShortcutLabels}
+          disabled={complete}
+          keepDisabled={complete}
+          keepAllDisabled={allComplete}
+          navigationDisabled={allComplete}
+          previousFile={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['previousFile']>>(() =>
+            moveFile(-1),
+          ).mockName('GlyphReviewControls.previousFile')}
+          nextFile={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['nextFile']>>(() =>
+            moveFile(1),
+          ).mockName('GlyphReviewControls.nextFile')}
+          previous={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['previous']>>(() =>
+            setActive(0),
+          ).mockName('GlyphReviewControls.previous')}
+          next={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['next']>>(() => setActive(1)).mockName(
+            'GlyphReviewControls.next',
+          )}
+          keepFile={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['keepFile']>>(() =>
+            decideFile('keep'),
+          ).mockName('GlyphReviewControls.keepFile')}
+          undoFile={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['undoFile']>>(() =>
+            decideFile('undo'),
+          ).mockName('GlyphReviewControls.undoFile')}
+          keepAll={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['keepAll']>>(async () => {
+            setDecisions(
+              Object.fromEntries([0, 1].flatMap(file => changes.map((_, index) => [`${file}:${index}`, 'keep']))),
+            );
             setNotice('All changes kept.');
-          }}
-          undoFile={async () => {
-            setDecisions({ 0: 'undo', 1: 'undo' });
-            setNotice('All changes undone.');
-          }}
-          keep={async () => {}}
-          undo={async () => {}}
+          }).mockName('GlyphReviewControls.keepAll')}
+          keep={fn<() => Promise<void>>().mockName('GlyphReviewControls.keep').mockResolvedValue(undefined)}
+          undo={fn<() => Promise<void>>().mockName('GlyphReviewControls.undo').mockResolvedValue(undefined)}
         />
       </div>
       <div class={editorStyles.code}>
@@ -127,14 +166,24 @@ function EditorPreview() {
                 <WiredGlyphReviewControls
                   itemId={`hunk-${index}`}
                   label={`${index + 1} of 2`}
-                  shortcutModifier="⌘"
+                  shortcuts={reviewShortcutLabels}
                   disabled={false}
                   keepDisabled={false}
-                  previous={() => setActive(Math.max(0, index - 1))}
-                  next={() => setActive(Math.min(1, index + 1))}
-                  keep={() => decide(index, 'keep')}
-                  undo={() => decide(index, 'undo')}
-                  rejectWithComment={comment => decide(index, 'undo', comment)}
+                  previous={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['previous']>>(() =>
+                    setActive(Math.max(0, index - 1)),
+                  ).mockName('GlyphReviewControls.previous')}
+                  next={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['next']>>(() =>
+                    setActive(Math.min(1, index + 1)),
+                  ).mockName('GlyphReviewControls.next')}
+                  keep={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['keep']>>(() =>
+                    decide(index, 'keep'),
+                  ).mockName('GlyphReviewControls.keep')}
+                  undo={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['undo']>>(() =>
+                    decide(index, 'undo'),
+                  ).mockName('GlyphReviewControls.undo')}
+                  rejectWithComment={fn<
+                    NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['rejectWithComment']>
+                  >(comment => decide(index, 'undo', comment)).mockName('GlyphReviewControls.rejectWithComment')}
                 />
               </div>
             )}
@@ -160,4 +209,4 @@ function EditorPreview() {
     </div>
   );
 }
-export const InEditor: Story = { globals: { paneWidth: '1000' }, render: () => <EditorPreview /> };
+export const InEditor: Story = { render: () => <EditorPreview /> };

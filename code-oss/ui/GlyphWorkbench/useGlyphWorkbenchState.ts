@@ -16,15 +16,9 @@ export type GlyphWorkbenchState = ReturnType<typeof useGlyphWorkbenchState>;
 export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOptions) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const [wide, setWide] = useState(false);
   useLayoutEffect(() => {
-    const element = root.current;
-    if (!element) return;
-    const observer = new ResizeObserver(() => setWide(element.clientWidth >= tokens.layout.widePane));
-    observer.observe(element);
-    setWide(element.clientWidth >= tokens.layout.widePane);
-    return () => observer.disconnect();
-  }, []);
+    if (historyOpen) return actions.reserveHistoryWidth?.(tokens.history.columnWidth);
+  }, [historyOpen, actions.reserveHistoryWidth]);
   const toggle = useRef<HTMLButtonElement>(null);
   const chat = state.chats.find(value => value.id === state.selectedChatId);
   const questionRun = state.runs.find(
@@ -44,14 +38,10 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
     setHistoryOpen(false);
     toggle.current?.focus();
   };
-  const openedChat = () => {
-    if ((root.current?.clientWidth ?? 0) < tokens.layout.widePane) closeHistory();
-  };
   return {
     root,
     toggle,
     historyOpen,
-    conversationInert: historyOpen && !wide,
     title: chat?.title ?? 'New chat',
     todos: chat?.todos ?? [],
     plans: chat?.plans ?? [],
@@ -73,7 +63,6 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
     newChat: () => actions.newChat(),
     toggleHistory: () => setHistoryOpen(!historyOpen),
     closeHistory,
-    openedChat,
     questionRun,
     approvalRun,
     initialAnswers: questionRun?.question ? (questionDrafts.current.get(questionRun.question.id) ?? []) : [],

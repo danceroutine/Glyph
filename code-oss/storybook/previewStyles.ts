@@ -14,7 +14,11 @@ export const stageClassName = css({
 
 export const frameClassName = css({
   boxSizing: 'border-box',
+  width: 'var(--glyph-preview-width)',
   maxWidth: '100%',
+  '&:has(.glyph-workbench[data-history-open])': {
+    width: `calc(var(--glyph-preview-width) + ${tokens.history.columnWidth}px)`,
+  },
   height: `calc(100vh - ${space('xxxl')})`,
   minHeight: 320,
   background: tokens.surface.pane,

@@ -1,15 +1,24 @@
+import type { ComponentProps } from 'preact';
+import { fn } from 'storybook/test';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { useState } from 'preact/hooks';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { WiredGlyphModePicker } from './GlyphModePicker.wired.tsx';
 function ModePickerExample({ initial }: { readonly initial: AgentModeID }) {
   const [mode, change] = useState(initial);
-  return <WiredGlyphModePicker mode={mode} change={change} />;
+  return (
+    <WiredGlyphModePicker
+      mode={mode}
+      change={fn<NonNullable<ComponentProps<typeof WiredGlyphModePicker>['change']>>(change).mockName(
+        'GlyphModePicker.change',
+      )}
+    />
+  );
 }
 const meta = {
   title: 'Glyph/Chat/In Composer/Mode/Mode Picker',
   component: WiredGlyphModePicker,
-  args: { mode: AgentModeID.AGENT, change: () => {} },
+  args: { mode: AgentModeID.AGENT, change: fn().mockName('GlyphModePicker.change') },
   decorators: [
     Story => (
       <div style={{ padding: '24px', paddingTop: '180px' }}>

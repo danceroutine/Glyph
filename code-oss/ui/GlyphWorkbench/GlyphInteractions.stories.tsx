@@ -1,3 +1,5 @@
+import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { fn } from 'storybook/test';
 import { isolateComposer } from '#code-oss/storybook/decorators.tsx';
 import { userMessageFixture, agentMessageFixture } from '#code-oss/storybook/fixtures/MessageFixtures.ts';
 import {
@@ -45,9 +47,9 @@ export const SubmissionFailure: Story = {
   args: {
     actions: {
       ...previewActionsFixture(),
-      answerQuestion: async () => {
+      answerQuestion: fn<NonNullable<GlyphWorkbenchViewActions['answerQuestion']>>(async () => {
         throw new Error('The connection was interrupted. Your answers are still here; try again.');
-      },
+      }).mockName('GlyphInteractions.answerQuestion'),
     },
   },
 };
@@ -81,29 +83,31 @@ function QuestionnairePreview({ consecutive = false }: { readonly consecutive?: 
       })}
       actions={{
         ...previewActionsFixture(),
-        answerQuestion: async (_chat, _run, _id, value) => {
-          const result = value as QuestionFormResult;
-          setResponses([
-            ...responses,
-            {
-              id: request.id,
-              answers: request.questions.map(question => {
-                const answer = result.answers.find(answer => answer.questionId === question.id)!;
-                return {
-                  question: question.prompt,
-                  answer:
-                    answer.type === QuestionAnswerType.OTHER
-                      ? answer.text
-                      : question.options
-                          .filter(option => answer.optionIds.includes(option.id))
-                          .map(option => option.label)
-                          .join(', '),
-                };
-              }),
-            },
-          ]);
-          setRound(round + 1);
-        },
+        answerQuestion: fn<NonNullable<GlyphWorkbenchViewActions['answerQuestion']>>(
+          async (_chat, _run, _id, value) => {
+            const result = value as QuestionFormResult;
+            setResponses([
+              ...responses,
+              {
+                id: request.id,
+                answers: request.questions.map(question => {
+                  const answer = result.answers.find(answer => answer.questionId === question.id)!;
+                  return {
+                    question: question.prompt,
+                    answer:
+                      answer.type === QuestionAnswerType.OTHER
+                        ? answer.text
+                        : question.options
+                            .filter(option => answer.optionIds.includes(option.id))
+                            .map(option => option.label)
+                            .join(', '),
+                  };
+                }),
+              },
+            ]);
+            setRound(round + 1);
+          },
+        ).mockName('GlyphInteractions.answerQuestion'),
       }}
     />
   );

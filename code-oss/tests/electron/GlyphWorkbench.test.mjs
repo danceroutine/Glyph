@@ -323,6 +323,25 @@ it.describe('Pending Tab and workspace lifecycle hooks', () => {
 });
 
 it.describe('Pending language-server integration', () => {
+  // Refactoring contracts must exercise an IDE language provider and inspect
+  // recorded agent tool calls plus resulting editor/filesystem changes. A
+  // model-generated text patch alone does not establish LSP integration.
+  it.fixme(
+    'lets the agent move a symbol to another file through an available IDE/LSP refactor action that updates affected imports and references without generating replacement file contents',
+    async () => {},
+  );
+  it.fixme(
+    'lets the agent rename a symbol through the IDE/LSP rename capability across its definitions and references without changing unrelated same-named symbols',
+    async () => {},
+  );
+  it.fixme(
+    'presents IDE/LSP refactoring edits for review, preserves files on rejection, and lets editor Undo reverse an accepted refactor across all affected files',
+    async () => {},
+  );
+  it.fixme(
+    'reports when the requested IDE/LSP refactor is unavailable for the selected symbol or language without claiming completion or silently substituting generated text edits',
+    async () => {},
+  );
   it.fixme(
     'uses language-server diagnostics and symbol information from the active project to answer code questions',
     async () => {},

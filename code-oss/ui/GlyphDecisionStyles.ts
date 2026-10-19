@@ -35,25 +35,7 @@ export const decisionStyles = {
     gap: tokens.space.md,
     padding: space('lg', 'lg'),
   }),
-  button: css({
-    border: 0,
-    borderRadius: tokens.button.radius,
-    padding: space('sm', 'md'),
-    cursor: 'pointer',
-    background: 'transparent',
-    color: tokens.text.muted,
-    ':hover': { background: tokens.button.quiet.hoverBackground },
-  }),
-  primary: css({
-    background: tokens.button.background,
-    color: tokens.button.foreground,
-    ':hover': { background: tokens.button.hoverBackground },
-  }),
-  secondary: css({
-    background: tokens.button.secondary.background,
-    color: tokens.button.secondary.foreground,
-    ':hover': { background: tokens.button.secondary.hoverBackground },
-  }),
+
   detail: css({ fontSize: tokens.font.size.caption, color: tokens.text.muted }),
   error: css({ padding: space('none', 'lg', 'lg'), color: tokens.text.error }),
 };

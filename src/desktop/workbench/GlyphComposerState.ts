@@ -5,8 +5,13 @@ import type { GlyphAnnotation, GlyphTurnOptions } from '#src/desktop/protocol/ev
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { replaceGlyphPromptRange, toGlyphPromptText, type GlyphPromptDocument } from './GlyphPromptDocument.ts';
 export interface GlyphAnnotationPosition {
+  /** Optional editor-owned mount point that reserves space in the source view. */
+  readonly container?: HTMLElement;
   readonly x: number;
   readonly y: number;
+  /** Horizontal bounds of the source editor, in viewport coordinates. */
+  readonly minX?: number;
+  readonly maxX?: number;
 }
 export interface GlyphQueuedMessage {
   readonly id: string;
@@ -212,6 +217,15 @@ export class GlyphComposerState {
     this.update({
       queued: this.value.queued.filter(value => value.id !== id),
       editingQueuedMessage: this.value.editingQueuedMessage === id ? undefined : this.value.editingQueuedMessage,
+      ...(this.value.editingQueuedMessage === id && {
+        draft: '',
+        document: {
+          parts: [],
+          from: 0,
+          to: 0,
+          options: { mode: this.value.document.options?.mode ?? AgentMode.default.id },
+        },
+      }),
     });
   }
   moveQueued(id: string, target: number): void {
@@ -249,6 +263,7 @@ export class GlyphComposerState {
       draft: '',
       document: { parts: [], from: 0, to: 0, options: { mode: document.options?.mode ?? AgentMode.default.id } },
       editingAnnotation: undefined,
+      annotationDraft: undefined,
       error: undefined,
       submitting: true,
     });

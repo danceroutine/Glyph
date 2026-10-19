@@ -1,3 +1,4 @@
+import { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
 import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
 import { GlyphComposerCommand } from '#glyph/workbench/GlyphComposerCommand.js';
 import { ContextKeyExpr } from '#vs/platform/contextkey/common/contextkey.js';
@@ -164,6 +165,77 @@ for (const command of [
       }
       run(accessor: ServicesAccessor): void {
         accessor.get(GlyphWorkbenchService).composer.executeCommand(command.id);
+      }
+    },
+  );
+}
+
+const reviewWhen = ContextKeyExpr.and(
+  ContextKeyExpr.has('glyph.reviewEditor'),
+  ContextKeyExpr.not('glyph.reviewTextInput'),
+);
+for (const command of [
+  { id: GlyphReviewCommand.ADD_TO_CHAT, title: 'Glyph: Add Selection to Chat', primary: KeyMod.CtrlCmd | KeyCode.KeyL },
+  { id: GlyphReviewCommand.KEEP, title: 'Glyph: Keep Change', primary: KeyMod.CtrlCmd | KeyCode.KeyY },
+  { id: GlyphReviewCommand.UNDO, title: 'Glyph: Undo Change', primary: KeyMod.CtrlCmd | KeyCode.KeyN },
+  {
+    id: GlyphReviewCommand.COMMENT,
+    title: 'Glyph: Reject Change with Comment',
+    primary: KeyMod.CtrlCmd | KeyCode.KeyR,
+  },
+  { id: GlyphReviewCommand.KEEP_FILE, title: 'Glyph: Keep File', primary: KeyMod.CtrlCmd | KeyCode.Enter },
+  {
+    id: GlyphReviewCommand.UNDO_FILE,
+    title: 'Glyph: Undo File',
+    primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.Backspace,
+  },
+  {
+    id: GlyphReviewCommand.KEEP_ALL,
+    title: 'Glyph: Keep All Changes',
+    primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter,
+  },
+  {
+    id: GlyphReviewCommand.NEXT_FILE,
+    title: 'Glyph: Review Next File',
+    primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.RightArrow,
+  },
+  {
+    id: GlyphReviewCommand.PREVIOUS_FILE,
+    title: 'Glyph: Review Previous File',
+    primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.LeftArrow,
+  },
+  { id: GlyphReviewCommand.NEXT_CHANGE, title: 'Glyph: Review Next Change', primary: KeyMod.Alt | KeyCode.DownArrow },
+  {
+    id: GlyphReviewCommand.PREVIOUS_CHANGE,
+    title: 'Glyph: Review Previous Change',
+    primary: KeyMod.Alt | KeyCode.UpArrow,
+  },
+]) {
+  registerAction2(
+    class extends Action2 {
+      constructor() {
+        super({
+          id: command.id,
+          title: localize2(command.id, command.title),
+          f1: true,
+          precondition:
+            command.id === GlyphReviewCommand.ADD_TO_CHAT
+              ? ContextKeyExpr.and(reviewWhen, ContextKeyExpr.has('editorHasSelection'))
+              : reviewWhen,
+          // Review defaults take precedence over editor navigation only inside a review editor.
+          keybinding: {
+            primary: command.primary,
+            // Development builds bind Cmd/Ctrl+R to Reload at +50.
+            weight: KeybindingWeight.WorkbenchContrib + (command.id === GlyphReviewCommand.COMMENT ? 51 : 1),
+            when:
+              command.id === GlyphReviewCommand.ADD_TO_CHAT
+                ? ContextKeyExpr.and(reviewWhen, ContextKeyExpr.has('editorHasSelection'))
+                : reviewWhen,
+          },
+        });
+      }
+      run(accessor: ServicesAccessor): void {
+        accessor.get(GlyphWorkbenchService).executeReviewCommand(command.id);
       }
     },
   );

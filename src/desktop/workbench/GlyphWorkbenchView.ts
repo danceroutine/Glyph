@@ -19,6 +19,8 @@ export interface GlyphWorkbenchView {
 export interface GlyphWorkbenchViewActions {
   readonly composer: GlyphComposerState;
   readonly context: GlyphContextActions;
+  /** Adds room for history alongside the chat; cleanup releases only the added width. */
+  reserveHistoryWidth?(width: number): () => void;
   send(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
   /** Native hosts resolve shortcuts through the workbench; browser previews use editor defaults. */
   readonly composerKeybindings?: {

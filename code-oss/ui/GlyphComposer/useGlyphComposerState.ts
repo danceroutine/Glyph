@@ -1,10 +1,11 @@
+import { dropdownNavigationIndex } from '#code-oss/ui/Dropdown/useDropdownState.ts';
 import { GlyphFollowUpBehavior } from '#src/desktop/workbench/GlyphFollowUpBehavior.js';
 import { GlyphComposerCommand } from '#src/desktop/workbench/GlyphComposerCommand.js';
 import { AgentMode, AgentModeID } from '#src/chat/AgentMode.js';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
-import type { GlyphContextCandidate } from '#src/desktop/workbench/GlyphContextActions.js';
+import { GlyphContextCandidateKind, type GlyphContextCandidate } from '#src/desktop/workbench/GlyphContextActions.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { GlyphPromptEditor, type GlyphPromptQuery } from '#code-oss/ui/GlyphPromptEditor/GlyphPromptEditor.ts';
 import { GlyphComposerError } from './GlyphComposerError.ts';
@@ -74,11 +75,16 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
       }
     }
   };
-  const choose = (candidate: GlyphContextCandidate) =>
-    perform(async () => {
+  const choose = async (candidate: GlyphContextCandidate) => {
+    await perform(async () => {
       const position = query;
       const document = model.snapshot.document;
-      const attachment = await actions.context.captureFile(candidate.uri);
+      const capture =
+        candidate.kind === GlyphContextCandidateKind.FOLDER
+          ? actions.context.captureFolder?.bind(actions.context)
+          : actions.context.captureFile.bind(actions.context);
+      if (!capture) throw new GlyphComposerError('Folder context is unavailable.');
+      const attachment = await capture(candidate.uri);
       if (!isMounted()) return;
       if (document !== model.snapshot.document)
         throw new GlyphComposerError('The prompt changed during capture. Choose the file again.');
@@ -86,6 +92,8 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
       editor.current?.insert(attachment, position);
       setQuery(undefined);
     });
+    if (isMounted()) editor.current?.focus();
+  };
   const latest = useRef({ submit, steer, choose, candidates, selected, query });
   latest.current = { submit, steer, choose, candidates, selected, query };
   useLayoutEffect(() => {
@@ -109,10 +117,10 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
             setQuery(undefined);
             return true;
           case 'ArrowDown':
-            setSelected(value => Math.min(value + 1, Math.max(0, current.candidates.length - 1)));
+            setSelected(value => dropdownNavigationIndex(event.key, value, current.candidates.length, false) ?? 0);
             return true;
           case 'ArrowUp':
-            setSelected(value => Math.max(0, value - 1));
+            setSelected(value => dropdownNavigationIndex(event.key, value, current.candidates.length, false) ?? 0);
             return true;
           case 'Enter': {
             if (event.metaKey || event.ctrlKey || event.shiftKey)
@@ -279,6 +287,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     disabled: disabled || pending,
     query,
     candidates,
+    highlightCandidate: setSelected,
     selected,
     searching,
     pending,
@@ -328,7 +337,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
         if (preview) await actions.context.openAttachment(preview);
       }),
     activate: () => {
-      if (active && !state.draft.trim()) {
+      if (active && !state.editingQueuedMessage && !state.draft.trim()) {
         model.pauseQueue();
         actions.cancel();
       } else void submit();

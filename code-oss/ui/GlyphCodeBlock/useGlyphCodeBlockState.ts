@@ -1,8 +1,5 @@
-import { common, createLowlight } from 'lowlight';
+import { highlightGlyphCode } from '#code-oss/ui/GlyphSyntaxHighlighting/GlyphSyntaxHighlighting.ts';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-
-const highlighter = createLowlight(common);
-highlighter.registerAlias({ javascript: ['jsx'], typescript: ['tsx'] });
 
 export function useGlyphCodeBlockState(
   source: string,
@@ -10,15 +7,7 @@ export function useGlyphCodeBlockState(
   copyText: ((text: string) => Promise<void>) | undefined,
 ) {
   const language = info?.trim().split(/\s+/)[0]?.toLowerCase() || 'text';
-  const nodes = useMemo(() => {
-    if (!highlighter.registered(language)) return undefined;
-    try {
-      return highlighter.highlight(language, source).children;
-    } catch {
-      // Incomplete streaming fences and unsupported syntax still display verbatim.
-      return undefined;
-    }
-  }, [source, language]);
+  const nodes = useMemo(() => highlightGlyphCode(source, language), [source, language]);
   const [wrap, setWrap] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(false);

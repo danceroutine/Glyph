@@ -1,3 +1,5 @@
+import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { fn } from 'storybook/test';
 import { modeSwapFixture } from '#code-oss/storybook/fixtures/InteractionFixtures.ts';
 import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
@@ -42,13 +44,17 @@ function Example({
       readOnly={disabled}
       actions={{
         ...previewActionsFixture(),
-        decideApproval: async (_chat, _run, _id, decision) => {
-          setSwap(current => ({
-            ...current,
-            status:
-              decision === GlyphApprovalDecision.ALLOW_ONCE ? GlyphModeSwapStatus.APPROVED : GlyphModeSwapStatus.DENIED,
-          }));
-        },
+        decideApproval: fn<NonNullable<GlyphWorkbenchViewActions['decideApproval']>>(
+          async (_chat, _run, _id, decision) => {
+            setSwap(current => ({
+              ...current,
+              status:
+                decision === GlyphApprovalDecision.ALLOW_ONCE
+                  ? GlyphModeSwapStatus.APPROVED
+                  : GlyphModeSwapStatus.DENIED,
+            }));
+          },
+        ).mockName('GlyphAgentMessageModeSwap.decideApproval'),
       }}
     />
   );

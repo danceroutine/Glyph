@@ -1,13 +1,15 @@
+import { IconButton, ButtonSize, Button, ButtonVariant, ButtonAppearance } from '#code-oss/ui/Button/Button.tsx';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { GlyphReviewCommand } from '#src/desktop/workbench/GlyphReviewCommand.js';
 import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, MessageSquare } from 'lucide-preact';
-import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
+import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 import type { GlyphReviewControlsState } from './useGlyphReviewControlsState.ts';
 const styles = {
   root: css({
     boxSizing: 'border-box',
     background: tokens.surface.canvas,
     color: tokens.text.primary,
-    border: tokens.border.default,
-    borderRadius: tokens.button.radius,
+
     padding: tokens.space.xs,
     fontFamily: tokens.font.family.body,
     fontSize: tokens.font.size.body,
@@ -19,38 +21,11 @@ const styles = {
     justifyContent: 'flex-end',
     gap: tokens.space.xs,
     flexWrap: 'wrap',
+    '& > *': { flexShrink: 0, whiteSpace: 'nowrap' },
   }),
-  button: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 24,
-    gap: tokens.space.xs,
-    '& svg': { display: 'block', flexShrink: 0 },
-    background: tokens.button.secondary.background,
-    color: tokens.button.secondary.foreground,
-    border: 0,
-    borderRadius: tokens.button.radius,
-    font: 'inherit',
-    padding: space('xs', 'sm'),
-    cursor: 'pointer',
-    ':hover': { background: tokens.button.secondary.hoverBackground },
-    ':focus-visible': { outline: tokens.focus.ring },
-    ':disabled': { opacity: tokens.opacity.disabled },
-  }),
-  commentButton: css({
-    '&&': {
-      background: tokens.button.background,
-      color: tokens.button.foreground,
-      ':hover': { background: tokens.button.hoverBackground },
-    },
-  }),
-  keep: css({
-    background: tokens.review.keepBackground,
-    color: tokens.review.keepForeground,
-    ':hover': { background: tokens.review.keepBackground },
-  }),
-  shortcut: css({ font: 'inherit', color: 'inherit' }),
+
+  separator: css({ height: 16, borderLeft: tokens.border.default, marginInline: tokens.space.sm }),
+
   commentForm: css({ display: 'flex', flexDirection: 'column', gap: tokens.space.sm, padding: tokens.space.sm }),
   commentInput: css({
     background: tokens.input.background,
@@ -66,108 +41,184 @@ const styles = {
   error: css({ color: tokens.text.error, whiteSpace: 'normal', maxWidth: 500, padding: tokens.space.sm }),
 };
 export function GlyphReviewControls(state: GlyphReviewControlsState) {
+  const bar = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(false);
+  useLayoutEffect(() => {
+    const node = bar.current;
+    if (!node || !state.fileLabel) return;
+    const measure = () => {
+      // Measure the full labels on one row, independent of the current compact state.
+      const copy = node.cloneNode(true) as HTMLElement;
+      Object.assign(copy.style, { position: 'fixed', visibility: 'hidden', width: 'max-content', flexWrap: 'nowrap' });
+      copy.querySelector<HTMLElement>('[data-keep-all-suffix]')?.removeAttribute('hidden');
+      node.parentElement!.append(copy);
+      const required = copy.getBoundingClientRect().width;
+      copy.remove();
+      setCompact(required > node.clientWidth);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [state.fileLabel, state.fileComplete, state.shortcuts]);
+  if (!state.fileLabel && state.fileComplete) return null;
   return (
     <section class={styles.root} aria-label={state.fileLabel ? 'File review controls' : 'Edit review controls'}>
-      <div class={styles.bar}>
-        <button
-          class={styles.button}
-          type="button"
-          aria-label="Previous change"
-          disabled={state.disabled}
-          onClick={state.previous}
-        >
-          <ChevronUp size={16} aria-hidden="true" />
-        </button>
-        <span>{state.label}</span>
-        <button
-          class={styles.button}
-          type="button"
-          aria-label="Next change"
-          disabled={state.disabled}
-          onClick={state.next}
-        >
-          <ChevronDown size={16} aria-hidden="true" />
-        </button>
-        {state.previousFile && (
-          <button
-            class={styles.button}
-            type="button"
-            aria-label="Previous file"
-            disabled={state.navigationDisabled}
-            onClick={state.previousFile}
-          >
-            <ChevronLeft size={16} aria-hidden="true" />
-          </button>
+      <div ref={bar} class={styles.bar}>
+        {!state.fileComplete && (
+          <>
+            <IconButton
+              size={ButtonSize.SMALL}
+
+              type="button"
+              aria-label="Previous change"
+              disabled={state.disabled}
+              onClick={state.previous}
+            >
+              <ChevronUp size={16} aria-hidden="true" />
+            </IconButton>
+            <span>{state.label}</span>
+            <IconButton
+              size={ButtonSize.SMALL}
+
+              type="button"
+              aria-label="Next change"
+              disabled={state.disabled}
+              onClick={state.next}
+            >
+              <ChevronDown size={16} aria-hidden="true" />
+            </IconButton>
+            {state.fileLabel && <span class={styles.separator} aria-hidden="true" />}
+            {state.previousFile && (
+              <IconButton
+                size={ButtonSize.SMALL}
+
+                type="button"
+                aria-label="Previous file"
+                disabled={state.navigationDisabled}
+                onClick={state.previousFile}
+              >
+                <ChevronLeft size={16} aria-hidden="true" />
+              </IconButton>
+            )}
+            {state.fileLabel && <span>{state.fileLabel}</span>}
+            {state.nextFile && (
+              <IconButton
+                size={ButtonSize.SMALL}
+
+                type="button"
+                aria-label="Review Next File"
+                disabled={state.navigationDisabled}
+                onClick={state.nextFile}
+              >
+                <ChevronRight size={16} aria-hidden="true" />
+              </IconButton>
+            )}
+            {!state.fileLabel && (
+              <Button
+                shortcut={state.shortcuts?.[GlyphReviewCommand.UNDO]}
+                size={ButtonSize.SMALL}
+
+                type="button"
+                aria-label="Undo"
+                disabled={state.disabled}
+                onClick={state.undo}
+              >
+                Undo
+              </Button>
+            )}
+            {!state.fileLabel && (
+              <Button
+                shortcut={state.shortcuts?.[GlyphReviewCommand.KEEP]}
+                size={ButtonSize.SMALL}
+                variant={ButtonVariant.CONFIRM}
+
+                type="button"
+                aria-label="Keep"
+                disabled={state.keepDisabled}
+                onClick={state.keep}
+              >
+                Keep
+              </Button>
+            )}
+            {!state.fileLabel && state.rejectWithComment && (
+              <Button
+                shortcut={state.shortcuts?.[GlyphReviewCommand.COMMENT]}
+                size={ButtonSize.SMALL}
+                variant={ButtonVariant.PRIMARY}
+
+                type="button"
+                aria-label="Reject with comments"
+                title="Reject with comments"
+                disabled={state.disabled}
+                onClick={state.openComment}
+              >
+                <MessageSquare size={16} aria-hidden="true" />
+              </Button>
+            )}
+            {state.undoFile && (
+              <Button
+                shortcut={state.shortcuts?.[GlyphReviewCommand.UNDO_FILE]}
+                size={ButtonSize.SMALL}
+                appearance={ButtonAppearance.OUTLINE}
+
+                type="button"
+                aria-label="Undo File"
+                disabled={state.disabled}
+                onClick={state.undoFile}
+              >
+                Undo File
+              </Button>
+            )}
+            {state.keepFile && (
+              <Button
+                shortcut={state.shortcuts?.[GlyphReviewCommand.KEEP_FILE]}
+                size={ButtonSize.SMALL}
+                variant={ButtonVariant.CONFIRM}
+
+                type="button"
+                disabled={state.keepDisabled}
+                aria-label="Keep File"
+                onClick={state.keepFile}
+              >
+                Keep File
+              </Button>
+            )}
+          </>
         )}
-        {state.fileLabel && <span>{state.fileLabel}</span>}
-        {state.nextFile && (
-          <button
-            class={styles.button}
+        {state.fileComplete && state.nextFile && (
+          <Button
+            shortcut={state.shortcuts?.[GlyphReviewCommand.NEXT_FILE]}
+            size={ButtonSize.SMALL}
+
             type="button"
             aria-label="Review Next File"
             disabled={state.navigationDisabled}
             onClick={state.nextFile}
           >
-            <ChevronRight size={16} aria-hidden="true" />
-          </button>
-        )}
-        {!state.fileLabel && (
-          <button
-            class={styles.button}
-            type="button"
-            aria-label="Undo"
-            aria-keyshortcuts={state.shortcutModifier === '⌘' ? 'Meta+N' : 'Control+N'}
-            disabled={state.disabled}
-            onClick={state.undo}
-          >
-            Undo {state.shortcutModifier && <kbd class={styles.shortcut}>{state.shortcutModifier}N</kbd>}
-          </button>
-        )}
-        {!state.fileLabel && (
-          <button
-            class={`${styles.button} ${styles.keep}`}
-            type="button"
-            aria-label="Keep"
-            aria-keyshortcuts={state.shortcutModifier === '⌘' ? 'Meta+Y' : 'Control+Y'}
-            disabled={state.keepDisabled}
-            onClick={state.keep}
-          >
-            Keep {state.shortcutModifier && <kbd class={styles.shortcut}>{state.shortcutModifier}Y</kbd>}
-          </button>
-        )}
-        {!state.fileLabel && state.rejectWithComment && (
-          <button
-            class={`${styles.button} ${styles.commentButton}`}
-            type="button"
-            aria-label="Reject with comments"
-            aria-keyshortcuts={state.shortcutModifier === '⌘' ? 'Meta+R' : 'Control+R'}
-            title={`Reject with comments${state.shortcutModifier ? ` (${state.shortcutModifier}R)` : ''}`}
-            disabled={state.disabled}
-            onClick={state.openComment}
-          >
-            <MessageSquare size={16} aria-hidden="true" />
-            {state.shortcutModifier && <kbd class={styles.shortcut}>{state.shortcutModifier}R</kbd>}
-          </button>
-        )}
-        {state.undoFile && (
-          <button class={styles.button} type="button" disabled={state.disabled} onClick={state.undoFile}>
-            Undo File
-          </button>
-        )}
-        {state.keepFile && (
-          <button
-            class={`${styles.button} ${styles.keep}`}
-            type="button"
-            disabled={state.keepDisabled}
-            onClick={state.keepFile}
-          >
-            Keep File
-          </button>
+            Review Next File
+          </Button>
         )}
         {state.keepAll && (
-          <button class={styles.button} type="button" disabled={state.keepAllDisabled} onClick={state.keepAll}>
-            Keep all changes
-          </button>
+          <Button
+            shortcut={state.shortcuts?.[GlyphReviewCommand.KEEP_ALL]}
+            size={ButtonSize.SMALL}
+            variant={ButtonVariant.CONFIRM}
+            appearance={ButtonAppearance.OUTLINE}
+
+            type="button"
+            aria-label="Keep all changes"
+            disabled={state.keepAllDisabled}
+            onClick={state.keepAll}
+          >
+            <span>
+              Keep all
+              <span data-keep-all-suffix hidden={compact}>
+                {' '}
+                changes
+              </span>
+            </span>{' '}
+          </Button>
         )}
       </div>
       {state.commentOpen && (
@@ -202,12 +253,17 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
             }}
           />
           <div class={styles.bar}>
-            <button class={styles.button} type="button" disabled={state.commentPending} onClick={state.cancelComment}>
+            <Button size={ButtonSize.SMALL} type="button" disabled={state.commentPending} onClick={state.cancelComment}>
               Cancel
-            </button>
-            <button class={`${styles.button} ${styles.commentButton}`} type="submit" disabled={state.commentDisabled}>
+            </Button>
+            <Button
+              size={ButtonSize.SMALL}
+              variant={ButtonVariant.PRIMARY}
+              type="submit"
+              disabled={state.commentDisabled}
+            >
               Reject with comment
-            </button>
+            </Button>
           </div>
         </form>
       )}

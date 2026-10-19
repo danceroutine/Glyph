@@ -1,3 +1,4 @@
+import { GlyphReviewCommand } from '#src/desktop/workbench/GlyphReviewCommand.js';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { GlyphReviewControls } from '#src/desktop/workbench/GlyphReviewControls.js';
 export function useGlyphReviewControlsState(controls: GlyphReviewControls) {
@@ -35,17 +36,38 @@ export function useGlyphReviewControlsState(controls: GlyphReviewControls) {
   };
   useEffect(
     () =>
-      controls.registerShortcuts?.(action => {
-        if (busy.current || commentOpen || controls.disabled) return;
-        switch (action) {
-          case 'keep':
+      controls.registerCommands?.(command => {
+        if (busy.current || commentOpen) return;
+        switch (command) {
+          case GlyphReviewCommand.KEEP:
             if (!controls.keepDisabled) void perform(controls.keep);
             break;
-          case 'undo':
-            void perform(controls.undo);
+          case GlyphReviewCommand.UNDO:
+            if (!controls.disabled) void perform(controls.undo);
             break;
-          case 'comment':
+          case GlyphReviewCommand.COMMENT:
             openComment();
+            break;
+          case GlyphReviewCommand.KEEP_FILE:
+            if (!controls.keepDisabled && controls.keepFile) void perform(controls.keepFile);
+            break;
+          case GlyphReviewCommand.UNDO_FILE:
+            if (!controls.disabled && controls.undoFile) void perform(controls.undoFile);
+            break;
+          case GlyphReviewCommand.KEEP_ALL:
+            if (!controls.keepAllDisabled && controls.keepAll) void perform(controls.keepAll);
+            break;
+          case GlyphReviewCommand.NEXT_FILE:
+            if (!controls.navigationDisabled && controls.nextFile) void perform(controls.nextFile);
+            break;
+          case GlyphReviewCommand.PREVIOUS_FILE:
+            if (!controls.navigationDisabled && controls.previousFile) void perform(controls.previousFile);
+            break;
+          case GlyphReviewCommand.NEXT_CHANGE:
+            if (!controls.disabled) controls.next();
+            break;
+          case GlyphReviewCommand.PREVIOUS_CHANGE:
+            if (!controls.disabled) controls.previous();
             break;
         }
       }),

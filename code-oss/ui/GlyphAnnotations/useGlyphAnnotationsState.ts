@@ -1,11 +1,24 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { GlyphAnnotation } from '#src/desktop/protocol/events/GlyphAnnotation.js';
-import type { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
+import type { GlyphAnnotationPosition, GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 
-interface PositionedAnnotation {
+interface PositionedAnnotation extends GlyphAnnotationPosition {
   readonly annotation: GlyphAnnotation;
   readonly x: number;
   readonly y: number;
+}
+function samePosition(a: PositionedAnnotation | undefined, b: PositionedAnnotation | undefined): boolean {
+  return (
+    a === b ||
+    (!!a &&
+      !!b &&
+      a.annotation === b.annotation &&
+      a.x === b.x &&
+      a.y === b.y &&
+      a.minX === b.minX &&
+      a.maxX === b.maxX &&
+      a.container === b.container)
+  );
 }
 function sourceRange(source: Element, from: number, to: number): Range | undefined {
   const walker = document.createTreeWalker(source, NodeFilter.SHOW_TEXT);
@@ -42,11 +55,17 @@ function position(annotation: GlyphAnnotation, selection = false): PositionedAnn
     return {
       annotation,
       x: selectionRect.left + selectionRect.width / 2,
-      y: Math.max(8, selectionRect.top - 28),
+      y: Math.max(8, selectionRect.top - 38),
+      ...(annotation.kind === 'proposal' && source ? { minX: source.getBoundingClientRect().left } : {}),
     };
   }
   // The 30px speech bubble points from its lower-left corner to the last selected line.
-  return { annotation, x: Math.max(0, Math.min(innerWidth - 30, rect.right - 3)), y: Math.max(0, rect.bottom - 28) };
+  return {
+    annotation,
+    x: Math.max(0, Math.min(innerWidth - 30, rect.right - 3)),
+    y: Math.max(0, rect.bottom - 28),
+    ...(annotation.kind === 'proposal' && source ? { minX: source.getBoundingClientRect().left } : {}),
+  };
 }
 export function useGlyphAnnotationsState(composer: GlyphComposerState, disabled: boolean) {
   const [snapshot, setSnapshot] = useState(composer.snapshot);
@@ -59,12 +78,20 @@ export function useGlyphAnnotationsState(composer: GlyphComposerState, disabled:
   const [editorPosition, setEditorPosition] = useState({ x: 8, y: 8 });
   const annotations = snapshot.document.options?.annotations ?? [];
   useEffect(() => composer.subscribe(() => setSnapshot(composer.snapshot)), [composer]);
+  useEffect(() => {
+    if (snapshot.submitting) {
+      setDraft(undefined);
+      setCandidate(undefined);
+    }
+  }, [snapshot.submitting]);
   useLayoutEffect(() => {
-    if (!draft || !editor.current) return;
+    if (!draft || draft.container || !editor.current) return;
     const { width, height } = editor.current.getBoundingClientRect();
     const above = draft.y - height - 8;
+    const minX = Math.max(8, draft.minX ?? 8);
+    const maxX = Math.min(innerWidth - 8, draft.maxX ?? innerWidth - 8);
     setEditorPosition({
-      x: Math.max(8, Math.min(innerWidth - width - 8, draft.x + 30 - width)),
+      x: Math.max(minX, Math.min(maxX - width, draft.x + 30 - width)),
       y: Math.max(8, Math.min(innerHeight - height - 8, above >= 8 ? above : draft.y + 36)),
     });
   }, [draft, comment]);
@@ -74,9 +101,20 @@ export function useGlyphAnnotationsState(composer: GlyphComposerState, disabled:
   }, [draft]);
   useEffect(() => {
     const update = () => {
-      setMarkers(annotations.flatMap(value => position(value) ?? []));
-      setCandidate(value => (value ? position(value.annotation, true) : undefined));
-      setDraft(value => (value ? (position(value.annotation) ?? value) : undefined));
+      const next = annotations.flatMap(value => position(value) ?? []);
+      setMarkers(current =>
+        current.length === next.length && current.every((value, index) => samePosition(value, next[index]))
+          ? current
+          : next,
+      );
+      setCandidate(value => {
+        const next = value ? position(value.annotation, true) : undefined;
+        return samePosition(value, next) ? value : next;
+      });
+      setDraft(value => {
+        const next = value ? (position(value.annotation) ?? value) : undefined;
+        return samePosition(value, next) ? value : next;
+      });
     };
     update();
     document.addEventListener('scroll', update, true);

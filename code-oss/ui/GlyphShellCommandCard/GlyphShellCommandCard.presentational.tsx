@@ -1,3 +1,4 @@
+import { Button, ButtonAppearance } from '#code-oss/ui/Button/Button.tsx';
 import { ChevronDown, ChevronRight } from 'lucide-preact';
 import type { GlyphShellCommandCardState } from './useGlyphShellCommandCardState.ts';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
@@ -13,19 +14,15 @@ const styles = {
     minWidth: 0,
   }),
   header: css({
-    display: 'flex',
-    alignItems: 'center',
-    width: '100%',
-    gap: tokens.space.md,
-    padding: space('lg', 'lg'),
-    border: 0,
-    background: 'transparent',
-    color: tokens.text.muted,
-    font: 'inherit',
-    textAlign: 'left',
-    cursor: 'pointer',
-    ':hover': { background: tokens.button.quiet.hoverBackground },
-    ':focus-visible': { outline: tokens.focus.ring, outlineOffset: tokens.focus.inset },
+    '&&': {
+      display: 'flex',
+      width: '100%',
+      gap: tokens.space.md,
+      padding: space('lg', 'lg'),
+      border: 0,
+      textAlign: 'left',
+    },
+    ':focus-visible': { outlineOffset: tokens.focus.inset },
   }),
   title: css({ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
   status: css({ fontSize: tokens.font.size.caption, flexShrink: 0 }),
@@ -69,17 +66,6 @@ const styles = {
     gap: tokens.space.md,
     marginTop: tokens.space.md,
   }),
-  button: css({
-    padding: space('xs', 'md'),
-    border: 0,
-    borderRadius: tokens.button.radius,
-    background: tokens.button.secondary.background,
-    color: tokens.button.secondary.foreground,
-    font: 'inherit',
-    cursor: 'pointer',
-    ':disabled': { opacity: tokens.opacity.disabled, cursor: 'default' },
-    ':focus-visible': { outline: tokens.focus.ring },
-  }),
 };
 
 export function GlyphShellCommandCard({
@@ -107,11 +93,17 @@ export function GlyphShellCommandCard({
       data-live={shell.live}
       aria-busy={pending}
     >
-      <button type="button" class={styles.header} aria-expanded={expanded} onClick={toggle}>
+      <Button
+        appearance={ButtonAppearance.GHOST}
+        type="button"
+        class={styles.header}
+        aria-expanded={expanded}
+        onClick={toggle}
+      >
         {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
         <span class={styles.title}>{shell.command}</span>
         <span class={`${styles.status} ${failed ? styles.error : ''}`}>{status}</span>
-      </button>
+      </Button>
       <div class={styles.body}>
         {expanded && <pre class={styles.command}>$ {shell.command}</pre>}
         <pre class={styles.output} aria-label="Command output">
@@ -149,16 +141,16 @@ export function GlyphShellCommandCard({
                     />{' '}
                     Append newline
                   </label>
-                  <button type="submit" class={styles.button} disabled={!canSend}>
+                  <Button type="submit" disabled={!canSend}>
                     Send input
-                  </button>
+                  </Button>
                 </div>
               </form>
             )}
             <div class={styles.controls}>
-              <button type="button" class={styles.button} disabled={disabled} onClick={close}>
+              <Button type="button" disabled={disabled} onClick={close}>
                 Close shell
-              </button>
+              </Button>
             </div>
           </>
         )}

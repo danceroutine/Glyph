@@ -1,45 +1,44 @@
+import {
+  IconButton,
+  ButtonSize,
+  ButtonVariant,
+  ButtonAppearance,
+  IconButtonShape,
+  Button,
+} from '#code-oss/ui/Button/Button.tsx';
+import { createPortal } from 'preact/compat';
 import { MessageSquareText, ArrowUp, X, Pencil, Trash2 } from 'lucide-preact';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 import type { GlyphAnnotation } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { GlyphAnnotationsState } from './useGlyphAnnotationsState.ts';
 import { GlyphCommentButton } from './GlyphCommentButton.presentational.tsx';
 const styles = {
-  button: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.space.xs,
-    border: tokens.border.default,
-    borderRadius: tokens.button.radius,
-    padding: tokens.space.xs,
-    font: 'inherit',
-    background: tokens.input.background,
-    color: tokens.text.primary,
-    cursor: 'pointer',
-    ':focus-visible': { outline: tokens.focus.ring },
-  }),
+  closePosition: css({ position: 'absolute', top: 10, right: 10 }),
+
   editor: css({
     position: 'fixed',
     zIndex: 1001,
     display: 'flex',
-    alignItems: 'center',
-    gap: tokens.space.md,
+    flexDirection: 'column',
     boxSizing: 'border-box',
-    width: 340,
+    width: 440,
     maxWidth: '90vw',
-    padding: tokens.space.md,
-    border: tokens.border.default,
-    borderRadius: 24,
-    background: tokens.input.background,
+    padding: 12,
+    gap: 8,
+    border: tokens.input.strongBorder,
+    borderRadius: 8,
+    background: tokens.surface.canvas,
     color: tokens.text.primary,
+    fontFamily: tokens.font.family.body,
+    fontSize: tokens.font.size.body,
     '& textarea': {
       width: '100%',
       boxSizing: 'border-box',
       minWidth: 0,
-      flex: 1,
-      minHeight: 28,
-      maxHeight: 160,
+      minHeight: 48,
+      maxHeight: 200,
       fieldSizing: 'content',
-      padding: '4px 8px',
+      padding: '4px 30px 4px 4px',
       lineHeight: 1.5,
       resize: 'none',
       font: 'inherit',
@@ -49,19 +48,10 @@ const styles = {
       outline: 'none',
       ':focus-visible': { outline: 'none' },
     },
-
-    '& footer': { display: 'flex', flexShrink: 0 },
-    '& button': {
-      width: 30,
-      height: 30,
-      padding: 0,
-      justifyContent: 'center',
-      borderRadius: tokens.avatar.radius,
-      background: tokens.text.primary,
-      color: tokens.surface.canvas,
-    },
-    '& button:disabled': { opacity: tokens.opacity.disabled },
+    '& footer': { display: 'flex', justifyContent: 'flex-end' },
   }),
+  inlineEditor: css({ '&&': { position: 'relative', width: '100%', maxWidth: 'none' } }),
+
   pill: css({
     position: 'relative',
     display: 'inline-flex',
@@ -76,47 +66,25 @@ const styles = {
     '&:hover .glyph-annotation-clear, &:focus-within .glyph-annotation-clear': { opacity: 1, pointerEvents: 'auto' },
   }),
   pillLabel: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.space.sm,
-    minWidth: 0,
-    padding: tokens.space.md,
-    border: 0,
-    borderRadius: tokens.card.radius,
-    font: 'inherit',
-    color: 'inherit',
-    background: 'transparent',
-    cursor: 'pointer',
-    ':focus-visible': { outline: tokens.focus.ring },
-    '& svg': { flexShrink: 0, color: tokens.text.muted },
+    '&&': {
+      gap: tokens.space.sm,
+      minWidth: 0,
+      flexShrink: 1,
+      padding: tokens.space.md,
+      border: 0,
+      borderRadius: tokens.card.radius,
+      color: 'inherit',
+    },
+    '& svg': { color: tokens.text.muted },
     '& span': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   }),
-  icon: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    width: 26,
-    height: 26,
-    padding: 0,
-    border: 0,
-    color: tokens.text.muted,
-    background: 'transparent',
-    cursor: 'pointer',
-    ':hover': { color: tokens.text.primary },
-    ':focus-visible': { outline: tokens.focus.ring },
-  }),
+
   clear: css({
-    position: 'absolute',
-    right: tokens.space.xs,
-    top: '50%',
-    transform: 'translateY(-50%)',
+    // Keep a dedicated slot so revealing the action never covers the label or resizes the pill.
+    marginRight: tokens.space.xs,
     opacity: 0,
     pointerEvents: 'none',
-    background: tokens.surface.canvas,
-    boxShadow: `-8px 0 6px ${tokens.surface.canvas}`,
-    border: tokens.border.default,
-    borderRadius: tokens.avatar.radius,
+    '@media (hover: none)': { opacity: 1, pointerEvents: 'auto' },
   }),
   list: css({
     display: 'none',
@@ -173,7 +141,8 @@ export function GlyphAnnotationPill({
   if (!annotations.length) return null;
   return (
     <div class={`glyph-annotation-pill ${styles.pill}`}>
-      <button
+      <Button
+        appearance={ButtonAppearance.GHOST}
         type="button"
         class={styles.pillLabel}
         aria-label={`${annotations.length} ${annotations.length === 1 ? 'annotation' : 'annotations'}`}
@@ -182,16 +151,18 @@ export function GlyphAnnotationPill({
         <span>
           {annotations.length} {annotations.length === 1 ? 'annotation' : 'annotations'}
         </span>
-      </button>
+      </Button>
       {remove && (
-        <button
+        <IconButton
+          size={ButtonSize.SMALL}
           type="button"
-          class={`glyph-annotation-clear ${styles.icon} ${styles.clear}`}
+          shape={IconButtonShape.CIRCLE}
+          class={`glyph-annotation-clear ${styles.clear}`}
           aria-label="Remove all annotations"
           onClick={() => annotations.forEach(annotation => remove(annotation.id))}
         >
           <X size={16} aria-hidden="true" />
-        </button>
+        </IconButton>
       )}
       <section class={styles.list} aria-label="Annotations">
         {annotations.map(annotation => (
@@ -209,24 +180,26 @@ export function GlyphAnnotationPill({
             </dl>
             <div class={styles.actions}>
               {edit && (
-                <button
+                <IconButton
+                  size={ButtonSize.SMALL}
                   type="button"
-                  class={styles.icon}
+
                   aria-label={`Edit annotation ${annotation.order}`}
                   onClick={() => edit(annotation.id)}
                 >
                   <Pencil size={18} aria-hidden="true" />
-                </button>
+                </IconButton>
               )}
               {remove && (
-                <button
+                <IconButton
+                  size={ButtonSize.SMALL}
                   type="button"
-                  class={styles.icon}
+
                   aria-label={`Delete annotation ${annotation.order}`}
                   onClick={() => remove(annotation.id)}
                 >
                   <Trash2 size={18} aria-hidden="true" />
-                </button>
+                </IconButton>
               )}
             </div>
           </article>
@@ -235,66 +208,97 @@ export function GlyphAnnotationPill({
     </div>
   );
 }
-export function GlyphAnnotations(state: GlyphAnnotationsState) {
-  return (
-    <>
-      {state.markers.map(({ annotation, x, y }) => (
-        <GlyphCommentButton
-          key={annotation.id}
-          position={{ x, y }}
-          order={annotation.order}
-          open={() => state.edit(annotation.id)}
-        />
-      ))}
-      {state.candidate && <GlyphCommentButton position={state.candidate} open={state.open} />}
-      {state.draft && (
-        <form
-          class={styles.editor}
-          aria-label="Annotation editor"
-          ref={state.editor}
-          style={{
-            left: `${state.editorPosition.x}px`,
-            top: `${state.editorPosition.y}px`,
-          }}
-          onSubmit={event => {
+export function GlyphAnnotations(
+  state: GlyphAnnotationsState & {
+    readonly selectionShortcut?: string;
+    readonly hideMarkers?: boolean;
+    readonly editorContainer?: HTMLElement;
+  },
+) {
+  const container = state.editorContainer ?? state.draft?.container;
+  const form = state.draft && (
+    <form
+      class={`${styles.editor} ${container ? styles.inlineEditor : ''}`}
+      aria-label="Annotation editor"
+      ref={state.editor}
+      style={
+        container
+          ? undefined
+          : {
+              left: `${state.editorPosition.x}px`,
+              top: `${state.editorPosition.y}px`,
+            }
+      }
+      onSubmit={event => {
+        event.preventDefault();
+        state.submit();
+      }}
+    >
+      <IconButton
+        size={ButtonSize.SMALL}
+        type="button"
+        class={styles.closePosition}
+        aria-label="Cancel annotation"
+        onClick={state.close}
+      >
+        <X size={16} aria-hidden="true" />
+      </IconButton>
+      <textarea
+        aria-label="Annotation comment"
+        aria-description={`Comment on: ${state.draft.annotation.quote}`}
+        title="Enter to save; Shift+Enter for a new line; Escape to cancel"
+        placeholder="Add a comment…"
+        rows={2}
+        ref={state.textarea}
+        value={state.comment}
+        maxLength={10000}
+        onInput={event => state.setComment(event.currentTarget.value)}
+        onKeyDown={event => {
+          event.stopPropagation();
+          if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
             event.preventDefault();
             state.submit();
-          }}
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            state.close();
+          }
+        }}
+      />
+      <footer>
+        <IconButton
+          variant={ButtonVariant.PRIMARY}
+          appearance={ButtonAppearance.FILLED}
+          shape={IconButtonShape.CIRCLE}
+          type="submit"
+
+          aria-label="Save annotation"
+          disabled={!state.comment.trim() || state.disabled}
         >
-          <textarea
-            aria-label="Annotation comment"
-            aria-description={`Comment on: ${state.draft.annotation.quote}`}
-            title="Enter to save; Shift+Enter for a new line; Escape to cancel"
-            placeholder="Add a comment…"
-            rows={1}
-            ref={state.textarea}
-            value={state.comment}
-            maxLength={10000}
-            onInput={event => state.setComment(event.currentTarget.value)}
-            onKeyDown={event => {
-              event.stopPropagation();
-              if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-                event.preventDefault();
-                state.submit();
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                state.close();
-              }
-            }}
+          <ArrowUp size={16} />
+        </IconButton>
+      </footer>
+    </form>
+  );
+  return (
+    <>
+      {!state.hideMarkers &&
+        state.markers.map(({ annotation, x, y }) => (
+          <GlyphCommentButton
+            key={annotation.id}
+            position={{ x, y }}
+            order={annotation.order}
+            open={() => state.edit(annotation.id)}
           />
-          <footer>
-            <button
-              type="submit"
-              class={styles.button}
-              aria-label="Save annotation"
-              disabled={!state.comment.trim() || state.disabled}
-            >
-              <ArrowUp size={16} />
-            </button>
-          </footer>
-        </form>
+        ))}
+      {state.candidate && (
+        <GlyphCommentButton
+          position={state.candidate}
+          open={state.open}
+          {...(state.selectionShortcut ? { shortcut: state.selectionShortcut } : {})}
+        />
       )}
+      {form && (container ? createPortal(form, container) : form)}
     </>
   );
 }

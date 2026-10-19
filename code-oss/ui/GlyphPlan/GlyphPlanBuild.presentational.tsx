@@ -1,5 +1,6 @@
-import { ChevronDown } from 'lucide-preact';
-import { planStyles } from './GlyphPlan.styles.ts';
+import { Button, ButtonVariant, ButtonSize } from '#code-oss/ui/Button/Button.tsx';
+import { SplitButton } from '#code-oss/ui/Button/SplitButton.tsx';
+import { AgentModeID } from '#src/chat/AgentMode.js';
 export function GlyphPlanBuild({
   build,
   buildNew,
@@ -10,20 +11,21 @@ export function GlyphPlanBuild({
   readonly disabled: boolean;
 }) {
   return (
-    <div class={planStyles.buildGroup}>
-      <button type="button" class={`${planStyles.button} ${planStyles.build}`} disabled={disabled} onClick={build}>
-        Build <kbd>⌘↵</kbd>
-      </button>
-      <details class={planStyles.buildOptions}>
-        <summary class={`${planStyles.button} ${planStyles.build}`} aria-label="Build options">
-          <ChevronDown size={14} aria-hidden="true" />
-        </summary>
-        <div class={planStyles.buildMenu}>
-          <button type="button" class={planStyles.button} disabled={disabled} onClick={buildNew}>
-            Build in new chat
-          </button>
-        </div>
-      </details>
-    </div>
+    <SplitButton
+      variant={ButtonVariant.PRIMARY}
+      mode={AgentModeID.PLAN}
+      size={ButtonSize.SMALL}
+      disabled={disabled}
+      onClick={build}
+      shortcut="⌘↵"
+      menuLabel="Build options"
+      menu={
+        <Button disabled={disabled} onClick={buildNew}>
+          Build in new chat
+        </Button>
+      }
+    >
+      Build
+    </SplitButton>
   );
 }

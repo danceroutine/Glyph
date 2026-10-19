@@ -80,10 +80,9 @@ it.describe('Text proposal review', () => {
     const result = await tool(glyph, provider, 'propose_patch', patch, 'text');
     expect(result.status).toBe('STAGED_FOR_REVIEW');
     await expect(pending(glyph)).toContainText('review.txt');
-    await expect(glyph.page.getByRole('region', { name: 'Proposed changes to review.txt' })).toContainText('ONE');
     await pending(glyph).getByRole('button', { name: 'Review', exact: true }).click();
     await expect(controls(glyph)).toBeVisible();
-    await expect(glyph.page.locator('.monaco-diff-editor .view-lines')).toContainText(['one']);
+    await expect(glyph.page.locator('.monaco-diff-editor .view-lines')).toContainText(['one', 'ONE']);
     expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
     await save(glyph);
     expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
@@ -214,9 +213,10 @@ it.describe('Text proposal review', () => {
     await expect(pending(glyph)).toHaveCount(0);
     const annotations = glyph.page.locator('.glyph-composer .glyph-annotation-pill');
     await expect(annotations).toContainText('1 annotation');
-    await annotations.hover();
-    await expect(annotations).toContainText('Keep the final line unchanged');
-    await annotations.getByRole('button', { name: 'Edit annotation 1' }).click();
+    await annotations.getByRole('button', { name: '1 annotation', exact: true }).focus();
+    const editAnnotation = annotations.getByRole('button', { name: 'Edit annotation 1', exact: true });
+    await editAnnotation.focus();
+    await editAnnotation.press('Enter');
     const annotationInput = glyph.page.getByRole('textbox', { name: 'Annotation comment' });
     await expect(annotationInput).toHaveValue('Keep the final line unchanged; it is a public contract.');
     await annotationInput.press('Enter');
@@ -263,22 +263,77 @@ it.describe('Text proposal review', () => {
     const editor = glyph.page.locator('.monaco-diff-editor .editor.modified').getByRole('textbox').first();
     await editor.focus();
     await glyph.page.keyboard.press('ControlOrMeta+a');
-    await glyph.page.getByRole('button', { name: 'Comment on selection', exact: true }).click();
+    await expect(glyph.page.getByRole('button', { name: 'Comment on selection', exact: true })).toContainText(
+      'Add to Chat',
+    );
+    await expect(
+      glyph.page.getByRole('button', { name: 'Comment on selection', exact: true }).locator('kbd'),
+    ).toContainText('L');
+    await glyph.page.keyboard.press('ControlOrMeta+l');
     const input = glyph.page.getByRole('textbox', { name: 'Annotation comment' });
+    await expect(input).toBeVisible();
+    const expectCodeBelowPrompt = async () => {
+      await expect
+        .poll(
+          async () => {
+            const popup = await glyph.page.getByRole('form', { name: 'Annotation editor' }).boundingBox();
+            const deletedLine = await glyph.page
+              .locator('.monaco-diff-editor .editor.modified .view-line')
+              .evaluateAll(lines => {
+                return lines
+                  .filter(line => line.textContent.trim() === 'one')
+                  .map(line => line.getBoundingClientRect())
+                  .find(rect => rect.width > 0 && rect.height > 0)?.top;
+              });
+            return deletedLine === undefined ? -Infinity : deletedLine - popup.y - popup.height;
+          },
+          { message: 'The deleted line must remain fully below the annotation prompt' },
+        )
+        .toBeGreaterThanOrEqual(4);
+    };
+    await expectCodeBelowPrompt();
+    const popupBounds = await glyph.page.getByRole('form', { name: 'Annotation editor' }).boundingBox();
+    const editorBounds = await glyph.page.locator('.monaco-diff-editor .editor.modified').boundingBox();
+    expect(popupBounds.x).toBeGreaterThanOrEqual(editorBounds.x);
+    expect(popupBounds.x + popupBounds.width).toBeLessThanOrEqual(editorBounds.x + editorBounds.width);
     await input.fill('Explain these changes first.');
+    await expectCodeBelowPrompt();
     await input.press('Enter');
     await expect(pending(glyph)).toBeVisible();
     expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
     const marker = glyph.page.locator('.monaco-diff-editor').getByRole('button', { name: 'Edit annotation 1' });
     await expect(marker).toBeVisible();
+    await expect(marker.locator('xpath=ancestor::*[contains(@class, "glyph-margin-widgets")]')).toHaveCount(1);
     await marker.click();
     await expect(input).toBeFocused();
     await expect(input).toHaveValue('Explain these changes first.');
+    await expectCodeBelowPrompt();
+    await input.fill(
+      'Explain these changes first.\nKeep the original behavior.\nPreserve the public contract.\nCheck the final line.',
+    );
+    await expectCodeBelowPrompt();
+    const originalSize = await glyph.application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      const size = window.getContentSize();
+      window.setContentSize(1100, size[1]);
+      return size;
+    });
+    await expect.poll(() => glyph.page.evaluate(() => innerWidth)).toBe(1100);
+    await expectCodeBelowPrompt();
+    await glyph.application.evaluate(({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0].setContentSize(size[0], size[1]);
+    }, originalSize);
+    await expect.poll(() => glyph.page.evaluate(() => innerWidth)).toBe(originalSize[0]);
+    await expectCodeBelowPrompt();
     await input.fill('Keep the original behavior.');
+    await expectCodeBelowPrompt();
     await input.press('Enter');
     provider.enqueue({ chunks: ['I will revise the proposal.'] });
     await glyph.send('Revise using this feedback.');
     await expect(glyph.page.locator('.glyph-transcript')).toContainText('I will revise the proposal.');
+    await expect(marker).toHaveCount(0);
+    await expect(glyph.page.getByRole('form', { name: 'Annotation editor' })).toHaveCount(0);
+    await expect(glyph.page.getByRole('button', { name: 'Comment on selection', exact: true })).toHaveCount(0);
     const prompt = JSON.stringify(provider.requests.at(-1).body.input);
     expect(prompt).toContain('Keep the original behavior.');
     expect(prompt).toContain('proposal');

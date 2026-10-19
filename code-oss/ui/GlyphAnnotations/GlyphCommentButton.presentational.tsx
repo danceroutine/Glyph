@@ -1,48 +1,38 @@
+import { Button, ButtonAppearance, ButtonSize } from '#code-oss/ui/Button/Button.tsx';
 import { MessageCircle } from 'lucide-preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 const styles = {
   button: css({
-    position: 'relative',
-    display: 'inline-grid',
-    placeItems: 'center',
-    flexShrink: 0,
-    width: 30,
-    height: 30,
-    padding: 0,
-    border: 0,
-    font: 'inherit',
-    fontSize: tokens.font.size.body,
-    lineHeight: 1,
-    color: tokens.button.foreground,
-    background: 'transparent',
-    cursor: 'pointer',
-    ':focus-visible': { outline: tokens.focus.ring, outlineOffset: tokens.focus.offset },
+    '&&': {
+      position: 'relative',
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 30,
+      height: 30,
+      minHeight: 0,
+      padding: 0,
+      border: 0,
+      fontSize: tokens.font.size.body,
+      lineHeight: 1,
+      color: tokens.button.foreground,
+    },
     '& > svg': { position: 'absolute', inset: 0, width: '100%', height: '100%', fill: tokens.button.background },
     '&:hover > svg': { fill: tokens.button.hoverBackground },
     '& > span': { position: 'relative', paddingBottom: tokens.space.xxs },
   }),
-  selection: css({
-    width: 'auto',
-    height: 24,
-    padding: '2px 8px',
-    borderRadius: 6,
-    color: tokens.text.primary,
-    background: tokens.button.secondary.background,
-    border: tokens.border.default,
-    whiteSpace: 'nowrap',
-    fontSize: tokens.font.size.body,
-    ':hover': { background: tokens.button.secondary.hoverBackground },
-  }),
-  positioned: css({ position: 'fixed', zIndex: 1000 }),
+
+  positioned: css({ '&&': { position: 'fixed', zIndex: 1000 } }),
 };
 export function GlyphCommentButton({
   open,
   order,
   position,
+  shortcut,
 }: {
   readonly open: () => void;
   readonly order?: number;
+  readonly shortcut?: string;
   readonly position?: { readonly x: number; readonly y: number };
 }) {
   const button = useRef<HTMLButtonElement>(null);
@@ -58,18 +48,35 @@ export function GlyphCommentButton({
   }, [selection]);
   const left =
     position && selection ? Math.max(8, Math.min(innerWidth - width - 8, position.x - width / 2)) : position?.x;
+  if (!order)
+    return (
+      <Button
+        buttonRef={button}
+        appearance={ButtonAppearance.OUTLINE}
+        size={ButtonSize.LARGE}
+        class={`glyph-annotation-marker ${position ? styles.positioned : ''}`}
+        style={position ? { left: `${left}px`, top: `${position.y}px` } : {}}
+        aria-label="Comment on selection"
+        onMouseDown={event => event.preventDefault()}
+        onClick={open}
+        shortcut={shortcut}
+      >
+        Add to Chat
+      </Button>
+    );
   return (
-    <button
-      ref={button}
+    <Button
+      appearance={ButtonAppearance.GHOST}
+      buttonRef={button}
       type="button"
-      class={`glyph-annotation-marker ${styles.button} ${order ? '' : styles.selection} ${position ? styles.positioned : ''}`}
-      style={position ? { left: `${left}px`, top: `${position.y}px` } : undefined}
+      class={`glyph-annotation-marker ${styles.button} ${position ? styles.positioned : ''}`}
+      style={position ? { left: `${left}px`, top: `${position.y}px` } : {}}
       aria-label={order ? `Edit annotation ${order}` : 'Comment on selection'}
       onMouseDown={event => event.preventDefault()}
       onClick={open}
     >
-      {order ? <MessageCircle aria-hidden="true" strokeWidth={1.8} /> : 'Add to chat'}
+      <MessageCircle aria-hidden="true" strokeWidth={1.8} />
       {order && <span>{order}</span>}
-    </button>
+    </Button>
   );
 }

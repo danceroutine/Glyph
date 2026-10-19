@@ -1,3 +1,6 @@
+import { Button } from '#code-oss/ui/Button/Button.tsx';
+import type { ComponentProps } from 'preact';
+import { fn } from 'storybook/test';
 import { GlyphFollowUpBehavior } from '#src/desktop/workbench/GlyphFollowUpBehavior.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { chatFixture, workbenchStateFixture } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
@@ -90,15 +93,22 @@ export function InteractiveWorkbench() {
             While responding{' '}
             <select
               value={followUpBehavior}
-              onChange={event => setFollowUpBehavior(event.currentTarget.value as GlyphFollowUpBehavior)}
+              onChange={fn<NonNullable<ComponentProps<'select'>['onChange']>>(event =>
+                setFollowUpBehavior(event.currentTarget.value as GlyphFollowUpBehavior),
+              ).mockName('InteractiveWorkbench.onChange')}
             >
               <option value={GlyphFollowUpBehavior.QUEUE}>Queue</option>
               <option value={GlyphFollowUpBehavior.SEND_IMMEDIATELY}>Send immediately</option>
             </select>
           </label>
-          <button type="button" onClick={() => setMessageSettings(false)}>
+          <Button
+            type="button"
+            onClick={fn<NonNullable<ComponentProps<'button'>['onClick']>>(() => setMessageSettings(false)).mockName(
+              'InteractiveWorkbench.onClick',
+            )}
+          >
             Done
-          </button>
+          </Button>
         </section>
       )}
       <WiredGlyphWorkbench
@@ -107,8 +117,10 @@ export function InteractiveWorkbench() {
           ...previewActionsFixture(),
           composer,
           followUpBehavior,
-          openMessageSettings: () => setMessageSettings(true),
-          moveQueuedToNewChat: async id => {
+          openMessageSettings: fn<NonNullable<GlyphWorkbenchViewActions['openMessageSettings']>>(() =>
+            setMessageSettings(true),
+          ).mockName('InteractiveWorkbench.openMessageSettings'),
+          moveQueuedToNewChat: fn<NonNullable<GlyphWorkbenchViewActions['moveQueuedToNewChat']>>(async id => {
             const message = composer.snapshot.queued.find(value => value.id === id);
             if (!message) return;
             const next = composerFixture({ document: message.document });
@@ -122,8 +134,8 @@ export function InteractiveWorkbench() {
               status: GlyphWorkbenchStatus.READY,
               transcript: [],
             }));
-          },
-          branchChat: async (_chatId, turnId) => {
+          }).mockName('InteractiveWorkbench.moveQueuedToNewChat'),
+          branchChat: fn<NonNullable<GlyphWorkbenchViewActions['branchChat']>>(async (_chatId, turnId) => {
             setState(current => ({
               ...current,
               selectedChatId: 'branch',
@@ -140,15 +152,17 @@ export function InteractiveWorkbench() {
                 }),
               ],
             }));
-          },
-          restoreCheckpoint: async (_chatId, turnId) => {
-            const index = state.transcript.findIndex(
-              entry => entry.role === GlyphTranscriptRole.USER && entry.checkpointTurnId === turnId,
-            );
-            composer.setDraft(state.transcript[index]!.text);
-            setState(current => ({ ...current, transcript: current.transcript.slice(0, index) }));
-          },
-          steer: async (text, attachments = [], options = {}) => {
+          }).mockName('InteractiveWorkbench.branchChat'),
+          restoreCheckpoint: fn<NonNullable<GlyphWorkbenchViewActions['restoreCheckpoint']>>(
+            async (_chatId, turnId) => {
+              const index = state.transcript.findIndex(
+                entry => entry.role === GlyphTranscriptRole.USER && entry.checkpointTurnId === turnId,
+              );
+              composer.setDraft(state.transcript[index]!.text);
+              setState(current => ({ ...current, transcript: current.transcript.slice(0, index) }));
+            },
+          ).mockName('InteractiveWorkbench.restoreCheckpoint'),
+          steer: fn<NonNullable<GlyphWorkbenchViewActions['steer']>>(async (text, attachments = [], options = {}) => {
             if (!pending) throw new Error('There is no active response to steer.');
             steering.current.push(text);
             const id = `preview-steering-${++nextTurn.current}`;
@@ -174,17 +188,17 @@ export function InteractiveWorkbench() {
                   : [entry],
               ),
             }));
-          },
-          send,
-          sendImmediately: async (...args) => {
+          }).mockName('InteractiveWorkbench.steer'),
+          send: fn<NonNullable<GlyphWorkbenchViewActions['send']>>(send).mockName('InteractiveWorkbench.send'),
+          sendImmediately: fn<NonNullable<GlyphWorkbenchViewActions['sendImmediately']>>(async (...args) => {
             steering.current = [];
             await send(...args);
-          },
-          cancel: () => {
+          }).mockName('InteractiveWorkbench.sendImmediately'),
+          cancel: fn<NonNullable<GlyphWorkbenchViewActions['cancel']>>(() => {
             steering.current = [];
             setPending(undefined);
             setState(current => ({ ...current, status: GlyphWorkbenchStatus.READY }));
-          },
+          }).mockName('InteractiveWorkbench.cancel'),
         }}
       />
     </>

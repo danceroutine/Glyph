@@ -1,3 +1,5 @@
+import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { fn } from 'storybook/test';
 import { pendingProposals } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
 import { ProtocolError } from '#src/errors/ProtocolError.js';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
@@ -26,9 +28,9 @@ export const FailedDecision: Story = {
   args: {
     actions: {
       ...previewActionsFixture(),
-      decideProposalItems: async () => {
+      decideProposalItems: fn<NonNullable<GlyphWorkbenchViewActions['decideProposalItems']>>(async () => {
         throw new ProtocolError('The file changed. Request a fresh proposal.');
-      },
+      }).mockName('GlyphPendingReviews.decideProposalItems'),
     },
   },
 };

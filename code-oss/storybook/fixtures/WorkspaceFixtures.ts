@@ -1,3 +1,4 @@
+import { fn } from 'storybook/test';
 import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import {
   GlyphContextAttachmentKind,
@@ -128,11 +129,11 @@ Queue --> Finished
 };
 
 export const planActions: GlyphPlanViewActions = {
-  update: async () => {},
-  build: async () => {},
-  newAgent: async () => {},
-  openChat: async () => {},
-  openLink: async () => {},
+  update: fn<() => Promise<void>>().mockName('WorkspaceFixtures.update').mockResolvedValue(undefined),
+  build: fn<() => Promise<void>>().mockName('WorkspaceFixtures.build').mockResolvedValue(undefined),
+  newAgent: fn<() => Promise<void>>().mockName('WorkspaceFixtures.newAgent').mockResolvedValue(undefined),
+  openChat: fn<() => Promise<void>>().mockName('WorkspaceFixtures.openChat').mockResolvedValue(undefined),
+  openLink: fn<() => Promise<void>>().mockName('WorkspaceFixtures.openLink').mockResolvedValue(undefined),
 };
 
 export const pendingProposals: readonly GlyphProposalSummary[] = [

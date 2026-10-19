@@ -253,6 +253,14 @@ describe(SqliteChatSessionStore, () => {
           side: 'original' as const,
         },
       },
+      {
+        path: 'src',
+        text: 'index.ts',
+        revision: 'tree-hash',
+        byteOrderMark: false,
+        byteLength: 8,
+        source: { kind: 'folder' as const, uri: 'file:///project/src', version: 0, revision: 'tree-hash' },
+      },
     ];
     for (let attempt = 0; attempt < 2; attempt++) {
       const store = new SqliteChatSessionStore(directory);

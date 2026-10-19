@@ -6,12 +6,11 @@ import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.
 export interface GlyphChatHistoryStateOptions {
   readonly state: GlyphWorkbenchState;
   readonly actions: GlyphWorkbenchViewActions;
-  readonly onOpened: () => void;
 }
 
 export type GlyphChatHistoryState = ReturnType<typeof useGlyphChatHistoryState>;
 
-export function useGlyphChatHistoryState({ state, actions, onOpened }: GlyphChatHistoryStateOptions) {
+export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistoryStateOptions) {
   const [query, setQuery] = useState('');
   const search = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => search.current?.focus(), []);
@@ -55,10 +54,9 @@ export function useGlyphChatHistoryState({ state, actions, onOpened }: GlyphChat
     navigationPending: !!state.navigationPending,
     newChat: () => {
       actions.newChat();
-      onOpened();
     },
     openChat: (id: string) => {
-      void actions.openChat(id).then(onOpened);
+      void actions.openChat(id);
     },
   };
 }

@@ -1,3 +1,4 @@
+import { GlyphEditorAnnotationMarker } from './GlyphAnnotations/GlyphEditorAnnotationMarker.tsx';
 import { configureGlyphDiagramRenderer } from './GlyphDiagram/GlyphDiagramRenderer.ts';
 import { GlyphCommentButton } from './GlyphAnnotations/GlyphCommentButton.presentational.tsx';
 import type { GlyphPlanMount } from '#src/desktop/workbench/GlyphPlanView.js';
@@ -39,7 +40,25 @@ export const mountGlyphPlan: GlyphPlanMount = (container, state, actions) => {
   return { update, dispose: () => render(null, container) };
 };
 
-export const mountGlyphCommentButton = (container: HTMLElement, open: () => void, order?: number) => {
-  render(<GlyphCommentButton open={open} {...(order ? { order } : {})} />, container);
+export const mountGlyphCommentButton = (
+  container: HTMLElement,
+  open: () => void,
+  order?: number,
+  shortcut?: string,
+) => {
+  render(
+    <GlyphCommentButton open={open} {...(order ? { order } : {})} {...(shortcut ? { shortcut } : {})} />,
+    container,
+  );
+  return { dispose: () => render(null, container) };
+};
+
+export const mountGlyphEditorAnnotationMarker = (
+  container: HTMLElement,
+  order: number,
+  comment: string,
+  open: () => void,
+) => {
+  render(<GlyphEditorAnnotationMarker order={order} comment={comment} open={open} />, container);
   return { dispose: () => render(null, container) };
 };

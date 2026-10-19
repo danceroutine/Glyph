@@ -1,7 +1,6 @@
 import { WiredGlyphPlanCards } from '#code-oss/ui/GlyphPlan/GlyphPlanCards.wired.tsx';
 import { WiredGlyphAnnotations } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.wired.tsx';
 import { WiredGlyphPendingReviews } from '#code-oss/ui/GlyphPendingReviews/GlyphPendingReviews.wired.tsx';
-import { WiredGlyphProposalPreviews } from '#code-oss/ui/GlyphProposalPreview/GlyphProposalPreview.wired.tsx';
 import { GlyphWorkbench } from './GlyphWorkbench.presentational.tsx';
 import { WiredGlyphTodoCard } from '#code-oss/ui/GlyphTodoCard/GlyphTodoCard.wired.tsx';
 import { WiredGlyphQuestionCard } from '#code-oss/ui/GlyphQuestionCard/GlyphQuestionCard.wired.tsx';
@@ -15,21 +14,11 @@ import { useGlyphWorkbenchState, type GlyphWorkbenchStateOptions } from './useGl
 export type WiredGlyphWorkbenchProps = GlyphWorkbenchStateOptions;
 
 export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps) {
-  const {
-    questionRun,
-    approvalRun,
-    initialAnswers,
-    onDraftChange,
-    openedChat,
-    todos,
-    proposals,
-    plans,
-    plansDisabled,
-    ...view
-  } = useGlyphWorkbenchState({
-    state,
-    actions,
-  });
+  const { questionRun, approvalRun, initialAnswers, onDraftChange, todos, proposals, plans, plansDisabled, ...view } =
+    useGlyphWorkbenchState({
+      state,
+      actions,
+    });
   return (
     <>
       <WiredGlyphAnnotations
@@ -41,23 +30,14 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
         {...view}
         transcript={
           <WiredGlyphTranscript
-            proposals={
+            plans={
               state.selectedChatId && (
-                <>
-                  <WiredGlyphPlanCards
-                    chatId={state.selectedChatId}
-                    plans={plans}
-                    actions={actions}
-                    disabled={plansDisabled}
-                  />
-                  <WiredGlyphProposalPreviews
-                    key={state.selectedChatId}
-                    chatId={state.selectedChatId}
-                    proposals={proposals}
-                    readOnly={state.readOnly}
-                    actions={actions}
-                  />
-                </>
+                <WiredGlyphPlanCards
+                  chatId={state.selectedChatId}
+                  plans={plans}
+                  actions={actions}
+                  disabled={plansDisabled}
+                />
               )
             }
             entries={state.transcript}
@@ -68,19 +48,6 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
           />
         }
         usage={state.selectedChatId && <GlyphUsageSummary usage={state.usage[state.selectedChatId]} />}
-        reviews={
-          state.selectedChatId &&
-          proposals.length > 0 && (
-            <WiredGlyphPendingReviews
-              key={state.selectedChatId}
-              chatId={state.selectedChatId}
-              proposals={proposals}
-              readOnly={state.readOnly}
-              actions={actions}
-            />
-          )
-        }
-        todos={todos.length > 0 && <WiredGlyphTodoCard key={state.selectedChatId} items={todos} />}
         question={
           questionRun?.question && (
             <WiredGlyphQuestionCard
@@ -97,6 +64,19 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
         }
         composer={
           <WiredGlyphComposer
+            reviews={
+              state.selectedChatId &&
+              proposals.length > 0 && (
+                <WiredGlyphPendingReviews
+                  key={state.selectedChatId}
+                  chatId={state.selectedChatId}
+                  proposals={proposals}
+                  readOnly={state.readOnly}
+                  actions={actions}
+                />
+              )
+            }
+            todos={todos.length > 0 && <WiredGlyphTodoCard key={state.selectedChatId} items={todos} />}
             status={state.status}
             key={state.selectedChatId ?? 'draft'}
             actions={actions}
@@ -104,7 +84,7 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
             modelControl={<WiredGlyphModelPicker state={state} actions={actions} />}
           />
         }
-        history={view.historyOpen && <WiredGlyphChatHistory state={state} actions={actions} onOpened={openedChat} />}
+        history={view.historyOpen && <WiredGlyphChatHistory state={state} actions={actions} />}
       />
     </>
   );

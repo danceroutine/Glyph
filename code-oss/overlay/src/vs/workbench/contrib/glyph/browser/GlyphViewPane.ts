@@ -11,7 +11,8 @@ import { IOpenerService } from '#vs/platform/opener/common/opener.js';
 import { IThemeService } from '#vs/platform/theme/common/themeService.js';
 import { ViewPane } from '#vs/workbench/browser/parts/views/viewPane.js';
 import { IViewletViewOptions } from '#vs/workbench/browser/parts/views/viewsViewlet.js';
-import { IViewDescriptorService } from '#vs/workbench/common/views.js';
+import { IWorkbenchLayoutService, Parts } from '#vs/workbench/services/layout/browser/layoutService.js';
+import { ViewContainerLocation, IViewDescriptorService } from '#vs/workbench/common/views.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
 import type { GlyphWorkbenchView } from '#glyph/workbench/GlyphWorkbenchView.js';
 import { mountGlyphWorkbench } from './ui/mountGlyphWorkbench.js';
@@ -30,11 +31,12 @@ export class GlyphViewPane extends ViewPane {
     @IContextMenuService contextMenuService: IContextMenuService,
     @IConfigurationService configurationService: IConfigurationService,
     @IContextKeyService private readonly glyphContextKeys: IContextKeyService,
-    @IViewDescriptorService viewDescriptorService: IViewDescriptorService,
+    @IViewDescriptorService private readonly glyphViewDescriptors: IViewDescriptorService,
     @IInstantiationService instantiationService: IInstantiationService,
     @IOpenerService openerService: IOpenerService,
     @IThemeService themeService: IThemeService,
     @IHoverService hoverService: IHoverService,
+    @IWorkbenchLayoutService private readonly glyphLayout: IWorkbenchLayoutService,
     @IPreferencesService private readonly preferences: IPreferencesService,
     @GlyphWorkbenchService private readonly glyphService: GlyphWorkbenchService,
   ) {
@@ -44,7 +46,7 @@ export class GlyphViewPane extends ViewPane {
       contextMenuService,
       configurationService,
       glyphContextKeys,
-      viewDescriptorService,
+      glyphViewDescriptors,
       instantiationService,
       openerService,
       themeService,
@@ -80,6 +82,23 @@ export class GlyphViewPane extends ViewPane {
           if (handled) event.stopPropagation();
           return handled;
         },
+      },
+      reserveHistoryWidth: width => {
+        const location = this.glyphViewDescriptors.getViewLocationById(this.id);
+        const part =
+          location === ViewContainerLocation.Sidebar
+            ? Parts.SIDEBAR_PART
+            : location === ViewContainerLocation.Panel
+              ? Parts.PANEL_PART
+              : Parts.AUXILIARYBAR_PART;
+        const before = this.glyphLayout.getSize(part);
+        this.glyphLayout.setSize(part, { ...before, width: before.width + width });
+        // The workbench may clamp expansion when the editor has reached its minimum size.
+        const addedWidth = Math.max(0, this.glyphLayout.getSize(part).width - before.width);
+        return () => {
+          const current = this.glyphLayout.getSize(part);
+          this.glyphLayout.setSize(part, { ...current, width: current.width - addedWidth });
+        };
       },
       managesQueue: true,
       moveQueuedToNewChat: id => service.moveQueuedToNewChat(id),

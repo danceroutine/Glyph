@@ -1,7 +1,9 @@
+import { IconButton, ButtonAppearance } from '#code-oss/ui/Button/Button.tsx';
 import { Maximize2, Minimize2 } from 'lucide-preact';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 import type { GlyphDiagramState } from './useGlyphDiagramState.ts';
 const styles = {
+  position: css({ position: 'absolute', right: 4, top: 4 }),
   root: css({
     position: 'relative',
     overflow: 'auto',
@@ -9,27 +11,7 @@ const styles = {
     minHeight: 80,
     '& > img': { display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto' },
   }),
-  button: css({
-    position: 'absolute',
-    right: 4,
-    top: 4,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 28,
-    height: 28,
-    minWidth: 28,
-    padding: 0,
-    boxSizing: 'border-box',
-    lineHeight: 1,
-    color: tokens.text.muted,
-    background: tokens.button.secondary.background,
-    border: 0,
-    borderRadius: tokens.button.radius,
-    cursor: 'pointer',
-    '& > svg': { width: 16, height: 16, flexShrink: 0 },
-    ':focus-visible': { outline: tokens.focus.ring },
-  }),
+
   expanded: css({
     position: 'fixed',
     inset: tokens.space.lg,
@@ -49,14 +31,15 @@ export function GlyphDiagram({ root, diagram, error, source, expanded, toggle }:
     );
   return (
     <div ref={root} class={`${styles.root} ${expanded ? styles.expanded : ''}`}>
-      <button
-        class={styles.button}
+      <IconButton
+        appearance={ButtonAppearance.FILLED}
+        class={styles.position}
         type="button"
         aria-label={expanded ? 'Collapse diagram' : 'Expand diagram'}
         onClick={toggle}
       >
         {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-      </button>
+      </IconButton>
       {diagram ? <img src={diagram} alt="Plan diagram" /> : <span role="status">Rendering diagram…</span>}
     </div>
   );

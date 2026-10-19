@@ -1,3 +1,4 @@
+import { Button, ButtonSize, ButtonAppearance } from '#code-oss/ui/Button/Button.tsx';
 import type { ComponentChildren } from 'preact';
 import { Circle, CircleCheck, MessageSquare, Plus, ChevronRight, LibraryBig } from 'lucide-preact';
 import { planStyles } from './GlyphPlan.styles.ts';
@@ -44,15 +45,16 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
         <section class={planStyles.section} aria-label="Plan todos">
           <header>
             <h3>{state.plan.todos.length} To-dos</h3>
-            <button class={planStyles.button} aria-label="New todo" disabled={state.disabled} onClick={state.add}>
+            <Button size={ButtonSize.SMALL} aria-label="New todo" disabled={state.disabled} onClick={state.add}>
               <Plus size={16} />
               New
-            </button>
+            </Button>
           </header>
           <ul>
             {state.plan.todos.map(todo => (
               <li key={todo.id}>
-                <button
+                <Button
+                  appearance={ButtonAppearance.GHOST}
                   class={planStyles.row}
                   aria-label={`Mark ${todo.text} ${todo.completed ? 'pending' : 'completed'}`}
                   disabled={state.disabled}
@@ -60,7 +62,7 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
                 >
                   {todo.completed ? <CircleCheck size={16} /> : <Circle size={16} />}
                   <span style={{ textDecoration: todo.completed ? 'line-through' : 'none' }}>{todo.text}</span>
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
@@ -82,9 +84,9 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
                 disabled={state.disabled}
                 onInput={event => state.setTodo(event.currentTarget.value)}
               />
-              <button class={planStyles.button} disabled={state.disabled || !state.todo.trim()}>
+              <Button size={ButtonSize.SMALL} type="submit" disabled={state.disabled || !state.todo.trim()}>
                 Add
-              </button>
+              </Button>
             </form>
           )}
         </section>
@@ -93,20 +95,24 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
             <h3>
               Referenced by {state.agents.length} {state.agents.length === 1 ? 'Agent' : 'Agents'}
             </h3>
-            <button class={planStyles.button} aria-label="New agent" disabled={state.disabled} onClick={state.newAgent}>
+            <Button size={ButtonSize.SMALL} aria-label="New agent" disabled={state.disabled} onClick={state.newAgent}>
               <Plus size={16} />
               New
-            </button>
+            </Button>
           </header>
           <ul>
             {state.agents.map(agent => (
               <li key={agent.chatId}>
-                <button class={`${planStyles.row} ${planStyles.agentRow}`} onClick={() => state.openChat(agent.chatId)}>
+                <Button
+                  appearance={ButtonAppearance.GHOST}
+                  class={`${planStyles.row} ${planStyles.agentRow}`}
+                  onClick={() => state.openChat(agent.chatId)}
+                >
                   <MessageSquare size={16} />
                   <span>
                     {agent.title} · {agent.role}
                   </span>
-                </button>
+                </Button>
               </li>
             ))}
           </ul>

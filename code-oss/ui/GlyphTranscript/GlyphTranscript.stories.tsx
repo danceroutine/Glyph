@@ -1,3 +1,5 @@
+import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { fn } from 'storybook/test';
 import {
   userMessageFixture,
   messageActionsConversation,
@@ -69,17 +71,19 @@ function HistoryPreview({ initialEntries }: { readonly initialEntries?: ReturnTy
         chatId="chat"
         actions={{
           ...previewActionsFixture(),
-          branchChat: async (_chatId, turnId) => {
+          branchChat: fn<NonNullable<GlyphWorkbenchViewActions['branchChat']>>(async (_chatId, turnId) => {
             setEntries(entries.slice(0, entries.findIndex(entry => entry.id === turnId) + 1));
             setNotice('Branched chat · the original conversation is unchanged.');
-          },
-          restoreCheckpoint: async (_chatId, turnId) => {
-            const index = entries.findIndex(
-              entry => entry.role === GlyphTranscriptRole.USER && entry.checkpointTurnId === turnId,
-            );
-            setNotice(`Restored checkpoint · draft: ${entries[index]!.text}`);
-            setEntries(entries.slice(0, index));
-          },
+          }).mockName('GlyphTranscript.branchChat'),
+          restoreCheckpoint: fn<NonNullable<GlyphWorkbenchViewActions['restoreCheckpoint']>>(
+            async (_chatId, turnId) => {
+              const index = entries.findIndex(
+                entry => entry.role === GlyphTranscriptRole.USER && entry.checkpointTurnId === turnId,
+              );
+              setNotice(`Restored checkpoint · draft: ${entries[index]!.text}`);
+              setEntries(entries.slice(0, index));
+            },
+          ).mockName('GlyphTranscript.restoreCheckpoint'),
         }}
       />
       {notice && <p role="status">{notice}</p>}

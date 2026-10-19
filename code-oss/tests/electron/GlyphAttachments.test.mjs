@@ -24,7 +24,7 @@ async function chooseFile(glyph, query) {
   await glyph.composer.pressSequentially(` @${query}`);
   await expect(glyph.page.getByRole('option', { name: query, exact: true })).toBeVisible();
   await glyph.composer.press('Enter');
-  await expect(glyph.page.getByRole('listbox', { name: 'Files to attach' })).not.toBeVisible();
+  await expect(glyph.page.getByRole('listbox', { name: 'Files and folders to attach' })).not.toBeVisible();
 }
 async function send(glyph, provider) {
   const count = provider.requests.length;
@@ -97,7 +97,7 @@ it.describe('Explicit editor and file attachments', () => {
     await expect(glyph.composer).toHaveText('before  after');
     await attach.click();
     await expect(glyph.composer).toHaveText('before alpha.txtempty.txt after');
-    await expect(glyph.page.getByRole('listbox', { name: 'Files to attach' })).toHaveCount(0);
+    await expect(glyph.page.getByRole('listbox', { name: 'Files and folders to attach' })).toHaveCount(0);
     const dialogs = await glyph.application.evaluate(() => globalThis.glyphFileDialogs);
     expect(dialogs).toHaveLength(2);
     expect(dialogs[0]).toMatchObject({

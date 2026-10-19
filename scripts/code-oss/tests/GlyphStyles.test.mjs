@@ -17,7 +17,15 @@ beforeAll(async () => {
         import { previewActionsFixture } from '#code-oss/storybook/fixtures/ActionFixtures.ts';
         import { stageClassName } from './code-oss/storybook/previewStyles.ts';
         window.glyphPreviewStage = stageClassName;
-        mountGlyphWorkbench(document.getElementById('root'), workbenchStateFixture(), previewActionsFixture());
+        window.newChat = () => window.glyphView.update(workbenchStateFixture({ models: [{ slug: 'test', name: 'Test model' }], selectedModel: 'test' }));
+        const root = document.getElementById('root');
+        window.glyphView = mountGlyphWorkbench(root, workbenchStateFixture(), previewActionsFixture({
+          reserveHistoryWidth: width => {
+            const before = root.clientWidth;
+            root.style.width = (before + width) + 'px';
+            return () => { root.style.width = (root.clientWidth - width) + 'px'; };
+          },
+        }));
       `,
     },
     bundle: true,
@@ -94,7 +102,11 @@ it('themes the real controls in Storybook and honors native overrides and option
     await page.getByRole('button', { name: 'Chat history', exact: true }).click();
     const composer = page.getByRole('textbox', { name: 'Message Glyph' });
     const search = page.getByRole('searchbox', { name: 'Search chats' });
+    await page.evaluate(() => window.newChat());
     const model = page.getByRole('combobox', { name: 'Model', exact: true });
+    await model.click();
+    const modelMenu = page.getByRole('listbox', { name: 'Models', exact: true });
+    const modelPanel = modelMenu.locator('..');
     for (const [theme, background, foreground] of [
       ['dark', 'rgb(49, 49, 49)', 'rgb(204, 204, 204)'],
       ['light', 'rgb(255, 255, 255)', 'rgb(59, 59, 59)'],
@@ -102,7 +114,7 @@ it('themes the real controls in Storybook and honors native overrides and option
       await page.locator('#root').evaluate((element, value) => {
         element.dataset.theme = value;
       }, theme);
-      for (const control of [page.locator('.glyph-composer-surface'), search, model]) {
+      for (const control of [page.locator('.glyph-composer-surface'), search, modelPanel]) {
         await expect(control).toHaveCSS('background-color', background);
         await expect(control).toHaveCSS('color', foreground);
       }
@@ -115,7 +127,7 @@ it('themes the real controls in Storybook and honors native overrides and option
       element.style.setProperty('--vscode-input-border', 'initial');
       element.style.setProperty('--vscode-dropdown-border', 'initial');
     });
-    await expect(model).toHaveCSS('color', 'rgb(12, 34, 56)');
+    await expect(modelMenu).toHaveCSS('color', 'rgb(12, 34, 56)');
     await expect(model).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
     await expect(composer).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
     await expect(search).toHaveCSS('border-top-color', 'rgb(78, 90, 12)');
@@ -124,27 +136,45 @@ it('themes the real controls in Storybook and honors native overrides and option
   }
 });
 
-it('places history beside a wide conversation and uses a dismissible drawer in a narrow pane', async () => {
-  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+it('expands the host for side-by-side history and releases its width on close or unmount', async () => {
+  const page = await browser.newPage({ viewport: { width: 1400, height: 800 } });
   try {
     await page.setContent('<div id="root" style="width:900px;height:600px"></div>');
     await page.addScriptTag({ content: script });
     const toggle = page.getByRole('button', { name: 'Chat history', exact: true });
-    await toggle.click();
     const history = page.getByRole('complementary', { name: 'Chat history' });
-    await expect(history).toHaveCSS('position', 'static');
-    const historyBox = await history.boundingBox();
-    const accountBox = await page.locator('.glyph-account-picker').boundingBox();
-    expect(Math.abs(accountBox.y + accountBox.height - historyBox.y - historyBox.height)).toBeLessThan(2);
+    const conversation = page.getByRole('main', { name: 'Current conversation' });
+    for (const width of [900, 320]) {
+      await page.locator('#root').evaluate((element, width) => {
+        element.style.width = width + 'px';
+      }, width);
+      const before = await conversation.boundingBox();
+      await toggle.click();
+      await expect(history).toHaveCSS('position', 'static');
+      await expect(page.locator('#root')).toHaveCSS('width', width + 260 + 'px');
+      const historyBox = await history.boundingBox();
+      const chatBox = await conversation.boundingBox();
+      expect(Math.abs(chatBox.width - before.width)).toBeLessThan(2);
+      expect(Math.abs(chatBox.x + chatBox.width - historyBox.x)).toBeLessThan(2);
+      expect(await conversation.evaluate(element => element.inert)).toBe(false);
+      const accountBox = await page.locator('.glyph-account-picker').boundingBox();
+      expect(Math.abs(accountBox.y + accountBox.height - historyBox.y - historyBox.height)).toBeLessThan(2);
+      await page.getByRole('searchbox', { name: 'Search chats' }).focus();
+      await page.keyboard.press('Escape');
+      await expect(history).toHaveCount(0);
+      await expect(toggle).toBeFocused();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await expect(page.locator('#root')).toHaveCSS('width', width + 'px');
+    }
+    await toggle.click();
     await page.locator('#root').evaluate(element => {
-      element.style.width = '320px';
+      element.style.width = '650px';
     });
-    await expect(history).toHaveCSS('position', 'absolute');
-    await page.getByRole('searchbox', { name: 'Search chats' }).focus();
-    await page.keyboard.press('Escape');
-    await expect(history).toHaveCount(0);
-    await expect(toggle).toBeFocused();
-    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await toggle.click();
+    await expect(page.locator('#root')).toHaveCSS('width', '390px');
+    await toggle.click();
+    await page.evaluate(() => window.glyphView.dispose());
+    await expect(page.locator('#root')).toHaveCSS('width', '390px');
   } finally {
     await page.close();
   }

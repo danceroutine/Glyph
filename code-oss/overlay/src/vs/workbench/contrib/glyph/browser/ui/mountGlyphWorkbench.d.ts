@@ -13,4 +13,12 @@ export declare const mountGlyphCommentButton: (
   container: HTMLElement,
   open: () => void,
   order?: number,
+  shortcut?: string,
+) => { dispose(): void };
+
+export declare const mountGlyphEditorAnnotationMarker: (
+  container: HTMLElement,
+  order: number,
+  comment: string,
+  open: () => void,
 ) => { dispose(): void };

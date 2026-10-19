@@ -213,7 +213,7 @@ it('preserves multi-question selections and free text when navigating backward b
   }
 });
 
-it('wires account and model choices and opens a filtered history result with focus restored', async () => {
+it('wires account and model choices and keeps filtered history open until explicitly closed', async () => {
   const page = await pageForTest();
   try {
     await page.evaluate(() =>
@@ -253,7 +253,8 @@ it('wires account and model choices and opens a filtered history result with foc
         ],
       }),
     );
-    await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('second');
+    await page.getByRole('combobox', { name: 'Model', exact: true }).click();
+    await page.getByRole('option', { name: 'Second model', exact: true }).click();
     const toggle = page.getByRole('button', { name: 'Chat history', exact: true });
     await toggle.click();
     const account = page.getByRole('combobox', { name: 'Account', exact: true });
@@ -262,6 +263,10 @@ it('wires account and model choices and opens a filtered history result with foc
     await search.fill('saved');
     await expect(page.getByRole('button', { name: 'Older conversation' })).toHaveCount(0);
     await page.getByRole('button', { name: 'Saved conversation' }).click();
+    await page.evaluate(() => window.update({ selectedChatId: 'saved' }));
+    await expect(search).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Saved conversation' })).toHaveAttribute('aria-current', 'true');
+    await toggle.click();
     await expect(search).toHaveCount(0);
     await expect(toggle).toBeFocused();
     expect(await page.evaluate(() => window.requests)).toEqual([
@@ -274,6 +279,53 @@ it('wires account and model choices and opens a filtered history result with foc
     await toggle.click();
     await expect(account).toBeDisabled();
     await expect(account).toHaveValue(JSON.stringify(['provider', 'a']));
+  } finally {
+    await page.close();
+  }
+});
+
+it('spins the model retry arrows while loading and permits another attempt after failure', async () => {
+  const page = await pageForTest();
+  try {
+    await page.evaluate(() =>
+      window.update({
+        selectedChatId: undefined,
+        status: 'ready',
+        runs: [],
+        accounts: [{ provider: 'provider', id: 'a', label: 'Account A', connected: true, inferenceAccess: true }],
+        selectedAccount: { provider: 'provider', id: 'a' },
+        selectedModel: undefined,
+        models: [],
+        navigationError: 'Catalog unavailable',
+        catalogPending: false,
+      }),
+    );
+    await page.getByRole('button', { name: 'Chat history', exact: true }).click();
+    const retry = page.getByRole('button', { name: 'Models unavailable', exact: true });
+    const arrows = await retry.locator('svg').innerHTML();
+    await retry.click();
+    expect(await page.evaluate(() => window.requests)).toEqual([['account', 'provider', 'a']]);
+    await page.evaluate(() => window.update({ catalogPending: true, navigationError: undefined }));
+    const loading = page.getByRole('button', { name: 'Loading models…', exact: true });
+    await expect(loading).toBeDisabled();
+    await expect(loading).toHaveAttribute('aria-busy', 'true');
+    expect(await loading.locator('svg').innerHTML()).toBe(arrows);
+    const spinner = loading.locator('svg').locator('..');
+    await expect(spinner).toHaveCSS('animation-iteration-count', 'infinite');
+    await expect(spinner).toHaveCSS('animation-duration', '0.9s');
+    await loading.evaluate(element => element.click());
+    expect(await page.evaluate(() => window.requests)).toHaveLength(1);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(spinner).toHaveCSS('animation-name', 'none');
+    await page.evaluate(() => window.update({ catalogPending: false, navigationError: 'Still unavailable' }));
+    await expect(retry).toBeEnabled();
+    await retry.click();
+    expect(await page.evaluate(() => window.requests)).toHaveLength(2);
+    await page.evaluate(() => window.update({ readOnly: true }));
+    await expect(retry).toBeDisabled();
+    await page.evaluate(() => window.update({ readOnly: false, navigationError: undefined, selectedModel: 'ready' }));
+    await expect(retry).toHaveCount(0);
+    await expect(page.locator('.glyph-account-picker')).toContainText('Connected account');
   } finally {
     await page.close();
   }

@@ -42,7 +42,7 @@ it('keeps review actions scoped, keyboard accessible, pending until acknowledged
   const page = await browser.newPage();
   try {
     await page.setContent(
-      '<div id="root" style="width:280px;--vscode-gitDecoration-deletedResourceForeground:#c81e28;--vscode-gitDecoration-addedResourceForeground:#1eb43c"></div>',
+      '<div id="root" style="width:280px;--vscode-foreground:#ccc;--vscode-descriptionForeground:#999;--vscode-toolbar-hoverBackground:#333"></div>',
     );
     await page.addScriptTag({ content: script });
     const card = page.getByRole('region', { name: 'Pending reviews' });
@@ -59,11 +59,11 @@ it('keeps review actions scoped, keyboard accessible, pending until acknowledged
     await expect(undo.locator('svg')).toHaveCount(1);
     await expect(keep.locator('svg')).toHaveCount(1);
     await undo.hover();
-    await expect(undo).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-    await expect(undo).toHaveCSS('color', 'rgb(200, 30, 40)');
+    await expect(undo).toHaveCSS('background-color', 'rgb(51, 51, 51)');
+    await expect(undo).toHaveCSS('color', 'rgb(204, 204, 204)');
     await keep.hover();
-    await expect(keep).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-    await expect(keep).toHaveCSS('color', 'rgb(30, 180, 60)');
+    await expect(keep).toHaveCSS('background-color', 'rgb(51, 51, 51)');
+    await expect(keep).toHaveCSS('color', 'rgb(204, 204, 204)');
     await card.getByRole('button', { name: 'Keep', exact: true }).click();
     await expect(card.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
     expect(await page.evaluate(() => window.decisions)).toEqual([

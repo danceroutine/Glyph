@@ -1,3 +1,4 @@
+import { Button, IconButton, ButtonAppearance, ButtonSize } from '#code-oss/ui/Button/Button.tsx';
 import { createPortal } from 'preact/compat';
 import { Gauge } from 'lucide-preact';
 import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
@@ -5,20 +6,6 @@ import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 import type { useGlyphUsageState } from './useGlyphUsageState.ts';
 const styles = {
   root: css({ padding: '0 12px 10px', flexShrink: 0 }),
-  button: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '3px 0',
-    border: 0,
-    font: 'inherit',
-    fontSize: tokens.font.size.detail,
-    color: tokens.text.muted,
-    background: 'transparent',
-    cursor: 'pointer',
-    ':hover': { color: tokens.text.primary },
-    ':focus-visible': { outline: tokens.focus.ring },
-  }),
   popup: css({
     position: 'fixed',
     zIndex: 2000,
@@ -49,21 +36,30 @@ export function GlyphUsageSummary({
   toggle,
 }: { readonly usage: GlyphUsage | undefined; readonly turn?: boolean } & ReturnType<typeof useGlyphUsageState>) {
   const label = turn ? 'Turn token usage' : 'Conversation token usage';
+  const triggerProps = {
+    buttonRef: trigger,
+    'aria-label': label,
+    title: label,
+    'aria-expanded': open,
+    'aria-controls': open ? id : undefined,
+    onClick: toggle,
+  };
   return (
     <div class={`glyph-usage ${turn ? '' : styles.root}`}>
-      <button
-        ref={trigger}
-        type="button"
-        class={styles.button}
-        aria-label={label}
-        title={label}
-        aria-expanded={open}
-        aria-controls={open ? id : undefined}
-        onClick={toggle}
-      >
-        <Gauge size={17} aria-hidden="true" />
-        {!turn && <span>Usage</span>}
-      </button>
+      {turn ? (
+        <IconButton {...triggerProps} size={ButtonSize.SMALL}>
+          <Gauge size={16} aria-hidden="true" />
+        </IconButton>
+      ) : (
+        <Button
+          {...triggerProps}
+          appearance={ButtonAppearance.GHOST}
+          size={ButtonSize.SMALL}
+          leadingIcon={<Gauge size={16} aria-hidden="true" />}
+        >
+          Usage
+        </Button>
+      )}
       {open &&
         createPortal(
           <div

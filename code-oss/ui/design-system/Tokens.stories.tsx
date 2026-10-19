@@ -1,5 +1,7 @@
+import { fn } from 'storybook/test';
+import { Button, ButtonVariant } from '#code-oss/ui/Button/Button.tsx';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
-import { atoms, css, space, tokens } from './index.ts';
+import { atoms, css, tokens } from './index.ts';
 
 const styles = {
   root: css({ height: '100%', boxSizing: 'border-box', overflowY: 'auto', padding: tokens.space.xl }),
@@ -16,15 +18,6 @@ const styles = {
   bar: css({ height: 8, background: tokens.progress.foreground }),
   card: css({ padding: tokens.space.lg, border: tokens.border.default, borderRadius: tokens.card.radius }),
   muted: css({ color: tokens.text.muted, fontSize: tokens.font.size.detail }),
-  button: css({
-    padding: space('sm', 'md'),
-    border: 0,
-    borderRadius: tokens.button.radius,
-    background: tokens.button.background,
-    color: tokens.button.foreground,
-    ':hover': { background: tokens.button.hoverBackground },
-    ':focus-visible': { outline: tokens.focus.ring, outlineOffset: tokens.focus.offset },
-  }),
 };
 
 interface ColorTree {
@@ -101,9 +94,9 @@ function TokenGallery() {
       <div class={styles.card}>
         <p>Body text</p>
         <p class={styles.muted}>Supporting text uses the muted semantic role.</p>
-        <button class={styles.button} type="button">
+        <Button variant={ButtonVariant.PRIMARY} onClick={fn().mockName('Tokens.primaryAction')}>
           Primary action
-        </button>
+        </Button>
       </div>
     </div>
   );

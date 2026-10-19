@@ -1,3 +1,4 @@
+import { glyphPromptHighlighting } from './GlyphPromptHighlighting.ts';
 import { promptSchema as schema, parsePrompt, serializePrompt, promptSelection } from './GlyphPromptMarkdown.ts';
 import {
   inputRules,
@@ -8,7 +9,7 @@ import {
 } from 'prosemirror-inputrules';
 import { splitListItem, sinkListItem, liftListItem } from 'prosemirror-schema-list';
 import { Slice } from 'prosemirror-model';
-import { EditorState, TextSelection } from 'prosemirror-state';
+import { EditorState, TextSelection, type Command } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { history, undo, redo, closeHistory } from 'prosemirror-history';
 import { keymap } from 'prosemirror-keymap';
@@ -124,6 +125,34 @@ export class GlyphPromptEditor {
   insertNewline(): void {
     if (this.view.editable && !this.view.composing) this.newline(this.view.state, this.view.dispatch, this.view);
   }
+  private leaveCodeBlock(direction: -1 | 1): Command {
+    return (state, dispatch) => {
+      if (!(state.selection instanceof TextSelection)) return false;
+      const { $cursor } = state.selection;
+      if (
+        !$cursor ||
+        $cursor.parent.type !== schema.nodes.code_block ||
+        $cursor.parentOffset !== (direction === -1 ? 0 : $cursor.parent.content.size)
+      )
+        return false;
+
+      const paragraph = schema.nodes.paragraph!;
+      const transaction = state.tr;
+      const boundary = direction === -1 ? $cursor.before() : $cursor.after();
+      const adjacent = direction === -1 ? state.doc.resolve(boundary).nodeBefore : state.doc.nodeAt(boundary);
+      let position = direction === -1 ? boundary - 1 : boundary + 1;
+      // Reuse the adjacent paragraph; otherwise create one on the requested side.
+      if (adjacent?.type !== paragraph) {
+        const parent = $cursor.node(-1);
+        const index = direction === -1 ? $cursor.index(-1) : $cursor.indexAfter(-1);
+        if (!parent.canReplaceWith(index, index, paragraph)) return false;
+        transaction.insert(boundary, paragraph.create());
+        position = boundary + 1;
+      }
+      dispatch?.(transaction.setSelection(TextSelection.create(transaction.doc, position)).scrollIntoView());
+      return true;
+    };
+  }
   private state(document: GlyphPromptDocument): EditorState {
     const { doc, from, to } = parsePrompt(document);
     return EditorState.create({
@@ -131,6 +160,7 @@ export class GlyphPromptEditor {
       selection: promptSelection(doc, from, to),
       plugins: [
         history(),
+        glyphPromptHighlighting(),
         inputRules({
           rules: [
             wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote!),
@@ -177,6 +207,10 @@ export class GlyphPromptEditor {
           ],
         }),
         keymap({
+          ArrowDown: this.leaveCodeBlock(1),
+          ArrowRight: this.leaveCodeBlock(1),
+          ArrowUp: this.leaveCodeBlock(-1),
+          ArrowLeft: this.leaveCodeBlock(-1),
           'Mod-a': (state, dispatch) => {
             dispatch?.(state.tr.setSelection(TextSelection.create(state.doc, 1, state.doc.content.size - 1)));
             return true;

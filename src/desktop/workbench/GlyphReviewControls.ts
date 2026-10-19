@@ -1,8 +1,12 @@
+import type { GlyphReviewCommand } from './GlyphReviewCommand.ts';
 export interface GlyphReviewControls {
   readonly label: string;
   readonly itemId?: string;
-  readonly shortcutModifier?: string;
-  readonly registerShortcuts?: (handler: (action: 'undo' | 'keep' | 'comment') => void) => () => void;
+  /** Current file has no remaining review items. */
+  readonly fileComplete?: boolean;
+  /** Labels resolved by the host from the current user keybindings. Unbound commands are omitted. */
+  readonly shortcuts?: Partial<Record<GlyphReviewCommand, string>>;
+  readonly registerCommands?: (handler: (command: GlyphReviewCommand) => void) => () => void;
   readonly rejectWithComment?: (comment: string) => Promise<void>;
   readonly fileLabel?: string;
   readonly navigationDisabled?: boolean;

@@ -1,3 +1,5 @@
+import type { ComponentProps } from 'preact';
+import { fn } from 'storybook/test';
 import { annotationFixture } from '#code-oss/storybook/fixtures/AnnotationFixtures.ts';
 import type { GlyphAnnotation } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import { useState } from 'preact/hooks';
@@ -8,8 +10,8 @@ const meta = {
   component: GlyphAnnotationPill,
   args: {
     annotations: [annotationFixture()],
-    edit: () => {},
-    remove: () => {},
+    edit: fn().mockName('GlyphAnnotations.edit'),
+    remove: fn().mockName('GlyphAnnotations.remove'),
   },
   decorators: [
     Story => (
@@ -26,8 +28,10 @@ function DraftPill({ annotations: initial }: { readonly annotations: readonly Gl
   return (
     <GlyphAnnotationPill
       annotations={annotations}
-      edit={() => {}}
-      remove={id => setAnnotations(values => values.filter(value => value.id !== id))}
+      edit={fn().mockName('GlyphAnnotations.edit')}
+      remove={fn<NonNullable<ComponentProps<typeof GlyphAnnotationPill>['remove']>>(id =>
+        setAnnotations(values => values.filter(value => value.id !== id)),
+      ).mockName('GlyphAnnotations.remove')}
     />
   );
 }

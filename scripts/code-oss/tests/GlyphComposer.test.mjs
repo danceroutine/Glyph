@@ -22,9 +22,10 @@ beforeAll(async () => {
         const captures = [];
         let selectFiles;
         const attachment = { id: 'a', kind: 'file', uri: 'file:///a.ts', path: 'a.ts', text: 'Exact captured source', contentRevision: 'hash', token: { workspaceGeneration: 'w', resource: 'file:///a.ts', incarnation: 'i', version: 1 } };
+        let contextCandidates = [{ uri: attachment.uri, path: attachment.path }];
         const actions = {
           composer: new GlyphComposerState(),
-          context: { selectFiles: () => new Promise(resolve => { selectFiles = resolve; }), searchFiles: async query => [{ uri: attachment.uri, path: attachment.path }].filter(file => file.path.includes(query)), captureFile: async () => attachment, openAttachment: async () => {}, checkAttachment: async () => undefined, refreshAttachment: async value => ({ ...value, text: 'Updated capture' }) },
+          context: { selectFiles: () => new Promise(resolve => { selectFiles = resolve; }), searchFiles: async query => contextCandidates.filter(file => file.path.includes(query)), captureFile: async uri => ({ ...attachment, ...contextCandidates.find(file => file.uri === uri) }), captureFolder: async uri => ({ ...attachment, ...contextCandidates.find(file => file.uri === uri), kind: 'folder', text: 'Directory tree: src\\n  index.ts' }), openAttachment: async () => {}, checkAttachment: async () => undefined, refreshAttachment: async value => ({ ...value, text: 'Updated capture' }) },
           send(text, attachments) { captures.push(attachments); calls.push(text); return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
           steer: async text => { steering.push(text); },
           sendImmediately: async text => { menuActions.push(text); },
@@ -34,6 +35,7 @@ beforeAll(async () => {
         };
         window.composerTest = {
           calls, captures, steering, menuActions,
+          setContextCandidates(files) { contextCandidates = files; },
           snapshot: () => actions.composer.snapshot,
           selectFiles(cancel = false) { selectFiles(cancel ? [] : [attachment, { ...attachment, id: 'b', uri: 'file:///b.ts', path: 'b.ts' }]); },
           attachSelection() { actions.composer.insertAttachments([{ ...attachment, id: 'selection', kind: 'selection', path: 'b.ts', text: 'Only selected text', range: { start: { line: 3, column: 1 }, end: { line: 4, column: 5 } } }]); },
@@ -195,9 +197,12 @@ describe('Inline attachment editing', () => {
       const attach = page.getByRole('button', { name: 'Attach file', exact: true });
       await composer.fill('before  after');
       for (let index = 0; index < 6; index++) await composer.press('ArrowLeft');
+      await expect
+        .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 1000 })
+        .toBe(7);
       await attach.click();
       await expect(attach).toBeDisabled();
-      await expect(page.getByRole('listbox', { name: 'Files to attach' })).toHaveCount(0);
+      await expect(page.getByRole('listbox', { name: 'Files and folders to attach' })).toHaveCount(0);
       await page.evaluate(() => window.composerTest.selectFiles(true));
       await expect(attach).toBeEnabled();
       await expect(composer).toHaveText('before  after');
@@ -219,6 +224,9 @@ describe('Inline attachment editing', () => {
       const composer = page.getByRole('textbox', { name: 'Message Glyph' });
       await composer.fill('before  after');
       for (let index = 0; index < 6; index++) await composer.press('ArrowLeft');
+      await expect
+        .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 1000 })
+        .toBe(7);
       await composer.pressSequentially('@a');
       await expect(page.getByRole('option', { name: 'a.ts', exact: true })).toBeVisible();
       await composer.press('Enter');
@@ -450,3 +458,406 @@ it('shows a collapsible draggable queue with decorative bullets and the requeste
     await page.close();
   }
 }, 20000);
+
+it('edits a queued message in the composer, preserves it on cancel, and clears the draft on deletion', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    await page.evaluate(() => window.composerTest.mount('streaming'));
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.fill('Original queued task');
+    await composer.press('Enter');
+    const tray = page.getByRole('region', { name: 'Queued messages', exact: true });
+    const row = tray.getByRole('listitem');
+    const edit = async () => {
+      await row.hover();
+      await row.getByRole('button', { name: 'Edit queued message', exact: true }).click();
+      await expect(page.getByText('Editing queued message', { exact: true })).toBeVisible();
+      await expect(row).toHaveAttribute('data-editing', 'true');
+      await expect(row).toHaveAttribute('draggable', 'false');
+      await expect(row.getByRole('button')).toHaveCount(1);
+      await composer.hover();
+      await expect(row.getByRole('button', { name: 'Remove queued message' })).toBeVisible();
+      await expect(row.getByRole('button', { name: 'Remove queued message' })).toBeEnabled();
+      await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
+    };
+    await edit();
+    await expect(composer).toHaveText('Original queued task');
+    await composer.fill('Discard this edit');
+    await page.getByRole('button', { name: 'Cancel queue edit' }).click();
+    await expect(composer).toHaveText('');
+    await expect(row).toContainText('Original queued task');
+    await expect(row).not.toHaveAttribute('data-editing');
+
+    await edit();
+    await composer.fill('');
+    await expect(page.getByRole('button', { name: 'Save queued message' })).toBeDisabled();
+    await composer.press('Enter');
+    await expect(row).toContainText('Original queued task');
+    await composer.fill('Updated queued task');
+    await page.getByRole('button', { name: 'Save queued message' }).click();
+    await expect(composer).toHaveText('');
+    await expect(row).toContainText('Updated queued task');
+    await expect(page.getByText('Editing queued message', { exact: true })).toHaveCount(0);
+
+    await edit();
+    await row.getByRole('button', { name: 'Remove queued message' }).click();
+    await expect(tray).toHaveCount(0);
+    await expect(composer).toHaveText('');
+    await expect(page.getByText('Editing queued message', { exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => window.composerTest.calls)).toEqual([]);
+    expect(await page.evaluate(() => window.composerTest.steering)).toEqual([]);
+    expect(await page.evaluate(() => window.composerTest.snapshot().queuePaused)).toBe(false);
+  } finally {
+    await page.close();
+  }
+}, 15000);
+
+it('highlights code while typing without changing the caret, undo history or submitted Markdown', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.pressSequentially('```ts');
+    await composer.press('Shift+Enter');
+    await composer.pressSequentially("const foo: string = '😀';");
+    await expect(composer.locator('.hljs-keyword')).toHaveText('const');
+    await expect(composer.locator('.hljs-string')).toHaveText("'😀'");
+    await composer.press('ArrowLeft');
+    await composer.press('ArrowLeft');
+    await composer.pressSequentially('x');
+    await expect(composer.locator('.hljs-string')).toHaveText("'😀x'");
+    await composer.press('ControlOrMeta+z');
+    await composer.press('ControlOrMeta+Shift+z');
+    await expect(composer.locator('pre code')).toHaveText("const foo: string = '😀x';");
+    await composer.press('Enter');
+    expect(await page.evaluate(() => window.composerTest.calls[0])).toBe("```ts\nconst foo: string = '😀x';\n```");
+  } finally {
+    await page.close();
+  }
+});
+
+it('highlights pasted and unlabelled fences while leaving unknown languages as literal text', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.evaluate(element => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData(
+        'text/plain',
+        '```\nconst answer = 42;\n```\n\n```unknown-language\n<script>literal</script>\n```',
+      );
+      element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+    });
+    await expect(composer.locator('pre').first().locator('[class*=hljs-]').first()).toBeVisible();
+    await expect(composer.locator('pre').nth(1)).toHaveText('<script>literal</script>');
+    await expect(composer.locator('pre').nth(1).locator('span')).toHaveCount(0);
+    await page.evaluate(() => {
+      window.composerTest.unmount();
+      window.composerTest.mount();
+    });
+    await expect(composer.locator('pre').first().locator('[class*=hljs-]').first()).toBeVisible();
+  } finally {
+    await page.close();
+  }
+});
+
+it.each(['ArrowDown', 'ArrowRight'])('leaves a trailing code block with %s and types in a new paragraph', async key => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.pressSequentially('```ts');
+    await composer.press('Shift+Enter');
+    await composer.pressSequentially('const answer = 42;');
+    await composer.press(key);
+    await composer.pressSequentially('Explain this.');
+    await expect(composer.locator('pre')).toHaveText('const answer = 42;');
+    await expect(composer.locator('p')).toHaveText('Explain this.');
+    await composer.press('Enter');
+    expect(await page.evaluate(() => window.composerTest.calls[0])).toBe(
+      '```ts\nconst answer = 42;\n```\n\nExplain this.',
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+it.each(['ArrowDown', 'ArrowRight'])('reuses the paragraph following a code block when leaving with %s', async key => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.evaluate(element => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData('text/plain', '```ts\nconst answer = 42;\n```\n\nExisting text');
+      element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+      const code = element.querySelector('pre code');
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      range.collapse(false);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+    });
+    await composer.press(key);
+    await composer.pressSequentially('Before: ');
+    await expect(composer.locator('p')).toHaveCount(1);
+    await expect(composer.locator('p')).toHaveText('Before: Existing text');
+    await expect(composer.locator('pre')).toHaveText('const answer = 42;');
+  } finally {
+    await page.close();
+  }
+});
+
+it.each(['ArrowUp', 'ArrowLeft'])(
+  'leaves the start of a code block with %s without adding duplicate paragraphs',
+  async key => {
+    const page = await browser.newPage();
+    try {
+      for (const preceding of ['', 'Existing text\n\n']) {
+        await page.setContent('<div id="root"></div>');
+        await page.addScriptTag({ content: script });
+        const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+        const source = preceding + '```ts\nconst answer = 42;\n```';
+        await composer.evaluate((element, source) => {
+          const clipboardData = new DataTransfer();
+          clipboardData.setData('text/plain', source);
+          element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+        }, source);
+        await composer.focus();
+        // Wait for ProseMirror to observe the caret, including syntax-highlighted text.
+        await expect
+          .poll(
+            () =>
+              composer.locator('pre code').evaluate(code => {
+                const range = document.createRange();
+                range.selectNodeContents(code);
+                range.collapse(true);
+                window.getSelection().removeAllRanges();
+                window.getSelection().addRange(range);
+                document.dispatchEvent(new Event('selectionchange'));
+                return window.composerTest.snapshot().document.from;
+              }),
+            { timeout: 1000 },
+          )
+          .toBe(source.indexOf('const answer'));
+        await composer.press(key);
+        await composer.pressSequentially(' Explain this.');
+        await expect(composer.locator('p')).toHaveCount(1);
+        await expect(composer.locator('p')).toHaveText(preceding ? 'Existing text Explain this.' : ' Explain this.');
+        await expect(composer.locator(':scope > :first-child')).toHaveJSProperty('tagName', 'P');
+        await expect(composer.locator('pre')).toHaveText('const answer = 42;');
+        await composer.press('Enter');
+        expect(await page.evaluate(() => window.composerTest.calls[0])).toBe(
+          (preceding ? 'Existing text Explain this.' : ' Explain this.') + '\n\n```ts\nconst answer = 42;\n```',
+        );
+      }
+    } finally {
+      await page.close();
+    }
+  },
+);
+
+it.each(['ArrowUp', 'ArrowLeft'])('escapes an empty code block backwards with %s', async key => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.pressSequentially('```');
+    await composer.press('Shift+Enter');
+    await composer.press(key);
+    await composer.pressSequentially('Before code');
+    await expect(composer.locator('p')).toHaveText('Before code');
+    await expect(composer.locator('pre')).toHaveText('');
+    await expect(composer.locator(':scope > :first-child')).toHaveJSProperty('tagName', 'P');
+  } finally {
+    await page.close();
+  }
+});
+
+it('keeps normal arrow navigation and selection inside code blocks', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.pressSequentially('```');
+    await composer.press('Shift+Enter');
+    await composer.pressSequentially('ab');
+    await composer.press('Shift+Enter');
+    await composer.pressSequentially('cd');
+    const move = async key => {
+      const before = await page.evaluate(() => window.composerTest.snapshot().document.from);
+      await composer.press(key);
+      await expect
+        .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 1000 })
+        .not.toBe(before);
+    };
+    // ProseMirror briefly suppresses DOM selection updates after typing.
+    // Establish the starting caret once its selection observer is listening again.
+    await expect
+      .poll(
+        () =>
+          composer.locator('pre code').evaluate(code => {
+            const range = document.createRange();
+            range.selectNodeContents(code);
+            range.collapse(true);
+            window.getSelection().removeAllRanges();
+            window.getSelection().addRange(range);
+            document.dispatchEvent(new Event('selectionchange'));
+            return window.composerTest.snapshot().document.from;
+          }),
+        { timeout: 1000 },
+      )
+      .toBe(4);
+    await move('ArrowRight');
+    await composer.pressSequentially('X');
+    await expect(composer.locator('pre')).toHaveText('aXb\ncd', { timeout: 1000 });
+    await move('ArrowDown');
+    await composer.pressSequentially('Y');
+    await expect(composer.locator('pre')).toHaveText('aXb\ncdY', { timeout: 1000 });
+    await composer.press('Shift+ArrowLeft');
+    await expect.poll(() => page.evaluate(() => window.getSelection().toString()), { timeout: 1000 }).toBe('Y');
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const { from, to } = window.composerTest.snapshot().document;
+            return to - from;
+          }),
+        { timeout: 1000 },
+      )
+      .toBe(1);
+    await composer.press('ArrowRight');
+    await composer.pressSequentially('Z');
+    await expect(composer.locator('pre')).toHaveText('aXb\ncdYZ', { timeout: 1000 });
+    await expect(composer.locator('p')).toHaveCount(0);
+  } finally {
+    await page.close();
+  }
+});
+
+it.each([280, 1000])(
+  'shows compact @ suggestions at %i px and attaches the hovered file without losing editor focus',
+  async width => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    try {
+      await page.setContent(
+        `<div id="root" style="width:${width}px;padding-top:400px;container-type:inline-size"></div>`,
+      );
+      await page.addScriptTag({ content: script });
+      await page.evaluate(() =>
+        window.composerTest.setContextCandidates([
+          { uri: 'file:///src/runtime/AgentRuntime.ts', path: 'src/runtime/AgentRuntime.ts' },
+          { uri: 'file:///src/chat/AgentMode.ts', path: 'src/chat/AgentMode.ts' },
+        ]),
+      );
+      const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+      await composer.pressSequentially('@');
+      const list = page.getByRole('listbox', { name: 'Files and folders to attach' });
+      const option = list.getByRole('option', { name: 'src/chat/AgentMode.ts', exact: true });
+      await option.hover();
+      await expect(option).toHaveAttribute('aria-selected', 'true');
+      await expect(composer).toBeFocused();
+      await expect(composer).toHaveAttribute('aria-activedescendant', await option.getAttribute('id'));
+      await expect(option.locator('span').first()).toHaveText('AgentMode.ts');
+      await expect(option.locator('span').last()).toHaveText('src/chat/');
+      const bounds = await list.boundingBox();
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 8);
+      const preview = page.locator('[data-dropdown] > [aria-hidden="true"]');
+      if (width === 1000) {
+        await expect(preview).toBeVisible();
+        await expect(preview).toContainText('chat');
+        const previewBounds = await preview.boundingBox();
+        expect(previewBounds.x).toBeGreaterThan(bounds.x + bounds.width);
+      } else await expect(preview).toBeHidden();
+      await option.click();
+      await expect(list).toHaveCount(0);
+      await expect(composer).toContainText('AgentMode.ts');
+      await expect(composer).toBeFocused();
+      await composer.press('Enter');
+      expect(await page.evaluate(() => window.composerTest.captures[0][0].path)).toBe('src/chat/AgentMode.ts');
+    } finally {
+      await page.close();
+    }
+  },
+  10000,
+);
+
+it('scrolls @ suggestions with the keyboard and dismisses them with Escape', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root" style="padding-top:400px"></div>');
+    await page.addScriptTag({ content: script });
+    await page.evaluate(() =>
+      window.composerTest.setContextCandidates(
+        Array.from({ length: 30 }, (_, index) => ({
+          uri: `file:///src/file${index}.ts`,
+          path: `src/file${index}.ts`,
+        })),
+      ),
+    );
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.pressSequentially('@');
+    const list = page.getByRole('listbox', { name: 'Files and folders to attach' });
+    await expect(list.getByRole('option')).toHaveCount(30);
+    for (let index = 0; index < 18; index++) await composer.press('ArrowDown');
+    const option = list.getByRole('option', { name: 'src/file18.ts', exact: true });
+    await expect(option).toHaveAttribute('aria-selected', 'true');
+    const bounds = await list.boundingBox();
+    const row = await option.boundingBox();
+    expect(row.y).toBeGreaterThanOrEqual(bounds.y);
+    expect(row.y + row.height).toBeLessThanOrEqual(bounds.y + bounds.height);
+    await composer.press('Escape');
+    await expect(list).toHaveCount(0);
+    await expect(composer).toHaveText('@');
+    await composer.pressSequentially('not-found');
+    await expect(page.getByText('No matching files', { exact: true })).toBeVisible();
+  } finally {
+    await page.close();
+  }
+});
+
+it('shows Tree outline only for folders and attaches their tree snapshot', async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  try {
+    await page.setContent('<div id="root" style="width:1000px;padding-top:400px;container-type:inline-size"></div>');
+    await page.addScriptTag({ content: script });
+    await page.evaluate(() =>
+      window.composerTest.setContextCandidates([
+        { uri: 'file:///workspace/src/index.ts', path: 'src/index.ts', kind: 'file' },
+        { uri: 'file:///workspace/src', path: 'src/', kind: 'folder' },
+        {
+          uri: 'file:///workspace',
+          path: './',
+          name: 'workspace',
+          kind: 'folder',
+          ancestry: ['Users', 'pedro', 'workspace'],
+        },
+      ]),
+    );
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.pressSequentially('@');
+    await page.getByRole('option', { name: 'src/index.ts', exact: true }).hover();
+    await expect(page.getByText('Tree outline', { exact: true })).toHaveCount(0);
+    await page.getByRole('option', { name: './', exact: true }).hover();
+    await expect(page.getByText('Tree outline', { exact: true })).toBeVisible();
+    await expect(page.locator('[data-dropdown] > [aria-hidden="true"]')).toContainText('Users');
+    await page.getByRole('option', { name: 'src/', exact: true }).click();
+    await expect(composer).toBeFocused();
+    await composer.press('Enter');
+    const captured = await page.evaluate(() => window.composerTest.captures[0][0]);
+    expect(captured.kind).toBe('folder');
+    expect(captured.text).toBe('Directory tree: src\n  index.ts');
+  } finally {
+    await page.close();
+  }
+});

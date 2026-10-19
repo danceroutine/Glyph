@@ -6,6 +6,5 @@
     "types": [],
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["./**/*.ts", "./**/*.tsx"],
-  "exclude": ["./**/*.stories.tsx"]
+  "include": ["./**/*.ts", "./**/*.tsx"]
 }

@@ -5,6 +5,7 @@ import {
   navigationStateFixture,
   chatFixture,
   todoItems,
+  pendingProposals,
   workbenchStateFixture,
 } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
 import { userMessageFixture, usageFixture, conversationFixture } from '#code-oss/storybook/fixtures/MessageFixtures.ts';
@@ -15,6 +16,8 @@ import { WiredGlyphWorkbench } from './GlyphWorkbench.wired.tsx';
 import { InteractiveWorkbench } from '#code-oss/storybook/InteractiveWorkbench.tsx';
 
 import {
+  composerFixture,
+  queuedMessageDocuments,
   failingActionsFixture,
   previewActionsFixture,
   attachedActionsFixture,
@@ -43,6 +46,9 @@ export const Streaming: Story = {
 export const SendFailure: Story = { args: { actions: failingActionsFixture() } };
 
 const savedChat = chatFixture();
+const expandTodos = async ({ canvasElement }: { canvasElement: HTMLElement }) => {
+  canvasElement.querySelector<HTMLButtonElement>('.glyph-todos button')?.click();
+};
 export const Todos: Story = {
   args: {
     state: workbenchStateFixture({
@@ -56,9 +62,25 @@ export const Todos: Story = {
       transcript: conversationFixture(),
     }),
   },
-  play: async ({ canvasElement }) => {
-    canvasElement.querySelector<HTMLButtonElement>('.glyph-todos button')?.click();
+  play: expandTodos,
+};
+export const TodosWithQueuedMessages: Story = {
+  args: {
+    ...Todos.args,
+    state: workbenchStateFixture({ ...Todos.args?.state, status: GlyphWorkbenchStatus.STREAMING }),
+    actions: previewActionsFixture({ composer: composerFixture({ queued: queuedMessageDocuments }) }),
   },
+  play: expandTodos,
+};
+export const ComposerDrawers: Story = {
+  args: {
+    ...TodosWithQueuedMessages.args,
+    state: workbenchStateFixture({
+      ...TodosWithQueuedMessages.args?.state,
+      proposals: pendingProposals.map(proposal => ({ ...proposal, chatId: savedChat.id })),
+    }),
+  },
+  play: expandTodos,
 };
 const navigationState = navigationStateFixture();
 const expandHistory = async ({ canvasElement }: { canvasElement: HTMLElement }) => {

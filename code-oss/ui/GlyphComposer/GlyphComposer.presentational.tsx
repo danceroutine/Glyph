@@ -1,5 +1,7 @@
+import { GlyphContextPicker } from '#code-oss/ui/GlyphContextPicker/GlyphContextPicker.tsx';
+import { Button, IconButton, ButtonVariant, ButtonAppearance, IconButtonShape } from '#code-oss/ui/Button/Button.tsx';
+import { glyphSyntaxStyles } from '#code-oss/ui/GlyphSyntaxHighlighting/GlyphSyntaxStyles.ts';
 import { GlyphQueuedMessages } from '#code-oss/ui/GlyphQueuedMessages/GlyphQueuedMessages.tsx';
-import { AGENT_MODE_PRESENTATION } from '#code-oss/ui/AgentMode/AgentModePresentation.tsx';
 import { GlyphAnnotationPill } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.presentational.tsx';
 import type { ComponentChildren } from 'preact';
 import { RefreshCw, ExternalLink, X, Paperclip, ArrowUp, Square } from 'lucide-preact';
@@ -7,7 +9,7 @@ import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 import type { GlyphComposerState } from './useGlyphComposerState.ts';
 
 const styles = {
-  root: css({ padding: tokens.space.md, position: 'relative' }),
+  root: css({ padding: tokens.space.md, position: 'relative', flexShrink: 0 }),
   annotations: css({ padding: '10px 10px 0' }),
   surface: css({
     position: 'relative',
@@ -16,30 +18,22 @@ const styles = {
     background: tokens.input.background,
     color: tokens.input.foreground,
   }),
+  queueEditHeader: css({
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: '8px 12px',
+    borderRadius: `${tokens.card.radius}px ${tokens.card.radius}px 0 0`,
+    borderBottom: tokens.input.strongBorder,
+    background: `color-mix(in srgb, ${tokens.focus.color} 24%, ${tokens.input.background})`,
+  }),
+  cancelQueueEdit: css({
+    '&&': { paddingInline: 6, color: tokens.context.file.foreground },
+  }),
   controls: css({ display: 'flex', alignItems: 'center', gap: tokens.space.sm, flex: 1, minWidth: 0 }),
   actions: css({ display: 'flex', alignItems: 'center', gap: tokens.space.sm, flexShrink: 0 }),
-  icon: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 28,
-    height: 28,
-    flexShrink: 0,
-    padding: 0,
-    border: 0,
-    background: 'transparent',
-    color: tokens.text.muted,
-    cursor: 'pointer',
-    ':focus-visible': { outline: tokens.focus.ring },
-    ':hover': { color: tokens.text.primary },
-    ':disabled': { opacity: tokens.opacity.disabled, cursor: 'default' },
-  }),
-  send: css({
-    borderRadius: '50%',
-    background: tokens.text.primary,
-    color: tokens.input.background,
-    ':hover': { background: tokens.text.primary, color: tokens.input.background },
-  }),
+
   hidden: css({
     position: 'absolute',
     width: 1,
@@ -94,50 +88,12 @@ const styles = {
     '& .glyph-prompt-link': { color: tokens.context.file.foreground },
     '& .ProseMirror-selectednode': { outline: tokens.focus.ring },
   }),
-  button: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: tokens.space.xs,
-    font: 'inherit',
-    color: tokens.button.secondary.foreground,
-    background: tokens.button.secondary.background,
-    border: 0,
-    borderRadius: tokens.button.radius,
-    padding: space('xs', 'sm'),
-    cursor: 'pointer',
-    ':hover': { background: tokens.button.secondary.hoverBackground },
-    ':focus-visible': { outline: tokens.focus.ring },
-    ':disabled': { opacity: tokens.opacity.disabled },
-  }),
   footer: css({
     display: 'flex',
     alignItems: 'center',
     gap: tokens.space.sm,
     justifyContent: 'space-between',
     padding: space('sm', 'lg', 'lg'),
-  }),
-  picker: css({
-    position: 'absolute',
-    bottom: '100%',
-    left: tokens.space.md,
-    right: tokens.space.md,
-    zIndex: 3,
-    maxHeight: 240,
-    overflowY: 'auto',
-    background: tokens.dropdown.background,
-    color: tokens.dropdown.foreground,
-    border: tokens.dropdown.border,
-    borderRadius: tokens.dropdown.radius,
-    padding: tokens.space.xs,
-  }),
-  option: css({
-    display: 'block',
-    textAlign: 'left',
-    width: '100%',
-    whiteSpace: 'normal',
-    overflowWrap: 'anywhere',
-    '&[aria-selected="true"]': { background: tokens.list.selected.background, color: tokens.list.selected.foreground },
   }),
   preview: css({
     border: tokens.border.default,
@@ -163,6 +119,8 @@ const styles = {
 };
 export type GlyphComposerProps = GlyphComposerState & {
   readonly modelControl?: ComponentChildren;
+  readonly todos?: ComponentChildren;
+  readonly reviews?: ComponentChildren;
   readonly modeControl: ComponentChildren;
 };
 export function GlyphComposer(state: GlyphComposerProps) {
@@ -174,9 +132,9 @@ export function GlyphComposer(state: GlyphComposerProps) {
           {state.unsent.map((text, index) => (
             <div key={index}>
               <pre>{text}</pre>
-              <button class={styles.button} type="button" onClick={() => state.editUnsent(index)}>
+              <Button type="button" onClick={() => state.editUnsent(index)}>
                 Edit unsent message
-              </button>
+              </Button>
             </div>
           ))}
         </section>
@@ -189,64 +147,56 @@ export function GlyphComposer(state: GlyphComposerProps) {
               {state.preview.range && ` (${state.preview.range.start.line}-${state.preview.range.end.line})`}
               {state.preview.side && ` · ${state.preview.side}`}
             </strong>
-            <button
-              class={styles.button}
-              type="button"
-              aria-label="Close attachment preview"
-              onClick={state.closePreview}
-            >
+            <IconButton aria-label="Close attachment preview" onClick={state.closePreview}>
               <X size={16} />
-            </button>
+            </IconButton>
           </header>
           <small>Captured revision {state.preview.contentRevision.slice(0, 12)}</small>
           <pre>{state.preview.text}</pre>
           {state.sourceStatus && <p role="status">{state.sourceStatus}</p>}
           <div class={styles.footer}>
-            <button class={styles.button} type="button" disabled={state.pending} onClick={state.openPreview}>
+            <Button type="button" disabled={state.pending} onClick={state.openPreview}>
               <ExternalLink size={14} />
               Open source
-            </button>
-            <button class={styles.button} type="button" disabled={state.pending} onClick={state.refreshPreview}>
+            </Button>
+            <Button type="button" disabled={state.pending} onClick={state.refreshPreview}>
               <RefreshCw size={14} />
               Refresh capture
-            </button>
-            <button class={styles.button} type="button" disabled={state.pending} onClick={state.removePreview}>
+            </Button>
+            <Button type="button" disabled={state.pending} onClick={state.removePreview}>
               Remove
-            </button>
+            </Button>
           </div>
         </section>
       )}
-      {state.query && (
-        <div id={state.pickerId} class={styles.picker} role="listbox" aria-label="Files to attach">
-          {state.searching ? (
-            <div role="status">Searching files…</div>
-          ) : !state.candidates.length ? (
-            <div role="status">No matching files</div>
-          ) : (
-            state.candidates.map((candidate, index) => (
-              <button
-                id={`${state.pickerId}-${index}`}
-                class={`${styles.button} ${styles.option}`}
-                role="option"
-                aria-selected={index === state.selected}
-                key={candidate.uri}
-                type="button"
-                disabled={state.pending}
-                onMouseDown={event => event.preventDefault()}
-                onClick={() => void state.choose(candidate)}
-              >
-                {candidate.path}
-              </button>
-            ))
-          )}
-        </div>
-      )}
+      {state.todos}
+      {state.reviews}
       <GlyphQueuedMessages state={state} />
       <div class={`glyph-composer-surface ${styles.surface}`}>
+        {state.query && (
+          <GlyphContextPicker
+            id={state.pickerId}
+            candidates={state.candidates}
+            selected={state.selected}
+            searching={state.searching}
+            disabled={state.pending}
+            highlight={state.highlightCandidate}
+            choose={candidate => void state.choose(candidate)}
+          />
+        )}
         {state.editingQueuedMessage && (
-          <button class={styles.button} type="button" onClick={state.cancelQueueEdit}>
-            Cancel queue edit
-          </button>
+          <div class={styles.queueEditHeader}>
+            <span>Editing queued message</span>
+            <Button
+              appearance={ButtonAppearance.GHOST}
+              class={styles.cancelQueueEdit}
+              type="button"
+              aria-label="Cancel queue edit"
+              onClick={state.cancelQueueEdit}
+            >
+              Cancel
+            </Button>
+          </div>
         )}
         {state.annotations.length > 0 && (
           <div class={styles.annotations}>
@@ -257,16 +207,16 @@ export function GlyphComposer(state: GlyphComposerProps) {
             />
           </div>
         )}
-        <div class={styles.input} ref={state.composer} />
+        <div class={`${styles.input} ${glyphSyntaxStyles}`} ref={state.composer} />
         <div class={styles.footer}>
           <div class={styles.controls}>
             {state.modeControl}
             {state.modelControl}
           </div>
           <div class={styles.actions}>
-            <button
-              class={styles.icon}
+            <IconButton
               type="button"
+              shape={IconButtonShape.CIRCLE}
               title="Attach file"
               aria-label="Attach file"
               disabled={state.pending || state.disabled}
@@ -274,34 +224,39 @@ export function GlyphComposer(state: GlyphComposerProps) {
               onClick={state.attachFile}
             >
               <Paperclip size={18} aria-hidden="true" />
-            </button>
-            {state.active && state.draft.trim() && (
-              <button
-                class={styles.icon}
+            </IconButton>
+            {state.active && !state.editingQueuedMessage && state.draft.trim() && (
+              <IconButton
                 type="button"
+                shape={IconButtonShape.CIRCLE}
                 title="Cancel"
                 aria-label="Cancel"
                 disabled={state.disabled}
                 onClick={state.cancel}
               >
                 <Square size={16} aria-hidden="true" />
-              </button>
+              </IconButton>
             )}
-            <button
-              class={`glyph-send ${styles.icon} ${styles.send}`}
-              style={AGENT_MODE_PRESENTATION[state.mode].send}
+            <IconButton
+              variant={ButtonVariant.PRIMARY}
+              mode={state.mode}
+              shape={IconButtonShape.CIRCLE}
+              appearance={ButtonAppearance.FILLED}
+              aria-label={state.saveQueueLabel ?? (state.active ? 'Cancel' : state.sendLabel)}
+              class={'glyph-send'}
+
               type="button"
-              disabled={state.disabled || state.submitting}
+              disabled={state.disabled || state.submitting || (!!state.editingQueuedMessage && !state.draft.trim())}
               onClick={state.activate}
               title={state.saveQueueLabel ?? (state.active ? 'Cancel' : state.sendLabel)}
             >
-              {state.active && !state.draft.trim() ? (
+              {state.active && !state.editingQueuedMessage && !state.draft.trim() ? (
                 <Square size={13} fill="currentColor" aria-hidden="true" />
               ) : (
                 <ArrowUp size={18} aria-hidden="true" />
               )}
               <span class={styles.hidden}>{state.saveQueueLabel ?? (state.active ? 'Cancel' : state.sendLabel)}</span>
-            </button>
+            </IconButton>
           </div>
         </div>
       </div>

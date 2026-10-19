@@ -24,3 +24,18 @@ Readonly catalogs define shared scenarios once. Mutable composer controllers mus
 be created per mounted preview. Composer/workbench args are seeds; the
 `isolateComposer` decorator copies their document into a fresh controller. Interactive
 previews own their controller with `useState(() => composerFixture())`.
+
+Use named `fn` spies from `storybook/test` for every story callback, including
+callbacks inside render functions and shared fixtures. For example, use
+`fn().mockName('Review.keep')` or wrap a simulated handler with
+`fn(handler).mockName('Review.keep')` to retain its behavior and log its arguments.
+Storybook omits unnamed spies from Actions when it cannot infer a name from args.
+Async callbacks retain their promise contract with `.mockResolvedValue(undefined)`.
+Type implemented spies against the component prop or domain action interface so
+callback parameters keep their types. Internal production event handling stays in
+the production component; story spies belong at its callback boundary.
+
+The Buttons gallery shows the canonical Button, IconButton, and SplitButton primitives.
+The variants and props live in `../../ui/Button/Button.tsx`. Drawer toggles, menu options,
+and selection rows use these primitives too, preserving their ARIA roles and keyboard
+behavior. Native selects and `<summary>` disclosures keep their browser semantics.

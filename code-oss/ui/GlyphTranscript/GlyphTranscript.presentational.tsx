@@ -1,3 +1,4 @@
+import { IconButton, ButtonSize } from '#code-oss/ui/Button/Button.tsx';
 import { GlyphQuestionResponses } from '#code-oss/ui/GlyphQuestionCard/GlyphQuestionResponses.presentational.tsx';
 import { GlyphAnnotationPill } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.presentational.tsx';
 import { Undo2 } from 'lucide-preact';
@@ -26,35 +27,20 @@ const styles = {
   steering: css({ background: `color-mix(in srgb, ${tokens.input.background} 70%, black)`, borderStyle: 'dotted' }),
   answer: css({ padding: '0 10px' }),
   restore: css({ position: 'absolute', right: 10, top: 10, opacity: 0 }),
-  action: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 0,
-    width: 20,
-    height: 24,
-    background: 'transparent',
-    border: 0,
-    color: tokens.text.muted,
-    cursor: 'pointer',
-    ':hover': { color: tokens.text.primary },
-    ':disabled': { opacity: 0.4, cursor: 'default' },
-    ':focus-visible': { outline: tokens.focus.ring },
-  }),
 };
 
 export interface GlyphTranscriptProps {
-  readonly proposals?: ComponentChildren;
+  readonly plans?: ComponentChildren;
   readonly transcript: GlyphTranscriptState['transcript'];
   readonly children: ComponentChildren;
 }
 
 /** Stable message keys are supplied by the wired transcript. */
-export function GlyphTranscript({ children, transcript, proposals }: GlyphTranscriptProps) {
+export function GlyphTranscript({ children, transcript, plans }: GlyphTranscriptProps) {
   return (
     <div class={`glyph-transcript ${styles.root}`} ref={transcript} role="log" aria-label="Glyph conversation">
       {children}
-      {proposals}
+      {plans}
     </div>
   );
 }
@@ -81,8 +67,9 @@ export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessag
           {content}
         </div>
         {entry.role === 'user' && entry.restore && (
-          <button
-            class={`glyph-restore ${styles.action} ${styles.restore}`}
+          <IconButton
+            size={ButtonSize.SMALL}
+            class={`glyph-restore ${styles.restore}`}
             type="button"
             aria-label="Restore checkpoint"
             title="Restore checkpoint"
@@ -90,7 +77,7 @@ export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessag
             onClick={entry.restore}
           >
             <Undo2 size={15} aria-hidden="true" />
-          </button>
+          </IconButton>
         )}
       </div>
       {entry.options?.annotations && <GlyphAnnotationPill annotations={entry.options.annotations} />}

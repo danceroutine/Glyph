@@ -1,3 +1,4 @@
+import { fn } from 'storybook/test';
 import { composerFixture } from '#code-oss/storybook/fixtures/ActionFixtures.ts';
 import { annotationFixture } from '#code-oss/storybook/fixtures/AnnotationFixtures.ts';
 import { useState } from 'preact/hooks';
@@ -58,7 +59,7 @@ function AnnotationExample({ kind, empty = false }: { readonly kind: 'chat' | 'p
 const meta = {
   title: 'Glyph/Shared/Annotations/Inline Annotation Marker',
   component: GlyphCommentButton,
-  args: { order: 1, open: () => {} },
+  args: { order: 1, open: fn().mockName('GlyphCommentButton.open') },
   decorators: [
     Story => (
       <div style={{ padding: '24px' }}>

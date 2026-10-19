@@ -209,9 +209,12 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
                 text: turn.userText,
                 ...(turn.options ? { options: turn.options } : {}),
                 attachments: (turn.attachments ?? []).map(attachment => ({
-                  kind: attachment.source?.range
-                    ? GlyphContextAttachmentKind.SELECTION
-                    : GlyphContextAttachmentKind.FILE,
+                  kind:
+                    attachment.source?.kind === 'folder'
+                      ? GlyphContextAttachmentKind.FOLDER
+                      : attachment.source?.range
+                        ? GlyphContextAttachmentKind.SELECTION
+                        : GlyphContextAttachmentKind.FILE,
                   uri: attachment.source?.uri ?? attachment.path,
                   path: attachment.path,
                   text: attachment.text,
@@ -828,21 +831,6 @@ function toProposal(proposal: EditProposal): GlyphProposalSummary {
       deletions: file.items
         .filter(item => item.decision === EditDecisionState.PENDING)
         .reduce((sum, item) => sum + changedLines(item.removedText), 0),
-      preview: file.items
-        .filter(item => item.decision === EditDecisionState.PENDING)
-        .flatMap(item => [
-          ...item.removedText
-            .split(/\r\n|\r|\n/)
-            .filter(Boolean)
-            .slice(0, 3)
-            .map(text => ({ added: false, text: text.slice(0, 200) })),
-          ...item.insertedText
-            .split(/\r\n|\r|\n/)
-            .filter(Boolean)
-            .slice(0, 3)
-            .map(text => ({ added: true, text: text.slice(0, 200) })),
-        ])
-        .slice(0, 6),
       pendingItemIds: file.items.filter(item => item.decision === EditDecisionState.PENDING).map(item => item.id),
       applicability:
         Object.values(GlyphProposalApplicability).find(value => value === String(file.applicability).toLowerCase()) ??
