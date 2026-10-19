@@ -1,5 +1,5 @@
 /**
- * Explicit Electron-test transport. Only the model catalog and Responses wire
+ * Explicit Electron-test transport. Only the model catalog, Responses, and web fixture
  * requests reach the local fixture; unexpected requests never fall back to the network.
  * Application services, tools, account storage, and chat persistence remain real.
  */
@@ -9,6 +9,16 @@ export class ScriptedDesktopTransport {
   readonly fetch: typeof fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
+    const search = url.origin === 'https://html.duckduckgo.com' && url.pathname === '/html/';
+    const page = url.origin === this.endpoint.origin && url.pathname.startsWith('/web/');
+    if (request.method === 'GET' && (search || page)) {
+      return fetch(new URL((search ? '/web/search' : url.pathname) + url.search, this.endpoint), {
+        method: 'GET',
+        signal: request.signal,
+        redirect: 'manual',
+        headers: { Accept: request.headers.get('accept') ?? 'text/html' },
+      });
+    }
     if (
       url.origin !== 'https://api.openai.com' ||
       !(

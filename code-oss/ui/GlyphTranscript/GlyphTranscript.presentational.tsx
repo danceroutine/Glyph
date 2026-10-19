@@ -58,7 +58,7 @@ export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessag
         <GlyphQuestionResponses key={response.id} response={response} />
       ))}
       {entry.role === 'diagnostic' && <strong>{entry.label}</strong>}
-      {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
+      {entry.progress && <GlyphTurnProgress progress={entry.progress} openLink={entry.openLink} />}
       <div
         data-steering={entry.steering || undefined}
         class={entry.role === 'user' ? `${styles.bubble} ${entry.steering ? styles.steering : ''}` : styles.answer}

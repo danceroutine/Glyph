@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { WebToolRuntime } from './web/WebToolRuntime.ts';
+import { WebHttpClient } from './web/WebHttpClient.ts';
+import { WebFetchService } from './web/WebFetchService.ts';
+import { DuckDuckGoSearch } from './web/DuckDuckGoSearch.ts';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -131,10 +135,14 @@ async function main(): Promise<void> {
     proposalReviews,
     logger,
   );
+  const webHttp = new WebHttpClient();
   const tools = new ToolRegistry(
-    [projectTools, new ProposeQuestionToolRuntime(ui), new ShellToolRuntime(shellSessions)].flatMap(
-      source => source.tools,
-    ),
+    [
+      projectTools,
+      new WebToolRuntime(new WebFetchService(webHttp), new DuckDuckGoSearch(webHttp)),
+      new ProposeQuestionToolRuntime(ui),
+      new ShellToolRuntime(shellSessions),
+    ].flatMap(source => source.tools),
   );
   const backend = new OpenAIBackend(
     store,

@@ -1,4 +1,7 @@
-import { ChevronRight, Wrench } from 'lucide-preact';
+import { GlyphWebActivity, isWebTool, webActivityResult } from '#code-oss/ui/GlyphWebActivity/GlyphWebActivity.tsx';
+import { WebToolName } from '#src/web/WebToolName.js';
+import { GlyphToolDisclosure } from './GlyphToolDisclosure.tsx';
+import { GlyphToolIcon } from './GlyphToolIcon.tsx';
 import type { GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphToolActivityStatus, type GlyphToolActivity } from '#src/desktop/protocol/events/GlyphToolActivity.js';
@@ -14,53 +17,6 @@ const styles = {
     padding: '0 10px',
   }),
   reasoning: css({ marginBottom: 12, '& p': { whiteSpace: 'pre-wrap' } }),
-  summary: css({
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    width: 'fit-content',
-    maxWidth: '100%',
-    minHeight: 26,
-    cursor: 'pointer',
-    listStyle: 'none',
-    userSelect: 'none',
-    '&::-webkit-details-marker': { display: 'none' },
-    '& > .glyph-tool-chevron': {
-      opacity: 0,
-      flexShrink: 0,
-      color: tokens.text.muted,
-      transition: 'opacity 100ms ease',
-    },
-    ':hover > .glyph-tool-chevron, :focus-visible > .glyph-tool-chevron': { opacity: 1 },
-    ':focus-visible': { outline: tokens.focus.ring, outlineOffset: tokens.focus.offset },
-    'details[open] > & > .glyph-tool-chevron': { transform: 'rotate(90deg)' },
-    '@media (hover: none)': { '& > .glyph-tool-chevron': { opacity: 1 } },
-  }),
-  icon: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    width: 17,
-    height: 17,
-    borderRadius: 4,
-    background: tokens.button.secondary.background,
-    border: tokens.border.default,
-    boxSizing: 'border-box',
-    color: tokens.text.muted,
-  }),
-  label: css({ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
-  running: css({
-    backgroundImage: `linear-gradient(100deg, ${tokens.text.muted} 43%, ${tokens.text.primary} 50%, ${tokens.text.muted} 57%)`,
-    backgroundSize: '300% 100%',
-    backgroundRepeat: 'no-repeat',
-    backgroundClip: 'text',
-    color: 'transparent',
-    animation: 'glyph-tool-shimmer 1.8s linear infinite',
-    '@keyframes glyph-tool-shimmer': { from: { backgroundPosition: '100% 0' }, to: { backgroundPosition: '0% 0' } },
-    '@media (prefers-reduced-motion: reduce)': { animation: 'none', backgroundImage: 'none', color: tokens.text.muted },
-    '@media (forced-colors: active)': { animation: 'none', backgroundImage: 'none', color: 'CanvasText' },
-  }),
   tools: css({ padding: 0, margin: '6px 0 12px', listStyle: 'none', '& > li': { margin: '4px 0', minWidth: 0 } }),
   group: css({ margin: '8px 0 12px' }),
   body: css({
@@ -87,16 +43,6 @@ const styles = {
   }),
 };
 
-function ToolIcon() {
-  return (
-    <span class={styles.icon} aria-hidden="true">
-      <Wrench size={12} strokeWidth={1.5} />
-    </span>
-  );
-}
-function Chevron() {
-  return <ChevronRight class="glyph-tool-chevron" size={14} aria-hidden="true" />;
-}
 function format(value: string): string {
   try {
     return JSON.stringify(JSON.parse(value), null, 2);
@@ -123,25 +69,32 @@ function ToolRow({ tool, active }: { readonly tool: GlyphToolActivity; readonly 
   const label = rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1);
   return (
     <li aria-busy={running} data-tool-id={tool.id}>
-      <details>
-        <summary class={`${styles.summary} ${running ? styles.running : ''}`} title={label}>
-          <ToolIcon />
-          <span class={styles.label}>{label}</span>
-          <Chevron />
-        </summary>
+      <GlyphToolDisclosure label={label} icon={<GlyphToolIcon />} running={running}>
         <pre class={styles.body}>
           {[tool.arguments && format(tool.arguments), tool.summary && format(tool.summary)]
             .filter(Boolean)
             .join('\n\n') || (running ? 'Waiting for the result…' : 'No details recorded for this call.')}
         </pre>
         <div class={`glyph-tool-status ${styles.status}`}>{status}</div>
-      </details>
+      </GlyphToolDisclosure>
     </li>
   );
 }
-function ToolGroup({ tools, active }: { readonly tools: readonly GlyphToolActivity[]; readonly active: boolean }) {
+function ToolGroup({
+  tools,
+  active,
+  openLink,
+}: {
+  readonly tools: readonly GlyphToolActivity[];
+  readonly active: boolean;
+  readonly openLink?: ((href: string) => void) | undefined;
+}) {
   const running = active && tools.some(tool => tool.status === GlyphToolActivityStatus.STARTED);
-  const failures = tools.filter(tool => tool.status === GlyphToolActivityStatus.FAILED).length;
+  const failures = tools.filter(
+    tool =>
+      tool.status === GlyphToolActivityStatus.FAILED ||
+      (isWebTool(tool) && webActivityResult(tool)?.kind === 'web_error'),
+  ).length;
   const interrupted = tools.some(
     tool =>
       tool.status === GlyphToolActivityStatus.INTERRUPTED ||
@@ -149,28 +102,45 @@ function ToolGroup({ tools, active }: { readonly tools: readonly GlyphToolActivi
   );
   const list = (
     <ul class={`glyph-tools ${styles.tools}`} aria-label="Tool activity">
-      {tools.map(tool => (
-        <ToolRow key={tool.id} tool={tool} active={active} />
-      ))}
+      {tools.map(tool =>
+        isWebTool(tool) ? (
+          <GlyphWebActivity key={tool.id} tool={tool} active={active} openLink={openLink} />
+        ) : (
+          <ToolRow key={tool.id} tool={tool} active={active} />
+        ),
+      )}
     </ul>
   );
   return tools.length === 1 ? (
     list
   ) : (
-    <details class={`glyph-tool-group ${styles.group}`}>
-      <summary class={`${styles.summary} ${running ? styles.running : ''}`}>
-        <span>{running ? 'Exploring' : 'Explored'}</span>
-        <ToolIcon />
-        <span>
-          {tools.length} tools{failures ? ` · ${failures} failed` : interrupted ? ' · interrupted' : ''}
-        </span>
-        <Chevron />
-      </summary>
+    <GlyphToolDisclosure
+      class={`glyph-tool-group ${styles.group}`}
+      prefix={running ? 'Exploring' : 'Explored'}
+      icon={<GlyphToolIcon web={tools.every(isWebTool)} />}
+      running={running}
+      label={
+        [
+          [tools.filter(tool => tool.name === WebToolName.SEARCH).length, 'search', 'searches'],
+          [tools.filter(tool => tool.name === WebToolName.FETCH).length, 'fetch', 'fetches'],
+          [tools.filter(tool => !isWebTool(tool)).length, 'tool', 'tools'],
+        ]
+          .filter(([count]) => Number(count) > 0)
+          .map(([count, singular, plural]) => `${count} ${count === 1 ? singular : plural}`)
+          .join(', ') + (failures ? ` · ${failures} failed` : interrupted ? ' · interrupted' : '')
+      }
+    >
       {list}
-    </details>
+    </GlyphToolDisclosure>
   );
 }
-export function GlyphTurnProgress({ progress }: { readonly progress: NonNullable<GlyphTranscriptEntry['progress']> }) {
+export function GlyphTurnProgress({
+  progress,
+  openLink,
+}: {
+  readonly progress: NonNullable<GlyphTranscriptEntry['progress']>;
+  readonly openLink?: ((href: string) => void) | undefined;
+}) {
   const active = [
     GlyphRunStatus.STREAMING,
     GlyphRunStatus.WAITING_FOR_QUESTION,
@@ -185,16 +155,12 @@ export function GlyphTurnProgress({ progress }: { readonly progress: NonNullable
   return (
     <section class={`glyph-turn-progress ${styles.root}`} aria-label="Turn progress">
       {progress.reasoning && (
-        <details class={`glyph-reasoning ${styles.reasoning}`}>
-          <summary class={styles.summary}>
-            Reasoning summary
-            <Chevron />
-          </summary>
+        <GlyphToolDisclosure class={`glyph-reasoning ${styles.reasoning}`} label="Reasoning summary">
           <p>{progress.reasoning}</p>
-        </details>
+        </GlyphToolDisclosure>
       )}
       {groups.map(tools => (
-        <ToolGroup key={tools[0]!.id} tools={tools} active={active} />
+        <ToolGroup key={tools[0]!.id} tools={tools} active={active} openLink={openLink} />
       ))}
     </section>
   );

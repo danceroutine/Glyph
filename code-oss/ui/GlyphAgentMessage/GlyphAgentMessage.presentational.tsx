@@ -37,7 +37,7 @@ export function GlyphAgentMessage({ entry, content, usage, approval, shells, mod
       {entry.questionResponses?.map(response => (
         <GlyphQuestionResponses key={response.id} response={response} />
       ))}
-      {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
+      {entry.progress && <GlyphTurnProgress progress={entry.progress} openLink={entry.openLink} />}
       {modeSwapCards}
       <div class={styles.answer}>
         <div data-glyph-source={entry.id} data-kind="chat" data-label={entry.label} data-revision={entry.text.length}>

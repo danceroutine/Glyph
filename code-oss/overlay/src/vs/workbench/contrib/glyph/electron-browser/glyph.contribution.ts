@@ -39,6 +39,12 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
   title: 'Glyph',
   type: 'object',
   properties: {
+    'glyph.preferOpeningWebLinksInGlyph': {
+      type: 'boolean',
+      default: false,
+      scope: ConfigurationScope.APPLICATION,
+      description: 'Prefer opening web links in Glyph’s integrated browser instead of the system browser.',
+    },
     'glyph.chat.followUpBehavior': {
       type: 'string',
       enum: Object.values(GlyphFollowUpBehavior),

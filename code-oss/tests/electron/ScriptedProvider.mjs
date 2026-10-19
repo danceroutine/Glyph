@@ -8,6 +8,8 @@ export class ScriptedProvider {
 
   requests = [];
   errors = [];
+  webRoutes = new Map();
+  webRequests = [];
   server = createServer((request, response) => {
     void this.handle(request, response).catch(error => {
       this.errors.push(String(error));
@@ -78,6 +80,27 @@ export class ScriptedProvider {
   }
 
   async handle(request, response) {
+    if (request.method === 'GET' && request.url === '/favicon.ico') {
+      response.writeHead(204).end();
+      return;
+    }
+    if (request.url.startsWith('/web/')) {
+      this.webRequests.push({ url: request.url, headers: request.headers });
+      const route = this.webRoutes.get(request.url);
+      if (!route) {
+        response.writeHead(404).end();
+        return;
+      }
+      if (typeof route === 'function') {
+        await route(request, response);
+        return;
+      }
+      response
+        .writeHead(route.status ?? 200, { 'content-type': route.contentType ?? 'text/html', ...route.headers })
+        .end(route.body ?? '');
+      return;
+    }
+
     const account = this.accounts.find(value => request.headers.authorization === `Bearer ${value.token}`);
     assert.ok(account, 'Unknown fixture account.');
     if (request.method === 'GET' && request.url === '/v1/models') {

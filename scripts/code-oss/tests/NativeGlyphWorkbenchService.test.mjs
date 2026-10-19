@@ -36,7 +36,7 @@ async function modules() {
             contents: 'export class GlyphEditorAdapter {}',
           }));
           builder.onResolve({ filter: /^#vs\// }, args => {
-            if (args.path.startsWith('#vs/base/'))
+            if (args.path.startsWith('#vs/base/') || args.path.endsWith('/browserViewUri.js'))
               return { path: resolve('.code-oss/src/src/vs', args.path.slice(4).replace(/\.js$/, '.ts')) };
             return { path: args.path, namespace: 'services' };
           });
@@ -59,7 +59,12 @@ function chat(id) {
   return { id, title: id, accountProvider: 'fixture', accountId: 'a', modelSlug: 'model', updatedAt: '', turnCount: 1 };
 }
 
-async function fixture({ chats = [chat('alpha'), chat('beta')], accounts = [], handler = async () => {} } = {}) {
+async function fixture({
+  chats = [chat('alpha'), chat('beta')],
+  accounts = [],
+  handler = async () => {},
+  openInGlyph = false,
+} = {}) {
   const { NativeGlyphWorkbenchService } = await (loaded ??= modules());
   const listeners = new Set();
   const trustListeners = new Set();
@@ -105,6 +110,8 @@ async function fixture({ chats = [chat('alpha'), chat('beta')], accounts = [], h
     },
     onDidDisconnect: () => ({ dispose() {} }),
   };
+  const editors = { openEditor: vi.fn() };
+  const opener = { open: vi.fn() };
   const service = new NativeGlyphWorkbenchService(
     { get: key => storage.get(key), store: (key, value) => storage.set(key, value) },
     {
@@ -124,14 +131,19 @@ async function fixture({ chats = [chat('alpha'), chat('beta')], accounts = [], h
     },
     { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
     { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
-    { openEditor: vi.fn() },
+    editors,
     { writeText: vi.fn() },
-    { open: vi.fn() },
-    { getValue: () => undefined, onDidChangeConfiguration: () => ({ dispose() {} }) },
+    opener,
+    {
+      getValue: key => (key === 'glyph.preferOpeningWebLinksInGlyph' ? openInGlyph : undefined),
+      onDidChangeConfiguration: () => ({ dispose() {} }),
+    },
   );
   await service.connect();
   return {
     service,
+    editors,
+    opener,
     state,
     emit,
     request,
@@ -374,5 +386,26 @@ it('gives restored captures local IDs so a folder can be refreshed independently
     expect(refreshed[1]).toEqual(file);
   } finally {
     test.dispose();
+  }
+});
+
+it('opens web links externally by default and uses the native browser editor when preferred', async () => {
+  for (const openInGlyph of [false, true]) {
+    const f = await fixture({ openInGlyph });
+    try {
+      await f.service.openLink('https://example.com/article');
+      if (openInGlyph) {
+        expect(f.editors.openEditor).toHaveBeenCalledWith(
+          expect.objectContaining({ options: { pinned: true, viewState: { url: 'https://example.com/article' } } }),
+        );
+        expect(f.opener.open).not.toHaveBeenCalled();
+      } else {
+        expect(f.opener.open).toHaveBeenCalledWith(expect.anything(), { allowCommands: false, openExternal: true });
+        expect(f.editors.openEditor).not.toHaveBeenCalled();
+      }
+      await expect(f.service.openLink('https://user:password@example.com')).rejects.toThrow('credentials');
+    } finally {
+      f.dispose();
+    }
   }
 });

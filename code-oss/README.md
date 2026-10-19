@@ -76,6 +76,31 @@ Live background cards expose input with an explicit newline option and Close she
 those controls use the same trust and ownership checks as agent tools. Foreground
 command display data survives host restarts. Background output and process authority
 belong to the live host; restored history never claims an old process is still running.
+
+Agent and Plan modes expose `web.web_search` and `web.web_fetch`. Search uses
+DuckDuckGo's no-key HTML results and returns up to five titles, URLs, and snippets;
+challenge pages, provider failures, and empty results remain distinct outcomes.
+Fetch makes anonymous HTTP(S) requests, follows up to five redirects, and extracts
+plain text without running page scripts. Requests have a 20-second timeout and a
+1 MiB download limit; extracted content is capped at 8,000 characters and reports
+truncation. Results are also bounded to preserve complete JSON in saved activity.
+Search snippets and fetched content carry separate provenance and are described
+to the agent as untrusted evidence, not instructions.
+
+`WebToolRuntime` depends on the `WebSearchProvider` and `WebPageFetcher` ports.
+The desktop and CLI composition roots select `DuckDuckGoSearch` and
+`WebFetchService`; neither tool definitions nor transcript rendering selects a
+provider. Adapters supply the search-page URL, including on provider errors.
+
+Transcript activity groups count searches and fetches separately. Web and ordinary
+tool rows share the same expandable disclosure and running shimmer. Activating a
+web row reveals its source list inline, including a direct search link; hovering
+does not open it. Empty results and errors appear inside the disclosure.
+Source links and Markdown citations open in the system browser by default.
+Enable **Glyph: Prefer Opening Web Links In Glyph**
+(`glyph.preferOpeningWebLinksInGlyph`) to open them in Code OSS's integrated
+browser instead. Saved source lists remain available after reloading the window.
+
 The read-only todo card above the composer expands upward and shows pending,
 in-progress, and completed items. Its completed count is derived from the same
 list it renders. The agent's `todo.update_todos` tool merges by stable ID unless
@@ -124,7 +149,8 @@ Run `pnpm code-oss:test:integration --list` to browse the behavior inventory:
 - [GlyphShells.test.mjs](tests/electron/GlyphShells.test.mjs): shell execution, interactive input, process-group cleanup, chat ownership, and bounded session lists.
 - [GlyphProposals.test.mjs](tests/electron/GlyphProposals.test.mjs): text proposal previews, per-hunk/file decisions, durable receipts, stale-edit protection, EOL conversion, and editor Undo.
 - [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs): pending proposal and reviewed file creation/deletion contracts.
-- [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs): Plan Mode, blocking/background sub-agents, action items, web fetch/search, and shell wake conditions.
+- [GlyphWeb.test.mjs](tests/electron/GlyphWeb.test.mjs): fetch/search results, redirects, limits, cancellation, source provenance, restored source lists, and integrated browser navigation using deterministic HTTP fixtures.
+- [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs): Plan Mode, blocking/background sub-agents, action items, and shell wake conditions.
 - [GlyphBrowserAutomation.test.mjs](tests/electron/GlyphBrowserAutomation.test.mjs): CDP lifecycle, DOM inspection/highlighting, input, screenshots, and browser feedback.
 - [GlyphMcp.test.mjs](tests/electron/GlyphMcp.test.mjs): human/agent installation and configuration, authentication, tool discovery/calls, resources/prompts, and optional or revision-dependent capabilities.
 - [GlyphSkills.test.mjs](tests/electron/GlyphSkills.test.mjs): skill discovery, activation, progressive loading, human/agent management, and execution boundaries.

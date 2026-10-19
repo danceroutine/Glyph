@@ -45,39 +45,7 @@ it.describe('Pending background sub-agents', () => {
   );
 });
 
-it.describe('Pending Web Fetch', () => {
-  it.fixme(
-    'fetches a requested page and lets the agent cite the final source URL and retrieved content',
-    async () => {},
-  );
-  it.fixme(
-    'handles redirects and reports HTTP errors, unsupported content, and response-size limits without fabricating page text',
-    async () => {},
-  );
-  it.fixme(
-    'cancels a slow fetch and returns control to the user without continuing on a late response',
-    async () => {},
-  );
-  it.fixme(
-    'treats instructions embedded in a fetched page as source content rather than authority to run tools or disclose workspace data',
-    async () => {},
-  );
-});
-
-it.describe('Pending Web Search', () => {
-  it.fixme(
-    'shows results for the requested query with titles, source URLs, and snippets that the agent can cite',
-    async () => {},
-  );
-  it.fixme(
-    'distinguishes an empty result set from a search-provider error and leaves the conversation usable',
-    async () => {},
-  );
-  it.fixme(
-    'distinguishes search snippets from fetched page contents instead of claiming unread sources were verified',
-    async () => {},
-  );
-});
+// Web Fetch and Web Search contracts run in GlyphWeb.test.mjs.
 
 it.describe('Pending background shells with agent-configured wake conditions', () => {
   it.fixme(

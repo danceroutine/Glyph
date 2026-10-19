@@ -12,7 +12,8 @@ beforeAll(async () => {
       contents: `
       import { h, render } from 'preact';
       import { GlyphTurnProgress } from './code-oss/ui/GlyphTurnProgress/GlyphTurnProgress.presentational.tsx';
-      window.show = (tools, status = 'streaming') => render(h(GlyphTurnProgress, { progress: { reasoning: '', tools, status } }), document.getElementById('root'));
+      window.openedLinks = [];
+      window.show = (tools, status = 'streaming') => render(h(GlyphTurnProgress, { progress: { reasoning: '', tools, status }, openLink: href => window.openedLinks.push(href) }), document.getElementById('root'));
     `,
     },
     bundle: true,
@@ -151,6 +152,88 @@ it('shows a single failed call directly and renders tool payloads as literal tex
     await expect(page.locator('pre')).toContainText('File not found.');
     await expect(page.locator('pre img')).toHaveCount(0);
     expect(await page.evaluate(() => window.injected)).toBeUndefined();
+  } finally {
+    await page.close();
+  }
+});
+
+const webSearch = {
+  id: 'web',
+  name: 'web_search',
+  status: 'started',
+  arguments: '{"query":"octopus"}',
+  textOffset: 0,
+};
+const webResults = {
+  kind: 'web_search',
+  query: 'octopus',
+  searchUrl: 'https://search.example/?q=octopus',
+  provenance: 'search_snippets_only',
+  results: [{ title: 'Octopus facts', url: 'https://source.example/octopus', snippet: 'Eight arms.' }],
+};
+it('shares the tool disclosure and shimmer, keeps results inline, and preserves expansion when a search completes', async () => {
+  const page = await mount();
+  try {
+    await page.evaluate(tool => window.show([tool]), webSearch);
+    const summary = page.locator('[data-tool-id="web"] summary');
+    const details = page.locator('[data-tool-id="web"] details');
+    await expect(summary).toHaveCSS('animation-name', 'glyph-tool-shimmer');
+    await summary.hover();
+    await expect(details).not.toHaveAttribute('open');
+    await page.mouse.move(600, 400);
+    await expect(details).not.toHaveAttribute('open');
+    await summary.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByText('Waiting for the result…')).toBeVisible();
+    await page.evaluate(
+      ({ tool, result }) =>
+        window.show([{ ...tool, status: 'completed', summary: JSON.stringify(result) }], 'completed'),
+      { tool: webSearch, result: webResults },
+    );
+    await expect(summary).toHaveText('Searched web octopus');
+    await expect(summary).toHaveCSS('animation-name', 'none');
+    const sources = page.getByRole('list', { name: 'Web search results', exact: true });
+    await expect(sources).toBeVisible();
+    expect((await sources.boundingBox()).y).toBeGreaterThan((await summary.boundingBox()).y);
+    await page.getByRole('link', { name: 'Octopus facts', exact: true }).click();
+    expect(await page.evaluate(() => window.openedLinks)).toEqual(['https://source.example/octopus']);
+    await expect(sources).toBeVisible();
+    await summary.focus();
+    await page.keyboard.press('Space');
+    await expect(sources).toBeHidden();
+    await summary.hover();
+    await expect(sources).toBeHidden();
+    await expect(page.getByRole('listbox')).toHaveCount(0);
+  } finally {
+    await page.close();
+  }
+});
+
+it('shows one empty-result message inside the toggle and keeps errors and cancellation inside it too', async () => {
+  const page = await mount();
+  try {
+    for (const [status, result, message] of [
+      ['completed', { ...webResults, results: [] }, 'No results found'],
+      [
+        'completed',
+        { kind: 'web_error', error: { code: 'HTTP_ERROR', message: 'The website returned HTTP 503.' } },
+        'The website returned HTTP 503.',
+      ],
+      ['interrupted', undefined, 'Request cancelled'],
+    ]) {
+      await page.evaluate(
+        ({ tool, status, result }) => window.show([{ ...tool, status, summary: JSON.stringify(result) }], 'completed'),
+        { tool: webSearch, status, result },
+      );
+      const summary = page.locator('[data-tool-id="web"] summary');
+      const bodyMessage = page.getByText(message, { exact: true });
+      await expect(bodyMessage).toHaveCount(1);
+      await expect(bodyMessage).toBeHidden();
+      await summary.click();
+      await expect(bodyMessage).toBeVisible();
+      await summary.click();
+      await expect(bodyMessage).toBeHidden();
+    }
   } finally {
     await page.close();
   }

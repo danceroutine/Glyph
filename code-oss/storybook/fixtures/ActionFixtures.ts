@@ -105,9 +105,9 @@ export function previewActionsFixture(overrides: Partial<GlyphWorkbenchViewActio
     copyText: fn<NonNullable<GlyphWorkbenchViewActions['copyText']>>()
       .mockName('ActionFixtures.copyText')
       .mockResolvedValue(undefined),
-    openLink: fn<NonNullable<GlyphWorkbenchViewActions['openLink']>>()
-      .mockName('ActionFixtures.openLink')
-      .mockResolvedValue(undefined),
+    openLink: fn<NonNullable<GlyphWorkbenchViewActions['openLink']>>(async () => undefined).mockName(
+      'ActionFixtures.openLink',
+    ),
     openMessageSettings: fn().mockName('ActionFixtures.openMessageSettings'),
     ...overrides,
   };

@@ -1,3 +1,4 @@
+import { BrowserViewUri } from '#vs/platform/browserView/common/browserViewUri.js';
 import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
 import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
 import { IClipboardService } from '#vs/platform/clipboard/common/clipboardService.js';
@@ -246,7 +247,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
 
   async openLink(href: string): Promise<void> {
     if (/^https?:\/\//i.test(href)) {
-      await this.opener.open(URI.parse(href), { allowCommands: false });
+      const url = new URL(href);
+      if (url.username || url.password) throw new Error('Web links cannot contain embedded credentials.');
+      if (this.configuration.getValue<boolean>('glyph.preferOpeningWebLinksInGlyph')) {
+        await this.editors.openEditor({
+          resource: BrowserViewUri.forId(generateUuid()),
+          options: { pinned: true, viewState: { url: url.href } },
+        });
+      } else {
+        await this.opener.open(URI.parse(url.href), { allowCommands: false, openExternal: true });
+      }
       return;
     }
     const path = href.replace(/#L\d+(?:-L?\d+)?$/, '');

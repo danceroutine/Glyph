@@ -1,3 +1,7 @@
+import { WebToolRuntime } from '#src/web/WebToolRuntime.js';
+import { WebHttpClient } from '#src/web/WebHttpClient.js';
+import { WebFetchService } from '#src/web/WebFetchService.js';
+import { DuckDuckGoSearch } from '#src/web/DuckDuckGoSearch.js';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { ModeSwitchToolRuntime } from '#src/interaction/modes/ModeSwitchToolRuntime.js';
 import { PlanToolRuntime } from '#src/planning/PlanToolRuntime.js';
@@ -203,6 +207,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       }),
       context,
     );
+    const webHttp = new WebHttpClient(this.transport);
     const tools = new ToolRegistry(
       [
         new ModeSwitchToolRuntime((target, description, context, signal) =>
@@ -227,6 +232,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           reviews,
           logger,
         ),
+        new WebToolRuntime(new WebFetchService(webHttp), new DuckDuckGoSearch(webHttp)),
         new ProposeQuestionToolRuntime(interactions),
         new ShellToolRuntime(shells),
         new TodoToolRuntime(async (chat, update, signal) => {

@@ -4,6 +4,29 @@ import { ScriptedDesktopTransport } from '#src/desktop/host/ScriptedDesktopTrans
 afterEach(() => vi.unstubAllGlobals());
 
 describe(ScriptedDesktopTransport, () => {
+  it('routes anonymous web fixtures without account headers or automatic redirects', async () => {
+    const network = vi.fn<typeof fetch>().mockResolvedValue(new Response('page'));
+    vi.stubGlobal('fetch', network);
+    const transport = new ScriptedDesktopTransport('http://127.0.0.1:1234');
+    const controller = new AbortController();
+    for (const url of ['https://html.duckduckgo.com/html/?q=octopus', 'http://127.0.0.1:1234/web/article']) {
+      await transport.fetch(url, {
+        signal: controller.signal,
+        headers: { authorization: 'Bearer fixture', cookie: 'session=fixture', accept: 'text/html' },
+      });
+    }
+    expect(network.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://127.0.0.1:1234/web/search?q=octopus',
+      'http://127.0.0.1:1234/web/article',
+    ]);
+    controller.abort();
+    for (const [, options] of network.mock.calls) {
+      expect(options?.redirect).toBe('manual');
+      expect(options?.headers).toEqual({ Accept: 'text/html' });
+      expect(options?.signal?.aborted).toBe(true);
+    }
+  });
+
   it.each([
     'https://127.0.0.1:1234',
     'http://localhost:1234',
@@ -46,6 +69,8 @@ describe(ScriptedDesktopTransport, () => {
     ['https://other.invalid/v1/models', 'GET'],
     ['https://api.openai.com/v1/responses', 'GET'],
     ['https://api.openai.com/v1/models', 'POST'],
+    ['https://example.com/web/article', 'GET'],
+    ['https://html.duckduckgo.com/html/', 'POST'],
   ])('never falls through to live networking for %s (%s)', async (url, method) => {
     const network = vi.fn<typeof fetch>();
     vi.stubGlobal('fetch', network);
