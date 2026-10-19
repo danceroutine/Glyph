@@ -1,3 +1,16 @@
+import { GlyphAgentReviewScope, glyphAgentReviewLabels } from '#glyph/workbench/GlyphAgentReview.js';
+import { GlyphAgentReviewPane } from '../browser/GlyphAgentReviewPane.js';
+import {
+  GlyphDiagnosticHover,
+  GlyphTerminalSelectionActions,
+  useGlyphContext,
+} from '../browser/GlyphNativeContextActions.js';
+import { HoverParticipantRegistry } from '#vs/editor/contrib/hover/browser/hoverTypes.js';
+import { WorkbenchPhase, registerWorkbenchContribution2 } from '#vs/workbench/common/contributions.js';
+import { VIEWLET_ID as SCM_VIEWLET_ID } from '#vs/workbench/contrib/scm/common/scm.js';
+import { TerminalContextKeys } from '#vs/workbench/contrib/terminal/common/terminalContextKey.js';
+import type { ITestMessageMenuArgs } from '#vs/workbench/contrib/testing/common/testTypes.js';
+import { AgentModeID } from '#glyph/protocol/index.js';
 import { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
 import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
 import { GlyphComposerCommand } from '#glyph/workbench/GlyphComposerCommand.js';
@@ -10,7 +23,7 @@ import {
 import { GlyphPlanEditor, GlyphPlanInput } from '#vs/workbench/contrib/glyph/browser/GlyphPlanEditor.js';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '#vs/workbench/browser/editor.js';
 import { EditorExtensions } from '#vs/workbench/common/editor.js';
-import { registerAction2, Action2 } from '#vs/platform/actions/common/actions.js';
+import { registerAction2, Action2, MenuId } from '#vs/platform/actions/common/actions.js';
 import { KeyCode, KeyMod } from '#vs/base/common/keyCodes.js';
 import { KeybindingWeight } from '#vs/platform/keybinding/common/keybindingsRegistry.js';
 import { EditorContextKeys } from '#vs/editor/common/editorContextKeys.js';
@@ -39,6 +52,20 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
   title: 'Glyph',
   type: 'object',
   properties: {
+    'glyph.review.scope': {
+      type: 'string',
+      enum: Object.values(GlyphAgentReviewScope),
+      enumItemLabels: Object.values(glyphAgentReviewLabels),
+      default: GlyphAgentReviewScope.LAST_COMMIT,
+      scope: ConfigurationScope.WINDOW,
+      description: 'Default comparison for Agent Review in Source Control.',
+    },
+    'glyph.review.baseBranch': {
+      type: 'string',
+      default: '',
+      scope: ConfigurationScope.RESOURCE,
+      description: 'Git branch ref used by Agent Review when comparing against a branch.',
+    },
     'glyph.preferOpeningWebLinksInGlyph': {
       type: 'boolean',
       default: false,
@@ -127,6 +154,24 @@ registerAction2(
       const views = accessor.get(IViewsService);
       await glyph.attachSelection();
       await views.openView(GlyphViewPane.ID, true);
+      glyph.composer.focus();
+    }
+  },
+);
+
+registerAction2(
+  class extends Action2 {
+    constructor() {
+      super({
+        id: 'glyph.attachIdeContext',
+        title: localize2('glyph.attachIdeContext', 'Glyph: Attach IDE Context'),
+        f1: true,
+      });
+    }
+    async run(accessor: ServicesAccessor): Promise<void> {
+      const glyph = accessor.get(GlyphWorkbenchService);
+      await glyph.attachIdeContext();
+      await accessor.get(IViewsService).openView(GlyphViewPane.ID, true);
       glyph.composer.focus();
     }
   },
@@ -246,3 +291,91 @@ for (const command of [
     },
   );
 }
+
+HoverParticipantRegistry.register(GlyphDiagnosticHover);
+registerWorkbenchContribution2(
+  GlyphTerminalSelectionActions.ID,
+  GlyphTerminalSelectionActions,
+  WorkbenchPhase.AfterRestored,
+);
+const scmContainer = containers.get(SCM_VIEWLET_ID);
+if (scmContainer)
+  views.registerViews(
+    [
+      {
+        id: GlyphAgentReviewPane.ID,
+        name: localize2('glyph.agentReview', 'Agent Review'),
+        ctorDescriptor: new SyncDescriptor(GlyphAgentReviewPane),
+        canToggleVisibility: true,
+        canMoveView: true,
+        order: 1.5,
+        openCommandActionDescriptor: {
+          id: 'glyph.openAgentReview',
+          title: localize2('glyph.openAgentReview', 'Glyph: Open Agent Review'),
+        },
+      },
+    ],
+    scmContainer,
+  );
+
+registerAction2(
+  class extends Action2 {
+    constructor() {
+      super({
+        id: 'glyph.attachTerminalSelection',
+        title: localize2('glyph.attachTerminalSelection', 'Add to Chat'),
+        precondition: TerminalContextKeys.textSelected,
+        keybinding: {
+          primary: KeyMod.CtrlCmd | KeyCode.KeyL,
+          weight: KeybindingWeight.WorkbenchContrib + 1,
+          when: ContextKeyExpr.and(TerminalContextKeys.focus, TerminalContextKeys.textSelected),
+        },
+        menu: {
+          id: MenuId.TerminalInstanceContext,
+          group: 'navigation',
+          order: 2,
+          when: TerminalContextKeys.textSelected,
+        },
+      });
+    }
+    async run(accessor: ServicesAccessor): Promise<void> {
+      const glyph = accessor.get(GlyphWorkbenchService);
+      await useGlyphContext(glyph, accessor.get(IViewsService), () => glyph.ideContext.terminal());
+    }
+  },
+);
+registerAction2(
+  class extends Action2 {
+    constructor() {
+      super({
+        id: 'glyph.fixTestFailure',
+        title: localize2('glyph.fixTestFailure', 'Fix with Agent'),
+        menu: [
+          { id: MenuId.TestMessageContent, group: 'navigation', order: 1 },
+          { id: MenuId.TestMessageContext, group: 'navigation', order: 1 },
+        ],
+      });
+    }
+    async run(
+      accessor: ServicesAccessor,
+      context?: ITestMessageMenuArgs & { glyphResultId?: string; glyphTaskIndex?: number; glyphMessageIndex?: number },
+    ): Promise<void> {
+      if (!context?.glyphResultId || context.glyphTaskIndex === undefined || context.glyphMessageIndex === undefined)
+        throw new Error('Open the test failure message to fix it with Glyph.');
+      const glyph = accessor.get(GlyphWorkbenchService);
+      await useGlyphContext(
+        glyph,
+        accessor.get(IViewsService),
+        () =>
+          glyph.ideContext.captureTestFailure(
+            context.glyphResultId!,
+            context.test.item.extId,
+            context.glyphTaskIndex!,
+            context.glyphMessageIndex!,
+          ),
+        'Investigate and fix the attached test failure. Check its source and run identity, reproduce when possible, and verify the fix.',
+        AgentModeID.AGENT,
+      );
+    }
+  },
+);

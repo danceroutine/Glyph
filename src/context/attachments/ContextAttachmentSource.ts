@@ -1,6 +1,6 @@
 /** Provenance of an explicit capture; contents stay immutable after editor changes. */
 export interface ContextAttachmentSource {
-  readonly kind: 'selection' | 'file' | 'folder';
+  readonly kind: 'selection' | 'file' | 'folder' | 'diagnostic' | 'symbol' | 'diff' | 'terminal' | 'test';
   readonly uri: string;
   readonly version: number;
   readonly revision: string;

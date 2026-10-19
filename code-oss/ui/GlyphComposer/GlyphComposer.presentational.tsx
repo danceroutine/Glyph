@@ -160,10 +160,12 @@ export function GlyphComposer(state: GlyphComposerProps) {
               <ExternalLink size={14} />
               Open source
             </Button>
-            <Button type="button" disabled={state.pending} onClick={state.refreshPreview}>
-              <RefreshCw size={14} />
-              Refresh capture
-            </Button>
+            {['file', 'selection', 'folder'].includes(state.preview.kind) && (
+              <Button type="button" disabled={state.pending} onClick={state.refreshPreview}>
+                <RefreshCw size={14} />
+                Refresh capture
+              </Button>
+            )}
             <Button type="button" disabled={state.pending} onClick={state.removePreview}>
               Remove
             </Button>

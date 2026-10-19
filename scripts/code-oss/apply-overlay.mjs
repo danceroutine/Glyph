@@ -77,6 +77,51 @@ await insertOnce(
   "import './contrib/terminal/electron-browser/terminal.contribution.js';",
 );
 
+// Native test-message menus otherwise serialize only the test and message, losing run identity.
+const testSubjectPath = join(
+  sourceRoot,
+  'src/vs/workbench/contrib/testing/browser/testResultsView/testResultsSubject.ts',
+);
+const testSubject = await readFile(testSubjectPath, 'utf8');
+const testAnchor = 'this.context = getMessageArgs(test, message);';
+const testReplacement =
+  'this.context = Object.assign(getMessageArgs(test, message), { glyphResultId: result.id, glyphTaskIndex: taskIndex, glyphMessageIndex: messageIndex });';
+if (!testSubject.includes(testReplacement)) {
+  if (!testSubject.includes(testAnchor)) throw new Error('Pinned test-message context anchor was not found.');
+  await writeFile(testSubjectPath, testSubject.replace(testAnchor, testReplacement));
+}
+
+// The native test message menu keeps its command plumbing; only Glyph's action
+// uses the shared button. Reserve enough height for an action beside a one-line failure.
+const testContentPath = join(
+  sourceRoot,
+  'src/vs/workbench/contrib/testing/browser/testResultsView/testResultsViewContent.ts',
+);
+let testContent = await readFile(testContentPath, 'utf8');
+for (const [before, after] of [
+  [
+    "import { FloatingClickMenu } from '../../../../../platform/actions/browser/floatingMenu.js';",
+    "import { GlyphTestFailureMenu as FloatingClickMenu } from '../../../glyph/browser/GlyphTestFailureMenu.js';",
+  ],
+  [
+    'topFrame.height.set(provider.layout({ width, height: this.dimension?.height }, hasMultipleFrames)!, undefined);',
+    'topFrame.height.set(Math.max(64, provider.layout({ width, height: this.dimension?.height }, hasMultipleFrames)!), undefined);',
+  ],
+  [
+    'topFrame.height.set(provider.layout({ width, height: this.dimension.height }, hasMultipleFrames)!, undefined);',
+    'topFrame.height.set(Math.max(64, provider.layout({ width, height: this.dimension.height }, hasMultipleFrames)!), undefined);',
+  ],
+  [
+    'this.currentTopFrame?.height.set(frameHeight, undefined);',
+    'this.currentTopFrame?.height.set(Math.max(64, frameHeight), undefined);',
+  ],
+]) {
+  if (testContent.includes(after)) continue;
+  if (!testContent.includes(before)) throw new Error('Pinned test-message view anchor was not found.');
+  testContent = testContent.replace(before, after);
+}
+await writeFile(testContentPath, testContent);
+
 const applicationEntry = join(sourceRoot, 'src', 'vs', 'code', 'electron-main', 'app.ts');
 await insertOnce(
   applicationEntry,

@@ -107,7 +107,7 @@ const transcriptTurnSchema = z
           byteLength: z.number(),
           source: z
             .object({
-              kind: z.enum(['selection', 'file', 'folder']),
+              kind: z.enum(['selection', 'file', 'folder', 'diagnostic', 'symbol', 'diff', 'terminal', 'test']),
               uri: z.string(),
               version: z.number(),
               revision: z.string(),

@@ -1,6 +1,7 @@
+import { cloneElement, isValidElement, toChildArray } from 'preact';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
-import type { ComponentChildren } from 'preact';
+import type { ComponentChildren, HTMLAttributes, Ref, VNode } from 'preact';
 import { ChevronDown } from 'lucide-preact';
 import { Button, IconButton, ButtonAppearance, ButtonVariant, ButtonSize, type ButtonProps } from './Button.tsx';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
@@ -20,6 +21,7 @@ const styles = {
       borderLeftColor: 'currentColor',
     },
   }),
+  fullWidth: css({ width: '100%', '& > button:first-child': { flex: 1, minWidth: 0 } }),
   menu: css({
     position: 'absolute',
     top: 'calc(100% + 4px)',
@@ -31,6 +33,35 @@ const styles = {
     background: tokens.dropdown.background,
   }),
 };
+/** Shared joined-button geometry, also usable with the standard Dropdown primitive. */
+export function SplitButtonGroup({
+  children,
+  fullWidth,
+  groupRef,
+  ...props
+}: HTMLAttributes<HTMLDivElement> & { readonly fullWidth?: boolean; readonly groupRef?: Ref<HTMLDivElement> }) {
+  const segments = toChildArray(children);
+  const primary = segments[0];
+  const trigger = segments[1];
+  if (isValidElement(primary) && primary.type === Button && isValidElement(trigger) && trigger.type === IconButton) {
+    const palette = (primary as VNode<ButtonProps>).props;
+    segments[1] = cloneElement(trigger as VNode<ButtonProps>, {
+      variant: palette.variant ?? ButtonVariant.SECONDARY,
+      appearance: palette.appearance ?? ButtonAppearance.FILLED,
+      mode: palette.mode ?? AgentModeID.AGENT,
+      size: palette.size ?? ButtonSize.MEDIUM,
+    });
+  }
+  return (
+    <div
+      {...props}
+      {...(groupRef ? { ref: groupRef } : {})}
+      class={`${styles.group} ${fullWidth ? styles.fullWidth : ''}`}
+    >
+      {segments}
+    </div>
+  );
+}
 export interface SplitButtonProps extends ButtonProps {
   readonly menuLabel: string;
   readonly menu: ComponentChildren;
@@ -55,9 +86,8 @@ export function SplitButton({ menuLabel, menu, ...props }: SplitButtonProps) {
     if (props.disabled || props.loading) setOpen(false);
   }, [props.disabled, props.loading]);
   return (
-    <div
-      class={styles.group}
-      ref={root}
+    <SplitButtonGroup
+      groupRef={root}
       onKeyDown={event => {
         if (event.key === 'Escape' && open) {
           event.preventDefault();
@@ -99,6 +129,6 @@ export function SplitButton({ menuLabel, menu, ...props }: SplitButtonProps) {
           {menu}
         </div>
       )}
-    </div>
+    </SplitButtonGroup>
   );
 }

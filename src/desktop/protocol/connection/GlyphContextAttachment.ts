@@ -5,6 +5,11 @@ export enum GlyphContextAttachmentKind {
   SELECTION = 'selection',
   FILE = 'file',
   FOLDER = 'folder',
+  DIAGNOSTIC = 'diagnostic',
+  SYMBOL = 'symbol',
+  DIFF = 'diff',
+  TERMINAL = 'terminal',
+  TEST = 'test',
 }
 
 /** Immutable text captured when the user attaches context. The token identifies the source model, not permission to edit it. */

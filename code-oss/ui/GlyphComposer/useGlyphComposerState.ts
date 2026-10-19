@@ -101,10 +101,11 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     const view = new GlyphPromptEditor(composer.current!, model.snapshot.document, {
       change: document => model.setDocument(document),
       preview: attachment => {
-        setPreview(attachment);
+        setPreview(['file', 'selection', 'folder'].includes(attachment.kind) ? attachment : undefined);
         setSourceStatus(undefined);
         void perform(() => actions.context.openAttachment(attachment));
       },
+      describe: attachment => actions.context.checkAttachment(attachment),
       query: setQuery,
       submit: () => void latest.current.submit(),
       steer: () => void latest.current.steer(),

@@ -1,3 +1,5 @@
+import { GlyphIdeContext } from './GlyphIdeContext.js';
+import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { dirname } from '#vs/base/common/resources.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import { formatFolderContextOutline } from '#glyph/workbench/formatFolderContextOutline.js';
@@ -28,6 +30,7 @@ import type { GlyphEditorAdapter } from './GlyphEditorAdapter.js';
 
 /** Capture context only from explicit file selection, search, or selected editor text. */
 export class GlyphContextController extends Disposable implements GlyphContextActions {
+  readonly ide: GlyphIdeContext;
   private focused: ICodeEditor | undefined;
   constructor(
     private readonly adapter: GlyphEditorAdapter,
@@ -42,8 +45,10 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     @IFileService private readonly files: IFileService,
     @IFileDialogService private readonly dialogs: IFileDialogService,
     @ICommandService private readonly commands: ICommandService,
+    @IInstantiationService instantiation: IInstantiationService,
   ) {
     super();
+    this.ide = instantiation.createInstance(GlyphIdeContext, adapter);
     const watch = (editor: ICodeEditor) =>
       this._register(
         editor.onDidFocusEditorText(() => {
@@ -52,6 +57,9 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       );
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
+  }
+  selectIdeContext(): Promise<readonly GlyphContextAttachment[]> {
+    return this.ide.select(this.activeEditor());
   }
   async attachSelection(): Promise<void> {
     this.assertTrusted();
@@ -64,6 +72,12 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         GlyphDesktopErrorCode.INVALID_REQUEST,
         'Highlight text in an editor before attaching a selection.',
       );
+    if (model.uri.scheme === 'vscode-test-data') {
+      composer.insertAttachments(
+        await Promise.all(selections.map(selection => this.ide.captureTestSelection(model, selection))),
+      );
+      return;
+    }
     const control = this.editors.activeTextEditorControl;
     const side = isDiffEditor(control) ? (editor === control.getOriginalEditor() ? 'original' : 'modified') : undefined;
     const attachments = await Promise.all(
@@ -216,6 +230,11 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     return { id: generateUuid(), kind: GlyphContextAttachmentKind.FOLDER, uri: value, path, text, contentRevision };
   }
   async refreshAttachment(attachment: GlyphContextAttachment): Promise<GlyphContextAttachment> {
+    if (!['file', 'selection', 'folder'].includes(attachment.kind))
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.STALE_DOCUMENT,
+        'IDE captures are immutable. Use Attach IDE context to capture a fresh result.',
+      );
     if (attachment.kind === GlyphContextAttachmentKind.FOLDER)
       return { ...(await this.captureFolder(attachment.uri)), ...(attachment.id ? { id: attachment.id } : {}) };
     return this.withModel(attachment.uri, async model => ({
@@ -225,6 +244,10 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }));
   }
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
+    if (!['file', 'selection', 'folder'].includes(attachment.kind)) {
+      const model = this.models.getModel(URI.parse(attachment.uri));
+      return `${attachment.token && model && !this.adapter.isCurrentContext(model, attachment) ? 'Source changed; this capture is stale. ' : ''}Captured IDE context. Capture again from the originating surface to refresh; the original snapshot is preserved.`;
+    }
     const uri = URI.parse(attachment.uri);
     if (uri.scheme === 'file' && !(await this.files.exists(uri)))
       return 'Source deleted. The captured text is preserved.';
@@ -237,6 +260,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     return undefined;
   }
   async openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void> {
+    if (attachment.uri && (await this.ide.openSource(URI.parse(attachment.uri), this.editors, attachment.range)))
+      return;
     const folders = this.workspace.getWorkspace().folders.filter(folder => folder.uri.scheme === 'file');
     const roots = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
     const folder =

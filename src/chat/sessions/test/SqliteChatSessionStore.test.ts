@@ -20,6 +20,29 @@ afterEach(async () => {
 });
 
 describe(SqliteChatSessionStore, () => {
+  it('preserves all IDE capture kinds and exact provenance across database reopen', async () => {
+    const directory = await fixture('glyph-ide-captures-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-ide-project-'), 'local');
+    const attachments = (['diagnostic', 'symbol', 'diff', 'terminal', 'test'] as const).map(kind => ({
+      path: `${kind} capture`,
+      text: `immutable ${kind}`,
+      revision: `hash-${kind}`,
+      byteOrderMark: false,
+      byteLength: 20,
+      source: { kind, uri: `glyph-${kind}:/original`, version: 3, revision: 'original-editor-revision' },
+    }));
+    const original = record(context.id);
+    const saved = { ...original, transcript: original.transcript.map(turn => ({ ...turn, attachments })) };
+    const store = new SqliteChatSessionStore(directory);
+    await store.initialize(context);
+    await store.save(saved);
+    await store.dispose();
+    const reopened = new SqliteChatSessionStore(directory);
+    await reopened.initialize(context);
+    expect((await reopened.load(context.id))[0]).toEqual(saved);
+    await reopened.dispose();
+  });
+
   it('migrates steering history and preserves instructions and captured context after reopening', async () => {
     const directory = await fixture('glyph-steering-');
     const context = await ProjectContextResolver.folder(await fixture('glyph-steering-project-'), 'local');

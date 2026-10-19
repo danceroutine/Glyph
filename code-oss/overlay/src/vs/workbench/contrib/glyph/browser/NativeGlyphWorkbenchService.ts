@@ -248,6 +248,15 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     if (chat?.mode) composer.hydrateMode(chat.mode);
     return composer;
   }
+  get ideContext() { return this.context.ide; }
+  async attachIdeContext(): Promise<void> {
+    const composer = this.composer;
+    const document = composer.snapshot.document;
+    const attachments = await this.context.selectIdeContext();
+    if (composer !== this.composer || document !== composer.snapshot.document)
+      throw new Error('The active draft changed during capture. Choose the context again.');
+    composer.insertAttachments(attachments);
+  }
   attachSelection(): Promise<void> {
     return this.context.attachSelection();
   }

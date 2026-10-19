@@ -130,6 +130,43 @@ to 2,000 open paths, 512 KiB per file, and 768 KiB of aggregate serialized overr
 per root; unavailable or oversized snapshots fail explicitly without a disk fallback.
 Structural file mutations are not yet supported by the editor-backed text store.
 
+Context actions live on the native workbench surfaces:
+
+- Diagnostic hovers and test-failure messages expose **Fix with Agent**, carrying
+  the exact marker or originating test run/message into a new prompt. Existing
+  drafts remain in unsent-message history; failed submissions retain their prompt.
+- Highlight terminal output to expose **Add to Chat**, or press Cmd+L (Ctrl+L
+  elsewhere). This attaches only the selected passage. The same shortcut works
+  in native test-output editors.
+- **Agent Review** in Source Control starts a review in Plan mode, with instructions
+  to report findings without editing files. `glyph.review.scope` defaults to
+  **Last commit**, with **Staged changes**, **All local changes**, and **Compare
+  against branch** available in the panel and Settings. The chosen scope persists. Choosing branch comparison opens the native searchable
+  branch picker immediately; selecting it again changes the target.
+  Branch comparison uses the common ancestor of HEAD and `glyph.review.baseBranch`;
+  last commit compares HEAD with its first parent (or the empty tree for an initial
+  commit). All-local includes tracked and untracked Git changes and current editor
+  text for those paths. Unsaved edits to otherwise Git-clean files are outside
+  this scope. Multiple repositories require an explicit repository selection.
+
+**Glyph: Attach IDE Context** remains a Command Palette fallback for diagnostics,
+related symbols, individual diffs, terminal selections, and test-output tasks.
+Captures use the existing inline context badges. Click a badge to open its native
+source; hover it to check capture freshness. Their captured content is immutable. Capture
+again to refresh; edits do not silently replace a draft or sent snapshot. Reviews
+fail explicitly when their selected comparison exceeds 32 files, 512 KiB per file,
+or 2 MiB total, rather than omitting files.
+
+Symbol lookup queries the current language providers for up to 20 selected
+identifiers, retains at most 20 definition/reference passages, and labels timeouts,
+failed queries, and results invalidated by an edit. Matching import declarations
+are lexical context for JavaScript, TypeScript, and Python. Unsupported providers
+offer an explicit active-file fallback. Terminal selections carry a command only
+when shell integration can attribute the entire selection to it; otherwise the
+capture says command attribution is unavailable. Git captures include both source
+URIs and content hashes for the selected comparison. No repository history is
+searched automatically.
+
 `pnpm code-oss:test:integration` runs the Playwright Electron suite against the
 compiled application with isolated profiles and workspaces. Most cases select
 the deterministic runtime explicitly with `GLYPH_DESKTOP_TEST_RUNTIME=deterministic`;
@@ -157,7 +194,9 @@ Run `pnpm code-oss:test:integration --list` to browse the behavior inventory:
 - [GlyphRules.test.mjs](tests/electron/GlyphRules.test.mjs): always-on, file-pattern, agent-selected, and manual rules with configuration and source visibility.
 - [GlyphAgentsMd.test.mjs](tests/electron/GlyphAgentsMd.test.mjs): root/nested instruction discovery, scope, precedence, refresh, and reviewable edits.
 - [GlyphAttachments.test.mjs](tests/electron/GlyphAttachments.test.mjs): inline whole-file and selection badges, dirty and untitled editors, split/diff focus, source previews and refresh, preserved captures after failed sends and reload, and multi-root paths.
-- [GlyphIdeContext.test.mjs](tests/electron/GlyphIdeContext.test.mjs): remaining workspace lifecycle, queued context, diagnostics/symbols, retrieval/indexing, context budgets, and privacy.
+- [GlyphNativeContextActions.test.mjs](tests/electron/GlyphNativeContextActions.test.mjs): diagnostic and test-failure actions, terminal selection UI, and persistent Source Control review scopes.
+- [GlyphIdeCaptures.test.mjs](tests/electron/GlyphIdeCaptures.test.mjs): native diagnostics, definitions/references, dirty-buffer and stale-result handling, explicit Git comparisons, terminal selections, test-output passages, and persisted provenance. A local extension fixture supplies deterministic delayed language responses and test runs; capture uses the production workbench adapters.
+- [GlyphIdeContext.test.mjs](tests/electron/GlyphIdeContext.test.mjs): remaining workspace lifecycle, queued context, retrieval/indexing, context budgets, and privacy.
 
 The capability files are explicit `it.fixme` inventories, not passing
 integration coverage. Enabling them requires scripted provider tool calls through

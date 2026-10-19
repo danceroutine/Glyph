@@ -164,3 +164,28 @@ export const ContextPickerFolder: Story = {
     await userEvent.hover(await within(context.canvasElement).findByRole('option', { name: 'src/chat/runtime/' }));
   },
 };
+
+const diagnosticComposer = composerFixture();
+diagnosticComposer.insertAttachments([
+  {
+    id: 'diagnostic-capture',
+    kind: GlyphContextAttachmentKind.DIAGNOSTIC,
+    uri: 'file:///workspace/src/main.ts',
+    path: 'src/main.ts',
+    contentRevision: 'captured-diagnostic-revision',
+    sourceRevision: 'editor-version-3',
+    range: { start: { line: 7, column: 1 }, end: { line: 7, column: 22 } },
+    text: 'Diagnostic (current)\nSource: TypeScript\nMessage: Type string is not assignable to type number.\n\nCaptured source:\nconst count: number = "3";',
+  },
+]);
+export const IdeContextCapture: Story = {
+  args: {
+    actions: previewActionsFixture({
+      composer: diagnosticComposer,
+      context: {
+        ...previewActionsFixture().context,
+        checkAttachment: fn(async () => 'Captured IDE context. Capture again from the originating surface to refresh.'),
+      },
+    }),
+  },
+};

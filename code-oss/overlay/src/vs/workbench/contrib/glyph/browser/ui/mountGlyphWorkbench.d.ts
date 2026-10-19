@@ -22,3 +22,14 @@ export declare const mountGlyphEditorAnnotationMarker: (
   comment: string,
   open: () => void,
 ) => { dispose(): void };
+
+export declare const mountGlyphContextButton: (
+  container: HTMLElement,
+  label: string,
+  action: () => void,
+  primary?: boolean,
+  shortcut?: string,
+) => { dispose(): void };
+
+import type { GlyphAgentReviewMount } from '#glyph/workbench/GlyphAgentReview.js';
+export declare const mountGlyphAgentReview: GlyphAgentReviewMount;

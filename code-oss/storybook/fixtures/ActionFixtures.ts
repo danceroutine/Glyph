@@ -59,9 +59,7 @@ export function previewActionsFixture(overrides: Partial<GlyphWorkbenchViewActio
       refreshAttachment: fn<NonNullable<GlyphWorkbenchViewActions['context']['refreshAttachment']>>(
         async attachment => attachment,
       ).mockName('ActionFixtures.refreshAttachment'),
-      checkAttachment: fn<() => Promise<undefined>>()
-        .mockName('ActionFixtures.checkAttachment')
-        .mockResolvedValue(undefined),
+      checkAttachment: fn(async () => undefined).mockName('ActionFixtures.checkAttachment'),
     },
     composer: composerFixture(),
     send: fn<() => Promise<void>>().mockName('ActionFixtures.send').mockResolvedValue(undefined),

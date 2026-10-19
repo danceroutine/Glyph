@@ -35,6 +35,7 @@ export interface GlyphPromptQuery {
 interface PromptCallbacks {
   change(document: GlyphPromptDocument): void;
   preview(attachment: GlyphContextAttachment): void;
+  describe?(attachment: GlyphContextAttachment): Promise<string | undefined>;
   query(query: GlyphPromptQuery | undefined): void;
   keydown(event: KeyboardEvent): boolean;
   submit(): void;
@@ -88,15 +89,36 @@ export class GlyphPromptEditor {
           dom.contentEditable = 'false';
           const attachment: GlyphContextAttachment = node.attrs.attachment;
           const range = attachment.range ? ` (${attachment.range.start.line}-${attachment.range.end.line})` : '';
+          const title = `${attachment.path}${range}`;
+          let disposed = false;
+          const describe = () => {
+            void callbacks
+              .describe?.(attachment)
+              .then(status => {
+                const button = dom.querySelector('button');
+                if (!disposed && button) button.title = status ? `${title}\n${status}` : title;
+              })
+              .catch(() => {});
+          };
+          dom.addEventListener('mouseenter', describe);
+          dom.addEventListener('focusin', describe);
           render(
             h(GlyphContextBadge, {
               label: `${attachment.path.split('/').at(-1)}${range}`,
-              title: `${attachment.path}${range}`,
+              title,
+              actionLabel: ['file', 'selection', 'folder'].includes(attachment.kind) ? 'Preview' : 'Open',
               onClick: () => callbacks.preview(attachment),
             }),
             dom,
           );
-          return { dom, stopEvent: () => true, destroy: () => render(null, dom) };
+          return {
+            dom,
+            stopEvent: () => true,
+            destroy: () => {
+              disposed = true;
+              render(null, dom);
+            },
+          };
         },
       },
       handleKeyDown: (_view, event) => !event.isComposing && callbacks.keydown(event),

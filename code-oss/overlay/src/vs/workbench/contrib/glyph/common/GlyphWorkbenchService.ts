@@ -1,3 +1,4 @@
+import type { GlyphIdeContext } from '../browser/GlyphIdeContext.js';
 import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
 import type { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
 import { AgentModeID } from '#glyph/protocol/index.js';
@@ -15,11 +16,13 @@ export const GlyphWorkbenchService = createDecorator<GlyphWorkbenchService>('gly
 
 /** Workbench interaction port implemented by the native host-backed adapter. */
 export interface GlyphWorkbenchService {
+  readonly ideContext: GlyphIdeContext;
   readonly composer: GlyphComposerState;
   readonly _serviceBrand: undefined;
   readonly onDidChangeState: Event<GlyphWorkbenchState>;
   readonly state: GlyphWorkbenchState;
   readonly context: GlyphContextActions;
+  attachIdeContext(): Promise<void>;
   attachSelection(): Promise<void>;
   send(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
   moveQueuedToNewChat(id: string): Promise<void>;

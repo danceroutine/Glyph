@@ -18,6 +18,7 @@ export const test = base.extend({
   userSettings: [{}, { option: true }],
   userKeybindings: [[], { option: true }],
   additionalRoots: [[], { option: true }],
+  extensionDevelopmentPath: [undefined, { option: true }],
   provider: async ({ scriptedProvider, scriptedAccounts }, use) => {
     if (!scriptedProvider) return use(undefined);
     const provider = new ScriptedProvider(scriptedAccounts);
@@ -30,7 +31,16 @@ export const test = base.extend({
     }
   },
   glyph: async (
-    { trustedWorkspace, productionRuntime, provider, workspaceFiles, additionalRoots, userSettings, userKeybindings },
+    {
+      trustedWorkspace,
+      productionRuntime,
+      provider,
+      workspaceFiles,
+      additionalRoots,
+      userSettings,
+      userKeybindings,
+      extensionDevelopmentPath,
+    },
     use,
     testInfo,
   ) => {
@@ -148,7 +158,9 @@ export const test = base.extend({
           '--disable-telemetry',
           '--disable-experiments',
           '--disable-updates',
-          '--disable-extensions',
+          ...(extensionDevelopmentPath
+            ? [`--extensionDevelopmentPath=${extensionDevelopmentPath}`]
+            : ['--disable-extensions']),
           ...(trustedWorkspace ? ['--disable-workspace-trust'] : []),
           '--use-inmemory-secretstorage',
           '--no-cached-data',

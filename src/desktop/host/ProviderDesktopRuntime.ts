@@ -287,11 +287,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
                 ...(turn.options ? { options: turn.options } : {}),
                 attachments: (turn.attachments ?? []).map(attachment => ({
                   kind:
-                    attachment.source?.kind === 'folder'
-                      ? GlyphContextAttachmentKind.FOLDER
-                      : attachment.source?.range
-                        ? GlyphContextAttachmentKind.SELECTION
-                        : GlyphContextAttachmentKind.FILE,
+                    Object.values(GlyphContextAttachmentKind).find(kind => kind === attachment.source?.kind) ??
+                    (attachment.source?.range ? GlyphContextAttachmentKind.SELECTION : GlyphContextAttachmentKind.FILE),
                   uri: attachment.source?.uri ?? attachment.path,
                   path: attachment.path,
                   text: attachment.text,

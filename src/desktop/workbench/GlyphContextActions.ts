@@ -15,6 +15,7 @@ export interface GlyphContextCandidate {
   readonly ancestry?: readonly string[];
 }
 export interface GlyphContextActions {
+  selectIdeContext?(): Promise<readonly GlyphContextAttachment[]>;
   selectFiles(): Promise<readonly GlyphContextAttachment[]>;
   searchFiles(query: string): Promise<readonly GlyphContextCandidate[]>;
   captureFile(uri: string): Promise<GlyphContextAttachment>;

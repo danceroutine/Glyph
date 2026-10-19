@@ -1,3 +1,6 @@
+import { GlyphAgentReview } from './GlyphAgentReview/GlyphAgentReview.presentational.tsx';
+import type { GlyphAgentReviewMount } from '#src/desktop/workbench/GlyphAgentReview.js';
+import { Button, ButtonAppearance, ButtonVariant } from './Button/Button.tsx';
 import { GlyphEditorAnnotationMarker } from './GlyphAnnotations/GlyphEditorAnnotationMarker.tsx';
 import { configureGlyphDiagramRenderer } from './GlyphDiagram/GlyphDiagramRenderer.ts';
 import { GlyphCommentButton } from './GlyphAnnotations/GlyphCommentButton.presentational.tsx';
@@ -61,4 +64,32 @@ export const mountGlyphEditorAnnotationMarker = (
 ) => {
   render(<GlyphEditorAnnotationMarker order={order} comment={comment} open={open} />, container);
   return { dispose: () => render(null, container) };
+};
+
+export const mountGlyphContextButton = (
+  container: HTMLElement,
+  label: string,
+  action: () => void,
+  primary = false,
+  shortcut?: string,
+) => {
+  render(
+    <Button
+      variant={primary ? ButtonVariant.PRIMARY : ButtonVariant.SECONDARY}
+      appearance={primary ? ButtonAppearance.FILLED : ButtonAppearance.OUTLINE}
+      onMouseDown={event => event.preventDefault()}
+      onClick={action}
+      shortcut={shortcut}
+    >
+      {label}
+    </Button>,
+    container,
+  );
+  return { dispose: () => render(null, container) };
+};
+
+export const mountGlyphAgentReview: GlyphAgentReviewMount = (container, controls) => {
+  const update = (next: typeof controls) => render(<GlyphAgentReview {...next} />, container);
+  update(controls);
+  return { update, dispose: () => render(null, container) };
 };

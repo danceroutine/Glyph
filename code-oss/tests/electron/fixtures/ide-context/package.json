@@ -1,0 +1,32 @@
+{
+  "name": "glyph-ide-context-fixture",
+  "publisher": "glyph-tests",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "main": "./extension.cjs",
+  "activationEvents": [
+    "*"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "glyphFixture.testOutput",
+        "title": "Glyph Fixture: Produce Test Output"
+      },
+      {
+        "command": "glyphFixture.slowSymbols",
+        "title": "Glyph Fixture: Slow Symbol Results"
+      }
+    ],
+    "languages": [
+      {
+        "id": "glyph-fixture",
+        "extensions": [
+          ".glyph"
+        ]
+      }
+    ]
+  }
+}

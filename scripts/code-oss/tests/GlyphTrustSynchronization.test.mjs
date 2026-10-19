@@ -22,6 +22,13 @@ async function modules() {
       {
         name: 'trust-fixture',
         setup(builder) {
+          builder.onResolve({ filter: /GlyphShellTerminals\.js$/ }, args => ({
+            path: args.path,
+            namespace: 'terminals',
+          }));
+          builder.onLoad({ filter: /.*/, namespace: 'terminals' }, () => ({
+            contents: 'export class GlyphShellTerminals {}',
+          }));
           builder.onResolve({ filter: /GlyphPlanEditor\.js$/ }, args => ({ path: args.path, namespace: 'plan' }));
           builder.onLoad({ filter: /.*/, namespace: 'plan' }, () => ({ contents: 'export class GlyphPlanInput {}' }));
           builder.onResolve({ filter: /GlyphContextController\.js$/ }, args => ({
@@ -55,7 +62,7 @@ async function modules() {
               : 'export const ipcRenderer = { on() {}, removeListener() {} };',
           }));
           builder.onResolve({ filter: /^#vs\// }, args => {
-            if (args.path.startsWith('#vs/base/'))
+            if (args.path.startsWith('#vs/base/') || args.path.endsWith('/browserViewUri.js'))
               return { path: resolve('.code-oss/src/src/vs', args.path.slice(4).replace(/\.js$/, '.ts')) };
             if (/\/(NativeGlyphWorkbenchService|GlyphDesktopClient)\.js$/.test(args.path))
               return { path: resolve('code-oss/overlay/src/vs', args.path.slice(4).replace(/\.js$/, '.ts')) };
@@ -63,7 +70,7 @@ async function modules() {
           });
           builder.onLoad({ filter: /.*/, namespace: 'services' }, () => ({
             contents:
-              'const service = () => {}; export { service as IEditorService, service as IOpenerService, service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
+              'const service = () => {}; export { service as IClipboardService, service as IConfigurationService, service as IEditorService, service as IOpenerService, service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
           }));
           builder.onResolve({ filter: /^#(glyph|src)\// }, args => ({
             path: resolve(
@@ -134,8 +141,21 @@ it('loads saved history through the latest untrusted attachment when revocation 
         return { dispose() {} };
       },
     },
-    { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
+    {
+      createInstance: () => ({
+        invalidate() {},
+        dispose() {},
+        handle() {},
+        changed() {},
+        update() {},
+        refresh: async () => {},
+      }),
+    },
     { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
+    {},
+    {},
+    {},
+    { getValue: () => undefined, onDidChangeConfiguration: () => ({ dispose() {} }) },
   );
   const connecting = service.connect().catch(error => error);
   try {
@@ -226,8 +246,21 @@ it.each(['handshake', 'attach acknowledgement'])(
           return { dispose() {} };
         },
       },
-      { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
+      {
+        createInstance: () => ({
+          invalidate() {},
+          dispose() {},
+          handle() {},
+          changed() {},
+          update() {},
+          refresh: async () => {},
+        }),
+      },
       { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
+      {},
+      {},
+      {},
+      { getValue: () => undefined, onDidChangeConfiguration: () => ({ dispose() {} }) },
     );
     try {
       await vi.waitFor(() => expect(started).toBe(true));
@@ -410,13 +443,26 @@ it.each(
       onDidChangeWorkbenchState: subscribe('state'),
     },
     { isWorkspaceTrusted: () => true, onDidChangeTrust: subscribe('trust') },
-    { createInstance: () => ({ invalidate, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
+    {
+      createInstance: () => ({
+        invalidate,
+        dispose() {},
+        handle() {},
+        changed() {},
+        update() {},
+        refresh: async () => {},
+      }),
+    },
     {
       get currentProfile() {
         return { id: profileId };
       },
       onDidChangeCurrentProfile: subscribe('profile'),
     },
+    {},
+    {},
+    {},
+    { getValue: () => undefined, onDidChangeConfiguration: () => ({ dispose() {} }) },
   );
   const connecting = service.connect().catch(error => error);
   try {

@@ -21,32 +21,9 @@ it.describe('Pending context lifecycle contracts', () => {
   );
 });
 
-it.describe('Pending IDE diagnostic, symbol, and change context', () => {
-  it.fixme(
-    'lets the user attach a diagnostic with its file, range, message, and current editor revision',
-    async () => {},
-  );
-  it.fixme(
-    'finds related definitions, references, and imports for selected code with navigable source provenance',
-    async () => {},
-  );
-  it.fixme(
-    'uses refreshed language-server information after edits and marks unavailable or stale symbol results',
-    async () => {},
-  );
-  it.fixme(
-    'lets the user attach staged or unstaged changes with an explicit diff base instead of silently reading unrelated repository history',
-    async () => {},
-  );
-  it.fixme(
-    'lets the user attach selected terminal or test output and identifies its originating command or test run',
-    async () => {},
-  );
-  it.fixme(
-    'shows missing language-server or repository support and falls back to available file context without inventing diagnostics',
-    async () => {},
-  );
-});
+// Group 13 diagnostic, symbol, Git diff, and terminal/test output contracts are
+// exercised through native workbench services, recorded provider input, and
+// persisted captures in GlyphIdeCaptures.test.mjs.
 
 it.describe('Pending intelligent context discovery and RAG', () => {
   it.fixme(
