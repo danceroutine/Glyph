@@ -178,6 +178,21 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     return this.withModel(value, model => this.adapter.captureContext(model));
   }
 
+  async captureResources(resources: readonly string[]): Promise<readonly GlyphContextAttachment[]> {
+    this.assertTrusted();
+    const selected = [...new Set(resources)];
+    if (!selected.length || selected.length > 32)
+      throw new Error('Select between 1 and 32 files or folders to attach.');
+    return Promise.all(
+      selected.map(async value => {
+        const uri = URI.parse(value);
+        this.adapter.contextPath(uri);
+        const stat = await this.files.stat(uri);
+        return stat.isDirectory ? this.captureFolder(value) : this.captureFile(value);
+      }),
+    );
+  }
+
   async captureFolder(value: string): Promise<GlyphContextAttachment> {
     this.assertTrusted();
     const uri = URI.parse(value);

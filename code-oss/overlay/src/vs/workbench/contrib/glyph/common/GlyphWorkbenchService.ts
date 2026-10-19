@@ -25,6 +25,7 @@ export interface GlyphWorkbenchService {
   readonly context: GlyphContextActions;
   attachIdeContext(): Promise<void>;
   attachSelection(): Promise<void>;
+  attachExplorerResources(resources: readonly string[], newChat: boolean): Promise<void>;
   send(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
   moveQueuedToNewChat(id: string): Promise<void>;
   readonly followUpBehavior: GlyphFollowUpBehavior;
@@ -54,6 +55,9 @@ export interface GlyphWorkbenchService {
     accept: boolean,
   ): Promise<void>;
   newChat(): void;
+  closeChat(chatId: string): Promise<void>;
+  setChatArchived(chatId: string, archived: boolean): Promise<void>;
+  setChatPinned(chatId: string, pinned: boolean): void;
   connect(): Promise<void>;
   selectAccount(provider: string, accountId: string): Promise<void>;
   selectModel(model: string): Promise<void>;

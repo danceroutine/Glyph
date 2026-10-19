@@ -47,6 +47,58 @@ import {
 import { GlyphViewPane } from '#vs/workbench/contrib/glyph/browser/GlyphViewPane.js';
 import { NativeGlyphWorkbenchService } from '#vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
+import { INotificationService } from '#vs/platform/notification/common/notification.js';
+import { URI } from '#vs/base/common/uri.js';
+import { IExplorerService } from '#vs/workbench/contrib/files/browser/files.js';
+import { ExplorerFolderContext } from '#vs/workbench/contrib/files/common/files.js';
+
+for (const folder of [false, true]) {
+  for (const newChat of [false, true]) {
+    const kind = folder ? 'Directory' : 'File';
+    const id = `glyph.addExplorer${kind}To${newChat ? 'New' : ''}Chat`;
+    registerAction2(
+      class extends Action2 {
+        constructor() {
+          super({
+            id,
+            title: localize2(id, 'Add {0} to {1}Glyph Chat', kind, newChat ? 'New ' : ''),
+            precondition: ContextKeyExpr.equals('isWorkspaceTrusted', true),
+            menu: {
+              id: MenuId.ExplorerContext,
+              group: '7_glyph',
+              order: newChat ? 2 : 1,
+              when: ContextKeyExpr.and(
+                ContextKeyExpr.equals('resourceScheme', 'file'),
+                folder ? ExplorerFolderContext : ExplorerFolderContext.negate(),
+              ),
+            },
+          });
+        }
+        async run(accessor: ServicesAccessor, resource?: URI): Promise<void> {
+          const selected = accessor.get(IExplorerService).getContext(true);
+          const resources =
+            resource && !selected.some(item => item.resource.toString() === resource.toString())
+              ? [resource]
+              : selected.map(item => item.resource);
+          const glyph = accessor.get(GlyphWorkbenchService);
+          const notifications = accessor.get(INotificationService);
+          const views = accessor.get(IViewsService);
+          try {
+            await glyph.attachExplorerResources(
+              resources.map(uri => uri.toString()),
+              newChat,
+            );
+          } catch (error) {
+            notifications.error(error instanceof Error ? error : String(error));
+            return;
+          }
+          await views.openView(GlyphViewPane.ID, true);
+          glyph.composer.focus();
+        }
+      },
+    );
+  }
+}
 
 // Match the design previews without overriding an explicitly selected user theme.
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerDefaultConfigurations([

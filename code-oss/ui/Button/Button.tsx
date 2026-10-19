@@ -13,6 +13,7 @@ export enum ButtonAppearance {
   FILLED = 'filled',
   OUTLINE = 'outline',
   GHOST = 'ghost',
+  BORDERLESS_GHOST = 'borderless-ghost',
 }
 export enum ButtonSize {
   SMALL = 'small',
@@ -63,6 +64,16 @@ const base = css({
       color: tokens.text.primary,
     },
   },
+  '&[data-appearance=borderless-ghost]': {
+    background: 'transparent',
+    borderColor: 'transparent',
+    color: tokens.text.muted,
+    '&:hover:not(:disabled), &[aria-pressed=true]:not(:disabled)': {
+      background: 'transparent',
+      boxShadow: 'none',
+      color: tokens.text.primary,
+    },
+  },
   '&[data-size=small]': { '--button-size': '24px', padding: '2px 6px' },
   '&[data-size=medium]': { '--button-size': '28px' },
   '&[data-size=large]': { '--button-size': '32px', padding: '5px 12px' },
@@ -71,8 +82,8 @@ const base = css({
     height: 'var(--button-size)',
     padding: 0,
     '& svg': {
-      width: 'min(20px, calc(var(--button-size) - 8px))',
-      height: 'min(20px, calc(var(--button-size) - 8px))',
+      width: 'min(var(--button-icon-size, 20px), calc(var(--button-size) - 8px))',
+      height: 'min(var(--button-icon-size, 20px), calc(var(--button-size) - 8px))',
     },
   },
   '&[data-shape=circle]': { borderRadius: '50%' },
@@ -181,16 +192,26 @@ export function Button({
 export interface IconButtonProps extends Omit<ButtonProps, 'leadingIcon' | 'trailingIcon' | 'shortcut'> {
   readonly 'aria-label': string;
   readonly shape?: IconButtonShape;
+  readonly iconSize?: number;
 }
 export function IconButton({
   shape = IconButtonShape.SQUARE,
   appearance = ButtonAppearance.GHOST,
   children,
   loading = false,
+  iconSize,
+  style,
   ...props
 }: IconButtonProps) {
   return (
-    <Button {...props} loading={loading} appearance={appearance} data-icon-button data-shape={shape}>
+    <Button
+      {...props}
+      loading={loading}
+      appearance={appearance}
+      data-icon-button
+      data-shape={shape}
+      style={{ ...(iconSize === undefined ? {} : { '--button-icon-size': `${iconSize}px` }), ...style }}
+    >
       {!loading && (
         <span class={iconSlot} aria-hidden="true">
           {children}

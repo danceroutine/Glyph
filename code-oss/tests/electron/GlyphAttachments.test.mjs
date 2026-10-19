@@ -288,7 +288,7 @@ it.describe('Explicit editor and file attachments', () => {
     );
   });
 
-  it.fixme('adds files from the Explorer file tree as context attachments in the composer', async () => {});
+  // Explorer file and folder context-menu entry points run in GlyphExplorerAttachments.test.mjs.
 
   it.fixme('investigate and revisit the 512 KiB per-file attachment limit', async () => {
     // Evaluate why this cap exists and whether to raise it or make it configurable,

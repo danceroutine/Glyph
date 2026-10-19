@@ -50,6 +50,8 @@ const styles = {
 };
 
 export interface DropdownProps<T> {
+  readonly role?: 'listbox' | 'menu' | 'dialog';
+  readonly children?: ComponentChildren;
   readonly id: string;
   readonly label: string;
   readonly items: readonly T[];
@@ -78,6 +80,8 @@ export interface DropdownProps<T> {
 
 /** Anchored to its positioned parent. Focus remains on the trigger or editable input. */
 export function Dropdown<T>({
+  role = 'listbox',
+  children,
   id,
   label,
   items,
@@ -208,38 +212,39 @@ export function Dropdown<T>({
           id={id}
           class={styles.list}
           style={{ maxHeight: `${layout.height}px` }}
-          role="listbox"
+          role={role}
           aria-label={label}
           aria-busy={busy}
           onScroll={positionPreview}
         >
-          {busy || !items.length ? (
-            <div class={styles.status} role="status">
-              {busy ? busyMessage : emptyMessage}
-            </div>
-          ) : (
-            items.map((item, index) => (
-              <Button
-                key={itemKey(item)}
-                id={`${id}-${index}`}
-                appearance={ButtonAppearance.GHOST}
-                role="option"
-                tabIndex={-1}
-                aria-label={itemLabel(item)}
-                title={itemLabel(item)}
-                aria-selected={selectedIndex === index}
-                data-highlighted={activeIndex === index}
-                class={styles.row}
-                disabled={disabled}
-                onMouseDown={event => event.preventDefault()}
-                onMouseEnter={() => highlight(index)}
-                onClick={() => choose(item)}
-              >
-                {renderItem(item)}
-                {showCheck && selectedIndex === index && <Check class={styles.check} size={16} aria-hidden="true" />}
-              </Button>
-            ))
-          )}
+          {children ??
+            (busy || !items.length ? (
+              <div class={styles.status} role="status">
+                {busy ? busyMessage : emptyMessage}
+              </div>
+            ) : (
+              items.map((item, index) => (
+                <Button
+                  key={itemKey(item)}
+                  id={`${id}-${index}`}
+                  appearance={ButtonAppearance.GHOST}
+                  role={role === 'menu' ? 'menuitem' : 'option'}
+                  tabIndex={-1}
+                  aria-label={itemLabel(item)}
+                  title={itemLabel(item)}
+                  aria-selected={role === 'listbox' ? selectedIndex === index : undefined}
+                  data-highlighted={activeIndex === index}
+                  class={styles.row}
+                  disabled={disabled}
+                  onMouseDown={event => event.preventDefault()}
+                  onMouseEnter={() => highlight(index)}
+                  onClick={() => choose(item)}
+                >
+                  {renderItem(item)}
+                  {showCheck && selectedIndex === index && <Check class={styles.check} size={16} aria-hidden="true" />}
+                </Button>
+              ))
+            ))}
         </div>
       </div>
       {preview && (

@@ -55,6 +55,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private readonly client: GlyphDesktopClient;
   private selectionInitialized = false;
   private selectedChatId: string | undefined;
+  private openChatIds: string[] = [];
+  private archivedChatIds: string[] = [];
+  private pinnedChatIds: string[] = [];
   private pendingRunId: string | undefined;
   private pendingCreation: string | undefined;
   private draftAccount: { readonly provider: string; readonly id: string } | undefined;
@@ -99,6 +102,14 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     const savedChat = this.storageService.get('glyph.selectedChat', StorageScope.WORKSPACE);
     this.selectionInitialized = savedChat !== undefined;
     this.selectedChatId = savedChat || undefined;
+    const savedTabs = this.storageService.getObject<object>('glyph.openChatTabs', StorageScope.WORKSPACE);
+    this.openChatIds = Array.isArray(savedTabs)
+      ? [...new Set(savedTabs.filter((id): id is string => typeof id === 'string'))]
+      : [savedChat || ''];
+    for (const key of ['archivedChatIds', 'pinnedChatIds'] as const) {
+      const saved = this.storageService.getObject<object>(`glyph.${key}`, StorageScope.WORKSPACE);
+      this[key] = Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : [];
+    }
     this.profileId = this.userDataProfileService.currentProfile.id;
     this.workspaceBinding = this.currentWorkspaceBinding();
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
@@ -183,8 +194,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
               !this.selectionInitialized ||
               (this.selectedChatId && !event.state.chats.some(chat => chat.id === this.selectedChatId))
             ) {
-              this.selectedChatId = event.state.chats[0]?.id;
-              this.selectionInitialized = true;
+              this.selectChat(event.state.chats[0]?.id);
             }
             this.pendingRunId = undefined;
             break;
@@ -193,7 +203,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
               this.composers.get(event.chat.id)?.setMode(event.chat.mode);
             if (this.pendingCreation && event.creationId === this.pendingCreation) {
               const composer = this.selectedChatId ? this.createComposer() : this.composer;
-              if (!this.selectedChatId) this.composers.delete('');
+              if (!this.selectedChatId) {
+                this.composers.delete('');
+                this.openChatIds = this.openChatIds.map(id => (id === '' ? event.chat.id : id));
+              }
               this.composers.set(event.chat.id, composer);
               this.selectChat(event.chat.id);
             }
@@ -262,6 +275,25 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
   attachSelection(): Promise<void> {
     return this.context.attachSelection();
+  }
+  async attachExplorerResources(resources: readonly string[], newChat: boolean): Promise<void> {
+    this.assertSessionBinding();
+    if (this.sending || this.navigationPending || this.immediatePending)
+      throw new Error('Wait for the current chat transition.');
+    const composer = this.composer;
+    const document = composer.snapshot.document;
+    const revision = this.navigationRevision;
+    const attachments = await this.context.captureResources(resources);
+    this.assertSessionBinding();
+    if (composer !== this.composer || document !== composer.snapshot.document || revision !== this.navigationRevision)
+      throw new Error('The active draft changed during capture. Choose the context again.');
+    if (this.sending || this.navigationPending || this.immediatePending)
+      throw new Error('Wait for the current chat transition.');
+    if (newChat) {
+      this.newChat();
+      this.composer.restoreDraft({ parts: [], from: 0, to: 0, options: {} });
+    }
+    this.composer.insertAttachments(attachments);
   }
   copyText(text: string): Promise<void> {
     return this.clipboard.writeText(text);
@@ -339,6 +371,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       });
     return {
       ...snapshot,
+      openChatIds: [...new Set([...this.openChatIds, this.selectedChatId ?? ''])].filter(
+        id => !id || snapshot.chats.some(chat => chat.id === id),
+      ),
+      archivedChatIds: this.archivedChatIds,
+      pinnedChatIds: this.pinnedChatIds,
       models: this.draftModels,
       ...(this.draftAccount ? { selectedAccount: this.draftAccount } : {}),
       ...(this.draftModel ? { selectedModel: this.draftModel } : {}),
@@ -586,6 +623,43 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.selectChat(undefined);
     this.changeEmitter.fire(this.state);
     void this.connect().catch(error => this.report(error));
+  }
+
+  async setChatArchived(chatId: string, archived: boolean): Promise<void> {
+    if (this.state.readOnly || this.navigationPending || this.sending) return;
+    if (archived) await this.closeChat(chatId);
+    this.archivedChatIds = this.archivedChatIds.filter(id => id !== chatId);
+    if (archived) this.archivedChatIds.push(chatId);
+    this.storageService.store(
+      'glyph.archivedChatIds',
+      this.archivedChatIds,
+      StorageScope.WORKSPACE,
+      StorageTarget.MACHINE,
+    );
+    this.changeEmitter.fire(this.state);
+  }
+  setChatPinned(chatId: string, pinned: boolean): void {
+    this.pinnedChatIds = this.pinnedChatIds.filter(id => id !== chatId);
+    if (pinned) this.pinnedChatIds.push(chatId);
+    this.storageService.store('glyph.pinnedChatIds', this.pinnedChatIds, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+    this.changeEmitter.fire(this.state);
+  }
+
+  async closeChat(chatId: string): Promise<void> {
+    if (this.sending || this.navigationPending || this.state.readOnly) return;
+    const tabs = this.state.openChatIds ?? [];
+    const index = tabs.indexOf(chatId);
+    if (index < 0) return;
+    const remaining = tabs.filter(id => id !== chatId);
+    if ((this.selectedChatId ?? '') === chatId) {
+      const next = remaining[Math.min(index, remaining.length - 1)];
+      if (next) await this.openChat(next);
+      else this.newChat();
+      if (next && this.selectedChatId !== next) return;
+    }
+    this.openChatIds = remaining.length ? [...remaining] : [''];
+    this.persistChatTabs();
+    this.changeEmitter.fire(this.state);
   }
 
   async createChat(provider: string, accountId: string, model: string): Promise<void> {
@@ -950,8 +1024,14 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
   private selectChat(chatId: string | undefined): void {
     this.selectedChatId = chatId;
+    if (!this.openChatIds.includes(chatId ?? '')) this.openChatIds.push(chatId ?? '');
+    this.persistChatTabs();
     this.selectionInitialized = true;
     this.storageService.store('glyph.selectedChat', chatId ?? '', StorageScope.WORKSPACE, StorageTarget.MACHINE);
+  }
+
+  private persistChatTabs(): void {
+    this.storageService.store('glyph.openChatTabs', this.openChatIds, StorageScope.WORKSPACE, StorageTarget.MACHINE);
   }
 
   private workspaceRoots() {

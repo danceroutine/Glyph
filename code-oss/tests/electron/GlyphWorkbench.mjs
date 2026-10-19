@@ -20,7 +20,7 @@ export class GlyphWorkbench {
     await this.page.locator('.quick-input-list .monaco-list-row').filter({ hasText: name }).first().click();
   }
 
-  async open() {
+  async dismissExtensionNotices() {
     // The --disable-extensions notice can arrive after startup or between two
     // turns. Dismiss this known fixture-only toast through its visible control
     // whenever it obstructs an action, without hiding unexpected notifications.
@@ -28,11 +28,22 @@ export class GlyphWorkbench {
       this.page.getByRole('dialog', { name: /All installed extensions are temporarily disabled/ }),
       async notice => {
         const composerWasFocused = await this.composer.and(this.page.locator(':focus')).count();
+        const commandInput = this.page.locator('.quick-input-widget input');
+        const command = (await commandInput.isVisible()) ? await commandInput.inputValue() : undefined;
         await notice.getByRole('button', { name: /^Clear Notification/ }).click();
-        if (composerWasFocused) await this.composer.focus();
+        // Clicking a notification closes Quick Input. Restore the command
+        // palette if this fixture-only notice interrupted a command action.
+        if (command?.startsWith('>')) {
+          await this.page.keyboard.press('F1');
+          await commandInput.fill(command);
+        } else if (composerWasFocused) await this.composer.focus();
       },
     );
     await this.extensionNoticeHandler;
+  }
+
+  async open() {
+    await this.dismissExtensionNotices();
     await expect(this.page.locator('.monaco-workbench')).toBeVisible({ timeout: 60_000 });
     await this.command('Focus Glyph');
     await expect(this.composer).toBeVisible();

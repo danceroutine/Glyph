@@ -79,6 +79,12 @@ export function previewActionsFixture(overrides: Partial<GlyphWorkbenchViewActio
       .mockName('ActionFixtures.decideProposalItems')
       .mockResolvedValue(undefined),
     newChat: fn().mockName('ActionFixtures.newChat'),
+    closeChat: fn<NonNullable<GlyphWorkbenchViewActions['closeChat']>>().mockResolvedValue(undefined),
+    setChatArchived: fn<NonNullable<GlyphWorkbenchViewActions['setChatArchived']>>().mockResolvedValue(undefined),
+    setChatPinned: fn<NonNullable<GlyphWorkbenchViewActions['setChatPinned']>>(),
+    chatMenuActions: ['Export Transcript', 'Open Browser', 'Agent Settings', 'Toggle Maximized Chat', 'Hide Chat'].map(
+      label => ({ id: label, label, run: fn().mockName(label) }),
+    ),
     openChat: fn<() => Promise<void>>().mockName('ActionFixtures.openChat').mockResolvedValue(undefined),
     selectAccount: fn<() => Promise<void>>().mockName('ActionFixtures.selectAccount').mockResolvedValue(undefined),
     selectModel: fn<() => Promise<void>>().mockName('ActionFixtures.selectModel').mockResolvedValue(undefined),

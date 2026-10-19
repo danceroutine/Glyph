@@ -262,10 +262,13 @@ it('wires account and model choices and keeps filtered history open until explic
     const search = page.getByRole('searchbox', { name: 'Search chats' });
     await search.fill('saved');
     await expect(page.getByRole('button', { name: 'Older conversation' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Saved conversation' }).click();
+    await page.getByRole('button', { name: 'Saved conversation', exact: true }).click();
     await page.evaluate(() => window.update({ selectedChatId: 'saved' }));
     await expect(search).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Saved conversation' })).toHaveAttribute('aria-current', 'true');
+    await expect(page.getByRole('button', { name: 'Saved conversation', exact: true })).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
     await toggle.click();
     await expect(search).toHaveCount(0);
     await expect(toggle).toBeFocused();

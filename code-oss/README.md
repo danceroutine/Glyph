@@ -568,6 +568,19 @@ the Preact root with the pane. The window-scoped service owns composer state;
 components reconcile keyed transcript rows, preserving DOM identity while
 response text streams in.
 
+The chat header is a compact tab strip. Open tabs survive window reloads; closing
+a tab keeps its conversation in history and leaves running work alone. With the
+history sidebar closed, the header offers New chat, a searchable recent/archived
+chat picker, a Glyph actions menu, and Open sidebar. With history open, only New
+chat and the actions menu remain beside the tabs; Close sidebar moves into the
+sidebar. Pin and archive choices are stored in workspace UI storage. The actions
+menu exports the visible conversation text to Markdown, opens the integrated
+browser or Glyph settings, controls the pane, and closes chat tabs.
+
+When Glyph is the only visible secondary-sidebar container, native layout omits
+the redundant container title row. Other secondary-sidebar views retain the
+standard workbench selector.
+
 ### Inline file and selection context
 
 Type `@` in the composer to search workspace files and open text buffers. Use
@@ -576,6 +589,13 @@ picker. The paperclip opens the system file picker; selected files are inserted
 as badges at the prompt caret, and canceling leaves the draft unchanged. Switching editor
 tabs never attaches context. The mode and model selectors sit together inside the
 composer, with attachment and Send/Stop icons on the right.
+
+The Explorer context menu offers **Add File to Glyph Chat** and **Add File to New
+Glyph Chat**, with corresponding **Add Directory** actions for folders. These
+actions support multi-selection and insert the same context badges without
+sending a message. Files capture current unsaved editor text; directories capture
+a search-visible tree outline, not recursive file contents. Failed captures leave
+the existing draft and chat selection unchanged.
 
 Select text in the editor and press Cmd+L (Ctrl+L on other platforms). Each nonempty cursor
 selection becomes its own inline badge, carrying the exact captured text,

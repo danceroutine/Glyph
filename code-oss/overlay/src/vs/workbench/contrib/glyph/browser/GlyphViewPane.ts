@@ -1,3 +1,8 @@
+import { BrowserViewCommandId } from '#vs/platform/browserView/common/browserView.js';
+import { IFileDialogService } from '#vs/platform/dialogs/common/dialogs.js';
+import { IFileService } from '#vs/platform/files/common/files.js';
+import { VSBuffer } from '#vs/base/common/buffer.js';
+import { ICommandService } from '#vs/platform/commands/common/commands.js';
 import { getIconClasses } from '#vs/editor/common/services/getIconClasses.js';
 import { IModelService } from '#vs/editor/common/services/model.js';
 import { ILanguageService } from '#vs/editor/common/languages/language.js';
@@ -31,6 +36,9 @@ export class GlyphViewPane extends ViewPane {
 
   constructor(
     options: IViewletViewOptions,
+    @IFileDialogService private readonly dialogs: IFileDialogService,
+    @IFileService private readonly files: IFileService,
+    @ICommandService private readonly commands: ICommandService,
     @IKeybindingService private readonly glyphKeybindings: IKeybindingService,
     @IContextMenuService contextMenuService: IContextMenuService,
     @IConfigurationService configurationService: IConfigurationService,
@@ -139,6 +147,37 @@ export class GlyphViewPane extends ViewPane {
       reviewProposalFile: (chatId, proposalId, fileId) => service.reviewProposalFile(chatId, proposalId, fileId),
       decideProposalItems: (chatId, items, accept) => service.decideProposalItems(chatId, items, accept),
       newChat: () => this.glyphService.newChat(),
+      closeChat: id => this.glyphService.closeChat(id),
+      setChatArchived: (id, archived) => service.setChatArchived(id, archived),
+      setChatPinned: (id, pinned) => service.setChatPinned(id, pinned),
+      chatMenuActions: [
+        {
+          id: 'export',
+          label: 'Export Transcript',
+          run: async () => {
+            const snapshot = service.state;
+            const title = snapshot.chats.find(chat => chat.id === snapshot.selectedChatId)?.title ?? 'New chat';
+            const transcript = `# ${title}\n\n${snapshot.transcript.map(entry => `## ${entry.role}\n\n${entry.text}`).join('\n\n')}\n`;
+            const resource = await this.dialogs.showSaveDialog({
+              title: 'Export Glyph transcript',
+              filters: [{ name: 'Markdown', extensions: ['md'] }],
+            });
+            if (resource) await this.files.writeFile(resource, VSBuffer.fromString(transcript));
+          },
+        },
+        {
+          id: 'browser',
+          label: 'Open Browser',
+          run: () => this.commands.executeCommand<void>(BrowserViewCommandId.Open),
+        },
+        {
+          id: 'settings',
+          label: 'Agent Settings',
+          run: () => this.preferences.openSettings({ query: 'glyph' }).then(() => {}),
+        },
+        { id: 'maximize', label: 'Toggle Maximized Chat', run: () => this.glyphLayout.toggleMaximizedAuxiliaryBar() },
+        { id: 'hide', label: 'Hide Chat', run: () => this.glyphLayout.setPartHidden(true, Parts.AUXILIARYBAR_PART) },
+      ],
       openChat: id => this.glyphService.openChat(id),
       selectAccount: (provider, id) => this.glyphService.selectAccount(provider, id),
       selectModel: model => this.glyphService.selectModel(model),

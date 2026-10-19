@@ -125,3 +125,24 @@ export const MarkdownAndUsage: Story = {
     },
   },
 };
+
+export const OpenChatTabs: Story = {
+  args: {
+    state: workbenchStateFixture({
+      chats: [
+        chatFixture({ id: 'first', title: 'Message queue testing' }),
+        chatFixture({ id: 'second', title: 'Proposed commit message' }),
+      ],
+      selectedChatId: 'second',
+      openChatIds: ['first', 'second'],
+      transcript: conversationFixture(),
+    }),
+  },
+};
+export const OpenChatTabsWithSidebar: Story = { args: { ...OpenChatTabs.args }, play: expandHistory };
+export const RecentChatPicker: Story = {
+  args: { ...OpenChatTabs.args },
+  play: async ({ canvasElement }) => {
+    canvasElement.querySelector<HTMLButtonElement>('button[aria-label="Recent chats"]')?.click();
+  },
+};

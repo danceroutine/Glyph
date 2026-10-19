@@ -15,6 +15,10 @@ export interface GlyphWorkbenchState extends GlyphDesktopSnapshot {
   readonly status: GlyphWorkbenchStatus;
   readonly transcript: readonly GlyphTranscriptEntry[];
   readonly selectedChatId?: string;
+  /** Window-owned open tabs. The empty ID is the unsent new-chat draft. */
+  readonly openChatIds?: readonly string[];
+  readonly archivedChatIds?: readonly string[];
+  readonly pinnedChatIds?: readonly string[];
   readonly usage: Readonly<Record<string, GlyphUsage>>;
   readonly navigationPending?: boolean;
   readonly catalogPending?: boolean;

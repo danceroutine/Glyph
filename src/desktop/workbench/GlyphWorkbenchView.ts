@@ -60,6 +60,15 @@ export interface GlyphWorkbenchViewActions {
     accept: boolean,
   ): Promise<void>;
   newChat(): void;
+  closeChat?(chatId: string): Promise<void>;
+  setChatArchived?(chatId: string, archived: boolean): Promise<void>;
+  setChatPinned?(chatId: string, pinned: boolean): void;
+  /** Available native pane actions, rendered by the same header in previews. */
+  readonly chatMenuActions?: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly run: () => void | Promise<void>;
+  }[];
   openChat(chatId: string): Promise<void>;
   selectAccount(provider: string, accountId: string): Promise<void>;
   selectModel(model: string): Promise<void>;

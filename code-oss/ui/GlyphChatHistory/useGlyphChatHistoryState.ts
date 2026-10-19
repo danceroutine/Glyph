@@ -11,14 +11,17 @@ export interface GlyphChatHistoryStateOptions {
 export type GlyphChatHistoryState = ReturnType<typeof useGlyphChatHistoryState>;
 
 export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistoryStateOptions) {
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [query, setQuery] = useState('');
   const search = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => search.current?.focus(), []);
-  const chats = [...state.chats]
+  const allChats = [...state.chats]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
     .filter(chat => chat.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .map(chat => ({
       id: chat.id,
+      archived: state.archivedChatIds?.includes(chat.id) ?? false,
+      pinned: state.pinnedChatIds?.includes(chat.id) ?? false,
       title: chat.title,
       updatedAt: chat.updatedAt,
       selected: state.selectedChatId === chat.id,
@@ -30,21 +33,29 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
           ),
       ),
     }));
+  const chats = allChats.filter(chat => !chat.archived);
+  const unpinned = chats.filter(chat => !chat.pinned);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const week = new Date(today);
-  week.setDate(week.getDate() - 7);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
   const groups = [
-    { label: 'Today', chats: chats.filter(chat => Date.parse(chat.updatedAt) >= today.getTime()) },
+    { label: 'Pinned', chats: chats.filter(chat => chat.pinned) },
+    { label: 'Today', chats: unpinned.filter(chat => Date.parse(chat.updatedAt) >= today.getTime()) },
     {
-      label: 'Previous 7 days',
-      chats: chats.filter(
-        chat => Date.parse(chat.updatedAt) < today.getTime() && Date.parse(chat.updatedAt) >= week.getTime(),
+      label: 'Yesterday',
+      chats: unpinned.filter(
+        chat => Date.parse(chat.updatedAt) < today.getTime() && Date.parse(chat.updatedAt) >= yesterday.getTime(),
       ),
     },
-    { label: 'Older', chats: chats.filter(chat => Date.parse(chat.updatedAt) < week.getTime()) },
+    { label: 'Older', chats: unpinned.filter(chat => Date.parse(chat.updatedAt) < yesterday.getTime()) },
   ];
   return {
+    archivedOpen,
+    toggleArchived: () => setArchivedOpen(!archivedOpen),
+    archived: allChats.filter(chat => chat.archived),
+    archive: (id: string, archived: boolean) => void actions.setChatArchived?.(id, archived),
+    pin: (id: string, pinned: boolean) => actions.setChatPinned?.(id, pinned),
     query,
     setQuery,
     search,

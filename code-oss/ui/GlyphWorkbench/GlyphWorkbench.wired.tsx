@@ -1,3 +1,4 @@
+import { GlyphRecentChats, GlyphChatMenu } from './GlyphChatHeaderControls.tsx';
 import { GlyphBackgroundTerminals } from '#code-oss/ui/GlyphBackgroundTerminals/GlyphBackgroundTerminals.tsx';
 import { WiredGlyphPlanCards } from '#code-oss/ui/GlyphPlan/GlyphPlanCards.wired.tsx';
 import { WiredGlyphAnnotations } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.wired.tsx';
@@ -29,6 +30,8 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
       />
       <GlyphWorkbench
         {...view}
+        recentChats={<GlyphRecentChats state={state} actions={actions} />}
+        menu={<GlyphChatMenu state={state} actions={actions} />}
         transcript={
           <WiredGlyphTranscript
             plans={
@@ -97,7 +100,11 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
             modelControl={<WiredGlyphModelPicker state={state} actions={actions} />}
           />
         }
-        history={view.historyOpen && <WiredGlyphChatHistory state={state} actions={actions} />}
+        history={
+          view.historyOpen && (
+            <WiredGlyphChatHistory state={state} actions={actions} close={view.closeHistory} toggleRef={view.toggle} />
+          )
+        }
       />
     </>
   );

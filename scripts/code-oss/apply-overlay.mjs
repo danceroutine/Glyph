@@ -128,6 +128,44 @@ for (const [before, after] of [
 }
 await writeFile(testContentPath, testContent);
 
+// Glyph supplies its own chat tab strip. Reclaim the native title row only
+// when Glyph is the sole visible auxiliary-bar container; other views retain
+// the standard workbench selector and controls. Layout and DOM visibility agree.
+for (const [relativePath, before, after] of [
+  [
+    'src/vs/workbench/browser/part.ts',
+    'protected layoutContents(width: number, height: number): ILayoutContentResult {',
+    'protected isTitleVisible(): boolean { return !!this.options.hasTitle; }\n\n\tprotected layoutContents(width: number, height: number): ILayoutContentResult {',
+  ],
+  [
+    'src/vs/workbench/browser/part.ts',
+    'return partLayout.layout(width, height);',
+    "const titleVisible = this.isTitleVisible();\n\t\tif (this.titleArea) this.titleArea.style.display = titleVisible ? '' : 'none';\n\t\treturn partLayout.layout(width, height, titleVisible);",
+  ],
+  [
+    'src/vs/workbench/browser/part.ts',
+    'layout(width: number, height: number): ILayoutContentResult {',
+    'layout(width: number, height: number, titleVisible = !!this.options.hasTitle): ILayoutContentResult {',
+  ],
+  ['src/vs/workbench/browser/part.ts', 'if (this.options.hasTitle) {', 'if (titleVisible) {'],
+  [
+    'src/vs/workbench/browser/parts/paneCompositePart.ts',
+    'protected focusCompositeBar(): void {',
+    "protected override isTitleVisible(): boolean {\n\t\treturn super.isTitleVisible() && !(this.partId === Parts.AUXILIARYBAR_PART && this.getActivePaneComposite()?.getId() === 'workbench.view.glyphContainer' && this.getVisiblePaneCompositeIds().length <= 1);\n\t}\n\n\tprotected focusCompositeBar(): void {",
+  ],
+  [
+    'src/vs/workbench/browser/parts/paneCompositePart.ts',
+    'this.element.dataset.activeComposite = compositeId;',
+    'this.element.dataset.activeComposite = compositeId;\n\t\tconst dimension = this.getRelayoutDimension();\n\t\tif (dimension && this.contentPosition) this.layout(dimension.width, dimension.height, this.contentPosition.top, this.contentPosition.left);',
+  ],
+]) {
+  const path = join(sourceRoot, relativePath);
+  const contents = await readFile(path, 'utf8');
+  if (contents.includes(after)) continue;
+  if (!contents.includes(before)) throw new Error(`Pinned chat-header layout anchor was not found: ${relativePath}`);
+  await writeFile(path, contents.replace(before, after));
+}
+
 // Guard structural mutations after native participants and before working-copy teardown.
 // The callback stays in the renderer; it is never part of the wire protocol.
 for (const [relativePath, before, after] of [

@@ -20,6 +20,11 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
     if (historyOpen) return actions.reserveHistoryWidth?.(tokens.history.columnWidth);
   }, [historyOpen, actions.reserveHistoryWidth]);
   const toggle = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
+  useLayoutEffect(() => {
+    if (wasOpen.current && !historyOpen) toggle.current?.focus();
+    wasOpen.current = historyOpen;
+  }, [historyOpen]);
   const chat = state.chats.find(value => value.id === state.selectedChatId);
   const questionRun = state.runs.find(
     run => run.chatId === state.selectedChatId && run.status === GlyphRunStatus.WAITING_FOR_QUESTION,
@@ -42,7 +47,13 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
     root,
     toggle,
     historyOpen,
-    title: chat?.title ?? 'New chat',
+    tabs: (state.openChatIds ?? [state.selectedChatId ?? '']).map(id => ({
+      id,
+      title: state.chats.find(chat => chat.id === id)?.title ?? 'New chat',
+      selected: id === (state.selectedChatId ?? ''),
+    })),
+    selectTab: (id: string) => (id ? void actions.openChat(id) : actions.newChat()),
+    closeTab: (id: string) => void actions.closeChat?.(id),
     todos: chat?.todos ?? [],
     plans: chat?.plans ?? [],
     plansDisabled:
