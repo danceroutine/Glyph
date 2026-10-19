@@ -1,5 +1,6 @@
 import { GlyphAgentReviewScope, glyphAgentReviewLabels } from '#glyph/workbench/GlyphAgentReview.js';
 import { GlyphAgentReviewPane } from '../browser/GlyphAgentReviewPane.js';
+import { GlyphBuiltinChat } from '../browser/GlyphBuiltinChat.js';
 import {
   GlyphDiagnosticHover,
   GlyphTerminalSelectionActions,
@@ -46,6 +47,18 @@ import {
 import { GlyphViewPane } from '#vs/workbench/contrib/glyph/browser/GlyphViewPane.js';
 import { NativeGlyphWorkbenchService } from '#vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
+
+// Match the design previews without overriding an explicitly selected user theme.
+Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerDefaultConfigurations([
+  {
+    overrides: {
+      'workbench.colorTheme': 'Dark Modern',
+      'workbench.preferredDarkColorTheme': 'Dark Modern',
+      'workbench.preferredLightColorTheme': 'Light Modern',
+      'chat.disableAIFeatures': true,
+    },
+  },
+]);
 
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
   id: 'glyph',
@@ -293,6 +306,7 @@ for (const command of [
 }
 
 HoverParticipantRegistry.register(GlyphDiagnosticHover);
+registerWorkbenchContribution2(GlyphBuiltinChat.ID, GlyphBuiltinChat, WorkbenchPhase.BlockStartup);
 registerWorkbenchContribution2(
   GlyphTerminalSelectionActions.ID,
   GlyphTerminalSelectionActions,

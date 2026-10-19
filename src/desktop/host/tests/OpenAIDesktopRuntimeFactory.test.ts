@@ -94,7 +94,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     const editor = new EditorRpcRouter();
     const requests = vi.spyOn(editor, 'request').mockImplementation(async (_identity, request) => {
       const operationId =
-        request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION
+        request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
+        request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
           ? request.mutation.operationId
           : request.operationId;
       if (!trusted)
@@ -367,7 +368,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     const editor = new EditorRpcRouter();
     vi.spyOn(editor, 'request').mockImplementation(async (_identity, request) => ({
       operationId:
-        request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION
+        request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
+        request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
           ? request.mutation.operationId
           : request.operationId,
       ok: true,
@@ -463,7 +465,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(request.type).toBe(GlyphEditorRequestType.READ_SNAPSHOT);
       return {
         operationId:
-          request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION
+          request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
+          request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
             ? request.mutation.operationId
             : request.operationId,
         ok: true,

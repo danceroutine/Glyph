@@ -40,6 +40,7 @@ afterAll(async () => {
 
 it('keeps review actions scoped, keyboard accessible, pending until acknowledged and retryable on failure', async () => {
   const page = await browser.newPage();
+  page.setDefaultTimeout(3000);
   try {
     await page.setContent(
       '<div id="root" style="width:280px;--vscode-foreground:#ccc;--vscode-descriptionForeground:#999;--vscode-toolbar-hoverBackground:#333"></div>',
@@ -49,6 +50,13 @@ it('keeps review actions scoped, keyboard accessible, pending until acknowledged
     await expect(card).toContainText('1 File');
     await expect(card).not.toContainText('secret.ts');
     await expect(card.locator('script')).toHaveCount(0);
+    const disclosure = card.locator('summary');
+    const count = disclosure.locator('.glyph-review-count');
+    await expect(count).toHaveCSS('color', 'rgb(153, 153, 153)');
+    await count.hover();
+    await expect(count).toHaveCSS('color', 'rgb(204, 204, 204)');
+    await expect(count).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(disclosure).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     const file = card.getByRole('button', { name: 'Review src/<script>.ts', exact: true });
     await expect(file).toHaveAttribute('title', 'src/<script>.ts');
     await expect(card.locator('.glyph-file-actions')).toHaveCSS('opacity', '0');
@@ -83,8 +91,10 @@ it('keeps review actions scoped, keyboard accessible, pending until acknowledged
     await expect(card.getByRole('button', { name: 'Keep', exact: true })).toBeEnabled();
     await page.evaluate(() => window.update({ readOnly: true }));
     await expect(card.getByRole('button', { name: 'Keep', exact: true })).toBeDisabled();
-    await card.getByRole('button', { name: '1 File' }).click();
+    await card.locator('summary').press('Enter');
     await expect(card.getByRole('list')).toHaveCount(0);
+    await disclosure.press('Space');
+    await expect(card.getByRole('list')).toBeVisible();
   } finally {
     await page.close();
   }

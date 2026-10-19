@@ -1,14 +1,30 @@
+import { GlyphRenameBadge } from '#code-oss/ui/GlyphFileIcon/GlyphRenameBadge.tsx';
+import { GlyphFileIcon } from '#code-oss/ui/GlyphFileIcon/GlyphFileIcon.tsx';
 import { Button, ButtonSize, ButtonAppearance, IconButton } from '#code-oss/ui/Button/Button.tsx';
 import { composerDrawerStyles as drawer } from '#code-oss/ui/GlyphComposer/GlyphComposerDrawer.styles.ts';
-import { ChevronUp, Check, X, FileCode } from 'lucide-preact';
+import { ChevronUp, Check, X, Undo2 } from 'lucide-preact';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 import type { GlyphPendingReviewsState } from './useGlyphPendingReviewsState.ts';
 
 const styles = {
   card: css({ overflow: 'hidden' }),
-  header: css({ flexWrap: 'wrap' }),
+  header: css({
+    flexWrap: 'wrap',
+    cursor: 'pointer',
+    listStyle: 'none',
+    '&::-webkit-details-marker': { display: 'none' },
+    '&:hover > .glyph-review-count, &:focus-visible > .glyph-review-count': { color: tokens.text.primary },
+    '&:focus-visible': { outline: tokens.focus.ring, outlineOffset: tokens.focus.inset },
+  }),
   headerActions: css({ display: 'inline-flex', gap: tokens.space.xxs, marginLeft: 'auto' }),
-  toggle: css({ marginRight: 'auto', minHeight: 24, padding: 0 }),
+  count: css({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.space.md,
+    marginRight: 'auto',
+    minHeight: 24,
+    color: tokens.text.muted,
+  }),
   button: css({
     '&&': { paddingInline: 0, border: 0, color: tokens.text.primary },
   }),
@@ -60,86 +76,90 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
       aria-label="Pending reviews"
       aria-busy={state.busy}
     >
-      <header class={`${drawer.header} ${styles.header}`}>
-        <Button
-          appearance={ButtonAppearance.GHOST}
-          class={`${drawer.toggle} ${styles.toggle}`}
-          type="button"
-          aria-expanded={state.expanded}
-          aria-controls={state.listId}
-          onClick={state.toggle}
-        >
-          <ChevronUp class={drawer.chevron} data-expanded={state.expanded || undefined} size={16} aria-hidden="true" />
-          <span>{state.summary}</span>
-        </Button>
-        <div class={styles.headerActions}>
-          <Button
-            size={ButtonSize.SMALL}
-            appearance={ButtonAppearance.GHOST}
-            type="button"
-            disabled={state.disabled}
-            onClick={state.undo}
-          >
-            {state.undoLabel}
-          </Button>
-          <Button
-            size={ButtonSize.SMALL}
-            appearance={ButtonAppearance.GHOST}
-            type="button"
-            disabled={state.keepDisabled}
-            onClick={state.keep}
-          >
-            {state.keepLabel}
-          </Button>
-          <Button
-            size={ButtonSize.SMALL}
-
-            type="button"
-            disabled={state.disabled}
-            onClick={state.review}
-          >
-            Review
-          </Button>
-        </div>
-      </header>
-      <div
-        class={drawer.reveal}
-        data-expanded={state.expanded || undefined}
-        aria-hidden={!state.expanded}
-        inert={!state.expanded}
+      <details
+        open={state.expanded}
+        onToggle={event => {
+          if (event.currentTarget.open !== state.expanded) state.toggle();
+        }}
       >
-        <div class={drawer.clip}>
-          <ul class={styles.list} id={state.listId}>
-            {state.files.map(file => (
-              <li key={file.key}>
-                <div class={styles.row}>
-                  <Button
-                    appearance={ButtonAppearance.GHOST}
-                    class={`${styles.button} ${styles.file}`}
-                    type="button"
-                    title={file.path}
-                    aria-label={`Review ${file.path}`}
-                    disabled={state.disabled}
-                    onClick={file.review}
-                  >
-                    <FileCode size={16} aria-hidden="true" />
-                    <span class={styles.name}>{file.name}</span>
-                    <span class={styles.added}>+{file.additions ?? 0}</span>
-                    <span class={styles.removed}>−{file.deletions ?? 0}</span>
-                  </Button>
-                  <span class={`glyph-file-actions ${styles.actions}`}>
-                    <IconButton
-                      size={ButtonSize.SMALL}
-                      appearance={ButtonAppearance.GHOST}
+        <summary class={`${drawer.header} ${styles.header}`} aria-label={state.summary}>
+          <span class={`glyph-review-count ${styles.count}`}>
+            <ChevronUp
+              class={drawer.chevron}
+              data-expanded={state.expanded || undefined}
+              size={16}
+              aria-hidden="true"
+            />
+            <span>{state.summary}</span>
+          </span>
+          <span class={styles.headerActions}>
+            <Button
+              size={ButtonSize.SMALL}
+              appearance={ButtonAppearance.GHOST}
+              type="button"
+              disabled={state.disabled}
+              onClick={state.undo}
+            >
+              {state.undoLabel}
+            </Button>
+            <Button
+              size={ButtonSize.SMALL}
+              appearance={ButtonAppearance.GHOST}
+              type="button"
+              disabled={state.keepDisabled}
+              onClick={state.keep}
+            >
+              {state.keepLabel}
+            </Button>
+            <Button
+              size={ButtonSize.SMALL}
 
-                      type="button"
-                      aria-label={`Undo ${file.path}`}
-                      title="Dismiss proposed changes"
-                      disabled={state.disabled}
-                      onClick={file.undo}
-                    >
-                      <X size={20} aria-hidden="true" />
-                    </IconButton>
+              type="button"
+              disabled={state.disabled}
+              onClick={state.review}
+            >
+              Review
+            </Button>
+          </span>
+        </summary>
+        <ul class={styles.list} id={state.listId}>
+          {state.files.map(file => (
+            <li key={file.key}>
+              <div class={styles.row}>
+                <Button
+                  appearance={ButtonAppearance.GHOST}
+                  class={`${styles.button} ${styles.file}`}
+                  type="button"
+                  title={file.path}
+                  aria-label={`Review ${file.path}`}
+                  disabled={state.disabled}
+                  onClick={file.review}
+                >
+                  <GlyphFileIcon path={file.path} />
+                  <span
+                    class={styles.name}
+                    style={file.operation === 'DELETE' ? { textDecoration: 'line-through' } : undefined}
+                  >
+                    {file.name}
+                  </span>
+                  {file.operation === 'RENAME' && <GlyphRenameBadge />}
+                  <span class={styles.added}>+{file.additions ?? 0}</span>
+                  <span class={styles.removed}>−{file.deletions ?? 0}</span>
+                </Button>
+                <span class={`glyph-file-actions ${styles.actions}`}>
+                  <IconButton
+                    size={ButtonSize.SMALL}
+                    appearance={ButtonAppearance.GHOST}
+
+                    type="button"
+                    aria-label={`${file.autoApplied ? 'Revert' : 'Undo'} ${file.path}`}
+                    title={file.autoApplied ? 'Revert file change' : 'Dismiss proposed changes'}
+                    disabled={state.disabled}
+                    onClick={file.undo}
+                  >
+                    {file.autoApplied ? <Undo2 size={18} aria-hidden="true" /> : <X size={20} aria-hidden="true" />}
+                  </IconButton>
+                  {!file.autoApplied && (
                     <IconButton
                       size={ButtonSize.SMALL}
                       appearance={ButtonAppearance.GHOST}
@@ -152,18 +172,18 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
                     >
                       <Check size={18} aria-hidden="true" />
                     </IconButton>
-                  </span>
+                  )}
+                </span>
+              </div>
+              {file.status && (
+                <div role="status" class={styles.error}>
+                  {file.status}
                 </div>
-                {file.status && (
-                  <div role="status" class={styles.error}>
-                    {file.status}
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </details>
       {state.error && (
         <div class={styles.error} role="alert">
           {state.error}

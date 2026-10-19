@@ -17,6 +17,11 @@ point and product-identity changes. Re-running it is idempotent.
 The runner installs the pinned Node runtime under ignored `.code-oss/` and then
 uses upstream's npm lockfile; Glyph's root remains a pnpm workspace.
 
+Glyph is the workbench's chat surface. Startup unregisters the built-in Code OSS
+Chat pane before layout restoration and hides its setup UI. Built-in AI features
+are disabled by default with `chat.disableAIFeatures`; shared upstream services
+remain available to the editor and extensions.
+
 Overlay imports use `#vs/*` for Code OSS modules and `#glyph/*` for Glyph's shared
 protocol and workbench state. For example, `#vs/base/common/uri.js` resolves to
 the upstream URI module, and `#glyph/protocol/editor/GlyphEditorRequest.js`
@@ -447,8 +452,15 @@ inert shell streams, and deferred credentials. It does not require live provider
 The acknowledged editing-workflow blockers remain explicit fixmes:
 
 - Proposal decision controls: `Pending desktop product contracts` in [GlyphWorkbench.test.mjs](tests/electron/GlyphWorkbench.test.mjs).
-- Structural create/delete/rename review and application: the structural mutation, Create File, and Delete File groups in [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs).
 - Desktop background-shell wake delivery: `Pending background shells with agent-configured wake conditions` in [GlyphAgentCapabilities.test.mjs](tests/electron/GlyphAgentCapabilities.test.mjs).
+
+Desktop file creation, deletion, and rename now apply immediately and remain in
+the review drawer until kept or reverted. The drawer and inline cards use the
+active file-icon theme; deletions strike through the name and renames show the
+new name with a tinted `R` badge. Native diffs retain the captured before/after
+content. [GlyphToolCalls.test.mjs](tests/electron/GlyphToolCalls.test.mjs) exercises
+all three operations through reload, Revert, Explorer Undo, and subsequent-edit
+collision protection. Dirty files must be saved before deletion.
 
 ### Authentication lifetime, text fidelity, and bounded rendering
 
@@ -657,7 +669,10 @@ The foundation has three layers:
   IDs become CSS property names only during serialization. This is the only place that
   constructs CSS variable references. Native Code OSS supplies the actual colors,
   including custom and high-contrast themes; preview values are installed only
-  on Storybook's stage. They are approximations, not a replacement native theme.
+  on Storybook's stage. Glyph defaults to Dark Modern, and Storybook previews
+  Dark Modern and Light Modern with the native workbench's inherited line height.
+  The Electron theme checks compare preview colors against the installed themes
+  and verify that explicit user theme choices take precedence over Glyph's default.
 - `tokens.ts` groups component roles at the top level: `tokens.dropdown` owns its
   foreground, background, border, and radius; `tokens.button` owns its primary,
   secondary, and quiet appearance. Text, surfaces, spacing, focus, typography,

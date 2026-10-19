@@ -41,6 +41,7 @@ export interface GlyphWorkbenchService {
   openLink?(href: string): Promise<void>;
   viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
   cancel(): void;
+  cancelRun(chatId: string, runId: string): Promise<void>;
   executeReviewCommand(command: GlyphReviewCommand): void;
   reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void>;
   decideProposalItems(

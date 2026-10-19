@@ -5,6 +5,23 @@ import type { GlyphProposalFilePreview } from '#src/desktop/protocol/events/Glyp
 
 /** Build the remaining diff from the live review baseline, including prior accepted decisions. */
 export function toGlyphProposalFilePreview(proposalId: string, file: FileEditPlan): GlyphProposalFilePreview {
+  if (file.automatic && file.automatic.state !== 'applying') {
+    return {
+      proposalId,
+      fileId: file.id,
+      before: file.automatic.before?.text ?? '',
+      after: file.operation === 'DELETE' ? '' : file.proposed.text,
+      items: [
+        { id: file.automatic.itemId, lineNumber: 1 },
+        ...file.items
+          .filter(item => item.kind === EditReviewItemKind.TEXT && item.decision === EditDecisionState.PENDING)
+          .map(item => ({
+            id: item.id,
+            lineNumber: (file.base?.text ?? '').slice(0, item.sourceStart).split(/\r\n|\r|\n/).length,
+          })),
+      ],
+    };
+  }
   const before = file.current?.text ?? file.base?.text ?? '';
   let after = before;
   const pending = file.items.filter(

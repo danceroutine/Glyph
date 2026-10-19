@@ -1,3 +1,4 @@
+import type { GlyphTurnOptions } from '#glyph/protocol/events/GlyphAnnotation.js';
 import { Disposable, DisposableStore, toDisposable } from '#vs/base/common/lifecycle.js';
 import { ICodeEditor } from '#vs/editor/browser/editorBrowser.js';
 import { IModelDecoration } from '#vs/editor/common/model.js';
@@ -27,6 +28,7 @@ export async function useGlyphContext(
   capture: () => Promise<readonly GlyphContextAttachment[]>,
   prompt?: string,
   mode?: AgentModeID,
+  options?: GlyphTurnOptions,
 ): Promise<void> {
   const composer = glyph.composer;
   const document = composer.snapshot.document;
@@ -39,7 +41,7 @@ export async function useGlyphContext(
       parts: [{ type: 'text', text: prompt }],
       from: prompt.length,
       to: prompt.length,
-      options: mode ? { mode } : {},
+      options: { ...options, ...(mode ? { mode } : {}) },
     });
   composer.insertAttachments(attachments);
   await views.openView(GlyphViewPane.ID, true);

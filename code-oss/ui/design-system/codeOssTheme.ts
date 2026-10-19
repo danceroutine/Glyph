@@ -35,10 +35,10 @@ const inputBorder = hostToken('input.border', palette.neutral[600], palette.neut
 /** Atomic colors acquire their native theme roles here, organized by component. */
 const definitions = {
   foreground,
-  descriptionForeground: hostToken('descriptionForeground', palette.neutral[400], palette.neutral[500]),
-  errorForeground: hostToken('errorForeground', palette.red[300], palette.red[700]),
+  descriptionForeground: hostToken('descriptionForeground', palette.neutral[400], palette.neutral[650]),
+  errorForeground: hostToken('errorForeground', palette.red[350], palette.red[350]),
   editorWarning: {
-    foreground: hostToken('editorWarning.foreground', palette.yellow[500], palette.yellow[700], palette.yellow[700]),
+    foreground: hostToken('editorWarning.foreground', palette.yellow[500], palette.yellow[600], palette.yellow[600]),
   },
   sideBar: { background: hostToken('sideBar.background', palette.neutral[900], palette.neutral[50]) },
   editor: {
@@ -62,34 +62,35 @@ const definitions = {
   },
   toolbar: { hoverBackground: hostToken('toolbar.hoverBackground', palette.slateAlpha[31], palette.neutralAlpha[31]) },
   list: {
-    hoverBackground: hostToken('list.hoverBackground', palette.slate[800], palette.neutral[100]),
-    activeSelectionBackground: hostToken('list.activeSelectionBackground', palette.blue[900], palette.blue[600]),
-    activeSelectionForeground: hostToken('list.activeSelectionForeground', palette.neutral[0], palette.neutral[0]),
+    hoverBackground: hostToken('list.hoverBackground', palette.slate[800], palette.neutral[75]),
+    activeSelectionBackground: hostToken('list.activeSelectionBackground', palette.blue[900], palette.neutral[100]),
+    activeSelectionForeground: hostToken('list.activeSelectionForeground', palette.neutral[0], palette.neutral[1000]),
   },
   button: {
     background: hostToken('button.background', palette.blue[400], palette.blue[650]),
     foreground: hostToken('button.foreground', palette.neutral[0], palette.neutral[0]),
     hoverBackground: hostToken('button.hoverBackground', palette.blue[500], palette.blue[700]),
-    secondaryBackground: hostToken('button.secondaryBackground', palette.neutral[700], palette.neutral[150]),
+    secondaryBackground: hostToken('button.secondaryBackground', palette.transparent, palette.neutral[150]),
     secondaryForeground: hostToken('button.secondaryForeground', palette.neutral[250], palette.neutral[650]),
-    secondaryHoverBackground: hostToken('button.secondaryHoverBackground', palette.neutral[600], palette.neutral[250]),
+    secondaryHoverBackground: hostToken('button.secondaryHoverBackground', palette.neutral[750], palette.neutral[250]),
   },
   review: {
-    keepBackground: hostToken('testing.runAction', palette.green[700], palette.green[700]),
+    keepBackground: hostToken('testing.runAction', palette.green[450], palette.green[450]),
     keepForeground: hostToken('button.foreground', palette.neutral[0], palette.neutral[0]),
   },
   context: {
-    fileForeground: hostToken('textLink.foreground', palette.blue[400], palette.blue[650]),
+    fileForeground: hostToken('textLink.foreground', palette.blue[300], palette.blue[650]),
     skillForeground: hostToken(
       'editorWarning.foreground',
       palette.yellow[500],
-      palette.yellow[700],
+      palette.yellow[600],
       palette.yellow[500],
     ),
   },
   diff: {
-    added: hostToken('gitDecoration.addedResourceForeground', palette.green[400], palette.green[700]),
-    removed: hostToken('gitDecoration.deletedResourceForeground', palette.red[300], palette.red[700]),
+    renamed: hostToken('gitDecoration.renamedResourceForeground', palette.green[450], palette.green[750]),
+    added: hostToken('gitDecoration.addedResourceForeground', palette.green[425], palette.green[650]),
+    removed: hostToken('gitDecoration.deletedResourceForeground', palette.red[600], palette.red[750]),
   },
   widget: { shadow: hostToken('widget.shadow', palette.blackAlpha[36], palette.blackAlpha[16]) },
   progressBar: { background: hostToken('progressBar.background', palette.blue[400], palette.blue[650]) },

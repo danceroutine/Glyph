@@ -1,3 +1,5 @@
+import { GlyphAgentReviewComment } from './GlyphAgentReview/GlyphAgentReviewComment.tsx';
+import { GlyphFileIcons } from './GlyphFileIcon/GlyphFileIcon.tsx';
 import { GlyphAgentReview } from './GlyphAgentReview/GlyphAgentReview.presentational.tsx';
 import type { GlyphAgentReviewMount } from '#src/desktop/workbench/GlyphAgentReview.js';
 import { Button, ButtonAppearance, ButtonVariant } from './Button/Button.tsx';
@@ -18,7 +20,13 @@ if (import.meta.url) configureGlyphDiagramRenderer(new URL('./glyph-diagram.html
 export const mountGlyphWorkbench: GlyphWorkbenchMount = (container, state, actions) => {
   let disposed = false;
   const update = (next: typeof state) => {
-    if (!disposed) render(<WiredGlyphWorkbench state={next} actions={actions} />, container);
+    if (!disposed)
+      render(
+        <GlyphFileIcons.Provider value={actions.fileIconClasses}>
+          <WiredGlyphWorkbench state={next} actions={actions} />
+        </GlyphFileIcons.Provider>,
+        container,
+      );
   };
   update(state);
   return {
@@ -92,4 +100,14 @@ export const mountGlyphAgentReview: GlyphAgentReviewMount = (container, controls
   const update = (next: typeof controls) => render(<GlyphAgentReview {...next} />, container);
   update(controls);
   return { update, dispose: () => render(null, container) };
+};
+
+export const mountGlyphAgentReviewComment = (
+  container: HTMLElement,
+  finding: import('#src/desktop/workbench/GlyphAgentReviewFinding.js').GlyphAgentReviewFinding,
+  fix: () => void,
+  dismiss: () => void,
+) => {
+  render(<GlyphAgentReviewComment finding={finding} fix={fix} dismiss={dismiss} />, container);
+  return { dispose: () => render(null, container) };
 };

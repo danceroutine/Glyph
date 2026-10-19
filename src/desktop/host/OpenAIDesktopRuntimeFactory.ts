@@ -152,10 +152,35 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             if (request.type === GlyphEditorRequestType.EXISTS) await disk.exists(path);
             else await disk.validateAccess(path);
           }
+          if (
+            request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
+            'target' in request.mutation &&
+            request.mutation.target
+          ) {
+            await disk.validateAccess(request.mutation.target);
+          }
           const qualified = path && roots.length > 1 ? `${root.name}/${path}` : path;
-          const wire = this.withRequestPath(request, qualified);
+          let wire = this.withRequestPath(request, qualified);
+          if (
+            wire.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
+            'target' in wire.mutation &&
+            wire.mutation.target &&
+            roots.length > 1
+          )
+            wire = { ...wire, mutation: { ...wire.mutation, target: `${root.name}/${wire.mutation.target}` } };
           const response = await this.editors.request(input.identity, wire, signal);
-          return response.snapshot && path ? { ...response, snapshot: { ...response.snapshot, path } } : response;
+          return response.snapshot && path
+            ? {
+                ...response,
+                snapshot: {
+                  ...response.snapshot,
+                  path:
+                    request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION && 'target' in request.mutation
+                      ? (request.mutation.target ?? path)
+                      : path,
+                },
+              }
+            : response;
         },
       });
       return { name: root.name, workspace, index };
@@ -182,7 +207,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       logger,
       configuration.editing.maxActiveReviews,
       context.mutationIdentity,
-      { maxReadBytes: getEditingReadBudget(configuration.editing) },
+      { maxReadBytes: getEditingReadBudget(configuration.editing), autoApplyStructural: true },
     );
     let runtime: ProviderDesktopRuntime | undefined;
     const interactions = new DesktopInteractionBroker(event => runtime?.publish(event));
@@ -299,6 +324,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       case GlyphEditorRequestType.EXISTS:
       case GlyphEditorRequestType.READ_SNAPSHOT:
         return request.path;
+      case GlyphEditorRequestType.APPLY_FILE_MUTATION:
       case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
         return request.mutation.path;
       default:
@@ -313,6 +339,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       case GlyphEditorRequestType.EXISTS:
       case GlyphEditorRequestType.READ_SNAPSHOT:
         return { ...request, path };
+      case GlyphEditorRequestType.APPLY_FILE_MUTATION:
+        return { ...request, mutation: { ...request.mutation, path } };
       case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
         return { ...request, mutation: { ...request.mutation, path } };
       default:

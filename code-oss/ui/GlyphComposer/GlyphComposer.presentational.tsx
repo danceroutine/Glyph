@@ -238,7 +238,7 @@ export function GlyphComposer(state: GlyphComposerProps) {
                 disabled={state.disabled}
                 onClick={state.cancel}
               >
-                <Square size={16} aria-hidden="true" />
+                <Square size={13} style={{ width: 13, height: 13 }} aria-hidden="true" />
               </IconButton>
             )}
             <IconButton
@@ -255,7 +255,7 @@ export function GlyphComposer(state: GlyphComposerProps) {
               title={state.saveQueueLabel ?? (state.active ? 'Cancel' : state.sendLabel)}
             >
               {state.active && !state.editingQueuedMessage && !state.draft.trim() ? (
-                <Square size={13} fill="currentColor" aria-hidden="true" />
+                <Square size={13} style={{ width: 13, height: 13 }} fill="currentColor" aria-hidden="true" />
               ) : (
                 <ArrowUp size={18} aria-hidden="true" />
               )}

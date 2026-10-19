@@ -1,4 +1,5 @@
 import type { GlyphTextMutation } from './GlyphTextMutation.ts';
+import type { GlyphFileMutation } from './GlyphFileMutation.ts';
 import type { GlyphWorkingCopySearchOptions } from './GlyphWorkingCopySearchOptions.ts';
 
 /** Operations the utility host may ask the live Code OSS editor to perform. */
@@ -9,6 +10,7 @@ export enum GlyphEditorRequestType {
   LIST_WORKING_COPY_PATHS = 'list_working_copy_paths',
   SEARCH_WORKING_COPIES = 'search_working_copies',
   APPLY_TEXT_MUTATION = 'apply_text_mutation',
+  APPLY_FILE_MUTATION = 'apply_file_mutation',
   INSPECT_MUTATION_RECEIPT = 'inspect_mutation_receipt',
 }
 
@@ -30,4 +32,5 @@ export type GlyphEditorRequest =
       readonly options: GlyphWorkingCopySearchOptions;
     }
   | { readonly type: GlyphEditorRequestType.APPLY_TEXT_MUTATION; readonly mutation: GlyphTextMutation }
+  | { readonly type: GlyphEditorRequestType.APPLY_FILE_MUTATION; readonly mutation: GlyphFileMutation }
   | { readonly type: GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT; readonly operationId: string };

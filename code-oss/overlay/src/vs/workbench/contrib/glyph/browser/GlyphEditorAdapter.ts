@@ -1,3 +1,6 @@
+import { UNDO_REDO_SOURCE as EXPLORER_UNDO_REDO_SOURCE } from '#vs/workbench/contrib/files/browser/explorerService.js';
+import { VSBuffer } from '#vs/base/common/buffer.js';
+import { GlyphFileMutationKind, type GlyphFileMutation } from '#glyph/protocol/editor/GlyphFileMutation.js';
 import {
   GlyphContextAttachmentKind,
   type GlyphContextAttachment,
@@ -25,7 +28,7 @@ import { GlyphEditorRequestType, type GlyphEditorRequest } from '#glyph/protocol
 import type { GlyphEditorResponse } from '#glyph/protocol/editor/GlyphEditorResponse.js';
 import { GlyphWorkingCopyPatternKind } from '#glyph/protocol/editor/GlyphWorkingCopySearchOptions.js';
 import type { GlyphWorkingCopySearchMatch } from '#glyph/protocol/editor/GlyphWorkingCopySearchMatch.js';
-import { ResourceTextEdit, IBulkEditService } from '#vs/editor/browser/services/bulkEditService.js';
+import { ResourceFileEdit, ResourceTextEdit, IBulkEditService } from '#vs/editor/browser/services/bulkEditService.js';
 import { EndOfLineSequence, type ITextModel } from '#vs/editor/common/model.js';
 import { EditSources } from '#vs/editor/common/textModelEditSource.js';
 import { ITextModelService } from '#vs/editor/common/services/resolverService.js';
@@ -54,6 +57,7 @@ export class GlyphEditorAdapter extends Disposable {
   private readonly pendingMutations = new Set<CancellationTokenSource>();
   /** Maps protocol grouping ids onto Code OSS's process-local undo groups. */
   private readonly undoGroups = new Map<string, UndoRedoGroup>();
+  private readonly removedResources = new Set<string>();
   private workspaceGeneration = generateUuid();
   private readonly workspaceBinding: string;
   private workspaceChanged = false;
@@ -98,7 +102,10 @@ export class GlyphEditorAdapter extends Disposable {
   /** Serializes failures at the process boundary while keeping typed errors inside the adapter. */
   async handle(request: GlyphEditorRequest): Promise<GlyphEditorResponse> {
     const operationId =
-      request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ? request.mutation.operationId : request.operationId;
+      request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
+      request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
+        ? request.mutation.operationId
+        : request.operationId;
     try {
       // Recovery inspects recorded evidence, not the current workspace. A root
       // change must not hide a write that completed before access was revoked.
@@ -112,6 +119,8 @@ export class GlyphEditorAdapter extends Disposable {
           return { operationId, ok: true, exists: await this.exists(request.path) };
         case GlyphEditorRequestType.READ_SNAPSHOT:
           return { operationId, ok: true, snapshot: await this.read(request.path, request.maxBytes) };
+        case GlyphEditorRequestType.APPLY_FILE_MUTATION:
+          return { operationId, ok: true, ...(await this.applyFile(request.mutation)) };
         case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
           return { operationId, ok: true, ...(await this.apply(request.mutation)) };
         case GlyphEditorRequestType.LIST_WORKING_COPIES:
@@ -233,6 +242,12 @@ export class GlyphEditorAdapter extends Disposable {
   /** Reads through a model reference so unopened files and dirty open files share one path. */
   async read(path: string, maxBytes?: number): Promise<GlyphEditorTextSnapshot> {
     const resource = this.resolve(path);
+    if (
+      this.removedResources.has(resource.toString()) &&
+      !this.textFileService.isDirty(resource) &&
+      !(await this.fileService.exists(resource))
+    )
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.NOT_FOUND);
     if (maxBytes !== undefined) {
       if (!Number.isSafeInteger(maxBytes) || maxBytes < 0)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.INVALID_REQUEST);
@@ -243,6 +258,156 @@ export class GlyphEditorAdapter extends Disposable {
     }
     const reference = await this.reference(resource);
     return this.snapshot(path, reference.object.textEditorModel, maxBytes);
+  }
+
+  /** Structural edits go through native Bulk Edit so Explorer, open editors and Undo stay coordinated. */
+  async applyFile(
+    mutation: GlyphFileMutation,
+  ): Promise<{ snapshot?: GlyphEditorTextSnapshot; receipt: GlyphMutationReceipt }> {
+    const targetPath = mutation.kind === GlyphFileMutationKind.RENAME ? mutation.target : mutation.path;
+    if (!targetPath) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.INVALID_REQUEST);
+    const known = this.receipts.get(mutation.operationId);
+    if (known) {
+      if (known.state !== GlyphMutationReceiptState.APPLIED)
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      if (mutation.kind === GlyphFileMutationKind.DELETE) {
+        if (await this.exists(mutation.path)) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+        return { receipt: known };
+      }
+      const snapshot = await this.read(targetPath);
+      if (snapshot.contentRevision !== known.afterRevision)
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      return { snapshot, receipt: known };
+    }
+    const source = this.resolve(mutation.path);
+    const target = this.resolve(targetPath);
+    const generation = this.workspaceGeneration;
+    const cancellation = new CancellationTokenSource();
+    this.pendingMutations.add(cancellation);
+    let changed: { dispose(): void } | undefined;
+    try {
+      const before = mutation.kind === GlyphFileMutationKind.CREATE ? undefined : await this.read(mutation.path);
+      if (before && mutation.kind !== GlyphFileMutationKind.CREATE) {
+        if (
+          !areSameTokens(before.token, mutation.expectedToken) ||
+          before.contentRevision !== mutation.expectedContentRevision
+        )
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+        // Native deletion backs up disk bytes for Undo. Never discard an unsaved buffer.
+        if (mutation.kind === GlyphFileMutationKind.DELETE && before.dirty)
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT, {
+            reason: 'Save or revert unsaved changes before deleting this file.',
+          });
+        if (!before.dirty) {
+          const bytes = (await this.fileService.readFile(source)).value.buffer;
+          const digest = Array.from(
+            new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))),
+            byte => byte.toString(16).padStart(2, '0'),
+          ).join('');
+          if (digest !== before.contentRevision)
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+        }
+        const model = this.modelService.getModel(source);
+        if (!model || model.getVersionId() !== before.token.version)
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+        changed = model.onDidChangeContent(() => cancellation.cancel());
+      }
+      if (mutation.kind !== GlyphFileMutationKind.DELETE && (await this.exists(targetPath)))
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT, {
+          reason: 'The destination already exists.',
+        });
+      const edit =
+        mutation.kind === GlyphFileMutationKind.CREATE
+          ? new ResourceFileEdit(undefined, target, {
+              overwrite: false,
+              contents: Promise.resolve(VSBuffer.fromString((mutation.byteOrderMark ? '\uFEFF' : '') + mutation.text)),
+            })
+          : new ResourceFileEdit(source, mutation.kind === GlyphFileMutationKind.RENAME ? target : undefined, {
+              overwrite: false,
+              recursive: false,
+              maxSize: 2 * 1024 * 1024 + 3,
+            });
+      edit.validate = async () => {
+        this.assertWorkspaceBinding();
+        if (!this.trustService.isWorkspaceTrusted())
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+        if (generation !== this.workspaceGeneration || cancellation.token.isCancellationRequested)
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+        if (before) {
+          const current = await this.read(mutation.path);
+          if (!areSameTokens(current.token, before.token) || current.contentRevision !== before.contentRevision)
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+          if (!current.dirty) {
+            const bytes = (await this.fileService.readFile(source)).value.buffer;
+            const revision = Array.from(
+              new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))),
+              byte => byte.toString(16).padStart(2, '0'),
+            ).join('');
+            if (revision !== before.contentRevision)
+              throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+          }
+        }
+        if (mutation.kind !== GlyphFileMutationKind.DELETE && (await this.exists(targetPath)))
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT, {
+            reason: 'The destination already exists.',
+          });
+        this.assertWorkspaceBinding();
+        if (!this.trustService.isWorkspaceTrusted())
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+        if (
+          generation !== this.workspaceGeneration ||
+          cancellation.token.isCancellationRequested ||
+          (before && this.modelService.getModel(source)?.getVersionId() !== before.token.version)
+        )
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      };
+      await edit.validate();
+      const result = await this.bulkEditService.apply([edit], {
+        label: 'Apply Glyph file change',
+        code: 'glyph.applyFile',
+        undoRedoSource: EXPLORER_UNDO_REDO_SOURCE,
+        undoRedoGroupId: this.undoGroup(mutation.undoGroupId).id,
+        token: cancellation.token,
+        respectAutoSaveConfig: true,
+      });
+      if (!result.isApplied) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      // Retain evidence before any later snapshot request can fail.
+      const receipt: GlyphMutationReceipt = {
+        operationId: mutation.operationId,
+        state: GlyphMutationReceiptState.UNKNOWN,
+        beforeRevision: before?.contentRevision ?? '',
+        observedAt: new Date().toISOString(),
+      };
+      this.receipts.set(mutation.operationId, receipt);
+      if (mutation.kind !== GlyphFileMutationKind.CREATE) this.removedResources.add(source.toString());
+      if (mutation.kind !== GlyphFileMutationKind.DELETE) this.removedResources.delete(target.toString());
+      this.references.get(source.toString())?.dispose();
+      this.references.delete(source.toString());
+      if (mutation.kind === GlyphFileMutationKind.DELETE) {
+        if (await this.fileService.exists(source)) {
+          this.receipts.set(mutation.operationId, { ...receipt, state: GlyphMutationReceiptState.UNKNOWN });
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+        }
+        const complete = { ...receipt, state: GlyphMutationReceiptState.APPLIED };
+        this.receipts.set(mutation.operationId, complete);
+        return { receipt: complete };
+      }
+      const snapshot = await this.read(targetPath);
+      if (mutation.kind === GlyphFileMutationKind.RENAME && (await this.fileService.exists(source)))
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      const complete = {
+        ...receipt,
+        state: GlyphMutationReceiptState.APPLIED,
+        afterRevision: snapshot.contentRevision,
+        appliedToken: snapshot.token,
+      };
+      this.receipts.set(mutation.operationId, complete);
+      return { snapshot, receipt: complete };
+    } finally {
+      changed?.dispose();
+      this.pendingMutations.delete(cancellation);
+      cancellation.dispose();
+    }
   }
 
   /**
@@ -481,7 +646,10 @@ export class GlyphEditorAdapter extends Disposable {
   /** Unsaved live models occupy a target too, without resolving or reading new models. */
   private async exists(path: string): Promise<boolean> {
     const resource = this.resolve(path);
-    const exists = this.modelService.getModel(resource) !== null || (await this.fileService.exists(resource));
+    const exists =
+      (this.modelService.getModel(resource) !== null &&
+        (!this.removedResources.has(resource.toString()) || this.textFileService.isDirty(resource))) ||
+      (await this.fileService.exists(resource));
     this.assertWorkspaceBinding();
     if (!this.trustService.isWorkspaceTrusted())
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);

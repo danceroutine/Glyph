@@ -201,7 +201,12 @@ describe(SqliteChatSessionStore, () => {
           transcript: [
             {
               ...loaded.transcript[0]!,
-              options: { mode: AgentModeID.PLAN, annotations: [annotation], attachmentSpans: [{ from: 4, to: 9 }] },
+              options: {
+                mode: AgentModeID.PLAN,
+                agentReviewId: '43d23d2a-850e-440b-a92b-b485d9b04599',
+                annotations: [annotation],
+                attachmentSpans: [{ from: 4, to: 9 }],
+              },
             },
           ],
         });
@@ -211,6 +216,7 @@ describe(SqliteChatSessionStore, () => {
         expect(loaded.transcript[0]!.options).toEqual({
           mode: AgentModeID.PLAN,
           annotations: [annotation],
+          agentReviewId: '43d23d2a-850e-440b-a92b-b485d9b04599',
           attachmentSpans: [{ from: 4, to: 9 }],
         });
       }

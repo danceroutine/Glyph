@@ -47,6 +47,7 @@ export class ProposalReviewManager {
   >();
   private readonly logger: Logger;
   private readonly maxReadBytes: number;
+  private readonly autoApplyStructural: boolean;
   private readonly listeners = new Set<(change: ProposalReviewChange) => void>();
 
   constructor(
@@ -55,8 +56,9 @@ export class ProposalReviewManager {
     logger: Logger = new NullLogger(),
     private readonly maxActiveReviews = 8,
     private readonly workspaceIdentity = workspace.root,
-    options: { readonly maxReadBytes?: number } = {},
+    options: { readonly maxReadBytes?: number; readonly autoApplyStructural?: boolean } = {},
   ) {
+    this.autoApplyStructural = options.autoApplyStructural ?? false;
     this.maxReadBytes = options.maxReadBytes ?? 2 * 1024 * 1024 + 3;
     if (!Number.isSafeInteger(this.maxReadBytes) || this.maxReadBytes < 0) {
       throw new Error('Review read budget must be a non-negative safe integer.');
@@ -69,6 +71,9 @@ export class ProposalReviewManager {
   }
   get activeReviews(): readonly EditProposal[] {
     return [...this.reviews];
+  }
+  get retainedReviews(): readonly EditProposal[] {
+    return [...this.reviews, ...this.completedReviews.filter(review => review.files.some(file => file.automatic))];
   }
   get pendingResults(): readonly EditReviewResult[] {
     // UI decisions may be optimistic while a save is pending. Model-facing
@@ -116,7 +121,21 @@ export class ProposalReviewManager {
     if (!reconcileWorkspace) return;
     if (this.reviews.length === 0) return;
     for (const review of this.reviews) {
-      for (const file of review.files) await this.reconcile(review, file);
+      for (const file of review.files) {
+        if (file.automatic?.state === 'applied') continue;
+        if (file.automatic?.state === 'reverting') {
+          file.applicability = EditApplicabilityState.STALE;
+          continue;
+        }
+        await this.reconcile(review, file);
+        if (
+          file.automatic?.state === 'applying' &&
+          file.items.find(item => item.id === file.automatic?.itemId)?.decision === EditDecisionState.ACCEPTED
+        ) {
+          file.automatic.state = 'applied';
+          file.automatic.appliedRevision = file.currentRevision;
+        }
+      }
     }
     const recoveredIds = this.reviews.map(review => review.id);
     await this.persist();
@@ -126,7 +145,11 @@ export class ProposalReviewManager {
 
   stage(proposal: EditProposal): Promise<void> {
     return this.enqueue(async () => {
-      if (this.reviews.length >= this.maxActiveReviews) {
+      if (
+        this.reviews.filter(review =>
+          review.files.some(file => file.items.some(item => item.decision === EditDecisionState.PENDING)),
+        ).length >= this.maxActiveReviews
+      ) {
         throw new EditError(
           EditFailureReason.ACTIVE_REVIEW_LIMIT,
           `The ${this.maxActiveReviews}-review queue is full.`,
@@ -137,6 +160,18 @@ export class ProposalReviewManager {
         throw new EditError(EditFailureReason.INCONSISTENT, 'A proposal with this review ID is already queued.', {
           source: proposal.id,
         });
+      }
+      if (this.autoApplyStructural) {
+        for (const file of proposal.files) {
+          const item = file.items.find(item => item.kind !== EditReviewItemKind.TEXT);
+          if (item)
+            file.automatic = {
+              itemId: item.id,
+              before: file.current ? structuredClone(file.current) : null,
+              state: 'applying',
+              appliedRevision: null,
+            };
+        }
       }
       this.reviews.push(proposal);
       try {
@@ -152,6 +187,13 @@ export class ProposalReviewManager {
         activeReviews: this.reviews.length,
       });
       this.emitChange(ProposalReviewChangeType.STAGED, [proposal.id]);
+      if (this.autoApplyStructural) {
+        await this.preflight(proposal);
+        for (const file of proposal.files) {
+          if (!file.automatic) continue;
+          await this.applyDecision(proposal, file, file.automatic.itemId, EditDecisionState.ACCEPTED);
+        }
+      }
     });
   }
 
@@ -166,6 +208,73 @@ export class ProposalReviewManager {
   }
   rejectInReview(reviewId: string, itemId: string, comment?: string): Promise<void> {
     return this.decide(itemId, EditDecisionState.REJECTED, reviewId, comment);
+  }
+
+  /** Settle an already-applied structural change, or reverse it with fresh workspace guards. */
+  settleAutomatic(reviewId: string, itemId: string, keep: boolean): Promise<void> {
+    return this.enqueue(async () => {
+      const review = this.requireReviewId(reviewId);
+      const file = review.files.find(file => file.automatic?.itemId === itemId);
+      if (!file?.automatic) throw new EditError(EditFailureReason.INCONSISTENT, 'Unknown applied file change.');
+      const automatic = file.automatic;
+      if (['kept', 'reverted'].includes(automatic.state)) return;
+      if (automatic.state === 'applying' || (keep && automatic.state === 'reverting')) throw this.stale(file);
+      if (keep) {
+        automatic.state = 'kept';
+        try {
+          await this.persist();
+        } catch (error) {
+          automatic.state = 'applied';
+          throw error;
+        }
+      } else {
+        const operationId = `${review.id}:${itemId}:revert`;
+        const mutation = { operationId, undoGroupId: operationId };
+        const wasReverting = automatic.state === 'reverting';
+        automatic.state = 'reverting';
+        await this.saveCheckpoint();
+        const current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxReadBytes });
+        if (file.operation === EditOperation.CREATE) {
+          if (current) {
+            if (current.revision !== automatic.appliedRevision) throw this.stale(file, current.revision);
+            await this.workspace.delete(file.currentPath, current.revision, mutation);
+          }
+          file.current = null;
+          file.currentRevision = null;
+        } else if (file.operation === EditOperation.DELETE) {
+          const before = automatic.before!;
+          if (current) {
+            if (current.revision !== before.revision || !wasReverting) throw this.stale(file, current.revision);
+            file.current = current;
+          } else
+            file.current = await this.workspace.create(
+              file.sourcePath,
+              before.text,
+              before.byteOrderMark,
+              before.mode,
+              mutation,
+            );
+          file.currentRevision = file.current.revision;
+        } else {
+          if (await this.workspace.exists(file.sourcePath)) {
+            const restored = await this.workspace.read(file.sourcePath);
+            if (!wasReverting || current || restored.revision !== automatic.appliedRevision) throw this.stale(file);
+            file.current = restored;
+          } else {
+            if (!current || current.revision !== automatic.appliedRevision) throw this.stale(file, current?.revision);
+            file.current = await this.workspace.rename(file.currentPath, file.sourcePath, current.revision, mutation);
+          }
+          file.currentPath = file.sourcePath;
+          file.currentRevision = file.current.revision;
+        }
+        automatic.state = 'reverted';
+        file.items.find(item => item.id === itemId)!.decision = EditDecisionState.REJECTED;
+        file.applicability = EditApplicabilityState.READY;
+        this.mutationCheckpointPending = true;
+        await this.persist();
+      }
+      this.emitChange(ProposalReviewChangeType.DECISION, [reviewId]);
+    });
   }
 
   async acceptAll(): Promise<void> {
@@ -244,7 +353,9 @@ export class ProposalReviewManager {
         review.acknowledgedResultIds = [...current];
       }
       if (!changed) return;
-      this.completedReviews = previousCompleted.filter(review => pendingReviewResults(review).length > 0);
+      this.completedReviews = previousCompleted.filter(
+        review => pendingReviewResults(review).length > 0 || review.files.some(file => file.automatic),
+      );
       try {
         await this.saveCheckpoint();
       } catch (error) {
@@ -409,6 +520,10 @@ export class ProposalReviewManager {
         }
       }
       item.decision = EditDecisionState.ACCEPTED;
+      if (file.automatic?.itemId === item.id) {
+        file.automatic.state = 'applied';
+        file.automatic.appliedRevision = file.currentRevision;
+      }
       file.applicability = applicability;
       file.applyingItemId = null;
       this.mutationCheckpointPending = true;
@@ -635,6 +750,10 @@ export class ProposalReviewManager {
       file.currentRevision = after?.revision ?? null;
       if (item.kind === EditReviewItemKind.RENAME && after) updateBaseline(file, after);
     }
+    if (file.automatic?.itemId === item.id) {
+      file.automatic.state = 'applied';
+      file.automatic.appliedRevision = file.currentRevision;
+    }
     file.applicability = EditApplicabilityState.READY;
     file.applyingItemId = null;
     return true;
@@ -801,7 +920,11 @@ function isUnreviewableSnapshot(error: unknown): boolean {
 }
 
 function isSettled(review: EditProposal): boolean {
-  return review.files.every(file => file.items.every(item => item.decision !== EditDecisionState.PENDING));
+  return review.files.every(
+    file =>
+      (!file.automatic || ['kept', 'reverted'].includes(file.automatic.state)) &&
+      file.items.every(item => item.decision !== EditDecisionState.PENDING),
+  );
 }
 
 function reviewResultId(reviewId: string, itemId: string): string {
@@ -814,7 +937,9 @@ function reviewResults(review: EditProposal): EditReviewResult[] {
       .filter(item => item.decision !== EditDecisionState.PENDING)
       .map(item => ({
         schemaVersion: 1 as const,
-        id: reviewResultId(review.id, item.id),
+        id:
+          reviewResultId(review.id, item.id) +
+          (file.automatic?.itemId === item.id && file.automatic.state === 'reverted' ? ':reverted' : ''),
         reviewId: review.id,
         ...(review.origin ? { origin: review.origin } : {}),
         items: [

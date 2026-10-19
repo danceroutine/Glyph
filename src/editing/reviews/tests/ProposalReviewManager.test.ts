@@ -35,6 +35,45 @@ const configuration: EditingConfiguration = {
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
 
 describe(ProposalReviewManager, () => {
+  it.each([EditOperation.CREATE, EditOperation.DELETE, EditOperation.RENAME])(
+    'automatically applies %s and retains a durable guarded Revert after receipt delivery',
+    async operation => {
+      const { root, state, service, workspace } = await fixture('base');
+      const store = new FileProposalReviewStore(state);
+      const manager = new ProposalReviewManager(workspace, store, new NullLogger(), 8, root, {
+        autoApplyStructural: true,
+      });
+      const base = await workspace.read('file.txt');
+      const proposal = await service.proposeStructured({
+        files: [
+          {
+            operation,
+            path: operation === EditOperation.CREATE ? 'new.txt' : 'file.txt',
+            new_path: operation === EditOperation.RENAME ? 'renamed.txt' : null,
+            base_revision: operation === EditOperation.CREATE ? null : base.revision,
+            content: operation === EditOperation.CREATE ? 'created' : null,
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      await manager.stage(proposal);
+      const file = proposal.files[0]!;
+      expect(file.automatic?.state).toBe('applied');
+      expect(manager.pendingChangeCount).toBe(0);
+      await manager.acknowledgeResults(manager.pendingResults.map(result => result.id));
+      const recovered = new ProposalReviewManager(workspace, store);
+      await recovered.initialize();
+      expect(recovered.active?.files[0]?.automatic?.state).toBe('applied');
+      await recovered.settleAutomatic(proposal.id, file.automatic!.itemId, false);
+      expect(recovered.active).toBeUndefined();
+      expect((await workspace.read('file.txt')).text).toBe('base');
+      if (operation === EditOperation.CREATE) expect(await workspace.exists('new.txt')).toBe(false);
+      if (operation === EditOperation.RENAME) expect(await workspace.exists('renamed.txt')).toBe(false);
+      expect(recovered.pendingResults[0]?.id).toContain(':reverted');
+    },
+  );
+
   it('persists rejection comments in recovered receipts and rolls them back after a failed save', async () => {
     const { root, state, service, workspace } = await fixture('base');
     const store = new FileProposalReviewStore(state);

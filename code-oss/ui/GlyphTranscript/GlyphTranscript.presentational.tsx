@@ -10,7 +10,7 @@ import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 const styles = {
   root: css({ flex: 1, minHeight: 0, overflowY: 'auto', padding: tokens.space.lg }),
   entry: css({
-    marginBottom: 28,
+    marginBottom: tokens.space.lg,
     userSelect: 'text',
     '&:hover time, &:focus-within time, &:hover .glyph-restore, &:focus-within .glyph-restore': { opacity: 1 },
   }),

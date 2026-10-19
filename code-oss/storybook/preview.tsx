@@ -13,8 +13,8 @@ const preview: Preview = {
       toolbar: {
         icon: 'paintbrush',
         items: [
-          { value: 'dark', title: 'Dark' },
-          { value: 'light', title: 'Light' },
+          { value: 'dark', title: 'Dark Modern' },
+          { value: 'light', title: 'Light Modern' },
         ],
         dynamicTitle: true,
       },

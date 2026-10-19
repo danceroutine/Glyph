@@ -41,8 +41,10 @@ async function adapterModule() {
         export const Progress = { None: {} };
         export class BulkTextEdits {}
         export const EndOfLineSequence = { LF: 0, CRLF: 1 };
+        export class ResourceFileEdit { constructor(oldResource, newResource, options) { Object.assign(this, { oldResource, newResource, options }); } }
         export class ResourceTextEdit { constructor(resource, edit, version) { Object.assign(this, { resource, edit, version }); } }
         export class UndoRedoGroup { id = 1; }
+        export const UNDO_REDO_SOURCE = { id: 1 };
         export const EditSources = { unknown: metadata => ({ metadata }) };
       `,
           }));
@@ -766,3 +768,60 @@ async function pendingEdit({
       }),
   };
 }
+
+it.each(['trust revoked', 'destination occupied'])(
+  'revalidates structural edits after native preparation: %s',
+  async race => {
+    const { GlyphEditorAdapter, URI } = await adapterModule();
+    const root = { name: 'workspace', uri: URI.file('/workspace') };
+    let trusted = true;
+    let occupied = false;
+    let written = false;
+    const apply = vi.fn(async edits => {
+      if (race === 'trust revoked') trusted = false;
+      else occupied = true;
+      await edits[0].validate();
+      written = true;
+      return { isApplied: true };
+    });
+    const adapter = new GlyphEditorAdapter(
+      {},
+      { apply },
+      {
+        getWorkspace: () => ({ id: 'workspace', folders: [root] }),
+        isInsideWorkspace: () => true,
+        onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+        onDidChangeWorkspaceName: () => ({ dispose() {} }),
+        onDidChangeWorkbenchState: () => ({ dispose() {} }),
+      },
+      { getModel: () => null },
+      { isDirty: () => false },
+      { isWorkspaceTrusted: () => trusted },
+      { exists: async () => occupied },
+      { asCanonicalUri: uri => uri },
+      { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
+    );
+    try {
+      const result = await adapter.handle({
+        type: 'apply_file_mutation',
+        mutation: {
+          kind: 'create',
+          path: 'file.ts',
+          text: 'new',
+          byteOrderMark: false,
+          operationId: 'create',
+          undoGroupId: 'create',
+        },
+      });
+      expect(apply).toHaveBeenCalledOnce();
+      expect(written).toBe(false);
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: race === 'trust revoked' ? 'UNTRUSTED_WORKSPACE' : 'STALE_DOCUMENT' },
+      });
+      expect(await adapter.inspectReceipt('create')).toBeUndefined();
+    } finally {
+      adapter.dispose();
+    }
+  },
+);

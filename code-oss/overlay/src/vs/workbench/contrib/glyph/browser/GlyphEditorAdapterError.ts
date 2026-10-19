@@ -4,12 +4,14 @@ import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
 export class GlyphEditorAdapterError extends Error {
   constructor(
     readonly code: GlyphDesktopErrorCode,
-    readonly details?: Readonly<Record<string, number>>,
+    readonly details?: Readonly<Record<string, string | number>>,
   ) {
     super(
       code === GlyphDesktopErrorCode.WORKSPACE_CHANGED
         ? 'Workspace folders changed. Reload the window to reconnect Glyph before reading or editing files.'
-        : code,
+        : typeof details?.reason === 'string'
+          ? details.reason
+          : code,
     );
     this.name = 'GlyphEditorAdapterError';
   }

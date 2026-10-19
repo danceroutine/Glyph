@@ -8,13 +8,17 @@ import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 import type { GlyphMessageState } from './useGlyphMessageState.ts';
 
 const styles = {
-  entry: css({ marginBottom: 28, userSelect: 'text', '&:hover time, &:focus-within time': { opacity: 1 } }),
+  entry: css({
+    marginBottom: tokens.space.lg,
+    userSelect: 'text',
+    '&:hover time, &:focus-within time': { opacity: 1 },
+  }),
   answer: css({ padding: '0 10px' }),
   footer: css({
     display: 'flex',
     alignItems: 'center',
     gap: 12,
-    marginTop: 12,
+    marginTop: tokens.space.sm,
     color: tokens.text.muted,
     minHeight: 24,
     '& time': { opacity: 0, fontSize: tokens.font.size.detail },
@@ -23,6 +27,7 @@ const styles = {
 
 export interface GlyphAgentMessageProps {
   readonly entry: GlyphMessageState['entries'][number];
+  readonly changes?: ComponentChildren;
   readonly content: ComponentChildren;
   readonly usage: ComponentChildren;
   readonly approval?: ComponentChildren;
@@ -31,7 +36,15 @@ export interface GlyphAgentMessageProps {
 }
 
 /** Everything belonging to one assistant message, including its tools and actions. */
-export function GlyphAgentMessage({ entry, content, usage, approval, shells, modeSwapCards }: GlyphAgentMessageProps) {
+export function GlyphAgentMessage({
+  entry,
+  content,
+  usage,
+  approval,
+  shells,
+  modeSwapCards,
+  changes,
+}: GlyphAgentMessageProps) {
   return (
     <div class={`glyph-entry assistant ${styles.entry}`}>
       {entry.questionResponses?.map(response => (
@@ -39,6 +52,7 @@ export function GlyphAgentMessage({ entry, content, usage, approval, shells, mod
       ))}
       {entry.progress && <GlyphTurnProgress progress={entry.progress} openLink={entry.openLink} />}
       {modeSwapCards}
+      {changes}
       <div class={styles.answer}>
         <div data-glyph-source={entry.id} data-kind="chat" data-label={entry.label} data-revision={entry.text.length}>
           {content}

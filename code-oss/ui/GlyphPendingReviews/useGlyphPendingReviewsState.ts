@@ -42,15 +42,15 @@ export function useGlyphPendingReviewsState({ chatId, proposals, readOnly, actio
           key: `${proposal.id}/${file.id}`,
           name: file.path.split('/').at(-1) ?? file.path,
           canKeep:
-            file.textOnly === true &&
+            (file.textOnly === true || file.autoApplied === true) &&
             [GlyphProposalApplicability.READY, GlyphProposalApplicability.FAILED_RETRYABLE].includes(
               file.applicability,
             ),
           status:
             file.applicability === GlyphProposalApplicability.STALE
               ? 'File changed. Dismiss this proposal and request a fresh edit.'
-              : file.textOnly === false
-                ? 'This file operation is not supported yet.'
+              : file.textOnly === false && !file.autoApplied
+                ? 'The file operation could not be applied. Revert to dismiss it.'
                 : undefined,
         })),
     );

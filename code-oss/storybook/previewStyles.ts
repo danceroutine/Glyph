@@ -9,6 +9,8 @@ export const stageClassName = css({
   color: tokens.text.primary,
   fontFamily: tokens.font.family.body,
   fontSize: tokens.font.size.inherited,
+  // The native workbench supplies this inherited line height.
+  lineHeight: 1.4,
   '&[data-theme="light"]': previewThemeStyles('light'),
 });
 

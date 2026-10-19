@@ -1,44 +1,137 @@
-import { test as it } from './GlyphWorkbench.fixture.mjs';
+import { randomUUID } from 'node:crypto';
+import { access, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { ScriptedProvider } from './ScriptedProvider.mjs';
 
-// Pending black-box contracts: these scenarios still need production UI wiring.
-// Enable these with scripted provider tool calls through the production runtime,
-// observable workbench results, and disposable workspace/process fixtures.
-// Existing runtime unit tests do not establish desktop end-to-end coverage.
-
-// Text patch and structured edit contracts are executable in GlyphProposals.test.mjs.
-
-// Create/delete are staged file operations in patch/structured-edit proposals,
-// not separate registered project tool names. Desktop application is still pending.
-it.describe('Pending structural file mutations through a reviewed proposal', () => {
-  it.fixme(
-    'shows a proposed rename and moves the file through the workbench only after acceptance, with Undo restoring its original path',
-    async () => {},
+const original = 'Original content\n';
+const drawer = glyph => glyph.page.getByRole('region', { name: 'Pending reviews', exact: true });
+const exists = path =>
+  access(path).then(
+    () => true,
+    () => false,
   );
-  it.fixme(
-    'preserves both files when a rename is rejected or its destination becomes occupied before acceptance',
-    async () => {},
-  );
-});
-
-it.describe('Pending Delete File through a reviewed proposal', () => {
-  it.fixme(
-    'shows the file and its contents in a deletion review without deleting it before acceptance',
-    async () => {},
-  );
-  it.fixme('deletes an accepted file through the workbench and lets Undo restore its contents', async () => {});
-  it.fixme('preserves the file after rejection and refuses a stale deletion after the user edits it', async () => {});
-  it.fixme('refuses deletion outside the authorized workspace without affecting the target file', async () => {});
-});
-
-it.describe('Pending Create File through a reviewed proposal', () => {
-  it.fixme('shows the proposed path and contents without creating the file before acceptance', async () => {});
-  it.fixme('creates an accepted file with the proposed contents and lets Undo reverse its creation', async () => {});
-  it.fixme(
-    'leaves no file after rejection and refuses to overwrite a file created while the proposal was pending',
-    async () => {},
-  );
-  it.fixme(
-    'refuses creation outside the authorized workspace without leaving files or directories behind',
-    async () => {},
-  );
+async function tool(glyph, provider, name, args) {
+  const callId = randomUUID();
+  const count = provider.requests.length;
+  provider.enqueue({ output: [ScriptedProvider.tool(name, args, { callId })] }, { chunks: ['File change complete.'] });
+  await glyph.send(`Run ${name}.`);
+  await expect.poll(() => provider.requests.length).toBe(count + 2);
+  await expect(glyph.sendButton).toHaveText('Send (Enter)');
+  const output = provider.requests
+    .at(-1)
+    .body.input.find(item => item.call_id === callId && item.type === 'function_call_output');
+  return JSON.parse(output.output);
+}
+async function change(glyph, provider, operation) {
+  const base =
+    operation === 'CREATE'
+      ? null
+      : await tool(glyph, provider, 'read_project_file', { path: 'original.txt', start_line: null, end_line: null });
+  const result = await tool(glyph, provider, 'propose_edits', {
+    files: [
+      {
+        operation,
+        path: operation === 'CREATE' ? 'created.json' : 'original.txt',
+        new_path: operation === 'RENAME' ? 'renamed.txt' : null,
+        base_revision: base?.revision ?? null,
+        content: operation === 'CREATE' ? '{"created":true}\n' : null,
+        byte_order_mark: null,
+        edits: [],
+      },
+    ],
+  });
+  expect(result, JSON.stringify(result)).toMatchObject({ status: 'APPLIED_WITH_REVERT' });
+  return operation === 'CREATE' ? 'created.json' : operation === 'RENAME' ? 'renamed.txt' : 'original.txt';
+}
+it.describe('Applied structural file changes', () => {
+  it.use({ scriptedProvider: true, workspaceFiles: { 'original.txt': original } });
+  for (const operation of ['CREATE', 'DELETE', 'RENAME']) {
+    it(`${operation} applies immediately, renders its diff and survives reload with Revert`, async ({
+      glyph,
+      provider,
+    }) => {
+      const path = await change(glyph, provider, operation);
+      await expect(drawer(glyph).getByRole('button', { name: `Revert ${path}`, exact: true })).toBeAttached();
+      await expect(glyph.page.getByRole('region', { name: `File change ${path}`, exact: true })).toBeVisible();
+      for (const surface of [
+        drawer(glyph),
+        glyph.page.getByRole('region', { name: `File change ${path}`, exact: true }),
+      ]) {
+        const icon = surface.locator('.file-icon');
+        await expect(icon).toBeVisible();
+        await expect
+          .poll(() => icon.evaluate(element => getComputedStyle(element, '::before').content))
+          .not.toMatch(/^(none|normal|""|)$/);
+      }
+      if (operation === 'DELETE') {
+        expect(await exists(join(glyph.workspace, path))).toBe(false);
+        await expect(drawer(glyph).getByText(path, { exact: true })).toHaveCSS('text-decoration-line', 'line-through');
+      } else
+        expect(await readFile(join(glyph.workspace, path), 'utf8')).toBe(
+          operation === 'CREATE' ? '{"created":true}\n' : original,
+        );
+      if (operation === 'RENAME') {
+        await expect(drawer(glyph).getByLabel('Renamed', { exact: true })).toHaveAttribute('title', 'Renamed');
+        await expect(drawer(glyph)).not.toContainText('original.txt');
+      }
+      await drawer(glyph)
+        .getByRole('button', { name: `Review ${path}`, exact: true })
+        .click();
+      await expect(glyph.page.locator('.monaco-diff-editor')).toBeVisible();
+      await glyph.reload();
+      await expect(drawer(glyph).getByRole('button', { name: `Revert ${path}`, exact: true })).toBeAttached();
+      await drawer(glyph)
+        .getByRole('button', { name: `Review ${path}`, exact: true })
+        .hover();
+      await drawer(glyph)
+        .getByRole('button', { name: `Revert ${path}`, exact: true })
+        .click();
+      await expect(drawer(glyph)).toHaveCount(0);
+      if (operation === 'CREATE') expect(await exists(join(glyph.workspace, path))).toBe(false);
+      else expect(await readFile(join(glyph.workspace, 'original.txt'), 'utf8')).toBe(original);
+      if (operation === 'RENAME') expect(await exists(join(glyph.workspace, path))).toBe(false);
+    });
+    it(`${operation} supports native workbench Undo`, async ({ glyph, provider }) => {
+      const path = await change(glyph, provider, operation);
+      await glyph.command('Focus on Files Explorer');
+      await glyph.page.keyboard.press('ControlOrMeta+z');
+      await expect
+        .poll(() => exists(join(glyph.workspace, operation === 'CREATE' ? path : 'original.txt')))
+        .toBe(operation !== 'CREATE');
+      if (operation !== 'CREATE') expect(await readFile(join(glyph.workspace, 'original.txt'), 'utf8')).toBe(original);
+      if (operation === 'RENAME') expect(await exists(join(glyph.workspace, path))).toBe(false);
+    });
+    it(`${operation} refuses Revert when it would overwrite subsequent work`, async ({ glyph, provider }) => {
+      const path = await change(glyph, provider, operation);
+      const protectedPath = operation === 'RENAME' ? 'original.txt' : path;
+      await writeFile(join(glyph.workspace, protectedPath), 'USER WORK\n');
+      await drawer(glyph)
+        .getByRole('button', { name: `Review ${path}`, exact: true })
+        .hover();
+      await drawer(glyph)
+        .getByRole('button', { name: `Revert ${path}`, exact: true })
+        .click();
+      await expect(drawer(glyph).getByRole('alert')).toBeVisible();
+      expect(await readFile(join(glyph.workspace, protectedPath), 'utf8')).toBe('USER WORK\n');
+    });
+  }
+  it('refuses an outside-workspace structural target without creating directories', async ({ glyph, provider }) => {
+    const target = `../outside-${randomUUID()}/file.txt`;
+    const result = await tool(glyph, provider, 'propose_edits', {
+      files: [
+        {
+          operation: 'CREATE',
+          path: target,
+          new_path: null,
+          base_revision: null,
+          content: 'outside',
+          byte_order_mark: null,
+          edits: [],
+        },
+      ],
+    });
+    expect(result.error).toBeTruthy();
+    expect(await exists(join(glyph.workspace, target, '..'))).toBe(false);
+  });
 });

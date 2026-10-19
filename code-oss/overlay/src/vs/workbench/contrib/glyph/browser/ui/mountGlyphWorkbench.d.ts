@@ -33,3 +33,9 @@ export declare const mountGlyphContextButton: (
 
 import type { GlyphAgentReviewMount } from '#glyph/workbench/GlyphAgentReview.js';
 export declare const mountGlyphAgentReview: GlyphAgentReviewMount;
+export declare function mountGlyphAgentReviewComment(
+  container: HTMLElement,
+  finding: import('#glyph/workbench/GlyphAgentReviewFinding.js').GlyphAgentReviewFinding,
+  fix: () => void,
+  dismiss: () => void,
+): { dispose(): void };

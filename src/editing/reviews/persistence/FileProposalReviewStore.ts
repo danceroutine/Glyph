@@ -50,6 +50,15 @@ const fileEditPlanSchema = z
     operation: z.enum(EditOperation),
     sourcePath: z.string().min(1),
     targetPath: z.string().min(1),
+    automatic: z
+      .object({
+        itemId: z.string().min(1),
+        before: snapshotSchema.nullable(),
+        state: z.enum(['applying', 'applied', 'reverting', 'reverted', 'kept']),
+        appliedRevision: z.string().nullable(),
+      })
+      .strict()
+      .optional(),
     base: snapshotSchema.nullable(),
     proposed: snapshotSchema,
     items: z.array(reviewItemSchema),
@@ -61,8 +70,9 @@ const fileEditPlanSchema = z
     currentRevision: z.string().min(1).nullable(),
   })
   .strict()
-  .transform(file => ({
+  .transform(({ automatic, ...file }) => ({
     ...file,
+    ...(automatic ? { automatic } : {}),
     current: file.current === undefined ? file.base : file.current,
     applyingItemId: file.applyingItemId ?? null,
     createdDirectories: file.createdDirectories ?? [],

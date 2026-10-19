@@ -1,3 +1,7 @@
+import { getIconClasses } from '#vs/editor/common/services/getIconClasses.js';
+import { IModelService } from '#vs/editor/common/services/model.js';
+import { ILanguageService } from '#vs/editor/common/languages/language.js';
+import { URI } from '#vs/base/common/uri.js';
 import { IPreferencesService } from '#vs/workbench/services/preferences/common/preferences.js';
 import { StandardKeyboardEvent } from '#vs/base/browser/keyboardEvent.js';
 import { MutableDisposable } from '#vs/base/common/lifecycle.js';
@@ -128,6 +132,10 @@ export class GlyphViewPane extends ViewPane {
         this.glyphService.answerQuestion(chatId, runId, questionId, answer),
       decideApproval: (chatId, runId, approvalId, decision) =>
         this.glyphService.decideApproval(chatId, runId, approvalId, decision),
+      fileIconClasses: path =>
+        this.instantiationService.invokeFunction(accessor =>
+          getIconClasses(accessor.get(IModelService), accessor.get(ILanguageService), URI.file(path)),
+        ),
       reviewProposalFile: (chatId, proposalId, fileId) => service.reviewProposalFile(chatId, proposalId, fileId),
       decideProposalItems: (chatId, items, accept) => service.decideProposalItems(chatId, items, accept),
       newChat: () => this.glyphService.newChat(),

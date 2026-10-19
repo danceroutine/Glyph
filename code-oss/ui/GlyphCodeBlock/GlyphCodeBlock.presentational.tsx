@@ -43,7 +43,7 @@ const styles = {
   }),
 };
 type HighlightNode = NonNullable<GlyphCodeBlockState['nodes']>[number];
-function highlighted(nodes: readonly HighlightNode[]): ComponentChildren {
+export function highlighted(nodes: readonly HighlightNode[]): ComponentChildren {
   return nodes.map(node =>
     node.type === 'text' ? (
       node.value

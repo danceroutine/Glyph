@@ -12,9 +12,13 @@ import { assertWellFormedWorkspacePath } from '#src/workspace/assertWellFormedWo
 import type { GlyphDocumentToken } from '#src/desktop/protocol/connection/GlyphDocumentToken.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 import type { GlyphEditorTextSnapshot } from '#src/desktop/protocol/editor/GlyphEditorTextSnapshot.js';
-import type { GlyphMutationReceipt } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
+import {
+  GlyphMutationReceiptState,
+  type GlyphMutationReceipt,
+} from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
+import { GlyphFileMutationKind, type GlyphFileMutation } from '#src/desktop/protocol/editor/GlyphFileMutation.js';
 import type { EditorWorkspaceClient } from './EditorWorkspaceClient.ts';
 
 interface CachedCapability {
@@ -103,29 +107,53 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     return this.remember(requireSnapshot(response, path));
   }
 
-  // TODO: Add guarded renderer RPC operations for create/rename/delete before
-  // enabling structural proposals; bypassing live models would break undo.
   async create(
-    _path: string,
-    _text: string,
-    _byteOrderMark: boolean,
+    path: string,
+    text: string,
+    byteOrderMark: boolean,
     _mode?: number,
-    _options?: WorkspaceMutationOptions,
+    options: WorkspaceMutationOptions = {},
   ): Promise<WorkspaceTextSnapshot> {
-    throw structuralEditError('Creating files from the desktop agent is not enabled.');
+    const response = await this.mutateFile({
+      kind: GlyphFileMutationKind.CREATE,
+      path: this.normalizePath(path),
+      text,
+      byteOrderMark,
+      operationId: options.operationId ?? randomUUID(),
+      undoGroupId: options.undoGroupId ?? options.operationId ?? randomUUID(),
+    });
+    return this.remember(requireSnapshot(response, path));
   }
 
   async rename(
-    _source: string,
-    _target: string,
-    _expectedRevision: string,
-    _options?: WorkspaceMutationOptions,
+    source: string,
+    target: string,
+    expectedRevision: string,
+    options: WorkspaceMutationOptions = {},
   ): Promise<WorkspaceTextSnapshot> {
-    throw structuralEditError('Renaming files from the desktop agent is not enabled.');
+    if (await this.recoverFileMutation(source, expectedRevision, options.operationId, target)) return this.read(target);
+    const response = await this.mutateFile({
+      kind: GlyphFileMutationKind.RENAME,
+      path: this.normalizePath(source),
+      target: this.normalizePath(target),
+      expectedContentRevision: expectedRevision,
+      expectedToken: await this.fileToken(source, expectedRevision),
+      operationId: options.operationId ?? randomUUID(),
+      undoGroupId: options.undoGroupId ?? options.operationId ?? randomUUID(),
+    });
+    return this.remember(requireSnapshot(response, target));
   }
 
-  async delete(_path: string, _expectedRevision: string, _options?: WorkspaceMutationOptions): Promise<void> {
-    throw structuralEditError('Deleting files from the desktop agent is not enabled.');
+  async delete(path: string, expectedRevision: string, options: WorkspaceMutationOptions = {}): Promise<void> {
+    if (await this.recoverFileMutation(path, expectedRevision, options.operationId)) return;
+    await this.mutateFile({
+      kind: GlyphFileMutationKind.DELETE,
+      path: this.normalizePath(path),
+      expectedContentRevision: expectedRevision,
+      expectedToken: await this.fileToken(path, expectedRevision),
+      operationId: options.operationId ?? randomUUID(),
+      undoGroupId: options.undoGroupId ?? options.operationId ?? randomUUID(),
+    });
   }
 
   async replace(
@@ -184,6 +212,47 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
   /** Invalidates every editor capability after reconnect, ownership transfer, or workspace change. */
   invalidateCapabilities(): void {
     this.capabilities.clear();
+  }
+
+  /** Inspect the renderer receipt before reading a source that the first attempt may have removed. */
+  private async recoverFileMutation(
+    source: string,
+    revision: string,
+    operationId?: string,
+    target?: string,
+  ): Promise<boolean> {
+    if (!operationId) return false;
+    const response = await this.client.request({ type: GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT, operationId });
+    if (!response.ok) throw responseError(response, source);
+    const receipt = response.receipt;
+    if (!receipt) return false;
+    if (
+      receipt.state !== GlyphMutationReceiptState.APPLIED ||
+      receipt.beforeRevision !== revision ||
+      (await this.exists(source))
+    )
+      throw stale(source);
+    if (target && (await this.read(target)).revision !== receipt.afterRevision) throw stale(target);
+    return true;
+  }
+
+  private async fileToken(input: string, revision: string): Promise<GlyphDocumentToken> {
+    const path = this.normalizePath(input);
+    const snapshot = await this.read(path);
+    if (snapshot.revision !== revision) throw stale(path, snapshot.revision);
+    return this.capabilities.get(capabilityKey(path, revision))!.token;
+  }
+
+  private async mutateFile(mutation: GlyphFileMutation): Promise<GlyphEditorResponse> {
+    const response = await this.client.request({ type: GlyphEditorRequestType.APPLY_FILE_MUTATION, mutation });
+    if (!response.ok) throw responseError(response, mutation.path);
+    if (!response.receipt)
+      throw new EditError(EditFailureReason.INCONSISTENT, 'The editor did not confirm the file operation.', {
+        path: mutation.path,
+      });
+    this.receipts.set(mutation.operationId, response.receipt);
+    this.capabilities.clear();
+    return response;
   }
 
   private remember(snapshot: GlyphEditorTextSnapshot): WorkspaceTextSnapshot {
@@ -245,10 +314,6 @@ function responseError(response: GlyphEditorResponse, path: string): Error {
 
 function malformedPath(path: string): EditError {
   return new EditError(EditFailureReason.MALFORMED, 'Path must be a project-relative file path.', { path });
-}
-
-function structuralEditError(message: string): EditError {
-  return new EditError(EditFailureReason.UNSUPPORTED, message);
 }
 
 function stale(path: string, currentRevision?: string): EditError {

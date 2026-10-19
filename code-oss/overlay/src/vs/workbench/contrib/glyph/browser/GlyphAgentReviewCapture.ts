@@ -30,6 +30,7 @@ export async function captureGlyphAgentReview(
   repository: ISCMRepository,
   scope: Scope,
   branch: string,
+  captured?: (uri: URI, before: string, after: string) => void,
 ): Promise<readonly GlyphContextAttachment[]> {
   const unavailableReason = glyphAgentReviewUnavailableReason(repository, scope);
   if (unavailableReason) throw new Error(unavailableReason);
@@ -104,7 +105,15 @@ export async function captureGlyphAgentReview(
   const before = signature();
   const attachments: GlyphContextAttachment[] = [];
   for (const change of changes)
-    attachments.push(await ide.captureDiff(change.uri, change.originalUri, change.modifiedUri, label));
+    attachments.push(
+      await ide.captureDiff(
+        change.uri,
+        change.originalUri,
+        change.modifiedUri,
+        label,
+        ...(captured ? [(before: string, after: string) => captured(change.uri, before, after)] : []),
+      ),
+    );
   if (attachments.reduce((bytes, item) => bytes + new TextEncoder().encode(item.text).byteLength, 0) > 2 * 1024 * 1024)
     throw new Error('This review exceeds 2 MiB. Select a smaller scope.');
   if (head !== history?.historyItemRef.get()?.revision || before !== signature())

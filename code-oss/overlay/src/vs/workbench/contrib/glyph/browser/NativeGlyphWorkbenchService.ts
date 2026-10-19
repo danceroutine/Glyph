@@ -248,7 +248,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     if (chat?.mode) composer.hydrateMode(chat.mode);
     return composer;
   }
-  get ideContext() { return this.context.ide; }
+  get ideContext() {
+    return this.context.ide;
+  }
   async attachIdeContext(): Promise<void> {
     const composer = this.composer;
     const document = composer.snapshot.document;
@@ -506,6 +508,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       attachments,
       options,
     });
+  }
+
+  cancelRun(chatId: string, runId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.CANCEL_RUN, chatId, runId });
   }
 
   cancel(): void {

@@ -26,7 +26,15 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
     return {
       prefix,
       items: parser.lexer(
-        entry.parts.map((part, index) => (part.type === 'text' ? part.text : `${prefix}${index}END`)).join(''),
+        entry.parts
+          .map((part, index) =>
+            part.type === 'text'
+              ? entry.role === 'assistant' && entry.options?.agentReviewId
+                ? part.text.replace(/<glyph_review>[\s\S]*?(?:<\/glyph_review>|$)/g, '')
+                : part.text
+              : `${prefix}${index}END`,
+          )
+          .join(''),
       ),
     };
   }, [entry.text, entry.attachments, entry.options]);

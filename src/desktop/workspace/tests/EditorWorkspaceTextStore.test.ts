@@ -26,6 +26,48 @@ describe(EditorWorkspaceTextStore, () => {
     },
   );
 
+  it.each(['delete', 'rename'] as const)(
+    'recovers a %s receipt without rereading its removed source',
+    async operation => {
+      const client = new FixtureEditorClient('original');
+      const snapshotResponse = await client.request({
+        type: GlyphEditorRequestType.READ_SNAPSHOT,
+        path: 'target.ts',
+        operationId: 'read',
+      });
+      const snapshot = snapshotResponse.snapshot!;
+      let sourceExists = false;
+      const request = vi.spyOn(client, 'request').mockImplementation(async request => {
+        if (request.type === GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT)
+          return {
+            operationId: request.operationId,
+            ok: true,
+            receipt: {
+              operationId: request.operationId,
+              state: GlyphMutationReceiptState.APPLIED,
+              beforeRevision: snapshot.contentRevision,
+              ...(operation === 'rename' ? { afterRevision: snapshot.contentRevision } : {}),
+              observedAt: 'now',
+            },
+          };
+        if (request.type === GlyphEditorRequestType.EXISTS)
+          return { operationId: request.operationId, ok: true, exists: sourceExists };
+        if (request.type === GlyphEditorRequestType.READ_SNAPSHOT && request.path === 'target.ts')
+          return { operationId: request.operationId, ok: true, snapshot };
+        throw new Error('Recovery must not repeat the mutation or read its missing source');
+      });
+      const store = new EditorWorkspaceTextStore('/project', true, client);
+      const retry = () =>
+        operation === 'rename'
+          ? store.rename('source.ts', 'target.ts', snapshot.contentRevision, { operationId: 'lost-response' })
+          : store.delete('source.ts', snapshot.contentRevision, { operationId: 'lost-response' });
+      await retry();
+      expect(request.mock.calls[0]?.[0].type).toBe(GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT);
+      sourceExists = true;
+      await expect(retry()).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+    },
+  );
+
   it('uses host canonical metadata for prospective path claims without loading editor snapshots', async () => {
     const canonicalPath = vi.fn(async (_path: string) => '/canonical/project/new/file');
     const request = vi.fn<EditorWorkspaceClient['request']>();
@@ -115,15 +157,15 @@ describe(EditorWorkspaceTextStore, () => {
     expect(client.mutationCount).toBe(0);
   });
 
-  it('fails closed for structural edits, traversal, missing files, and invalid snapshot hashes', async () => {
+  it('rejects unsupported renderer operations, stale file changes, traversal, missing files, and invalid hashes', async () => {
     const client = new FixtureEditorClient('text');
     const store = new EditorWorkspaceTextStore('/project', true, client);
-    await expect(store.create('new.ts', '', false)).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    await expect(store.create('new.ts', '', false)).rejects.toMatchObject({ reason: EditFailureReason.INCONSISTENT });
     await expect(store.rename('file.ts', 'other.ts', 'revision')).rejects.toMatchObject({
-      reason: EditFailureReason.UNSUPPORTED,
+      reason: EditFailureReason.STALE,
     });
     await expect(store.delete('file.ts', 'revision')).rejects.toMatchObject({
-      reason: EditFailureReason.UNSUPPORTED,
+      reason: EditFailureReason.STALE,
     });
     expect(() => store.normalizePath('../outside')).toThrowError(/project-relative/);
 
@@ -201,7 +243,7 @@ class FixtureEditorClient implements EditorWorkspaceClient {
       };
     }
     return {
-      operationId: request.operationId,
+      operationId: 'mutation' in request ? request.mutation.operationId : request.operationId,
       ok: false,
       error: { code: GlyphDesktopErrorCode.INVALID_REQUEST, message: 'unsupported', retryable: false },
     };

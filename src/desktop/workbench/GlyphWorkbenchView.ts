@@ -17,6 +17,7 @@ export interface GlyphWorkbenchView {
 
 /** Callbacks preserve the service's ownership of application behavior. */
 export interface GlyphWorkbenchViewActions {
+  readonly fileIconClasses?: (path: string) => readonly string[];
   readonly composer: GlyphComposerState;
   readonly context: GlyphContextActions;
   /** Adds room for history alongside the chat; cleanup releases only the added width. */

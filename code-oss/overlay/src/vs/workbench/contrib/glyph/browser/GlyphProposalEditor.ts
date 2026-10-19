@@ -505,14 +505,14 @@ export class GlyphProposalEditor extends Disposable {
         files.length === 0 ||
         files.some(
           ({ file }) =>
-            file.textOnly !== true ||
+            (file.textOnly !== true && !file.autoApplied) ||
             ![GlyphProposalApplicability.READY, GlyphProposalApplicability.FAILED_RETRYABLE].includes(
               file.applicability,
             ),
         ),
       keepDisabled:
         disabled ||
-        file?.textOnly !== true ||
+        (file?.textOnly !== true && !file?.autoApplied) ||
         file.applicability === GlyphProposalApplicability.STALE ||
         file.applicability === GlyphProposalApplicability.APPLYING,
       previous: () => this.move(-1),

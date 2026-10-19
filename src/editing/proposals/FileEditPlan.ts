@@ -8,6 +8,12 @@ export interface FileEditPlan {
   readonly operation: EditOperation;
   readonly sourcePath: string;
   readonly targetPath: string;
+  automatic?: {
+    readonly itemId: string;
+    readonly before: WorkspaceTextSnapshot | null;
+    state: 'applying' | 'applied' | 'reverting' | 'reverted' | 'kept';
+    appliedRevision: string | null;
+  };
   base: WorkspaceTextSnapshot | null;
   proposed: WorkspaceTextSnapshot;
   readonly items: EditReviewItem[];

@@ -185,6 +185,28 @@ class TwoToolClaudeAdapter extends ClaudeShapedAdapter {
 }
 
 describe(AgentRuntime, () => {
+  it.each([false, true])(
+    'keeps review formatting out of the visible prompt and scopes it to review turns: %s',
+    async reviewing => {
+      const adapter = new ClaudeShapedAdapter();
+      const runtime = new AgentRuntime(
+        adapter,
+        { timeoutMs: 10_000 },
+        mockTools(async () => 'file'),
+      );
+      const request = {
+        text: 'Review the attached comparison.',
+        attachments: [],
+        ...(reviewing ? { agentReviewId: '43d23d2a-850e-440b-a92b-b485d9b04599' } : {}),
+      };
+      await runtime.send(request, { signal: new AbortController().signal, onText: () => {} });
+      const providerText = adapter.requests[0]!.messages[0]!.content;
+      if (typeof providerText !== 'string') throw new Error('Expected textual provider input');
+      expect(providerText.includes('<glyph_review>')).toBe(reviewing);
+      expect(request.text).toBe('Review the attached comparison.');
+    },
+  );
+
   it.each([0, 1])('marks a multi-request turn incomplete when round %s has no usage report', async missingRound => {
     const adapter = new ClaudeShapedAdapter();
     const streamStep = adapter.streamStep.bind(adapter);

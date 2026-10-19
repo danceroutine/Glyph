@@ -41,6 +41,7 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
                 />
               )
             }
+            proposals={state.proposals}
             entries={state.transcript}
             {...(state.selectedChatId ? { chatId: state.selectedChatId } : {})}
             actions={actions}

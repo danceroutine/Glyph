@@ -115,13 +115,16 @@ Every directive and context line is exact; no fuzzy matching occurs. Never claim
       const queuePosition = this.reviews.activeReviews.findIndex(review => review.id === stagedProposal.id) + 1;
       return JSON.stringify({
         proposal_id: proposal.id,
-        status: 'STAGED_FOR_REVIEW',
+        status: stagedProposal.files.some(file => file.automatic?.state === 'applied')
+          ? 'APPLIED_WITH_REVERT'
+          : 'STAGED_FOR_REVIEW',
         queue_position: queuePosition,
         active_reviews: this.reviews.activeReviews.length,
         files: proposal.files.length,
         review_items: proposal.files.reduce((sum, file) => sum + file.items.length, 0),
-        message:
-          'The proposal was appended to the review queue, but no workspace changes have been written. The user must accept review items.',
+        message: stagedProposal.files.some(file => file.automatic?.state === 'applied')
+          ? 'Structural file changes have been applied. The user can inspect and revert them in the review drawer. Any text hunks still pending require acceptance.'
+          : 'The proposal was appended to the review queue, but no workspace changes have been written. The user must accept review items.',
       });
     } catch (error) {
       if (signal?.aborted) throw signal.reason ?? error;

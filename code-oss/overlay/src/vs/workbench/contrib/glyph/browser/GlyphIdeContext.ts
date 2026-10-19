@@ -254,6 +254,7 @@ export class GlyphIdeContext {
     before: URI | undefined,
     after: URI | undefined,
     base: string,
+    captured?: (before: string, after: string) => void,
   ): Promise<GlyphContextAttachment> {
     this.assertTrusted();
     const path = this.adapter.contextPath(uri.with({ query: '', fragment: '' }));
@@ -280,6 +281,7 @@ export class GlyphIdeContext {
         'The Git comparison changed during capture. Capture it again.',
       );
     const text = `Git diff: ${base}\nBase URI: ${before?.toString() ?? '/dev/null'}\nTarget URI: ${after?.toString() ?? '/dev/null'}\nBase SHA-256: ${await digest(oldText)}\nTarget SHA-256: ${await digest(newText)}\n\n--- ${before ? path : '/dev/null'}\n+++ ${after ? path : '/dev/null'}\n${this.diffBody(oldText, newText)}`;
+    captured?.(oldText, newText);
     return this.snapshot(Kind.DIFF, { uri: uri.with({ query: '', fragment: '' }).toString(), path }, text);
   }
 

@@ -108,7 +108,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     this.unsubscribeShells = options.shellSessions.onDidChange(() => this.syncShells());
     this.unsubscribe = options.glyph.proposalReviews?.onDidChange(change => {
       for (const id of change.proposalIds) {
-        const proposal = options.glyph.proposalReviews?.get(id);
+        const proposal = options.glyph.proposalReviews?.retainedReviews.find(review => review.id === id);
         const previous = this.proposals.get(id);
         const summary = this.proposalSummary(proposal, previous);
         if (!summary) continue;
@@ -120,7 +120,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   /** Rebuild reconnect state from live reviews so missed notifications cannot leave stale decisions. */
   async snapshot(): Promise<GlyphRuntimeSnapshot> {
-    for (const proposal of this.options.glyph.proposalReviews?.activeReviews ?? [])
+    for (const proposal of this.options.glyph.proposalReviews?.retainedReviews ?? [])
       this.proposals.set(proposal.id, toProposal(proposal));
     return {
       accounts: this.options.glyph.accounts,
@@ -497,7 +497,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       case GlyphWorkbenchCommandType.READ_PROPOSAL_FILE: {
         const session = this.session(command.chatId);
-        const proposal = this.options.glyph.proposalReviews?.get(command.proposalId);
+        const proposal = this.options.glyph.proposalReviews?.retainedReviews.find(
+          review => review.id === command.proposalId,
+        );
         if (
           !proposal ||
           proposal.origin?.chatId !== session.id ||
@@ -507,8 +509,6 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           throw new ProtocolError('This proposal does not belong to that chat.');
         const file = proposal.files.find(file => file.id === command.fileId);
         if (!file) throw new ProtocolError('This proposal file is no longer available.');
-        if (file.operation !== EditOperation.UPDATE)
-          throw new ProtocolError('Only text changes can be reviewed in the editor.');
         this.publish({
           type: GlyphHostEventType.PROPOSAL_PREVIEW,
           preview: toGlyphProposalFilePreview(proposal.id, file),
@@ -543,7 +543,16 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     ) {
       throw new ProtocolError('This proposal does not belong to that chat.');
     }
-    if (command.type === GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM)
+    const automatic = review.files.find(
+      file => file.automatic?.itemId === command.itemId && file.automatic.state !== 'applying',
+    );
+    if (automatic)
+      await reviews.settleAutomatic(
+        command.proposalId,
+        command.itemId,
+        command.type === GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM,
+      );
+    else if (command.type === GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM)
       await reviews.acceptInReview(command.proposalId, command.itemId);
     else await reviews.rejectInReview(command.proposalId, command.itemId, command.comment);
     await glyph.commitReviewResults(session, { currentChatOnly: true });
@@ -970,16 +979,40 @@ function toProposal(proposal: EditProposal): GlyphProposalSummary {
     createdAt: proposal.createdAt,
     files: proposal.files.map(file => ({
       id: file.id,
-      path: file.currentPath,
+      path: file.operation === EditOperation.RENAME ? file.targetPath : file.currentPath,
+      operation: file.operation,
+      sourcePath: file.sourcePath,
+      ...(file.automatic
+        ? {
+            automaticItemId: file.automatic.itemId,
+            autoApplied: ['applied', 'reverting'].includes(file.automatic.state),
+            beforePreview: (file.automatic.before?.text ?? '')
+              .split(/\r\n|\r|\n/)
+              .slice(0, 6)
+              .join('\n')
+              .slice(0, 4000),
+            afterPreview: (file.operation === EditOperation.DELETE ? '' : (file.current?.text ?? file.proposed.text))
+              .split(/\r\n|\r|\n/)
+              .slice(0, 6)
+              .join('\n')
+              .slice(0, 4000),
+          }
+        : {}),
       proposedUri: `glyph-proposal:/${encodeURIComponent(proposal.id)}/${encodeURIComponent(file.id)}`,
       textOnly: file.operation === EditOperation.UPDATE,
       additions: file.items
-        .filter(item => item.decision === EditDecisionState.PENDING)
+        .filter(item => item.decision === EditDecisionState.PENDING || file.automatic?.itemId === item.id)
         .reduce((sum, item) => sum + changedLines(item.insertedText), 0),
       deletions: file.items
-        .filter(item => item.decision === EditDecisionState.PENDING)
+        .filter(item => item.decision === EditDecisionState.PENDING || file.automatic?.itemId === item.id)
         .reduce((sum, item) => sum + changedLines(item.removedText), 0),
-      pendingItemIds: file.items.filter(item => item.decision === EditDecisionState.PENDING).map(item => item.id),
+      pendingItemIds: file.items
+        .filter(
+          item =>
+            item.decision === EditDecisionState.PENDING ||
+            (file.automatic?.itemId === item.id && ['applied', 'reverting'].includes(file.automatic.state)),
+        )
+        .map(item => item.id),
       applicability:
         Object.values(GlyphProposalApplicability).find(value => value === String(file.applicability).toLowerCase()) ??
         GlyphProposalApplicability.STALE,

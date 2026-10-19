@@ -237,6 +237,7 @@ export class ChatSession {
         options: {
           ...(request.attachmentSpans ? { attachmentSpans: request.attachmentSpans } : {}),
           ...(request.turnId ? { turnId: request.turnId } : {}),
+          ...(request.agentReviewId ? { agentReviewId: request.agentReviewId } : {}),
           ...(request.mode ? { mode: request.mode } : {}),
           ...(request.annotations ? { annotations: request.annotations } : {}),
         },

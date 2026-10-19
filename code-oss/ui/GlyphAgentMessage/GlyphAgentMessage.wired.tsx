@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact';
 import { GlyphAgentMessage } from './GlyphAgentMessage.presentational.tsx';
 import { useGlyphMessageState, type GlyphMessageState } from './useGlyphMessageState.ts';
 import { WiredGlyphTranscriptContent } from '#code-oss/ui/GlyphTranscript/GlyphTranscriptContent.wired.tsx';
@@ -10,7 +11,12 @@ import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunPr
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 
 export type GlyphMessageActions = Pick<GlyphWorkbenchViewActions, 'decideApproval' | 'writeShellInput' | 'stopShell'> &
-  Partial<Pick<GlyphWorkbenchViewActions, 'context' | 'openLink' | 'branchChat' | 'restoreCheckpoint' | 'copyText'>>;
+  Partial<
+    Pick<
+      GlyphWorkbenchViewActions,
+      'context' | 'openLink' | 'branchChat' | 'restoreCheckpoint' | 'copyText' | 'reviewProposalFile'
+    >
+  >;
 
 export interface WiredGlyphAgentMessageProps {
   readonly entry: GlyphTranscriptEntry;
@@ -47,6 +53,7 @@ export function WiredGlyphAgentMessage({
 }
 
 export interface GlyphAgentMessageWithStateProps {
+  readonly changes?: ComponentChildren;
   readonly entry: GlyphMessageState['entries'][number];
   readonly chatId?: string | undefined;
   readonly pendingApproval?: GlyphRunProjection | undefined;
@@ -59,12 +66,14 @@ export function GlyphAgentMessageWithState({
   entry,
   chatId,
   pendingApproval,
+  changes,
   actions,
   readOnly = false,
 }: GlyphAgentMessageWithStateProps) {
   return (
     <GlyphAgentMessage
       entry={entry}
+      changes={changes}
       content={<WiredGlyphTranscriptContent entry={entry} />}
       usage={<WiredGlyphUsageSummary usage={entry.usage} turn />}
       shells={

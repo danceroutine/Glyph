@@ -122,6 +122,43 @@ for (const [before, after] of [
 }
 await writeFile(testContentPath, testContent);
 
+// Guard structural mutations after native participants and before working-copy teardown.
+// The callback stays in the renderer; it is never part of the wire protocol.
+for (const [relativePath, before, after] of [
+  [
+    'src/vs/editor/browser/services/bulkEditService.ts',
+    'export class ResourceFileEdit extends ResourceEdit implements IWorkspaceFileEdit {',
+    'export class ResourceFileEdit extends ResourceEdit implements IWorkspaceFileEdit {\n\tvalidate?: () => Promise<void>;',
+  ],
+  [
+    'src/vs/workbench/services/workingCopy/common/workingCopyFileService.ts',
+    'export interface IFileOperationUndoRedoInfo {',
+    'export interface IFileOperationUndoRedoInfo {\n\tvalidate?: () => Promise<void>;',
+  ],
+  [
+    'src/vs/workbench/contrib/bulkEdit/browser/bulkFileEdits.ts',
+    'const undoRedoInfo = { undoRedoGroupId: this._undoRedoGroup.id };',
+    'const undoRedoInfo = { undoRedoGroupId: this._undoRedoGroup.id, validate: async () => { for (const edit of this._edits) await edit.validate?.(); } };',
+  ],
+]) {
+  const path = join(sourceRoot, relativePath);
+  const source = await readFile(path, 'utf8');
+  if (source.includes(after)) continue;
+  if (!source.includes(before)) throw new Error(`Pinned structural mutation anchor missing: ${relativePath}`);
+  await writeFile(path, source.replace(before, after));
+}
+const workingCopyPath = join(sourceRoot, 'src/vs/workbench/services/workingCopy/common/workingCopyFileService.ts');
+let workingCopySource = await readFile(workingCopyPath, 'utf8');
+const willRun =
+  'await this._onWillRunWorkingCopyFileOperation.fireAsync(event, CancellationToken.None /* intentional: we currently only forward cancellation to participants */);';
+const guardedWillRun = `${willRun}\n\t\ttry { await undoInfo?.validate?.(); } catch (error) {\n\t\t\tawait this._onDidFailWorkingCopyFileOperation.fireAsync(event, CancellationToken.None);\n\t\t\tthrow error;\n\t\t}`;
+if (!workingCopySource.includes(guardedWillRun)) {
+  if (workingCopySource.split(willRun).length !== 4)
+    throw new Error('Expected three pinned working-copy mutation boundaries.');
+  workingCopySource = workingCopySource.replaceAll(willRun, guardedWillRun);
+  await writeFile(workingCopyPath, workingCopySource);
+}
+
 const applicationEntry = join(sourceRoot, 'src', 'vs', 'code', 'electron-main', 'app.ts');
 await insertOnce(
   applicationEntry,

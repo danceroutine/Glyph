@@ -1,3 +1,5 @@
+import type { GlyphProposalSummary } from '#src/desktop/protocol/events/GlyphProposalSummary.js';
+import { GlyphFileChanges } from '#code-oss/ui/GlyphFileChanges/GlyphFileChanges.tsx';
 import type { ComponentChildren } from 'preact';
 import type { GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import {
@@ -9,6 +11,7 @@ import { GlyphTranscript, GlyphTranscriptMessage } from './GlyphTranscript.prese
 import { useGlyphTranscriptState, type GlyphTranscriptStateOptions } from './useGlyphTranscriptState.ts';
 
 export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
+  readonly proposals?: readonly GlyphProposalSummary[];
   readonly plans?: ComponentChildren;
   readonly chatId?: string;
   readonly pendingApproval?: GlyphRunProjection;
@@ -19,6 +22,7 @@ export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
 export function WiredGlyphTranscript({
   entries,
   plans,
+  proposals = [],
   chatId,
   pendingApproval,
   actions,
@@ -42,6 +46,20 @@ export function WiredGlyphTranscript({
           <GlyphAgentMessageWithState
             key={entry.id}
             entry={entry}
+            changes={proposals
+              .filter(
+                proposal =>
+                  proposal.chatId === chatId && entry.progress?.tools.some(tool => tool.summary?.includes(proposal.id)),
+              )
+              .map(proposal => (
+                <GlyphFileChanges
+                  key={proposal.id}
+                  files={proposal.files}
+                  review={fileId => {
+                    if (chatId) void actions?.reviewProposalFile?.(chatId, proposal.id, fileId);
+                  }}
+                />
+              ))}
             chatId={chatId}
             pendingApproval={pendingApproval}
             actions={actions}

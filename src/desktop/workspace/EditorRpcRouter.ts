@@ -41,7 +41,10 @@ export class EditorRpcRouter {
     const port = this.ports.get(key(identity));
     if (!port) return Promise.reject(new Error('The owning editor is unavailable.'));
     const operationId =
-      request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ? request.mutation.operationId : request.operationId;
+      request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
+      request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
+        ? request.mutation.operationId
+        : request.operationId;
     if (this.pending.has(operationId)) return Promise.reject(new Error('This editor operation is already pending.'));
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {

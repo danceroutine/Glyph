@@ -1,3 +1,4 @@
+import type { GlyphAgentReviewFinding } from './GlyphAgentReviewFinding.ts';
 export enum GlyphAgentReviewScope {
   LAST_COMMIT = 'lastCommit',
   STAGED = 'staged',
@@ -14,6 +15,15 @@ export interface GlyphAgentReviewControls {
   readonly scope: GlyphAgentReviewScope;
   readonly branch: string;
   readonly busy: boolean;
+  readonly reviewing?: boolean;
+  readonly stop?: () => void;
+  readonly findings?: readonly GlyphAgentReviewFinding[];
+  readonly completed?: boolean;
+  readonly resultScope?: string;
+  readonly openFinding?: (id: string) => void;
+  readonly fixFinding?: (id: string) => void;
+  readonly dismissFinding?: (id: string) => void;
+  readonly fileIconClasses?: (path: string) => readonly string[];
   readonly unavailableReason?: string;
   readonly error?: string;
   readonly chooseScope: (scope: GlyphAgentReviewScope) => void;

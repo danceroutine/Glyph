@@ -38,3 +38,29 @@ export const ScopePicker: Story = {
     await expect(args.chooseScope).toHaveBeenCalledWith(GlyphAgentReviewScope.STAGED);
   },
 };
+export const Reviewing: Story = { args: { reviewing: true, stop: fn() } };
+export const Findings: Story = {
+  args: {
+    completed: true,
+    resultScope: 'Last commit',
+    findings: [
+      {
+        id: '1',
+        path: 'src/parser.ts',
+        line: 12,
+        title: 'Empty input is indexed before validation',
+        body: 'The parser reads the first element before checking whether input is empty.',
+      },
+      {
+        id: '2',
+        path: 'src/storage.json',
+        line: 2,
+        title: 'The default location is outside the workspace',
+        body: 'The configured path escapes the project directory.',
+      },
+    ],
+    openFinding: fn(),
+    fixFinding: fn(),
+    dismissFinding: fn(),
+  },
+};

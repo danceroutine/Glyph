@@ -34,3 +34,22 @@ export const FailedDecision: Story = {
     },
   },
 };
+export const AppliedFileChanges: Story = {
+  args: {
+    proposals: [
+      {
+        ...pendingProposals[0]!,
+        files: (['CREATE', 'DELETE', 'RENAME'] as const).map((operation, index) => ({
+          ...pendingProposals[0]!.files[0]!,
+          id: `structural-${index}`,
+          path: ['created.json', 'deleted.txt', 'renamed.ts'][index]!,
+          operation,
+          textOnly: false,
+          autoApplied: true,
+          automaticItemId: `item-${index}`,
+          pendingItemIds: [`item-${index}`],
+        })),
+      },
+    ],
+  },
+};

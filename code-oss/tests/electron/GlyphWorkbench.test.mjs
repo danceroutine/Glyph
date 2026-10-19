@@ -1,6 +1,20 @@
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
 it.describe('Glyph in the native Code OSS workbench', () => {
+  it('keeps Glyph as the only chat tab across window reloads', async ({ glyph }) => {
+    const expectOnlyGlyph = async () => {
+      await expect(glyph.page.getByRole('tab', { name: /^Glyph(?:\s|$)/ })).toBeVisible();
+      await expect(glyph.page.getByRole('tab', { name: /^Chat(?:\s|$)/ })).toHaveCount(0);
+      await expect(glyph.page.locator('[id="workbench.panel.chat"]')).toHaveCount(0);
+    };
+    await expectOnlyGlyph();
+    await glyph.reload();
+    await expectOnlyGlyph();
+    await glyph.send('Glyph remains available without the built-in chat.');
+    await glyph.waitForResponse();
+    await expect(glyph.assistantEntries).toHaveCount(1);
+  });
+
   it('opens the Glyph sidebar from the command palette with an accessible message composer', async ({ glyph }) => {
     await expect(glyph.composer).toBeEditable();
     await expect(glyph.composer).toHaveAttribute('aria-multiline', 'true');

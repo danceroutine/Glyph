@@ -84,7 +84,7 @@ export const tokens = {
     variable: 'light-dark(#001080, #9cdcfe)',
     comment: 'light-dark(#008000, #6a9955)',
   },
-  diff: { added: codeOss.diff.added, removed: codeOss.diff.removed },
+  diff: { added: codeOss.diff.added, removed: codeOss.diff.removed, renamed: codeOss.diff.renamed },
   card: { radius: atoms.radius.lg },
   badge: { radius: atoms.radius.xs },
   avatar: { radius: atoms.radius.round },
