@@ -20,7 +20,13 @@ export async function buildGlyphUi(sourceRoot) {
   async function readPromptLicense(name, requireFrom) {
     if (visited.has(name)) return;
     visited.add(name);
-    let directory = dirname(requireFrom.resolve(name));
+    let entry;
+    try {
+      entry = requireFrom.resolve(`${name}/package.json`);
+    } catch {
+      entry = requireFrom.resolve(name);
+    }
+    let directory = dirname(entry);
     let metadata;
     while (!metadata) {
       try {
@@ -35,13 +41,17 @@ export async function buildGlyphUi(sourceRoot) {
         directory = parent;
       }
     }
-    promptLicenses.push(`/*! ${name}\n${await readFile(join(directory, 'LICENSE'), 'utf8')}\n*/`);
+    const license = await readFile(join(directory, 'LICENSE'), 'utf8').catch(() =>
+      readFile(join(directory, 'license'), 'utf8'),
+    );
+    promptLicenses.push(`/*! ${name}\n${license}\n*/`);
     const requireDependency = createRequire(join(directory, 'package.json'));
     for (const dependency of Object.keys(metadata.dependencies ?? {}))
       await readPromptLicense(dependency, requireDependency);
   }
   const requireRoot = createRequire(join(repositoryRoot, 'package.json'));
   for (const name of [
+    'lowlight',
     'prosemirror-model',
     'prosemirror-state',
     'prosemirror-view',

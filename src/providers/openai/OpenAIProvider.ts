@@ -1,3 +1,4 @@
+import { ToolRegistry } from '#src/tools/ToolRegistry.js';
 import OpenAI from 'openai';
 import { z } from 'zod';
 import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems';
@@ -12,7 +13,7 @@ import type {
 } from 'openai/resources/responses/responses';
 import type { ChatConfiguration } from '#src/configuration/ChatConfiguration.js';
 import { ProviderError } from '#src/errors/ProviderError.js';
-import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ToolSource } from '#src/tools/ToolSource.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
@@ -36,7 +37,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     private readonly configuration: ChatConfiguration,
     private readonly token: () => Promise<string>,
     private readonly client: OpenAI | undefined,
-    private readonly tools: ToolRuntime,
+    private readonly tools: ToolRegistry,
   ) {}
 
   emptyState(): ChatProviderState {
@@ -91,6 +92,11 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     return { input: [...historyFrom(state), toUserInput(request)] };
   }
 
+  /** HTTP transport appends user input for the next request; WebSocket delivery belongs behind this seam. */
+  async steerTurn(turn: OpenAITurn, request: ChatRequest): Promise<OpenAITurn> {
+    return { ...turn, input: [...turn.input, toUserInput(request)] };
+  }
+
   /** Tool execution and human decisions can outlive a token, so authenticate every model request. */
   private async requestClient(context: AgentTurnContext): Promise<OpenAI> {
     const accessToken = await this.awaitCredentials(context.signal);
@@ -130,7 +136,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     const client = await this.requestClient(context);
     const request = {
       model: this.model,
-      instructions: this.configuration.instructions,
+      instructions: [this.configuration.instructions, context.mode.instructions].filter(Boolean).join('\n\n'),
       input: turn.input,
       stream: true,
       // Keep state client-side; complete response items are replayed in `input`.
@@ -300,10 +306,11 @@ export class OpenAIProvider extends AgentRuntime<OpenAITurn> {
     configuration: ChatConfiguration,
     token: () => Promise<string>,
     client: OpenAI | undefined,
-    tools: ToolRuntime,
+    tools: ToolSource,
     initialState?: ChatProviderState,
   ) {
-    super(new OpenAIModelAdapter(model, configuration, token, client, tools), configuration, tools, initialState);
+    const registry = tools instanceof ToolRegistry ? tools : new ToolRegistry(tools.tools);
+    super(new OpenAIModelAdapter(model, configuration, token, client, registry), configuration, registry, initialState);
   }
 }
 
@@ -419,28 +426,28 @@ function usageFrom(response: Response): AgentTurnStep<OpenAITurn>['usage'] {
   return { inputTokens, cachedInputTokens, outputTokens, reasoningTokens, totalTokens };
 }
 
-function toOpenAITools(runtime: ToolRuntime): NamespaceTool[] {
+function toOpenAITools(runtime: ToolRegistry): NamespaceTool[] {
   const namespaces = new Map<string, NamespaceTool>();
-  for (const definition of runtime.definitions) {
-    let namespace = namespaces.get(definition.namespace);
+  for (const tool of runtime.tools) {
+    let namespace = namespaces.get(tool.namespace);
     if (!namespace) {
       namespace = {
         type: 'namespace',
-        name: definition.namespace,
-        description: `${definition.namespace} tools supplied by the host runtime.`,
+        name: tool.namespace,
+        description: `${tool.namespace} tools supplied by the host runtime.`,
         tools: [],
       };
-      namespaces.set(definition.namespace, namespace);
+      namespaces.set(tool.namespace, namespace);
     }
     namespace.tools.push(
-      definition.inputKind === ToolInputKind.TEXT
-        ? { type: 'custom', name: definition.name, description: definition.description }
+      tool.inputKind === ToolInputKind.TEXT
+        ? { type: 'custom', name: tool.name, description: tool.description }
         : {
             type: 'function',
-            name: definition.name,
-            description: definition.description,
+            name: tool.name,
+            description: tool.description,
             strict: true,
-            parameters: definition.parameters ?? {
+            parameters: tool.parameters ?? {
               type: 'object',
               properties: {},
               required: [],

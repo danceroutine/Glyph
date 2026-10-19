@@ -1,3 +1,5 @@
+import { AgentModeID } from '#src/chat/AgentMode.js';
+import type { GlyphModeSwapPolicy } from './events/GlyphModeSwap.ts';
 import type { GlyphPlan } from './events/GlyphPlan.ts';
 import type { GlyphTurnOptions } from './events/GlyphAnnotation.ts';
 import type { GlyphApprovalDecision } from './GlyphApprovalDecision.ts';
@@ -15,6 +17,7 @@ export enum GlyphWorkbenchCommandType {
   SELECT_ACCOUNT = 'select_account',
   SELECT_MODEL = 'select_model',
   SEND = 'send',
+  STEER = 'steer',
   UPDATE_PLAN = 'update_plan',
   LINK_PLAN = 'link_plan',
   SET_CHAT_MODE = 'set_chat_mode',
@@ -35,101 +38,176 @@ export enum GlyphWorkbenchCommandType {
  * through MessagePort without coupling either process to the other's classes.
  */
 export type GlyphWorkbenchCommand =
-  | {
-      readonly type: GlyphWorkbenchCommandType.BRANCH_CHAT;
-      readonly chatId: string;
-      readonly turnId: string;
-      readonly creationId: string;
-    }
-  | { readonly type: GlyphWorkbenchCommandType.RESTORE_CHECKPOINT; readonly chatId: string; readonly turnId: string }
-  | { readonly type: GlyphWorkbenchCommandType.SET_CHAT_MODE; readonly chatId: string; readonly mode: 'agent' | 'plan' }
-  | {
-      readonly type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE;
-      readonly roots: readonly GlyphWorkspaceRoot[];
-      readonly trusted: boolean;
-      readonly resumeHostGeneration?: string;
-      readonly resumeAfterSequence?: number;
-    }
-  | {
-      readonly type: GlyphWorkbenchCommandType.LIST_CHATS;
-      readonly accountProvider?: string;
-      readonly accountId?: string;
-    }
-  | {
-      readonly type: GlyphWorkbenchCommandType.CREATE_CHAT;
-      readonly creationId?: string;
-      readonly accountProvider: string;
-      readonly accountId: string;
-      readonly model: string;
-    }
-  | {
-      readonly type: GlyphWorkbenchCommandType.LINK_PLAN;
-      readonly chatId: string;
-      readonly planId: string;
-      readonly targetChatId: string;
-      readonly role: 'Builder' | 'Reviewer';
-    }
-  | { readonly type: GlyphWorkbenchCommandType.UPDATE_PLAN; readonly chatId: string; readonly plan: GlyphPlan }
-  | { readonly type: GlyphWorkbenchCommandType.OPEN_CHAT; readonly chatId: string }
-  | {
-      readonly type: GlyphWorkbenchCommandType.SELECT_ACCOUNT;
-      readonly accountProvider: string;
-      readonly accountId: string;
-    }
-  | { readonly type: GlyphWorkbenchCommandType.SELECT_MODEL; readonly model: string }
-  | {
-      readonly type: GlyphWorkbenchCommandType.SEND;
-      readonly chatId: string;
-      readonly runId: string;
-      readonly text: string;
-      readonly attachments: readonly GlyphContextAttachment[];
-      readonly options?: GlyphTurnOptions;
-    }
-  | { readonly type: GlyphWorkbenchCommandType.CANCEL_RUN; readonly chatId: string; readonly runId: string }
-  | {
-      readonly type: GlyphWorkbenchCommandType.ANSWER_QUESTION;
-      readonly chatId: string;
-      readonly runId: string;
-      readonly questionId: string;
-      readonly answer: unknown;
-    }
-  | {
-      readonly type: GlyphWorkbenchCommandType.DECIDE_APPROVAL;
-      readonly chatId: string;
-      readonly runId: string;
-      readonly approvalId: string;
-      readonly decision: GlyphApprovalDecision;
-    }
-  | {
-      readonly type: GlyphWorkbenchCommandType.READ_PROPOSAL_FILE;
-      readonly chatId: string;
-      readonly proposalId: string;
-      readonly fileId: string;
-    }
-  | {
-      readonly type: GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM;
-      readonly chatId: string;
-      readonly proposalId: string;
-      readonly itemId: string;
-    }
-  | {
-      readonly type: GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM;
-      readonly comment?: string;
-      readonly chatId: string;
-      readonly proposalId: string;
-      readonly itemId: string;
-    }
-  | {
-      readonly type: GlyphWorkbenchCommandType.STOP_SHELL_SESSION;
-      readonly chatId: string;
-      readonly sessionId: string;
-    }
-  | {
-      readonly type: GlyphWorkbenchCommandType.WRITE_SHELL_INPUT;
-      readonly chatId: string;
-      readonly sessionId: string;
-      readonly input: string;
-      readonly appendNewline: boolean;
-    }
-  | { readonly type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT; readonly afterSequence: number }
-  | { readonly type: GlyphWorkbenchCommandType.DETACH };
+  | BranchChatCommand
+  | RestoreCheckpointCommand
+  | SetChatModeCommand
+  | AttachWorkspaceCommand
+  | ListChatsCommand
+  | CreateChatCommand
+  | LinkPlanCommand
+  | UpdatePlanCommand
+  | OpenChatCommand
+  | SelectAccountCommand
+  | SelectModelCommand
+  | SteerCommand
+  | SendCommand
+  | CancelRunCommand
+  | AnswerQuestionCommand
+  | DecideApprovalCommand
+  | ReadProposalFileCommand
+  | AcceptProposalItemCommand
+  | RejectProposalItemCommand
+  | StopShellSessionCommand
+  | WriteShellInputCommand
+  | RequestSnapshotCommand
+  | DetachCommand;
+
+type BranchChatCommand = {
+  readonly type: GlyphWorkbenchCommandType.BRANCH_CHAT;
+  readonly chatId: string;
+  readonly turnId: string;
+  readonly creationId: string;
+};
+
+type RestoreCheckpointCommand = {
+  readonly type: GlyphWorkbenchCommandType.RESTORE_CHECKPOINT;
+  readonly chatId: string;
+  readonly turnId: string;
+};
+
+type SetChatModeCommand = {
+  readonly type: GlyphWorkbenchCommandType.SET_CHAT_MODE;
+  readonly chatId: string;
+  readonly mode: AgentModeID;
+};
+
+type AttachWorkspaceCommand = {
+  readonly type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE;
+  readonly roots: readonly GlyphWorkspaceRoot[];
+  readonly trusted: boolean;
+  readonly resumeHostGeneration?: string;
+  readonly resumeAfterSequence?: number;
+};
+
+type ListChatsCommand = {
+  readonly type: GlyphWorkbenchCommandType.LIST_CHATS;
+  readonly accountProvider?: string;
+  readonly accountId?: string;
+};
+
+type CreateChatCommand = {
+  readonly type: GlyphWorkbenchCommandType.CREATE_CHAT;
+  readonly creationId?: string;
+  readonly accountProvider: string;
+  readonly accountId: string;
+  readonly model: string;
+};
+
+type LinkPlanCommand = {
+  readonly type: GlyphWorkbenchCommandType.LINK_PLAN;
+  readonly chatId: string;
+  readonly planId: string;
+  readonly targetChatId: string;
+  readonly role: 'Builder' | 'Reviewer';
+};
+
+type UpdatePlanCommand = {
+  readonly type: GlyphWorkbenchCommandType.UPDATE_PLAN;
+  readonly chatId: string;
+  readonly plan: GlyphPlan;
+};
+
+type OpenChatCommand = { readonly type: GlyphWorkbenchCommandType.OPEN_CHAT; readonly chatId: string };
+
+type SelectAccountCommand = {
+  readonly type: GlyphWorkbenchCommandType.SELECT_ACCOUNT;
+  readonly accountProvider: string;
+  readonly accountId: string;
+};
+
+type SelectModelCommand = { readonly type: GlyphWorkbenchCommandType.SELECT_MODEL; readonly model: string };
+
+type SendCommand = {
+  readonly type: GlyphWorkbenchCommandType.SEND;
+  readonly modeSwapPolicy?: GlyphModeSwapPolicy;
+  readonly chatId: string;
+  readonly runId: string;
+  readonly text: string;
+  readonly attachments: readonly GlyphContextAttachment[];
+  readonly options?: GlyphTurnOptions;
+};
+
+type CancelRunCommand = {
+  readonly type: GlyphWorkbenchCommandType.CANCEL_RUN;
+  readonly chatId: string;
+  readonly runId: string;
+};
+
+type AnswerQuestionCommand = {
+  readonly type: GlyphWorkbenchCommandType.ANSWER_QUESTION;
+  readonly chatId: string;
+  readonly runId: string;
+  readonly questionId: string;
+  readonly answer: unknown;
+};
+
+type DecideApprovalCommand = {
+  readonly type: GlyphWorkbenchCommandType.DECIDE_APPROVAL;
+  readonly chatId: string;
+  readonly runId: string;
+  readonly approvalId: string;
+  readonly decision: GlyphApprovalDecision;
+};
+
+type ReadProposalFileCommand = {
+  readonly type: GlyphWorkbenchCommandType.READ_PROPOSAL_FILE;
+  readonly chatId: string;
+  readonly proposalId: string;
+  readonly fileId: string;
+};
+
+type AcceptProposalItemCommand = {
+  readonly type: GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM;
+  readonly chatId: string;
+  readonly proposalId: string;
+  readonly itemId: string;
+};
+
+type RejectProposalItemCommand = {
+  readonly type: GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM;
+  readonly comment?: string;
+  readonly chatId: string;
+  readonly proposalId: string;
+  readonly itemId: string;
+};
+
+type StopShellSessionCommand = {
+  readonly type: GlyphWorkbenchCommandType.STOP_SHELL_SESSION;
+  readonly chatId: string;
+  readonly sessionId: string;
+};
+
+type WriteShellInputCommand = {
+  readonly type: GlyphWorkbenchCommandType.WRITE_SHELL_INPUT;
+  readonly chatId: string;
+  readonly sessionId: string;
+  readonly input: string;
+  readonly appendNewline: boolean;
+};
+
+type RequestSnapshotCommand = {
+  readonly type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT;
+  readonly afterSequence: number;
+};
+
+type DetachCommand = { readonly type: GlyphWorkbenchCommandType.DETACH };
+
+type SteerCommand = {
+  readonly type: GlyphWorkbenchCommandType.STEER;
+  readonly chatId: string;
+  readonly runId: string;
+  readonly messageId: string;
+  readonly text: string;
+  readonly attachments: readonly GlyphContextAttachment[];
+  readonly options?: GlyphTurnOptions;
+};

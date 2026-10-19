@@ -1,3 +1,6 @@
+import type { GlyphSteeringMessage } from '#src/desktop/protocol/events/GlyphSteeringMessage.js';
+import { AgentModeID } from '../AgentMode.ts';
+import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
@@ -11,16 +14,21 @@ import type { TodoItem } from '#src/todos/TodoItem.js';
 /** Compact activity history with bounded shell display data; provider history owns complete tool results. */
 export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'> & {
   readonly shell?: ShellCommandSummary;
+  readonly arguments?: string;
+  readonly output?: string;
+  readonly textOffset?: number;
 };
 
 export interface ChatHistoryCheckpoint {
   readonly providerState: ChatProviderState;
   readonly plans: readonly GlyphPlan[];
   readonly todos: readonly TodoItem[];
-  readonly mode: 'agent' | 'plan';
+  readonly mode: AgentModeID;
 }
 
 export interface ChatTranscriptTurn {
+  readonly steering?: readonly GlyphSteeringMessage[];
+  readonly modeSwaps?: readonly GlyphModeSwap[];
   readonly questionResponses?: readonly GlyphQuestionResponse[];
   readonly checkpoints?: { readonly before: ChatHistoryCheckpoint; readonly after: ChatHistoryCheckpoint };
   readonly options?: GlyphTurnOptions;
@@ -37,7 +45,7 @@ export interface ChatTranscriptTurn {
 /** Durable state required to discover and resume one conversation. */
 export interface ChatSessionRecord {
   readonly schemaVersion: 3;
-  readonly mode?: 'agent' | 'plan';
+  readonly mode?: AgentModeID;
   readonly id: string;
   readonly title: string;
   readonly titleOrigin: 'placeholder' | 'generated' | 'human';
@@ -55,6 +63,6 @@ export interface ChatSessionRecord {
 }
 
 export type ChatSessionSummary = Omit<ChatSessionRecord, 'providerState' | 'transcript'> & {
-  readonly mode?: 'agent' | 'plan';
+  readonly mode?: AgentModeID;
   readonly turnCount: number;
 };

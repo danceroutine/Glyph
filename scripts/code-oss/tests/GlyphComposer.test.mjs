@@ -16,6 +16,8 @@ beforeAll(async () => {
         import { WiredGlyphComposer } from './code-oss/ui/GlyphComposer/GlyphComposer.wired.tsx';
         import { GlyphComposerState } from './src/desktop/workbench/GlyphComposerState.ts';
         const calls = [];
+        const steering = [];
+        const menuActions = [];
         const pending = [];
         const captures = [];
         let selectFiles;
@@ -24,15 +26,19 @@ beforeAll(async () => {
           composer: new GlyphComposerState(),
           context: { selectFiles: () => new Promise(resolve => { selectFiles = resolve; }), searchFiles: async query => [{ uri: attachment.uri, path: attachment.path }].filter(file => file.path.includes(query)), captureFile: async () => attachment, openAttachment: async () => {}, checkAttachment: async () => undefined, refreshAttachment: async value => ({ ...value, text: 'Updated capture' }) },
           send(text, attachments) { captures.push(attachments); calls.push(text); return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
+          steer: async text => { steering.push(text); },
+          sendImmediately: async text => { menuActions.push(text); },
+          openMessageSettings: () => { menuActions.push('settings'); },
+          moveQueuedToNewChat: async id => { menuActions.push('new-chat'); actions.composer.removeQueued(id); },
           cancel() {}
         };
         window.composerTest = {
-          calls, captures,
+          calls, captures, steering, menuActions,
           snapshot: () => actions.composer.snapshot,
           selectFiles(cancel = false) { selectFiles(cancel ? [] : [attachment, { ...attachment, id: 'b', uri: 'file:///b.ts', path: 'b.ts' }]); },
           attachSelection() { actions.composer.insertAttachments([{ ...attachment, id: 'selection', kind: 'selection', path: 'b.ts', text: 'Only selected text', range: { start: { line: 3, column: 1 }, end: { line: 4, column: 5 } } }]); },
           unmount() { render(null, document.getElementById('root')); },
-          mount() { render(h(WiredGlyphComposer, { status: 'ready', selection: undefined, actions }), document.getElementById('root')); },
+          mount(status = 'ready') { render(h(WiredGlyphComposer, { status, selection: undefined, actions }), document.getElementById('root')); },
           reject() { pending.shift().reject(new Error('Connection unavailable')); },
           resolve() { pending.shift().resolve(); }
         };
@@ -62,7 +68,7 @@ describe('WiredGlyphComposer draft recovery', () => {
         await page.addScriptTag({ content: script });
         const composer = page.getByRole('textbox', { name: 'Message Glyph' });
         await composer.fill('Original message');
-        await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+        await page.getByRole('button', { name: 'Send (Enter)', exact: true }).click();
         await composer.fill('Newer draft');
         if (when === 'before') await page.evaluate(() => window.composerTest.reject());
         await page.evaluate(() => window.composerTest.unmount());
@@ -81,7 +87,7 @@ describe('WiredGlyphComposer draft recovery', () => {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
       const composer = page.getByRole('textbox', { name: 'Message Glyph' });
-      const send = page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true });
+      const send = page.getByRole('button', { name: 'Send (Enter)', exact: true });
       await composer.fill('Original unsent message');
       await send.click();
       await expect(composer).toHaveText('');
@@ -113,7 +119,7 @@ describe('WiredGlyphComposer draft recovery', () => {
       await page.addScriptTag({ content: script });
       const composer = page.getByRole('textbox', { name: 'Message Glyph' });
       await composer.fill('Keep this message');
-      await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+      await page.getByRole('button', { name: 'Send (Enter)', exact: true }).click();
       await page.evaluate(() => window.composerTest.reject());
       await expect(composer).toHaveText('Keep this message');
     } finally {
@@ -127,7 +133,7 @@ describe('WiredGlyphComposer draft recovery', () => {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
       const composer = page.getByRole('textbox', { name: 'Message Glyph' });
-      const send = page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true });
+      const send = page.getByRole('button', { name: 'Send (Enter)', exact: true });
       await composer.fill('First message');
       await send.click();
       await composer.fill('Second message');
@@ -219,7 +225,7 @@ describe('Inline attachment editing', () => {
       await composer.pressSequentially(' between ');
       await page.evaluate(() => window.composerTest.attachSelection());
       await expect(composer).toHaveText('before a.ts between b.ts (3-4) after');
-      await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+      await page.getByRole('button', { name: 'Send (Enter)', exact: true }).click();
       await composer.fill('New draft');
       await page.evaluate(() => window.composerTest.reject());
       await page.getByRole('button', { name: 'Edit unsent message' }).click();
@@ -227,7 +233,7 @@ describe('Inline attachment editing', () => {
       await page.evaluate(() => window.composerTest.unmount());
       await page.evaluate(() => window.composerTest.mount());
       await expect(composer.getByRole('button')).toHaveCount(2);
-      await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+      await page.getByRole('button', { name: 'Send (Enter)', exact: true }).click();
       await page.evaluate(() => window.composerTest.resolve());
       const { calls, captures } = await page.evaluate(() => window.composerTest);
       expect(calls).toEqual(['before @a.ts between @b.ts (3-4) after', 'before @a.ts between @b.ts (3-4) after']);
@@ -274,18 +280,18 @@ describe('Rich Markdown composer', () => {
       await page.addScriptTag({ content: script });
       const composer = page.getByRole('textbox', { name: 'Message Glyph' });
       await composer.pressSequentially('1. First');
-      await composer.press('Enter');
+      await composer.press('Shift+Enter');
       await composer.pressSequentially('Second');
       await expect(composer.locator('ol > li')).toHaveCount(2);
       await composer.press('Tab');
       await expect(composer.locator('li ol li')).toHaveText('Second');
       await composer.press('Shift+Tab');
       await expect(composer.locator('ol > li')).toHaveCount(2);
-      await composer.press('Enter');
-      await composer.press('Enter');
+      await composer.press('Shift+Enter');
+      await composer.press('Shift+Enter');
       await composer.pressSequentially('> Keep **exact** revisions');
       await expect(composer.locator('blockquote strong')).toHaveText('exact');
-      await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+      await page.getByRole('button', { name: 'Send (Enter)', exact: true }).click();
       const text = await page.evaluate(() => window.composerTest.calls[0]);
       expect(text).toContain('1. First\n2. Second');
       expect(text).toContain('> Keep **exact** revisions');
@@ -316,7 +322,7 @@ describe('Rich Markdown composer', () => {
       await expect.poll(() => page.evaluate(() => window.composerTest.snapshot().document.from)).toBe(22);
       await page.evaluate(() => window.composerTest.attachSelection());
       await expect(composer.locator('strong button')).toHaveCount(1);
-      await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+      await page.getByRole('button', { name: 'Send (Enter)', exact: true }).click();
       await page.evaluate(() => window.composerTest.reject());
       await expect(composer.locator('blockquote button')).toHaveCount(2);
       await expect(composer.locator('strong')).toContainText('carefullb.ts (3-4)y');
@@ -343,9 +349,9 @@ it('formats typed links and fenced code while preserving literal code and Markdo
     const composer = page.getByRole('textbox', { name: 'Message Glyph' });
     await composer.pressSequentially('[source](src/a.ts)');
     await expect(composer.locator('.glyph-prompt-link')).toHaveText('source');
-    await composer.press('Enter');
+    await composer.press('Shift+Enter');
     await composer.pressSequentially('```ts');
-    await composer.press('Enter');
+    await composer.press('Shift+Enter');
     await composer.press('Tab');
     await composer.pressSequentially('**literal**');
     await expect(composer.locator('pre code')).toHaveText('  **literal**');
@@ -353,9 +359,94 @@ it('formats typed links and fenced code while preserving literal code and Markdo
     await page.evaluate(() => window.composerTest.unmount());
     await page.evaluate(() => window.composerTest.mount());
     await expect(composer.locator('pre code')).toHaveText('  **literal**');
-    await page.getByRole('button', { name: 'Send (⌘/Ctrl+Enter)', exact: true }).click();
+    await page.getByRole('button', { name: 'Send (Enter)', exact: true }).click();
     expect(await page.evaluate(() => window.composerTest.calls[0])).toContain('```ts\n  **literal**\n```');
   } finally {
     await page.close();
   }
 });
+
+it('uses Enter to submit and Shift+Enter to edit a multiline prompt', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.fill('First line');
+    await composer.press('Shift+Enter');
+    await composer.pressSequentially('Second line');
+    await expect(composer.locator('p')).toHaveText(['First line', 'Second line']);
+    expect(await page.evaluate(() => window.composerTest.calls)).toEqual([]);
+    await composer.press('Enter');
+    expect(await page.evaluate(() => window.composerTest.calls)).toEqual(['First line\n\nSecond line']);
+    await expect(composer).toHaveText('');
+  } finally {
+    await page.close();
+  }
+});
+
+it('routes the steering shortcut separately and leaves the active response running', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    await page.evaluate(() => window.composerTest.mount('streaming'));
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    await composer.fill('Keep going with this constraint');
+    await composer.press('ControlOrMeta+Enter');
+    await expect(composer).toHaveText('');
+    expect(await page.evaluate(() => window.composerTest.steering)).toEqual(['Keep going with this constraint']);
+    expect(await page.evaluate(() => window.composerTest.calls)).toEqual([]);
+    await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
+  } finally {
+    await page.close();
+  }
+});
+
+it('shows a collapsible draggable queue with decorative bullets and the requested row menu', async () => {
+  const page = await browser.newPage();
+  page.setDefaultTimeout(3000);
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    await page.evaluate(() => window.composerTest.mount('streaming'));
+    const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+    for (const text of ['First queued task', 'Second queued task']) {
+      await composer.fill(text);
+      await composer.press('Enter');
+    }
+    const tray = page.getByRole('region', { name: 'Queued messages', exact: true });
+    await expect(tray.getByRole('checkbox')).toHaveCount(0);
+    const rows = tray.getByRole('listitem');
+    await expect(rows.first()).toHaveCSS('cursor', 'grab');
+    await rows.nth(1).focus();
+    await rows.nth(1).press('Alt+ArrowUp');
+    await expect(rows.first()).toContainText('Second queued task');
+    const toggle = tray.getByRole('button', { name: '2 Queued Messages', exact: true });
+    await toggle.click();
+    await expect(rows).toHaveCount(0);
+    await toggle.click();
+    await expect(rows).toHaveCount(2);
+    await rows.first().hover();
+    await rows.first().hover();
+    await rows.first().getByRole('button', { name: 'Queued message actions', exact: true }).click();
+    const bounds = await tray.getByRole('menu').boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(8);
+    expect(bounds.y).toBeGreaterThanOrEqual(8);
+    await tray.getByRole('menuitem', { name: 'New Message Settings', exact: true }).click();
+    expect(await page.evaluate(() => window.composerTest.menuActions)).toEqual(['settings']);
+    await rows.first().hover();
+    await rows.first().getByRole('button', { name: 'Queued message actions', exact: true }).click();
+    await tray.getByRole('menuitem', { name: 'Steer', exact: true }).click();
+    expect(await page.evaluate(() => window.composerTest.steering)).toEqual(['Second queued task']);
+    await expect(rows).toHaveCount(1);
+    await rows.first().hover();
+    await rows.first().getByRole('button', { name: 'Queued message actions', exact: true }).click();
+    await tray.getByRole('menuitem', { name: 'Move to New Chat', exact: true }).click();
+    await expect(tray).toHaveCount(0);
+    expect(await page.evaluate(() => window.composerTest.menuActions)).toEqual(['settings', 'new-chat']);
+    expect(await page.evaluate(() => window.composerTest.calls)).toEqual([]);
+  } finally {
+    await page.close();
+  }
+}, 20000);

@@ -1,3 +1,4 @@
+import type { AgentMode } from '#src/chat/AgentMode.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
@@ -26,6 +27,7 @@ export interface AgentTurnStep<TTurn> {
 }
 
 export interface AgentTurnContext {
+  readonly mode: AgentMode;
   readonly signal: AbortSignal;
   readonly round: number;
   readonly onText: (delta: string) => void;
@@ -50,6 +52,10 @@ export interface AgentModelAdapter<TTurn> {
   recoverInterruptedToolCalls(state: ChatProviderState): InterruptedToolRecovery;
   recordContext(state: ChatProviderState, events: readonly ChatContextEvent[]): ChatProviderState;
   beginTurn(state: ChatProviderState, request: ChatRequest, context: AgentTurnContext): Promise<TTurn>;
+  /** Apply accepted guidance to the current logical turn, preserving completed output and tool results.
+   * Adapters own provider-specific delivery; this operation must not execute or cancel tools.
+   */
+  steerTurn(turn: TTurn, request: ChatRequest, context: AgentTurnContext): Promise<TTurn>;
   streamStep(turn: TTurn, context: AgentTurnContext): Promise<AgentTurnStep<TTurn>>;
   appendToolResults(turn: TTurn, results: readonly AgentToolResult[]): TTurn;
   commit(turn: TTurn): ChatProviderState;

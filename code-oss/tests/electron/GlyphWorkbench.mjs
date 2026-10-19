@@ -80,6 +80,6 @@ export class GlyphWorkbench {
     await expect(this.assistantEntries.nth(index)).toContainText(
       'The packaged Glyph host is connected through the native utility-process transport.',
     );
-    await expect(this.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(this.sendButton).toHaveText('Send (Enter)');
   }
 }

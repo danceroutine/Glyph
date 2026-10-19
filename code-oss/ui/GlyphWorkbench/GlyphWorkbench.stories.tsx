@@ -1,20 +1,30 @@
-import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
+import { markdownMessageFixture } from '#code-oss/storybook/fixtures/MessageScenarios.ts';
+import { isolateComposer } from '#code-oss/storybook/decorators.tsx';
+import {
+  autoModel,
+  navigationStateFixture,
+  chatFixture,
+  todoItems,
+  workbenchStateFixture,
+} from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
+import { userMessageFixture, usageFixture, conversationFixture } from '#code-oss/storybook/fixtures/MessageFixtures.ts';
+
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { WiredGlyphWorkbench } from './GlyphWorkbench.wired.tsx';
 import { InteractiveWorkbench } from '#code-oss/storybook/InteractiveWorkbench.tsx';
+
 import {
-  conversation,
-  failingActions,
-  previewActions,
-  attachedActions,
-  workbenchState,
-} from '#code-oss/storybook/fixtures.ts';
+  failingActionsFixture,
+  previewActionsFixture,
+  attachedActionsFixture,
+} from '#code-oss/storybook/fixtures/ActionFixtures.ts';
 
 const meta = {
   title: 'Glyph/Chat/Workbench',
   component: WiredGlyphWorkbench,
-  args: { state: workbenchState(), actions: previewActions },
+  args: { state: workbenchStateFixture(), actions: previewActionsFixture() },
+  decorators: [isolateComposer],
   argTypes: { actions: { control: false } },
 } satisfies Meta<typeof WiredGlyphWorkbench>;
 
@@ -25,68 +35,37 @@ export const Interactive: Story = { render: () => <InteractiveWorkbench /> };
 export const Empty: Story = {};
 export const Conversation: Story = { render: () => <InteractiveWorkbench /> };
 export const AttachedSelection: Story = {
-  args: { state: workbenchState({ transcript: conversation }), actions: attachedActions },
+  args: { state: workbenchStateFixture({ transcript: conversationFixture() }), actions: attachedActionsFixture() },
 };
 export const Streaming: Story = {
-  args: { state: workbenchState({ transcript: conversation, status: GlyphWorkbenchStatus.STREAMING }) },
+  args: { state: workbenchStateFixture({ transcript: conversationFixture(), status: GlyphWorkbenchStatus.STREAMING }) },
 };
-export const SendFailure: Story = { args: { actions: failingActions } };
+export const SendFailure: Story = { args: { actions: failingActionsFixture() } };
 
-const savedChat = {
-  id: 'settings',
-  title: 'Review the settings migration',
-  accountProvider: 'fixture',
-  accountId: 'personal',
-  modelSlug: 'balanced',
-  updatedAt: new Date().toISOString(),
-  turnCount: 4,
-};
+const savedChat = chatFixture();
 export const Todos: Story = {
   args: {
-    state: workbenchState({
+    state: workbenchStateFixture({
       selectedChatId: savedChat.id,
       chats: [
         {
           ...savedChat,
-          todos: [
-            { id: 'inspect', text: 'Inspect the current implementation', status: 'completed' },
-            { id: 'implement', text: 'Implement the requested change', status: 'in_progress' },
-            { id: 'verify', text: 'Verify persistence and chat isolation', status: 'pending' },
-          ],
+          todos: todoItems,
         },
       ],
-      transcript: conversation,
+      transcript: conversationFixture(),
     }),
   },
   play: async ({ canvasElement }) => {
     canvasElement.querySelector<HTMLButtonElement>('.glyph-todos button')?.click();
   },
 };
-const navigationState = workbenchState({
-  accounts: [
-    { provider: 'fixture', id: 'personal', label: 'developer@example.invalid', connected: true, inferenceAccess: true },
-  ],
-  models: [
-    { slug: 'balanced', name: 'Balanced' },
-    { slug: 'deep', name: 'Deep reasoning' },
-  ],
-  selectedAccount: { provider: 'fixture', id: 'personal' },
-  selectedModel: 'balanced',
-  chats: [
-    savedChat,
-    {
-      ...savedChat,
-      id: 'rendering',
-      title: 'Investigate rendering performance',
-      updatedAt: new Date(Date.now() - 86400000).toISOString(),
-    },
-  ],
-});
+const navigationState = navigationStateFixture();
 const expandHistory = async ({ canvasElement }: { canvasElement: HTMLElement }) => {
   canvasElement.querySelector<HTMLButtonElement>('button[aria-label="Chat history"]')?.click();
 };
 export const ChatHistory: Story = {
-  args: { state: { ...navigationState, selectedChatId: 'settings', transcript: conversation } },
+  args: { state: { ...navigationState, selectedChatId: 'settings', transcript: conversationFixture() } },
   play: expandHistory,
 };
 export const NewChatSetup: Story = { args: { state: navigationState }, play: expandHistory };
@@ -102,38 +81,24 @@ export const CatalogFailure: Story = {
   play: expandHistory,
 };
 
-const meteredUsage = {
-  inputTokens: 12400,
-  cachedInputTokens: 8000,
-  outputTokens: 650,
-  reasoningTokens: 200,
-  totalTokens: 13050,
-};
+const meteredUsage = usageFixture();
 export const MarkdownAndUsage: Story = {
   args: {
     state: {
       ...navigationState,
       selectedChatId: 'settings',
-      models: [{ slug: 'auto', name: 'Auto' }],
+      models: [autoModel],
       selectedModel: 'auto',
       chats: [{ ...savedChat, modelSlug: 'auto', title: 'Message queue' }],
       usage: { settings: meteredUsage },
       transcript: [
-        {
+        userMessageFixture({
           id: 'request',
-          checkpointTurnId: 'answer',
-          role: GlyphTranscriptRole.USER,
+          checkpointTurnId: 'markdown-answer',
           text: 'Explain how messages are queued.',
           createdAt: '2026-10-17T15:30:00Z',
-        },
-        {
-          id: 'answer',
-          checkpointTurnId: 'answer',
-          role: GlyphTranscriptRole.ASSISTANT,
-          text: '## Message queue\n\n1. Submit the next message.\n2. Queue it while a run is active.\n3. Send it when the run finishes.\n\n> Preserve attachments and their revisions.\n\n```mermaid\nflowchart TD\n  Composer --> Active{Run active?}\n  Active -->|yes| Queue[Add to queue]\n  Active -->|no| Send[Send immediately]\n```',
-          createdAt: '2026-10-17T15:30:08Z',
-          usage: meteredUsage,
-        },
+        }),
+        markdownMessageFixture(),
       ],
     },
   },

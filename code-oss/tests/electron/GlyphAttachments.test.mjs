@@ -31,7 +31,7 @@ async function send(glyph, provider) {
   provider.enqueue({ chunks: ['Captured context received.'] });
   await glyph.sendButton.click();
   await expect.poll(() => provider.requests.length).toBe(count + 1);
-  await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+  await expect(glyph.sendButton).toHaveText('Send (Enter)');
   const user = provider.requests
     .at(-1)
     .body.input.filter(item => item.role === 'user')

@@ -97,12 +97,12 @@ it.describe('Saved chats and new conversation setup', () => {
       { chunks: ['The beta answer.'], usage: { input: 20, cached: 5, output: 7, reasoning: 2, total: 27 } },
     );
     await glyph.send('Alpha project');
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await glyph.composer.fill('Unsent alpha draft');
     await glyph.page.getByRole('button', { name: 'New chat', exact: true }).click();
     await expect(glyph.composer).toHaveText('');
     await glyph.send('Beta project');
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await glyph.composer.fill('Unsent beta draft');
     const list = await history(glyph);
     await expect(list.getByRole('button')).toHaveCount(2);
@@ -168,7 +168,7 @@ it.describe('Saved chats and new conversation setup', () => {
     await glyph.composer.fill('Alpha next prompt');
     await glyph.page.getByRole('button', { name: 'New chat', exact: true }).click();
     await glyph.send('Beta completed');
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['Beta finished.']);
     provider.release(0);
     await expect.poll(() => provider.requests[0].completed).toBe(true);
@@ -176,7 +176,7 @@ it.describe('Saved chats and new conversation setup', () => {
     await openChat(glyph, 'Alpha');
     await expect(glyph.composer).toHaveText('Alpha next prompt');
     await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['Alpha still running.']);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
   });
 });
 
@@ -223,7 +223,7 @@ it.describe('Account and model selection', () => {
     await closeHistory(glyph);
     provider.enqueue({ chunks: ['Work answer.'] });
     await glyph.sendButton.click();
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     expect(provider.requests[0]).toMatchObject({ account: 'work', body: { model: 'work-deep' } });
     await expect(model).toBeDisabled();
     await glyph.page.getByRole('button', { name: 'New chat', exact: true }).click();
@@ -233,7 +233,7 @@ it.describe('Account and model selection', () => {
     await expect(model).toHaveValue('personal-model');
     provider.enqueue({ chunks: ['Personal answer.'] });
     await glyph.send('Personal analysis');
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     expect(provider.requests[1]).toMatchObject({ account: 'personal', body: { model: 'personal-model' } });
     await openChat(glyph, 'Work');
     await expect(model).toHaveValue('work-deep');
@@ -245,7 +245,7 @@ it.describe('Account and model selection', () => {
     await glyph.reload();
     provider.enqueue({ chunks: ['Work continued.'] });
     await glyph.send('Continue the work conversation');
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     expect(provider.requests[2]).toMatchObject({ account: 'work', body: { model: 'work-deep' } });
     expect(JSON.stringify(provider.requests[2].body.input)).toContain('Work analysis');
     expect(JSON.stringify(provider.requests[2].body.input)).not.toContain('Personal analysis');

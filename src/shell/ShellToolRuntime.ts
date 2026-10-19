@@ -1,7 +1,8 @@
+import { AgentModeID } from "#src/chat/AgentMode.js";
+import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
-import type { ToolDefinition } from '#src/tools/ToolDefinition.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
-import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ToolSource } from '#src/tools/ToolSource.js';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import type { ShellSessionManager } from './ShellSessionManager.ts';
 import { ShellToolName } from './ShellToolName.ts';
@@ -38,42 +39,60 @@ const writeInputArgumentsSchema = z
 const closeArgumentsSchema = z.object({ terminal_id: z.string().min(1) }).strict();
 const listArgumentsSchema = z.object({}).strict();
 
-const definitions: readonly ToolDefinition[] = [
-  {
-    namespace: ShellToolNamespace.SHELL,
-    name: ShellToolName.EXECUTE,
-    description:
-      'Execute an authorized command in a project shell. Set background true for long-running work and optionally provide wake_on literal output. Reuse an idle terminal_id for a subsequent command.',
-    inputKind: ToolInputKind.JSON,
-    parameters: jsonSchema(executeArgumentsSchema),
-  },
-  {
-    namespace: ShellToolNamespace.SHELL,
-    name: ShellToolName.WRITE_INPUT,
-    description:
-      'Write interactive input to a running background shell command and optionally replace its one-shot wake_on condition. This cannot start a new command; use execute_shell so each new command is authorized.',
-    inputKind: ToolInputKind.JSON,
-    parameters: jsonSchema(writeInputArgumentsSchema),
-  },
-  {
-    namespace: ShellToolNamespace.SHELL,
-    name: ShellToolName.CLOSE,
-    description: 'Terminate and remove a background shell terminal.',
-    inputKind: ToolInputKind.JSON,
-    parameters: jsonSchema(closeArgumentsSchema),
-  },
-  {
-    namespace: ShellToolNamespace.SHELL,
-    name: ShellToolName.LIST,
-    description: 'List live background shell terminals, their status, commands, and recent output.',
-    inputKind: ToolInputKind.JSON,
-    parameters: jsonSchema(listArgumentsSchema),
-  },
-];
-
 /** Provider-neutral lifecycle tools for authorized project shell sessions. */
-export class ShellToolRuntime implements ToolRuntime {
-  readonly definitions = definitions;
+export class ShellToolRuntime implements ToolSource {
+  readonly tools: readonly Tool[] = [
+    {
+      namespace: ShellToolNamespace.SHELL,
+      name: ShellToolName.EXECUTE,
+      allowedModes: [AgentModeID.AGENT],
+      description:
+        'Execute an authorized command in a project shell. Set background true for long-running work and optionally provide wake_on literal output. Reuse an idle terminal_id for a subsequent command.',
+      inputKind: ToolInputKind.JSON,
+      parameters: jsonSchema(executeArgumentsSchema),
+      validateInput: input => {
+        executeArgumentsSchema.parse(JSON.parse(input));
+      },
+      execute: (input, signal, context) => this.execute(ShellToolName.EXECUTE, input, signal, context),
+    },
+    {
+      namespace: ShellToolNamespace.SHELL,
+      name: ShellToolName.WRITE_INPUT,
+      allowedModes: [AgentModeID.AGENT],
+      description:
+        'Write interactive input to a running background shell command and optionally replace its one-shot wake_on condition. This cannot start a new command; use execute_shell so each new command is authorized.',
+      inputKind: ToolInputKind.JSON,
+      parameters: jsonSchema(writeInputArgumentsSchema),
+      validateInput: input => {
+        writeInputArgumentsSchema.parse(JSON.parse(input));
+      },
+      execute: (input, signal, context) => this.execute(ShellToolName.WRITE_INPUT, input, signal, context),
+    },
+    {
+      namespace: ShellToolNamespace.SHELL,
+      name: ShellToolName.CLOSE,
+      allowedModes: [AgentModeID.AGENT],
+      description: 'Terminate and remove a background shell terminal.',
+      inputKind: ToolInputKind.JSON,
+      parameters: jsonSchema(closeArgumentsSchema),
+      validateInput: input => {
+        closeArgumentsSchema.parse(JSON.parse(input));
+      },
+      execute: (input, signal, context) => this.execute(ShellToolName.CLOSE, input, signal, context),
+    },
+    {
+      namespace: ShellToolNamespace.SHELL,
+      name: ShellToolName.LIST,
+      allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+      description: 'List live background shell terminals, their status, commands, and recent output.',
+      inputKind: ToolInputKind.JSON,
+      parameters: jsonSchema(listArgumentsSchema),
+      validateInput: input => {
+        listArgumentsSchema.parse(JSON.parse(input));
+      },
+      execute: (input, signal, context) => this.execute(ShellToolName.LIST, input, signal, context),
+    },
+  ];
 
   constructor(private readonly sessions: ShellSessionManager) {}
 

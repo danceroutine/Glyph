@@ -1,0 +1,157 @@
+import { createRequire } from 'node:module';
+import { build } from 'esbuild';
+import { afterAll, beforeAll, it } from 'vitest';
+const { chromium, expect } = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url))(
+  '@playwright/test',
+);
+let browser, script;
+beforeAll(async () => {
+  const result = await build({
+    stdin: {
+      resolveDir: process.cwd(),
+      contents: `
+      import { h, render } from 'preact';
+      import { GlyphTurnProgress } from './code-oss/ui/GlyphTurnProgress/GlyphTurnProgress.presentational.tsx';
+      window.show = (tools, status = 'streaming') => render(h(GlyphTurnProgress, { progress: { reasoning: '', tools, status } }), document.getElementById('root'));
+    `,
+    },
+    bundle: true,
+    write: false,
+    format: 'iife',
+    platform: 'browser',
+    tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
+  });
+  script = result.outputFiles[0].text;
+  browser = await chromium.launch();
+}, 30000);
+afterAll(async () => browser?.close());
+const calls = [
+  {
+    id: 'read',
+    name: 'read_project_file',
+    status: 'completed',
+    arguments: '{"path":"queue.ts"}',
+    summary: 'Captured file contents.',
+    textOffset: 0,
+  },
+  { id: 'search', name: 'search_project', status: 'started', arguments: '{"query":"queue"}', textOffset: 0 },
+];
+async function mount(options) {
+  const page = await browser.newPage(options);
+  await page.setContent(
+    '<div id="root" style="width:280px;--vscode-descriptionForeground:#888;--vscode-foreground:#ccc"></div><button id="outside">Outside</button>',
+  );
+  await page.addScriptTag({ content: script });
+  return page;
+}
+it('bundles consecutive calls, reveals details, and preserves expanded rows across streaming updates', async () => {
+  const page = await mount();
+  try {
+    await page.evaluate(calls => window.show(calls), calls);
+    const group = page.locator('.glyph-tool-group > summary');
+    await expect(group).toHaveText('Exploring2 tools');
+    await expect(page.getByRole('list', { name: 'Tool activity' })).toBeHidden();
+    await page.mouse.move(600, 400);
+    await expect(group.locator('.glyph-tool-chevron')).toHaveCSS('opacity', '0');
+    await group.hover();
+    await expect(group.locator('.glyph-tool-chevron')).toHaveCSS('opacity', '1');
+    await group.click();
+    const first = page.locator('[data-tool-id="read"]');
+    await first.locator('summary').click();
+    await expect(first.locator('pre')).toHaveText('{\n  "path": "queue.ts"\n}\n\nCaptured file contents.');
+    const running = page.locator('[data-tool-id="search"] summary');
+    await expect(running).toHaveCSS('animation-name', 'glyph-tool-shimmer');
+    await page.evaluate(
+      calls => window.show(calls, 'completed'),
+      calls.map(call => ({ ...call, status: 'completed' })),
+    );
+    await expect(group).toHaveText('Explored2 tools');
+    await expect(first.locator('pre')).toBeVisible();
+    await expect(running).toHaveCSS('animation-name', 'none');
+    await group.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('list', { name: 'Tool activity' })).toBeHidden();
+    await page.mouse.move(600, 400);
+    await expect(group.locator('.glyph-tool-chevron')).toHaveCSS('opacity', '1');
+  } finally {
+    await page.close();
+  }
+});
+it('sweeps once across the entire summary and resets only after the highlight leaves the text', async () => {
+  const page = await mount();
+  try {
+    await page.evaluate(calls => window.show(calls), calls);
+    const summary = page.locator('.glyph-tool-group > summary');
+    await page.mouse.move(600, 400);
+    const count = await summary.evaluate(
+      element =>
+        element.getAnimations({ subtree: true }).filter(animation => animation.animationName === 'glyph-tool-shimmer')
+          .length,
+    );
+    expect(count).toBe(1);
+    await expect(summary.locator('span').first()).toHaveCSS('animation-name', 'none');
+    const frame = async time => {
+      await summary.evaluate((element, time) => {
+        const animation = element.getAnimations().find(animation => animation.animationName === 'glyph-tool-shimmer');
+        animation.pause();
+        animation.currentTime = time;
+      }, time);
+      return summary.screenshot();
+    };
+    const start = await frame(0);
+    const left = await frame(450);
+    const right = await frame(1350);
+    const end = await frame(1799);
+    expect(left.equals(start)).toBe(false);
+    expect(right.equals(left)).toBe(false);
+    expect(end.equals(start)).toBe(true);
+  } finally {
+    await page.close();
+  }
+});
+
+it('separates batches across assistant text and stops shimmer on interruption or reduced motion', async () => {
+  const page = await mount({ reducedMotion: 'reduce' });
+  try {
+    await page.evaluate(
+      calls => window.show([...calls, ...calls.map(call => ({ ...call, id: call.id + '-later', textOffset: 80 }))]),
+      calls,
+    );
+    await expect(page.locator('.glyph-tool-group')).toHaveCount(2);
+    await page.locator('.glyph-tool-group > summary').first().click();
+    const row = page.locator('[data-tool-id="search"]');
+    await expect(row).toHaveAttribute('aria-busy', 'true');
+    await expect(row.locator('summary')).toHaveCSS('animation-name', 'none');
+    await page.evaluate(calls => window.show(calls, 'interrupted'), calls);
+    await expect(row).toHaveAttribute('aria-busy', 'false');
+    await expect(row.locator('summary')).toHaveText('Interrupted · search project');
+  } finally {
+    await page.close();
+  }
+});
+it('shows a single failed call directly and renders tool payloads as literal text', async () => {
+  const page = await mount();
+  try {
+    await page.evaluate(() =>
+      window.show(
+        [
+          {
+            id: 'failed',
+            name: 'read_project_file',
+            status: 'failed',
+            arguments: '{"path":"missing.ts"}',
+            summary: '<img src=x onerror="window.injected=true"> File not found.',
+          },
+        ],
+        'completed',
+      ),
+    );
+    await expect(page.locator('.glyph-tool-group')).toHaveCount(0);
+    await page.locator('[data-tool-id="failed"] summary').click();
+    await expect(page.locator('pre')).toContainText('File not found.');
+    await expect(page.locator('pre img')).toHaveCount(0);
+    expect(await page.evaluate(() => window.injected)).toBeUndefined();
+  } finally {
+    await page.close();
+  }
+});

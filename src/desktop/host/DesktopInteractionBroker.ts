@@ -1,3 +1,6 @@
+import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
+import { AgentMode } from '#src/chat/AgentMode.js';
+import type { GlyphModeSwap, GlyphModeSwapPolicy } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
@@ -14,6 +17,7 @@ import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/e
 interface RunIdentity {
   readonly chatId: string;
   readonly runId: string;
+  readonly modeSwapPolicy?: GlyphModeSwapPolicy;
 }
 interface PendingDecision extends RunIdentity {
   readonly resolve: (value: unknown) => void;
@@ -42,7 +46,14 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
   constructor(private readonly emit: (event: GlyphHostEvent) => void) {}
 
   run<T>(identity: RunIdentity, operation: () => Promise<T>): Promise<T> {
-    return this.scope.run({ chatId: identity.chatId, runId: identity.runId }, operation);
+    return this.scope.run(
+      {
+        chatId: identity.chatId,
+        runId: identity.runId,
+        modeSwapPolicy: modeSwapPolicySchema.parse(identity.modeSwapPolicy ?? {}),
+      },
+      operation,
+    );
   }
 
   async present(form: QuestionForm, signal: AbortSignal): Promise<QuestionFormResult> {
@@ -114,6 +125,80 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
           },
         }),
     );
+  }
+
+  async presentModeSwitch(
+    request: Pick<GlyphModeSwap, 'source' | 'target' | 'description'>,
+    signal: AbortSignal,
+    apply: () => Promise<void>,
+    settle: (id: string, status: GlyphModeSwap['status']) => void,
+  ): Promise<boolean> {
+    const identity = this.requireRun();
+    const policy = modeSwapPolicySchema.parse(identity.modeSwapPolicy ?? {});
+    const id = randomUUID();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let committed = false;
+    try {
+      const approved = await this.wait(
+        id,
+        identity,
+        'approval',
+        signal,
+        value => {
+          return (
+            z.enum([GlyphApprovalDecision.ALLOW_ONCE, GlyphApprovalDecision.DENY]).parse(value) ===
+            GlyphApprovalDecision.ALLOW_ONCE
+          );
+        },
+        () => {
+          const startedAt = Date.now();
+          const modeSwap: GlyphModeSwap = {
+            ...request,
+            id,
+            status: GlyphModeSwapStatus.PENDING,
+            autoApprove: policy.autoApprove,
+            startedAt: new Date(startedAt).toISOString(),
+            expiresAt: new Date(startedAt + policy.timeoutSeconds * 1000).toISOString(),
+          };
+          this.emit({
+            type: GlyphHostEventType.APPROVAL,
+            chatId: identity.chatId,
+            runId: identity.runId,
+            approval: {
+              id,
+              title: `Switch to ${AgentMode.resolve(request.target).title}`,
+              detail: request.description,
+              sandboxed: false,
+              modeSwap,
+            },
+          });
+          timer = setTimeout(() => {
+            this.pending
+              .get(id)
+              ?.resolve(policy.autoApprove ? GlyphApprovalDecision.ALLOW_ONCE : GlyphApprovalDecision.DENY);
+          }, policy.timeoutSeconds * 1000);
+        },
+      );
+      if (approved) {
+        signal.throwIfAborted();
+        await apply();
+        committed = true;
+      }
+      settle(id, approved ? GlyphModeSwapStatus.APPROVED : GlyphModeSwapStatus.DENIED);
+      return approved;
+    } catch (error) {
+      settle(
+        id,
+        committed
+          ? GlyphModeSwapStatus.APPROVED
+          : signal.aborted
+            ? GlyphModeSwapStatus.CANCELLED
+            : GlyphModeSwapStatus.FAILED,
+      );
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   answer(
@@ -215,3 +300,10 @@ const GLYPH_APPROVAL_TO_SHELL_PERMISSION: Record<GlyphApprovalDecision, ShellPer
   [GlyphApprovalDecision.ALLOW_ONCE]: ShellPermissionDecision.ALLOW_ONCE,
   [GlyphApprovalDecision.ALWAYS_ALLOW]: ShellPermissionDecision.ALWAYS_ALLOW,
 };
+
+const modeSwapPolicySchema = z
+  .object({
+    autoApprove: z.boolean().default(false),
+    timeoutSeconds: z.number().int().min(5).max(300).default(15),
+  })
+  .strict();

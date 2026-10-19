@@ -1,25 +1,13 @@
+import { annotationFixture } from '#code-oss/storybook/fixtures/AnnotationFixtures.ts';
 import type { GlyphAnnotation } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import { useState } from 'preact/hooks';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphAnnotationPill } from './GlyphAnnotations.presentational.tsx';
 const meta = {
-  title: 'Glyph/Shared/Annotations',
+  title: 'Glyph/Shared/Annotations/Annotations Pill',
   component: GlyphAnnotationPill,
   args: {
-    annotations: [
-      {
-        id: '1',
-        order: 1,
-        kind: 'plan',
-        sourceId: 'plan',
-        revision: '2',
-        label: 'Queue composer messages',
-        quote: 'Send the next queued message',
-        from: 0,
-        to: 28,
-        comment: 'Preserve the original attachments and their exact revisions.',
-      },
-    ],
+    annotations: [annotationFixture()],
     edit: () => {},
     remove: () => {},
   },

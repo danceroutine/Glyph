@@ -25,7 +25,7 @@ it.describe('Scripted provider through the production desktop runtime', () => {
     await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText([
       'The production tool loop returned the file.',
     ]);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect(glyph.diagnostics).toHaveCount(0);
     expect(provider.requests).toHaveLength(2);
     const input = provider.requests[1].body.input;
@@ -40,4 +40,14 @@ it.describe('Scripted provider through the production desktop runtime', () => {
       ],
     });
   });
+});
+
+it.fixme('delivers steering through OpenAI WebSockets behind the provider-neutral adapter contract', async () => {
+  // Drive Send and Steer through the native composer against a scripted WebSocket server.
+  // Assert response.steer targets the current response and accepted input is visibly queued.
+  // A steered/incomplete or normally completed parent automatically continues without a second response.create.
+  // Existing output and running tools remain intact; tool results and approvals satisfy steer.pending once,
+  // without executing a tool twice or resending accepted guidance. Preserve input order and request settings.
+  // Failed/uncommitted input is recoverable; disconnect without acknowledgment must not silently drop or duplicate it.
+  // An adapter without native mid-response steering retains delivery at the next safe model step.
 });

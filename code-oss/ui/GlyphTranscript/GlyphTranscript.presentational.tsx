@@ -1,6 +1,6 @@
 import { GlyphQuestionResponses } from '#code-oss/ui/GlyphQuestionCard/GlyphQuestionResponses.presentational.tsx';
 import { GlyphAnnotationPill } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.presentational.tsx';
-import { Copy, GitFork, Undo2 } from 'lucide-preact';
+import { Undo2 } from 'lucide-preact';
 import type { ComponentChildren } from 'preact';
 import type { GlyphTranscriptState } from './useGlyphTranscriptState.ts';
 import { GlyphTurnProgress } from '#code-oss/ui/GlyphTurnProgress/GlyphTurnProgress.presentational.tsx';
@@ -23,17 +23,9 @@ const styles = {
     '& p:first-child': { marginTop: 0 },
     '& p:last-child': { marginBottom: 0 },
   }),
+  steering: css({ background: `color-mix(in srgb, ${tokens.input.background} 70%, black)`, borderStyle: 'dotted' }),
   answer: css({ padding: '0 10px' }),
   restore: css({ position: 'absolute', right: 10, top: 10, opacity: 0 }),
-  footer: css({
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 12,
-    color: tokens.text.muted,
-    minHeight: 24,
-    '& time': { opacity: 0, fontSize: tokens.font.size.detail },
-  }),
   action: css({
     display: 'inline-flex',
     alignItems: 'center',
@@ -54,85 +46,55 @@ const styles = {
 export interface GlyphTranscriptProps {
   readonly proposals?: ComponentChildren;
   readonly transcript: GlyphTranscriptState['transcript'];
-  readonly entries: readonly (Omit<GlyphTranscriptState['entries'][number], 'usage'> & {
-    readonly content: ComponentChildren;
-    readonly usage: ComponentChildren;
-    readonly approval?: ComponentChildren;
-    readonly shells?: ComponentChildren;
-  })[];
+  readonly children: ComponentChildren;
 }
 
-/** Stable turn keys preserve DOM identity across streaming updates. */
-export function GlyphTranscript({ entries, transcript, proposals }: GlyphTranscriptProps) {
+/** Stable message keys are supplied by the wired transcript. */
+export function GlyphTranscript({ children, transcript, proposals }: GlyphTranscriptProps) {
   return (
     <div class={`glyph-transcript ${styles.root}`} ref={transcript} role="log" aria-label="Glyph conversation">
-      {entries.map(entry => (
-        <div class={`glyph-entry ${entry.role} ${styles.entry}`} key={entry.id}>
-          {entry.questionResponses?.map(response => (
-            <GlyphQuestionResponses key={response.id} response={response} />
-          ))}
-          {entry.role === 'diagnostic' && <strong>{entry.label}</strong>}
-          {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
-          <div class={entry.role === 'user' ? styles.bubble : styles.answer}>
-            <div
-              data-glyph-source={entry.id}
-              data-kind="chat"
-              data-label={entry.label}
-              data-revision={entry.text.length}
-            >
-              {entry.content}
-            </div>
-            {entry.role === 'user' && entry.restore && (
-              <button
-                class={`glyph-restore ${styles.action} ${styles.restore}`}
-                type="button"
-                aria-label="Restore checkpoint"
-                title="Restore checkpoint"
-                disabled={entry.historyPending}
-                onClick={entry.restore}
-              >
-                <Undo2 size={15} aria-hidden="true" />
-              </button>
-            )}
-          </div>
-          {entry.options?.annotations && <GlyphAnnotationPill annotations={entry.options.annotations} />}
-          {entry.attachmentError && <p role="alert">{entry.attachmentError}</p>}
-          {entry.approval}
-          {entry.shells}
-          {entry.role === 'assistant' && (
-            <footer class={styles.footer} aria-label="Message actions">
-              <button
-                class={styles.action}
-                type="button"
-                aria-label="Copy message"
-                title="Copy message"
-                onClick={entry.copy}
-              >
-                <Copy size={16} aria-hidden="true" />
-              </button>
-              {entry.branch && (
-                <button
-                  class={styles.action}
-                  type="button"
-                  aria-label="Branch chat"
-                  title="Branch chat"
-                  disabled={entry.historyPending}
-                  onClick={entry.branch}
-                >
-                  <GitFork size={16} aria-hidden="true" />
-                </button>
-              )}
-              {entry.usage}
-              {entry.datetime && (
-                <time dateTime={entry.createdAt} title={entry.datetime}>
-                  {entry.datetime}
-                </time>
-              )}
-            </footer>
-          )}
-        </div>
-      ))}
+      {children}
       {proposals}
+    </div>
+  );
+}
+
+export interface GlyphTranscriptMessageProps {
+  readonly entry: GlyphTranscriptState['entries'][number];
+  readonly content: ComponentChildren;
+}
+
+/** User and diagnostic rows; assistant messages have their own complete component. */
+export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessageProps) {
+  return (
+    <div class={`glyph-entry ${entry.role} ${styles.entry}`} key={entry.id}>
+      {entry.questionResponses?.map(response => (
+        <GlyphQuestionResponses key={response.id} response={response} />
+      ))}
+      {entry.role === 'diagnostic' && <strong>{entry.label}</strong>}
+      {entry.progress && <GlyphTurnProgress progress={entry.progress} />}
+      <div
+        data-steering={entry.steering || undefined}
+        class={entry.role === 'user' ? `${styles.bubble} ${entry.steering ? styles.steering : ''}` : styles.answer}
+      >
+        <div data-glyph-source={entry.id} data-kind="chat" data-label={entry.label} data-revision={entry.text.length}>
+          {content}
+        </div>
+        {entry.role === 'user' && entry.restore && (
+          <button
+            class={`glyph-restore ${styles.action} ${styles.restore}`}
+            type="button"
+            aria-label="Restore checkpoint"
+            title="Restore checkpoint"
+            disabled={entry.historyPending}
+            onClick={entry.restore}
+          >
+            <Undo2 size={15} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      {entry.options?.annotations && <GlyphAnnotationPill annotations={entry.options.annotations} />}
+      {entry.attachmentError && <p role="alert">{entry.attachmentError}</p>}
     </div>
   );
 }

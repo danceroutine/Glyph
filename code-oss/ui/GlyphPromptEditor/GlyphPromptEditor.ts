@@ -37,6 +37,8 @@ interface PromptCallbacks {
   query(query: GlyphPromptQuery | undefined): void;
   keydown(event: KeyboardEvent): boolean;
   submit(): void;
+  steer?(): void;
+  readonly nativeKeybindings?: boolean;
 }
 /** ProseMirror owns DOM selection, atomic badge deletion, composition and edit history. */
 export class GlyphPromptEditor {
@@ -100,6 +102,27 @@ export class GlyphPromptEditor {
       },
     });
     this.view.dom.addEventListener('keydown', this.containKeydown);
+  }
+  private readonly newline = chainCommands(
+    (state, dispatch) => {
+      const { $from, empty } = state.selection;
+      const match = /^```([\w-]*)$/.exec($from.parent.textContent);
+      if (!empty || $from.parent.type !== schema.nodes.paragraph || !match) return false;
+      dispatch?.(
+        state.tr
+          .delete($from.start(), $from.end())
+          .setBlockType($from.start(), $from.start(), schema.nodes.code_block!, { params: match[1] }),
+      );
+      return true;
+    },
+    newlineInCode,
+    splitListItem(schema.nodes.list_item!),
+    createParagraphNear,
+    liftEmptyBlock,
+    splitBlock,
+  );
+  insertNewline(): void {
+    if (this.view.editable && !this.view.composing) this.newline(this.view.state, this.view.dispatch, this.view);
   }
   private state(document: GlyphPromptDocument): EditorState {
     const { doc, from, to } = parsePrompt(document);
@@ -173,10 +196,14 @@ export class GlyphPromptEditor {
           },
           'Shift-Mod-z': redo,
           'Mod-y': redo,
-          'Mod-Enter': () => {
-            this.callbacks.submit();
-            return true;
-          },
+          ...(this.callbacks.nativeKeybindings
+            ? {}
+            : {
+                'Mod-Enter': () => {
+                  this.callbacks.steer?.();
+                  return true;
+                },
+              }),
           'Mod-b': toggleMark(schema.marks.strong!),
           'Mod-i': toggleMark(schema.marks.em!),
           Tab: chainCommands(sinkListItem(schema.nodes.list_item!), (state, dispatch) => {
@@ -185,28 +212,15 @@ export class GlyphPromptEditor {
             return true;
           }),
           'Shift-Tab': liftListItem(schema.nodes.list_item!),
-          'Shift-Enter': (state, dispatch) => {
-            dispatch?.(state.tr.replaceSelectionWith(schema.nodes.hard_break!.create()).scrollIntoView());
-            return true;
-          },
-          Enter: chainCommands(
-            (state, dispatch) => {
-              const { $from, empty } = state.selection;
-              const match = /^```([\w-]*)$/.exec($from.parent.textContent);
-              if (!empty || $from.parent.type !== schema.nodes.paragraph || !match) return false;
-              dispatch?.(
-                state.tr
-                  .delete($from.start(), $from.end())
-                  .setBlockType($from.start(), $from.start(), schema.nodes.code_block!, { params: match[1] }),
-              );
-              return true;
-            },
-            newlineInCode,
-            splitListItem(schema.nodes.list_item!),
-            createParagraphNear,
-            liftEmptyBlock,
-            splitBlock,
-          ),
+          ...(this.callbacks.nativeKeybindings
+            ? {}
+            : {
+                Enter: () => {
+                  this.callbacks.submit();
+                  return true;
+                },
+              }),
+          ...(this.callbacks.nativeKeybindings ? {} : { 'Shift-Enter': this.newline }),
         }),
         keymap(baseKeymap),
       ],

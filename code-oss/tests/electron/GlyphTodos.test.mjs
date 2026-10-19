@@ -22,7 +22,7 @@ async function runUpdate(
   provider.enqueue({ output: [update(next, replace, callId)] }, { chunks: ['Todo update recorded.'], hold });
   await glyph.send(prompt);
   await expect.poll(() => provider.requests.length).toBe(before + 2);
-  if (!hold) await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+  if (!hold) await expect(glyph.sendButton).toHaveText('Send (Enter)');
   const outputs = provider.requests
     .at(-1)
     .body.input.filter(value => value.type === 'function_call_output' && value.call_id === callId);
@@ -103,7 +103,7 @@ it.describe('Action items and read-only todo cards', () => {
       card(glyph).getByRole('listitem').nth(1).getByRole('img', { name: 'Completed', exact: true }),
     ).toBeVisible();
     provider.release(3);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await runUpdate(glyph, provider, [completed]);
     await expect(card(glyph).getByRole('listitem')).toHaveCount(3);
   });
@@ -113,7 +113,7 @@ it.describe('Action items and read-only todo cards', () => {
       await runUpdate(glyph, provider, items, { hold: ending !== 'completion' });
       if (ending === 'cancellation') {
         await glyph.sendButton.click();
-        await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+        await expect(glyph.sendButton).toHaveText('Send (Enter)');
       }
       if (ending === 'host failure') await glyph.crashHost();
       await expect(card(glyph).getByRole('button', { name: '1 of 3 To-dos completed' })).toBeVisible();

@@ -40,7 +40,7 @@ const outputs = (provider, callId) =>
     .at(-1)
     .body.input.filter(item => item.type === 'function_call_output' && item.call_id === callId)
     .map(item => JSON.parse(item.output));
-const finished = glyph => expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+const finished = glyph => expect(glyph.sendButton).toHaveText('Send (Enter)');
 
 it.describe('Questions and command approvals', () => {
   it.use({ scriptedProvider: true, workspaceFiles: { 'nested/.keep': '' } });
@@ -137,7 +137,7 @@ it.describe('Questions and command approvals', () => {
     await glyph.send('Ask which language I prefer.');
     await expect(form(glyph)).toBeVisible();
     await glyph.composer.fill('Keep this as my next message.');
-    await glyph.composer.press('ControlOrMeta+Enter');
+    await glyph.composer.press('Enter');
     await expect(form(glyph)).toBeVisible();
     expect(provider.requests).toHaveLength(1);
     await expect(glyph.composer).toHaveText('Keep this as my next message.');
@@ -168,17 +168,17 @@ it.describe('Questions and command approvals', () => {
       ],
     });
     await glyph.send('Ask me three questions.');
-    await form(glyph).getByRole('radio', { name: 'Rust', exact: true }).check();
+    await form(glyph).getByRole('group').nth(0).getByRole('radio', { name: 'Rust', exact: true }).check();
     await form(glyph).getByRole('button', { name: 'Continue' }).click();
     await form(glyph).getByRole('checkbox', { name: 'Clarity', exact: true }).check();
     await form(glyph).getByRole('checkbox', { name: 'Speed', exact: true }).check();
     await form(glyph).getByRole('button', { name: 'Previous question' }).click();
-    await expect(form(glyph).getByRole('radio', { name: 'Rust', exact: true })).toBeChecked();
+    await expect(form(glyph).getByRole('group').nth(0).getByRole('radio', { name: 'Rust', exact: true })).toBeChecked();
     await form(glyph).getByRole('button', { name: 'Next question' }).click();
     await expect(form(glyph).getByRole('checkbox', { name: 'Clarity', exact: true })).toBeChecked();
     await expect(form(glyph).getByRole('checkbox', { name: 'Speed', exact: true })).toBeChecked();
     await form(glyph).getByRole('button', { name: 'Continue' }).click();
-    await form(glyph).getByRole('radio', { name: 'Other…', exact: true }).check();
+    await form(glyph).getByRole('group').nth(2).getByRole('radio', { name: 'Other…', exact: true }).check();
     await form(glyph).getByRole('textbox', { name: 'Your answer' }).fill('Custom answer — café 🌱');
     provider.enqueue({ chunks: ['All three answers received.'] });
     // Two same-tick submissions exercise the guard before the DOM disables.

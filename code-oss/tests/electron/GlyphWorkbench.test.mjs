@@ -4,7 +4,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
   it('opens the Glyph sidebar from the command palette with an accessible message composer', async ({ glyph }) => {
     await expect(glyph.composer).toBeEditable();
     await expect(glyph.composer).toHaveAttribute('aria-multiline', 'true');
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect(glyph.page.getByText('No active text editor', { exact: true })).toBeVisible();
   });
 
@@ -30,14 +30,11 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await glyph.waitForResponse();
   });
 
-  it('preserves a draft and composer focus through streaming updates and ignores submit until the current answer finishes', async ({
-    glyph,
-  }) => {
+  it('preserves an unsubmitted draft and composer focus through streaming updates', async ({ glyph }) => {
     await glyph.send('Stream while I write the next question.');
     await expect(glyph.sendButton).toHaveText('Cancel');
     await expect(glyph.assistantEntries.first()).toContainText('The packaged');
     await glyph.composer.fill('Keep this next question as a draft.');
-    await glyph.composer.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter');
     await expect(glyph.composer).toHaveText('Keep this next question as a draft.');
     await glyph.waitForResponse();
     await expect(glyph.composer).toHaveText('Keep this next question as a draft.');
@@ -62,22 +59,22 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     }
   });
 
-  it('submits a message with the platform command-enter shortcut', async ({ glyph }) => {
+  it('submits a message with Enter', async ({ glyph }) => {
     await glyph.composer.fill('Send from the keyboard.');
-    await glyph.composer.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter');
+    await glyph.composer.press('Enter');
     await glyph.waitForResponse();
     await expect(glyph.userEntries.first()).toContainText('Send from the keyboard.');
   });
 
-  it('keeps ordinary Enter as a newline and preserves multiline message text', async ({ glyph }) => {
+  it('uses Shift+Enter for a newline and preserves multiline message text', async ({ glyph }) => {
     await glyph.composer.fill('First line');
-    await glyph.composer.press('Enter');
+    await glyph.composer.press('Shift+Enter');
     await glyph.composer.pressSequentially('Second line');
-    await expect(glyph.composer).toHaveText('First line\nSecond line');
+    await expect(glyph.composer.locator('p')).toHaveText(['First line', 'Second line']);
     await expect(glyph.userEntries).toHaveCount(0);
     await glyph.sendButton.click();
     await glyph.waitForResponse();
-    await expect(glyph.userEntries.first().locator('div')).toHaveText('First line\nSecond line');
+    await expect(glyph.userEntries.first().locator('[data-glyph-source] p')).toHaveText(['First line', 'Second line']);
   });
 
   it('ignores an empty or whitespace-only message without creating a conversation turn', async ({ glyph }) => {
@@ -86,7 +83,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await expect(glyph.userEntries).toHaveCount(0);
     await expect(glyph.assistantEntries).toHaveCount(0);
     await expect(glyph.diagnostics).toHaveCount(0);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
   });
 
   it('renders markup in a user message as literal text rather than creating HTML elements', async ({ glyph }) => {
@@ -103,7 +100,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await expect(glyph.assistantEntries.first()).toContainText('The packaged');
     await glyph.sendButton.click();
     await expect(glyph.diagnostics).toContainText(['Response cancelled.']);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect(glyph.assistantEntries.first()).not.toContainText('transport.');
     await glyph.send('Now answer another question.');
     await glyph.waitForResponse(1);
@@ -131,7 +128,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await glyph.send('After reload.');
     await expect(glyph.userEntries.last()).toContainText('After reload.');
     await expect(glyph.assistantEntries.last()).toContainText('transport.');
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
   });
 
   it('restores completed conversation text after the workbench reconnects', async ({ glyph }) => {
@@ -164,7 +161,7 @@ it.describe('An untrusted workspace', () => {
     await glyph.send('Do not expose this untrusted project.');
     await expect(glyph.diagnostics).toContainText([/Workspace trust is required/]);
     await expect(glyph.assistantEntries).not.toContainText(['The packaged Glyph host is connected']);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
   });
 });
 
@@ -177,7 +174,7 @@ it.describe('The production runtime with no configured account', () => {
       'Sign in to a Glyph account with inference access before sending a message.',
     ]);
     await expect(glyph.assistantEntries).toHaveCount(0);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
   });
 });
 
@@ -205,24 +202,7 @@ it.describe('Pending editor Tab completion', () => {
 
 // Proposal annotation and rebuttal contracts are exercised in GlyphProposals.test.mjs.
 
-it.describe('Pending messages during an active turn', () => {
-  it.fixme('queues a message with the queue shortcut without cancelling or steering the active turn', async () => {});
-  it.fixme(
-    'interrupts the active turn with the interrupt shortcut and starts the new message after cancellation settles',
-    async () => {},
-  );
-  it.fixme('steers the active turn with the steering shortcut without starting a competing turn', async () => {});
-  it.fixme('shows queued message previews stacked above the composer in their delivery order', async () => {});
-  it.fixme(
-    'moves a queued message back into the composer for editing without losing the existing draft',
-    async () => {},
-  );
-  it.fixme(
-    'lets the user reorder queued messages and delivers them in the new order after the active turn finishes',
-    async () => {},
-  );
-  it.fixme('lets the user delete a queued message so it is never submitted', async () => {});
-});
+// Queue, immediate-send, and steering contracts run in GlyphMessageQueue and GlyphComposerCommands.
 
 it.describe('Pending context compaction', () => {
   it.fixme('indicates when conversation context is being compacted and when the agent can continue', async () => {});
@@ -243,10 +223,6 @@ it.describe('Pending context compaction', () => {
 it.describe('Pending usage metering and settings', () => {
   it.fixme(
     'lets the user rebind send, queue, interrupt, and steer shortcuts through the workbench keyboard shortcut settings',
-    async () => {},
-  );
-  it.fixme(
-    'honors a rebound shortcut and removes the old binding without breaking ordinary composer text editing',
     async () => {},
   );
   it.fixme(
@@ -377,3 +353,15 @@ it.describe('Pending cross-chat agent communication', () => {
   );
   it.fixme('refuses discovery or messages outside the user-authorized set of chats', async () => {});
 });
+
+// Measure the packaged renderer before choosing a virtualization strategy.
+it.fixme(
+  'keeps very long conversations responsive with bounded rendered history while preserving scroll position, streaming, code-block state, selection, and annotation navigation',
+  async () => {
+    // Seed thousands of mixed-size turns, including fenced code, diagrams, and tool groups.
+    // Measure initial load, memory/DOM growth, scroll latency, and streaming updates;
+    // evaluate viewport virtualization/windowing with variable-height rows.
+    // Scrolling into older history must not jump back to the latest turn; returning
+    // to a row must preserve actions, wrap state, selected text, and annotation anchors.
+  },
+);

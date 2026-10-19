@@ -1,22 +1,32 @@
+import { autoModel } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
+import { isolateComposer } from '#code-oss/storybook/decorators.tsx';
+import {
+  composerFixture,
+  queuedMessageDocuments,
+  markdownDraft,
+  failingActionsFixture,
+  previewActionsFixture,
+  attachedActionsFixture,
+} from '#code-oss/storybook/fixtures/ActionFixtures.ts';
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { GlyphModelPicker } from '#code-oss/ui/GlyphModelPicker/GlyphModelPicker.presentational.tsx';
-import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
+
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import { WiredGlyphComposer } from './GlyphComposer.wired.tsx';
 import { workbenchClassName } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.presentational.tsx';
-import { failingActions, previewActions, attachedActions } from '#code-oss/storybook/fixtures.ts';
 
 const meta = {
-  title: 'Glyph/Chat/Composer',
+  title: 'Glyph/Chat/In Composer/Composer',
   component: WiredGlyphComposer,
   args: {
     status: GlyphWorkbenchStatus.READY,
-    actions: previewActions,
+    actions: previewActionsFixture(),
     modelControl: (
       <GlyphModelPicker
-        model="auto"
-        label="Auto"
-        models={[{ value: 'auto', label: 'Auto' }]}
+        model={autoModel.slug}
+        label={autoModel.name}
+        models={[{ value: autoModel.slug, label: autoModel.name }]}
         disabled={false}
         selectModel={() => {}}
       />
@@ -27,6 +37,7 @@ const meta = {
     status: { control: 'select', options: Object.values(GlyphWorkbenchStatus) },
   },
   decorators: [
+    isolateComposer,
     Story => (
       <div class={`glyph-workbench ${workbenchClassName}`}>
         <Story />
@@ -39,23 +50,20 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Empty: Story = {};
-export const AttachedSelection: Story = { args: { actions: attachedActions } };
+export const AttachedSelection: Story = { args: { actions: attachedActionsFixture() } };
 export const Streaming: Story = { args: { status: GlyphWorkbenchStatus.STREAMING } };
-export const SendFailure: Story = { args: { actions: failingActions } };
+export const SendFailure: Story = { args: { actions: failingActionsFixture() } };
 
-const planComposer = new GlyphComposerState();
-planComposer.setMode('plan');
-export const Plan: Story = { args: { actions: { ...previewActions, composer: planComposer } } };
+export const Plan: Story = {
+  args: { actions: previewActionsFixture({ composer: composerFixture({ mode: AgentModeID.PLAN }) }) },
+};
+export const MarkdownDraft: Story = {
+  args: { actions: previewActionsFixture({ composer: composerFixture({ document: markdownDraft }) }) },
+};
 
-const markdownComposer = new GlyphComposerState();
-markdownComposer.setDocument({
-  parts: [
-    {
-      type: 'text',
-      text: '## Implementation notes\n\n1. Inspect the **existing behavior**\n2. Add focused tests\n   * Include the failure path\n\n> Keep the change small and reviewable.\n\nUse `pnpm test` to verify.',
-    },
-  ],
-  from: 0,
-  to: 0,
-});
-export const MarkdownDraft: Story = { args: { actions: { ...previewActions, composer: markdownComposer } } };
+export const QueuedMessages: Story = {
+  args: {
+    status: GlyphWorkbenchStatus.STREAMING,
+    actions: previewActionsFixture({ composer: composerFixture({ queued: queuedMessageDocuments }) }),
+  },
+};

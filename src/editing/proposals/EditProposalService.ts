@@ -1,3 +1,4 @@
+import type { AgentMode } from '#src/chat/AgentMode.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Logger } from '#src/observability/Logger.js';
@@ -89,6 +90,17 @@ export class EditProposalService {
     private readonly now: () => Date = () => new Date(),
   ) {
     this.logger = logger.forNamespace('editing.proposal');
+  }
+
+  /** Apply the mode policy to every logical and canonical source/destination before review. */
+  async assertModeAllows(proposal: EditProposal, mode: AgentMode): Promise<void> {
+    if (!mode.restrictsEdits) return;
+    for (const file of proposal.files) {
+      for (const path of new Set([file.sourcePath, file.targetPath])) {
+        const denial = mode.getEditDenial(path) ?? mode.getEditDenial(await this.workspace.canonicalPath(path));
+        if (denial) throw new EditError(EditFailureReason.UNSUPPORTED, denial, { path });
+      }
+    }
   }
 
   async proposeStructured(raw: unknown, signal?: AbortSignal): Promise<EditProposal> {

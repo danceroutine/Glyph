@@ -1,11 +1,12 @@
+import { WiredGlyphCodeBlock } from '#code-oss/ui/GlyphCodeBlock/GlyphCodeBlock.wired.tsx';
 import { useMemo } from 'preact/hooks';
 import { Marked } from 'marked';
 import { GlyphMarkdown } from '#code-oss/ui/GlyphMarkdown/GlyphMarkdown.presentational.tsx';
 import { WiredGlyphDiagram } from '#code-oss/ui/GlyphDiagram/GlyphDiagram.wired.tsx';
 import { GlyphContextBadge } from '#code-oss/ui/GlyphContextBadge/GlyphContextBadge.presentational.tsx';
-import type { GlyphTranscriptState } from './useGlyphTranscriptState.ts';
+import type { GlyphMessageState } from '#code-oss/ui/GlyphAgentMessage/useGlyphMessageState.ts';
 
-export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphTranscriptState['entries'][number] }) {
+export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMessageState['entries'][number] }) {
   const { items, prefix } = useMemo(() => {
     const prefix = `GLYPH${Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16)).join('')}CONTEXT`;
     const expression = new RegExp(`^${prefix}(\\d+)END`);
@@ -56,6 +57,18 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphTr
       items={items}
       openLink={entry.openLink}
       text={renderText}
+      code={(source, language) => (
+        <WiredGlyphCodeBlock
+          copyText={entry.copyText}
+          language={language}
+          source={source.replace(pattern, (_, index) => {
+            const part = entry.parts[Number(index)];
+            return part?.type === 'attachment'
+              ? `@${part.attachment.path}${part.attachment.range ? ` (${part.attachment.range.start.line}-${part.attachment.range.end.line})` : ''}`
+              : '';
+          })}
+        />
+      )}
       diagram={source => (
         <WiredGlyphDiagram
           source={source.replace(pattern, (_, index) => {

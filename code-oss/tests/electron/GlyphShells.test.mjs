@@ -20,7 +20,7 @@ const write = (id, input, appendNewline = true) =>
 const close = id => tool('close_shell', { terminal_id: id });
 const list = () => tool('list_shells', {});
 const cards = glyph => glyph.page.getByRole('region', { name: 'Shell command', exact: true });
-const finished = glyph => expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+const finished = glyph => expect(glyph.sendButton).toHaveText('Send (Enter)');
 const result = (provider, call) =>
   JSON.parse(
     provider.requests

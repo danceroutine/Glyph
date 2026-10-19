@@ -20,7 +20,7 @@ async function createPlan(glyph, provider) {
   );
   await glyph.send('Plan a queue for messages.');
   await expect(glyph.page.getByRole('article', { name: 'Plan: Queue messages' })).toBeVisible();
-  await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+  await expect(glyph.sendButton).toHaveText('Send (Enter)');
 }
 async function annotate(glyph, source, comment) {
   await source.dblclick({ position: { x: 10, y: 10 } });
@@ -43,6 +43,15 @@ async function annotate(glyph, source, comment) {
 }
 it.describe('Plans and passage annotations', () => {
   it.use({ scriptedProvider: true });
+  it.fixme(
+    'renders agent annotation citations as links that scroll to the annotated source range and briefly highlight it before fading, without repeating the original text',
+    async () => {
+      // Cite a submitted annotation in a later assistant response, with its source
+      // passage above the viewport. Clicking the citation must reveal that exact
+      // range and fade its temporary highlight; it must not open a quote preview
+      // or duplicate the original passage in the citation or a popover.
+    },
+  );
   it('blocks execution while planning and renders a saved native plan with editable todos and linked chats', async ({
     glyph,
     provider,
@@ -96,7 +105,7 @@ it.describe('Plans and passage annotations', () => {
     await question.getByRole('radio', { name: 'Yes', exact: true }).click();
     await question.getByRole('button', { name: 'Continue' }).click();
     await expect(glyph.page.locator('.glyph-transcript')).toContainText('Execution requires Build.');
-    expect(JSON.stringify(provider.requests.at(-1).body.input)).toContain('PLAN_MODE_READ_ONLY');
+    expect(JSON.stringify(provider.requests.at(-1).body.input)).toContain('TOOL_MODE_DENIED');
     const read = provider.requests
       .at(-1)
       .body.input.find(item => item.type === 'function_call_output' && item.call_id === 'read');

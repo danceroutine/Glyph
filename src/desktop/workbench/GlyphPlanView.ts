@@ -10,6 +10,7 @@ export interface GlyphPlanViewActions {
   build(newChat?: boolean): Promise<void>;
   newAgent(): Promise<void>;
   openChat(id: string): Promise<void>;
+  copyText?(text: string): Promise<void>;
   openLink(href: string): Promise<void>;
 }
 export type GlyphPlanMount = (

@@ -1,5 +1,6 @@
-import { List, ChevronDown, Check } from 'lucide-preact';
-import { GlyphAgentIcon } from './GlyphAgentIcon.presentational.tsx';
+import { ChevronDown, Check } from 'lucide-preact';
+import { AgentMode } from '#src/chat/AgentMode.js';
+import { AGENT_MODE_PRESENTATION } from '#code-oss/ui/AgentMode/AgentModePresentation.tsx';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 import type { GlyphModePickerState } from './useGlyphModePickerState.ts';
 const styles = {
@@ -15,10 +16,6 @@ const styles = {
     cursor: 'pointer',
     color: tokens.text.muted,
     background: tokens.button.secondary.background,
-    '&[data-mode=plan]': {
-      color: tokens.text.warning,
-      background: `color-mix(in srgb, ${tokens.text.warning} 24%, transparent)`,
-    },
     ':focus-visible': { outline: tokens.focus.ring },
   }),
   menu: css({
@@ -51,12 +48,16 @@ const styles = {
   }),
 };
 export function GlyphModePicker(state: GlyphModePickerState) {
+  const mode = AgentMode.resolve(state.mode);
+  const presentation = AGENT_MODE_PRESENTATION[mode.id];
+  const Icon = presentation.Icon;
   return (
     <div class={styles.root} ref={state.root} onBlur={event => state.blur(event.relatedTarget)}>
       <button
         type="button"
         class={styles.trigger}
         data-mode={state.mode}
+        style={presentation.badge}
         ref={state.trigger}
         role="combobox"
         aria-label="Conversation mode"
@@ -67,31 +68,34 @@ export function GlyphModePicker(state: GlyphModePickerState) {
         onClick={state.toggle}
         onKeyDown={state.keydown}
       >
-        {state.mode === 'plan' ? <List size={16} aria-hidden="true" /> : <GlyphAgentIcon />}
-        {state.mode === 'plan' ? 'Plan' : 'Agent'}
+        <Icon />
+        {mode.name}
         <ChevronDown size={14} aria-hidden="true" />
       </button>
       {state.open && (
         <div id={state.id} role="listbox" aria-label="Conversation modes" class={styles.menu}>
-          {(['agent', 'plan'] as const).map(mode => (
-            <button
-              type="button"
-              key={mode}
-              id={`${state.id}-${mode}`}
-              role="option"
-              aria-selected={state.mode === mode}
-              tabIndex={-1}
-              class={styles.option}
-              data-highlighted={state.highlighted === mode}
-              onMouseDown={event => event.preventDefault()}
-              onMouseEnter={() => state.setHighlighted(mode)}
-              onClick={() => state.select(mode)}
-            >
-              {mode === 'plan' ? <List size={16} aria-hidden="true" /> : <GlyphAgentIcon />}
-              <span>{mode === 'plan' ? 'Plan' : 'Agent'}</span>
-              {state.mode === mode && <Check size={16} aria-hidden="true" />}
-            </button>
-          ))}
+          {state.modes.map(mode => {
+            const OptionIcon = AGENT_MODE_PRESENTATION[mode.id].Icon;
+            return (
+              <button
+                type="button"
+                key={mode.id}
+                id={`${state.id}-${mode.id}`}
+                role="option"
+                aria-selected={state.mode === mode.id}
+                tabIndex={-1}
+                class={styles.option}
+                data-highlighted={state.highlighted === mode.id}
+                onMouseDown={event => event.preventDefault()}
+                onMouseEnter={() => state.setHighlighted(mode.id)}
+                onClick={() => state.select(mode.id)}
+              >
+                <OptionIcon />
+                <span>{mode.name}</span>
+                {state.mode === mode.id && <Check size={16} aria-hidden="true" />}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

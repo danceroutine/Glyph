@@ -1,3 +1,5 @@
+import { AgentMode } from '#src/chat/AgentMode.js';
+import { AgentModeID } from "../AgentMode.ts";
 import { ChatHistoryError } from './ChatHistoryError.ts';
 import { PlanError } from '#src/planning/PlanError.js';
 import { planUpdateSchema, type PlanUpdate } from '#src/planning/PlanSchema.js';
@@ -150,9 +152,9 @@ export class ChatSessionManager {
     });
   }
 
-  setMode(id: string, mode: 'agent' | 'plan'): Promise<ChatSessionSummary> {
+  setMode(id: string, mode: AgentModeID): Promise<ChatSessionSummary> {
     return this.enqueue(async () => {
-      if (mode !== 'agent' && mode !== 'plan') throw new PlanError('Unknown conversation mode.');
+      if (!AgentMode.isId(mode)) throw new PlanError('Unknown conversation mode.');
       const updated = { ...this.requireRecord(id), mode };
       await this.saveWith(id, updated);
       return toSummary(updated);

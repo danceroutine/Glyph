@@ -26,7 +26,9 @@ it('uses letter controls for choices and Other while retaining radio keyboard an
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: result.outputFiles[0].text });
-    const choices = page.getByRole('radio');
+    const first = page.getByRole('group').nth(0);
+    const second = page.getByRole('group').nth(1);
+    const choices = first.getByRole('radio');
     await expect(choices).toHaveCount(4);
     expect(await choices.evaluateAll(inputs => inputs.map(input => input.nextElementSibling.textContent))).toEqual([
       'A',
@@ -38,7 +40,7 @@ it('uses letter controls for choices and Other while retaining radio keyboard an
     await page.getByRole('radio', { name: 'TypeScript' }).check();
     await page.keyboard.press('ArrowDown');
     await expect(page.getByRole('radio', { name: 'Rust' })).toBeChecked();
-    await page.getByRole('radio', { name: 'Other…' }).check();
+    await first.getByRole('radio', { name: 'Other…' }).check();
     await page.getByRole('textbox', { name: 'Your answer' }).fill('Swift');
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await expect(page.getByRole('checkbox')).toHaveCount(2);
@@ -46,7 +48,7 @@ it('uses letter controls for choices and Other while retaining radio keyboard an
     await page.getByRole('checkbox', { name: 'Speed' }).check();
     await expect(page.getByRole('checkbox', { name: 'Clarity' })).toBeChecked();
     await expect(page.getByRole('checkbox', { name: 'Speed' })).toBeChecked();
-    await expect(page.getByRole('radio', { name: 'Other…' }).locator('..')).toContainText('C');
+    await expect(second.getByRole('radio', { name: 'Other…' }).locator('..')).toContainText('C');
   } finally {
     await browser.close();
   }

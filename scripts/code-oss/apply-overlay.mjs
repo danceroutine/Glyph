@@ -25,6 +25,14 @@ await buildGlyphUi(sourceRoot);
 const protocolSourceRoot = join(repositoryRoot, 'src', 'desktop', 'protocol');
 const protocolTargetRoot = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'common', 'protocol');
 await copyProtocol(protocolSourceRoot, protocolTargetRoot);
+// Protocol modes share the runtime enum. Preserve its relative source location
+// in the generated tree instead of maintaining a second set of wire values.
+const chatContractTarget = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'chat');
+await mkdir(chatContractTarget, { recursive: true });
+for (const name of ['AgentMode.ts']) {
+  const source = join(repositoryRoot, 'src', 'chat', name);
+  await writeFile(join(chatContractTarget, name), (await readFile(source, 'utf8')).replaceAll(".ts'", ".js'"));
+}
 await copyProtocol(
   join(repositoryRoot, 'src', 'desktop', 'workbench'),
   join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'common', 'workbench'),

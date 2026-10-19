@@ -1,3 +1,5 @@
+import { GlyphQueuedMessages } from '#code-oss/ui/GlyphQueuedMessages/GlyphQueuedMessages.tsx';
+import { AGENT_MODE_PRESENTATION } from '#code-oss/ui/AgentMode/AgentModePresentation.tsx';
 import { GlyphAnnotationPill } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.presentational.tsx';
 import type { ComponentChildren } from 'preact';
 import { RefreshCw, ExternalLink, X, Paperclip, ArrowUp, Square } from 'lucide-preact';
@@ -8,6 +10,7 @@ const styles = {
   root: css({ padding: tokens.space.md, position: 'relative' }),
   annotations: css({ padding: '10px 10px 0' }),
   surface: css({
+    position: 'relative',
     border: tokens.input.strongBorder,
     borderRadius: tokens.card.radius,
     background: tokens.input.background,
@@ -238,7 +241,13 @@ export function GlyphComposer(state: GlyphComposerProps) {
           )}
         </div>
       )}
+      <GlyphQueuedMessages state={state} />
       <div class={`glyph-composer-surface ${styles.surface}`}>
+        {state.editingQueuedMessage && (
+          <button class={styles.button} type="button" onClick={state.cancelQueueEdit}>
+            Cancel queue edit
+          </button>
+        )}
         {state.annotations.length > 0 && (
           <div class={styles.annotations}>
             <GlyphAnnotationPill
@@ -266,22 +275,32 @@ export function GlyphComposer(state: GlyphComposerProps) {
             >
               <Paperclip size={18} aria-hidden="true" />
             </button>
+            {state.active && state.draft.trim() && (
+              <button
+                class={styles.icon}
+                type="button"
+                title="Cancel"
+                aria-label="Cancel"
+                disabled={state.disabled}
+                onClick={state.cancel}
+              >
+                <Square size={16} aria-hidden="true" />
+              </button>
+            )}
             <button
               class={`glyph-send ${styles.icon} ${styles.send}`}
-              style={
-                state.mode === 'plan' ? { background: tokens.text.warning, color: tokens.surface.canvas } : undefined
-              }
+              style={AGENT_MODE_PRESENTATION[state.mode].send}
               type="button"
-              disabled={!state.active && state.disabled}
+              disabled={state.disabled || state.submitting}
               onClick={state.activate}
-              title={state.active ? 'Cancel' : 'Send (⌘/Ctrl+Enter)'}
+              title={state.saveQueueLabel ?? (state.active ? 'Cancel' : state.sendLabel)}
             >
-              {state.active ? (
+              {state.active && !state.draft.trim() ? (
                 <Square size={13} fill="currentColor" aria-hidden="true" />
               ) : (
                 <ArrowUp size={18} aria-hidden="true" />
               )}
-              <span class={styles.hidden}>{state.active ? 'Cancel' : 'Send (⌘/Ctrl+Enter)'}</span>
+              <span class={styles.hidden}>{state.saveQueueLabel ?? (state.active ? 'Cancel' : state.sendLabel)}</span>
             </button>
           </div>
         </div>

@@ -36,7 +36,7 @@ import { TerminalEditReviewer } from './terminal/ui/proposal/TerminalEditReviewe
 import { ShutdownSignal } from './terminal/ShutdownSignal.ts';
 import { TerminalUI } from './terminal/TerminalUI.tsx';
 import { installShutdownHandlers } from './terminal/installShutdownHandlers.ts';
-import { CompositeToolRuntime } from './tools/CompositeToolRuntime.ts';
+import { ToolRegistry } from './tools/ToolRegistry.ts';
 import { FileSystemWorkspaceTextStore } from './workspace/FileSystemWorkspaceTextStore.ts';
 import { MultiRootWorkspaceTextStore } from './workspace/MultiRootWorkspaceTextStore.ts';
 import type { WorkspaceTextStore } from './workspace/WorkspaceTextStore.ts';
@@ -131,11 +131,11 @@ async function main(): Promise<void> {
     proposalReviews,
     logger,
   );
-  const tools = new CompositeToolRuntime([
-    projectTools,
-    new ProposeQuestionToolRuntime(ui),
-    new ShellToolRuntime(shellSessions),
-  ]);
+  const tools = new ToolRegistry(
+    [projectTools, new ProposeQuestionToolRuntime(ui), new ShellToolRuntime(shellSessions)].flatMap(
+      source => source.tools,
+    ),
+  );
   const backend = new OpenAIBackend(
     store,
     session,

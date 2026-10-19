@@ -1,3 +1,6 @@
+import type { GlyphFollowUpBehavior } from './GlyphFollowUpBehavior.ts';
+import type { GlyphComposerCommand } from './GlyphComposerCommand.ts';
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
@@ -17,11 +20,29 @@ export interface GlyphWorkbenchViewActions {
   readonly composer: GlyphComposerState;
   readonly context: GlyphContextActions;
   send(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
-  selectMode?(mode: 'agent' | 'plan'): Promise<void>;
+  /** Native hosts resolve shortcuts through the workbench; browser previews use editor defaults. */
+  readonly composerKeybindings?: {
+    mount(element: HTMLElement): () => void;
+    dispatch(event: KeyboardEvent): boolean;
+    label(command: GlyphComposerCommand): string | undefined;
+  };
+  readonly followUpBehavior?: GlyphFollowUpBehavior;
+  /** Native hosts drain queued drafts even while their pane is unmounted. */
+  readonly managesQueue?: boolean;
+  moveQueuedToNewChat?(id: string): Promise<void>;
+  openMessageSettings?(): void;
+  sendImmediately?(
+    text: string,
+    attachments?: readonly GlyphContextAttachment[],
+    options?: GlyphTurnOptions,
+  ): Promise<void>;
+  steer?(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
+  selectMode?(mode: AgentModeID): Promise<void>;
   buildPlan?(chatId: string, plan: GlyphPlan, newChat?: boolean): Promise<void>;
   viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
   branchChat?(chatId: string, turnId: string): Promise<void>;
   restoreCheckpoint?(chatId: string, turnId: string): Promise<void>;
+  copyText?(text: string): Promise<void>;
   openLink?(href: string): Promise<void>;
   cancel(): void;
   writeShellInput(chatId: string, sessionId: string, input: string, appendNewline: boolean): Promise<void>;

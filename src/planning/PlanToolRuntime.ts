@@ -1,21 +1,29 @@
+import { AgentModeID } from "#src/chat/AgentMode.js";
+import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
-import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ToolSource } from '#src/tools/ToolSource.js';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import { planUpdateSchema, type PlanUpdate } from './PlanSchema.ts';
 import { PlanError } from './PlanError.ts';
 const { $schema: _, ...parameters } = z.toJSONSchema(planUpdateSchema, { target: 'draft-7' });
-export class PlanToolRuntime implements ToolRuntime {
-  readonly definitions = [
+export class PlanToolRuntime implements ToolSource {
+  readonly tools: readonly Tool[] = [
     {
       namespace: 'planning',
       name: 'save_plan',
+      allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
       inputKind: ToolInputKind.JSON,
       parameters,
       description:
         'Save a plan for human review. Include Markdown, a short summary and todos. For a new plan pass null id and expectedRevision; to revise use its returned id and revision. This does not execute work or authorize leaving Plan Mode.',
+      validateInput: input => {
+        planUpdateSchema.parse(JSON.parse(input));
+      },
+      execute: (input, signal, context) => this.execute('save_plan', input, signal, context),
     },
   ];
+
   constructor(
     private readonly save: (
       chat: NonNullable<ToolExecutionContext['chat']>,

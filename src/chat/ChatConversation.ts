@@ -1,3 +1,4 @@
+import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { Logger } from '#src/observability/Logger.js';
 import { ProviderError } from '#src/errors/ProviderError.js';
 import type { ChatProvider } from './ChatProvider.ts';
@@ -13,6 +14,7 @@ import type { ChatContextEvent } from './ChatContextEvent.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 
 export interface ChatConversationSendOptions {
+  readonly takeSteering?: (finishing: boolean) => readonly ChatRequest[];
   readonly onStateCheckpoint?: (state: ChatProviderState) => void | Promise<void>;
   readonly toolContext?: ToolExecutionContext;
 }
@@ -79,6 +81,7 @@ export class ChatConversation {
           if (this.traceEnabled) trace.push(entry);
         },
         ...(options.onStateCheckpoint ? { onStateCheckpoint: options.onStateCheckpoint } : {}),
+        ...(options.takeSteering ? { takeSteering: options.takeSteering } : {}),
         ...(options.toolContext ? { toolContext: options.toolContext } : {}),
       });
     } catch (error) {

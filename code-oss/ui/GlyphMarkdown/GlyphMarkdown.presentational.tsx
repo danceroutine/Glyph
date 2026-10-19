@@ -18,7 +18,6 @@ const style = css({
     color: tokens.text.muted,
   },
   overflowWrap: 'anywhere',
-  '& pre': { overflow: 'auto', padding: tokens.space.md, background: tokens.input.background },
   '& code': { fontFamily: tokens.font.family.code },
   '& a': { color: tokens.context.file.foreground },
   '& table': { borderCollapse: 'collapse' },
@@ -29,6 +28,7 @@ export function GlyphMarkdown({
   items,
   openLink,
   diagram,
+  code,
   inline,
   text = value => value,
 }: {
@@ -36,6 +36,7 @@ export function GlyphMarkdown({
   readonly openLink: (href: string) => void;
   readonly text?: (value: string) => ComponentChildren;
   readonly inline?: (token: Token) => ComponentChildren;
+  readonly code: (source: string, language: string | undefined) => ComponentChildren;
   readonly diagram: (source: string) => ComponentChildren;
 }) {
   const render = (items: readonly Token[]): ComponentChildren =>
@@ -64,13 +65,7 @@ export function GlyphMarkdown({
         case 'codespan':
           return <code>{text(token.text)}</code>;
         case 'code':
-          return token.lang === 'mermaid' ? (
-            diagram(token.text)
-          ) : (
-            <pre>
-              <code>{text(token.text)}</code>
-            </pre>
-          );
+          return token.lang?.trim().toLowerCase() === 'mermaid' ? diagram(token.text) : code(token.text, token.lang);
         case 'link':
           return (
             <a

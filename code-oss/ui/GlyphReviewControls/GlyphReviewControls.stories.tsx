@@ -1,3 +1,5 @@
+import { reviewControlsFixture } from '#code-oss/storybook/fixtures/ViewFixtures.ts';
+import { editorChanges } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
 import { useState } from 'preact/hooks';
 import { FileCode2 } from 'lucide-preact';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
@@ -6,21 +8,7 @@ import { WiredGlyphReviewControls } from './GlyphReviewControls.wired.tsx';
 const meta = {
   title: 'Glyph/Editor/Editor review controls',
   component: WiredGlyphReviewControls,
-  args: {
-    label: '1 of 2',
-    fileLabel: '1 of 2 Files',
-    disabled: false,
-    keepDisabled: false,
-    previous: () => {},
-    next: () => {},
-    previousFile: async () => {},
-    nextFile: async () => {},
-    keep: async () => {},
-    undo: async () => {},
-    keepFile: async () => {},
-    undoFile: async () => {},
-    keepAll: async () => {},
-  },
+  args: reviewControlsFixture(),
 } satisfies Meta<typeof WiredGlyphReviewControls>;
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -84,10 +72,7 @@ const editorStyles = {
   }),
   status: css({ padding: '8px 16px', color: tokens.text.muted, fontFamily: tokens.font.family.body }),
 };
-const changes = [
-  { before: '  send(message);', after: '  pendingMessages.push(message);' },
-  { before: '  return undefined;', after: '  return pendingMessages.shift();' },
-];
+const changes = editorChanges;
 function EditorPreview() {
   const [active, setActive] = useState(0);
   const [decisions, setDecisions] = useState<Record<number, 'keep' | 'undo'>>({});

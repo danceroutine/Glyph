@@ -1,3 +1,5 @@
+import { AgentMode } from '#src/chat/AgentMode.js';
+import { ModeSwitchToolRuntime } from '#src/interaction/modes/ModeSwitchToolRuntime.js';
 import { PlanToolRuntime } from '#src/planning/PlanToolRuntime.js';
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
@@ -37,7 +39,7 @@ import { ShellWorkingDirectoryResolver } from '#src/shell/ShellWorkingDirectoryR
 import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
 import { assertShellRuntimePathIsolation } from '#src/shell/ShellRuntimePathPolicy.js';
 import { ShellToolRuntime } from '#src/shell/ShellToolRuntime.js';
-import { CompositeToolRuntime } from '#src/tools/CompositeToolRuntime.js';
+import { ToolRegistry } from '#src/tools/ToolRegistry.js';
 import { TodoToolRuntime } from '#src/todos/TodoToolRuntime.js';
 import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTextStore.js';
@@ -201,26 +203,39 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       }),
       context,
     );
-    const tools = new CompositeToolRuntime([
-      new PlanToolRuntime(async (chat, update, signal) => {
-        const summary = await sessions.updatePlan(chat, update, signal);
-        runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
-        return summary.plans?.at(-1);
-      }),
-      new ProjectToolRuntime(
-        new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index),
-        new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
-        reviews,
-        logger,
-      ),
-      new ProposeQuestionToolRuntime(interactions),
-      new ShellToolRuntime(shells),
-      new TodoToolRuntime(async (chat, update, signal) => {
-        const summary = await sessions.updateTodos(chat, update, signal);
-        runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
-        return summary.todos ?? [];
-      }),
-    ]);
+    const tools = new ToolRegistry(
+      [
+        new ModeSwitchToolRuntime((target, description, context, signal) =>
+          interactions.presentModeSwitch(
+            { source: context.mode ?? AgentMode.default.id, target, description },
+            signal,
+            async () => {
+              const summary = await sessions.setMode(context.chat!.id, target);
+              runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+            },
+            (id, status) => runtime?.finishModeSwap(context.chat!.id, id, status),
+          ),
+        ),
+        new PlanToolRuntime(async (chat, update, signal) => {
+          const summary = await sessions.updatePlan(chat, update, signal);
+          runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+          return summary.plans?.at(-1);
+        }),
+        new ProjectToolRuntime(
+          new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index),
+          new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
+          reviews,
+          logger,
+        ),
+        new ProposeQuestionToolRuntime(interactions),
+        new ShellToolRuntime(shells),
+        new TodoToolRuntime(async (chat, update, signal) => {
+          const summary = await sessions.updateTodos(chat, update, signal);
+          runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+          return summary.todos ?? [];
+        }),
+      ].flatMap(source => source.tools),
+    );
     const store = this.accounts.borrowStore();
     const http = new FetchHttpClient(logger, this.transport);
     const client = this.transport

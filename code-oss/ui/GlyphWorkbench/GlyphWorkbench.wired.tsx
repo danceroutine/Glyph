@@ -100,7 +100,7 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
             status={state.status}
             key={state.selectedChatId ?? 'draft'}
             actions={actions}
-            disabled={!!state.navigationPending || (!state.selectedChatId && !!state.catalogPending)}
+            disabled={state.readOnly || !!state.navigationPending || (!state.selectedChatId && !!state.catalogPending)}
             modelControl={<WiredGlyphModelPicker state={state} actions={actions} />}
           />
         }

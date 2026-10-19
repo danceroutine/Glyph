@@ -1,3 +1,4 @@
+import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ProviderTraceEntry } from './ProviderTraceEntry.ts';
 import type { ToolActivity } from './ToolActivity.ts';
 import type { TurnResult } from './TurnResult.ts';
@@ -19,6 +20,8 @@ export interface ChatProvider {
     options: {
       signal: AbortSignal;
       onText: (delta: string) => void;
+      /** Drain accepted instructions at a safe boundary; close acceptance when a final step has none. */
+      takeSteering?: (finishing: boolean) => readonly ChatRequest[];
       /** Receives provider-authored summaries, never a model's raw hidden reasoning. */
       onReasoningSummary?: (delta: string) => void;
       onTrace?: (entry: ProviderTraceEntry) => void;

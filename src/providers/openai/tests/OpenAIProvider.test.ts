@@ -1,3 +1,4 @@
+import { AgentMode } from '#src/chat/AgentMode.js';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,9 +7,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChatConfiguration } from '#src/configuration/ChatConfiguration.js';
 import { describeError } from '#src/describeError.js';
 import { ProjectAccess } from '#src/project/ProjectAccess.js';
-import { CompositeToolRuntime } from '#src/tools/CompositeToolRuntime.js';
+import { ToolRegistry } from '#src/tools/ToolRegistry.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
-import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ToolSource } from '#src/tools/ToolSource.js';
+import { AgentModeID } from "#src/chat/AgentMode.js";
+import { testToolSource } from '#src/tools/test/fixtures/TestToolSource.js';
 import type { ProviderTraceEntry } from '#src/chat/ProviderTraceEntry.js';
 import { OpenAIProvider } from '#src/providers/openai/OpenAIProvider.js';
 import { OpenAISession } from '#src/providers/openai/auth/OpenAISession.js';
@@ -64,7 +67,7 @@ function sse(events: unknown[]): Response {
   );
 }
 
-function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolRuntime) {
+function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolSource) {
   const requests: Record<string, unknown>[] = [];
   const client = new OpenAI({
     apiKey: 'test-secret',
@@ -106,6 +109,53 @@ const toolCompleted = {
 };
 
 describe(OpenAIProvider, () => {
+  it.each([
+    [AgentModeID.PLAN, AgentModeID.AGENT],
+    [AgentModeID.AGENT, AgentModeID.PLAN],
+  ])(
+    'updates model instructions after switching from %s to %s without storing policy in user text',
+    async (source, target) => {
+      const tools = testToolSource(
+        [
+          {
+            namespace: 'interaction',
+            name: 'request_mode_switch',
+            description: 'Switch mode',
+            inputKind: ToolInputKind.JSON,
+            allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+            requiresExclusiveRound: true,
+          },
+        ],
+        async (_name, _input, _signal, context) => {
+          context!.onModeChanged!(target);
+          return '{}';
+        },
+      );
+      const transition = {
+        ...toolCompleted,
+        response: {
+          ...toolCompleted.response,
+          output: [
+            {
+              ...toolCompleted.response.output[0]!,
+              name: 'request_mode_switch',
+              arguments: JSON.stringify({ target, description: 'Change the task mode' }),
+            },
+          ],
+        },
+      };
+      const { provider, requests } = harness([() => sse([transition]), () => sse([completed])], tools);
+      await provider.send({ text: 'Continue the task.', attachments: [], mode: source }, options());
+      expect(requests.map(request => request.instructions)).toEqual(
+        [source, target].map(id =>
+          [configuration.instructions, AgentMode.resolve(id).instructions].filter(Boolean).join('\n\n'),
+        ),
+      );
+      expect(JSON.stringify(requests[0]!.input)).toContain('Continue the task.');
+      expect(JSON.stringify(provider.exportState())).not.toContain('Plan Mode:');
+    },
+  );
+
   it.each(['default client', 'injected transport'] as const)(
     'refreshes credentials before a continuation after a long tool wait with the %s',
     async transport => {
@@ -153,13 +203,12 @@ describe(OpenAIProvider, () => {
       });
       if (transport === 'default client') vi.stubGlobal('fetch', fetch);
       const client = transport === 'injected transport' ? new OpenAI({ apiKey: 'unused', fetch }) : undefined;
-      const tools: ToolRuntime = {
-        definitions: [],
-        execute: vi.fn(async () => {
+      const tools = waitTools(
+        vi.fn(async () => {
           now += 90000;
           return 'work finished';
         }),
-      };
+      );
       const provider = new OpenAIProvider('model', configuration, token, client, tools);
       try {
         await provider.send('Wait for the work and continue.', options());
@@ -191,7 +240,7 @@ describe(OpenAIProvider, () => {
         return sse([requests.length === 1 ? toolCompleted : completed]);
       },
     });
-    const tools: ToolRuntime = { definitions: [], execute: vi.fn(async () => 'durable tool outcome') };
+    const tools = waitTools(vi.fn(async () => 'durable tool outcome'));
     const provider = new OpenAIProvider('model', configuration, token, client, tools);
     await expect(provider.send('Do the work.', options())).rejects.toThrow('temporarily unavailable');
     expect(requests).toHaveLength(1);
@@ -220,7 +269,7 @@ describe(OpenAIProvider, () => {
       const token = vi.fn<() => Promise<string>>().mockResolvedValueOnce('initial').mockReturnValue(credentials);
       const fetch = vi.fn(async () => sse([fetch.mock.calls.length === 1 ? toolCompleted : completed]));
       const client = new OpenAI({ apiKey: 'fixture', maxRetries: 0, fetch });
-      const tools: ToolRuntime = { definitions: [], execute: vi.fn(async () => 'completed safely') };
+      const tools = waitTools(vi.fn(async () => 'completed safely'));
       const provider = new OpenAIProvider(
         'model',
         { ...configuration, timeoutMs: mode === 'timeout' ? 100 : 120000 },
@@ -271,7 +320,7 @@ describe(OpenAIProvider, () => {
         { ...configuration, timeoutMs: mode === 'timeout' ? 10 : 120000 },
         token,
         client,
-        new CompositeToolRuntime([]),
+        new ToolRegistry([]),
       );
       const controller = new AbortController();
       let failure: unknown;
@@ -464,21 +513,22 @@ describe(OpenAIProvider, () => {
     });
 
     it('translates independently composed tool domains without provider coupling', async () => {
-      const interaction: ToolRuntime = {
-        definitions: [
+      const interaction = testToolSource(
+        [
           {
             namespace: 'interaction',
             name: 'propose_question',
+            allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
             description: 'Ask the human.',
             inputKind: ToolInputKind.JSON,
             parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
           },
         ],
-        execute: vi.fn(async () => '{}'),
-      };
+        vi.fn(async () => '{}'),
+      );
       const { provider, requests } = harness(
         [() => sse([completed])],
-        new CompositeToolRuntime([new ProjectAccess(process.cwd()), interaction]),
+        new ToolRegistry([...new ProjectAccess(process.cwd()).tools, ...interaction.tools]),
       );
 
       await provider.send('hello', options());
@@ -910,3 +960,18 @@ describe(OpenAIProvider, () => {
     });
   });
 });
+
+function waitTools(execute: () => Promise<string>) {
+  return testToolSource(
+    [
+      {
+        namespace: 'fixture',
+        name: 'wait_for_work',
+        description: 'Wait for work',
+        inputKind: ToolInputKind.JSON,
+        allowedModes: [AgentModeID.AGENT],
+      },
+    ],
+    execute,
+  );
+}

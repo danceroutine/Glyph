@@ -1,3 +1,4 @@
+import { AgentModeID } from "#src/chat/AgentMode.js";
 /** A comment carries its captured quote, not a live read of its source. Offsets are UTF-16. */
 export interface GlyphAnnotation {
   readonly id: string;
@@ -15,6 +16,6 @@ export interface GlyphTurnOptions {
   /** UTF-16 spans in the trimmed prompt, in attachment order. */
   readonly attachmentSpans?: readonly { readonly from: number; readonly to: number }[];
   readonly turnId?: string;
-  readonly mode?: 'agent' | 'plan';
+  readonly mode?: AgentModeID;
   readonly annotations?: readonly GlyphAnnotation[];
 }

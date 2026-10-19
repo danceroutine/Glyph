@@ -1,9 +1,11 @@
+import { AgentMode } from '#src/chat/AgentMode.js';
+import { AgentModeID } from "#src/chat/AgentMode.js";
+import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
-import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
-import type { ToolDefinition } from '#src/tools/ToolDefinition.js';
+import type { ToolSource } from '#src/tools/ToolSource.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import type { Logger } from '#src/observability/Logger.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
@@ -12,11 +14,15 @@ import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 
-const editDefinitions: readonly ToolDefinition[] = [
-  {
-    namespace: ProjectToolNamespace.PROJECT,
-    name: ProjectToolName.PROPOSE_PATCH,
-    description: `Stage a strict patch for user review. Prefer this for ordinary source edits. The grammar is:
+export class ProjectToolRuntime implements ToolSource {
+  get tools(): readonly Tool[] {
+    return [
+      ...this.access.tools,
+      {
+        namespace: ProjectToolNamespace.PROJECT,
+        name: ProjectToolName.PROPOSE_PATCH,
+        allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        description: `Stage a strict patch for user review. Prefer this for ordinary source edits. The grammar is:
 *** Begin Patch
 *** Add File: path
 +new line
@@ -34,20 +40,28 @@ const editDefinitions: readonly ToolDefinition[] = [
 [\\ No newline at end of file]
 *** End Patch
 Every directive and context line is exact; no fuzzy matching occurs. Never claim the workspace changed until the user accepts review items.`,
-    inputKind: ToolInputKind.TEXT,
-  },
-  {
-    namespace: ProjectToolNamespace.PROJECT,
-    name: ProjectToolName.PROPOSE_EDITS,
-    description:
-      'Stage exact UTF-16 range edits for user review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
-    inputKind: ToolInputKind.JSON,
-    parameters: toJsonSchema(EditProposalService.structuredSchema),
-  },
-];
+        inputKind: ToolInputKind.TEXT,
+        validateInput: input => {
+          if (!input.trim()) throw new Error('Expected a nonempty patch.');
+        },
+        execute: (input, signal, context) => this.execute(ProjectToolName.PROPOSE_PATCH, input, signal, context),
+      },
+      {
+        namespace: ProjectToolNamespace.PROJECT,
+        name: ProjectToolName.PROPOSE_EDITS,
+        allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        description:
+          'Stage exact UTF-16 range edits for user review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
+        inputKind: ToolInputKind.JSON,
+        parameters: toJsonSchema(EditProposalService.structuredSchema),
+        validateInput: input => {
+          EditProposalService.structuredSchema.parse(JSON.parse(input));
+        },
+        execute: (input, signal, context) => this.execute(ProjectToolName.PROPOSE_EDITS, input, signal, context),
+      },
+    ];
+  }
 
-export class ProjectToolRuntime implements ToolRuntime {
-  readonly definitions: readonly ToolDefinition[];
   private readonly logger: Logger;
 
   constructor(
@@ -56,7 +70,6 @@ export class ProjectToolRuntime implements ToolRuntime {
     private readonly reviews: ProposalReviewManager,
     logger: Logger = new NullLogger(),
   ) {
-    this.definitions = [...access.definitions, ...editDefinitions];
     this.logger = logger.forNamespace('project.tool');
   }
 
@@ -83,6 +96,7 @@ export class ProjectToolRuntime implements ToolRuntime {
         default:
           throw new Error(`Unknown project tool: ${name}`);
       }
+      await this.proposals.assertModeAllows(proposal, AgentMode.resolve(context?.mode ?? AgentMode.default.id));
       const stagedProposal = context?.chat
         ? {
             ...proposal,

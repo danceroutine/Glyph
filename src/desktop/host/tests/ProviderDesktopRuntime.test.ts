@@ -1,3 +1,4 @@
+import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -217,6 +218,53 @@ function reviewFixture() {
 }
 
 describe(ProviderDesktopRuntime, () => {
+  it('routes steering to its exact active run, persists it, and rejects a stale target without a competing send', async () => {
+    const gate = deferredVoid();
+    const entered = deferredVoid();
+    let received: readonly ChatRequest[] = [];
+    let sends = 0;
+    const harness = await fixture(async options => {
+      sends++;
+      entered.resolve();
+      await gate.promise;
+      expect(options.signal.aborted).toBe(false);
+      received = options.takeSteering!(false);
+      options.onText('Continued');
+      options.takeSteering!(true);
+    });
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'run',
+        text: 'Start',
+        attachments: [],
+      });
+      await entered.promise;
+      const command = {
+        type: Command.STEER as const,
+        chatId: harness.chatId,
+        runId: 'run',
+        messageId: 'steer',
+        text: 'Keep going',
+        attachments: [],
+      };
+      await expect(harness.runtime.handle({ ...command, runId: 'different' })).rejects.toThrow('no active response');
+      await harness.runtime.handle(command);
+      await harness.runtime.handle(command);
+      expect((await harness.runtime.snapshot()).runs[0]?.steering).toHaveLength(1);
+      gate.resolve();
+      await vi.waitFor(() => expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(1));
+      expect(sends).toBe(1);
+      expect(received.map(value => value.text)).toEqual(['Keep going']);
+      expect(harness.saved.get(harness.chatId)?.transcript[0]?.steering?.[0]?.text).toBe('Keep going');
+      await expect(harness.runtime.handle(command)).rejects.toThrow();
+    } finally {
+      gate.resolve();
+      await harness.runtime.dispose();
+    }
+  });
+
   it('publishes independent branches and replaces stale runs on restore, including after reopening', async () => {
     const harness = await fixture(async options => {
       options.onText('Answer');
@@ -485,6 +533,49 @@ describe(ProviderDesktopRuntime, () => {
     }
   });
 
+  it('keeps tool batches separate across assistant text and retains the starting position when a call finishes', async () => {
+    const harness = await fixture(async options => {
+      options.onToolActivity?.({ callId: 'first', name: 'read', phase: ToolActivityPhase.STARTED, arguments: '{}' });
+      options.onText('Between calls.');
+      options.onToolActivity?.({
+        callId: 'second',
+        name: 'read',
+        phase: ToolActivityPhase.COMPLETED,
+        arguments: '{}',
+        output: 'x'.repeat(20_000),
+      });
+      options.onToolActivity?.({
+        callId: 'first',
+        name: 'read',
+        phase: ToolActivityPhase.COMPLETED,
+        arguments: '{}',
+        output: 'Finished first.',
+      });
+    });
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'batches',
+        text: 'Read',
+        attachments: [],
+      });
+      await vi.waitFor(async () =>
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
+      );
+      const tools = (await harness.runtime.snapshot()).runs[0]!.tools;
+      expect(tools.map(tool => tool.textOffset)).toEqual([0, 'Between calls.'.length]);
+      expect(tools[1]!.summary).toBe(`${'x'.repeat(16_000)}\n… (truncated)`);
+      expect(harness.saved.get(harness.chatId)?.transcript[0]?.tools?.map(tool => tool.textOffset)).toEqual([
+        0,
+        'Between calls.'.length,
+      ]);
+      expect(harness.saved.get(harness.chatId)?.transcript[0]?.tools?.[1]?.output).toBe(tools[1]!.summary);
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
   it('keeps tool call order stable and restores compact progress from completed turns', async () => {
     const harness = await fixture(async options => {
       for (const [callId, phase] of [
@@ -498,7 +589,7 @@ describe(ProviderDesktopRuntime, () => {
           name: 'read',
           phase,
           arguments: '{}',
-          output: 'large output is not copied into transcript',
+          output: 'secret tool result',
         });
     });
     try {
@@ -513,13 +604,41 @@ describe(ProviderDesktopRuntime, () => {
         expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
       );
       const expected = [
-        { id: 'first', name: 'read', status: 'completed' },
-        { id: 'second', name: 'read', status: 'failed' },
+        {
+          id: 'first',
+          name: 'read',
+          status: 'completed',
+          arguments: '{}',
+          summary: '[REDACTED] tool result',
+          textOffset: 0,
+        },
+        {
+          id: 'second',
+          name: 'read',
+          status: 'failed',
+          arguments: '{}',
+          summary: '[REDACTED] tool result',
+          textOffset: 0,
+        },
       ];
       expect((await harness.runtime.snapshot()).runs[0]?.tools).toMatchObject(expected);
       expect(harness.saved.get(harness.chatId)?.transcript[0]?.tools).toEqual([
-        { callId: 'first', name: 'read', phase: ToolActivityPhase.COMPLETED },
-        { callId: 'second', name: 'read', phase: ToolActivityPhase.FAILED },
+        {
+          callId: 'first',
+          name: 'read',
+          phase: ToolActivityPhase.COMPLETED,
+          arguments: '{}',
+          output: 'secret tool result',
+          textOffset: 0,
+        },
+        {
+          callId: 'second',
+          name: 'read',
+          phase: ToolActivityPhase.FAILED,
+          arguments: '{}',
+          output: 'secret tool result',
+          textOffset: 0,
+        },
       ]);
       const restored = new ProviderDesktopRuntime({
         glyph: harness.glyph,
@@ -1234,3 +1353,11 @@ describe(ProviderDesktopRuntime, () => {
     }
   });
 });
+
+function deferredVoid(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}

@@ -1,3 +1,5 @@
+import type { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
+import { AgentModeID } from '#glyph/protocol/index.js';
 import type { GlyphTurnOptions } from '#glyph/protocol/events/GlyphAnnotation.js';
 import type { GlyphPlan } from '#glyph/protocol/events/GlyphPlan.js';
 import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
@@ -19,10 +21,19 @@ export interface GlyphWorkbenchService {
   readonly context: GlyphContextActions;
   attachSelection(): Promise<void>;
   send(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
-  selectMode?(mode: 'agent' | 'plan'): Promise<void>;
+  moveQueuedToNewChat(id: string): Promise<void>;
+  readonly followUpBehavior: GlyphFollowUpBehavior;
+  sendImmediately(
+    text: string,
+    attachments?: readonly GlyphContextAttachment[],
+    options?: GlyphTurnOptions,
+  ): Promise<void>;
+  steer(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
+  selectMode?(mode: AgentModeID): Promise<void>;
   buildPlan?(chatId: string, plan: GlyphPlan, newChat?: boolean): Promise<void>;
   branchChat?(chatId: string, turnId: string): Promise<void>;
   restoreCheckpoint?(chatId: string, turnId: string): Promise<void>;
+  copyText(text: string): Promise<void>;
   openLink?(href: string): Promise<void>;
   viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
   cancel(): void;

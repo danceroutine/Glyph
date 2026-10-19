@@ -141,7 +141,12 @@ export class GlyphWorkbenchProjection {
       }
       case GlyphHostEventType.APPROVAL: {
         const run = this.run(event.chatId, event.runId);
-        this.setRun({ ...run, status: GlyphRunStatus.WAITING_FOR_APPROVAL, approval: event.approval });
+        this.setRun({
+          ...run,
+          status: GlyphRunStatus.WAITING_FOR_APPROVAL,
+          approval: event.approval,
+          ...(event.approval.modeSwap ? { modeSwaps: [...(run.modeSwaps ?? []), event.approval.modeSwap] } : {}),
+        });
         return;
       }
     }

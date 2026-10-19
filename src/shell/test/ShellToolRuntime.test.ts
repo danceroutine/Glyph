@@ -13,13 +13,13 @@ describe(ShellToolRuntime, () => {
     it('exposes provider-neutral strict JSON lifecycle tools', () => {
       const runtime = new ShellToolRuntime(sessions());
 
-      expect(runtime.definitions.map(definition => [definition.namespace, definition.name])).toEqual([
+      expect(runtime.tools.map(definition => [definition.namespace, definition.name])).toEqual([
         [ShellToolNamespace.SHELL, ShellToolName.EXECUTE],
         [ShellToolNamespace.SHELL, ShellToolName.WRITE_INPUT],
         [ShellToolNamespace.SHELL, ShellToolName.CLOSE],
         [ShellToolNamespace.SHELL, ShellToolName.LIST],
       ]);
-      expect(runtime.definitions.every(definition => definition.inputKind === 'JSON')).toBe(true);
+      expect(runtime.tools.every(definition => definition.inputKind === 'JSON')).toBe(true);
     });
   });
 

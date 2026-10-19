@@ -1,3 +1,4 @@
+import { AgentModeID } from "#src/chat/AgentMode.js";
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -107,7 +108,7 @@ describe(ChatSessionManager, () => {
       { chatId: second.id, role: 'Reviewer' },
     ]);
     expect(second.transcript).toEqual([]);
-    await manager.setMode(second.id, 'plan');
+    await manager.setMode(second.id, AgentModeID.PLAN);
     expect(second.summary.mode).toBe('plan');
     await manager.dispose();
   });

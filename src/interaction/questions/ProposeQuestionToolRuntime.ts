@@ -1,7 +1,8 @@
+import { AgentModeID } from "#src/chat/AgentMode.js";
+import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
-import type { ToolDefinition } from '#src/tools/ToolDefinition.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
-import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import type { ToolSource } from '#src/tools/ToolSource.js';
 import type { QuestionAnswer } from './QuestionAnswer.ts';
 import { QuestionAnswerType } from './QuestionAnswerType.ts';
 import type { QuestionForm } from './QuestionForm.ts';
@@ -59,18 +60,23 @@ const executableProposeQuestionArgumentsSchema = z.preprocess(value => {
   return { ...value, title: 'title' in value ? value.title : null, questions };
 }, proposeQuestionArgumentsSchema);
 
-const definition: ToolDefinition = {
-  namespace: QuestionToolNamespace.INTERACTION,
-  name: QuestionToolName.PROPOSE_QUESTION,
-  description:
-    'Propose a question to the human only when missing preferences or requirements would materially change the result. Combine related questions into one call, use concise mutually distinct options, and do not request facts available through project tools. The host always adds an Other option for free-text input.',
-  inputKind: ToolInputKind.JSON,
-  parameters: jsonSchema(proposeQuestionArgumentsSchema),
-};
-
 /** Executes the provider-neutral proposed-question capability through a host presenter. */
-export class ProposeQuestionToolRuntime implements ToolRuntime {
-  readonly definitions: readonly ToolDefinition[] = [definition];
+export class ProposeQuestionToolRuntime implements ToolSource {
+  readonly tools: readonly Tool[] = [
+    {
+      namespace: QuestionToolNamespace.INTERACTION,
+      name: QuestionToolName.PROPOSE_QUESTION,
+      allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+      description:
+        'Propose a question to the human only when missing preferences or requirements would materially change the result. Combine related questions into one call, use concise mutually distinct options, and do not request facts available through project tools. The host always adds an Other option for free-text input.',
+      inputKind: ToolInputKind.JSON,
+      parameters: jsonSchema(proposeQuestionArgumentsSchema),
+      validateInput: input => {
+        executableProposeQuestionArgumentsSchema.parse(JSON.parse(input));
+      },
+      execute: (input, signal) => this.execute(QuestionToolName.PROPOSE_QUESTION, input, signal),
+    },
+  ];
 
   constructor(private readonly presenter: QuestionPresenter) {}
 

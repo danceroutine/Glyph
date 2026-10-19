@@ -12,7 +12,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     await glyph.reload();
     await expect(glyph.userEntries.locator('div')).toHaveText(['Keep this partial answer across reload.']);
     await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText([prefix]);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect.poll(() => provider.requests[0].closed).toBe(true);
     expect(provider.requests[0].completed).toBe(false);
     expect(provider.requests).toHaveLength(1);
@@ -21,7 +21,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     provider.enqueue({ chunks: ['The next turn works.'] });
     await glyph.send('Continue with a new turn.');
     await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText([prefix, 'The next turn works.']);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await glyph.reload();
     await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText([prefix, 'The next turn works.']);
     expect(provider.requests).toHaveLength(2);
@@ -37,13 +37,13 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     );
     await glyph.send('Persist this completed turn.');
     await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText(['A durable completed answer.']);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect(glyph.diagnostics).toHaveCount(0);
     await glyph.send('Start a turn that will be interrupted.');
     await expect(glyph.assistantEntries.last()).toContainText('An interrupted partial answer.');
     await expect(glyph.sendButton).toHaveText('Cancel');
     await glyph.crashHost();
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect(glyph.diagnostics).toContainText([/host exited.*interrupted/i]);
     await expect(glyph.assistantEntries.last()).toContainText('An interrupted partial answer.');
     await expect.poll(() => provider.requests[1].closed).toBe(true);
@@ -58,7 +58,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
       'Persist this completed turn.',
       'Continue after the host restart.',
     ]);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     expect(provider.requests).toHaveLength(3);
     const input = provider.requests[2].body.input;
     expect(input.filter(item => item.role === 'user').map(item => item.content)).toEqual([
@@ -96,7 +96,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     await expect(duplicate.composer).toHaveText(draft);
     expect(provider.requests).toHaveLength(1);
     provider.release(0);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect(glyph.diagnostics).toHaveCount(0);
     provider.enqueue({ chunks: ['Only the owner continued.'] });
     await glyph.send('Continue in the owning window.');
@@ -106,7 +106,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     ]);
     expect(provider.requests).toHaveLength(2);
     await expect(duplicate.assistantEntries).toHaveCount(0);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect(glyph.diagnostics).toHaveCount(0);
   });
 });

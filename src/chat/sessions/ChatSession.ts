@@ -1,3 +1,7 @@
+import type { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
+import { AgentMode } from '#src/chat/AgentMode.js';
+import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
+import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
 import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
 import { ChatHistoryError } from './ChatHistoryError.ts';
 import { toShellCommandSummary } from '#src/shell/toShellCommandSummary.js';
@@ -103,7 +107,7 @@ export class ChatSession {
       providerState: this.conversation.exportState(),
       plans: record.plans ?? [],
       todos: record.todos ?? [],
-      mode: record.mode ?? 'agent',
+      mode: record.mode ?? AgentMode.default.id,
     });
   }
 
@@ -149,8 +153,10 @@ export class ChatSession {
     response: ChatResponseStream,
     signal: AbortSignal,
     questionResponses?: () => readonly GlyphQuestionResponse[],
+    modeSwaps?: () => readonly GlyphModeSwap[],
+    steering?: ChatSteeringQueue,
   ): Promise<ChatTurnResult> {
-    return this.enqueue(() => this.sendNow(requestInput, response, signal, questionResponses));
+    return this.enqueue(() => this.sendNow(requestInput, response, signal, questionResponses, modeSwaps, steering));
   }
 
   private async sendNow(
@@ -158,6 +164,8 @@ export class ChatSession {
     response: ChatResponseStream,
     signal: AbortSignal,
     questionResponses?: () => readonly GlyphQuestionResponse[],
+    modeSwaps?: () => readonly GlyphModeSwap[],
+    steering?: ChatSteeringQueue,
   ): Promise<ChatTurnResult> {
     await this.persistOutstandingToolState();
     const request = toChatRequest(requestInput);
@@ -179,7 +187,15 @@ export class ChatSession {
           case ChatResponsePartType.TOOL: {
             const { callId, name, phase } = part.activity;
             const shell = toShellCommandSummary(part.activity);
-            tools.set(callId, { callId, name, phase, ...(shell ? { shell } : {}) });
+            tools.set(callId, {
+              callId,
+              name,
+              phase,
+              arguments: toToolActivityPreview(part.activity.arguments),
+              ...(part.activity.output ? { output: toToolActivityPreview(part.activity.output) } : {}),
+              textOffset: tools.get(callId)?.textOffset ?? assistantText.length,
+              ...(shell ? { shell } : {}),
+            });
             break;
           }
           case ChatResponsePartType.DIAGNOSTIC:
@@ -192,6 +208,7 @@ export class ChatSession {
     let result: ChatTurnResult;
     try {
       result = await this.conversation.send(request, recordingResponse, signal, {
+        ...(steering ? { takeSteering: steering.take } : {}),
         onStateCheckpoint: async state => {
           this.unpersistedProviderState = state;
           await this.checkpoint(state, undefined, true);
@@ -214,6 +231,8 @@ export class ChatSession {
       await this.checkpoint(this.conversation.exportState(), {
         checkpoints: { before, after: this.historySnapshot() },
         ...(questionResponses ? { questionResponses: questionResponses() } : {}),
+        ...(modeSwaps ? { modeSwaps: modeSwaps() } : {}),
+        ...(steering?.messages.length ? { steering: steering.messages } : {}),
         userText: request.text,
         options: {
           ...(request.attachmentSpans ? { attachmentSpans: request.attachmentSpans } : {}),
@@ -256,5 +275,9 @@ export class ChatSession {
 
 export function toSummary(record: ChatSessionRecord): ChatSessionSummary {
   const { providerState: _, transcript, ...summary } = record;
-  return { ...summary, mode: record.mode ?? transcript.at(-1)?.options?.mode ?? 'agent', turnCount: transcript.length };
+  return {
+    ...summary,
+    mode: record.mode ?? transcript.at(-1)?.options?.mode ?? AgentMode.default.id,
+    turnCount: transcript.length,
+  };
 }

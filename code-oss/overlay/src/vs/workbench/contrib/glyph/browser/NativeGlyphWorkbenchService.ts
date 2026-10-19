@@ -1,3 +1,7 @@
+import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
+import { IClipboardService } from '#vs/platform/clipboard/common/clipboardService.js';
+import { AgentModeID } from '#glyph/protocol/index.js';
+import { IConfigurationService } from '#vs/platform/configuration/common/configuration.js';
 import { toGlyphTranscriptParts } from '#glyph/workbench/toGlyphTranscriptParts.js';
 import type { GlyphPlan } from '#glyph/protocol/events/GlyphPlan.js';
 import { GlyphPlanInput } from './GlyphPlanEditor.js';
@@ -36,10 +40,51 @@ import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#glyph/workbench
 /** Adapts the host's recoverable state and commands to the workbench interaction port. */
 export class NativeGlyphWorkbenchService extends Disposable implements GlyphWorkbenchService {
   private readonly composers = new Map<string, GlyphComposerState>();
+  private immediatePending = false;
+  get followUpBehavior(): GlyphFollowUpBehavior {
+    return this.configuration.getValue<string>('glyph.chat.followUpBehavior') === GlyphFollowUpBehavior.SEND_IMMEDIATELY
+      ? GlyphFollowUpBehavior.SEND_IMMEDIATELY
+      : GlyphFollowUpBehavior.QUEUE;
+  }
+  private createComposer(): GlyphComposerState {
+    const composer = new GlyphComposerState();
+    this._register({ dispose: composer.subscribe(() => queueMicrotask(() => this.flushQueues())) });
+    return composer;
+  }
+  private flushQueues(): void {
+    if (
+      this.sessionChanged ||
+      this.sending ||
+      this.navigationPending ||
+      this.pendingRunId ||
+      this.immediatePending ||
+      this.projection.status !== GlyphHostStatus.READY ||
+      this.projection.state.readOnly
+    )
+      return;
+    for (const [chatId, composer] of this.composers) {
+      const state = composer.snapshot;
+      const first = state.queued[0];
+      if (
+        !chatId ||
+        !first ||
+        state.queuePaused ||
+        state.queueSubmitting ||
+        state.editingQueuedMessage ||
+        state.submitting ||
+        this.projection.state.runs.some(run => run.chatId === chatId && isActive(run.status))
+      )
+        continue;
+      void composer.sendQueued(first.id, (text, attachments, options) =>
+        this.sendToChat(text, attachments, options, chatId),
+      );
+      return;
+    }
+  }
   get composer(): GlyphComposerState {
     const key = this.selectedChatId ?? '';
     let composer = this.composers.get(key);
-    if (!composer) this.composers.set(key, (composer = new GlyphComposerState()));
+    if (!composer) this.composers.set(key, (composer = this.createComposer()));
     const chat = this.projection.state.chats.find(value => value.id === key);
     if (chat?.mode) composer.hydrateMode(chat.mode);
     return composer;
@@ -86,7 +131,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     @IInstantiationService instantiationService: IInstantiationService,
     @IUserDataProfileService private readonly userDataProfileService: IUserDataProfileService,
     @IEditorService private readonly editors: IEditorService,
+    @IClipboardService private readonly clipboard: IClipboardService,
     @IOpenerService private readonly opener: IOpenerService,
+    @IConfigurationService private readonly configuration: IConfigurationService,
   ) {
     super();
     const savedChat = this.storageService.get('glyph.selectedChat', StorageScope.WORKSPACE);
@@ -130,6 +177,12 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       }),
     );
     this._register(this.onDidChangeState(() => this.proposalEditor.changed()));
+    this._register(this.onDidChangeState(() => queueMicrotask(() => this.flushQueues())));
+    this._register(
+      this.configuration.onDidChangeConfiguration(event => {
+        if (event.affectsConfiguration('glyph.chat.followUpBehavior')) this.changeEmitter.fire(this.state);
+      }),
+    );
     this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => this.invalidateSession()));
     for (const event of [
       this.workspaceContextService.onDidChangeWorkspaceName,
@@ -158,6 +211,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           this.proposalEditor.acceptPreview(event.preview);
           return;
         }
+        const previousMode =
+          event.type === GlyphHostEventType.CHAT_UPDATED
+            ? this.projection.state.chats.find(chat => chat.id === event.chat.id)?.mode
+            : undefined;
         this.projection.accept(event);
         switch (event.type) {
           case GlyphHostEventType.INITIAL_STATE:
@@ -171,8 +228,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             this.pendingRunId = undefined;
             break;
           case GlyphHostEventType.CHAT_UPDATED:
+            if (event.chat.mode && event.chat.mode !== previousMode)
+              this.composers.get(event.chat.id)?.setMode(event.chat.mode);
             if (this.pendingCreation && event.creationId === this.pendingCreation) {
-              const composer = this.selectedChatId ? new GlyphComposerState() : this.composer;
+              const composer = this.selectedChatId ? this.createComposer() : this.composer;
               if (!this.selectedChatId) this.composers.delete('');
               this.composers.set(event.chat.id, composer);
               this.selectChat(event.chat.id);
@@ -217,6 +276,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     if (this.workspaceRoots().length > 0) void this.connect().catch(error => this.report(error));
   }
 
+  copyText(text: string): Promise<void> {
+    return this.clipboard.writeText(text);
+  }
+
   async openLink(href: string): Promise<void> {
     if (/^https?:\/\//i.test(href)) {
       await this.opener.open(URI.parse(href), { allowCommands: false });
@@ -249,10 +312,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
               },
             ]
           : []),
+        ...(run.steering ?? []).map(message => ({
+          ...message,
+          role: GlyphTranscriptRole.USER,
+          steering: true,
+        })),
         {
           id: run.options?.turnId ?? run.runId,
           role: GlyphTranscriptRole.ASSISTANT,
           text: run.text,
+          ...(run.modeSwaps ? { modeSwaps: run.modeSwaps } : {}),
           ...(run.questionResponses ? { questionResponses: run.questionResponses } : {}),
           ...(run.createdAt ? { createdAt: run.createdAt } : {}),
           ...(!active && !this.sending && run.checkpointTurnId ? { checkpointTurnId: run.checkpointTurnId } : {}),
@@ -325,7 +394,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
     }
   }
-  async selectMode(mode: 'agent' | 'plan'): Promise<void> {
+  async selectMode(mode: AgentModeID): Promise<void> {
     const composer = this.composer;
     if (this.selectedChatId)
       await this.request({ type: GlyphWorkbenchCommandType.SET_CHAT_MODE, chatId: this.selectedChatId, mode });
@@ -359,6 +428,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           newAgent: () => this.linkPlanChat(chatId, read().plan),
           openChat: id => this.openChat(id),
           openLink: href => this.openLink(href),
+          copyText: text => this.copyText(text),
         },
         listener => this.onDidChangeState(listener),
       ),
@@ -378,7 +448,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       targetChatId,
       role: 'Reviewer',
     });
-    this.composer.setMode('plan');
+    this.composer.setMode(AgentModeID.PLAN);
     this.composer.setDraft(this.planPrompt(plan, 'Review this plan'));
     this.composer.focus();
   }
@@ -395,7 +465,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.composer.setDraft('');
     } else if (this.selectedChatId !== chatId) await this.openChat(chatId);
     const composer = this.composer;
-    await this.selectMode('agent');
+    await this.selectMode(AgentModeID.AGENT);
     const document = composer.snapshot.document;
     const text = `\n\n${this.planPrompt(plan, 'Build this approved plan')}`;
     composer.setDocument({ ...document, parts: [...document.parts, { type: 'text', text }] });
@@ -417,6 +487,58 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     attachments: readonly GlyphContextAttachment[] = [],
     options: GlyphTurnOptions = {},
   ): Promise<void> {
+    if (this.immediatePending) throw new Error('Waiting for the current response to stop.');
+    await this.sendToChat(text, attachments, options);
+  }
+
+  async sendImmediately(
+    text: string,
+    attachments: readonly GlyphContextAttachment[] = [],
+    options: GlyphTurnOptions = {},
+  ): Promise<void> {
+    this.assertSessionBinding();
+    if (this.immediatePending || this.navigationPending) throw new Error('A chat transition is already in progress.');
+    const chatId = this.selectedChatId;
+    const run = this.projection.state.runs.find(value => value.chatId === chatId && isActive(value.status));
+    this.immediatePending = true;
+    try {
+      if (run) {
+        await this.request({ type: GlyphWorkbenchCommandType.CANCEL_RUN, chatId: run.chatId, runId: run.runId });
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            listener.dispose();
+            reject(new Error('The response has not stopped yet. Your message was retained.'));
+          }, 30000);
+          const check = () => {
+            if (this.projection.status === GlyphHostStatus.DISCONNECTED || this.sessionChanged) {
+              clearTimeout(timeout);
+              listener.dispose();
+              reject(new Error('Glyph disconnected while stopping the response.'));
+              return;
+            }
+            if (!this.projection.state.runs.some(value => value.runId === run.runId && isActive(value.status))) {
+              clearTimeout(timeout);
+              listener.dispose();
+              resolve();
+            }
+          };
+          const listener = this.onDidChangeState(check);
+          check();
+        });
+      }
+      await this.sendToChat(text, attachments, options, chatId);
+    } finally {
+      this.immediatePending = false;
+      queueMicrotask(() => this.flushQueues());
+    }
+  }
+
+  private async sendToChat(
+    text: string,
+    attachments: readonly GlyphContextAttachment[] = [],
+    options: GlyphTurnOptions = {},
+    targetChatId = this.selectedChatId,
+  ): Promise<void> {
     const bytes = attachments.reduce(
       (total, attachment) => total + new TextEncoder().encode(attachment.text).byteLength,
       0,
@@ -435,14 +557,14 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.sending ||
       this.navigationPending ||
       this.pendingRunId ||
-      this.projection.state.runs.some(run => run.chatId === this.selectedChatId && isActive(run.status))
+      this.projection.state.runs.some(run => run.chatId === targetChatId && isActive(run.status))
     )
-      return;
+      throw new Error('The chat is busy. Queue the message or send it immediately.');
     this.sending = true;
     try {
       await this.connect();
       if (this.projection.state.readOnly) throw new Error('Another window owns this workspace’s Glyph session.');
-      if (!this.selectedChatId) {
+      if (!targetChatId) {
         await this.catalogOperation;
         await this.modelOperation;
         const account = this.draftAccount;
@@ -450,17 +572,22 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         if (!this.draftModel)
           throw new Error(this.navigationError ?? 'No models are available for the selected account.');
         await this.createChat(account.provider, account.id, this.draftModel);
+        targetChatId = this.selectedChatId;
       }
-      const chatId = this.selectedChatId;
+      const chatId = targetChatId;
       if (!chatId) throw new Error('Create or open a chat before sending.');
       if (options.mode && this.state.chats.find(chat => chat.id === chatId)?.mode !== options.mode)
         await this.request({ type: GlyphWorkbenchCommandType.SET_CHAT_MODE, chatId, mode: options.mode });
       const runId = generateUuid();
-      this.pendingRunId = runId;
+      if (chatId === this.selectedChatId) this.pendingRunId = runId;
       this.prompts.set(runId, prompt);
       this.changeEmitter.fire(this.state);
       await this.request({
         type: GlyphWorkbenchCommandType.SEND,
+        modeSwapPolicy: {
+          autoApprove: this.configuration.getValue<boolean>('glyph.modeSwitch.autoApprove'),
+          timeoutSeconds: this.configuration.getValue<number>('glyph.modeSwitch.timeoutSeconds'),
+        },
         chatId,
         runId,
         text: prompt,
@@ -476,6 +603,28 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.sending = false;
       this.changeEmitter.fire(this.state);
     }
+  }
+
+  async steer(
+    text: string,
+    attachments: readonly GlyphContextAttachment[] = [],
+    options: GlyphTurnOptions = {},
+  ): Promise<void> {
+    this.assertSessionBinding();
+    const run = this.projection.state.runs.find(
+      value => value.chatId === this.selectedChatId && isActive(value.status),
+    );
+    if (!run || this.navigationPending) throw new Error('There is no active response to steer.');
+    if (this.projection.state.readOnly) throw new Error('Another window owns this workspace’s Glyph session.');
+    await this.request({
+      type: GlyphWorkbenchCommandType.STEER,
+      chatId: run.chatId,
+      runId: run.runId,
+      messageId: generateUuid(),
+      text: text.trim(),
+      attachments,
+      options,
+    });
   }
 
   private currentWorkspaceBinding(): string {
@@ -520,6 +669,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   cancel(): void {
+    if (this.composer.snapshot.queued.length) this.composer.pauseQueue();
     const run = this.projection.state.runs.find(run => run.chatId === this.selectedChatId && isActive(run.status));
     const runId = run?.runId ?? this.pendingRunId;
     if (!runId || !this.selectedChatId) return;
@@ -602,6 +752,19 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       if (modelRevision === this.modelRevision) this.modelPending = false;
       this.changeEmitter.fire(this.state);
     }
+  }
+
+  async moveQueuedToNewChat(id: string): Promise<void> {
+    this.assertSessionBinding();
+    if (this.sending || this.navigationPending || this.immediatePending)
+      throw new Error('Wait for the current chat transition.');
+    const source = this.composer;
+    const message = source.snapshot.queued.find(value => value.id === id);
+    if (!message || source.snapshot.queueSubmitting || source.snapshot.editingQueuedMessage) return;
+    this.newChat();
+    this.composer.restoreDraft(structuredClone(message.document));
+    source.removeQueued(id);
+    this.composer.focus();
   }
 
   newChat(): void {

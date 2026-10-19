@@ -1,6 +1,7 @@
+import { AgentModeID } from "#src/chat/AgentMode.js";
+import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
-import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
-import type { ToolDefinition } from '#src/tools/ToolDefinition.js';
+import type { ToolSource } from '#src/tools/ToolSource.js';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import type { TodoItem } from './TodoItem.ts';
@@ -11,15 +12,20 @@ import { TodoToolNamespace } from './TodoToolNamespace.ts';
 const { $schema: _, ...parameters } = z.toJSONSchema(todoUpdateSchema, { target: 'draft-7' });
 
 /** Updates only the host-supplied chat; successful results describe durable state. */
-export class TodoToolRuntime implements ToolRuntime {
-  readonly definitions: readonly ToolDefinition[] = [
+export class TodoToolRuntime implements ToolSource {
+  readonly tools: readonly Tool[] = [
     {
       namespace: TodoToolNamespace.TODO,
       name: TodoToolName.UPDATE_TODOS,
+      allowedModes: [AgentModeID.AGENT],
       description:
         'Maintain a concise action list for multi-step work in the current chat. Use stable IDs to update items without duplicating them. Mark work completed only after it is done; ending a turn does not complete unfinished work. The human sees this list read-only. Use replace only to deliberately start a new list or clear it.',
       inputKind: ToolInputKind.JSON,
       parameters,
+      validateInput: input => {
+        todoUpdateSchema.parse(JSON.parse(input));
+      },
+      execute: (input, signal, context) => this.execute(TodoToolName.UPDATE_TODOS, input, signal, context),
     },
   ];
 

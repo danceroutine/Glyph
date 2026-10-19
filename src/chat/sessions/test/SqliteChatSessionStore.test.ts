@@ -1,3 +1,5 @@
+import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +20,86 @@ afterEach(async () => {
 });
 
 describe(SqliteChatSessionStore, () => {
+  it('migrates steering history and preserves instructions and captured context after reopening', async () => {
+    const directory = await fixture('glyph-steering-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-steering-project-'), 'local');
+    const store = new SqliteChatSessionStore(directory);
+    await store.initialize(context);
+    await store.save(record(context.id));
+    await store.dispose();
+    const database = new Database(join(directory, 'chats.sqlite3'));
+    database.exec('ALTER TABLE chat_turns DROP COLUMN steering');
+    database.close();
+    const migrated = new SqliteChatSessionStore(directory);
+    await migrated.initialize(context);
+    const source = record(context.id);
+    const saved = {
+      ...source,
+      transcript: source.transcript.map(turn => ({
+        ...turn,
+        steering: [
+          {
+            id: 'guidance',
+            text: 'Keep working',
+            createdAt: source.createdAt,
+            options: { mode: AgentModeID.PLAN },
+            attachments: [{ path: 'README.md', text: 'Exact capture', revision: 'r1' }],
+          },
+        ],
+      })),
+    };
+    await migrated.save(saved);
+    await migrated.dispose();
+    const reopened = new SqliteChatSessionStore(directory);
+    await reopened.initialize(context);
+    expect((await reopened.load(context.id))[0]).toEqual(saved);
+    await reopened.dispose();
+  });
+
+  it.each([undefined, new Date(0).toISOString()])(
+    'migrates mode switch announcements and preserves their countdown origin (%s) on reopen',
+    async startedAt => {
+      const directory = await fixture('glyph-mode-switch-');
+      const context = await ProjectContextResolver.folder(await fixture('glyph-mode-project-'), 'local');
+      const seed = new SqliteChatSessionStore(directory);
+      await seed.initialize(context);
+      await seed.save(record(context.id));
+      await seed.dispose();
+      const database = new Database(join(directory, 'chats.sqlite3'));
+      database.exec('ALTER TABLE chat_turns DROP COLUMN mode_swaps');
+      database.close();
+      const source = record(context.id);
+      const saved = {
+        ...source,
+        mode: AgentModeID.AGENT as const,
+        transcript: source.transcript.map(turn => ({
+          ...turn,
+          modeSwaps: [
+            {
+              id: 'swap',
+              source: AgentModeID.PLAN as const,
+              target: AgentModeID.AGENT as const,
+              description: 'Implement the approved plan.',
+              status: GlyphModeSwapStatus.APPROVED as const,
+              ...(startedAt ? { startedAt } : {}),
+              expiresAt: new Date(0).toISOString(),
+              autoApprove: false,
+            },
+          ],
+        })),
+      };
+      const migrated = new SqliteChatSessionStore(directory);
+      await migrated.initialize(context);
+      expect((await migrated.load(context.id))[0]!.transcript[0]!.modeSwaps).toBeUndefined();
+      await migrated.save(saved);
+      await migrated.dispose();
+      const reopened = new SqliteChatSessionStore(directory);
+      await reopened.initialize(context);
+      expect((await reopened.load(context.id))[0]).toEqual(saved);
+      await reopened.dispose();
+    },
+  );
+
   it('migrates turn checkpoints and preserves their provider history across reopening', async () => {
     const directory = await fixture('glyph-checkpoints-');
     const context = await ProjectContextResolver.folder(await fixture('glyph-checkpoint-project-'), 'local');
@@ -29,7 +111,7 @@ describe(SqliteChatSessionStore, () => {
     database.exec('ALTER TABLE chat_turns DROP COLUMN checkpoints');
     database.close();
     const source = record(context.id);
-    const checkpoint = { providerState: source.providerState, mode: 'agent' as const, plans: [], todos: [] };
+    const checkpoint = { providerState: source.providerState, mode: AgentModeID.AGENT as const, plans: [], todos: [] };
     const saved = {
       ...source,
       transcript: source.transcript.map(turn => ({
@@ -92,11 +174,11 @@ describe(SqliteChatSessionStore, () => {
         await store.save({
           ...loaded,
           plans: [plan],
-          mode: 'plan',
+          mode: AgentModeID.PLAN,
           transcript: [
             {
               ...loaded.transcript[0]!,
-              options: { mode: 'plan', annotations: [annotation], attachmentSpans: [{ from: 4, to: 9 }] },
+              options: { mode: AgentModeID.PLAN, annotations: [annotation], attachmentSpans: [{ from: 4, to: 9 }] },
             },
           ],
         });
@@ -104,7 +186,7 @@ describe(SqliteChatSessionStore, () => {
         expect(loaded.plans).toEqual([plan]);
         expect(loaded.mode).toBe('plan');
         expect(loaded.transcript[0]!.options).toEqual({
-          mode: 'plan',
+          mode: AgentModeID.PLAN,
           annotations: [annotation],
           attachmentSpans: [{ from: 4, to: 9 }],
         });

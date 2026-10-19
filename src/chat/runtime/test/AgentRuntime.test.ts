@@ -1,3 +1,4 @@
+import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -5,7 +6,9 @@ import { join } from 'node:path';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
-import type { ToolRuntime } from '#src/tools/ToolRuntime.js';
+import { AgentModeID } from '#src/chat/AgentMode.js';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import { testToolSource, type TestToolHandler } from '#src/tools/test/fixtures/TestToolSource.js';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
 import { AgentRuntime } from '#src/chat/runtime/AgentRuntime.js';
@@ -84,6 +87,10 @@ class ClaudeShapedAdapter implements AgentModelAdapter<ClaudeTurn> {
 
   async beginTurn(state: ChatProviderState, request: ChatRequest, _context: AgentTurnContext): Promise<ClaudeTurn> {
     return { messages: [...messagesFrom(state), { role: 'user', content: request.text }], round: 0 };
+  }
+
+  async steerTurn(turn: ClaudeTurn, request: ChatRequest): Promise<ClaudeTurn> {
+    return { ...turn, messages: [...turn.messages, { role: 'user', content: request.text }] };
   }
 
   async streamStep(turn: ClaudeTurn, context: AgentTurnContext): Promise<AgentTurnStep<ClaudeTurn>> {
@@ -185,17 +192,18 @@ describe(AgentRuntime, () => {
       const step = await streamStep(turn, context);
       return turn.round === missingRound ? { ...step, usage: null } : step;
     };
-    const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, { definitions: [], execute: async () => 'file' });
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10_000 },
+      mockTools(async () => 'file'),
+    );
     const result = await runtime.send('Read the file', { signal: new AbortController().signal, onText: () => {} });
     expect(result.usage).toEqual({ ...(missingRound === 0 ? usage(8, 2) : usage(5, 3)), incomplete: true });
   });
 
   it('supports Claude-shaped messages while keeping tool execution provider-independent', async () => {
     const adapter = new ClaudeShapedAdapter();
-    const tools: ToolRuntime = {
-      definitions: [],
-      execute: vi.fn(async (_name, input) => `contents for ${JSON.parse(input).path as string}`),
-    };
+    const tools = mockTools(vi.fn(async (_name, input) => `contents for ${JSON.parse(input).path as string}`));
     const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, tools);
     let text = '';
 
@@ -212,6 +220,7 @@ describe(AgentRuntime, () => {
       'read_file',
       JSON.stringify({ path: 'README.md' }),
       expect.any(AbortSignal),
+      expect.objectContaining({ mode: AgentModeID.AGENT, onModeChanged: expect.any(Function) }),
     );
     expect(adapter.requests[1]?.messages.slice(-2)).toEqual([
       {
@@ -241,13 +250,12 @@ describe(AgentRuntime, () => {
       if (turn.round > 0) throw new Error('provider failed after mutation');
       return originalStreamStep(turn, context);
     };
-    const tools: ToolRuntime = {
-      definitions: [],
-      execute: vi.fn(async () => {
+    const tools = mockTools(
+      vi.fn(async () => {
         await writeFile(marker, 'I win');
         return 'workspace mutation receipt';
       }),
-    };
+    );
     const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, tools);
     const checkpoints: ChatProviderState[] = [];
 
@@ -277,15 +285,14 @@ describe(AgentRuntime, () => {
     const marker = join(directory, 'marker.txt');
     const controller = new AbortController();
     const adapter = new ClaudeShapedAdapter();
-    const tools: ToolRuntime = {
-      definitions: [],
-      execute: vi.fn(async (_name, _input, signal) => {
+    const tools = mockTools(
+      vi.fn(async (_name, _input, signal) => {
         await writeFile(marker, 'I win');
         controller.abort(new Error('cancel after readiness'));
         signal?.throwIfAborted();
         return 'unreachable';
       }),
-    };
+    );
     const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, tools);
     const checkpoints: ChatProviderState[] = [];
     const activity: ToolActivity[] = [];
@@ -318,9 +325,8 @@ describe(AgentRuntime, () => {
     const adapter = new TwoToolClaudeAdapter();
     let firstPending = false;
     let secondObservedFirstPending = false;
-    const tools: ToolRuntime = {
-      definitions: [],
-      execute: vi.fn(async name => {
+    const tools = mockTools(
+      vi.fn(async name => {
         if (name === 'second_tool') {
           secondObservedFirstPending = firstPending;
           throw new Error('second tool failed');
@@ -330,7 +336,7 @@ describe(AgentRuntime, () => {
         firstPending = false;
         return 'first completed';
       }),
-    };
+    );
     const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, tools);
     const checkpoints: ChatProviderState[] = [];
     const activity: ToolActivity[] = [];
@@ -367,10 +373,7 @@ describe(AgentRuntime, () => {
 
   it('does not launch tools when their execution intent cannot be checkpointed', async () => {
     const adapter = new ClaudeShapedAdapter();
-    const tools: ToolRuntime = {
-      definitions: [],
-      execute: vi.fn(async () => 'must not run'),
-    };
+    const tools = mockTools(vi.fn(async () => 'must not run'));
     const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, tools);
 
     await expect(
@@ -422,34 +425,254 @@ function usage(inputTokens: number, outputTokens: number) {
 }
 
 describe('Plan Mode execution boundary', () => {
-  it.each(['read_project_file', 'list_project_files', 'search_project_contents', 'propose_question', 'save_plan'])(
-    'permits %s while planning',
+  it.each([
+    'read_project_file',
+    'list_project_files',
+    'search_project_contents',
+    'propose_question',
+    'save_plan',
+    'list_shells',
+    'propose_patch',
+    'propose_edits',
+    'request_mode_switch',
+  ])('permits %s while planning', async name => {
+    class PlanningAdapter extends ClaudeShapedAdapter {
+      override async streamStep(turn: ClaudeTurn, context: AgentTurnContext): Promise<AgentTurnStep<ClaudeTurn>> {
+        const step = await super.streamStep(turn, context);
+        return { ...step, toolCalls: step.toolCalls.map(call => ({ ...call, name })) };
+      }
+    }
+    const execute = vi.fn(async () => '{}');
+    const runtime = new AgentRuntime(new PlanningAdapter(), { timeoutMs: 10000 }, mockTools(execute, [name]));
+    await runtime.send(
+      { text: 'Plan this', attachments: [], mode: AgentModeID.PLAN },
+      { signal: new AbortController().signal, onText: () => {} },
+    );
+    expect(execute).toHaveBeenCalledWith(
+      name,
+      expect.any(String),
+      expect.any(AbortSignal),
+      expect.objectContaining({ mode: AgentModeID.PLAN }),
+    );
+  });
+
+  it('blocks unlisted capabilities before dispatch and permits execution after an explicit Agent turn', async () => {
+    const adapter = new ClaudeShapedAdapter();
+    const execute = vi.fn(async () => 'tool result');
+    const runtime = new AgentRuntime(adapter, { timeoutMs: 10000 }, mockTools(execute));
+    const options = { signal: new AbortController().signal, onText: () => {} };
+    await runtime.send({ text: 'Prepare a plan', attachments: [], mode: AgentModeID.PLAN }, options);
+    expect(execute).not.toHaveBeenCalled();
+    expect(JSON.stringify(runtime.exportState())).toContain('TOOL_MODE_DENIED');
+    await runtime.send({ text: 'Build it', attachments: [], mode: AgentModeID.AGENT }, options);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Approved mode transitions', () => {
+  class SwitchAdapter extends ClaudeShapedAdapter {
+    constructor(private readonly batch: boolean) {
+      super();
+    }
+    override async streamStep(turn: ClaudeTurn, context: AgentTurnContext): Promise<AgentTurnStep<ClaudeTurn>> {
+      if (turn.round < 2)
+        return {
+          turn: { ...turn, round: turn.round + 1 },
+          responseId: 'switch',
+          usage: null,
+          hasVisibleOutput: false,
+          toolCalls:
+            turn.round === 0
+              ? [
+                  {
+                    id: 'switch',
+                    name: 'request_mode_switch',
+                    input: '{"target":"agent","description":"Implement the plan"}',
+                  },
+                  ...(this.batch ? [{ id: 'race', name: 'execute_shell', input: '{}' }] : []),
+                ]
+              : [{ id: 'write', name: 'execute_shell', input: '{}' }],
+        };
+      return super.streamStep(turn, context);
+    }
+  }
+  it.each([true, false])('permits writes only after an approved transition (approved=%s)', async approved => {
+    const execute = vi.fn<TestToolHandler>(async (name, _input, _signal, context) => {
+      if (name === 'request_mode_switch' && approved) context!.onModeChanged!(AgentModeID.AGENT);
+      return '{}';
+    });
+    const runtime = new AgentRuntime(new SwitchAdapter(false), { timeoutMs: 10000 }, mockTools(execute));
+    await runtime.send(
+      { text: 'Plan', attachments: [], mode: AgentModeID.PLAN },
+      { signal: new AbortController().signal, onText: () => {} },
+    );
+    expect(execute.mock.calls.map(call => call[0])).toEqual(
+      approved ? ['request_mode_switch', 'execute_shell'] : ['request_mode_switch'],
+    );
+    if (approved) expect(execute.mock.calls[1]?.[3]?.mode).toBe('agent');
+  });
+  it('rejects a mode switch batched with another tool without letting either write escape Plan mode', async () => {
+    const execute = vi.fn(async () => '{}');
+    const runtime = new AgentRuntime(new SwitchAdapter(true), { timeoutMs: 10000 }, mockTools(execute));
+    await runtime.send(
+      { text: 'Plan', attachments: [], mode: AgentModeID.PLAN },
+      { signal: new AbortController().signal, onText: () => {} },
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it.each(['execute_shell', 'write_shell_input', 'close_shell', 'update_todos', 'unknown_write'])(
+    'blocks %s in Plan mode',
     async name => {
-      class PlanningAdapter extends ClaudeShapedAdapter {
-        override async streamStep(turn: ClaudeTurn, context: AgentTurnContext): Promise<AgentTurnStep<ClaudeTurn>> {
+      class BlockedAdapter extends ClaudeShapedAdapter {
+        override async streamStep(turn: ClaudeTurn, context: AgentTurnContext) {
           const step = await super.streamStep(turn, context);
           return { ...step, toolCalls: step.toolCalls.map(call => ({ ...call, name })) };
         }
       }
       const execute = vi.fn(async () => '{}');
-      const runtime = new AgentRuntime(new PlanningAdapter(), { timeoutMs: 10000 }, { definitions: [], execute });
-      await runtime.send(
-        { text: 'Plan this', attachments: [], mode: 'plan' },
+      await new AgentRuntime(new BlockedAdapter(), { timeoutMs: 10000 }, mockTools(execute)).send(
+        { text: 'Plan', attachments: [], mode: AgentModeID.PLAN },
         { signal: new AbortController().signal, onText: () => {} },
       );
-      expect(execute).toHaveBeenCalledWith(name, expect.any(String), expect.any(AbortSignal));
+      expect(execute).not.toHaveBeenCalled();
     },
   );
+});
 
-  it('blocks unlisted capabilities before dispatch and permits execution after an explicit Agent turn', async () => {
+function mockTools(execute: TestToolHandler, planningNames: readonly string[] = []) {
+  return testToolSource(
+    [
+      ...[
+        'read_file',
+        'first_tool',
+        'second_tool',
+        'execute_shell',
+        'write_shell_input',
+        'close_shell',
+        'update_todos',
+      ].map(name => ({
+        namespace: 'fixture',
+        name,
+        description: name,
+        inputKind: ToolInputKind.JSON,
+        allowedModes: [AgentModeID.AGENT] as const,
+      })),
+      {
+        namespace: 'fixture',
+        name: 'request_mode_switch',
+        description: 'Switch mode',
+        inputKind: ToolInputKind.JSON,
+        allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        requiresExclusiveRound: true,
+      },
+      ...planningNames
+        .filter(name => name !== 'request_mode_switch')
+        .map(name => ({
+          namespace: 'fixture',
+          name,
+          description: name,
+          inputKind: ToolInputKind.JSON,
+          allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN] as const,
+        })),
+    ],
+    execute,
+  );
+}
+
+describe('provider-neutral steering', () => {
+  const instruction = (queue: ChatSteeringQueue, text: string) =>
+    queue.add(
+      { text, attachments: [] },
+      {
+        id: text,
+        text,
+        createdAt: new Date(0).toISOString(),
+        options: {},
+        attachments: [],
+      },
+    );
+  it('waits for the running tool and its durable outcome, preserves mode and input order, then continues the same turn', async () => {
     const adapter = new ClaudeShapedAdapter();
-    const execute = vi.fn(async () => 'tool result');
-    const runtime = new AgentRuntime(adapter, { timeoutMs: 10000 }, { definitions: [], execute });
-    const options = { signal: new AbortController().signal, onText: () => {} };
-    await runtime.send({ text: 'Prepare a plan', attachments: [], mode: 'plan' }, options);
-    expect(execute).not.toHaveBeenCalled();
-    expect(JSON.stringify(runtime.exportState())).toContain('PLAN_MODE_READ_ONLY');
-    await runtime.send({ text: 'Build it', attachments: [], mode: 'agent' }, options);
+    const queue = new ChatSteeringQueue();
+    const controller = new AbortController();
+    const gate = deferredVoid();
+    const entered = deferredVoid();
+    const execute = vi.fn(async () => {
+      entered.resolve();
+      await gate.promise;
+      return 'file';
+    });
+    const modes: AgentModeID[] = [];
+    const stream = adapter.streamStep.bind(adapter);
+    adapter.streamStep = async (turn, context) => {
+      modes.push(context.mode.id);
+      return stream(turn, context);
+    };
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10_000 },
+      {
+        tools: mockTools(execute).tools.map(tool => ({ ...tool, allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN] })),
+      },
+    );
+    const checkpoints: ChatProviderState[] = [];
+    const pending = runtime.send(
+      { text: 'Read', attachments: [], mode: AgentModeID.PLAN },
+      {
+        signal: controller.signal,
+        onText: () => {},
+        takeSteering: queue.take,
+        onStateCheckpoint: state => {
+          checkpoints.push(state);
+        },
+      },
+    );
+    await entered.promise;
+    instruction(queue, 'Keep scope small');
+    instruction(queue, 'Also check tests');
+    expect(adapter.requests).toHaveLength(1);
+    expect(controller.signal.aborted).toBe(false);
+    gate.resolve();
+    await pending;
     expect(execute).toHaveBeenCalledTimes(1);
+    expect(modes).toEqual([AgentModeID.PLAN, AgentModeID.PLAN]);
+    expect(adapter.requests[1]?.messages.slice(-3)).toEqual([
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'file' }] },
+      { role: 'user', content: 'Keep scope small' },
+      { role: 'user', content: 'Also check tests' },
+    ]);
+    expect(messagesFrom(checkpoints[1]!).at(-1)?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'toolu_1', content: 'file' },
+    ]);
+    expect(() => instruction(queue, 'Too late')).toThrow('finished');
+  });
+
+  it('continues after a text-only response when steering arrived during that response', async () => {
+    const adapter = new ClaudeShapedAdapter();
+    const queue = new ChatSteeringQueue();
+    const stream = adapter.streamStep.bind(adapter);
+    let calls = 0;
+    adapter.streamStep = async (turn, context) => {
+      calls++;
+      const result = await stream({ ...turn, round: 1 }, context);
+      if (calls === 1) instruction(queue, 'Continue with this constraint');
+      return result;
+    };
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10_000 },
+      mockTools(async () => 'unused'),
+    );
+    await runtime.send('Start', { signal: new AbortController().signal, onText: () => {}, takeSteering: queue.take });
+    expect(calls).toBe(2);
+    expect(adapter.requests[1]?.messages.at(-1)).toEqual({ role: 'user', content: 'Continue with this constraint' });
   });
 });
+
+function deferredVoid(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}

@@ -13,14 +13,15 @@ beforeAll(async () => {
       resolveDir: process.cwd(),
       contents: `
         import { mountGlyphWorkbench } from './code-oss/ui/mountGlyphWorkbench.tsx';
-        import { workbenchState, previewActions } from './code-oss/storybook/fixtures.ts';
+        import { workbenchStateFixture } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
+        import { previewActionsFixture } from '#code-oss/storybook/fixtures/ActionFixtures.ts';
         const question = { id: 'question', title: 'Questions', prompt: 'Choose.', questions: [{ id: 'choice', prompt: 'Choose.', allowMultiple: false, options: [{ id: 'a', label: 'First' }, { id: 'b', label: 'Second' }] }] };
         const run = { chatId: 'chat', runId: 'run', text: '', reasoning: '', tools: [], status: 'waiting_for_question', question };
-        let state = workbenchState({ selectedChatId: 'chat', status: 'waiting_for_question', runs: [run], transcript: [{ id: 'run', role: 'assistant', text: 'Waiting.' }] });
+        let state = workbenchStateFixture({ selectedChatId: 'chat', status: 'waiting_for_question', runs: [run], transcript: [{ id: 'run', role: 'assistant', text: 'Waiting.' }] });
         window.requests = [];
         const operation = (...args) => { window.requests.push(args); return new Promise((resolve, reject) => { window.fail = () => reject(new Error('Connection interrupted. Try again.')); window.acknowledge = resolve; }); };
         const view = mountGlyphWorkbench(document.getElementById('root'), state, {
-          ...previewActions, answerQuestion: operation, decideApproval: operation,
+          ...previewActionsFixture(), answerQuestion: operation, decideApproval: operation,
           selectAccount: async (...args) => { window.requests.push(['account', ...args]); },
           selectModel: async (...args) => { window.requests.push(['model', ...args]); },
           openChat: async (...args) => { window.requests.push(['open', ...args]); },
@@ -163,6 +164,25 @@ it('preserves multi-question selections and free text when navigating backward b
     const form = page.getByRole('form', { name: 'Questions' });
     const next = form.getByRole('button', { name: 'Continue' });
     await expect(next).toBeDisabled();
+    await expect(form.getByRole('group')).toHaveCount(2);
+    const viewport = form.locator('.glyph-question-scroll');
+    expect(await viewport.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+    const footerTop = (await next.boundingBox()).y;
+    await viewport.hover();
+    await page.mouse.wheel(0, 600);
+    await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    await expect(form.locator('header')).toContainText('2 of 2');
+    expect((await next.boundingBox()).y).toBe(footerTop);
+    await form.getByRole('textbox', { name: 'Your answer' }).fill('Initial details');
+    await next.click(); // The first unanswered question must be visited, not submitted.
+    await expect(form.locator('header')).toContainText('1 of 2');
+    expect(await page.evaluate(() => window.requests)).toHaveLength(0);
+    await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBe(0);
+    await form.getByRole('button', { name: 'Next question' }).click(); // Navigation does not require an answer.
+    await expect(form.locator('header')).toContainText('2 of 2');
+    await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    await form.getByRole('button', { name: 'Previous question' }).click();
+    await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBe(0);
     await form.getByRole('checkbox', { name: 'First' }).check();
     await form.getByRole('checkbox', { name: 'Second' }).check();
     await next.click();

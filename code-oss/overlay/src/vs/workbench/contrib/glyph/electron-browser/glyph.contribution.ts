@@ -1,3 +1,11 @@
+import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
+import { GlyphComposerCommand } from '#glyph/workbench/GlyphComposerCommand.js';
+import { ContextKeyExpr } from '#vs/platform/contextkey/common/contextkey.js';
+import {
+  ConfigurationScope,
+  Extensions as ConfigurationExtensions,
+  IConfigurationRegistry,
+} from '#vs/platform/configuration/common/configurationRegistry.js';
 import { GlyphPlanEditor, GlyphPlanInput } from '#vs/workbench/contrib/glyph/browser/GlyphPlanEditor.js';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '#vs/workbench/browser/editor.js';
 import { EditorExtensions } from '#vs/workbench/common/editor.js';
@@ -24,6 +32,40 @@ import {
 import { GlyphViewPane } from '#vs/workbench/contrib/glyph/browser/GlyphViewPane.js';
 import { NativeGlyphWorkbenchService } from '#vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
+
+Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
+  id: 'glyph',
+  title: 'Glyph',
+  type: 'object',
+  properties: {
+    'glyph.chat.followUpBehavior': {
+      type: 'string',
+      enum: Object.values(GlyphFollowUpBehavior),
+      default: GlyphFollowUpBehavior.QUEUE,
+      enumDescriptions: [
+        'Wait for the active response to finish, then send queued messages in order.',
+        'Cancel the active response and start a new turn with the message.',
+      ],
+      scope: ConfigurationScope.APPLICATION,
+      description: 'What Send Message does while Glyph is responding. Steer always updates the existing work.',
+    },
+    'glyph.modeSwitch.autoApprove': {
+      type: 'boolean',
+      default: false,
+      scope: ConfigurationScope.APPLICATION,
+      description:
+        'Automatically approve agent-requested mode switches when the countdown ends. When disabled, unanswered switches are denied.',
+    },
+    'glyph.modeSwitch.timeoutSeconds': {
+      type: 'integer',
+      default: 15,
+      minimum: 5,
+      maximum: 300,
+      scope: ConfigurationScope.APPLICATION,
+      description: 'Seconds to wait for approval of an agent-requested mode switch.',
+    },
+  },
+});
 
 const containerId = 'workbench.view.glyphContainer';
 const icon = registerIcon('glyph-view-icon', Codicon.sparkle, localize('glyphViewIcon', 'Glyph view icon.'));
@@ -87,3 +129,42 @@ Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane
   EditorPaneDescriptor.create(GlyphPlanEditor, GlyphPlanEditor.ID, 'Glyph Plan'),
   [new SyncDescriptor(GlyphPlanInput)],
 );
+
+for (const command of [
+  {
+    id: GlyphComposerCommand.SEND,
+    title: localize2('glyph.sendMessage', 'Glyph: Send Message'),
+    primary: KeyCode.Enter,
+  },
+  {
+    id: GlyphComposerCommand.STEER,
+    title: localize2('glyph.steerMessage', 'Glyph: Steer Current Response'),
+    primary: KeyMod.CtrlCmd | KeyCode.Enter,
+  },
+  {
+    id: GlyphComposerCommand.INSERT_NEWLINE,
+    title: localize2('glyph.insertNewline', 'Glyph: Insert Newline'),
+    primary: KeyMod.Shift | KeyCode.Enter,
+  },
+]) {
+  registerAction2(
+    class extends Action2 {
+      constructor() {
+        super({
+          id: command.id,
+          title: command.title,
+          f1: true,
+          precondition: ContextKeyExpr.has('glyph.composerFocus'),
+          keybinding: {
+            primary: command.primary,
+            weight: KeybindingWeight.WorkbenchContrib,
+            when: ContextKeyExpr.has('glyph.composerFocus'),
+          },
+        });
+      }
+      run(accessor: ServicesAccessor): void {
+        accessor.get(GlyphWorkbenchService).composer.executeCommand(command.id);
+      }
+    },
+  );
+}

@@ -1,3 +1,5 @@
+import type { GlyphSteeringMessage } from '#src/desktop/protocol/events/GlyphSteeringMessage.js';
+import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
 import type { GlyphUsage } from './GlyphUsage.ts';
 import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
@@ -26,6 +28,8 @@ export interface GlyphRunProjection {
   readonly userText?: string;
   readonly checkpointTurnId?: string;
   readonly createdAt?: string;
+  readonly steering?: readonly GlyphSteeringMessage[];
+  readonly modeSwaps?: readonly GlyphModeSwap[];
   readonly questionResponses?: readonly GlyphQuestionResponse[];
   readonly usage?: GlyphUsage;
   readonly reasoning: string;

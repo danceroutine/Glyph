@@ -1,3 +1,10 @@
+import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
+import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
+import { AgentMode } from '#src/chat/AgentMode.js';
+import { AgentModeID } from '#src/chat/AgentMode.js';
+import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
+import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
 import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
 import { GlyphContextAttachmentKind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
@@ -41,6 +48,7 @@ const TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS = {
 } as const satisfies Record<ToolActivityPhase, GlyphToolActivityStatus>;
 
 interface ActiveRun {
+  readonly steering: ChatSteeringQueue;
   readonly controller: AbortController;
   readonly completion: Promise<void>;
   readonly runId: string;
@@ -247,7 +255,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         const summary = await glyph.linkPlan(command.chatId, command.planId, command.targetChatId, command.role);
         this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
         if (command.role === 'Reviewer')
-          this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: await glyph.setChatMode(target.id, 'plan') });
+          this.publish({
+            type: GlyphHostEventType.CHAT_UPDATED,
+            chat: await glyph.setChatMode(target.id, AgentModeID.PLAN),
+          });
         await target.recordContext([
           {
             schemaVersion: 1,
@@ -281,19 +292,60 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         if (this.runs.has(command.runId)) throw new Error('This run id has already been used.');
         const session = this.session(command.chatId);
         const controller = new AbortController();
+        const steering = new ChatSteeringQueue();
         // Defer execution one microtask so cancellation can always find its controller.
         const completion = Promise.resolve().then(() =>
           this.send(
             {
               ...command,
-              options: { ...command.options, mode: command.options?.mode ?? session.summary.mode ?? 'agent' },
+              options: {
+                ...command.options,
+                mode: command.options?.mode ?? session.summary.mode ?? AgentMode.default.id,
+              },
             },
             session,
             controller.signal,
+            steering,
           ),
         );
-        this.active.set(command.chatId, { controller, completion, runId: command.runId });
-        void completion.finally(() => this.active.delete(command.chatId));
+        this.active.set(command.chatId, { controller, completion, runId: command.runId, steering });
+        void completion.finally(() => {
+          steering.close();
+          this.active.delete(command.chatId);
+        });
+        return;
+      }
+      case GlyphWorkbenchCommandType.STEER: {
+        const options = chatTurnOptionsSchema.parse(command.options ?? {});
+        const active = this.active.get(command.chatId);
+        const run = this.runs.get(command.runId);
+        if (!active || active.runId !== command.runId || active.controller.signal.aborted || !run)
+          throw new ProtocolError('There is no active response to steer.');
+        if (!command.text.trim()) throw new ProtocolError('Steering instructions cannot be empty.');
+        const attachments = command.attachments;
+        if (
+          attachments.length > 32 ||
+          attachments.reduce((total, value) => total + Buffer.byteLength(value.text), 0) > 2 * 1024 * 1024
+        )
+          throw new ProtocolError('Reduce the selected context to at most 32 attachments and 2 MiB.');
+        active.steering.add(
+          { text: command.text, ...options, attachments: toRequestAttachments(attachments) },
+          {
+            id: command.messageId,
+            text: command.text,
+            createdAt: new Date().toISOString(),
+            options,
+            attachments: attachments.map(attachment => ({
+              uri: attachment.uri,
+              path: attachment.path,
+              text: attachment.text,
+              revision: attachment.contentRevision,
+              ...(attachment.range ? { range: attachment.range } : {}),
+              ...(attachment.side ? { side: attachment.side } : {}),
+            })),
+          },
+        );
+        this.setRun({ ...run, steering: active.steering.messages });
         return;
       }
       case GlyphWorkbenchCommandType.CANCEL_RUN: {
@@ -455,10 +507,27 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           event.runId,
           event.type === GlyphHostEventType.QUESTION
             ? { ...run, question: event.question, status: GlyphRunStatus.WAITING_FOR_QUESTION }
-            : { ...run, approval: event.approval, status: GlyphRunStatus.WAITING_FOR_APPROVAL },
+            : {
+                ...run,
+                approval: event.approval,
+                status: GlyphRunStatus.WAITING_FOR_APPROVAL,
+                ...(event.approval.modeSwap ? { modeSwaps: [...(run.modeSwaps ?? []), event.approval.modeSwap] } : {}),
+              },
         );
     }
     this.options.emit(event);
+  }
+
+  finishModeSwap(chatId: string, id: string, status: GlyphModeSwap['status']): void {
+    const run = [...this.runs.values()].find(
+      run => run.chatId === chatId && run.modeSwaps?.some(swap => swap.id === id),
+    );
+    if (!run) return;
+    const updated = { ...run, modeSwaps: run.modeSwaps!.map(swap => (swap.id === id ? { ...swap, status } : swap)) };
+    if (updated.approval?.id === id) {
+      const { approval: _approval, ...rest } = updated;
+      this.setRun({ ...rest, status: GlyphRunStatus.STREAMING });
+    } else this.setRun(updated);
   }
 
   /** Recheck inference access at use time rather than trusting a previously selected account. */
@@ -468,7 +537,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         chatId: session.id,
         runId: `${session.id}:history:${index}`,
         userText: turn.userText,
+        ...(turn.steering ? { steering: turn.steering } : {}),
         createdAt: turn.createdAt,
+        ...(turn.modeSwaps ? { modeSwaps: turn.modeSwaps } : {}),
         ...(turn.questionResponses ? { questionResponses: turn.questionResponses } : {}),
         ...(turn.checkpoints ? { checkpointTurnId: turn.options?.turnId ?? `${session.id}:history:${index}` } : {}),
         ...(turn.usage ? { usage: { ...turn.usage, unreportedTurns: turn.usage.incomplete ? 1 : 0 } } : {}),
@@ -491,6 +562,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           id: tool.callId,
           name: tool.name,
           status: TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[tool.phase],
+          ...(tool.arguments === undefined ? {} : { arguments: this.options.glyph.redact(tool.arguments) }),
+          ...(tool.output === undefined ? {} : { summary: this.options.glyph.redact(tool.output) }),
+          ...(tool.textOffset === undefined ? {} : { textOffset: tool.textOffset }),
           ...(tool.shell ? { shell: { ...this.redactShell(tool.shell), live: false, running: false } } : {}),
         })),
         status: GlyphRunStatus.COMPLETED,
@@ -520,6 +594,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     command: Extract<GlyphRuntimeCommand, { type: GlyphWorkbenchCommandType.SEND }>,
     session: ChatSession,
     signal: AbortSignal,
+    steering: ChatSteeringQueue,
   ): Promise<void> {
     this.setRun({
       chatId: command.chatId,
@@ -551,25 +626,13 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
             text: command.text,
             ...command.options,
             turnId: command.runId,
-            attachments: command.attachments.map(attachment => ({
-              path: attachment.path,
-              text: attachment.text,
-              revision: attachment.contentRevision,
-              source: {
-                kind: attachment.kind,
-                uri: attachment.uri,
-                version: attachment.token?.version ?? attachment.sourceVersion ?? 0,
-                revision: attachment.sourceRevision ?? attachment.contentRevision,
-                ...(attachment.range ? { range: attachment.range } : {}),
-                ...(attachment.side ? { side: attachment.side } : {}),
-              },
-              byteOrderMark: false,
-              byteLength: Buffer.byteLength(attachment.text),
-            })),
+            attachments: toRequestAttachments(command.attachments),
           },
           { push: part => this.response(command.runId, part) },
           signal,
           () => this.runs.get(command.runId)?.questionResponses ?? [],
+          () => this.runs.get(command.runId)?.modeSwaps ?? [],
+          steering,
         ),
       );
       const run = this.runs.get(command.runId)!;
@@ -630,7 +693,11 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           shell?.error && part.activity.phase === ToolActivityPhase.COMPLETED
             ? GlyphToolActivityStatus.FAILED
             : TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[part.activity.phase],
-        ...(part.activity.output ? { summary: part.activity.output } : {}),
+        arguments: this.options.glyph.redact(toToolActivityPreview(part.activity.arguments)),
+        textOffset: previous?.textOffset ?? run.text.length,
+        ...(part.activity.output
+          ? { summary: this.options.glyph.redact(toToolActivityPreview(part.activity.output)) }
+          : {}),
         ...(shell ? { shell } : {}),
       };
       const tools = run.tools.some(tool => tool.id === activity.id)
@@ -786,4 +853,22 @@ function toProposal(proposal: EditProposal): GlyphProposalSummary {
 
 function changedLines(text: string): number {
   return text ? text.replace(/(?:\r\n|\r|\n)$/, '').split(/\r\n|\r|\n/).length : 0;
+}
+
+function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): ContextAttachment[] {
+  return attachments.map(attachment => ({
+    path: attachment.path,
+    text: attachment.text,
+    revision: attachment.contentRevision,
+    source: {
+      kind: attachment.kind,
+      uri: attachment.uri,
+      version: attachment.token?.version ?? attachment.sourceVersion ?? 0,
+      revision: attachment.sourceRevision ?? attachment.contentRevision,
+      ...(attachment.range ? { range: attachment.range } : {}),
+      ...(attachment.side ? { side: attachment.side } : {}),
+    },
+    byteOrderMark: false,
+    byteLength: Buffer.byteLength(attachment.text),
+  }));
 }

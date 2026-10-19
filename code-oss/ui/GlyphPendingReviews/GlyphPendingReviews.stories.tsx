@@ -1,45 +1,18 @@
+import { pendingProposals } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
 import { ProtocolError } from '#src/errors/ProtocolError.js';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { WiredGlyphPendingReviews } from './GlyphPendingReviews.wired.tsx';
-import { GlyphProposalApplicability } from '#src/desktop/protocol/events/GlyphProposalFileSummary.js';
-import { previewActions } from '#code-oss/storybook/fixtures.ts';
+
+import { previewActionsFixture } from '#code-oss/storybook/fixtures/ActionFixtures.ts';
 
 const meta = {
-  title: 'Glyph/Chat/Pending reviews',
+  title: 'Glyph/Chat/In Composer/Pending reviews',
   component: WiredGlyphPendingReviews,
   args: {
     chatId: 'chat',
     readOnly: false,
-    actions: previewActions,
-    proposals: [
-      {
-        id: 'proposal',
-        chatId: 'chat',
-        createdAt: '',
-        files: [
-          {
-            id: 'runtime',
-            path: 'src/desktop/host/ProviderDesktopRuntime.ts',
-            proposedUri: '',
-            pendingItemIds: ['one'],
-            applicability: GlyphProposalApplicability.READY,
-            textOnly: true,
-            additions: 2,
-            deletions: 1,
-          },
-          {
-            id: 'decision',
-            path: 'code-oss/ui/useGlyphDecision.ts',
-            proposedUri: '',
-            pendingItemIds: ['two'],
-            applicability: GlyphProposalApplicability.READY,
-            textOnly: true,
-            additions: 1,
-            deletions: 2,
-          },
-        ],
-      },
-    ],
+    actions: previewActionsFixture(),
+    proposals: pendingProposals,
   },
 } satisfies Meta<typeof WiredGlyphPendingReviews>;
 export default meta;
@@ -52,7 +25,7 @@ export const ReadOnly: Story = { args: { readOnly: true } };
 export const FailedDecision: Story = {
   args: {
     actions: {
-      ...previewActions,
+      ...previewActionsFixture(),
       decideProposalItems: async () => {
         throw new ProtocolError('The file changed. Request a fresh proposal.');
       },

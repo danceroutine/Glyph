@@ -1,3 +1,4 @@
+import { AgentModeID } from "#src/chat/AgentMode.js";
 import type { PlanUpdate } from '#src/planning/PlanSchema.js';
 import { PlanError } from '#src/planning/PlanError.js';
 import { ChatConversation } from '#src/chat/ChatConversation.js';
@@ -56,7 +57,7 @@ export class GlyphService {
     this.traceEnabled = options.traceEnabled ?? true;
   }
 
-  setChatMode(id: string, mode: 'agent' | 'plan'): Promise<ChatSessionSummary> {
+  setChatMode(id: string, mode: AgentModeID): Promise<ChatSessionSummary> {
     if (!this.chatSessions) throw new PlanError('Chat storage is unavailable.');
     return this.chatSessions.setMode(id, mode);
   }

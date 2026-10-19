@@ -1,6 +1,8 @@
+import { composerFixture } from '#code-oss/storybook/fixtures/ActionFixtures.ts';
+import { annotationFixture } from '#code-oss/storybook/fixtures/AnnotationFixtures.ts';
 import { useState } from 'preact/hooks';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
-import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
+
 import { GlyphCommentButton } from './GlyphCommentButton.presentational.tsx';
 import { GlyphAnnotationPill, GlyphAnnotations } from './GlyphAnnotations.presentational.tsx';
 import { useGlyphAnnotationsState } from './useGlyphAnnotationsState.ts';
@@ -15,25 +17,27 @@ const prompt = css({
 function AnnotationExample({ kind, empty = false }: { readonly kind: 'chat' | 'plan'; readonly empty?: boolean }) {
   const quote = 'Preserve the original attachments and their exact revisions.';
   const [composer] = useState(() => {
-    const composer = new GlyphComposerState();
+    const composer = composerFixture();
     if (!empty)
-      composer.saveAnnotation({
-        id: 'example',
-        order: 1,
-        kind,
-        sourceId: `example-${kind}`,
-        revision: '1',
-        label: kind === 'plan' ? 'Queue composer messages' : 'Assistant reply',
-        quote,
-        from: 0,
-        to: quote.length,
-        comment: 'Include selections from unsaved files too.',
-      });
+      composer.saveAnnotation(
+        annotationFixture({
+          id: 'example',
+          order: 1,
+          kind,
+          sourceId: `example-${kind}`,
+          revision: '1',
+          label: kind === 'plan' ? 'Queue composer messages' : 'Assistant reply',
+          quote,
+          from: 0,
+          to: quote.length,
+          comment: 'Include selections from unsaved files too.',
+        }),
+      );
     return composer;
   });
   const state = useGlyphAnnotationsState(composer, false);
   return (
-    <div class={surface}>
+    <div className={surface}>
       {kind === 'plan' ? <h2>Queue composer messages</h2> : <p>Worked for 3s</p>}
       <p
         data-glyph-source={`example-${kind}`}
@@ -43,7 +47,7 @@ function AnnotationExample({ kind, empty = false }: { readonly kind: 'chat' | 'p
       >
         {quote}
       </p>
-      <div class={prompt}>
+      <div className={prompt}>
         <GlyphAnnotationPill annotations={state.annotations} edit={state.edit} remove={state.remove} />
         <div>Ask for follow-up changes</div>
       </div>
@@ -52,7 +56,7 @@ function AnnotationExample({ kind, empty = false }: { readonly kind: 'chat' | 'p
   );
 }
 const meta = {
-  title: 'Glyph/Shared/Annotation Marker',
+  title: 'Glyph/Shared/Annotations/Inline Annotation Marker',
   component: GlyphCommentButton,
   args: { order: 1, open: () => {} },
   decorators: [

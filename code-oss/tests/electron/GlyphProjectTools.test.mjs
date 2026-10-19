@@ -4,6 +4,23 @@ import { join } from 'node:path';
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+it.describe('Pending file references in agent messages', () => {
+  it.fixme('opens a workspace file link at its requested one-based line', async () => {
+    // Stream [file.ts:42](src/file.ts#L42), click the rendered link, and verify
+    // the native editor opens that file with line 42 revealed and the caret there.
+  });
+  it.fixme('opens a workspace file link with its requested line range selected', async () => {
+    // Stream [file.ts:42-50](src/file.ts#L42-L50), click the rendered link, and
+    // verify lines 42 through 50 are selected and revealed in the native editor.
+  });
+  it.fixme('instructs the agent to cite inspected workspace files using clickable file and line links', async () => {
+    // Inspect the outgoing provider instructions for the supported Markdown
+    // format: workspace-relative paths, #L42 for a line, and #L42-L50 for a range.
+    // Require file references to use this format and only cite verified locations.
+    // Scripted responses can verify rendering/navigation, not model compliance.
+  });
+});
+
 const list = (glob_pattern = '**/*', target_directory = null) => [
   'list_project_files',
   { glob_pattern, target_directory },
@@ -37,7 +54,7 @@ async function runTools(glyph, provider, calls, answer = 'The requested project 
   );
   await glyph.send('Inspect these workspace files.');
   await expect.poll(() => provider.requests.length).toBe(requestCount + 2);
-  await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+  await expect(glyph.sendButton).toHaveText('Send (Enter)');
   await expect(glyph.assistantEntries.last().locator('[data-glyph-source]')).toHaveText(answer);
   const input = provider.requests.at(-1).body.input;
   return ids.map(id => {

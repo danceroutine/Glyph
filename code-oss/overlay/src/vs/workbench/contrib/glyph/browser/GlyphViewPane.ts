@@ -1,3 +1,5 @@
+import { IPreferencesService } from '#vs/workbench/services/preferences/common/preferences.js';
+import { StandardKeyboardEvent } from '#vs/base/browser/keyboardEvent.js';
 import { MutableDisposable } from '#vs/base/common/lifecycle.js';
 import { IConfigurationService } from '#vs/platform/configuration/common/configuration.js';
 import { IContextKeyService } from '#vs/platform/contextkey/common/contextkey.js';
@@ -24,28 +26,32 @@ export class GlyphViewPane extends ViewPane {
 
   constructor(
     options: IViewletViewOptions,
-    @IKeybindingService keybindingService: IKeybindingService,
+    @IKeybindingService private readonly glyphKeybindings: IKeybindingService,
     @IContextMenuService contextMenuService: IContextMenuService,
     @IConfigurationService configurationService: IConfigurationService,
-    @IContextKeyService contextKeyService: IContextKeyService,
+    @IContextKeyService private readonly glyphContextKeys: IContextKeyService,
     @IViewDescriptorService viewDescriptorService: IViewDescriptorService,
     @IInstantiationService instantiationService: IInstantiationService,
     @IOpenerService openerService: IOpenerService,
     @IThemeService themeService: IThemeService,
     @IHoverService hoverService: IHoverService,
+    @IPreferencesService private readonly preferences: IPreferencesService,
     @GlyphWorkbenchService private readonly glyphService: GlyphWorkbenchService,
   ) {
     super(
       options,
-      keybindingService,
+      glyphKeybindings,
       contextMenuService,
       configurationService,
-      contextKeyService,
+      glyphContextKeys,
       viewDescriptorService,
       instantiationService,
       openerService,
       themeService,
       hoverService,
+    );
+    this._register(
+      this.glyphKeybindings.onDidUpdateKeybindings(() => this.view.value?.update(this.glyphService.state)),
     );
     this._register(this.glyphService.onDidChangeState(state => this.view.value?.update(state)));
   }
@@ -59,11 +65,38 @@ export class GlyphViewPane extends ViewPane {
       get composer() {
         return service.composer;
       },
+      composerKeybindings: {
+        label: command => this.glyphKeybindings.lookupKeybinding(command)?.getLabel() ?? undefined,
+        mount: element => {
+          const scope = this.glyphContextKeys.createScoped(element);
+          scope.createKey('glyph.composerFocus', true);
+          return () => scope.dispose();
+        },
+        dispatch: event => {
+          const handled = this.glyphKeybindings.dispatchEvent(
+            new StandardKeyboardEvent(event),
+            event.target as HTMLElement,
+          );
+          if (handled) event.stopPropagation();
+          return handled;
+        },
+      },
+      managesQueue: true,
+      moveQueuedToNewChat: id => service.moveQueuedToNewChat(id),
+      openMessageSettings: () => {
+        void this.preferences.openSettings({ query: 'glyph.chat.followUpBehavior' });
+      },
+      get followUpBehavior() {
+        return service.followUpBehavior;
+      },
+      sendImmediately: (text, attachments, options) => service.sendImmediately(text, attachments, options),
       context: this.glyphService.context,
+      steer: (text, attachments, options) => this.glyphService.steer(text, attachments, options),
       send: (text, attachments, options) => this.glyphService.send(text, attachments, options),
       branchChat: (chatId, turnId) => service.branchChat!(chatId, turnId),
       restoreCheckpoint: (chatId, turnId) => service.restoreCheckpoint!(chatId, turnId),
       openLink: href => service.openLink!(href),
+      copyText: text => service.copyText(text),
       viewPlan: (chatId, plan) => service.viewPlan!(chatId, plan),
       selectMode: mode => service.selectMode!(mode),
       buildPlan: (chatId, plan, newChat) => service.buildPlan!(chatId, plan, newChat),

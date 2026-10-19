@@ -19,7 +19,7 @@ async function tool(glyph, provider, name, args, inputKind = 'json') {
   );
   await glyph.send(`Run ${name}.`);
   await expect.poll(() => provider.requests.length).toBe(count + 2);
-  await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+  await expect(glyph.sendButton).toHaveText('Send (Enter)');
   const output = provider.requests
     .at(-1)
     .body.input.find(

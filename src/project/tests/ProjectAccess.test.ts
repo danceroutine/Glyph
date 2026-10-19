@@ -215,7 +215,7 @@ describe(ProjectAccess, () => {
         ),
       );
 
-      const definition = access.definitions.find(candidate => candidate.name === 'search_project_contents');
+      const definition = access.tools.find(candidate => candidate.name === 'search_project_contents');
       expect(definition?.parameters).toMatchObject({
         type: 'object',
         additionalProperties: false,

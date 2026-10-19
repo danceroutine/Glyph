@@ -40,3 +40,7 @@ export * from './events/GlyphUsage.ts';
 
 export * from './events/GlyphPlan.ts';
 export * from './events/GlyphAnnotation.ts';
+
+export * from './events/GlyphModeSwap.ts';
+
+export { AgentModeID } from '#src/chat/AgentMode.js';

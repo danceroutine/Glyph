@@ -10,7 +10,7 @@ it.describe('Review regressions — utility-host failure', () => {
     await expect(glyph.sendButton).toHaveText('Cancel');
     await expect(glyph.assistantEntries.first()).toContainText('The packaged');
     await glyph.crashHost();
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect(glyph.diagnostics).toContainText([/host|disconnect|interrupt/i]);
   });
 
@@ -26,7 +26,7 @@ it.describe('Review regressions — utility-host failure', () => {
     const response = prompt.locator('xpath=following-sibling::*[1]');
     await expect(response).toHaveClass(/assistant/);
     await expect(response).toContainText('transport.');
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
   });
 });
 
@@ -48,7 +48,7 @@ it.describe('Review regressions — rejected send with no account', () => {
     await expect(glyph.diagnostics).toContainText([/Sign in.*inference access/]);
     await expect(glyph.composer).toHaveText(draft);
     await expect(glyph.userEntries).toHaveCount(0);
-    await expect(glyph.sendButton).toHaveText('Send (⌘/Ctrl+Enter)');
+    await expect(glyph.sendButton).toHaveText('Send (Enter)');
   });
 });
 

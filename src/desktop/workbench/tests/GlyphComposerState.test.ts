@@ -1,3 +1,4 @@
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { describe, expect, it } from 'vitest';
 import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 import { GlyphContextAttachmentKind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
@@ -27,7 +28,7 @@ describe(GlyphComposerState, () => {
   });
   it('restores annotations and mode after a rejected send and keeps edits and deletion scoped to the draft', async () => {
     const composer = new GlyphComposerState();
-    composer.setMode('plan');
+    composer.setMode(AgentModeID.PLAN);
     composer.setDraft('Revise this');
     const annotation = {
       id: 'a',
@@ -43,7 +44,7 @@ describe(GlyphComposerState, () => {
     };
     composer.saveAnnotation(annotation);
     await composer.submit(async (_text, _attachments, options) => {
-      expect(options).toEqual({ mode: 'plan', annotations: [annotation] });
+      expect(options).toEqual({ mode: AgentModeID.PLAN, annotations: [annotation] });
       throw new Error('Offline');
     });
     expect(composer.snapshot.document.options?.annotations).toEqual([annotation]);
@@ -88,5 +89,84 @@ describe(GlyphComposerState, () => {
     await model.submit(async (_text, attachments) => {
       expect(attachments).toEqual([attachment]);
     });
+  });
+});
+
+describe('queued composer documents', () => {
+  it('reorders and edits exact attachment snapshots without consuming a newer draft', async () => {
+    const composer = new GlyphComposerState();
+    composer.setMode(AgentModeID.PLAN);
+    composer.setDraft('Inspect ');
+    composer.insertAttachments([attachment]);
+    composer.enqueueDraft();
+    const first = composer.snapshot.queued[0]!;
+    composer.setDraft('Then verify');
+    composer.enqueueDraft();
+    const second = composer.snapshot.queued[1]!;
+    composer.moveQueued(second.id, 0);
+    expect(composer.snapshot.queued.map(value => value.id)).toEqual([second.id, first.id]);
+    composer.setDraft('Unrelated current draft');
+    composer.editQueued(first.id);
+    expect(composer.snapshot.unsent).toEqual(['Unrelated current draft']);
+    expect(composer.snapshot.document.parts).toEqual(first.document.parts);
+    composer.setDocument({
+      ...composer.snapshot.document,
+      parts: [...composer.snapshot.document.parts, { type: 'text', text: ' carefully' }],
+    });
+    composer.enqueueDraft();
+    expect(composer.snapshot.queued.map(value => value.id)).toEqual([second.id, first.id]);
+    composer.setDraft('Keep this draft');
+    await composer.sendQueued(first.id, async (text, attachments, options) => {
+      expect(text).toBe('Inspect @a.ts (2-3) carefully');
+      expect(attachments).toEqual([attachment]);
+      expect(options?.mode).toBe(AgentModeID.PLAN);
+      expect(options?.attachmentSpans).toEqual([{ from: 8, to: 19 }]);
+    });
+    expect(composer.snapshot.draft).toBe('Keep this draft');
+    expect(composer.snapshot.queued.map(value => value.id)).toEqual([second.id]);
+  });
+  it('keeps failed queue entries in place and pauses automatic delivery until resumed', async () => {
+    const composer = new GlyphComposerState();
+    composer.setDraft('First');
+    composer.enqueueDraft();
+    composer.setDraft('Second');
+    composer.enqueueDraft();
+    const first = composer.snapshot.queued[0]!;
+    await composer.sendQueued(first.id, async () => {
+      throw new Error('Disconnected');
+    });
+    expect(composer.snapshot.queued.map(value => value.text)).toEqual(['First', 'Second']);
+    expect(composer.snapshot.queuePaused).toBe(true);
+    expect(composer.snapshot.queueError).toBe('Disconnected');
+    composer.resumeQueue();
+    expect(composer.snapshot.queuePaused).toBe(false);
+    expect(composer.snapshot.queueError).toBeUndefined();
+    composer.removeQueued(first.id);
+    expect(composer.snapshot.queued.map(value => value.text)).toEqual(['Second']);
+  });
+  it('prevents double submission or editing an entry while it is being delivered', async () => {
+    const composer = new GlyphComposerState();
+    composer.setDraft('Only once');
+    composer.enqueueDraft();
+    const id = composer.snapshot.queued[0]!.id;
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    let calls = 0;
+    const send = async () => {
+      calls++;
+      await gate;
+    };
+    const pending = composer.sendQueued(id, send);
+    await composer.sendQueued(id, send);
+    composer.removeQueued(id);
+    composer.editQueued(id);
+    expect(composer.snapshot.queued).toHaveLength(1);
+    expect(composer.snapshot.editingQueuedMessage).toBeUndefined();
+    finish();
+    await pending;
+    expect(calls).toBe(1);
+    expect(composer.snapshot.queued).toEqual([]);
   });
 });

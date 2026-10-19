@@ -1,23 +1,23 @@
+import { contextBadges } from '#code-oss/storybook/fixtures/ViewFixtures.ts';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphContextBadge } from './GlyphContextBadge.presentational.tsx';
 
 const meta = {
-  title: 'Glyph/Shared/Context Badge',
+  title: 'Glyph/Chat/Shared/Context Badge',
   component: GlyphContextBadge,
-  args: { label: 'ProviderDesktopRuntime.ts', title: 'src/desktop/host/ProviderDesktopRuntime.ts' },
+  args: contextBadges.file,
 } satisfies Meta<typeof GlyphContextBadge>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const File: Story = {};
-export const Selection: Story = { args: { label: 'Untitled-1 (11-14)', title: 'Untitled-1 (11-14)' } };
+export const Selection: Story = { args: contextBadges.selection };
 /** Visual vocabulary only; skill discovery and activation belong to rank 21. */
-export const Skill: Story = { args: { label: 'agent-driven-pr', title: 'agent-driven-pr', skill: true } };
+export const Skill: Story = { args: contextBadges.skill };
 export const MixedPrompt: Story = {
   render: () => (
     <div>
-      Review <GlyphContextBadge label="cursor-ide-tools.md" title="docs/cursor-ide-tools.md" /> using{' '}
-      <GlyphContextBadge label="agent-driven-pr" title="agent-driven-pr" skill /> and compare{' '}
-      <GlyphContextBadge label="Untitled-1 (11-14)" title="Untitled-1 (11-14)" /> with the saved version.
+      Review <GlyphContextBadge {...contextBadges.document} /> using <GlyphContextBadge {...contextBadges.skill} /> and
+      compare <GlyphContextBadge {...contextBadges.selection} /> with the saved version.
     </div>
   ),
 };

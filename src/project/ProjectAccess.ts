@@ -1,8 +1,9 @@
+import { AgentModeID } from "#src/chat/AgentMode.js";
+import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
 import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
-import type { ToolDefinition } from '#src/tools/ToolDefinition.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
@@ -124,36 +125,53 @@ const resolvedSearchProjectContentsArguments = searchProjectContentsArguments.tr
 
 type ReadArguments = z.infer<typeof readProjectFileArguments>;
 
-const definitions: readonly ToolDefinition[] = [
-  {
-    namespace: ProjectToolNamespace.PROJECT,
-    name: ProjectToolName.LIST_FILES,
-    description:
-      'Find project files by glob pattern within an optional project-relative directory. Patterns without a **/ prefix match at any depth. Results preserve project access exclusions.',
-    inputKind: ToolInputKind.JSON,
-    parameters: jsonSchema(listProjectFilesArguments),
-  },
-  {
-    namespace: ProjectToolNamespace.PROJECT,
-    name: ProjectToolName.READ_FILE,
-    description:
-      'Read a UTF-8 text snapshot inside the project, including revision, byte-order-mark state, and per-line line-ending metadata. Paths are project-relative. Results are bounded to 512 KiB; when nextStartLine is present, request that start_line to continue. Reuse the revision in edit proposals.',
-    inputKind: ToolInputKind.JSON,
-    parameters: jsonSchema(readProjectFileArguments),
-  },
-];
-
-const searchDefinition: ToolDefinition = {
-  namespace: ProjectToolNamespace.PROJECT,
-  name: ProjectToolName.SEARCH_CONTENTS,
-  description:
-    'Search current project file contents with the native ripgrep engine. Scope by project-relative path, glob, or file type. Prefer literal patterns unless regular-expression behavior is needed. Results preserve project access exclusions.',
-  inputKind: ToolInputKind.JSON,
-  parameters: jsonSchema(searchProjectContentsArguments),
-};
-
 export class ProjectAccess {
-  readonly definitions: readonly ToolDefinition[];
+  get tools(): readonly Tool[] {
+    const tools: Tool[] = [
+      {
+        namespace: ProjectToolNamespace.PROJECT,
+        name: ProjectToolName.LIST_FILES,
+        allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        description:
+          'Find project files by glob pattern within an optional project-relative directory. Patterns without a **/ prefix match at any depth. Results preserve project access exclusions.',
+        inputKind: ToolInputKind.JSON,
+        parameters: jsonSchema(listProjectFilesArguments),
+        validateInput: input => {
+          listProjectFilesArguments.parse(JSON.parse(input));
+        },
+        execute: (input, signal) => this.execute(ProjectToolName.LIST_FILES, input, signal),
+      },
+      {
+        namespace: ProjectToolNamespace.PROJECT,
+        name: ProjectToolName.READ_FILE,
+        allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        description:
+          'Read a UTF-8 text snapshot inside the project, including revision, byte-order-mark state, and per-line line-ending metadata. Paths are project-relative. Results are bounded to 512 KiB; when nextStartLine is present, request that start_line to continue. Reuse the revision in edit proposals.',
+        inputKind: ToolInputKind.JSON,
+        parameters: jsonSchema(readProjectFileArguments),
+        validateInput: input => {
+          readProjectFileArguments.parse(JSON.parse(input));
+        },
+        execute: (input, signal) => this.execute(ProjectToolName.READ_FILE, input, signal),
+      },
+    ];
+    if (this.pathIndex?.searchContents)
+      tools.push({
+        namespace: ProjectToolNamespace.PROJECT,
+        name: ProjectToolName.SEARCH_CONTENTS,
+        allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        description:
+          'Search current project file contents with the native ripgrep engine. Scope by project-relative path, glob, or file type. Prefer literal patterns unless regular-expression behavior is needed. Results preserve project access exclusions.',
+        inputKind: ToolInputKind.JSON,
+        parameters: jsonSchema(searchProjectContentsArguments),
+        validateInput: input => {
+          resolvedSearchProjectContentsArguments.parse(JSON.parse(input));
+        },
+        execute: (input, signal) => this.execute(ProjectToolName.SEARCH_CONTENTS, input, signal),
+      });
+    return tools;
+  }
+
   private readonly options: ResolvedProjectAccessOptions;
   private readonly workspace: WorkspaceTextStore;
 
@@ -166,7 +184,6 @@ export class ProjectAccess {
     const { maxFiles, maxFileBytes, excludedPaths, accessPolicy } = projectAccessOptionsSchema.parse(options);
     this.options = { maxFiles, maxFileBytes, excludedPaths, accessPolicy };
     this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, { excludedPaths, accessPolicy });
-    this.definitions = this.pathIndex?.searchContents ? [...definitions, searchDefinition] : definitions;
   }
 
   async execute(name: string, rawArguments: string, signal?: AbortSignal): Promise<string> {

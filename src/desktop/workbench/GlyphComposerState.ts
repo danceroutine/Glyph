@@ -1,3 +1,6 @@
+import type { GlyphComposerCommand } from './GlyphComposerCommand.ts';
+import { AgentMode } from '#src/chat/AgentMode.js';
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphAnnotation, GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { replaceGlyphPromptRange, toGlyphPromptText, type GlyphPromptDocument } from './GlyphPromptDocument.ts';
@@ -5,10 +8,32 @@ export interface GlyphAnnotationPosition {
   readonly x: number;
   readonly y: number;
 }
+export interface GlyphQueuedMessage {
+  readonly id: string;
+  readonly document: GlyphPromptDocument;
+  readonly text: string;
+}
+type SendMessage = (
+  text: string,
+  attachments: readonly GlyphContextAttachment[],
+  options?: GlyphTurnOptions,
+) => Promise<void>;
+
 /** Window-owned drafts outlive panes, including sends that settle after unmount. */
 export class GlyphComposerState {
+  private commandHandler: ((command: GlyphComposerCommand) => void) | undefined;
+  registerCommands(handler: (command: GlyphComposerCommand) => void): () => void {
+    this.commandHandler = handler;
+    return () => {
+      if (this.commandHandler === handler) this.commandHandler = undefined;
+    };
+  }
+  executeCommand(command: GlyphComposerCommand): void {
+    this.commandHandler?.(command);
+  }
+  private queueSequence = 0;
   private modeTouched = false;
-  hydrateMode(mode: 'agent' | 'plan'): void {
+  hydrateMode(mode: AgentModeID): void {
     if (!this.modeTouched && this.value.document.options?.mode !== mode)
       this.setDocument({ ...this.value.document, options: { ...this.value.document.options, mode } });
   }
@@ -29,6 +54,11 @@ export class GlyphComposerState {
   private documents: readonly GlyphPromptDocument[] = [];
   private value: {
     document: GlyphPromptDocument;
+    queued: readonly GlyphQueuedMessage[];
+    editingQueuedMessage: string | undefined;
+    queueSubmitting: string | undefined;
+    queuePaused: boolean;
+    queueError: string | undefined;
     focus: number;
     editingAnnotation: string | undefined;
     annotationDraft: GlyphAnnotation | undefined;
@@ -38,6 +68,11 @@ export class GlyphComposerState {
     submitting: boolean;
   } = {
     document: { parts: [], from: 0, to: 0 },
+    queued: [],
+    editingQueuedMessage: undefined,
+    queueSubmitting: undefined,
+    queuePaused: false,
+    queueError: undefined,
     focus: 0,
     editingAnnotation: undefined,
     annotationDraft: undefined,
@@ -71,7 +106,7 @@ export class GlyphComposerState {
   requestAnnotation(annotation: GlyphAnnotation): void {
     this.update({ annotationDraft: annotation });
   }
-  setMode(mode: 'agent' | 'plan'): void {
+  setMode(mode: AgentModeID): void {
     this.modeTouched = true;
     this.setDocument({ ...this.value.document, options: { ...this.value.document.options, mode } });
   }
@@ -144,27 +179,81 @@ export class GlyphComposerState {
     this.update({ unsent: this.documents.map(value => toGlyphPromptText(value.parts)) });
     this.focus();
   }
-  async submit(
-    send: (text: string, attachments: readonly GlyphContextAttachment[], options?: GlyphTurnOptions) => Promise<void>,
-  ): Promise<void> {
+  enqueueDraft(): void {
+    if (!this.value.draft.trim() || this.value.submitting) return;
+    const id = this.value.editingQueuedMessage ?? `queued-${++this.queueSequence}`;
+    const message = { id, document: structuredClone(this.value.document), text: this.value.draft };
+    const queued = this.value.queued.some(value => value.id === id)
+      ? this.value.queued.map(value => (value.id === id ? message : value))
+      : [...this.value.queued, message];
+    const mode = this.value.document.options?.mode ?? AgentMode.default.id;
+    this.update({
+      queued,
+      editingQueuedMessage: undefined,
+      document: { parts: [], from: 0, to: 0, options: { mode } },
+      draft: '',
+      queueError: undefined,
+    });
+  }
+  editQueued(id: string): void {
+    const message = this.value.queued.find(value => value.id === id);
+    if (!message || this.value.queueSubmitting || this.value.editingQueuedMessage) return;
+    this.update({ editingQueuedMessage: id });
+    this.restoreDraft(structuredClone(message.document));
+    this.focus();
+  }
+  cancelQueueEdit(): void {
+    if (!this.value.editingQueuedMessage) return;
+    this.setDraft('');
+    this.update({ editingQueuedMessage: undefined });
+  }
+  removeQueued(id: string): void {
+    if (this.value.queueSubmitting === id) return;
+    this.update({
+      queued: this.value.queued.filter(value => value.id !== id),
+      editingQueuedMessage: this.value.editingQueuedMessage === id ? undefined : this.value.editingQueuedMessage,
+    });
+  }
+  moveQueued(id: string, target: number): void {
+    if (this.value.queueSubmitting) return;
+    const queued = [...this.value.queued];
+    const from = queued.findIndex(value => value.id === id);
+    if (from < 0) return;
+    const [message] = queued.splice(from, 1);
+    queued.splice(Math.max(0, Math.min(target, queued.length)), 0, message!);
+    this.update({ queued });
+  }
+  pauseQueue(): void {
+    if (this.value.queued.length) this.update({ queuePaused: true });
+  }
+  resumeQueue(): void {
+    this.update({ queuePaused: false, queueError: undefined });
+  }
+  async sendQueued(id: string, send: SendMessage): Promise<void> {
+    const message = this.value.queued.find(value => value.id === id);
+    if (!message || this.value.queueSubmitting || this.value.editingQueuedMessage) return;
+    this.update({ queueSubmitting: id, queueError: undefined });
+    try {
+      await sendDocument(message.document, send);
+      this.update({ queued: this.value.queued.filter(value => value.id !== id) });
+    } catch (error) {
+      this.update({ queuePaused: true, queueError: error instanceof Error ? error.message : String(error) });
+    } finally {
+      this.update({ queueSubmitting: undefined });
+    }
+  }
+  async submit(send: SendMessage): Promise<void> {
     if (this.value.submitting || !this.value.draft.trim()) return;
-    const { document, draft } = this.value;
-    const attachments = document.parts.flatMap(part => (part.type === 'attachment' ? [part.attachment] : []));
+    const { document } = this.value;
     this.update({
       draft: '',
-      document: { parts: [], from: 0, to: 0, options: { mode: document.options?.mode ?? 'agent' } },
+      document: { parts: [], from: 0, to: 0, options: { mode: document.options?.mode ?? AgentMode.default.id } },
       editingAnnotation: undefined,
       error: undefined,
       submitting: true,
     });
     try {
-      let offset = -(draft.length - draft.trimStart().length);
-      const attachmentSpans = document.parts.flatMap(part => {
-        const from = offset;
-        offset += toGlyphPromptText([part]).length;
-        return part.type === 'attachment' ? [{ from, to: offset }] : [];
-      });
-      await send(draft, attachments, { ...document.options, ...(attachmentSpans.length ? { attachmentSpans } : {}) });
+      await sendDocument(document, send);
     } catch (error) {
       if (this.value.document.parts.length) this.documents = [...this.documents, document];
       else this.setDocument(document);
@@ -180,4 +269,17 @@ export class GlyphComposerState {
     this.value = { ...this.value, ...change };
     for (const listener of this.listeners) listener();
   }
+}
+
+/** Both queued and direct sends preserve the same exact captures and UTF-16 spans. */
+async function sendDocument(document: GlyphPromptDocument, send: SendMessage): Promise<void> {
+  const draft = toGlyphPromptText(document.parts);
+  const attachments = document.parts.flatMap(part => (part.type === 'attachment' ? [part.attachment] : []));
+  let offset = -(draft.length - draft.trimStart().length);
+  const attachmentSpans = document.parts.flatMap(part => {
+    const from = offset;
+    offset += toGlyphPromptText([part]).length;
+    return part.type === 'attachment' ? [{ from, to: offset }] : [];
+  });
+  await send(draft, attachments, { ...document.options, ...(attachmentSpans.length ? { attachmentSpans } : {}) });
 }

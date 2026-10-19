@@ -24,9 +24,11 @@ beforeAll(async () => {
       resolveDir: process.cwd(),
       contents: `
     import { h, render } from 'preact';
+    import { MessageActions } from './code-oss/ui/GlyphTranscript/GlyphTranscript.stories.tsx';
     import { WiredGlyphTranscript } from './code-oss/ui/GlyphTranscript/GlyphTranscript.wired.tsx';
     import { WiredGlyphUsageSummary } from './code-oss/ui/GlyphUsageSummary/GlyphUsageSummary.wired.tsx';
     const usage = { inputTokens: 100, cachedInputTokens: 40, outputTokens: 30, reasoningTokens: 12, totalTokens: 130 };
+    window.showMessageActions = () => render(h(MessageActions.render, {}), document.getElementById('root'));
     window.actions = [];
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: async text => window.actions.push(['copy', text]) } });
     const text = '## Result\\n\\n**Strong** and *emphasized*, with [source](src/a.ts).\\n\\n3. Three\\n4. Four\\n\\n> A quotation\\n\\n| Column | Value |\\n| --- | --- |\\n| Test | Passed |\\n\\n\`\`\`mermaid\\nflowchart LR\\n  A[Start] --> B[Done]\\n\`\`\`';
@@ -115,4 +117,23 @@ describe('Markdown messages and usage controls', () => {
       await page.close();
     }
   }, 15000);
+});
+
+it('shows a date on hover for both assistant messages in the actual Message Actions story', async () => {
+  const page = await browser.newPage();
+  try {
+    await mount(page);
+    await page.evaluate(() => window.showMessageActions());
+    const messages = page.locator('.glyph-entry.assistant');
+    await expect(messages).toHaveCount(2);
+    for (const message of await messages.all()) {
+      await page.mouse.move(0, 0);
+      await expect(message.locator('time')).toHaveCSS('opacity', '0');
+      await message.hover();
+      await expect(message.locator('time')).toHaveCSS('opacity', '1');
+      await expect(message.locator('time')).toHaveAttribute('datetime', /2026-10-18T14:/);
+    }
+  } finally {
+    await page.close();
+  }
 });

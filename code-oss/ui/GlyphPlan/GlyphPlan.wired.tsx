@@ -11,6 +11,9 @@ export function WiredGlyphPlan({
 }) {
   const model = useGlyphPlanState(state, actions);
   return (
-    <GlyphPlan {...model} markdown={<WiredGlyphMarkdown text={state.plan.markdown} openLink={model.openLink} />} />
+    <GlyphPlan
+      {...model}
+      markdown={<WiredGlyphMarkdown copyText={actions.copyText} text={state.plan.markdown} openLink={model.openLink} />}
+    />
   );
 }

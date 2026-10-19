@@ -1,15 +1,12 @@
+import { todoItems } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { WiredGlyphTodoCard } from './GlyphTodoCard.wired.tsx';
 
 const meta = {
-  title: 'Glyph/Chat/To-dos',
+  title: 'Glyph/Chat/In Composer/To-dos',
   component: WiredGlyphTodoCard,
   args: {
-    items: [
-      { id: 'inspect', text: 'Inspect the current implementation', status: 'completed' },
-      { id: 'implement', text: 'Implement the todo card', status: 'in_progress' },
-      { id: 'verify', text: 'Verify persistence and chat isolation', status: 'pending' },
-    ],
+    items: todoItems,
   },
 } satisfies Meta<typeof WiredGlyphTodoCard>;
 export default meta;

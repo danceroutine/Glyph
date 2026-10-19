@@ -13,10 +13,11 @@ beforeAll(async () => {
       resolveDir: process.cwd(),
       contents: `
         import { mountGlyphWorkbench } from './code-oss/ui/mountGlyphWorkbench.tsx';
-        import { workbenchState, previewActions } from './code-oss/storybook/fixtures.ts';
+        import { workbenchStateFixture } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
+        import { previewActionsFixture } from '#code-oss/storybook/fixtures/ActionFixtures.ts';
         import { stageClassName } from './code-oss/storybook/previewStyles.ts';
         window.glyphPreviewStage = stageClassName;
-        mountGlyphWorkbench(document.getElementById('root'), workbenchState(), previewActions);
+        mountGlyphWorkbench(document.getElementById('root'), workbenchStateFixture(), previewActionsFixture());
       `,
     },
     bundle: true,

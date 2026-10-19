@@ -15,6 +15,8 @@ export const test = base.extend({
   scriptedProvider: [false, { option: true }],
   scriptedAccounts: [undefined, { option: true }],
   workspaceFiles: [{}, { option: true }],
+  userSettings: [{}, { option: true }],
+  userKeybindings: [[], { option: true }],
   additionalRoots: [[], { option: true }],
   provider: async ({ scriptedProvider, scriptedAccounts }, use) => {
     if (!scriptedProvider) return use(undefined);
@@ -27,7 +29,11 @@ export const test = base.extend({
       await provider.close();
     }
   },
-  glyph: async ({ trustedWorkspace, productionRuntime, provider, workspaceFiles, additionalRoots }, use, testInfo) => {
+  glyph: async (
+    { trustedWorkspace, productionRuntime, provider, workspaceFiles, additionalRoots, userSettings, userKeybindings },
+    use,
+    testInfo,
+  ) => {
     // macOS Unix socket paths are limited to 103 bytes. Descriptive test titles
     // belong in the report, not in Code OSS's user-data directory path.
     const sandbox = await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'glyph-e2e-'));
@@ -66,8 +72,10 @@ export const test = base.extend({
         'extensions.autoCheckUpdates': false,
         'chat.disableAIFeatures': true,
         'security.workspace.trust.startupPrompt': 'never',
+        ...userSettings,
       }),
     );
+    await writeFile(join(userData, 'User', 'keybindings.json'), JSON.stringify(userKeybindings));
     const product = JSON.parse(await readFile(join(sourceRoot, 'product.json'), 'utf8'));
     const executablePath =
       process.platform === 'darwin'

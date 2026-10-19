@@ -1,3 +1,4 @@
+import { AgentModeID } from "#src/chat/AgentMode.js";
 import type { GlyphPlan } from './GlyphPlan.ts';
 import type { GlyphTodoItem } from './GlyphTodoItem.ts';
 
@@ -10,6 +11,6 @@ export interface GlyphChatSummary {
   readonly updatedAt: string;
   readonly turnCount: number;
   readonly plans?: readonly GlyphPlan[];
-  readonly mode?: 'agent' | 'plan';
+  readonly mode?: AgentModeID;
   readonly todos?: readonly GlyphTodoItem[];
 }

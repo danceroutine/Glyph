@@ -44,7 +44,7 @@ describe(ProposeQuestionToolRuntime, () => {
     it('exposes a provider-neutral strict JSON tool in the interaction namespace', () => {
       const runtime = new ProposeQuestionToolRuntime(presenter(async () => ({ answers: [] })));
 
-      expect(runtime.definitions).toEqual([
+      expect(runtime.tools).toEqual([
         expect.objectContaining({
           namespace: QuestionToolNamespace.INTERACTION,
           name: QuestionToolName.PROPOSE_QUESTION,

@@ -1,7 +1,8 @@
+import { AgentMode, AgentModeID } from '#src/chat/AgentMode.js';
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
 export interface GlyphModePickerOptions {
-  readonly mode: 'agent' | 'plan';
-  readonly change: (mode: 'agent' | 'plan') => void;
+  readonly mode: AgentModeID;
+  readonly change: (mode: AgentModeID) => void;
 }
 export function useGlyphModePickerState({ mode, change }: GlyphModePickerOptions) {
   const [open, setOpen] = useState(false);
@@ -15,7 +16,7 @@ export function useGlyphModePickerState({ mode, change }: GlyphModePickerOptions
     setOpen(true);
     trigger.current?.focus();
   };
-  const select = (value: 'agent' | 'plan') => {
+  const select = (value: AgentModeID) => {
     change(value);
     close();
     trigger.current?.focus();
@@ -30,6 +31,7 @@ export function useGlyphModePickerState({ mode, change }: GlyphModePickerOptions
   }, [open]);
   return {
     mode,
+    modes: AgentMode.all,
     open,
     highlighted,
     root,
@@ -47,13 +49,19 @@ export function useGlyphModePickerState({ mode, change }: GlyphModePickerOptions
         case 'ArrowUp':
           event.preventDefault();
           if (!open) show();
-          else setHighlighted(value => (value === 'agent' ? 'plan' : 'agent'));
+          else
+            setHighlighted(value => {
+              const modes = AgentMode.all;
+              const current = modes.findIndex(mode => mode.id === value);
+              const offset = event.key === 'ArrowDown' ? 1 : -1;
+              return modes[(current + offset + modes.length) % modes.length]!.id;
+            });
           break;
         case 'Home':
         case 'End':
           if (open) {
             event.preventDefault();
-            setHighlighted(event.key === 'Home' ? 'agent' : 'plan');
+            setHighlighted((event.key === 'Home' ? AgentMode.all[0]! : AgentMode.all.at(-1)!).id);
           }
           break;
         case 'Enter':

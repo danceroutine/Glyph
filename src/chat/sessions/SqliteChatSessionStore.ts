@@ -1,3 +1,5 @@
+import { AgentModeID } from '../AgentMode.ts';
+import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { planSchema } from '#src/planning/PlanSchema.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
 import { shellCommandSummarySchema } from '#src/shell/ShellCommandSummary.js';
@@ -27,13 +29,64 @@ const historyCheckpointSchema = z
     providerState: providerStateSchema,
     plans: z.array(planSchema),
     todos: todoItemsSchema,
-    mode: z.enum(['agent', 'plan']),
+    mode: z.enum(AgentModeID),
   })
   .strict();
 
 const transcriptTurnSchema = z
   .object({
+    steering: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            text: z.string(),
+            createdAt: z.iso.datetime(),
+            options: chatTurnOptionsSchema,
+            attachments: z.array(
+              z
+                .object({
+                  path: z.string(),
+                  text: z.string(),
+                  revision: z.string(),
+                  uri: z.string().optional(),
+                  side: z.enum(['original', 'modified']).optional(),
+                  range: z
+                    .object({
+                      start: z.object({ line: z.number(), column: z.number() }),
+                      end: z.object({ line: z.number(), column: z.number() }),
+                    })
+                    .optional(),
+                })
+                .transform(({ uri, side, range, ...attachment }) => ({
+                  ...attachment,
+                  ...(uri ? { uri } : {}),
+                  ...(side ? { side } : {}),
+                  ...(range ? { range } : {}),
+                })),
+            ),
+          })
+          .strict(),
+      )
+      .optional(),
     checkpoints: z.object({ before: historyCheckpointSchema, after: historyCheckpointSchema }).strict().optional(),
+    modeSwaps: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            source: z.enum(AgentModeID),
+            target: z.enum(AgentModeID),
+            description: z.string(),
+            status: z.enum(GlyphModeSwapStatus),
+            startedAt: z.iso.datetime().optional(),
+            expiresAt: z.iso.datetime(),
+            autoApprove: z.boolean(),
+          })
+          .strict()
+          .transform(({ startedAt, ...swap }) => ({ ...swap, ...(startedAt ? { startedAt } : {}) })),
+      )
+      .optional(),
     questionResponses: z
       .array(
         z
@@ -92,41 +145,54 @@ const transcriptTurnSchema = z
             name: z.string(),
             phase: z.enum(ToolActivityPhase),
             shell: shellCommandSummarySchema.optional(),
+            arguments: z.string().optional(),
+            output: z.string().optional(),
+            textOffset: z.number().int().nonnegative().optional(),
           })
           .strict()
-          .transform(({ shell, ...tool }) => ({ ...tool, ...(shell === undefined ? {} : { shell }) })),
+          .transform(({ shell, arguments: args, output, textOffset, ...tool }) => ({
+            ...tool,
+            ...(shell === undefined ? {} : { shell }),
+            ...(args === undefined ? {} : { arguments: args }),
+            ...(output === undefined ? {} : { output }),
+            ...(textOffset === undefined ? {} : { textOffset }),
+          })),
       )
       .optional(),
     createdAt: z.iso.datetime(),
   })
   .strict()
-  .transform(({ usage, tools, attachments, options, checkpoints, questionResponses, ...turn }) => ({
-    ...(checkpoints ? { checkpoints } : {}),
-    ...(questionResponses ? { questionResponses } : {}),
-    ...(options ? { options } : {}),
-    ...turn,
-    ...(usage === undefined ? {} : { usage }),
-    ...(tools === undefined ? {} : { tools }),
-    ...(attachments === undefined
-      ? {}
-      : {
-          attachments: attachments.map(({ source, ...attachment }) => ({
-            ...attachment,
-            ...(source === undefined
-              ? {}
-              : {
-                  source: {
-                    kind: source.kind,
-                    uri: source.uri,
-                    version: source.version,
-                    revision: source.revision,
-                    ...(source.range ? { range: source.range } : {}),
-                    ...(source.side ? { side: source.side } : {}),
-                  },
-                }),
-          })),
-        }),
-  }));
+  .transform(
+    ({ usage, tools, attachments, options, checkpoints, questionResponses, modeSwaps, steering, ...turn }) => ({
+      ...(checkpoints ? { checkpoints } : {}),
+      ...(questionResponses ? { questionResponses } : {}),
+      ...(modeSwaps ? { modeSwaps } : {}),
+      ...(steering ? { steering } : {}),
+      ...(options ? { options } : {}),
+      ...turn,
+      ...(usage === undefined ? {} : { usage }),
+      ...(tools === undefined ? {} : { tools }),
+      ...(attachments === undefined
+        ? {}
+        : {
+            attachments: attachments.map(({ source, ...attachment }) => ({
+              ...attachment,
+              ...(source === undefined
+                ? {}
+                : {
+                    source: {
+                      kind: source.kind,
+                      uri: source.uri,
+                      version: source.version,
+                      revision: source.revision,
+                      ...(source.range ? { range: source.range } : {}),
+                      ...(source.side ? { side: source.side } : {}),
+                    },
+                  }),
+            })),
+          }),
+    }),
+  );
 
 const legacyRecordSchema = z
   .object({
@@ -161,7 +227,7 @@ const legacyCatalogSchema = z
 const storedRecordSchema = z
   .object({
     schemaVersion: z.literal(3),
-    mode: z.enum(['agent', 'plan']).optional(),
+    mode: z.enum(AgentModeID).optional(),
     id: z.string().min(1),
     title: z.string().min(1),
     titleOrigin: z.enum(['placeholder', 'generated', 'human']),
@@ -205,6 +271,8 @@ interface ChatRow {
 
 interface TurnRow {
   readonly question_responses: string | null;
+  readonly steering: string | null;
+  readonly mode_swaps: string | null;
   readonly checkpoints: string | null;
   readonly options: string | null;
   readonly user_text: string;
@@ -274,7 +342,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         .prepare('SELECT * FROM chats WHERE project_context_id = ? ORDER BY updated_at DESC')
         .all(projectContextId) as ChatRow[];
       const turns = database.prepare(
-        'SELECT question_responses, checkpoints, options, user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
+        'SELECT steering, mode_swaps, question_responses, checkpoints, options, user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
       );
       return chats.map(row => toRecord(row, turns.all(row.id) as TurnRow[]));
     } catch (error) {
@@ -382,7 +450,16 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         if (!chatColumns.some(value => value.name === 'plans'))
           database.exec('ALTER TABLE chats ADD COLUMN plans TEXT');
         const columns = database.prepare('PRAGMA table_info(chat_turns)').all() as { name: string }[];
-        for (const column of ['usage', 'tools', 'attachments', 'options', 'checkpoints', 'question_responses']) {
+        for (const column of [
+          'usage',
+          'tools',
+          'attachments',
+          'options',
+          'checkpoints',
+          'question_responses',
+          'mode_swaps',
+          'steering',
+        ]) {
           if (!columns.some(value => value.name === column))
             database.exec(`ALTER TABLE chat_turns ADD COLUMN ${column} TEXT`);
         }
@@ -504,8 +581,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
     database.prepare('DELETE FROM chat_turns WHERE chat_id = ?').run(record.id);
     const insertTurn = database.prepare(
       `INSERT INTO chat_turns(
-         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools, attachments, options, checkpoints, question_responses
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools, attachments, options, checkpoints, question_responses, mode_swaps, steering
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     record.transcript.forEach((turn, position) =>
       insertTurn.run(
@@ -522,6 +599,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         turn.options ? JSON.stringify(turn.options) : null,
         turn.checkpoints ? JSON.stringify(turn.checkpoints) : null,
         turn.questionResponses ? JSON.stringify(turn.questionResponses) : null,
+        turn.modeSwaps ? JSON.stringify(turn.modeSwaps) : null,
+        turn.steering ? JSON.stringify(turn.steering) : null,
       ),
     );
   })();
@@ -546,6 +625,8 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
     ...(row.plans == null ? {} : { plans: JSON.parse(row.plans) as unknown }),
     ...(row.todos === null ? {} : { todos: JSON.parse(row.todos) as unknown }),
     transcript: turns.map(turn => ({
+      ...(turn.steering == null ? {} : { steering: JSON.parse(turn.steering) as unknown }),
+      ...(turn.mode_swaps == null ? {} : { modeSwaps: JSON.parse(turn.mode_swaps) as unknown }),
       ...(turn.question_responses == null ? {} : { questionResponses: JSON.parse(turn.question_responses) as unknown }),
       ...(turn.checkpoints == null ? {} : { checkpoints: JSON.parse(turn.checkpoints) as unknown }),
       ...(turn.options == null ? {} : { options: JSON.parse(turn.options) as unknown }),

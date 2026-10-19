@@ -1,3 +1,4 @@
+import { AgentModeID } from "./AgentMode.ts";
 import { z } from 'zod';
 export const annotationSchema = z
   .object({
@@ -29,7 +30,7 @@ export const chatTurnOptionsSchema = z
       .max(32)
       .optional(),
     turnId: z.string().min(1).max(100).optional(),
-    mode: z.enum(['agent', 'plan']).optional(),
+    mode: z.enum(AgentModeID).optional(),
     annotations: z.array(annotationSchema).max(100).optional(),
   })
   .strict()
