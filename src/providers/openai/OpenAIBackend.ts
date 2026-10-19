@@ -112,22 +112,6 @@ export class OpenAIBackend implements ChatBackend {
     return models;
   }
 
-  /** Abandon this caller's wait while a shared account refresh can still serve its peers. */
-  private awaitDiscoveryCredentials(account: OpenAIAccount, signal: AbortSignal): Promise<string> {
-    signal.throwIfAborted();
-    return new Promise((resolve, reject) => {
-      const abort = () => reject(signal.reason);
-      signal.addEventListener('abort', abort, { once: true });
-      void Promise.resolve()
-        .then(() => {
-          signal.throwIfAborted();
-          return this.session.accessToken(account);
-        })
-        .then(resolve, reject)
-        .finally(() => signal.removeEventListener('abort', abort));
-    });
-  }
-
   createProvider(account: ChatAccount, model: Model, state?: ChatProviderState): ChatProvider {
     this.resolve(account);
     // Reauthentication replaces the stored account; cached chats must resolve
@@ -142,6 +126,22 @@ export class OpenAIBackend implements ChatBackend {
 
   redact(message: string): string {
     return this.session.redact(message);
+  }
+
+  /** Abandon this caller's wait while a shared account refresh can still serve its peers. */
+  private awaitDiscoveryCredentials(account: OpenAIAccount, signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      void Promise.resolve()
+        .then(() => {
+          signal.throwIfAborted();
+          return this.session.accessToken(account);
+        })
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener('abort', abort));
+    });
   }
 
   private toAccount(account: OpenAIAccount): ChatAccount {

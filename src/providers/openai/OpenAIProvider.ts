@@ -97,41 +97,6 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     return { ...turn, input: [...turn.input, toUserInput(request)] };
   }
 
-  /** Tool execution and human decisions can outlive a token, so authenticate every model request. */
-  private async requestClient(context: AgentTurnContext): Promise<OpenAI> {
-    const accessToken = await this.awaitCredentials(context.signal);
-    context.trace('authentication.resolved', { accessToken: '[REDACTED]' }, context.round);
-    context.signal.throwIfAborted();
-    // Never mutate an injected transport's credentials: another conversation may share it.
-    return (
-      this.client?.withOptions({ apiKey: accessToken }) ??
-      new OpenAI({
-        apiKey: accessToken,
-        baseURL: 'https://api.openai.com/v1',
-        organization: null,
-        project: null,
-        maxRetries: 0,
-        logLevel: 'off',
-      })
-    );
-  }
-
-  /** Cancel this turn's wait, not the refresh shared by other conversations. */
-  private awaitCredentials(signal: AbortSignal): Promise<string> {
-    signal.throwIfAborted();
-    return new Promise((resolve, reject) => {
-      const abort = () => reject(signal.reason);
-      signal.addEventListener('abort', abort, { once: true });
-      void Promise.resolve()
-        .then(() => {
-          signal.throwIfAborted();
-          return this.token();
-        })
-        .then(resolve, reject)
-        .finally(() => signal.removeEventListener('abort', abort));
-    });
-  }
-
   async streamStep(turn: OpenAITurn, context: AgentTurnContext): Promise<AgentTurnStep<OpenAITurn>> {
     const client = await this.requestClient(context);
     const request = {
@@ -296,6 +261,41 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
 
   commit(turn: OpenAITurn): ChatProviderState {
     return stateFrom(turn.input);
+  }
+
+  /** Tool execution and human decisions can outlive a token, so authenticate every model request. */
+  private async requestClient(context: AgentTurnContext): Promise<OpenAI> {
+    const accessToken = await this.awaitCredentials(context.signal);
+    context.trace('authentication.resolved', { accessToken: '[REDACTED]' }, context.round);
+    context.signal.throwIfAborted();
+    // Never mutate an injected transport's credentials: another conversation may share it.
+    return (
+      this.client?.withOptions({ apiKey: accessToken }) ??
+      new OpenAI({
+        apiKey: accessToken,
+        baseURL: 'https://api.openai.com/v1',
+        organization: null,
+        project: null,
+        maxRetries: 0,
+        logLevel: 'off',
+      })
+    );
+  }
+
+  /** Cancel this turn's wait, not the refresh shared by other conversations. */
+  private awaitCredentials(signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      void Promise.resolve()
+        .then(() => {
+          signal.throwIfAborted();
+          return this.token();
+        })
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener('abort', abort));
+    });
   }
 }
 

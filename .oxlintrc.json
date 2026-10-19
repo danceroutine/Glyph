@@ -1,5 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "jsPlugins": ["eslint-plugin-perfectionist", "./scripts/lint/storybook-order.mjs"],
   "env": {
     "node": true
   },
@@ -9,9 +10,32 @@
     "reportUnusedDisableDirectives": "error"
   },
   "rules": {
-    "no-control-regex": "off"
+    "no-control-regex": "off",
+    "perfectionist/sort-classes": [
+      "error",
+      {
+        "type": "unsorted",
+        "groups": [
+          ["index-signature", "property", "accessor-property", "function-property", "static-block"],
+          "constructor",
+          ["public-static-method", "public-static-get-method", "public-static-set-method"],
+          ["protected-static-method", "protected-static-get-method", "protected-static-set-method"],
+          ["private-static-method", "private-static-get-method", "private-static-set-method"],
+          ["public-method", "public-get-method", "public-set-method"],
+          ["protected-method", "protected-get-method", "protected-set-method"],
+          ["private-method", "private-get-method", "private-set-method"],
+          "unknown"
+        ]
+      }
+    ]
   },
   "overrides": [
+    {
+      "files": ["**/*.stories.ts", "**/*.stories.tsx", "**/*.stories.js", "**/*.stories.jsx"],
+      "rules": {
+        "glyph-storybook/declaration-order": "error"
+      }
+    },
     {
       "files": ["examples/**/*.ts", "examples/**/*.tsx"],
       "env": {

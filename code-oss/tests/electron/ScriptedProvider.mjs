@@ -4,6 +4,16 @@ import assert from 'node:assert/strict';
 
 /** Local Responses wire fixture, controlled by the test rather than by application internals. */
 export class ScriptedProvider {
+  rounds = [];
+
+  requests = [];
+  errors = [];
+  server = createServer((request, response) => {
+    void this.handle(request, response).catch(error => {
+      this.errors.push(String(error));
+      response.writeHead(500).end(JSON.stringify({ error: { message: String(error) } }));
+    });
+  });
   constructor(
     accounts = [
       {
@@ -17,15 +27,29 @@ export class ScriptedProvider {
     this.accounts = accounts;
   }
 
-  rounds = [];
-  requests = [];
-  errors = [];
-  server = createServer((request, response) => {
-    void this.handle(request, response).catch(error => {
-      this.errors.push(String(error));
-      response.writeHead(500).end(JSON.stringify({ error: { message: String(error) } }));
-    });
-  });
+  static message(text, id = 'fixture-message') {
+    return {
+      type: 'message',
+      id,
+      role: 'assistant',
+      status: 'completed',
+      content: [{ type: 'output_text', text, annotations: [] }],
+    };
+  }
+
+  static tool(name, input, { namespace = 'project', callId = 'fixture-call', inputKind = 'json' } = {}) {
+    return inputKind === 'text'
+      ? { type: 'custom_tool_call', id: `item-${callId}`, call_id: callId, namespace, name, input }
+      : {
+          type: 'function_call',
+          id: `item-${callId}`,
+          call_id: callId,
+          namespace,
+          name,
+          arguments: JSON.stringify(input),
+          status: 'completed',
+        };
+  }
 
   async start() {
     this.server.listen(0, '127.0.0.1');
@@ -132,29 +156,5 @@ export class ScriptedProvider {
       event({ type: 'response.output_text.delta', item_id: messageId, output_index: 0, content_index: 0, delta });
     }
     if (!round.hold) record.finish();
-  }
-
-  static message(text, id = 'fixture-message') {
-    return {
-      type: 'message',
-      id,
-      role: 'assistant',
-      status: 'completed',
-      content: [{ type: 'output_text', text, annotations: [] }],
-    };
-  }
-
-  static tool(name, input, { namespace = 'project', callId = 'fixture-call', inputKind = 'json' } = {}) {
-    return inputKind === 'text'
-      ? { type: 'custom_tool_call', id: `item-${callId}`, call_id: callId, namespace, name, input }
-      : {
-          type: 'function_call',
-          id: `item-${callId}`,
-          call_id: callId,
-          namespace,
-          name,
-          arguments: JSON.stringify(input),
-          status: 'completed',
-        };
   }
 }

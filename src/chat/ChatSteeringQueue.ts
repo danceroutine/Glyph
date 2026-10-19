@@ -7,6 +7,13 @@ export class ChatSteeringQueue {
   private pending: ChatRequest[] = [];
   private closed = false;
   private accepted: GlyphSteeringMessage[] = [];
+  /** Closing an empty final boundary synchronously prevents late input from being silently lost. */
+  take = (finishing: boolean): readonly ChatRequest[] => {
+    const requests = this.pending;
+    this.pending = [];
+    if (finishing && !requests.length) this.close();
+    return requests;
+  };
   get messages(): readonly GlyphSteeringMessage[] {
     return this.accepted;
   }
@@ -16,13 +23,6 @@ export class ChatSteeringQueue {
     this.pending.push(request);
     this.accepted = [...this.accepted, message];
   }
-  /** Closing an empty final boundary synchronously prevents late input from being silently lost. */
-  take = (finishing: boolean): readonly ChatRequest[] => {
-    const requests = this.pending;
-    this.pending = [];
-    if (finishing && !requests.length) this.close();
-    return requests;
-  };
   close(): void {
     this.closed = true;
   }

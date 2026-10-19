@@ -72,6 +72,13 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter, ShellP
   private shellSessions: ShellSessionManager | undefined;
   private shellRefreshTimer: NodeJS.Timeout | undefined;
 
+  private readonly forwardInterrupt = (): void => {
+    this.events.emit('SIGINT');
+  };
+
+  private readonly handleInputClosed = (): void => {
+    this.events.emit('close');
+  };
   constructor(
     private readonly input: TerminalInputStream = process.stdin,
     private readonly output: TerminalOutputStream = process.stdout,
@@ -90,13 +97,18 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter, ShellP
     }
     if (shellSessions) this.connectShellSessions(shellSessions);
   }
+  static clean(text: string): string {
+    return clean(text);
+  }
 
   on(event: 'SIGINT', listener: () => void): void {
     this.events.on(event, listener);
   }
+
   off(event: 'SIGINT', listener: () => void): void {
     this.events.off(event, listener);
   }
+
   onClose(listener: () => void): void {
     this.events.on('close', listener);
   }
@@ -168,10 +180,6 @@ ${roots.map(root => `  ${root}`).join('\n')}
 ${usageDescription ? `${usageDescription}\n` : ''}Log: ${logPath ? clean(logPath) : 'off'}
 Full provider tracing: ${traceEnabled ? 'on' : 'off'}
 ${TERMINAL_HELP}`);
-  }
-
-  static clean(text: string): string {
-    return clean(text);
   }
 
   async chooseAccount(
@@ -333,7 +341,6 @@ ${TERMINAL_HELP}`);
     } else this.errorLine(`\n${clean(message)}\nThis turn was not added to history.\n`);
     this.responseSection = undefined;
   }
-
   showActive(account: ChatAccount, model: Model, provider: ChatBackendPresentation): void {
     if (this.renderer) {
       this.renderer.append(
@@ -362,6 +369,7 @@ ${TERMINAL_HELP}`);
   showConversationReset(): void {
     this.appendText('Conversation cleared.');
   }
+
   showChats(chats: readonly ChatSessionSummary[], activeId: string | undefined): void {
     if (chats.length === 0) {
       this.appendText('No saved chats are available in this project.');
@@ -373,7 +381,6 @@ ${TERMINAL_HELP}`);
     });
     this.appendText(`Project chats\n${lines.join('\n')}\nUse /chat <ID> to switch.`);
   }
-
   showChatActivated(summary: ChatSessionSummary, transcript: readonly ChatTranscriptTurn[]): void {
     const heading = `Chat ${summary.id.slice(0, 8)}  ${summary.title}  · ${summary.modelSlug}`;
     const turns = transcript
@@ -399,6 +406,7 @@ ${TERMINAL_HELP}`);
   showChatRenamed(title: string): void {
     this.appendText(`Chat renamed to "${clean(title)}".`);
   }
+
   showUnknownCommand(): void {
     this.appendText('Unknown command. Use /help.', { color: 'yellow' });
   }
@@ -561,7 +569,6 @@ ${TERMINAL_HELP}`);
     });
     return reader;
   }
-
   private appendText(text: string, style: { bold?: boolean; color?: 'red' | 'yellow'; dimColor?: boolean } = {}): void {
     if (this.renderer) this.renderer.append(<Text {...style}>{clean(text)}</Text>);
     else this.line(clean(text));
@@ -570,6 +577,7 @@ ${TERMINAL_HELP}`);
   private line(value: string): void {
     this.output.write(`${value}\n`);
   }
+
   private errorLine(value: string): void {
     this.errorOutput.write(`${value}\n`);
   }
@@ -583,7 +591,6 @@ ${TERMINAL_HELP}`);
     this.output.write(label);
     this.responseSection = section;
   }
-
   private writeToolActivity(activity: ToolActivity): void {
     const prefix = this.responseSection === undefined ? '' : '\n\n';
     const name = activity.namespace ? `${activity.namespace}.${activity.name}` : activity.name;
@@ -600,13 +607,6 @@ ${TERMINAL_HELP}`);
     const details = argumentsText ? `\n${indent(argumentsText)}` : '';
     this.output.write(`${prefix}[${name} ×]${details}\n  ${clean(result.message)}\n`);
   }
-
-  private readonly forwardInterrupt = (): void => {
-    this.events.emit('SIGINT');
-  };
-  private readonly handleInputClosed = (): void => {
-    this.events.emit('close');
-  };
 }
 
 function formatUsage(usage: Usage): string {

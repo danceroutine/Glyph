@@ -102,6 +102,7 @@
     "@types/react": "19.3.0",
     "@vitest/coverage-v8": "5.0.3",
     "esbuild": "0.28.2",
+    "eslint-plugin-perfectionist": "5.12.1",
     "ink-testing-library": "4.0.0",
     "oxlint": "1.86.0",
     "prettier": "3.9.9",

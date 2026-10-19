@@ -53,19 +53,6 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
   }
-  private activeEditor(): ICodeEditor | undefined {
-    const control = this.editors.activeTextEditorControl;
-    if (isDiffEditor(control))
-      return this.focused === control.getOriginalEditor() ? control.getOriginalEditor() : control.getModifiedEditor();
-    return isCodeEditor(control) ? control : undefined;
-  }
-  private assertTrusted(): void {
-    if (!this.trust.isWorkspaceTrusted())
-      throw new GlyphContextError(
-        GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
-        'Trust this workspace before attaching context.',
-      );
-  }
   async attachSelection(): Promise<void> {
     this.assertTrusted();
     const composer = this.composer();
@@ -160,30 +147,6 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }
     return candidates.slice(0, 50);
   }
-
-  private async withModel<T>(value: string, capture: (model: ITextModel) => Promise<T>): Promise<T> {
-    this.assertTrusted();
-    const uri = URI.parse(value);
-    this.adapter.contextPath(uri);
-    if (uri.scheme === 'file' && !(await this.files.exists(uri)))
-      throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'The source file has been deleted.');
-    const existing = this.models.getModel(uri);
-    if (existing) return capture(existing);
-    if (uri.scheme !== 'file')
-      throw new GlyphContextError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE, 'This resource cannot be attached.');
-    const stat = await this.files.stat(uri);
-    if ((stat.size ?? 0) > 512 * 1024)
-      throw new GlyphContextError(
-        GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
-        'This file exceeds the 512 KiB attachment limit. Select a smaller passage.',
-      );
-    const reference = await this.resolver.createModelReference(uri);
-    try {
-      return await capture(reference.object.textEditorModel);
-    } finally {
-      reference.dispose();
-    }
-  }
   async selectFiles(): Promise<readonly GlyphContextAttachment[]> {
     this.assertTrusted();
     const selected = await this.dialogs.showOpenDialog({
@@ -200,6 +163,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   captureFile(value: string): Promise<GlyphContextAttachment> {
     return this.withModel(value, model => this.adapter.captureContext(model));
   }
+
   async captureFolder(value: string): Promise<GlyphContextAttachment> {
     this.assertTrusted();
     const uri = URI.parse(value);
@@ -318,5 +282,41 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
           : {}),
       },
     });
+  }
+  private activeEditor(): ICodeEditor | undefined {
+    const control = this.editors.activeTextEditorControl;
+    if (isDiffEditor(control))
+      return this.focused === control.getOriginalEditor() ? control.getOriginalEditor() : control.getModifiedEditor();
+    return isCodeEditor(control) ? control : undefined;
+  }
+  private assertTrusted(): void {
+    if (!this.trust.isWorkspaceTrusted())
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
+        'Trust this workspace before attaching context.',
+      );
+  }
+  private async withModel<T>(value: string, capture: (model: ITextModel) => Promise<T>): Promise<T> {
+    this.assertTrusted();
+    const uri = URI.parse(value);
+    this.adapter.contextPath(uri);
+    if (uri.scheme === 'file' && !(await this.files.exists(uri)))
+      throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'The source file has been deleted.');
+    const existing = this.models.getModel(uri);
+    if (existing) return capture(existing);
+    if (uri.scheme !== 'file')
+      throw new GlyphContextError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE, 'This resource cannot be attached.');
+    const stat = await this.files.stat(uri);
+    if ((stat.size ?? 0) > 512 * 1024)
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
+        'This file exceeds the 512 KiB attachment limit. Select a smaller passage.',
+      );
+    const reference = await this.resolver.createModelReference(uri);
+    try {
+      return await capture(reference.object.textEditorModel);
+    } finally {
+      reference.dispose();
+    }
   }
 }

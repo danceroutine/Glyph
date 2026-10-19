@@ -12,6 +12,25 @@ export class ScriptedOpenAIResponsesFixture {
   private index = 0;
   private previousCalls: ResponseOutputItem[] = [];
 
+  readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<globalThis.Response> => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url !== 'https://responses.fixture.invalid/v1/responses') throw new Error(`Unexpected fixture URL: ${url}`);
+    const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    this.requests.push(request);
+    const round = this.rounds[this.index++];
+    if (!round) throw new Error('Unexpected extra Responses request.');
+    round.validate?.(request);
+    if (this.previousCalls.length > 0) validateContinuation(request, this.previousCalls);
+    this.previousCalls = round.output.filter(item => item.type === 'function_call' || item.type === 'custom_tool_call');
+    if (round.status === 'cancelled') return cancelledSse(init?.signal ?? undefined);
+    const response = makeResponse(round);
+    const event =
+      round.status === 'failed'
+        ? ({ type: 'response.failed', sequence_number: 1, response } satisfies ResponseStreamEvent)
+        : ({ type: 'response.completed', sequence_number: 1, response } satisfies ResponseStreamEvent);
+    return sse([event]);
+  };
+
   constructor(private readonly rounds: readonly ScriptedResponseRound[]) {}
 
   static encodeToolCall(invocation: ScriptedToolInvocation): ResponseOutputItem {
@@ -34,25 +53,6 @@ export class ScriptedOpenAIResponsesFixture {
           arguments: JSON.stringify(invocation.input),
         } satisfies ResponseOutputItem);
   }
-
-  readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<globalThis.Response> => {
-    const url = String(input instanceof Request ? input.url : input);
-    if (url !== 'https://responses.fixture.invalid/v1/responses') throw new Error(`Unexpected fixture URL: ${url}`);
-    const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    this.requests.push(request);
-    const round = this.rounds[this.index++];
-    if (!round) throw new Error('Unexpected extra Responses request.');
-    round.validate?.(request);
-    if (this.previousCalls.length > 0) validateContinuation(request, this.previousCalls);
-    this.previousCalls = round.output.filter(item => item.type === 'function_call' || item.type === 'custom_tool_call');
-    if (round.status === 'cancelled') return cancelledSse(init?.signal ?? undefined);
-    const response = makeResponse(round);
-    const event =
-      round.status === 'failed'
-        ? ({ type: 'response.failed', sequence_number: 1, response } satisfies ResponseStreamEvent)
-        : ({ type: 'response.completed', sequence_number: 1, response } satisfies ResponseStreamEvent);
-    return sse([event]);
-  };
 
   assertConsumed(): void {
     if (this.index !== this.rounds.length)

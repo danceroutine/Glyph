@@ -45,6 +45,37 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
     }
   }
 
+  async load(): Promise<void> {
+    try {
+      const raw: unknown = JSON.parse(await readFile(join(this.directory, 'accounts.json'), 'utf8'));
+      if (!isOpenAISavedState(raw)) {
+        throw new PersistenceError('Credential file is invalid. Restore it or move it aside before restarting.');
+      }
+      Object.assign(this.state, raw);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        await this.save();
+        return;
+      }
+      if (error instanceof PersistenceError) throw error;
+      throw new PersistenceError('Could not load ChatGPT account state.', { cause: error });
+    }
+  }
+
+  save(): Promise<void> {
+    // Atomic rename prevents torn files, not stale writers. Serialize the whole
+    // capture/write/rename transaction and allow a later save to retry failures.
+    const saving = this.saving.then(() => this.persist());
+    this.saving = saving.catch(() => {});
+    return saving;
+  }
+
+  async release(): Promise<void> {
+    await this.saving;
+    this.lock?.close();
+    this.lock = undefined;
+  }
+
   /** Only retire old-version sentinel locks when their recorded process is conclusively dead. */
   private async retireLegacyLock(): Promise<void> {
     const path = join(this.directory, 'session.lock');
@@ -77,31 +108,6 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
     throw new ConcurrentInstanceError('Another Glyph instance owns the legacy account lock.');
   }
 
-  async load(): Promise<void> {
-    try {
-      const raw: unknown = JSON.parse(await readFile(join(this.directory, 'accounts.json'), 'utf8'));
-      if (!isOpenAISavedState(raw)) {
-        throw new PersistenceError('Credential file is invalid. Restore it or move it aside before restarting.');
-      }
-      Object.assign(this.state, raw);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        await this.save();
-        return;
-      }
-      if (error instanceof PersistenceError) throw error;
-      throw new PersistenceError('Could not load ChatGPT account state.', { cause: error });
-    }
-  }
-
-  save(): Promise<void> {
-    // Atomic rename prevents torn files, not stale writers. Serialize the whole
-    // capture/write/rename transaction and allow a later save to retry failures.
-    const saving = this.saving.then(() => this.persist());
-    this.saving = saving.catch(() => {});
-    return saving;
-  }
-
   private async persist(): Promise<void> {
     const temporary = join(this.directory, `accounts.${randomUUID()}.tmp`);
     try {
@@ -112,12 +118,6 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
     } finally {
       await rm(temporary, { force: true });
     }
-  }
-
-  async release(): Promise<void> {
-    await this.saving;
-    this.lock?.close();
-    this.lock = undefined;
   }
 }
 

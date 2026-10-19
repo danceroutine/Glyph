@@ -109,6 +109,22 @@ export class GlyphDesktopClient extends Disposable {
     return this.postRequest(command);
   }
 
+  override dispose(): void {
+    const port = this.port;
+    if (port && this.identity) {
+      const envelope: GlyphRequestEnvelope = {
+        ...this.identity,
+        protocolVersion: GLYPH_DESKTOP_PROTOCOL_VERSION,
+        requestId: generateUuid(),
+        command: { type: GlyphWorkbenchCommandType.DETACH },
+      };
+      port.postMessage(envelope);
+      port.close();
+    }
+    this.disconnect(new Error('The Glyph desktop host disconnected.'));
+    super.dispose();
+  }
+
   private async postRequest(command: GlyphWorkbenchCommand): Promise<void> {
     const port = this.port;
     const identity = this.identity;
@@ -128,22 +144,6 @@ export class GlyphDesktopClient extends Disposable {
       return Promise.reject(error);
     }
     return completed;
-  }
-
-  override dispose(): void {
-    const port = this.port;
-    if (port && this.identity) {
-      const envelope: GlyphRequestEnvelope = {
-        ...this.identity,
-        protocolVersion: GLYPH_DESKTOP_PROTOCOL_VERSION,
-        requestId: generateUuid(),
-        command: { type: GlyphWorkbenchCommandType.DETACH },
-      };
-      port.postMessage(envelope);
-      port.close();
-    }
-    this.disconnect(new Error('The Glyph desktop host disconnected.'));
-    super.dispose();
   }
 
   private async connectNow(epoch: number): Promise<void> {

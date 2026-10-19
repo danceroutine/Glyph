@@ -206,29 +206,6 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  private async inspectReadPath(input: string) {
-    const path = this.normalizePath(input);
-    try {
-      await this.assertNoSymlinkSegments(path, false);
-      const absolute = resolve(this.root, path);
-      const link = await lstat(absolute);
-      if (link.isSymbolicLink())
-        throw new EditError(EditFailureReason.UNSUPPORTED, 'Symbolic links are not supported.', { path });
-      if (!link.isFile())
-        throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
-      const resolvedRoot = await realpath(this.root);
-      const resolvedFile = await realpath(absolute);
-      assertInsideRoot(resolvedRoot, resolvedFile, path);
-      // Check the filesystem's spelling too: aliases must not bypass the policy.
-      this.normalizePath(relative(resolvedRoot, resolvedFile));
-      return { path, resolvedFile, identity: `${link.dev}:${link.ino}` };
-    } catch (error) {
-      // An ancestor can change after its earlier inspection. Preserve that as
-      // an unsupported resource, never as proof of an absent child or a delete.
-      throw classifyPathError(error, path);
-    }
-  }
-
   async readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {
     try {
       return await this.read(path, options);
@@ -335,6 +312,29 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     try {
       await unlink(resolve(this.root, path));
     } catch (error) {
+      throw classifyPathError(error, path);
+    }
+  }
+
+  private async inspectReadPath(input: string) {
+    const path = this.normalizePath(input);
+    try {
+      await this.assertNoSymlinkSegments(path, false);
+      const absolute = resolve(this.root, path);
+      const link = await lstat(absolute);
+      if (link.isSymbolicLink())
+        throw new EditError(EditFailureReason.UNSUPPORTED, 'Symbolic links are not supported.', { path });
+      if (!link.isFile())
+        throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
+      const resolvedRoot = await realpath(this.root);
+      const resolvedFile = await realpath(absolute);
+      assertInsideRoot(resolvedRoot, resolvedFile, path);
+      // Check the filesystem's spelling too: aliases must not bypass the policy.
+      this.normalizePath(relative(resolvedRoot, resolvedFile));
+      return { path, resolvedFile, identity: `${link.dev}:${link.ino}` };
+    } catch (error) {
+      // An ancestor can change after its earlier inspection. Preserve that as
+      // an unsupported resource, never as proof of an absent child or a delete.
       throw classifyPathError(error, path);
     }
   }

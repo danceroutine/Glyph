@@ -134,6 +134,16 @@ export class EditingE2EHarness {
     return harness;
   }
 
+  static finalMessage(text = 'The edit is staged for your review.'): ResponseOutputItem {
+    return {
+      type: 'message',
+      id: 'message-final',
+      role: 'assistant',
+      status: 'completed',
+      content: [{ type: 'output_text', text, annotations: [], logprobs: [] }],
+    } satisfies ResponseOutputItem;
+  }
+
   async send(prompt = 'Make the requested edit.', attachmentPaths: readonly string[] = []): Promise<string> {
     return this.sendWithSignal(new AbortController().signal, prompt, attachmentPaths);
   }
@@ -170,16 +180,6 @@ export class EditingE2EHarness {
     await this.application.dispose();
     await rm(this.projectRoot, { recursive: true, force: true });
     await rm(this.stateRoot, { recursive: true, force: true });
-  }
-
-  static finalMessage(text = 'The edit is staged for your review.'): ResponseOutputItem {
-    return {
-      type: 'message',
-      id: 'message-final',
-      role: 'assistant',
-      status: 'completed',
-      content: [{ type: 'output_text', text, annotations: [], logprobs: [] }],
-    } satisfies ResponseOutputItem;
   }
 }
 

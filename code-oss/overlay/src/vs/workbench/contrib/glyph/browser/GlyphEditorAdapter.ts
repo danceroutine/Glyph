@@ -146,82 +146,6 @@ export class GlyphEditorAdapter extends Disposable {
     }
   }
 
-  private async workingCopies(): Promise<readonly GlyphEditorTextSnapshot[]> {
-    const models = this.modelService
-      .getModels()
-      .filter(model => model.uri.scheme === 'file' && this.workspaceContextService.isInsideWorkspace(model.uri));
-    return Promise.all(models.map(model => this.snapshot(this.pathFor(model.uri), model)));
-  }
-
-  /** Unsaved live models occupy a target too, without resolving or reading new models. */
-  private async exists(path: string): Promise<boolean> {
-    const resource = this.resolve(path);
-    const exists = this.modelService.getModel(resource) !== null || (await this.fileService.exists(resource));
-    this.assertWorkspaceBinding();
-    if (!this.trustService.isWorkspaceTrusted())
-      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
-    return exists;
-  }
-
-  /** Search the same live text that reads return, including unsaved edits. */
-  private async searchWorkingCopies(
-    request: Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.SEARCH_WORKING_COPIES }>,
-  ): Promise<GlyphEditorResponse> {
-    const { operationId } = request;
-    const snapshots = await this.workingCopies();
-    const matches: GlyphWorkingCopySearchMatch[] = [];
-    const pattern =
-      request.options.patternKind === GlyphWorkingCopyPatternKind.LITERAL
-        ? request.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        : request.pattern;
-    const regex = new RegExp(
-      pattern,
-      `g${request.options.caseSensitive ? '' : 'i'}${request.options.multiline ? 'ms' : 'm'}`,
-    );
-    const limit = Math.min(Math.max(request.options.limit, 1), 1000);
-    for (const snapshot of snapshots) {
-      for (const match of snapshot.text.matchAll(regex)) {
-        if (matches.length >= limit) return { operationId, ok: true, search: { matches, truncated: true } };
-        const before = snapshot.text.slice(0, match.index).split('\n');
-        const through = snapshot.text.slice(0, match.index + match[0].length).split('\n');
-        matches.push({
-          path: snapshot.path,
-          line: before.length,
-          column: before[before.length - 1].length + 1,
-          endLine: through.length,
-          endColumn: through[through.length - 1].length + 1,
-          lineText: snapshot.text.split('\n')[before.length - 1],
-          matchedText: match[0],
-        });
-      }
-    }
-    return { operationId, ok: true, search: { matches, truncated: false } };
-  }
-
-  private errorCode(error: unknown): GlyphDesktopErrorCode {
-    if (error instanceof GlyphEditorAdapterError) return error.code;
-    // A resource becoming non-text is a stale review, not a broken transport.
-    // Keep permission and unexpected failures fatal instead of treating them as
-    // missing/unsupported files and allowing recovery to infer a completed edit.
-    if (
-      TextFileOperationError.isTextFileOperationError(error) &&
-      error.textFileOperationResult === TextFileOperationResult.FILE_IS_BINARY
-    ) {
-      return GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE;
-    }
-    if (error instanceof Error) {
-      switch (toFileOperationResult(error)) {
-        case FileOperationResult.FILE_NOT_FOUND:
-          return GlyphDesktopErrorCode.NOT_FOUND;
-        case FileOperationResult.FILE_IS_DIRECTORY:
-        case FileOperationResult.FILE_NOT_DIRECTORY:
-        case FileOperationResult.FILE_TOO_LARGE:
-          return GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE;
-      }
-    }
-    return GlyphDesktopErrorCode.INTERNAL;
-  }
-
   /** Invalidates every previously issued token after workspace or ownership changes. */
   invalidate(): void {
     for (const mutation of this.pendingMutations) mutation.cancel();
@@ -545,6 +469,82 @@ export class GlyphEditorAdapter extends Disposable {
   /** Supports recovery when an apply result was lost after the side effect completed. */
   async inspectReceipt(operationId: string): Promise<GlyphMutationReceipt | undefined> {
     return this.receipts.get(operationId);
+  }
+
+  private async workingCopies(): Promise<readonly GlyphEditorTextSnapshot[]> {
+    const models = this.modelService
+      .getModels()
+      .filter(model => model.uri.scheme === 'file' && this.workspaceContextService.isInsideWorkspace(model.uri));
+    return Promise.all(models.map(model => this.snapshot(this.pathFor(model.uri), model)));
+  }
+
+  /** Unsaved live models occupy a target too, without resolving or reading new models. */
+  private async exists(path: string): Promise<boolean> {
+    const resource = this.resolve(path);
+    const exists = this.modelService.getModel(resource) !== null || (await this.fileService.exists(resource));
+    this.assertWorkspaceBinding();
+    if (!this.trustService.isWorkspaceTrusted())
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+    return exists;
+  }
+
+  /** Search the same live text that reads return, including unsaved edits. */
+  private async searchWorkingCopies(
+    request: Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.SEARCH_WORKING_COPIES }>,
+  ): Promise<GlyphEditorResponse> {
+    const { operationId } = request;
+    const snapshots = await this.workingCopies();
+    const matches: GlyphWorkingCopySearchMatch[] = [];
+    const pattern =
+      request.options.patternKind === GlyphWorkingCopyPatternKind.LITERAL
+        ? request.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        : request.pattern;
+    const regex = new RegExp(
+      pattern,
+      `g${request.options.caseSensitive ? '' : 'i'}${request.options.multiline ? 'ms' : 'm'}`,
+    );
+    const limit = Math.min(Math.max(request.options.limit, 1), 1000);
+    for (const snapshot of snapshots) {
+      for (const match of snapshot.text.matchAll(regex)) {
+        if (matches.length >= limit) return { operationId, ok: true, search: { matches, truncated: true } };
+        const before = snapshot.text.slice(0, match.index).split('\n');
+        const through = snapshot.text.slice(0, match.index + match[0].length).split('\n');
+        matches.push({
+          path: snapshot.path,
+          line: before.length,
+          column: before[before.length - 1].length + 1,
+          endLine: through.length,
+          endColumn: through[through.length - 1].length + 1,
+          lineText: snapshot.text.split('\n')[before.length - 1],
+          matchedText: match[0],
+        });
+      }
+    }
+    return { operationId, ok: true, search: { matches, truncated: false } };
+  }
+
+  private errorCode(error: unknown): GlyphDesktopErrorCode {
+    if (error instanceof GlyphEditorAdapterError) return error.code;
+    // A resource becoming non-text is a stale review, not a broken transport.
+    // Keep permission and unexpected failures fatal instead of treating them as
+    // missing/unsupported files and allowing recovery to infer a completed edit.
+    if (
+      TextFileOperationError.isTextFileOperationError(error) &&
+      error.textFileOperationResult === TextFileOperationResult.FILE_IS_BINARY
+    ) {
+      return GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE;
+    }
+    if (error instanceof Error) {
+      switch (toFileOperationResult(error)) {
+        case FileOperationResult.FILE_NOT_FOUND:
+          return GlyphDesktopErrorCode.NOT_FOUND;
+        case FileOperationResult.FILE_IS_DIRECTORY:
+        case FileOperationResult.FILE_NOT_DIRECTORY:
+        case FileOperationResult.FILE_TOO_LARGE:
+          return GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE;
+      }
+    }
+    return GlyphDesktopErrorCode.INTERNAL;
   }
 
   private resolve(path: string): URI {

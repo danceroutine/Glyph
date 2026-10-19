@@ -50,6 +50,24 @@ export class GlyphPromptEditor {
   private readonly containKeydown = (event: KeyboardEvent): void => {
     if (event.defaultPrevented) event.stopPropagation();
   };
+  private readonly newline = chainCommands(
+    (state, dispatch) => {
+      const { $from, empty } = state.selection;
+      const match = /^```([\w-]*)$/.exec($from.parent.textContent);
+      if (!empty || $from.parent.type !== schema.nodes.paragraph || !match) return false;
+      dispatch?.(
+        state.tr
+          .delete($from.start(), $from.end())
+          .setBlockType($from.start(), $from.start(), schema.nodes.code_block!, { params: match[1] }),
+      );
+      return true;
+    },
+    newlineInCode,
+    splitListItem(schema.nodes.list_item!),
+    createParagraphNear,
+    liftEmptyBlock,
+    splitBlock,
+  );
   constructor(
     container: HTMLElement,
     document: GlyphPromptDocument,
@@ -104,26 +122,53 @@ export class GlyphPromptEditor {
     });
     this.view.dom.addEventListener('keydown', this.containKeydown);
   }
-  private readonly newline = chainCommands(
-    (state, dispatch) => {
-      const { $from, empty } = state.selection;
-      const match = /^```([\w-]*)$/.exec($from.parent.textContent);
-      if (!empty || $from.parent.type !== schema.nodes.paragraph || !match) return false;
-      dispatch?.(
-        state.tr
-          .delete($from.start(), $from.end())
-          .setBlockType($from.start(), $from.start(), schema.nodes.code_block!, { params: match[1] }),
-      );
-      return true;
-    },
-    newlineInCode,
-    splitListItem(schema.nodes.list_item!),
-    createParagraphNear,
-    liftEmptyBlock,
-    splitBlock,
-  );
   insertNewline(): void {
     if (this.view.editable && !this.view.composing) this.newline(this.view.state, this.view.dispatch, this.view);
+  }
+  update(document: GlyphPromptDocument): void {
+    if (this.lastDocument && JSON.stringify(document.parts) === JSON.stringify(this.lastDocument.parts)) return;
+    const { doc, from, to } = parsePrompt(document);
+    if (!this.view.state.doc.eq(doc)) {
+      if (!document.parts.length) this.view.updateState(this.state(document));
+      else {
+        const transaction = this.view.state.tr.replaceWith(0, this.view.state.doc.content.size, doc.content);
+        transaction.setSelection(promptSelection(transaction.doc, from, to));
+        this.view.updateState(this.view.state.apply(transaction));
+      }
+      this.updateQuery();
+    }
+    this.lastDocument = document;
+  }
+  insert(attachment: GlyphContextAttachment, query: GlyphPromptQuery): void {
+    this.view.dispatch(
+      closeHistory(
+        this.view.state.tr
+          .replaceWith(query.from, query.to, schema.node('attachment', { attachment }))
+          .scrollIntoView(),
+      ),
+    );
+    this.view.dispatch(closeHistory(this.view.state.tr));
+    this.view.focus();
+  }
+  updateQuery(): void {
+    const { selection } = this.view.state;
+    const before = selection.empty
+      ? selection.$from.parent.textBetween(0, selection.$from.parentOffset, '', '\ufffc')
+      : '';
+    const match = /(?:^|\s)@([^\s@\ufffc]*)$/.exec(before);
+    this.callbacks.query(
+      match ? { text: match[1]!, from: selection.from - match[1]!.length - 1, to: selection.from } : undefined,
+    );
+  }
+  setEditable(editable: boolean): void {
+    this.view.setProps({ editable: () => editable });
+  }
+  focus(): void {
+    this.view.focus();
+  }
+  destroy(): void {
+    this.view.dom.removeEventListener('keydown', this.containKeydown);
+    this.view.destroy();
   }
   private leaveCodeBlock(direction: -1 | 1): Command {
     return (state, dispatch) => {
@@ -259,50 +304,5 @@ export class GlyphPromptEditor {
         keymap(baseKeymap),
       ],
     });
-  }
-  update(document: GlyphPromptDocument): void {
-    if (this.lastDocument && JSON.stringify(document.parts) === JSON.stringify(this.lastDocument.parts)) return;
-    const { doc, from, to } = parsePrompt(document);
-    if (!this.view.state.doc.eq(doc)) {
-      if (!document.parts.length) this.view.updateState(this.state(document));
-      else {
-        const transaction = this.view.state.tr.replaceWith(0, this.view.state.doc.content.size, doc.content);
-        transaction.setSelection(promptSelection(transaction.doc, from, to));
-        this.view.updateState(this.view.state.apply(transaction));
-      }
-      this.updateQuery();
-    }
-    this.lastDocument = document;
-  }
-  insert(attachment: GlyphContextAttachment, query: GlyphPromptQuery): void {
-    this.view.dispatch(
-      closeHistory(
-        this.view.state.tr
-          .replaceWith(query.from, query.to, schema.node('attachment', { attachment }))
-          .scrollIntoView(),
-      ),
-    );
-    this.view.dispatch(closeHistory(this.view.state.tr));
-    this.view.focus();
-  }
-  updateQuery(): void {
-    const { selection } = this.view.state;
-    const before = selection.empty
-      ? selection.$from.parent.textBetween(0, selection.$from.parentOffset, '', '\ufffc')
-      : '';
-    const match = /(?:^|\s)@([^\s@\ufffc]*)$/.exec(before);
-    this.callbacks.query(
-      match ? { text: match[1]!, from: selection.from - match[1]!.length - 1, to: selection.from } : undefined,
-    );
-  }
-  setEditable(editable: boolean): void {
-    this.view.setProps({ editable: () => editable });
-  }
-  focus(): void {
-    this.view.focus();
-  }
-  destroy(): void {
-    this.view.dom.removeEventListener('keydown', this.containKeydown);
-    this.view.destroy();
   }
 }

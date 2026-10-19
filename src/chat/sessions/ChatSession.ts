@@ -91,6 +91,30 @@ export class ChatSession {
     });
   }
 
+  async reset(): Promise<void> {
+    return this.enqueue(() => this.resetNow());
+  }
+
+  async recordContext(events: readonly ChatContextEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    return this.enqueue(() => this.recordContextNow(events));
+  }
+
+  setTraceEnabled(enabled: boolean): void {
+    this.conversation.setTraceEnabled(enabled);
+  }
+
+  async send(
+    requestInput: ChatRequestInput,
+    response: ChatResponseStream,
+    signal: AbortSignal,
+    questionResponses?: () => readonly GlyphQuestionResponse[],
+    modeSwaps?: () => readonly GlyphModeSwap[],
+    steering?: ChatSteeringQueue,
+  ): Promise<ChatTurnResult> {
+    return this.enqueue(() => this.sendNow(requestInput, response, signal, questionResponses, modeSwaps, steering));
+  }
+
   private findHistory(turnId: string) {
     const record = this.record();
     const index = record.transcript.findIndex(
@@ -111,10 +135,6 @@ export class ChatSession {
     });
   }
 
-  async reset(): Promise<void> {
-    return this.enqueue(() => this.resetNow());
-  }
-
   private async resetNow(): Promise<void> {
     await this.persistOutstandingToolState();
     const previousState = this.conversation.exportState();
@@ -127,11 +147,6 @@ export class ChatSession {
     }
   }
 
-  async recordContext(events: readonly ChatContextEvent[]): Promise<void> {
-    if (events.length === 0) return;
-    return this.enqueue(() => this.recordContextNow(events));
-  }
-
   private async recordContextNow(events: readonly ChatContextEvent[]): Promise<void> {
     await this.persistOutstandingToolState();
     const previousState = this.conversation.exportState();
@@ -142,21 +157,6 @@ export class ChatSession {
       this.conversation.restoreState(previousState);
       throw error;
     }
-  }
-
-  setTraceEnabled(enabled: boolean): void {
-    this.conversation.setTraceEnabled(enabled);
-  }
-
-  async send(
-    requestInput: ChatRequestInput,
-    response: ChatResponseStream,
-    signal: AbortSignal,
-    questionResponses?: () => readonly GlyphQuestionResponse[],
-    modeSwaps?: () => readonly GlyphModeSwap[],
-    steering?: ChatSteeringQueue,
-  ): Promise<ChatTurnResult> {
-    return this.enqueue(() => this.sendNow(requestInput, response, signal, questionResponses, modeSwaps, steering));
   }
 
   private async sendNow(

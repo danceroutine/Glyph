@@ -1,4 +1,4 @@
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
 import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
@@ -126,6 +126,20 @@ const resolvedSearchProjectContentsArguments = searchProjectContentsArguments.tr
 type ReadArguments = z.infer<typeof readProjectFileArguments>;
 
 export class ProjectAccess {
+  private readonly options: ResolvedProjectAccessOptions;
+
+  private readonly workspace: WorkspaceTextStore;
+  constructor(
+    root: string,
+    options: ProjectAccessOptions = {},
+    workspace?: WorkspaceTextStore,
+    private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
+  ) {
+    const { maxFiles, maxFileBytes, excludedPaths, accessPolicy } = projectAccessOptionsSchema.parse(options);
+    this.options = { maxFiles, maxFileBytes, excludedPaths, accessPolicy };
+    this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, { excludedPaths, accessPolicy });
+  }
+
   get tools(): readonly Tool[] {
     const tools: Tool[] = [
       {
@@ -170,20 +184,6 @@ export class ProjectAccess {
         execute: (input, signal) => this.execute(ProjectToolName.SEARCH_CONTENTS, input, signal),
       });
     return tools;
-  }
-
-  private readonly options: ResolvedProjectAccessOptions;
-  private readonly workspace: WorkspaceTextStore;
-
-  constructor(
-    root: string,
-    options: ProjectAccessOptions = {},
-    workspace?: WorkspaceTextStore,
-    private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
-  ) {
-    const { maxFiles, maxFileBytes, excludedPaths, accessPolicy } = projectAccessOptionsSchema.parse(options);
-    this.options = { maxFiles, maxFileBytes, excludedPaths, accessPolicy };
-    this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, { excludedPaths, accessPolicy });
   }
 
   async execute(name: string, rawArguments: string, signal?: AbortSignal): Promise<string> {

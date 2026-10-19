@@ -1,5 +1,5 @@
 import { AgentMode } from '#src/chat/AgentMode.js';
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
 import { EditError } from '#src/editing/errors/EditError.js';
@@ -15,6 +15,17 @@ import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 
 export class ProjectToolRuntime implements ToolSource {
+  private readonly logger: Logger;
+
+  constructor(
+    private readonly access: ProjectAccess,
+    private readonly proposals: EditProposalService,
+    private readonly reviews: ProposalReviewManager,
+    logger: Logger = new NullLogger(),
+  ) {
+    this.logger = logger.forNamespace('project.tool');
+  }
+
   get tools(): readonly Tool[] {
     return [
       ...this.access.tools,
@@ -60,17 +71,6 @@ Every directive and context line is exact; no fuzzy matching occurs. Never claim
         execute: (input, signal, context) => this.execute(ProjectToolName.PROPOSE_EDITS, input, signal, context),
       },
     ];
-  }
-
-  private readonly logger: Logger;
-
-  constructor(
-    private readonly access: ProjectAccess,
-    private readonly proposals: EditProposalService,
-    private readonly reviews: ProposalReviewManager,
-    logger: Logger = new NullLogger(),
-  ) {
-    this.logger = logger.forNamespace('project.tool');
   }
 
   async execute(name: string, input: string, signal?: AbortSignal, context?: ToolExecutionContext): Promise<string> {

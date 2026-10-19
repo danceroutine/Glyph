@@ -27,35 +27,13 @@ type SendMessage = (
 /** Window-owned drafts outlive panes, including sends that settle after unmount. */
 export class GlyphComposerState {
   private commandHandler: ((command: GlyphComposerCommand) => void) | undefined;
-  registerCommands(handler: (command: GlyphComposerCommand) => void): () => void {
-    this.commandHandler = handler;
-    return () => {
-      if (this.commandHandler === handler) this.commandHandler = undefined;
-    };
-  }
-  executeCommand(command: GlyphComposerCommand): void {
-    this.commandHandler?.(command);
-  }
   private queueSequence = 0;
   private modeTouched = false;
-  hydrateMode(mode: AgentModeID): void {
-    if (!this.modeTouched && this.value.document.options?.mode !== mode)
-      this.setDocument({ ...this.value.document, options: { ...this.value.document.options, mode } });
-  }
   private annotationSequence = 0;
   private readonly annotationReveals = new Map<
     string,
     (annotation: GlyphAnnotation) => Promise<GlyphAnnotationPosition | undefined>
   >();
-  registerAnnotationSource(
-    id: string,
-    reveal: (annotation: GlyphAnnotation) => Promise<GlyphAnnotationPosition | undefined>,
-  ): void {
-    this.annotationReveals.set(id, reveal);
-  }
-  async revealAnnotation(annotation: GlyphAnnotation): Promise<GlyphAnnotationPosition | undefined> {
-    return this.annotationReveals.get(annotation.sourceId)?.(annotation);
-  }
   private documents: readonly GlyphPromptDocument[] = [];
   private value: {
     document: GlyphPromptDocument;
@@ -87,6 +65,28 @@ export class GlyphComposerState {
     submitting: false,
   };
   private readonly listeners = new Set<() => void>();
+  registerCommands(handler: (command: GlyphComposerCommand) => void): () => void {
+    this.commandHandler = handler;
+    return () => {
+      if (this.commandHandler === handler) this.commandHandler = undefined;
+    };
+  }
+  executeCommand(command: GlyphComposerCommand): void {
+    this.commandHandler?.(command);
+  }
+  hydrateMode(mode: AgentModeID): void {
+    if (!this.modeTouched && this.value.document.options?.mode !== mode)
+      this.setDocument({ ...this.value.document, options: { ...this.value.document.options, mode } });
+  }
+  registerAnnotationSource(
+    id: string,
+    reveal: (annotation: GlyphAnnotation) => Promise<GlyphAnnotationPosition | undefined>,
+  ): void {
+    this.annotationReveals.set(id, reveal);
+  }
+  async revealAnnotation(annotation: GlyphAnnotation): Promise<GlyphAnnotationPosition | undefined> {
+    return this.annotationReveals.get(annotation.sourceId)?.(annotation);
+  }
   get snapshot(): Readonly<typeof this.value> {
     return this.value;
   }

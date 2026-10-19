@@ -17,18 +17,18 @@ export class OpenAISession implements OpenAISessionService {
   private disposed = false;
   private readonly saves = new Set<Promise<void>>();
 
-  /** Stop this caller and drain its writes; shared refreshes follow the account owner's lifetime. */
-  async dispose(): Promise<void> {
-    this.disposed = true;
-    await Promise.allSettled(this.saves);
-  }
-
   constructor(
     private readonly store: OpenAIAccountStore,
     private readonly authentication: OpenAIAuthenticationClient,
     private readonly configuration: OpenAIConfiguration,
     private readonly signal?: AbortSignal,
   ) {}
+
+  /** Stop this caller and drain its writes; shared refreshes follow the account owner's lifetime. */
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    await Promise.allSettled(this.saves);
+  }
 
   redact(message: string): string {
     for (const account of this.store.state.accounts) {

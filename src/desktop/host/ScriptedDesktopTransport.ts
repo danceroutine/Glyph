@@ -6,22 +6,6 @@
 export class ScriptedDesktopTransport {
   private readonly endpoint: URL;
 
-  constructor(endpoint: string) {
-    this.endpoint = new URL(endpoint);
-    if (
-      this.endpoint.protocol !== 'http:' ||
-      this.endpoint.hostname !== '127.0.0.1' ||
-      !this.endpoint.port ||
-      this.endpoint.username ||
-      this.endpoint.password ||
-      this.endpoint.pathname !== '/' ||
-      this.endpoint.search ||
-      this.endpoint.hash
-    ) {
-      throw new Error('The scripted desktop provider requires an explicit http://127.0.0.1:port endpoint.');
-    }
-  }
-
   readonly fetch: typeof fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
@@ -42,4 +26,20 @@ export class ScriptedDesktopTransport {
       ...(request.method === 'POST' ? { body: await request.text() } : {}),
     });
   };
+
+  constructor(endpoint: string) {
+    this.endpoint = new URL(endpoint);
+    if (
+      this.endpoint.protocol !== 'http:' ||
+      this.endpoint.hostname !== '127.0.0.1' ||
+      !this.endpoint.port ||
+      this.endpoint.username ||
+      this.endpoint.password ||
+      this.endpoint.pathname !== '/' ||
+      this.endpoint.search ||
+      this.endpoint.hash
+    ) {
+      throw new Error('The scripted desktop provider requires an explicit http://127.0.0.1:port endpoint.');
+    }
+  }
 }

@@ -62,6 +62,7 @@ export class GlyphProposalEditor extends Disposable {
   private readonly models = new Set<string>();
   private selectionButton: { dispose(): void } | undefined;
   private controls: { update(value: GlyphReviewControls): void }[] = [];
+  private hunk: { zone: IViewZone; id: string; widget: IContentWidget } | undefined;
   constructor(
     private readonly actions: ReviewActions,
     @IModelService private readonly modelService: IModelService,
@@ -178,6 +179,77 @@ export class GlyphProposalEditor extends Disposable {
     this.updateAnnotationMarkers();
     this.reveal();
   }
+  acceptPreview(preview: GlyphProposalFilePreview): void {
+    if (preview.proposalId !== this.current?.proposalId || preview.fileId !== this.current.fileId) return;
+    this.preview = preview;
+    for (const [side, value] of [
+      ['before', preview.before],
+      ['after', preview.after],
+    ] as const) {
+      const uri = this.uri(side);
+      const model = this.modelService.getModel(uri);
+      if (model) {
+        if (model.getValue() !== value) model.setValue(value);
+      } else {
+        this.modelService.createModel(
+          value,
+          this.languageService.createByFilepathOrFirstLine(URI.file(this.file()?.path ?? '')),
+          uri,
+        );
+        this.models.add(uri.toString());
+      }
+    }
+    this.index = Math.min(this.index, Math.max(0, preview.items.length - 1));
+    this.refreshControls();
+  }
+  changed(): void {
+    this.refreshControls();
+  }
+  async refresh(): Promise<void> {
+    const current = this.current;
+    if (current && this.file()?.pendingItemIds.length)
+      await this.actions.read(current.chatId, current.proposalId, current.fileId);
+    else this.refreshControls();
+  }
+  async revealAnnotation(annotation: GlyphAnnotation): Promise<GlyphAnnotationPosition | undefined> {
+    const [proposalId, fileId] = annotation.sourceId.split(':');
+    const proposal = this.actions.state().proposals.find(value => value.id === proposalId);
+    if (!proposal?.chatId || !fileId || !proposalId) return;
+    if (
+      this.current?.proposalId !== proposalId ||
+      this.current.fileId !== fileId ||
+      !this.editor?.getDomNode()?.isConnected
+    )
+      await this.open(proposal.chatId, proposalId, fileId);
+    const model = this.editor?.getModel();
+    if (
+      !model ||
+      annotation.revision !== `${model.id}:${model.getVersionId()}` ||
+      model.getValue().slice(annotation.from, annotation.to) !== annotation.quote
+    )
+      return;
+    const start = model.getPositionAt(annotation.from),
+      end = model.getPositionAt(annotation.to);
+    this.editor?.setSelection({
+      startLineNumber: start.lineNumber,
+      startColumn: start.column,
+      endLineNumber: end.lineNumber,
+      endColumn: end.column,
+    });
+    this.editor?.revealPositionInCenterIfOutsideViewport(start, ScrollType.Immediate);
+    const container = this.installAnnotationEditor(start.lineNumber);
+    const point = this.editor?.getScrolledVisiblePosition(start);
+    const bounds = this.editor?.getDomNode()?.getBoundingClientRect();
+    if (point && bounds)
+      return {
+        ...(container ? { container } : {}),
+        x: bounds.left + point.left,
+        y: bounds.top + point.top + point.height,
+        minX: bounds.left + (this.editor?.getLayoutInfo().contentLeft ?? 0),
+        maxX: bounds.right,
+      };
+    return undefined;
+  }
   private updateAnnotationMarkers(): void {
     this.annotationWidgets.clear();
     const editor = this.editor,
@@ -243,38 +315,6 @@ export class GlyphProposalEditor extends Disposable {
       );
     }
   }
-  acceptPreview(preview: GlyphProposalFilePreview): void {
-    if (preview.proposalId !== this.current?.proposalId || preview.fileId !== this.current.fileId) return;
-    this.preview = preview;
-    for (const [side, value] of [
-      ['before', preview.before],
-      ['after', preview.after],
-    ] as const) {
-      const uri = this.uri(side);
-      const model = this.modelService.getModel(uri);
-      if (model) {
-        if (model.getValue() !== value) model.setValue(value);
-      } else {
-        this.modelService.createModel(
-          value,
-          this.languageService.createByFilepathOrFirstLine(URI.file(this.file()?.path ?? '')),
-          uri,
-        );
-        this.models.add(uri.toString());
-      }
-    }
-    this.index = Math.min(this.index, Math.max(0, preview.items.length - 1));
-    this.refreshControls();
-  }
-  changed(): void {
-    this.refreshControls();
-  }
-  async refresh(): Promise<void> {
-    const current = this.current;
-    if (current && this.file()?.pendingItemIds.length)
-      await this.actions.read(current.chatId, current.proposalId, current.fileId);
-    else this.refreshControls();
-  }
   private file() {
     return this.actions
       .state()
@@ -308,6 +348,7 @@ export class GlyphProposalEditor extends Disposable {
       this.editor.layoutContentWidget(this.hunk.widget);
     }
   }
+
   private async decide(scope: 'item' | 'file' | 'all', accept: boolean): Promise<void> {
     const current = this.current;
     if (!current) return;
@@ -322,45 +363,6 @@ export class GlyphProposalEditor extends Disposable {
     await this.actions.decide(current.chatId, items, accept);
     await this.refresh();
     this.reveal();
-  }
-  async revealAnnotation(annotation: GlyphAnnotation): Promise<GlyphAnnotationPosition | undefined> {
-    const [proposalId, fileId] = annotation.sourceId.split(':');
-    const proposal = this.actions.state().proposals.find(value => value.id === proposalId);
-    if (!proposal?.chatId || !fileId || !proposalId) return;
-    if (
-      this.current?.proposalId !== proposalId ||
-      this.current.fileId !== fileId ||
-      !this.editor?.getDomNode()?.isConnected
-    )
-      await this.open(proposal.chatId, proposalId, fileId);
-    const model = this.editor?.getModel();
-    if (
-      !model ||
-      annotation.revision !== `${model.id}:${model.getVersionId()}` ||
-      model.getValue().slice(annotation.from, annotation.to) !== annotation.quote
-    )
-      return;
-    const start = model.getPositionAt(annotation.from),
-      end = model.getPositionAt(annotation.to);
-    this.editor?.setSelection({
-      startLineNumber: start.lineNumber,
-      startColumn: start.column,
-      endLineNumber: end.lineNumber,
-      endColumn: end.column,
-    });
-    this.editor?.revealPositionInCenterIfOutsideViewport(start, ScrollType.Immediate);
-    const container = this.installAnnotationEditor(start.lineNumber);
-    const point = this.editor?.getScrolledVisiblePosition(start);
-    const bounds = this.editor?.getDomNode()?.getBoundingClientRect();
-    if (point && bounds)
-      return {
-        ...(container ? { container } : {}),
-        x: bounds.left + point.left,
-        y: bounds.top + point.top + point.height,
-        minX: bounds.left + (this.editor?.getLayoutInfo().contentLeft ?? 0),
-        maxX: bounds.right,
-      };
-    return undefined;
   }
 
   private installAnnotationEditor(lineNumber: number): HTMLElement | undefined {
@@ -449,7 +451,6 @@ export class GlyphProposalEditor extends Disposable {
     const annotation = this.captureAnnotation(comment);
     if (annotation && this.current) await this.actions.annotate(this.current.chatId, annotation);
   }
-
   private properties(full: boolean): GlyphReviewControls {
     const state = this.actions.state();
     const file = this.file();
@@ -530,7 +531,6 @@ export class GlyphProposalEditor extends Disposable {
         : {}),
     };
   }
-  private hunk: { zone: IViewZone; id: string; widget: IContentWidget } | undefined;
   private installControls(): void {
     const editor = this.editor;
     if (!editor) return;

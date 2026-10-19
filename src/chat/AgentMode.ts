@@ -1,7 +1,7 @@
 /** Execution permissions for an agent turn. Serialized values remain stable. */
 export enum AgentModeID {
   AGENT = 'agent',
-  PLAN = 'plan'
+  PLAN = 'plan',
 }
 
 interface AgentModeOptions {
@@ -16,16 +16,6 @@ export class AgentMode {
   readonly name: string;
   readonly instructions: string;
   private readonly editDenial: AgentModeOptions['editDenial'];
-
-  private constructor(
-    readonly id: AgentModeID,
-    options: AgentModeOptions,
-  ) {
-    this.name = options.name;
-    this.instructions = options.instructions;
-    this.editDenial = options.editDenial;
-    Object.freeze(this);
-  }
 
   private static readonly catalog: Readonly<Record<AgentModeID, AgentMode>> = Object.freeze({
     [AgentModeID.AGENT]: new AgentMode(AgentModeID.AGENT, {
@@ -43,7 +33,17 @@ export class AgentMode {
   });
 
   static readonly all: readonly AgentMode[] = Object.freeze(Object.values(AgentMode.catalog));
+
   static readonly default = AgentMode.catalog[AgentModeID.AGENT];
+  private constructor(
+    readonly id: AgentModeID,
+    options: AgentModeOptions,
+  ) {
+    this.name = options.name;
+    this.instructions = options.instructions;
+    this.editDenial = options.editDenial;
+    Object.freeze(this);
+  }
 
   static isId(value: unknown): value is AgentModeID {
     return typeof value === 'string' && Object.hasOwn(AgentMode.catalog, value);
@@ -66,4 +66,3 @@ export class AgentMode {
     return this.editDenial?.(path);
   }
 }
-

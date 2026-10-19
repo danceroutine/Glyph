@@ -1,4 +1,4 @@
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { PlanUpdate } from '#src/planning/PlanSchema.js';
 import { PlanError } from '#src/planning/PlanError.js';
 import { ChatConversation } from '#src/chat/ChatConversation.js';
@@ -214,6 +214,66 @@ export class GlyphService {
     });
   }
 
+  listChats(account?: ChatAccount): readonly ChatSessionSummary[] {
+    return this.requireChatSessions().list(account);
+  }
+
+  async createChat(account: ChatAccount, model: Model): Promise<ChatSession> {
+    const conversation = this.instantiateConversation(account, model);
+    return this.requireChatSessions().create(
+      {
+        accountProvider: account.provider,
+        accountId: account.id,
+        modelSlug: model.slug,
+        modelName: model.name,
+      },
+      conversation,
+    );
+  }
+
+  openChat(identifier: string, account: ChatAccount): ChatSession {
+    return this.requireChatSessions().open(
+      identifier,
+      record =>
+        this.instantiateConversation(account, { slug: record.modelSlug, name: record.modelName }, record.providerState),
+      record => {
+        if (record.accountProvider !== account.provider || record.accountId !== account.id) {
+          throw new Error('That chat belongs to a different provider account or workspace.');
+        }
+      },
+    );
+  }
+
+  branchChat(identifier: string, turnId: string, account: ChatAccount): Promise<ChatSession> {
+    const session = this.openChat(identifier, account);
+    return this.requireChatSessions().branch(session, turnId, record =>
+      this.instantiateConversation(account, { slug: record.modelSlug, name: record.modelName }, record.providerState),
+    );
+  }
+
+  renameChat(identifier: string, title: string): Promise<ChatSessionSummary> {
+    return this.requireChatSessions().rename(identifier, title);
+  }
+
+  /** Resolves user-selected paths at send time so providers receive fresh, authorized snapshots. */
+  async resolveChatRequest(text: string, references: readonly ContextAttachmentReference[] = []): Promise<ChatRequest> {
+    if (references.length === 0) return { text, attachments: [] };
+    if (!this.contextAttachments) throw new Error('This host does not support workspace context attachments.');
+    return { text, attachments: await this.contextAttachments.resolve(references) };
+  }
+
+  setTraceEnabled(enabled: boolean): void {
+    this.traceEnabled = enabled;
+  }
+
+  async logout(account: ChatAccount): Promise<boolean> {
+    return this.backend.logout(account);
+  }
+
+  redact(message: string): string {
+    return this.backend.redact(message);
+  }
+
   private async deliverReviewResults(
     conversation: ReviewResultDestination,
     currentChatOnly: boolean,
@@ -260,47 +320,6 @@ export class GlyphService {
     }
   }
 
-  listChats(account?: ChatAccount): readonly ChatSessionSummary[] {
-    return this.requireChatSessions().list(account);
-  }
-
-  async createChat(account: ChatAccount, model: Model): Promise<ChatSession> {
-    const conversation = this.instantiateConversation(account, model);
-    return this.requireChatSessions().create(
-      {
-        accountProvider: account.provider,
-        accountId: account.id,
-        modelSlug: model.slug,
-        modelName: model.name,
-      },
-      conversation,
-    );
-  }
-
-  openChat(identifier: string, account: ChatAccount): ChatSession {
-    return this.requireChatSessions().open(
-      identifier,
-      record =>
-        this.instantiateConversation(account, { slug: record.modelSlug, name: record.modelName }, record.providerState),
-      record => {
-        if (record.accountProvider !== account.provider || record.accountId !== account.id) {
-          throw new Error('That chat belongs to a different provider account or workspace.');
-        }
-      },
-    );
-  }
-
-  branchChat(identifier: string, turnId: string, account: ChatAccount): Promise<ChatSession> {
-    const session = this.openChat(identifier, account);
-    return this.requireChatSessions().branch(session, turnId, record =>
-      this.instantiateConversation(account, { slug: record.modelSlug, name: record.modelName }, record.providerState),
-    );
-  }
-
-  renameChat(identifier: string, title: string): Promise<ChatSessionSummary> {
-    return this.requireChatSessions().rename(identifier, title);
-  }
-
   private instantiateConversation(account: ChatAccount, model: Model, state?: ChatProviderState): ChatConversation {
     const provider = this.backend.createProvider(account, model, state);
     return new ChatConversation(
@@ -310,25 +329,6 @@ export class GlyphService {
       result => this.recordUsage(result),
       this.traceEnabled,
     );
-  }
-
-  /** Resolves user-selected paths at send time so providers receive fresh, authorized snapshots. */
-  async resolveChatRequest(text: string, references: readonly ContextAttachmentReference[] = []): Promise<ChatRequest> {
-    if (references.length === 0) return { text, attachments: [] };
-    if (!this.contextAttachments) throw new Error('This host does not support workspace context attachments.');
-    return { text, attachments: await this.contextAttachments.resolve(references) };
-  }
-
-  setTraceEnabled(enabled: boolean): void {
-    this.traceEnabled = enabled;
-  }
-
-  async logout(account: ChatAccount): Promise<boolean> {
-    return this.backend.logout(account);
-  }
-
-  redact(message: string): string {
-    return this.backend.redact(message);
   }
 
   private recordUsage(result: TurnResult): void {

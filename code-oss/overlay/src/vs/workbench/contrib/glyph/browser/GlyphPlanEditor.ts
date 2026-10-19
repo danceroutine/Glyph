@@ -14,9 +14,6 @@ import { mountGlyphPlan } from './ui/mountGlyphWorkbench.js';
 
 export class GlyphPlanInput extends EditorInput {
   static readonly ID = 'workbench.input.glyphPlan';
-  override get typeId(): string {
-    return GlyphPlanInput.ID;
-  }
   readonly resource: URI;
   constructor(
     readonly read: () => GlyphPlanViewState,
@@ -25,6 +22,9 @@ export class GlyphPlanInput extends EditorInput {
   ) {
     super();
     this.resource = URI.from({ scheme: 'glyph-plan', path: `/${read().plan.id}` });
+  }
+  override get typeId(): string {
+    return GlyphPlanInput.ID;
   }
   override matches(other: EditorInput | IUntypedEditorInput): boolean {
     return (
@@ -49,11 +49,6 @@ export class GlyphPlanEditor extends EditorPane {
     @IStorageService storage: IStorageService,
   ) {
     super(GlyphPlanEditor.ID, group, telemetry, theme, storage);
-  }
-  protected override createEditor(parent: HTMLElement): void {
-    this.container = document.createElement('div');
-    this.container.tabIndex = 0;
-    parent.append(this.container);
   }
   override async setInput(
     input: EditorInput,
@@ -87,5 +82,10 @@ export class GlyphPlanEditor extends EditorPane {
     this.subscription?.dispose();
     this.view?.dispose();
     super.dispose();
+  }
+  protected override createEditor(parent: HTMLElement): void {
+    this.container = document.createElement('div');
+    this.container.tabIndex = 0;
+    parent.append(this.container);
   }
 }

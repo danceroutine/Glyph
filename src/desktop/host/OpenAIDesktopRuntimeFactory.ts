@@ -282,6 +282,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     return runtime;
   }
 
+  async dispose(): Promise<void> {
+    await this.initialized;
+    await this.accounts.dispose();
+  }
+
   /** Pathless editor operations must not acquire an invented filesystem target. */
   private requestPath(request: GlyphEditorRequest): string | undefined {
     switch (request.type) {
@@ -307,10 +312,5 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       default:
         return request;
     }
-  }
-
-  async dispose(): Promise<void> {
-    await this.initialized;
-    await this.accounts.dispose();
   }
 }

@@ -129,6 +129,55 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     return pending;
   }
 
+  /** Pending prompts are cancelled when their owning renderer disappears. */
+  async connectionLost(windowId: string): Promise<void> {
+    if (windowId !== this.options.ownerWindowId) return;
+    const discovery = this.discovery;
+    // A renderer reload can reuse this runtime. New commands get a fresh
+    // discovery scope while in-flight requests retain the cancelled one.
+    this.discovery = new AbortController();
+    discovery.abort(new Error('Model discovery cancelled because the owning window disconnected.'));
+    for (const run of this.active.values()) run.controller.abort(new Error('The owning window disconnected.'));
+    await Promise.allSettled([...this.active.values()].map(run => run.completion));
+  }
+
+  /** Settle active operations before closing their shell and persistence dependencies. */
+  dispose(): Promise<void> {
+    return (this.disposal ??= this.stop());
+  }
+
+  /** Record pending decisions before delivery so reconnect snapshots cannot lose a waiting prompt. */
+  publish(event: GlyphHostEvent): void {
+    if (event.type === GlyphHostEventType.QUESTION || event.type === GlyphHostEventType.APPROVAL) {
+      const run = this.runs.get(event.runId);
+      if (run)
+        this.runs.set(
+          event.runId,
+          event.type === GlyphHostEventType.QUESTION
+            ? { ...run, question: event.question, status: GlyphRunStatus.WAITING_FOR_QUESTION }
+            : {
+                ...run,
+                approval: event.approval,
+                status: GlyphRunStatus.WAITING_FOR_APPROVAL,
+                ...(event.approval.modeSwap ? { modeSwaps: [...(run.modeSwaps ?? []), event.approval.modeSwap] } : {}),
+              },
+        );
+    }
+    this.options.emit(event);
+  }
+
+  finishModeSwap(chatId: string, id: string, status: GlyphModeSwap['status']): void {
+    const run = [...this.runs.values()].find(
+      run => run.chatId === chatId && run.modeSwaps?.some(swap => swap.id === id),
+    );
+    if (!run) return;
+    const updated = { ...run, modeSwaps: run.modeSwaps!.map(swap => (swap.id === id ? { ...swap, status } : swap)) };
+    if (updated.approval?.id === id) {
+      const { approval: _approval, ...rest } = updated;
+      this.setRun({ ...rest, status: GlyphRunStatus.STREAMING });
+    } else this.setRun(updated);
+  }
+
   private async dispatch(command: GlyphRuntimeCommand): Promise<void> {
     if (this.disposed) throw new Error('The workspace runtime has stopped.');
     const glyph = this.options.glyph;
@@ -469,23 +518,6 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     await glyph.commitReviewResults(session, { currentChatOnly: true });
   }
 
-  /** Pending prompts are cancelled when their owning renderer disappears. */
-  async connectionLost(windowId: string): Promise<void> {
-    if (windowId !== this.options.ownerWindowId) return;
-    const discovery = this.discovery;
-    // A renderer reload can reuse this runtime. New commands get a fresh
-    // discovery scope while in-flight requests retain the cancelled one.
-    this.discovery = new AbortController();
-    discovery.abort(new Error('Model discovery cancelled because the owning window disconnected.'));
-    for (const run of this.active.values()) run.controller.abort(new Error('The owning window disconnected.'));
-    await Promise.allSettled([...this.active.values()].map(run => run.completion));
-  }
-
-  /** Settle active operations before closing their shell and persistence dependencies. */
-  dispose(): Promise<void> {
-    return (this.disposal ??= this.stop());
-  }
-
   private async stop(): Promise<void> {
     this.disposed = true;
     await this.connectionLost(this.options.ownerWindowId);
@@ -499,38 +531,6 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     } finally {
       await this.options.glyph.dispose();
     }
-  }
-
-  /** Record pending decisions before delivery so reconnect snapshots cannot lose a waiting prompt. */
-  publish(event: GlyphHostEvent): void {
-    if (event.type === GlyphHostEventType.QUESTION || event.type === GlyphHostEventType.APPROVAL) {
-      const run = this.runs.get(event.runId);
-      if (run)
-        this.runs.set(
-          event.runId,
-          event.type === GlyphHostEventType.QUESTION
-            ? { ...run, question: event.question, status: GlyphRunStatus.WAITING_FOR_QUESTION }
-            : {
-                ...run,
-                approval: event.approval,
-                status: GlyphRunStatus.WAITING_FOR_APPROVAL,
-                ...(event.approval.modeSwap ? { modeSwaps: [...(run.modeSwaps ?? []), event.approval.modeSwap] } : {}),
-              },
-        );
-    }
-    this.options.emit(event);
-  }
-
-  finishModeSwap(chatId: string, id: string, status: GlyphModeSwap['status']): void {
-    const run = [...this.runs.values()].find(
-      run => run.chatId === chatId && run.modeSwaps?.some(swap => swap.id === id),
-    );
-    if (!run) return;
-    const updated = { ...run, modeSwaps: run.modeSwaps!.map(swap => (swap.id === id ? { ...swap, status } : swap)) };
-    if (updated.approval?.id === id) {
-      const { approval: _approval, ...rest } = updated;
-      this.setRun({ ...rest, status: GlyphRunStatus.STREAMING });
-    } else this.setRun(updated);
   }
 
   /** Recheck inference access at use time rather than trusting a previously selected account. */
