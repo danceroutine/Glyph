@@ -334,6 +334,7 @@ export class GlyphDesktopHost {
       ];
     const controller = new AbortController();
     await record.runtime.handle(command, {
+      windowId: connection.identity.windowId,
       signal: controller.signal,
       emit: event => this.broadcast(getWorkspaceKey(connection.identity), event),
     });

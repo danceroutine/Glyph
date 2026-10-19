@@ -1,3 +1,6 @@
+import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
+import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
+import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
@@ -56,6 +59,14 @@ interface ActiveRun {
 
 /** Adapts the existing application service to desktop commands without moving provider logic into Electron. */
 export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
+  private connected = true;
+  private readonly pendingShellEvents = new Map<
+    string,
+    { readonly chatId: string; readonly label: string; readonly context: ChatContextEvent }
+  >();
+  private readonly previousShells = new Map<string, ShellSessionSnapshot>();
+  private readonly stoppingShells = new Set<string>();
+  private readonly unsubscribeWakes: () => void;
   private readonly shellCalls = new Map<string, { readonly runId: string; readonly toolId: string }>();
   private readonly runs = new Map<string, GlyphRunProjection>();
   private readonly active = new Map<string, ActiveRun>();
@@ -80,12 +91,20 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       readonly interactions: DesktopInteractionBroker;
       readonly shellSessions: Pick<
         ShellSessionManager,
-        'close' | 'dispose' | 'writeInput' | 'allSessions' | 'onDidChange'
+        | 'close'
+        | 'dispose'
+        | 'writeInput'
+        | 'allSessions'
+        | 'onDidChange'
+        | 'onDidWake'
+        | 'takePendingWake'
+        | 'peekPendingWake'
       >;
       readonly emit: (event: GlyphHostEvent) => void;
       readonly ownerWindowId: string;
     },
   ) {
+    this.unsubscribeWakes = options.shellSessions.onDidWake(wake => this.queueShellWake(wake));
     this.unsubscribeShells = options.shellSessions.onDidChange(() => this.syncShells());
     this.unsubscribe = options.glyph.proposalReviews?.onDidChange(change => {
       for (const id of change.proposalIds) {
@@ -109,6 +128,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       chats: this.options.glyph.listChats(),
       runs: [...this.runs.values()],
       proposals: [...this.proposals.values()],
+      shells: this.shellProjection(),
       usageByChat: { ...this.usageByChat },
       ...(this.selectedAccount
         ? { selectedAccount: { provider: this.selectedAccount.provider, id: this.selectedAccount.id } }
@@ -118,13 +138,20 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   }
 
   /** Dispatch commands without holding the request acknowledgement open for an entire model turn. */
-  handle(command: GlyphRuntimeCommand): Promise<void> {
+  handle(command: GlyphRuntimeCommand, context?: { readonly windowId?: string }): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('The workspace runtime has stopped.'));
+    if (!context?.windowId || context.windowId === this.options.ownerWindowId) this.connected = true;
     const pending = this.dispatch(command);
     this.commands.add(pending);
     void pending.then(
-      () => this.commands.delete(pending),
-      () => this.commands.delete(pending),
+      () => {
+        this.commands.delete(pending);
+        this.drainShellEvents();
+      },
+      () => {
+        this.commands.delete(pending);
+        this.drainShellEvents();
+      },
     );
     return pending;
   }
@@ -132,6 +159,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   /** Pending prompts are cancelled when their owning renderer disappears. */
   async connectionLost(windowId: string): Promise<void> {
     if (windowId !== this.options.ownerWindowId) return;
+    this.connected = false;
     const discovery = this.discovery;
     // A renderer reload can reuse this runtime. New commands get a fresh
     // discovery scope while in-flight requests retain the cancelled one.
@@ -364,6 +392,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         void completion.finally(() => {
           steering.close();
           this.active.delete(command.chatId);
+          this.drainShellEvents();
         });
         return;
       }
@@ -461,7 +490,12 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       case GlyphWorkbenchCommandType.STOP_SHELL_SESSION: {
         this.session(command.chatId);
-        await this.options.shellSessions.close(command.sessionId, command.chatId);
+        this.stoppingShells.add(command.sessionId);
+        try {
+          await this.options.shellSessions.close(command.sessionId, command.chatId);
+        } finally {
+          this.stoppingShells.delete(command.sessionId);
+        }
         return;
       }
       case GlyphWorkbenchCommandType.READ_PROPOSAL_FILE: {
@@ -526,6 +560,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     await Promise.allSettled(this.commands);
     this.unsubscribe?.();
     this.unsubscribeShells();
+    this.unsubscribeWakes();
     try {
       await this.options.shellSessions.dispose();
     } finally {
@@ -598,6 +633,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     session: ChatSession,
     signal: AbortSignal,
     steering: ChatSteeringQueue,
+    shellEvent?: { readonly context: ChatContextEvent },
   ): Promise<void> {
     this.setRun({
       chatId: command.chatId,
@@ -619,6 +655,18 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       status: GlyphRunStatus.STREAMING,
     });
     try {
+      if (shellEvent) {
+        signal.throwIfAborted();
+        await session.recordContext([shellEvent.context]);
+        // Persistence precedes acknowledgement and the single continuation attempt.
+        signal.throwIfAborted();
+        if (
+          shellEvent.context.type === 'shell_wake' &&
+          !this.options.shellSessions.takePendingWake(shellEvent.context.id)
+        )
+          throw new Error('The shell wake was revoked because its terminal closed.');
+        this.pendingShellEvents.delete(shellEvent.context.id);
+      }
       // Review decisions must enter provider history before the next turn can reason about the files.
       await this.options.glyph.commitReviewResults(session, { currentChatOnly: true, signal });
       signal.throwIfAborted();
@@ -732,6 +780,33 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   /** Correlate process updates by host-supplied execution id, never by command text. */
   private syncShells(): void {
     const sessions = this.options.shellSessions.allSessions;
+    this.publish({ type: GlyphHostEventType.SHELL_SESSIONS, shells: this.shellProjection() });
+    for (const previous of this.previousShells.values()) {
+      const current = sessions.find(value => value.id === previous.id);
+      if (
+        previous.background &&
+        previous.ownerChatId &&
+        previous.status === ShellSessionStatus.RUNNING &&
+        current?.status !== ShellSessionStatus.RUNNING
+      ) {
+        const final = current ?? previous;
+        const stopped = final.stopRequested || this.stoppingShells.has(previous.id) || !current;
+        const label = `${stopped ? 'Stopped' : final.error ? 'Failed' : final.exitCode === 0 ? 'Finished' : 'Exited'} ${final.command}`;
+        const id = `shell-exit:${previous.executionId ?? previous.id}:${previous.startedAt}`;
+        this.pendingShellEvents.set(id, {
+          chatId: previous.ownerChatId,
+          label: this.options.glyph.redact(label),
+          context: {
+            schemaVersion: 1,
+            id,
+            type: 'shell_exit',
+            payload: { ...final, reason: stopped ? 'stopped' : 'exited' },
+          },
+        });
+      }
+    }
+    this.previousShells.clear();
+    for (const session of sessions) this.previousShells.set(session.id, session);
     for (const [runId, run] of this.runs) {
       for (const tool of run.tools) {
         if (!tool.shell) continue;
@@ -740,9 +815,12 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           return value.ownerChatId === run.chatId && owner?.runId === runId && owner.toolId === tool.id;
         });
         if (!session && !tool.shell.live && !tool.shell.running) continue;
+        const { wakePattern: _wakePattern, ...previousShell } = tool.shell;
         const shell = session
           ? {
-              ...tool.shell,
+              ...previousShell,
+              ...(session.error ? { error: this.options.glyph.redact(session.error) } : {}),
+              ...(session.wakePattern ? { wakePattern: this.options.glyph.redact(session.wakePattern) } : {}),
               command: this.options.glyph.redact(session.command),
               workingDirectory: session.workingDirectory,
               sessionId: session.id,
@@ -760,7 +838,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         const activity = {
           ...tool,
           shell,
-          status: shell.exitCode !== undefined && shell.exitCode !== 0 ? GlyphToolActivityStatus.FAILED : tool.status,
+          status:
+            shell.error || (shell.exitCode !== undefined && shell.exitCode !== 0)
+              ? GlyphToolActivityStatus.FAILED
+              : tool.status,
         };
         const current = this.runs.get(runId)!;
         this.runs.set(runId, {
@@ -769,6 +850,76 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         });
         this.publish({ type: GlyphHostEventType.TOOL_ACTIVITY, chatId: run.chatId, runId, activity });
       }
+    }
+    this.drainShellEvents();
+  }
+
+  private shellProjection() {
+    return this.options.shellSessions.allSessions
+      .filter(shell => shell.background && shell.ownerChatId)
+      .map(shell => ({
+        id: shell.id,
+        chatId: shell.ownerChatId!,
+        command: this.options.glyph.redact(shell.command),
+        workingDirectory: shell.workingDirectory,
+        output: this.options.glyph.redact(shell.outputTail),
+        running: shell.status === ShellSessionStatus.RUNNING,
+        ...(shell.error === undefined ? {} : { error: this.options.glyph.redact(shell.error) }),
+        ...(shell.exitCode === undefined ? {} : { exitCode: shell.exitCode }),
+        ...(shell.wakePattern === undefined ? {} : { wakePattern: this.options.glyph.redact(shell.wakePattern) }),
+      }));
+  }
+
+  private queueShellWake(wake: ShellWakeEvent): void {
+    if (!wake.ownerChatId) return;
+    this.pendingShellEvents.set(wake.id, {
+      chatId: wake.ownerChatId,
+      label: this.options.glyph.redact(`Wake condition matched: ${wake.pattern}`),
+      context: { schemaVersion: 1, id: wake.id, type: 'shell_wake', payload: wake },
+    });
+    this.drainShellEvents();
+  }
+
+  /** Reserve the same per-chat turn lock before any asynchronous context persistence. */
+  private drainShellEvents(): void {
+    if (this.disposed || !this.connected) return;
+    for (const [id, event] of this.pendingShellEvents) {
+      if (event.context.type === 'shell_wake' && !this.options.shellSessions.peekPendingWake(wake => wake.id === id)) {
+        this.pendingShellEvents.delete(id);
+        continue;
+      }
+      const runId = `shell-event:${id}`;
+      if (this.active.has(event.chatId) || this.historyChanges.has(event.chatId) || this.runs.has(runId)) continue;
+      let session: ChatSession;
+      try {
+        session = this.session(event.chatId);
+      } catch {
+        continue;
+      }
+      const controller = new AbortController();
+      const steering = new ChatSteeringQueue();
+      const completion = Promise.resolve().then(() =>
+        this.send(
+          {
+            type: GlyphWorkbenchCommandType.SEND,
+            chatId: event.chatId,
+            runId,
+            text: event.label,
+            attachments: [],
+            options: { mode: session.summary.mode ?? AgentMode.default.id },
+          },
+          session,
+          controller.signal,
+          steering,
+          event,
+        ),
+      );
+      this.active.set(event.chatId, { controller, steering, completion, runId });
+      void completion.finally(() => {
+        steering.close();
+        this.active.delete(event.chatId);
+        this.drainShellEvents();
+      });
     }
   }
 

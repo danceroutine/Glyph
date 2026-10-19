@@ -54,6 +54,7 @@ interface PendingShellInput {
 export class ShellSessionManager implements ShellSessionRegistry {
   private readonly events = new EventEmitter();
   private readonly terminals = new Map<string, ManagedShellSession>();
+  private readonly closing = new Set<string>();
   private readonly pendingWakes: ShellWakeEvent[] = [];
   private ownerChatId: string | undefined;
   private disposed = false;
@@ -126,7 +127,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
     });
     options.signal.throwIfAborted();
     this.assertAvailable();
-    if (existing && this.terminals.get(existing.snapshot.id) !== existing) {
+    if (existing && (this.terminals.get(existing.snapshot.id) !== existing || this.closing.has(existing.snapshot.id))) {
       throw new Error('The shell terminal was closed while permission was pending.');
     }
     if (!existing && this.terminals.size >= this.maxSessions) {
@@ -187,9 +188,15 @@ export class ShellSessionManager implements ShellSessionRegistry {
 
   async close(terminalId: string, ownerChatId = this.ownerChatId): Promise<void> {
     const terminal = this.requireTerminal(terminalId, ownerChatId);
-    this.terminals.delete(terminalId);
-    this.changed();
+    this.closing.add(terminalId);
+    // Closing revokes pending matches before terminating the process.
+    for (let index = this.pendingWakes.length - 1; index >= 0; index--) {
+      if (this.pendingWakes[index]?.terminalId === terminalId) this.pendingWakes.splice(index, 1);
+    }
     await terminal.terminate();
+    this.terminals.delete(terminalId);
+    this.closing.delete(terminalId);
+    this.changed();
   }
 
   shutdown(): void {
@@ -235,7 +242,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
 
   private requireTerminal(terminalId: string, ownerChatId: string | undefined): ManagedShellSession {
     const terminal = this.terminals.get(terminalId);
-    if (!terminal || terminal.snapshot.ownerChatId !== ownerChatId) {
+    if (!terminal || this.closing.has(terminalId) || terminal.snapshot.ownerChatId !== ownerChatId) {
       throw new Error(`Unknown shell terminal: ${terminalId}`);
     }
     return terminal;
@@ -272,6 +279,8 @@ class ManagedShellSession {
   private status = ShellSessionStatus.IDLE;
   private background: boolean;
   private outputTail = '';
+  private error: string | undefined;
+  private stopRequested = false;
   private exitCode: number | undefined;
   private wakePattern: string | undefined;
   private wakeScanTail = '';
@@ -292,6 +301,8 @@ class ManagedShellSession {
       background: this.background,
       outputTail: this.outputTail,
       startedAt: this.options.startedAt,
+      ...(this.error === undefined ? {} : { error: this.error }),
+      ...(this.stopRequested ? { stopRequested: true } : {}),
       ...(this.exitCode === undefined ? {} : { exitCode: this.exitCode }),
       ...(this.wakePattern === undefined ? {} : { wakePattern: this.wakePattern }),
     };
@@ -322,6 +333,8 @@ class ManagedShellSession {
     this.command = normalized;
     this.executionId = executionId;
     this.outputTail = '';
+    this.stopRequested = false;
+    this.error = undefined;
     this.status = ShellSessionStatus.RUNNING;
     this.exitCode = undefined;
     let child: ChildProcess;
@@ -356,6 +369,7 @@ class ManagedShellSession {
       child.once('error', error => {
         if (this.child !== child) return;
         this.status = ShellSessionStatus.EXITED;
+        this.error = error.message;
         this.child = undefined;
         this.active = undefined;
         reject(error);
@@ -500,6 +514,7 @@ class ManagedShellSession {
   }
 
   async terminate(): Promise<void> {
+    this.stopRequested = true;
     this.wakePattern = undefined;
     this.wakeScanTail = '';
     this.pendingInput?.fail(new Error('The shell terminal is closing.'));

@@ -52,6 +52,7 @@ export interface GlyphWorkbenchService {
   createChat(provider: string, accountId: string, model: string): Promise<void>;
   openChat(chatId: string): Promise<void>;
   writeShellInput(chatId: string, sessionId: string, input: string, appendNewline: boolean): Promise<void>;
+  openShell(chatId: string, sessionId: string): Promise<void>;
   stopShell(chatId: string, sessionId: string): Promise<void>;
   answerQuestion(chatId: string, runId: string, questionId: string, answer: unknown): Promise<void>;
   decideApproval(chatId: string, runId: string, approvalId: string, decision: GlyphApprovalDecision): Promise<void>;

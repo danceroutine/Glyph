@@ -22,7 +22,11 @@ export interface GlyphDesktopWorkspaceRuntime {
   snapshot(): Promise<GlyphRuntimeSnapshot>;
   handle(
     command: GlyphRuntimeCommand,
-    context: { readonly signal: AbortSignal; readonly emit: (event: GlyphHostEvent) => void },
+    context: {
+      readonly windowId?: string;
+      readonly signal: AbortSignal;
+      readonly emit: (event: GlyphHostEvent) => void;
+    },
   ): Promise<void>;
   connectionLost(windowId: string): Promise<void>;
   dispose(): Promise<void>;

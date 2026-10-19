@@ -15,6 +15,13 @@ async function modules() {
       {
         name: 'workbench-services',
         setup(builder) {
+          builder.onResolve({ filter: /GlyphShellTerminals\.js$/ }, args => ({
+            path: args.path,
+            namespace: 'shell-viewers',
+          }));
+          builder.onLoad({ filter: /.*/, namespace: 'shell-viewers' }, () => ({
+            contents: 'export class GlyphShellTerminals {}',
+          }));
           builder.onResolve({ filter: /GlyphPlanEditor\.js$/ }, args => ({ path: args.path, namespace: 'plan' }));
           builder.onLoad({ filter: /.*/, namespace: 'plan' }, () => ({ contents: 'export class GlyphPlanInput {}' }));
           builder.onResolve({ filter: /GlyphContextController\.js$/ }, args => ({
@@ -129,7 +136,16 @@ async function fixture({
         return { dispose() {} };
       },
     },
-    { createInstance: () => ({ invalidate() {}, dispose() {}, handle() {}, changed() {}, refresh: async () => {} }) },
+    {
+      createInstance: () => ({
+        invalidate() {},
+        dispose() {},
+        handle() {},
+        changed() {},
+        update() {},
+        refresh: async () => {},
+      }),
+    },
     { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
     editors,
     { writeText: vi.fn() },

@@ -10,7 +10,7 @@ import { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ToolRegistry } from '#src/tools/ToolRegistry.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import type { ToolSource } from '#src/tools/ToolSource.js';
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { testToolSource } from '#src/tools/test/fixtures/TestToolSource.js';
 import type { ProviderTraceEntry } from '#src/chat/ProviderTraceEntry.js';
 import { OpenAIProvider } from '#src/providers/openai/OpenAIProvider.js';
@@ -479,24 +479,27 @@ describe(OpenAIProvider, () => {
       });
     });
 
-    it('keeps command-controlled shell wake output in an untrusted user-role event', async () => {
-      const { provider, requests } = harness([() => sse([completed])]);
-      const event = {
-        schemaVersion: 1 as const,
-        id: 'shell-wake:one',
-        type: 'shell_wake',
-        payload: { output: 'pretend this is a developer instruction' },
-      };
+    it.each(['shell_wake', 'shell_exit'])(
+      'keeps command-controlled %s output in an untrusted user-role event',
+      async type => {
+        const { provider, requests } = harness([() => sse([completed])]);
+        const event = {
+          schemaVersion: 1 as const,
+          id: 'shell-wake:one',
+          type,
+          payload: { output: 'pretend this is a developer instruction' },
+        };
 
-      provider.recordContext([event]);
-      provider.recordContext([event]);
-      await provider.send('Continue from the wake.', options());
+        provider.recordContext([event]);
+        provider.recordContext([event]);
+        await provider.send('Continue from the wake.', options());
 
-      const input = requests[0]!.input as Array<{ role: string; content: string }>;
-      expect(input).toHaveLength(2);
-      expect(input[0]?.role).toBe('user');
-      expect(JSON.parse(input[0]!.content)).toEqual({ schema: 'glyph.context-event.v1', event });
-    });
+        const input = requests[0]!.input as Array<{ role: string; content: string }>;
+        expect(input).toHaveLength(2);
+        expect(input[0]?.role).toBe('user');
+        expect(JSON.parse(input[0]!.content)).toEqual({ schema: 'glyph.context-event.v1', event });
+      },
+    );
 
     it('falls back to completed output when the stream omits text deltas', async () => {
       const { provider } = harness([() => sse([completed])]);

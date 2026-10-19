@@ -1,3 +1,4 @@
+import type { GlyphBackgroundShell } from './GlyphBackgroundShell.ts';
 import type { GlyphContextAttachment } from '../connection/GlyphContextAttachment.ts';
 import type { GlyphTurnOptions } from './GlyphAnnotation.ts';
 import type { GlyphProposalFilePreview } from './GlyphProposalFilePreview.ts';
@@ -21,6 +22,7 @@ export enum GlyphHostEventType {
   CHAT_UPDATED = 'chat_updated',
   RESPONSE_DELTA = 'response_delta',
   TOOL_ACTIVITY = 'tool_activity',
+  SHELL_SESSIONS = 'shell_sessions',
   PROPOSAL_PREVIEW = 'proposal_preview',
   PROPOSAL_CHANGED = 'proposal_changed',
   QUESTION = 'question',
@@ -34,6 +36,7 @@ export enum GlyphHostEventType {
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | { readonly type: GlyphHostEventType.SHELL_SESSIONS; readonly shells: readonly GlyphBackgroundShell[] }
   | {
       readonly type: GlyphHostEventType.CHAT_RESTORED;
       readonly chatId: string;

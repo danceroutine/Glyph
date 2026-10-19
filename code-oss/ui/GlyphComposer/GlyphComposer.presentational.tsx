@@ -120,6 +120,7 @@ const styles = {
 export type GlyphComposerProps = GlyphComposerState & {
   readonly modelControl?: ComponentChildren;
   readonly todos?: ComponentChildren;
+  readonly terminals?: ComponentChildren;
   readonly reviews?: ComponentChildren;
   readonly modeControl: ComponentChildren;
 };
@@ -171,6 +172,7 @@ export function GlyphComposer(state: GlyphComposerProps) {
       )}
       {state.todos}
       {state.reviews}
+      {state.terminals}
       <GlyphQueuedMessages state={state} />
       <div class={`glyph-composer-surface ${styles.surface}`}>
         {state.query && (

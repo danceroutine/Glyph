@@ -1,5 +1,5 @@
 import { Button, ButtonAppearance } from '#code-oss/ui/Button/Button.tsx';
-import { ChevronDown, ChevronRight } from 'lucide-preact';
+import { ChevronDown, ChevronRight, SquareTerminal } from 'lucide-preact';
 import type { GlyphShellCommandCardState } from './useGlyphShellCommandCardState.ts';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
 
@@ -101,10 +101,16 @@ export function GlyphShellCommandCard({
         onClick={toggle}
       >
         {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
+        <SquareTerminal size={16} aria-hidden="true" />
         <span class={styles.title}>{shell.command}</span>
         <span class={`${styles.status} ${failed ? styles.error : ''}`}>{status}</span>
       </Button>
       <div class={styles.body}>
+        {shell.wakePattern && (
+          <div class={styles.details}>
+            Wake on: <code>{shell.wakePattern}</code>
+          </div>
+        )}
         {expanded && <pre class={styles.command}>$ {shell.command}</pre>}
         <pre class={styles.output} aria-label="Command output">
           {expanded ? shell.output : preview}

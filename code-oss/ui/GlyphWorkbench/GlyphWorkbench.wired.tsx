@@ -1,3 +1,4 @@
+import { GlyphBackgroundTerminals } from '#code-oss/ui/GlyphBackgroundTerminals/GlyphBackgroundTerminals.tsx';
 import { WiredGlyphPlanCards } from '#code-oss/ui/GlyphPlan/GlyphPlanCards.wired.tsx';
 import { WiredGlyphAnnotations } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotations.wired.tsx';
 import { WiredGlyphPendingReviews } from '#code-oss/ui/GlyphPendingReviews/GlyphPendingReviews.wired.tsx';
@@ -64,6 +65,17 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
         }
         composer={
           <WiredGlyphComposer
+            terminals={
+              <GlyphBackgroundTerminals
+                shells={(state.shells ?? []).filter(shell => shell.chatId === state.selectedChatId)}
+                disabled={state.readOnly}
+                open={shell =>
+                  actions.openShell?.(shell.chatId, shell.id) ??
+                  Promise.reject(new Error('Terminal viewer unavailable.'))
+                }
+                stop={shell => actions.stopShell(shell.chatId, shell.id)}
+              />
+            }
             reviews={
               state.selectedChatId &&
               proposals.length > 0 && (

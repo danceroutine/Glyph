@@ -1,3 +1,4 @@
+import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
@@ -120,9 +121,22 @@ async function fixture(
     sessions,
   );
   await glyph.initialize();
+  const wakes: ShellWakeEvent[] = [];
+  const wakeListeners = new Set<(wake: ShellWakeEvent) => void>();
   const shellListeners = new Set<() => void>();
   const shells = {
     allSessions: [] as ShellSessionSnapshot[],
+    onDidWake: (listener: (wake: ShellWakeEvent) => void) => {
+      wakeListeners.add(listener);
+      return () => {
+        wakeListeners.delete(listener);
+      };
+    },
+    peekPendingWake: (accepts: (wake: ShellWakeEvent) => boolean) => wakes.find(accepts),
+    takePendingWake: (id?: string) => {
+      const index = id === undefined ? 0 : wakes.findIndex(wake => wake.id === id);
+      return index < 0 ? undefined : wakes.splice(index, 1)[0];
+    },
     onDidChange: (listener: () => void) => {
       shellListeners.add(listener);
       return () => {
@@ -152,6 +166,10 @@ async function fixture(
     backend,
     store,
     recorded,
+    wake: (wake: ShellWakeEvent) => {
+      if (!wakes.some(value => value.id === wake.id)) wakes.push(wake);
+      for (const listener of wakeListeners) listener(wake);
+    },
     emitShells: () => {
       for (const listener of shellListeners) listener();
     },
@@ -1361,3 +1379,215 @@ function deferredVoid(): { promise: Promise<void>; resolve: () => void } {
   });
   return { promise, resolve };
 }
+
+describe('background shell continuation scheduling', () => {
+  const wakeFor = (chatId: string): ShellWakeEvent => ({
+    id: 'wake-1',
+    terminalId: 'terminal',
+    ownerChatId: chatId,
+    pattern: 'READY',
+    command: 'server',
+    workingDirectory: '/project',
+    output: 'READY\n',
+    matchedAt: new Date().toISOString(),
+  });
+  it('persists matching output before exactly one continuation and keeps the owning chat', async () => {
+    let sends = 0;
+    const harness = await fixture(async () => {
+      sends++;
+      expect(harness.recorded.flat()).toContainEqual(
+        expect.objectContaining({ type: 'shell_wake', payload: expect.objectContaining({ output: 'READY\n' }) }),
+      );
+    });
+    try {
+      const wake = wakeFor(harness.chatId);
+      harness.wake(wake);
+      harness.wake(wake);
+      await vi.waitFor(() => expect(sends).toBe(1));
+      await vi.waitFor(async () =>
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
+      );
+      harness.wake(wake);
+      await harness.runtime.snapshot();
+      expect(sends).toBe(1);
+      expect(harness.recorded.flat()).toHaveLength(1);
+      expect((await harness.runtime.snapshot()).runs[0]?.chatId).toBe(harness.chatId);
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+  it('waits for an active turn and reserves the turn lock while saving the wake', async () => {
+    const gate = deferredVoid();
+    let sends = 0;
+    const harness = await fixture(async () => {
+      if (++sends === 1) await gate.promise;
+    });
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'manual',
+        text: 'Work',
+        attachments: [],
+      });
+      await vi.waitFor(() => expect(sends).toBe(1));
+      harness.wake(wakeFor(harness.chatId));
+      expect(harness.recorded.flat()).toHaveLength(0);
+      gate.resolve();
+      await vi.waitFor(() => expect(sends).toBe(2));
+      await vi.waitFor(async () =>
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED),
+      );
+      expect(harness.recorded.flat()).toHaveLength(1);
+    } finally {
+      gate.resolve();
+      await harness.runtime.dispose();
+    }
+  });
+  it('holds the chat turn lock while wake persistence is still pending', async () => {
+    const gate = deferredVoid();
+    let sends = 0;
+    const harness = await fixture(async () => {
+      sends++;
+    });
+    const save = harness.store.save.bind(harness.store);
+    try {
+      const saving = vi.spyOn(harness.store, 'save').mockImplementation(async record => {
+        await gate.promise;
+        await save(record);
+      });
+      harness.wake(wakeFor(harness.chatId));
+      await vi.waitFor(() => expect(saving).toHaveBeenCalled());
+      await expect(
+        harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId: 'racing',
+          text: 'Race',
+          attachments: [],
+        }),
+      ).rejects.toThrow('active run');
+      expect(sends).toBe(0);
+      gate.resolve();
+      await vi.waitFor(() => expect(sends).toBe(1));
+    } finally {
+      gate.resolve();
+      await harness.runtime.dispose();
+    }
+  });
+  it('does not consume or invoke the provider when durable context storage fails', async () => {
+    let sends = 0;
+    const harness = await fixture(async () => {
+      sends++;
+    });
+    try {
+      vi.spyOn(harness.store, 'save').mockRejectedValue(new Error('Disk unavailable'));
+      harness.wake(wakeFor(harness.chatId));
+      await vi.waitFor(async () =>
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED),
+      );
+      expect(sends).toBe(0);
+      expect(harness.shells.peekPendingWake(() => true)?.id).toBe('wake-1');
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+  it('revokes a pending closed-shell match and reports the stopped command with final output once', async () => {
+    const gate = deferredVoid();
+    let sends = 0;
+    const harness = await fixture(async () => {
+      if (++sends === 1) await gate.promise;
+    });
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'manual',
+        text: 'Work',
+        attachments: [],
+      });
+      const shell: ShellSessionSnapshot = {
+        id: 'terminal',
+        ownerChatId: harness.chatId,
+        command: 'server',
+        workingDirectory: '/project',
+        outputTail: 'last line',
+        startedAt: 'now',
+        background: true,
+        status: ShellSessionStatus.RUNNING,
+      };
+      harness.shells.allSessions = [shell];
+      harness.emitShells();
+      harness.wake(wakeFor(harness.chatId));
+      harness.shells.close.mockImplementation(async () => {
+        harness.shells.takePendingWake('wake-1');
+        harness.shells.allSessions = [
+          { ...shell, status: ShellSessionStatus.IDLE, outputTail: 'final output', exitCode: 128 },
+        ];
+        harness.emitShells();
+        harness.shells.allSessions = [];
+        harness.emitShells();
+      });
+      await harness.runtime.handle({ type: Command.STOP_SHELL_SESSION, chatId: harness.chatId, sessionId: 'terminal' });
+      gate.resolve();
+      await vi.waitFor(() => expect(sends).toBe(2));
+      expect(harness.recorded.flat()).toEqual([
+        expect.objectContaining({
+          type: 'shell_exit',
+          payload: expect.objectContaining({ outputTail: 'final output', reason: 'stopped' }),
+        }),
+      ]);
+      expect((await harness.runtime.snapshot()).runs.at(-1)?.userText).toBe('Stopped server');
+    } finally {
+      gate.resolve();
+      await harness.runtime.dispose();
+    }
+  });
+  it('delivers an asynchronous launch failure as a failed background command with its actual error', async () => {
+    let sends = 0;
+    const harness = await fixture(async () => {
+      sends++;
+    });
+    try {
+      const shell: ShellSessionSnapshot = {
+        id: 'terminal',
+        ownerChatId: harness.chatId,
+        command: 'server',
+        workingDirectory: '/project',
+        outputTail: '',
+        startedAt: 'now',
+        background: true,
+        status: ShellSessionStatus.RUNNING,
+      };
+      harness.shells.allSessions = [shell];
+      harness.emitShells();
+      harness.shells.allSessions = [{ ...shell, status: ShellSessionStatus.EXITED, error: 'spawn ENOENT' }];
+      harness.emitShells();
+      await vi.waitFor(() => expect(sends).toBe(1));
+      expect((await harness.runtime.snapshot()).shells?.[0]).toMatchObject({ running: false, error: 'spawn ENOENT' });
+      expect((await harness.runtime.snapshot()).runs.at(-1)?.userText).toBe('Failed server');
+      expect(harness.recorded.flat()).toContainEqual(
+        expect.objectContaining({ type: 'shell_exit', payload: expect.objectContaining({ error: 'spawn ENOENT' }) }),
+      );
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+  it('defers notifications while disconnected and resumes them only after an owner command', async () => {
+    let sends = 0;
+    const harness = await fixture(async () => {
+      sends++;
+    });
+    try {
+      await harness.runtime.connectionLost('owner');
+      harness.wake(wakeFor(harness.chatId));
+      await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId }, { windowId: 'peer' });
+      await harness.runtime.snapshot();
+      expect(sends).toBe(0);
+      await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
+      await vi.waitFor(() => expect(sends).toBe(1));
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+});

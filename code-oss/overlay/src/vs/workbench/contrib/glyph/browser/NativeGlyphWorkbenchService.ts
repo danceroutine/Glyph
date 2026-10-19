@@ -1,3 +1,4 @@
+import { GlyphShellTerminals } from './GlyphShellTerminals.js';
 import { BrowserViewUri } from '#vs/platform/browserView/common/browserViewUri.js';
 import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
 import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
@@ -48,6 +49,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   readonly onDidChangeState = this.changeEmitter.event;
   private readonly projection = new GlyphWorkbenchProjection();
   readonly context: GlyphContextController;
+  private readonly shellTerminals: GlyphShellTerminals;
   private readonly proposalEditor: GlyphProposalEditor;
   private readonly client: GlyphDesktopClient;
   private selectionInitialized = false;
@@ -86,6 +88,13 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     @IConfigurationService private readonly configuration: IConfigurationService,
   ) {
     super();
+    this.shellTerminals = this._register(
+      instantiationService.createInstance(GlyphShellTerminals, shell => {
+        if (this.state.readOnly || !this.projection.state.shells?.some(value => value.id === shell.id && value.running))
+          return;
+        void this.stopShell(shell.chatId, shell.id).catch(error => this.report(error));
+      }),
+    );
     const savedChat = this.storageService.get('glyph.selectedChat', StorageScope.WORKSPACE);
     this.selectionInitialized = savedChat !== undefined;
     this.selectedChatId = savedChat || undefined;
@@ -166,6 +175,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             ? this.projection.state.chats.find(chat => chat.id === event.chat.id)?.mode
             : undefined;
         this.projection.accept(event);
+        this.shellTerminals.update(this.projection.state.shells ?? []);
         switch (event.type) {
           case GlyphHostEventType.INITIAL_STATE:
             if (
@@ -277,7 +287,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           ? [
               {
                 id: `${run.options?.turnId ?? run.runId}:user`,
-                role: GlyphTranscriptRole.USER,
+                role: (run.options?.turnId ?? run.runId).startsWith('shell-event:')
+                  ? GlyphTranscriptRole.DIAGNOSTIC
+                  : GlyphTranscriptRole.USER,
                 text: prompt,
                 ...(run.createdAt ? { createdAt: run.createdAt } : {}),
                 ...(!active && !this.sending && run.checkpointTurnId ? { checkpointTurnId: run.checkpointTurnId } : {}),
@@ -597,6 +609,13 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
 
   writeShellInput(chatId: string, sessionId: string, input: string, appendNewline: boolean): Promise<void> {
     return this.request({ type: GlyphWorkbenchCommandType.WRITE_SHELL_INPUT, chatId, sessionId, input, appendNewline });
+  }
+
+  async openShell(chatId: string, sessionId: string): Promise<void> {
+    this.assertSessionBinding();
+    const shell = this.projection.state.shells?.find(value => value.id === sessionId && value.chatId === chatId);
+    if (!shell) throw new Error('This background terminal is no longer available.');
+    await this.shellTerminals.open(shell);
   }
 
   stopShell(chatId: string, sessionId: string): Promise<void> {

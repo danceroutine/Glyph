@@ -41,6 +41,10 @@ export class GlyphWorkbenchProjection {
         this.status = GlyphHostStatus.READY;
         return;
       }
+      case GlyphHostEventType.SHELL_SESSIONS: {
+        this.snapshot = { ...this.snapshot, shells: event.shells };
+        return;
+      }
       case GlyphHostEventType.CHAT_UPDATED: {
         this.snapshot = { ...this.snapshot, chats: upsert(this.snapshot.chats, event.chat, value => value.id) };
         return;
@@ -72,6 +76,7 @@ export class GlyphWorkbenchProjection {
         if (event.status === GlyphHostStatus.DISCONNECTED) {
           this.snapshot = {
             ...this.snapshot,
+            shells: [],
             runs: this.snapshot.runs.map(run => ({
               ...run,
               tools: run.tools.map(tool =>

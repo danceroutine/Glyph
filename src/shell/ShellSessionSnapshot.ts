@@ -10,6 +10,8 @@ export interface ShellSessionSnapshot {
   readonly background: boolean;
   readonly outputTail: string;
   readonly startedAt: string;
+  readonly stopRequested?: boolean;
+  readonly error?: string;
   readonly exitCode?: number;
   readonly wakePattern?: string;
 }

@@ -359,7 +359,7 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
 
 function toContextEventInput(event: ChatContextEvent): ResponseInputItem {
   return {
-    role: event.type === 'shell_wake' ? 'user' : 'developer',
+    role: event.type === 'shell_wake' || event.type === 'shell_exit' ? 'user' : 'developer',
     content: JSON.stringify({ schema: 'glyph.context-event.v1', event }),
   };
 }
@@ -379,7 +379,8 @@ function contextEventId(item: ResponseInputItem): string | undefined {
       event?: { id?: unknown; type?: unknown };
     };
     if (value.schema !== 'glyph.context-event.v1' || typeof value.event?.id !== 'string') return undefined;
-    if (item.role === 'user' && value.event.type !== 'shell_wake') return undefined;
+    if (item.role === 'user' && value.event.type !== 'shell_wake' && value.event.type !== 'shell_exit')
+      return undefined;
     return value.event.id;
   } catch {
     return undefined;

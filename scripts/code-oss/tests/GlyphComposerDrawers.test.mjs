@@ -14,6 +14,7 @@ beforeAll(async () => {
       import { h, render } from 'preact';
       import { WiredGlyphTodoCard } from './code-oss/ui/GlyphTodoCard/GlyphTodoCard.wired.tsx';
       import { WiredGlyphPendingReviews } from './code-oss/ui/GlyphPendingReviews/GlyphPendingReviews.wired.tsx';
+      import { GlyphBackgroundTerminals } from './code-oss/ui/GlyphBackgroundTerminals/GlyphBackgroundTerminals.tsx';
       import { GlyphQueuedMessages } from './code-oss/ui/GlyphQueuedMessages/GlyphQueuedMessages.tsx';
       render(h('div', { id: 'stack', style: 'display:flex;flex-direction:column;height:800px;width:360px' },
         h('div', { style: 'flex:1;min-height:0' }),
@@ -26,6 +27,7 @@ beforeAll(async () => {
           { id: 'a', path: 'src/one.ts', pendingItemIds: ['a'], applicability: 'ready', textOnly: true },
           { id: 'b', path: 'src/two.ts', pendingItemIds: ['b'], applicability: 'ready', textOnly: true },
         ] }], actions: { reviewProposalFile: async () => {}, decideProposalItems: async () => {} } }),
+        h(GlyphBackgroundTerminals, { shells: [{ id: 'terminal', chatId: 'chat', command: 'Background ticker', output: 'tick', workingDirectory: '/project', running: true, wakePattern: 'READY' }], open: async () => { window.opened = true; }, stop: async () => { throw new Error('Stop failed'); } }),
         h(GlyphQueuedMessages, { state: { queued: [{ id: 'a', text: 'Verify the tests.' }, { id: 'b', text: 'Review the result.' }], active: true, disabled: false } }),
         h('textarea', { 'aria-label': 'Composer', style: 'height:100px;flex-shrink:0' })
       ), document.getElementById('root'));
@@ -45,14 +47,14 @@ afterAll(async () => {
   await browser?.close();
 });
 
-it('aligns the three drawers and animates both directions without moving the composer', async () => {
+it('aligns all four drawers and animates both directions without moving the composer', async () => {
   const page = await browser.newPage({ viewport: { width: 1000, height: 1000 } });
   try {
     await page.setContent(
       '<style>body{margin:0;font:13px Arial}button,textarea{font:inherit}</style><div id="root"></div>',
     );
     await page.addScriptTag({ content: script });
-    const cards = ['To-dos', 'Pending reviews', 'Queued messages'].map(name =>
+    const cards = ['To-dos', 'Pending reviews', 'Background terminals', 'Queued messages'].map(name =>
       page.getByRole('region', { name, exact: true }),
     );
     const settle = card =>
@@ -142,3 +144,21 @@ it('aligns the three drawers and animates both directions without moving the com
     await page.close();
   }
 }, 15000);
+
+it('opens a background terminal and keeps a failed Stop visible for retry', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: script });
+    const terminals = page.getByRole('region', { name: 'Background terminals' });
+    await terminals.getByRole('button', { name: '1 background terminal', exact: true }).press('Enter');
+    await expect(terminals.getByRole('listitem')).toContainText('Wake on: READY');
+    await terminals.getByRole('button', { name: 'Background ticker', exact: true }).click();
+    expect(await page.evaluate(() => window.opened)).toBe(true);
+    await terminals.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect(terminals.getByRole('alert')).toHaveText('Stop failed');
+    await expect(terminals.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
+  } finally {
+    await page.close();
+  }
+});

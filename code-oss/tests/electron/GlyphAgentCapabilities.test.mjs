@@ -47,31 +47,4 @@ it.describe('Pending background sub-agents', () => {
 
 // Web Fetch and Web Search contracts run in GlyphWeb.test.mjs.
 
-it.describe('Pending background shells with agent-configured wake conditions', () => {
-  it.fixme(
-    'returns control to the agent after starting a background command and shows the live shell and configured wake text',
-    async () => {},
-  );
-  it.fixme(
-    'wakes the owning agent when the configured literal text appears in shell output and provides the matching output as context',
-    async () => {},
-  );
-  it.fixme(
-    'matches configured wake text across separate output chunks without waking on unrelated output',
-    async () => {},
-  );
-  it.fixme('fires a one-shot wake condition only once even when the matching text appears repeatedly', async () => {});
-  it.fixme(
-    'lets the agent replace or re-arm the wake condition through shell input and waits for the new text',
-    async () => {},
-  );
-  it.fixme(
-    'delivers a wake event while the agent is already working without starting concurrent turns in the same chat',
-    async () => {},
-  );
-  it.fixme(
-    'keeps wake events scoped to their owning chat and prevents a closed shell from waking the agent later',
-    async () => {},
-  );
-  it.fixme('shows a background command’s exit or failure even when its wake text never appears', async () => {});
-});
+// Background shell wake and termination contracts run in GlyphBackgroundShells.test.mjs.

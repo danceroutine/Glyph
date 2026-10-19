@@ -1,3 +1,4 @@
+import type { GlyphBackgroundShell } from './GlyphBackgroundShell.ts';
 import type { GlyphAccountSummary } from './GlyphAccountSummary.ts';
 import type { GlyphModelSummary } from './GlyphModelSummary.ts';
 import type { GlyphChatSummary } from './GlyphChatSummary.ts';
@@ -11,6 +12,7 @@ export interface GlyphDesktopSnapshot {
   readonly models: readonly GlyphModelSummary[];
   readonly chats: readonly GlyphChatSummary[];
   readonly runs: readonly GlyphRunProjection[];
+  readonly shells?: readonly GlyphBackgroundShell[];
   readonly proposals: readonly GlyphProposalSummary[];
   readonly ownerWindowId: string;
   readonly readOnly: boolean;

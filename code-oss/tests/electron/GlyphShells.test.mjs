@@ -27,21 +27,24 @@ const result = (provider, call) =>
       .at(-1)
       .body.input.find(item => item.type === 'function_call_output' && item.call_id === call.call_id).output,
   );
-async function runTool(glyph, provider, call, prompt = 'Perform the shell operation.') {
+async function runTool(glyph, provider, call, notifiesExit = false) {
   const count = provider.requests.length;
   provider.enqueue({ output: [call] }, { chunks: ['Shell step complete.'] });
-  await glyph.send(prompt);
-  await expect.poll(() => provider.requests.length).toBe(count + 2);
+  if (notifiesExit) provider.enqueue({ chunks: ['Background terminal stopped.'] });
+  await glyph.send('Perform the shell operation.');
+  await expect.poll(() => provider.requests.length).toBe(count + (notifiesExit ? 3 : 2));
   await finished(glyph);
   return result(provider, call);
 }
-async function runCommand(glyph, provider, call) {
+async function runCommand(glyph, provider, call, notifiesExit = false) {
   provider.enqueue({ output: [call] });
   await glyph.send('Run the requested command.');
   const approval = glyph.page.getByRole('region', { name: 'Command approval' });
   await expect(approval).toBeVisible();
   provider.enqueue({ chunks: ['Shell step complete.'] });
+  if (notifiesExit) provider.enqueue({ chunks: ['Background terminal exited.'] });
   await approval.getByRole('button', { name: 'Run', exact: true }).click();
+  if (notifiesExit) await expect(glyph.assistantEntries.last()).toContainText('Background terminal exited.');
   await finished(glyph);
   return result(provider, call);
 }
@@ -157,7 +160,7 @@ it.describe('Shell execution, input, close, and listing', () => {
       terminal_id: id,
     });
     await expect(cards(glyph).first().getByLabel('Command output')).toContainText('GOT:from agent');
-    await runTool(glyph, provider, close(id));
+    await runTool(glyph, provider, close(id), true);
   });
 
   it('respects append_newline so typing input and submitting it remain distinct operations', async ({
@@ -169,7 +172,7 @@ it.describe('Shell execution, input, close, and listing', () => {
     await expect(cards(glyph).first().getByLabel('Command output')).not.toContainText('GOT:');
     await runTool(glyph, provider, write(id, '', true));
     await expect(cards(glyph).first().getByLabel('Command output')).toContainText('GOT:partial');
-    await runTool(glyph, provider, close(id));
+    await runTool(glyph, provider, close(id), true);
   });
 
   it('reports an unknown or idle shell without starting a command or bypassing command approval', async ({
@@ -181,6 +184,7 @@ it.describe('Shell execution, input, close, and listing', () => {
       glyph,
       provider,
       execute('printf "finished\\n"', { background: true }),
+      true,
     );
     await expect(cards(glyph).nth(1)).toContainText('Exit 0');
     expect((await runTool(glyph, provider, write(id, 'printf bad > input-bypass.txt'))).error.message).toMatch(
@@ -209,7 +213,7 @@ it.describe('Shell execution, input, close, and listing', () => {
     );
     await expect.poll(() => file(glyph, 'child.pid')).not.toBeNull();
     const pid = Number((await file(glyph, 'child.pid')).trim());
-    expect(await runTool(glyph, provider, close(id))).toMatchObject({ status: 'closed' });
+    expect(await runTool(glyph, provider, close(id), true)).toMatchObject({ status: 'closed' });
     await expect
       .poll(() => {
         try {
@@ -232,7 +236,7 @@ it.describe('Shell execution, input, close, and listing', () => {
     const id = await startInteractive(glyph, provider);
     expect((await runTool(glyph, provider, close('unknown'))).error.message).toMatch(/unknown/i);
     expect((await runTool(glyph, provider, list())).terminals.map(value => value.terminal_id)).toEqual([id]);
-    await runTool(glyph, provider, close(id));
+    await runTool(glyph, provider, close(id), true);
     expect((await runTool(glyph, provider, close(id))).error.message).toMatch(/unknown/i);
   });
 
@@ -267,7 +271,7 @@ it.describe('Shell execution, input, close, and listing', () => {
     expect(output.terminals[0].output_tail).toContain('TAIL END');
     await cards(glyph).last().getByRole('button').first().click();
     await expect(cards(glyph).last()).toContainText(id);
-    await runTool(glyph, provider, close(id));
+    await runTool(glyph, provider, close(id), true);
   });
 
   it('reports an empty shell list without inventing a session or showing another chat’s shells', async ({
@@ -286,6 +290,7 @@ it.describe('Shell execution, input, close, and listing', () => {
       glyph,
       provider,
       execute('printf "FINISHED\\n"', { background: true }),
+      true,
     );
     await expect(cards(glyph).first()).toContainText('Exit 0');
     const output = await runTool(glyph, provider, list());
@@ -306,8 +311,10 @@ it.describe('Shell execution, input, close, and listing', () => {
     await card.getByRole('checkbox', { name: 'Append newline' }).check();
     await card.getByRole('button', { name: 'Send input' }).click();
     await expect(card.getByLabel('Command output')).toContainText('GOT:from user');
+    provider.enqueue({ chunks: ['Background terminal stopped.'] });
     await card.getByRole('button', { name: 'Close shell' }).click();
     await expect(card.getByRole('button', { name: 'Close shell' })).toHaveCount(0);
-    expect(provider.requests).toHaveLength(2);
+    await expect(glyph.assistantEntries.last()).toContainText('Background terminal stopped.');
+    expect(provider.requests).toHaveLength(3);
   });
 });

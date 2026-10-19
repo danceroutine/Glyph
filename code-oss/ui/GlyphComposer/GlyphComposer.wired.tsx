@@ -6,10 +6,11 @@ import { useGlyphComposerState, type GlyphComposerStateOptions } from './useGlyp
 export interface WiredGlyphComposerProps extends GlyphComposerStateOptions {
   readonly modelControl?: ComponentChildren;
   readonly todos?: ComponentChildren;
+  readonly terminals?: ComponentChildren;
   readonly reviews?: ComponentChildren;
 }
 
-export function WiredGlyphComposer({ modelControl, todos, reviews, ...props }: WiredGlyphComposerProps) {
+export function WiredGlyphComposer({ modelControl, todos, reviews, terminals, ...props }: WiredGlyphComposerProps) {
   const state = useGlyphComposerState(props);
   return (
     <GlyphComposer
@@ -17,6 +18,7 @@ export function WiredGlyphComposer({ modelControl, todos, reviews, ...props }: W
       modelControl={modelControl}
       todos={todos}
       reviews={reviews}
+      terminals={terminals}
       modeControl={<WiredGlyphModePicker mode={state.mode} change={state.setMode} />}
     />
   );
