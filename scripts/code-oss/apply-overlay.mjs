@@ -33,6 +33,12 @@ for (const name of ['AgentMode.ts']) {
   const source = join(repositoryRoot, 'src', 'chat', name);
   await writeFile(join(chatContractTarget, name), (await readFile(source, 'utf8')).replaceAll(".ts'", ".js'"));
 }
+const reviewContractTarget = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'reviewing');
+await mkdir(reviewContractTarget, { recursive: true });
+await writeFile(
+  join(reviewContractTarget, 'AgentReview.ts'),
+  await readFile(join(repositoryRoot, 'src/reviewing/AgentReview.ts'), 'utf8'),
+);
 await copyProtocol(
   join(repositoryRoot, 'src', 'desktop', 'workbench'),
   join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'common', 'workbench'),

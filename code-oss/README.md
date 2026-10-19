@@ -143,8 +143,9 @@ Context actions live on the native workbench surfaces:
 - Highlight terminal output to expose **Add to Chat**, or press Cmd+L (Ctrl+L
   elsewhere). This attaches only the selected passage. The same shortcut works
   in native test-output editors.
-- **Agent Review** in Source Control starts a review in Plan mode, with instructions
-  to report findings without editing files. `glyph.review.scope` defaults to
+- **Agent Review** in Source Control starts a separate core-owned review, independent
+  of the active chat. Its provider has only project read/search tools; editing, shell,
+  and mode-switch tools are unavailable. `glyph.review.scope` defaults to
   **Last commit**, with **Staged changes**, **All local changes**, and **Compare
   against branch** available in the panel and Settings. The chosen scope persists. Choosing branch comparison opens the native searchable
   branch picker immediately; selecting it again changes the target.
@@ -153,6 +154,15 @@ Context actions live on the native workbench surfaces:
   commit). All-local includes tracked and untracked Git changes and current editor
   text for those paths. Unsaved edits to otherwise Git-clean files are outside
   this scope. Multiple repositories require an explicit repository selection.
+  The core validates model findings against captured paths and line bounds and
+  checkpoints captures, findings, dismissals, and lifecycle state in a workspace-scoped
+  SQLite store. Completed reviews restore after host restart. Unfinished checkpoints
+  become interrupted and require an explicit retry; inference is never replayed automatically.
+  Completion changes the controls to **Review Again** (fresh capture) and **Fix All Issues**
+  (all undismissed findings sent to the active chat). Fix is disabled for a clean review.
+  Individual fixes also use the active chat; fixing does not automatically dismiss a finding.
+  Native tests exercise the production runtime with scripted provider responses, including
+  rejected write tools and host recovery; they do not establish live-model review quality.
 
 **Glyph: Attach IDE Context** remains a Command Palette fallback for diagnostics,
 related symbols, individual diffs, terminal selections, and test-output tasks.

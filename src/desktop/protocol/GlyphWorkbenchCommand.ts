@@ -1,3 +1,4 @@
+import type { AgentReviewInput, AgentReviewModel } from '#src/reviewing/AgentReview.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwapPolicy } from './events/GlyphModeSwap.ts';
 import type { GlyphPlan } from './events/GlyphPlan.ts';
@@ -16,6 +17,9 @@ export enum GlyphWorkbenchCommandType {
   RESTORE_CHECKPOINT = 'restore_checkpoint',
   SELECT_ACCOUNT = 'select_account',
   SELECT_MODEL = 'select_model',
+  START_AGENT_REVIEW = 'start_agent_review',
+  CANCEL_AGENT_REVIEW = 'cancel_agent_review',
+  DISMISS_AGENT_REVIEW_FINDING = 'dismiss_agent_review_finding',
   SEND = 'send',
   STEER = 'steer',
   UPDATE_PLAN = 'update_plan',
@@ -38,6 +42,17 @@ export enum GlyphWorkbenchCommandType {
  * through MessagePort without coupling either process to the other's classes.
  */
 export type GlyphWorkbenchCommand =
+  | {
+      readonly type: GlyphWorkbenchCommandType.START_AGENT_REVIEW;
+      readonly review: AgentReviewInput;
+      readonly model: AgentReviewModel;
+    }
+  | { readonly type: GlyphWorkbenchCommandType.CANCEL_AGENT_REVIEW; readonly reviewId: string }
+  | {
+      readonly type: GlyphWorkbenchCommandType.DISMISS_AGENT_REVIEW_FINDING;
+      readonly reviewId: string;
+      readonly findingId: string;
+    }
   | BranchChatCommand
   | RestoreCheckpointCommand
   | SetChatModeCommand

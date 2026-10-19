@@ -1,3 +1,4 @@
+import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import { GlyphShellTerminals } from './GlyphShellTerminals.js';
 import { BrowserViewUri } from '#vs/platform/browserView/common/browserViewUri.js';
 import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
@@ -508,6 +509,24 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       attachments,
       options,
     });
+  }
+
+  async startAgentReview(review: AgentReviewInput): Promise<void> {
+    const chat = this.state.chats.find(chat => chat.id === this.selectedChatId);
+    const account = chat ? { provider: chat.accountProvider, id: chat.accountId } : this.state.selectedAccount;
+    const model = chat?.modelSlug ?? this.state.selectedModel;
+    if (!account || !model) throw new Error('Choose an account and model before reviewing.');
+    await this.request({
+      type: GlyphWorkbenchCommandType.START_AGENT_REVIEW,
+      review,
+      model: { accountProvider: account.provider, accountId: account.id, model },
+    });
+  }
+  cancelAgentReview(reviewId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.CANCEL_AGENT_REVIEW, reviewId });
+  }
+  dismissAgentReviewFinding(reviewId: string, findingId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.DISMISS_AGENT_REVIEW_FINDING, reviewId, findingId });
   }
 
   cancelRun(chatId: string, runId: string): Promise<void> {

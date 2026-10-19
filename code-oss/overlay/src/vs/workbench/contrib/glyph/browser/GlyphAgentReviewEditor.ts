@@ -87,6 +87,12 @@ export class GlyphAgentReviewEditor extends Disposable {
   dismiss(id: string): void {
     this.issueComments.get(id)?.dispose();
   }
+
+  clear(): void {
+    this.revision++;
+    this.comments.clear();
+    this.issueComments.clear();
+  }
 }
 
 /** Native zone widgets reserve diff space while keeping interactive comments in the accessible overlay layer. */

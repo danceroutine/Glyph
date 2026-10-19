@@ -16,7 +16,7 @@ export interface GlyphTurnOptions {
   /** UTF-16 spans in the trimmed prompt, in attachment order. */
   readonly attachmentSpans?: readonly { readonly from: number; readonly to: number }[];
   readonly turnId?: string;
-  /** Associates a structured code review with its originating workbench panel. */
+  /** Legacy chat-based review metadata, retained for saved transcript compatibility. */
   readonly agentReviewId?: string;
   readonly mode?: AgentModeID;
   readonly annotations?: readonly GlyphAnnotation[];

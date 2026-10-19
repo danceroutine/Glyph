@@ -1,3 +1,4 @@
+import type { AgentReview } from '#src/reviewing/AgentReview.js';
 import type { GlyphBackgroundShell } from './GlyphBackgroundShell.ts';
 import type { GlyphContextAttachment } from '../connection/GlyphContextAttachment.ts';
 import type { GlyphTurnOptions } from './GlyphAnnotation.ts';
@@ -28,6 +29,7 @@ export enum GlyphHostEventType {
   QUESTION = 'question',
   APPROVAL = 'approval',
   USAGE = 'usage',
+  AGENT_REVIEW_CHANGED = 'agent_review_changed',
   RUN_STATE = 'run_state',
   CHAT_RESTORED = 'chat_restored',
   HOST_STATUS = 'host_status',
@@ -36,6 +38,7 @@ export enum GlyphHostEventType {
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | { readonly type: GlyphHostEventType.AGENT_REVIEW_CHANGED; readonly review: AgentReview }
   | { readonly type: GlyphHostEventType.SHELL_SESSIONS; readonly shells: readonly GlyphBackgroundShell[] }
   | {
       readonly type: GlyphHostEventType.CHAT_RESTORED;

@@ -136,7 +136,7 @@ it.describe('Context actions on native workbench surfaces', () => {
     expect(files(provider)[0].text).toContain('FIRST_COMMIT');
     expect(files(provider)[0].text).toContain('LAST_COMMIT');
     expect(files(provider)[0].text).not.toContain('STAGED_ONLY');
-    await expect(glyph.sendButton).toHaveText('Send (Enter)');
+    await expect(glyph.page.getByRole('button', { name: 'Find Issues', exact: true })).toBeEnabled();
     await scope.click();
     await glyph.page.getByRole('option', { name: 'Staged changes', exact: true }).click();
     await expect(scope).toHaveAttribute('title', 'Review scope: Staged changes');
@@ -145,7 +145,7 @@ it.describe('Context actions on native workbench surfaces', () => {
     await expect.poll(() => provider.requests.length).toBe(2);
     expect(files(provider)[0].text).toContain('STAGED_ONLY');
     expect(files(provider)[0].text).not.toContain('WORKTREE_ONLY');
-    await expect(glyph.sendButton).toHaveText('Send (Enter)');
+    await expect(glyph.page.getByRole('button', { name: 'Find Issues', exact: true })).toBeEnabled();
     await glyph.reload();
     await glyph.command('Glyph: Open Agent Review');
     await expect(scope).toHaveAttribute('title', 'Review scope: Staged changes');
@@ -160,7 +160,7 @@ it.describe('Context actions on native workbench surfaces', () => {
     expect(files(provider)[0].text).toContain('FIRST_COMMIT');
     expect(files(provider)[0].text).toContain('LAST_COMMIT');
     expect(files(provider)[0].text).not.toContain('WORKTREE_ONLY');
-    await expect(glyph.sendButton).toHaveText('Send (Enter)');
+    await expect(glyph.page.getByRole('button', { name: 'Find Issues', exact: true })).toBeEnabled();
     await scope.click();
     await glyph.page.getByRole('option', { name: 'All local changes', exact: true }).click();
     provider.enqueue({ chunks: ['Local review complete.'] });

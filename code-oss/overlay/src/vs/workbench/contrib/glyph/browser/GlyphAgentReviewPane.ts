@@ -1,11 +1,11 @@
+import { ICommandService } from '#vs/platform/commands/common/commands.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import { GlyphAgentReviewEditor, type GlyphAgentReviewFile } from './GlyphAgentReviewEditor.js';
+import { AgentReviewStatus, type AgentReview } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import {
-  parseGlyphAgentReviewFindings,
-  type GlyphAgentReviewFinding,
-} from '#glyph/workbench/GlyphAgentReviewFinding.js';
-import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
-import { GlyphRunStatus } from '#glyph/protocol/events/GlyphRunProjection.js';
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import { getIconClasses } from '#vs/editor/common/services/getIconClasses.js';
 import { IModelService } from '#vs/editor/common/services/model.js';
 import { ILanguageService } from '#vs/editor/common/languages/language.js';
@@ -43,15 +43,7 @@ export class GlyphAgentReviewPane extends ViewPane {
   private readonly repositories = this._register(new DisposableMap<ISCMRepository, DisposableStore>());
   private readonly reviewEditor: GlyphAgentReviewEditor;
   private readonly reviewFiles = new Map<string, GlyphAgentReviewFile>();
-  private captured: readonly GlyphContextAttachment[] = [];
-  private findings: readonly GlyphAgentReviewFinding[] = [];
-  private readonly dismissed = new Set<string>();
-  private reviewRun: { chatId: string; runId: string } | undefined;
-  private reviewPrompt: string | undefined;
-  private reviewId: string | undefined;
-  private reviewing = false;
-  private completed = false;
-  private resultScope = '';
+  private displayedReviewId: string | undefined;
   private busy = false;
   private error: string | undefined;
   constructor(
@@ -67,6 +59,7 @@ export class GlyphAgentReviewPane extends ViewPane {
     @IHoverService hoverService: IHoverService,
     @ISCMService private readonly scm: ISCMService,
     @IQuickInputService private readonly quick: IQuickInputService,
+    @ICommandService private readonly commands: ICommandService,
     @IViewsService private readonly views: IViewsService,
     @GlyphWorkbenchService private readonly glyphService: GlyphWorkbenchService,
   ) {
@@ -84,7 +77,7 @@ export class GlyphAgentReviewPane extends ViewPane {
     );
 
     this.reviewEditor = this._register(instantiationService.createInstance(GlyphAgentReviewEditor));
-    this._register(glyphService.onDidChangeState(() => this.observeReview()));
+    this._register(glyphService.onDidChangeState(() => this.update()));
     this._register(
       configurationService.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('glyph.review')) this.refresh();
@@ -139,29 +132,29 @@ export class GlyphAgentReviewPane extends ViewPane {
       scope: this.scope,
       branch: this.branch,
       busy: this.busy,
-      reviewing: this.reviewing,
-      completed: this.completed,
-      resultScope: this.resultScope,
-      findings: this.findings.filter(finding => !this.dismissed.has(finding.id)),
+      reviewing: this.reviewState?.status === AgentReviewStatus.RUNNING,
+      completed: this.reviewState?.status === AgentReviewStatus.COMPLETED,
+      resultScope: this.reviewState?.label,
+      findings: this.visibleFindings,
       fileIconClasses: path =>
         this.instantiationService.invokeFunction(accessor =>
           getIconClasses(accessor.get(IModelService), accessor.get(ILanguageService), URI.file(path)),
         ),
       stop: () => {
-        if (this.reviewRun)
-          void this.glyphService.cancelRun(this.reviewRun.chatId, this.reviewRun.runId).catch(error => {
-            this.error = String(error);
-            this.update();
-          });
+        const review = this.reviewState;
+        if (review) void this.perform(() => this.glyphService.cancelAgentReview(review.id));
+      },
+      fixAll: () => {
+        void this.perform(() => this.fixFindings(this.visibleFindings.map(finding => finding.id)));
       },
       openFinding: id => {
         void this.perform(() => this.openFinding(id));
       },
       fixFinding: id => {
-        void this.perform(() => this.fixFinding(id));
+        void this.perform(() => this.fixFindings([id]));
       },
       dismissFinding: id => this.dismissFinding(id),
-      error: this.error,
+      error: this.error ?? this.reviewState?.error,
       unavailableReason,
       chooseScope: scope => {
         void this.perform(async () => {
@@ -175,6 +168,14 @@ export class GlyphAgentReviewPane extends ViewPane {
     };
   }
   private update(): void {
+    const review = this.reviewState;
+    if (review && this.displayedReviewId !== review.id) {
+      this.reviewEditor.clear();
+      this.displayedReviewId = review.id;
+      this.reviewFiles.clear();
+      for (const file of review.files)
+        this.reviewFiles.set(file.path, { uri: URI.parse(file.uri), before: file.before, after: file.after });
+    }
     this.view.value?.update(this.controls());
   }
   private async perform(action: () => Promise<unknown>): Promise<void> {
@@ -236,119 +237,100 @@ export class GlyphAgentReviewPane extends ViewPane {
     const scope = this.scope;
     const repository = await this.repository(true);
     if (!repository) return;
+    // Await Git's refresh before reading HEAD/index; filesystem watchers can lag a commit.
+    await this.commands.executeCommand('git.refresh', repository.provider.rootUri);
     const branch = scope === Scope.BRANCH ? this.branch || (await this.chooseBranch(repository)) : '';
     if (branch === undefined) return;
-    this.reviewFiles.clear();
-    this.captured = await captureGlyphAgentReview(
+    const files = new Map<string, GlyphAgentReviewFile>();
+    const captured = await captureGlyphAgentReview(
       this.glyphService.ideContext,
       repository,
       scope,
       branch,
       (uri, before, after) => {
         const source = uri.with({ query: '', fragment: '' });
-        this.reviewFiles.set(source.toString(), { uri: source, before, after });
+        files.set(source.toString(), { uri: source, before, after });
       },
     );
-    const capturedFiles = new Map<string, GlyphAgentReviewFile>();
-    for (const attachment of this.captured) {
-      const file = this.reviewFiles.get(attachment.uri);
-      if (file) capturedFiles.set(attachment.path, file);
-    }
-    this.reviewFiles.clear();
-    for (const [path, file] of capturedFiles) this.reviewFiles.set(path, file);
-    this.findings = [];
-    this.dismissed.clear();
-    this.completed = false;
-    this.resultScope =
-      scope === Scope.BRANCH
-        ? `Compare against ${branch.replace(/^refs\/(heads|remotes)\//, '')}`
-        : { lastCommit: 'Last commit', staged: 'Staged changes', allLocal: 'All local changes' }[scope];
-    this.reviewId = generateUuid();
-    this.reviewRun = undefined;
-    this.reviewPrompt =
-      'Review the attached Git comparison for actionable bugs and regressions. Do not modify files. Use the captured revisions.';
-    this.reviewing = true;
-    this.update();
-    try {
-      await useGlyphContext(
-        this.glyphService,
-        this.views,
-        async () => this.captured,
-        this.reviewPrompt,
-        AgentModeID.PLAN,
-        { agentReviewId: this.reviewId },
-      );
-      this.observeReview();
-    } catch (error) {
-      this.reviewing = false;
-      this.reviewPrompt = undefined;
-      throw error;
-    }
+    const repositoryUri = repository.provider.rootUri;
+    if (!repositoryUri) throw new Error('The repository root is unavailable.');
+    await this.glyphService.startAgentReview({
+      id: generateUuid(),
+      repositoryUri: repositoryUri.toString(),
+      scope,
+      branch,
+      label:
+        scope === Scope.BRANCH
+          ? `Compare against ${branch.replace(/^refs\/(heads|remotes)\//, '')}`
+          : { lastCommit: 'Last commit', staged: 'Staged changes', allLocal: 'All local changes' }[scope],
+      files: captured.map(attachment => {
+        const file = files.get(attachment.uri);
+        if (!file) throw new Error(`The captured comparison is unavailable for ${attachment.path}.`);
+        return {
+          path: attachment.path,
+          uri: attachment.uri,
+          before: file.before,
+          after: file.after,
+          contextText: attachment.text,
+          revision: attachment.contentRevision,
+        };
+      }),
+    });
   }
-  private observeReview(): void {
-    if (!this.reviewPrompt || !this.reviewing) return;
-    const run = this.reviewRun
-      ? this.glyphService.state.runs.find(
-          run => run.runId === this.reviewRun!.runId && run.chatId === this.reviewRun!.chatId,
-        )
-      : this.glyphService.state.runs.find(run => run.options?.agentReviewId === this.reviewId);
-    if (!run) return;
-    this.reviewRun = { chatId: run.chatId, runId: run.runId };
-    const result = parseGlyphAgentReviewFindings(
-      run.text,
-      new Map(
-        [...this.reviewFiles].map(([path, file]) => [
-          path,
-          Math.max(1, (file.after || file.before).split('\n').length),
-        ]),
-      ),
+  private get reviewState(): AgentReview | undefined {
+    return this.glyphService.state.agentReviews?.reduce<AgentReview | undefined>(
+      (latest, review) => (!latest || review.createdAt > latest.createdAt ? review : latest),
+      undefined,
     );
-    this.findings = result.findings;
-    if (
-      [GlyphRunStatus.COMPLETED, GlyphRunStatus.CANCELLED, GlyphRunStatus.FAILED, GlyphRunStatus.INTERRUPTED].includes(
-        run.status,
-      )
-    ) {
-      this.reviewing = false;
-      this.completed = run.status === GlyphRunStatus.COMPLETED && result.complete;
-      if (run.status === GlyphRunStatus.COMPLETED && !result.complete)
-        this.error =
-          'The review did not return a complete findings report. You can inspect its response in chat or run it again.';
-      else if (run.status === GlyphRunStatus.FAILED || run.status === GlyphRunStatus.INTERRUPTED)
-        this.error = run.terminalMessage ?? 'Review interrupted. Run it again to finish.';
-    }
-    this.update();
+  }
+  private get visibleFindings() {
+    const review = this.reviewState;
+    return review?.findings.filter(finding => !review.dismissedIds.includes(finding.id)) ?? [];
   }
   private async openFinding(id: string): Promise<void> {
-    const finding = this.findings.find(finding => finding.id === id);
+    this.update();
+    const finding = this.visibleFindings.find(finding => finding.id === id);
     const file = finding && this.reviewFiles.get(finding.path);
     if (!finding || !file) return;
     await this.reviewEditor.open(
       file,
       finding,
-      this.findings.filter(finding => !this.dismissed.has(finding.id)),
+      this.visibleFindings,
       issue => {
-        void this.perform(() => this.fixFinding(issue.id));
+        void this.perform(() => this.fixFindings([issue.id]));
       },
       issue => this.dismissFinding(issue.id),
     );
   }
-  private async fixFinding(id: string): Promise<void> {
-    const finding = this.findings.find(finding => finding.id === id);
-    if (!finding) return;
-    const attachment = this.captured.find(attachment => attachment.path === finding.path);
-    if (!attachment) return;
+  private async fixFindings(ids: readonly string[]): Promise<void> {
+    const review = this.reviewState;
+    if (!review) return;
+    const findings = this.visibleFindings.filter(finding => ids.includes(finding.id));
+    if (!findings.length) return;
+    const paths = new Set(findings.map(finding => finding.path));
+    const attachments: GlyphContextAttachment[] = review.files
+      .filter(file => paths.has(file.path))
+      .map(file => ({
+        kind: GlyphContextAttachmentKind.DIFF,
+        uri: file.uri,
+        path: file.path,
+        text: file.contextText,
+        contentRevision: file.revision,
+      }));
     await useGlyphContext(
       this.glyphService,
       this.views,
-      async () => [attachment],
-      `Fix this agent review issue in ${finding.path}:${finding.line}.\n\n${finding.title}\n\n${finding.body}\n\nCheck that it still applies to the current source before changing files.`,
+      async () => attachments,
+      `${findings.length === 1 ? 'Fix this agent review issue' : 'Fix all of these agent review issues'}.\n\n${findings.map(finding => `${finding.path}:${finding.line} — ${finding.title}\n${finding.body}`).join('\n\n')}\n\nCheck each issue against the current source before changing files; the attached revisions are the reviewed snapshots.`,
       AgentModeID.AGENT,
     );
   }
   private dismissFinding(id: string): void {
-    this.dismissed.add(id);
-    this.reviewEditor.dismiss(id);
-    this.update();
+    const review = this.reviewState;
+    if (!review) return;
+    void this.perform(async () => {
+      await this.glyphService.dismissAgentReviewFinding(review.id, id);
+      this.reviewEditor.dismiss(id);
+    });
   }
 }

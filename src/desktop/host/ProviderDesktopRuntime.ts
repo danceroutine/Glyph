@@ -1,3 +1,4 @@
+import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
@@ -60,6 +61,7 @@ interface ActiveRun {
 /** Adapts the existing application service to desktop commands without moving provider logic into Electron. */
 export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private connected = true;
+  private readonly unsubscribeAgentReviews: (() => void) | undefined;
   private readonly pendingShellEvents = new Map<
     string,
     { readonly chatId: string; readonly label: string; readonly context: ChatContextEvent }
@@ -88,6 +90,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   constructor(
     private readonly options: {
       readonly glyph: GlyphService;
+      readonly agentReviews?: AgentReviewService;
       readonly interactions: DesktopInteractionBroker;
       readonly shellSessions: Pick<
         ShellSessionManager,
@@ -104,6 +107,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       readonly ownerWindowId: string;
     },
   ) {
+    this.unsubscribeAgentReviews = options.agentReviews?.onDidChange(review =>
+      this.publish({ type: GlyphHostEventType.AGENT_REVIEW_CHANGED, review }),
+    );
     this.unsubscribeWakes = options.shellSessions.onDidWake(wake => this.queueShellWake(wake));
     this.unsubscribeShells = options.shellSessions.onDidChange(() => this.syncShells());
     this.unsubscribe = options.glyph.proposalReviews?.onDidChange(change => {
@@ -123,6 +129,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     for (const proposal of this.options.glyph.proposalReviews?.retainedReviews ?? [])
       this.proposals.set(proposal.id, toProposal(proposal));
     return {
+      agentReviews: this.options.agentReviews?.reviews ?? [],
       accounts: this.options.glyph.accounts,
       models: this.models,
       chats: this.options.glyph.listChats(),
@@ -210,6 +217,25 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     if (this.disposed) throw new Error('The workspace runtime has stopped.');
     const glyph = this.options.glyph;
     switch (command.type) {
+      case GlyphWorkbenchCommandType.START_AGENT_REVIEW: {
+        if (!this.options.agentReviews) throw new Error('Agent review is unavailable.');
+        const account = this.account(command.model.accountProvider, command.model.accountId);
+        if (!glyph.hasInferenceAccess(account)) throw new Error('The selected account cannot run reviews.');
+        const models = await glyph.listModels(account, this.discovery.signal);
+        if (!models.some(model => model.slug === command.model.model))
+          throw new Error('The selected review model is unavailable.');
+        await this.options.agentReviews.start(command.review, command.model);
+        return;
+      }
+      case GlyphWorkbenchCommandType.CANCEL_AGENT_REVIEW:
+        if (!this.options.agentReviews) throw new Error('Agent review is unavailable.');
+        await this.options.agentReviews.cancel(command.reviewId);
+        return;
+      case GlyphWorkbenchCommandType.DISMISS_AGENT_REVIEW_FINDING:
+        if (!this.options.agentReviews) throw new Error('Agent review is unavailable.');
+        await this.options.agentReviews.dismiss(command.reviewId, command.findingId);
+        return;
+
       case GlyphWorkbenchCommandType.SELECT_ACCOUNT: {
         const selection = ++this.accountSelectionRevisionNumber;
         const account = this.account(command.accountProvider, command.accountId);
@@ -564,6 +590,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     // Proposal decisions checkpoint after their editor side effect. Closing
     // persistence before those admitted commands settle would lose the outcome.
     await Promise.allSettled(this.commands);
+    await this.options.agentReviews?.dispose();
+    this.unsubscribeAgentReviews?.();
     this.unsubscribe?.();
     this.unsubscribeShells();
     this.unsubscribeWakes();

@@ -1,10 +1,6 @@
 import type { GlyphAgentReviewFinding } from './GlyphAgentReviewFinding.ts';
-export enum GlyphAgentReviewScope {
-  LAST_COMMIT = 'lastCommit',
-  STAGED = 'staged',
-  ALL_LOCAL = 'allLocal',
-  BRANCH = 'branch',
-}
+import { AgentReviewScope as GlyphAgentReviewScope } from '#src/reviewing/AgentReview.js';
+export { GlyphAgentReviewScope };
 export const glyphAgentReviewLabels: Readonly<Record<GlyphAgentReviewScope, string>> = {
   [GlyphAgentReviewScope.LAST_COMMIT]: 'Last commit',
   [GlyphAgentReviewScope.STAGED]: 'Staged changes',
@@ -21,6 +17,7 @@ export interface GlyphAgentReviewControls {
   readonly completed?: boolean;
   readonly resultScope?: string;
   readonly openFinding?: (id: string) => void;
+  readonly fixAll?: () => void;
   readonly fixFinding?: (id: string) => void;
   readonly dismissFinding?: (id: string) => void;
   readonly fileIconClasses?: (path: string) => readonly string[];

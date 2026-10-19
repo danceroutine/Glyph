@@ -1,3 +1,4 @@
+import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import type { GlyphIdeContext } from '../browser/GlyphIdeContext.js';
 import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
 import type { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
@@ -41,6 +42,9 @@ export interface GlyphWorkbenchService {
   openLink?(href: string): Promise<void>;
   viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
   cancel(): void;
+  startAgentReview(review: AgentReviewInput): Promise<void>;
+  cancelAgentReview(reviewId: string): Promise<void>;
+  dismissAgentReviewFinding(reviewId: string, findingId: string): Promise<void>;
   cancelRun(chatId: string, runId: string): Promise<void>;
   executeReviewCommand(command: GlyphReviewCommand): void;
   reviewProposalFile(chatId: string, proposalId: string, fileId: string): Promise<void>;

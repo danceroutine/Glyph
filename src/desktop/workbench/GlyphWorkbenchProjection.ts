@@ -35,6 +35,12 @@ export class GlyphWorkbenchProjection {
   /** A snapshot replaces old collections so removed or completed work cannot linger. */
   accept(event: GlyphHostEvent): void {
     switch (event.type) {
+      case GlyphHostEventType.AGENT_REVIEW_CHANGED:
+        this.snapshot = {
+          ...this.snapshot,
+          agentReviews: upsert(this.snapshot.agentReviews ?? [], event.review, value => value.id),
+        };
+        return;
       case GlyphHostEventType.INITIAL_STATE: {
         this.snapshot = event.state;
         this.usageByChat = { ...event.state.usageByChat };

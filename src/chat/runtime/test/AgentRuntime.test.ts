@@ -186,7 +186,7 @@ class TwoToolClaudeAdapter extends ClaudeShapedAdapter {
 
 describe(AgentRuntime, () => {
   it.each([false, true])(
-    'keeps review formatting out of the visible prompt and scopes it to review turns: %s',
+    'does not inject review instructions into ordinary chat, including legacy review metadata: %s',
     async reviewing => {
       const adapter = new ClaudeShapedAdapter();
       const runtime = new AgentRuntime(
@@ -202,7 +202,7 @@ describe(AgentRuntime, () => {
       await runtime.send(request, { signal: new AbortController().signal, onText: () => {} });
       const providerText = adapter.requests[0]!.messages[0]!.content;
       if (typeof providerText !== 'string') throw new Error('Expected textual provider input');
-      expect(providerText.includes('<glyph_review>')).toBe(reviewing);
+      expect(providerText.includes('<glyph_review>')).toBe(false);
       expect(request.text).toBe('Review the attached comparison.');
     },
   );

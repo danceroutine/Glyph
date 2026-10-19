@@ -1,3 +1,7 @@
+import { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
+import { SqliteAgentReviewStore } from '#src/reviewing/SqliteAgentReviewStore.js';
+import { ConversationAgentReviewExecutor } from '#src/reviewing/ConversationAgentReviewExecutor.js';
+import { ChatConversation } from '#src/chat/ChatConversation.js';
 import { WebToolRuntime } from '#src/web/WebToolRuntime.js';
 import { WebHttpClient } from '#src/web/WebHttpClient.js';
 import { WebFetchService } from '#src/web/WebFetchService.js';
@@ -281,10 +285,16 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           fetch: this.transport,
         })
       : undefined;
+    const authentication = new OpenAISession(
+      store,
+      new OpenAIAuthenticationClient(configuration.openAI, http),
+      configuration.openAI,
+    );
+    const catalog = new OpenAIModelCatalog(configuration.openAI, http);
     const backend = new OpenAIBackend(
       store,
-      new OpenAISession(store, new OpenAIAuthenticationClient(configuration.openAI, http), configuration.openAI),
-      new OpenAIModelCatalog(configuration.openAI, http),
+      authentication,
+      catalog,
       new OpenAIProviderFactory(root.path, configuration, tools, client),
       configuration.openAI,
     );
@@ -303,8 +313,49 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       await shells.dispose();
       throw error;
     }
+    // Share the account lifetime, but expose only project read/search tools to
+    // reviews. No shell, proposal, mode-switch, or interactive tools are registered.
+    const reviewBackend = new OpenAIBackend(
+      store,
+      authentication,
+      catalog,
+      new OpenAIProviderFactory(
+        root.path,
+        configuration,
+        new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index),
+        client,
+      ),
+      configuration.openAI,
+    );
+    const agentReviews = new AgentReviewService(
+      new SqliteAgentReviewStore(
+        join(configuration.stateDirectory, 'projects', mutationStorageId, 'agent-reviews.sqlite'),
+      ),
+      new ConversationAgentReviewExecutor(selection => {
+        const account = glyph.accounts.find(
+          account => account.provider === selection.accountProvider && account.id === selection.accountId,
+        );
+        if (!account || !glyph.hasInferenceAccess(account)) throw new Error('The review account is unavailable.');
+        return new ChatConversation(
+          reviewBackend.createProvider(account, { slug: selection.model, name: selection.model }),
+          logger,
+          value => glyph.redact(value),
+          () => {},
+          configuration.traceEnabled,
+        );
+      }),
+    );
+    try {
+      await agentReviews.initialize();
+    } catch (error) {
+      await agentReviews.dispose();
+      await shells.dispose();
+      await glyph.dispose();
+      throw error;
+    }
     runtime = new ProviderDesktopRuntime({
       glyph,
+      agentReviews,
       interactions,
       shellSessions: shells,
       emit: input.emit,

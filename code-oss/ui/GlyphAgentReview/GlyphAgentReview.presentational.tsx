@@ -20,6 +20,8 @@ const styles = {
     flexDirection: 'column',
     gap: tokens.space.sm,
   }),
+  completedActions: css({ display: 'flex', gap: tokens.space.sm, flexShrink: 0, '& > button': { flex: 1 } }),
+  reviewAgain: css({ '&&': { border: tokens.border.default } }),
   findings: css({ minHeight: 0, overflowY: 'auto' }),
   spinner: css({
     animation: 'glyph-review-spin 1s linear infinite',
@@ -60,89 +62,111 @@ export function GlyphAgentReview(controls: GlyphAgentReviewControls) {
   };
   return (
     <div class={styles.root}>
-      <SplitButtonGroup
-        fullWidth
-        onBlur={event => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false);
-        }}
-      >
-        <Button
-          variant={ButtonVariant.PRIMARY}
-          class={controls.reviewing ? styles.running : undefined}
-          loading={controls.busy && !controls.reviewing}
-          disabled={!controls.reviewing && disabled}
-          title={controls.reviewing ? 'Stop Review' : controls.unavailableReason}
-          onClick={controls.reviewing ? controls.stop : controls.review}
-          leadingIcon={
-            controls.reviewing ? (
-              <>
-                <LoaderCircle class={`glyph-review-spin ${styles.spinner}`} size={16} />
-                <CircleStop class="glyph-review-stop" size={16} />
-              </>
-            ) : (
-              <ScanSearch size={16} />
-            )
-          }
-        >
-          {controls.reviewing ? 'Reviewing' : 'Find Issues'}
-        </Button>
-        <IconButton
-          variant={ButtonVariant.PRIMARY}
-          title={`Review scope: ${glyphAgentReviewLabels[controls.scope]}`}
-          disabled={disabled}
-          role="combobox"
-          aria-label="Review scope"
-          aria-expanded={open && !disabled}
-          aria-controls={open && !disabled ? 'glyph-review-scopes' : undefined}
-          aria-haspopup="listbox"
-          aria-activedescendant={open && !disabled ? `glyph-review-scopes-${active}` : undefined}
-          onClick={() => {
-            setActive(selected);
-            setOpen(!open);
-          }}
-          onKeyDown={event => {
-            if (event.key === 'Escape') {
-              setOpen(false);
-              event.preventDefault();
-            }
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-              event.preventDefault();
-              setOpen(true);
-              setActive(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + scopes.length) % scopes.length);
-            }
-            if (open && (event.key === 'Enter' || event.key === ' ')) {
-              event.preventDefault();
-              choose(scopes[active]!);
-            }
+      {controls.completed ? (
+        <div class={styles.completedActions}>
+          <Button
+            class={styles.reviewAgain}
+            appearance={ButtonAppearance.OUTLINE}
+            disabled={disabled}
+            onClick={controls.review}
+          >
+            Review Again
+          </Button>
+          <Button
+            variant={ButtonVariant.PRIMARY}
+            disabled={controls.busy || !controls.findings?.length}
+            onClick={controls.fixAll}
+          >
+            Fix All Issues
+          </Button>
+        </div>
+      ) : (
+        <SplitButtonGroup
+          fullWidth
+          onBlur={event => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false);
           }}
         >
-          <ChevronDown size={14} />
-        </IconButton>
-        {open && !disabled && (
-          <Dropdown
-            topLayer
-            id="glyph-review-scopes"
-            label="Review scopes"
-            items={scopes}
-            itemKey={scope => scope}
-            itemLabel={scope => glyphAgentReviewLabels[scope]}
-            activeIndex={active}
-            selectedIndex={selected}
-            highlight={setActive}
-            choose={choose}
-            showCheck
-            width={230}
-            renderItem={scope => <span>{glyphAgentReviewLabels[scope]}</span>}
-          />
-        )}
-      </SplitButtonGroup>
-      <p class={styles.description}>
-        {controls.reviewing
-          ? 'Reviewing your changes…'
-          : controls.scope === GlyphAgentReviewScope.BRANCH
-            ? `Review committed changes since the common ancestor with ${controls.branch.replace(/^refs\/(heads|remotes)\//, '') || 'the selected branch'}.`
-            : `Review ${glyphAgentReviewLabels[controls.scope].toLowerCase()} for issues.`}
-      </p>
+          <Button
+            variant={ButtonVariant.PRIMARY}
+            class={controls.reviewing ? styles.running : undefined}
+            loading={controls.busy && !controls.reviewing}
+            disabled={!controls.reviewing && disabled}
+            title={controls.reviewing ? 'Stop Review' : controls.unavailableReason}
+            onClick={controls.reviewing ? controls.stop : controls.review}
+            leadingIcon={
+              controls.reviewing ? (
+                <>
+                  <LoaderCircle class={`glyph-review-spin ${styles.spinner}`} size={16} />
+                  <CircleStop class="glyph-review-stop" size={16} />
+                </>
+              ) : (
+                <ScanSearch size={16} />
+              )
+            }
+          >
+            {controls.reviewing ? 'Reviewing' : 'Find Issues'}
+          </Button>
+          <IconButton
+            variant={ButtonVariant.PRIMARY}
+            title={`Review scope: ${glyphAgentReviewLabels[controls.scope]}`}
+            disabled={disabled}
+            role="combobox"
+            aria-label="Review scope"
+            aria-expanded={open && !disabled}
+            aria-controls={open && !disabled ? 'glyph-review-scopes' : undefined}
+            aria-haspopup="listbox"
+            aria-activedescendant={open && !disabled ? `glyph-review-scopes-${active}` : undefined}
+            onClick={() => {
+              setActive(selected);
+              setOpen(!open);
+            }}
+            onKeyDown={event => {
+              if (event.key === 'Escape') {
+                setOpen(false);
+                event.preventDefault();
+              }
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                setOpen(true);
+                setActive(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + scopes.length) % scopes.length);
+              }
+              if (open && (event.key === 'Enter' || event.key === ' ')) {
+                event.preventDefault();
+                choose(scopes[active]!);
+              }
+            }}
+          >
+            <ChevronDown size={14} />
+          </IconButton>
+          {open && !disabled && (
+            <Dropdown
+              topLayer
+              id="glyph-review-scopes"
+              label="Review scopes"
+              items={scopes}
+              itemKey={scope => scope}
+              itemLabel={scope => glyphAgentReviewLabels[scope]}
+              activeIndex={active}
+              selectedIndex={selected}
+              highlight={setActive}
+              choose={choose}
+              showCheck
+              width={230}
+              renderItem={scope => <span>{glyphAgentReviewLabels[scope]}</span>}
+            />
+          )}
+        </SplitButtonGroup>
+      )}
+      {!controls.completed && (
+        <p class={styles.description}>
+          {controls.reviewing
+            ? 'Reviewing your changes…'
+            : controls.scope === GlyphAgentReviewScope.BRANCH
+              ? `Review committed changes since the common ancestor with ${controls.branch.replace(/^refs\/(heads|remotes)\//, '') || 'the selected branch'}.`
+              : `Review ${glyphAgentReviewLabels[controls.scope].toLowerCase()} for issues.`}
+        </p>
+      )}
       {controls.findings?.length || controls.completed ? (
         <div class={styles.findings} aria-label="Review findings">
           <p>

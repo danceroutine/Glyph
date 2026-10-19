@@ -11,6 +11,7 @@ const meta = {
     busy: false,
     chooseScope: fn(),
     review: fn(),
+    fixAll: fn(),
   },
 } satisfies Meta<typeof GlyphAgentReview>;
 export default meta;
@@ -40,6 +41,13 @@ export const ScopePicker: Story = {
 };
 export const Reviewing: Story = { args: { reviewing: true, stop: fn() } };
 export const Findings: Story = {
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole('button', { name: 'Fix All Issues' }));
+    await expect(args.fixAll).toHaveBeenCalled();
+    await userEvent.click(canvas.getByRole('button', { name: 'Review Again' }));
+    await expect(args.review).toHaveBeenCalled();
+  },
   args: {
     completed: true,
     resultScope: 'Last commit',
@@ -63,4 +71,9 @@ export const Findings: Story = {
     fixFinding: fn(),
     dismissFinding: fn(),
   },
+};
+
+export const CleanReview: Story = { args: { completed: true, findings: [], resultScope: 'Last commit' } };
+export const Interrupted: Story = {
+  args: { error: 'The review was interrupted when the host stopped. Review again to retry.' },
 };

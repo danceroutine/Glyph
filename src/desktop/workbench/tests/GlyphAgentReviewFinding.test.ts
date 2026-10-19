@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { parseGlyphAgentReviewFindings as parse } from '../GlyphAgentReviewFinding.ts';
+import { parseAgentReviewFindings as parse } from '#src/reviewing/parseAgentReviewFindings.js';
 const files = new Map([['src/file.ts', 8]]);
 const finding = { path: 'src/file.ts', line: 2, title: 'Missing validation', body: 'Empty input causes a crash.' };
 const report = (value: unknown) => `<glyph_review>\n${JSON.stringify(value)}\n{"complete":true}\n</glyph_review>`;
