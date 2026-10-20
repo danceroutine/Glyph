@@ -21,7 +21,7 @@
       "import": "./dist/desktop/host/index.js"
     }
   },
-  "description": "A local-first terminal coding agent with ChatGPT authentication and reviewable workspace edits.",
+  "description": "An agent-native IDE built on Code OSS, combining Cursor- and Codex-style workflows with bring-your-own provider accounts.",
   "engines": {
     "node": ">=22.18.0"
   },
