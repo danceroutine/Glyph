@@ -1,5 +1,6 @@
 import type { EditDecisionState } from './EditDecisionState.ts';
 import type { EditReviewItemKind } from './EditReviewItemKind.ts';
+import type { AppliedTextEdit } from './AppliedTextEdit.ts';
 
 export interface EditReviewItem {
   readonly id: string;
@@ -10,5 +11,6 @@ export interface EditReviewItem {
   readonly removedText: string;
   readonly insertedText: string;
   decision: EditDecisionState;
+  appliedText?: AppliedTextEdit;
   rejectionComment?: string | undefined;
 }

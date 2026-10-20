@@ -463,7 +463,7 @@ ${TERMINAL_HELP}`);
       const entry = pendingReviewEntries(queue)[0];
       if (!entry) return;
       this.line(renderEntry(entry.file, entry.item, ReviewViewMode.FOCUSED, false).lines.join('\n'));
-      const answer = (await this.ask('Accept? [y/n/q]: ', signal)).trim().toLowerCase();
+      const answer = (await this.ask('Keep / revert? [y/n/q]: ', signal)).trim().toLowerCase();
       if (answer === 'q') return;
       try {
         if (answer === 'y') await manager.acceptInReview(entry.review.id, entry.item.id);

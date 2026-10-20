@@ -58,7 +58,7 @@ for (const inline of [false, true]) {
         await expect(keepFile).toBeVisible();
         await page
           .getByRole('region', { name: 'Edit review controls', exact: true })
-          .getByRole('button', { name: 'Undo', exact: true })
+          .getByRole('button', { name: 'Revert', exact: true })
           .click();
       } else await keepFile.click();
       await expect(keepFile).toHaveCount(0);
@@ -88,13 +88,15 @@ it('shortens Keep all changes before wrapping and restores its label when space 
     const keepAll = toolbar.getByRole('button', { name: 'Keep all changes', exact: true });
     await expect(keepAll).toBeVisible();
     const width = await toolbar.evaluate(node => {
-      const row = node.firstElementChild;
-      const children = [...row.children];
-      return (
-        children.reduce((total, child) => total + child.getBoundingClientRect().width, 0) +
-        (children.length - 1) * parseFloat(getComputedStyle(row).columnGap) +
-        8
-      );
+      // The longer Revert label can make the initial toolbar compact already.
+      // Measure its expanded content rather than subtracting from that compact width.
+      const row = node.firstElementChild.cloneNode(true);
+      Object.assign(row.style, { position: 'fixed', visibility: 'hidden', width: 'max-content', flexWrap: 'nowrap' });
+      row.querySelector('[data-keep-all-suffix]').removeAttribute('hidden');
+      node.append(row);
+      const width = row.getBoundingClientRect().width + 8;
+      row.remove();
+      return width;
     });
     await toolbar.evaluate((node, width) => {
       node.style.width = `${width - 20}px`;

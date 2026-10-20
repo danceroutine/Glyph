@@ -62,12 +62,12 @@ export const TERMINAL_COMMANDS: readonly TerminalCommand[] = [
   { value: '/review', description: 'Resume pending edit review', action: { type: TerminalActionType.REVIEW } },
   {
     value: '/accept-all',
-    description: 'Accept all pending changes',
+    description: 'Keep all applied changes',
     action: { type: TerminalActionType.ACCEPT_ALL },
   },
   {
     value: '/reject-all',
-    description: 'Reject all pending changes',
+    description: 'Revert all applied changes',
     action: { type: TerminalActionType.REJECT_ALL },
   },
   {

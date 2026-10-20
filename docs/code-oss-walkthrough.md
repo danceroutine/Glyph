@@ -1,5 +1,7 @@
 # Glyph Code OSS implementation walkthrough
 
+Current editing behavior: proposals apply and save their changes immediately. Keep confirms an applied change; Revert performs a guarded inverse. The checkpoint notes below record the earlier walkthrough and its findings at that time. The current contract is described in [Application, saving, and recovery](code-oss-integration-plan.md#application-saving-and-recovery).
+
 The reader helped design Glyph and understands hexagonal architecture, ports,
 adapters, and the intended product. The learning target is VS Code internals:
 how our implementations register with, call into, and run inside Code OSS.
@@ -84,10 +86,10 @@ this learning sequence crosses them where a call chain requires it.
       URI resolution, hashes, and version/incarnation tokens. Show the missing
       transport wiring between adapter halves explicitly. Pause before mutations.
 
-- [x] **9. How accepted edits use native edit and undo services.**
+- [x] **9. How applied edits use native edit and undo services.**
       Follow store `replace`, adapter `apply`, `ResourceTextEdit`, `IBulkEditService`,
       `UndoRedoGroup`, and proposal mutation metadata. Inspect upstream for exact
-      version checks, async boundaries, receipts, undo, and Auto Save behavior.
+      version checks, async boundaries, receipts, undo, and save behavior.
       Separate implemented guarantees from missing integration. Pause.
 
 - [x] **10. How the real Glyph services fit into the host.**
@@ -164,8 +166,6 @@ this learning sequence crosses them where a call chain requires it.
   sampling still has races before that boundary. Renderer ignores the supplied
   string undoGroupId; its newly allocated numeric ID is not an active upstream
   bulk-edit group, so upstream allocates its own. Receipts remain in memory.
-  `respectAutoSaveConfig` controls refactoring auto-save for multiple resources
-  in this upstream version; single-file normal Auto Save is separate.
   User confirmed the gestalt clarification and requested the next checkpoint.
 - Gestalt clarification: DI resolves local services, separately from IPC.
   Workbench service maintains renderer UI state; the selection action is a user

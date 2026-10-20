@@ -60,7 +60,7 @@ describe(ProposalReviewManager, () => {
       await manager.stage(proposal);
       const file = proposal.files[0]!;
       expect(file.automatic?.state).toBe('applied');
-      expect(manager.pendingChangeCount).toBe(0);
+      expect(manager.pendingChangeCount).toBe(1);
       await manager.acknowledgeResults(manager.pendingResults.map(result => result.id));
       const recovered = new ProposalReviewManager(workspace, store);
       await recovered.initialize();

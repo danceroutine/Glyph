@@ -1,6 +1,6 @@
 # Glyph
 
-Glyph is a local-first terminal coding agent that signs in with ChatGPT and works against the project in which it is launched. It can inspect project files, attach selected context to a conversation, stream responses and reasoning summaries, and stage workspace edits for explicit review before anything is written.
+Glyph is a local-first terminal coding agent that signs in with ChatGPT and works against the project in which it is launched. It can inspect project files, attach selected context to a conversation, stream responses and reasoning summaries, and apply workspace edits immediately, with explicit Keep/Revert review afterward.
 
 Glyph uses ChatGPT subscription authentication. It does not require an OpenAI API key, client secret, separate API billing setup, or application registration.
 
@@ -54,8 +54,8 @@ guards against reintroducing parent-relative module imports.
 - Fast fuzzy project-file search and `@` attachments from the terminal prompt.
 - Project-aware file discovery and exact, revision-pinned reads.
 - Project-scoped shell commands with explicit approval, conservative safe-command auto-approval, operating-system-enforced filesystem and network sandboxing, reusable background terminals, interactive input, and output-triggered agent wake-ups.
-- Staged create, update, rename, and delete proposals that never modify the workspace before review.
-- An arrival-ordered, multi-actor review queue with per-change decisions, accept-all and reject-all commands, durable recovery, and stale-file protection when actors or collaborators touch the same file.
+- Create, update, rename, and delete proposals apply immediately so the agent can run tests, start a server, and iterate before review.
+- An arrival-ordered, multi-actor review queue with per-change Keep/Revert decisions, durable recovery, and stale-file protection. `/accept-all` keeps applied changes; `/reject-all` reverts them in reverse order. Revert preserves disjoint later edits and refuses overlapping changes.
 - Exact preservation of UTF-8 text, byte-order marks, line endings, final newlines, whitespace, Unicode, and file modes.
 - Full-screen terminal review with navigation across files and change blocks, plus a non-interactive fallback.
 - Provider tracing with credential redaction and configurable local state storage.

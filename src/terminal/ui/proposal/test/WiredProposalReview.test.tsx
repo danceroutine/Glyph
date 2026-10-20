@@ -461,7 +461,7 @@ describe(WiredProposalReview, () => {
         <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
       );
       view.stdin.write('y');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('applying…'));
+      await waitUntil(() => (view.lastFrame() ?? '').includes('saving…'));
       view.stdin.write('n');
       await tick();
       finish();
@@ -484,3 +484,28 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 async function tick(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
 }
+
+it('keeps an already-applied hunk through the existing review controls', async () => {
+  const fixture = createProposalReviewFixture();
+  const file = fixture.proposal.files[0]!;
+  const item = file.items[0]!;
+  item.decision = EditDecisionState.ACCEPTED;
+  item.appliedText = { state: 'applied', before: file.base, after: file.proposed, revertTarget: null };
+  fixture.accept.mockImplementation(async () => {
+    item.appliedText!.state = 'kept';
+  });
+  const complete = vi.fn();
+  const view = render(
+    <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete, interrupt: vi.fn() }} />,
+  );
+  try {
+    expect(view.lastFrame()).toContain('Y keep  N revert');
+    expect(complete).not.toHaveBeenCalled();
+    view.stdin.write('y');
+    await waitUntil(() => complete.mock.calls.length > 0);
+    expect(fixture.accept).toHaveBeenCalledExactlyOnceWith(fixture.proposal.id, item.id);
+    expect(complete).toHaveBeenCalledExactlyOnceWith({ accepted: 1, rejected: 0 });
+  } finally {
+    view.unmount();
+  }
+});

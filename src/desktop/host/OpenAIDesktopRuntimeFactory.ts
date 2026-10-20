@@ -211,7 +211,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       logger,
       configuration.editing.maxActiveReviews,
       context.mutationIdentity,
-      { maxReadBytes: getEditingReadBudget(configuration.editing), autoApplyStructural: true },
+      { maxReadBytes: getEditingReadBudget(configuration.editing), autoApply: true },
     );
     let runtime: ProviderDesktopRuntime | undefined;
     const interactions = new DesktopInteractionBroker(event => runtime?.publish(event));

@@ -765,7 +765,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       );
     this.decidingProposal = true;
     try {
-      for (const item of items) {
+      for (const item of accept ? items : [...items].reverse()) {
         if (accept) await this.acceptProposalItem(chatId, item.proposalId, item.itemId);
         else await this.rejectProposalItem(chatId, item.proposalId, item.itemId, comment);
       }

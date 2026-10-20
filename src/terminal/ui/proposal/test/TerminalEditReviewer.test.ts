@@ -225,3 +225,46 @@ function reviewFixture(): { file: FileEditPlan; item: EditReviewItem } {
   const proposal = createProposalReviewFixture().proposal;
   return { file: proposal.files[0]!, item: proposal.files[0]!.items[0]! };
 }
+
+it('renders the original diff for an applied hunk and keeps it pending until reviewed', () => {
+  const { proposal } = createProposalReviewFixture();
+  const file = proposal.files[0]!;
+  const item = file.items[0]!;
+  item.decision = EditDecisionState.ACCEPTED;
+  item.appliedText = { state: 'applied', before: file.base, after: file.proposed, revertTarget: null };
+  file.current = file.proposed;
+  file.base = file.proposed;
+  expect(pendingEntries([proposal])).toHaveLength(1);
+  const rendered = renderEntry(file, item, ReviewViewMode.FULL_FILE, false).lines.join('\n');
+  expect(rendered).toContain('old');
+  expect(rendered).toContain('new');
+  item.appliedText.state = 'kept';
+  expect(pendingEntries([proposal])).toHaveLength(0);
+});
+
+it.each([false, true])('renders applied encoding-only edits from their original BOM state (%s)', beforeBom => {
+  const { proposal } = createProposalReviewFixture();
+  const file = proposal.files[0]!;
+  const item = file.items[0]!;
+  const before = { ...file.base!, byteOrderMark: beforeBom };
+  const after = { ...before, byteOrderMark: !beforeBom };
+  item.appliedText = { state: 'applied', before, after, revertTarget: null };
+  const rendered = renderEntry(file, item, ReviewViewMode.FOCUSED, false).lines.join('\n');
+  expect(rendered).toContain('Encoding:');
+  expect(rendered).toContain('Text content unchanged');
+  item.appliedText.after = null;
+  expect(renderEntry(file, item, ReviewViewMode.FOCUSED, false).lines.join('\n')).toContain('new');
+});
+
+it('renders literal ESC bytes visibly in an applied edit', () => {
+  const { proposal } = createProposalReviewFixture();
+  const file = proposal.files[0]!;
+  const item = file.items[0]!;
+  item.appliedText = {
+    state: 'applied',
+    before: file.base,
+    after: { ...file.proposed, text: '\u001b' },
+    revertTarget: null,
+  };
+  expect(renderEntry(file, item, ReviewViewMode.FOCUSED, false).lines.join('\n')).toContain('␛ = ESC');
+});

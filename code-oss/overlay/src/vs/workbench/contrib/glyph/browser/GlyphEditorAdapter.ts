@@ -274,9 +274,10 @@ export class GlyphEditorAdapter extends Disposable {
         if (await this.exists(mutation.path)) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
         return { receipt: known };
       }
-      const snapshot = await this.read(targetPath);
+      let snapshot = await this.read(targetPath);
       if (snapshot.contentRevision !== known.afterRevision)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      if (mutation.save) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
       return { snapshot, receipt: known };
     }
     const source = this.resolve(mutation.path);
@@ -392,7 +393,7 @@ export class GlyphEditorAdapter extends Disposable {
         this.receipts.set(mutation.operationId, complete);
         return { receipt: complete };
       }
-      const snapshot = await this.read(targetPath);
+      let snapshot = await this.read(targetPath);
       if (mutation.kind === GlyphFileMutationKind.RENAME && (await this.fileService.exists(source)))
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
       const complete = {
@@ -402,6 +403,7 @@ export class GlyphEditorAdapter extends Disposable {
         appliedToken: snapshot.token,
       };
       this.receipts.set(mutation.operationId, complete);
+      if (mutation.save) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
       return { snapshot, receipt: complete };
     } finally {
       changed?.dispose();
@@ -422,7 +424,13 @@ export class GlyphEditorAdapter extends Disposable {
     if (known) {
       if (known.state === GlyphMutationReceiptState.UNKNOWN)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-      return { snapshot: await this.read(mutation.path), receipt: known };
+      let snapshot = await this.read(mutation.path);
+      if (mutation.save) {
+        if (snapshot.contentRevision !== known.afterRevision)
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+        snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision);
+      }
+      return { snapshot, receipt: known };
     }
     const resource = this.resolve(mutation.path);
     // Own a reference until settlement: invalidating cached read capabilities
@@ -615,7 +623,8 @@ export class GlyphEditorAdapter extends Disposable {
         if (!receipt || receipt.state === GlyphMutationReceiptState.UNKNOWN) {
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
         }
-        const snapshot = await this.snapshot(mutation.path, model);
+        let snapshot = await this.snapshot(mutation.path, model);
+        if (mutation.save) snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision);
         return { snapshot, receipt };
       } finally {
         changed.dispose();
@@ -634,6 +643,28 @@ export class GlyphEditorAdapter extends Disposable {
   /** Supports recovery when an apply result was lost after the side effect completed. */
   async inspectReceipt(operationId: string): Promise<GlyphMutationReceipt | undefined> {
     return this.receipts.get(operationId);
+  }
+
+  /** Save only the changed resource; skip formatters that would escape the recorded edit. */
+  private async saveMutation(path: string, expectedRevision: string): Promise<GlyphEditorTextSnapshot> {
+    this.assertWorkspaceBinding();
+    if (!this.trustService.isWorkspaceTrusted())
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+    const resource = this.resolve(path);
+    const current = await this.read(path);
+    if (current.contentRevision !== expectedRevision)
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+    if (this.textFileService.isDirty(resource)) {
+      const saved = await this.textFileService.save(resource, { skipSaveParticipants: true });
+      if (!saved || this.textFileService.isDirty(resource))
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT, {
+          reason: 'The edit changed the working copy but could not be saved. Save it before running commands.',
+        });
+    }
+    const saved = await this.read(path);
+    if (saved.contentRevision !== expectedRevision)
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+    return saved;
   }
 
   private async workingCopies(): Promise<readonly GlyphEditorTextSnapshot[]> {

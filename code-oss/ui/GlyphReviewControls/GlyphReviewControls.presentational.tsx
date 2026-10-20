@@ -120,11 +120,11 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
                 size={ButtonSize.SMALL}
 
                 type="button"
-                aria-label="Undo"
+                aria-label="Revert"
                 disabled={state.disabled}
                 onClick={state.undo}
               >
-                Undo
+                Revert
               </Button>
             )}
             {!state.fileLabel && (
@@ -163,11 +163,11 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
                 appearance={ButtonAppearance.OUTLINE}
 
                 type="button"
-                aria-label="Undo File"
+                aria-label="Revert File"
                 disabled={state.disabled}
                 onClick={state.undoFile}
               >
-                Undo File
+                Revert File
               </Button>
             )}
             {state.keepFile && (

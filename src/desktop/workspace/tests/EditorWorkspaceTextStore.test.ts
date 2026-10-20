@@ -269,3 +269,60 @@ class FixtureEditorClient implements EditorWorkspaceClient {
     };
   }
 }
+
+it('requires the renderer to confirm a saved working copy for immediate agent edits', async () => {
+  const client = new FixtureEditorClient('before');
+  const store = new EditorWorkspaceTextStore('/project', true, client);
+  const before = await store.read('file.ts');
+  const request = vi.spyOn(client, 'request');
+  await expect(store.replace('file.ts', before.revision, 'after', false, { save: true })).rejects.toThrow(
+    'did not save',
+  );
+  expect(request).toHaveBeenCalledWith(
+    expect.objectContaining({
+      type: GlyphEditorRequestType.APPLY_TEXT_MUTATION,
+      mutation: expect.objectContaining({ save: true }),
+    }),
+  );
+  expect((await store.read('file.ts')).text).toBe('after');
+});
+
+it('finishes saving a recovered rename through its existing operation ID', async () => {
+  const client = new FixtureEditorClient('original');
+  const snapshot = (
+    await client.request({ type: GlyphEditorRequestType.READ_SNAPSHOT, path: 'target.ts', operationId: 'read' })
+  ).snapshot!;
+  const receipt = {
+    operationId: 'rename',
+    state: GlyphMutationReceiptState.APPLIED,
+    beforeRevision: snapshot.contentRevision,
+    afterRevision: snapshot.contentRevision,
+    observedAt: 'now',
+  };
+  let saved = false;
+  const request = vi.spyOn(client, 'request').mockImplementation(async request => {
+    if (request.type === GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT)
+      return { operationId: request.operationId, ok: true, receipt };
+    if (request.type === GlyphEditorRequestType.EXISTS)
+      return { operationId: request.operationId, ok: true, exists: false };
+    if (request.type === GlyphEditorRequestType.READ_SNAPSHOT && request.path === 'target.ts')
+      return { operationId: request.operationId, ok: true, snapshot: { ...snapshot, dirty: !saved } };
+    if (request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION) {
+      expect(request.mutation).toMatchObject({
+        operationId: 'rename',
+        save: true,
+        path: 'source.ts',
+        target: 'target.ts',
+      });
+      saved = true;
+      return { operationId: 'rename', ok: true, receipt, snapshot: { ...snapshot, dirty: false } };
+    }
+    throw new Error('Must not read the removed source');
+  });
+  const store = new EditorWorkspaceTextStore('/project', true, client);
+  await store.rename('source.ts', 'target.ts', snapshot.contentRevision, { operationId: 'rename', save: true });
+  expect(saved).toBe(true);
+  expect(
+    request.mock.calls.filter(([request]) => request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION),
+  ).toHaveLength(1);
+});

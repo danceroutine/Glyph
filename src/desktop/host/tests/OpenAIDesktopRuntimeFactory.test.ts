@@ -1,3 +1,4 @@
+import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -366,31 +367,52 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       services.push(this);
     });
     const editor = new EditorRpcRouter();
-    vi.spyOn(editor, 'request').mockImplementation(async (_identity, request) => ({
-      operationId:
-        request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
-        request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
-          ? request.mutation.operationId
-          : request.operationId,
-      ok: true,
-      snapshot: {
-        uri: `file://${project}/A/file.txt`,
-        path: 'A/file.txt',
-        text: 'original',
-        contentRevision: contentRevision('original', false),
-        byteLength: 8,
-        byteOrderMark: false,
-        mode: 0o644,
-        identity: 'fixture',
-        dirty: false,
-        token: {
-          workspaceGeneration: 'workspace',
-          resource: `file://${project}/A/file.txt`,
-          incarnation: 'model',
-          version: 1,
+    let text = 'original';
+    let version = 1;
+    vi.spyOn(editor, 'request').mockImplementation(async (_identity, request) => {
+      const before = contentRevision(text, false);
+      const mutation = request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ? request.mutation : undefined;
+      if (mutation) {
+        text = mutation.text;
+        version++;
+      }
+      return {
+        operationId:
+          request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
+          request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
+            ? request.mutation.operationId
+            : request.operationId,
+        ok: true,
+        ...(mutation
+          ? {
+              receipt: {
+                operationId: mutation.operationId,
+                state: GlyphMutationReceiptState.APPLIED,
+                beforeRevision: before,
+                afterRevision: contentRevision(text, false),
+                observedAt: new Date().toISOString(),
+              },
+            }
+          : {}),
+        snapshot: {
+          uri: `file://${project}/A/file.txt`,
+          path: 'A/file.txt',
+          text,
+          contentRevision: contentRevision(text, false),
+          byteLength: Buffer.byteLength(text, 'utf8'),
+          byteOrderMark: false,
+          mode: 0o644,
+          identity: 'fixture',
+          dirty: false,
+          token: {
+            workspaceGeneration: 'workspace',
+            resource: `file://${project}/A/file.txt`,
+            incarnation: 'model',
+            version,
+          },
         },
-      },
-    }));
+      };
+    });
     const factory = new OpenAIDesktopRuntimeFactory(editor);
     const runtimes: Awaited<ReturnType<typeof factory.create>>[] = [];
     const open = async (names: string[]) => {

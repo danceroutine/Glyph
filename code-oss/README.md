@@ -114,15 +114,20 @@ it explicitly replaces or clears the list. Updates are validated (100 items,
 turn completion never implicitly completes unfinished work. SQLite upgrades
 older catalogs with an optional todo column, and reconnect snapshots carry each
 chat's saved list through the existing chat-update contract.
-Text proposals appear as compact transcript previews and a collapsible pending-files
+Text edits apply immediately and appear as compact transcript previews and a collapsible pending-files
 card above the composer. Review opens a native, read-only inline diff with hunk and
-file navigation. Keep applies the selected pending edits to the live buffer; Undo
-in the review UI dismisses them without applying them. Keep is green; the blue
+file navigation. The agent saves each edited file so tests and development servers see
+the changes immediately. This saves the edited working copy,
+including any pre-existing unsaved text in that file; unrelated dirty files are not saved.
+Save participants are skipped to keep formatting outside the recorded edit.
+Keep confirms the selected applied edits without writing them again; Revert restores
+their previous content while preserving disjoint later changes. Overlapping changes
+block a revert; revert newer edits first or keep the earlier change. Keep is green; the blue
 speech-bubble action opens a rejection comment field. In the focused review editor,
-⌘N dismisses the selected change, ⌘Y keeps it, and ⌘R opens that field (Ctrl on
+⌘N reverts the selected change, ⌘Y keeps it, and ⌘R opens that field (Ctrl on
 other platforms). These shortcuts do not intercept comment typing. Submitting a
 nonempty comment saves it with the rejection and includes it in the agent's durable
-review receipt; opening or cancelling the field does not decide the change. Accepted edits remain
+review receipt; opening or cancelling the field does not decide the change. Applied edits remain
 undoable through the editor's ordinary Undo command. File and bulk decisions stop
 on failure and retain the remaining review controls. Full file previews are fetched
 on demand, while reconnect snapshots carry bounded snippets and pending item IDs.
@@ -133,7 +138,7 @@ including when an unsaved edit removes every match. The Rust matcher applies the
 same filters, context, and pagination to both sources. Snapshot transfer is bounded
 to 2,000 open paths, 512 KiB per file, and 768 KiB of aggregate serialized overrides
 per root; unavailable or oversized snapshots fail explicitly without a disk fallback.
-Structural file mutations are not yet supported by the editor-backed text store.
+Create, rename, and delete also apply immediately through native file operations and remain reviewable with Keep/Revert. Multi-file application is not atomic: a failure can leave earlier changes applied and available for review. Applied reviews do not block subsequent agent edits; each edit uses a fresh workspace revision.
 
 Context actions live on the native workbench surfaces:
 
@@ -377,7 +382,7 @@ These regressions cover the next eleven findings:
 - Successfully observed workspace mutations remain in memory after checkpoint failures. The next queued operation must persist them before it can change a decision; normalized editor text is not compared back to an obsolete prediction.
 - Desktop routing uses a single-component identifier shared by the host and editor. Safe unique folder names retain their existing addresses; duplicate or delimiter-containing display names use URI-derived identifiers. Display labels remain separate.
 - Attachment search generations survive prompt remounts. Replacement native workers start with clean transport buffers and ignore late output from the old worker.
-- Large-file review calculates line-number width iteratively. Rename proposals retain BOM-only decisions, and acceptance applies both changes.
+- Large-file review calculates line-number width iteratively. Rename proposals retain BOM-only decisions; automatic application handles both changes where the workspace adapter supports them.
 - Explicit EOL conversion of existing multiline editor content fails before mutation until the editor port supports an undoable EOL operation. Newline normalization for inserted text remains supported; unsupported conversions cannot silently settle as accepted.
 - Trust changes hydrate the selected chat after the new runtime snapshot. Transcript paging resets for a different conversation, and cursor placement follows Ink's hard-wrap behavior for wide characters.
 
@@ -745,7 +750,7 @@ the Docs addon. The component previews do not use that shim.
 At the pinned revision, Code OSS's agent host owns its own session protocol,
 side-effect bookkeeping, provider lifecycle, and state projection. Adapting
 Glyph to that protocol would make a second state system authoritative for
-staged-before-write proposals, approvals, and recovery. This integration
+immediately applied edits with subsequent Keep/Revert review, approvals, and recovery. This integration
 therefore reuses the upstream `UtilityProcess` and MessagePort lifecycle
 patterns, but keeps a dedicated versioned Glyph protocol and Glyph's existing
 domain state.

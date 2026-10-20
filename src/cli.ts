@@ -127,7 +127,7 @@ async function main(): Promise<void> {
     logger,
     configuration.editing.maxActiveReviews,
     projectContext.mutationIdentity,
-    { maxReadBytes: getEditingReadBudget(configuration.editing) },
+    { maxReadBytes: getEditingReadBudget(configuration.editing), autoApply: true },
   );
   const projectTools = new ProjectToolRuntime(
     new ProjectAccess(projectContext.roots[0]!.path, {}, workspace, pathIndex),

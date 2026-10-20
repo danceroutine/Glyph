@@ -18,13 +18,13 @@ export enum ProjectToolName {
   SEARCH_CONTENTS = 'search_project_contents',
 
   /**
-   * Parses the strict patch dialect and stages the resulting file changes for human review.
-   * It does not write to the workspace until the corresponding review items are accepted.
+   * Parses the strict patch dialect and applies the resulting file changes immediately.
+   * The user can keep or revert the applied changes afterward.
    */
   PROPOSE_PATCH = 'propose_patch',
 
   /**
-   * Stages structured, coordinate-based text and file operations for human review.
+   * Applies structured, coordinate-based text and file operations with subsequent Keep/Revert review.
    * This form is intended for changes that require exact ranges, whitespace, line endings, or Unicode handling.
    */
   PROPOSE_EDITS = 'propose_edits',

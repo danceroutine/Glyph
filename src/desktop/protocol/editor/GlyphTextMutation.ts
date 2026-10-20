@@ -9,4 +9,5 @@ export interface GlyphTextMutation {
   readonly text: string;
   readonly byteOrderMark: boolean;
   readonly undoGroupId: string;
+  readonly save?: boolean;
 }

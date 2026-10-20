@@ -1,3 +1,4 @@
+import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useInput, useWindowSize } from 'ink';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
@@ -99,7 +100,7 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
     // Navigation can precede a decision in the same input batch. Never decide
     // the previous entry, or a newly selected diff that has not rendered yet.
     if (entries[clamp(currentSelection.current, 0, Math.max(0, entries.length - 1))] !== entry) return;
-    if (entry.item.decision !== EditDecisionState.PENDING) return;
+    if (!isReviewItemPending(entry.file, entry.item)) return;
     setPending(true);
     const operation =
       decision === EditDecisionState.ACCEPTED
@@ -121,8 +122,12 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
         // A failed checkpoint can follow a successful edit. Keep its decision
         // in the receipt totals while persistence remains visibly unfinished.
         totals.current = {
-          accepted: queue.current.filter(value => value.item.decision === EditDecisionState.ACCEPTED).length,
-          rejected: queue.current.filter(value => value.item.decision === EditDecisionState.REJECTED).length,
+          accepted: queue.current.filter(
+            value => !isReviewItemPending(value.file, value.item) && value.item.decision === EditDecisionState.ACCEPTED,
+          ).length,
+          rejected: queue.current.filter(
+            value => !isReviewItemPending(value.file, value.item) && value.item.decision === EditDecisionState.REJECTED,
+          ).length,
         };
         setDiagnostic(error instanceof Error ? error.message : String(error));
       })
@@ -202,7 +207,7 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
     diagnostic: diagnostic ? `Error: ${sanitizeText(diagnostic)}` : '',
     visibleLines: rendered.lines.slice(visibleScroll, visibleScroll + pageSize),
     navigationHelp: `↑/↓ scroll  PgUp/PgDn page  Home/End top/bottom  F ${viewAction}`,
-    decisionHelp: `←/→ previous/next change  Y accept  N reject  Esc/Q defer${busy ? '  applying…' : ''}`,
+    decisionHelp: `←/→ previous/next change  Y keep  N revert  Esc/Q defer${busy ? '  saving…' : ''}`,
     complete: false,
   };
 }
@@ -211,7 +216,9 @@ function countDecisions(reviews: ProposalReviewRequest['manager']['activeReviews
   accepted: number;
   rejected: number;
 } {
-  const items = reviews.flatMap(review => review.files).flatMap(file => file.items);
+  const items = reviews
+    .flatMap(review => review.files)
+    .flatMap(file => file.items.filter(item => !isReviewItemPending(file, item)));
   return {
     accepted: items.filter(item => item.decision === EditDecisionState.ACCEPTED).length,
     rejected: items.filter(item => item.decision === EditDecisionState.REJECTED).length,

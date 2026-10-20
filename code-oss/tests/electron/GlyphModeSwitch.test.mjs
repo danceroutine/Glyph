@@ -70,7 +70,7 @@ it.describe('Mode switches', () => {
     await expect(glyph.page.getByRole('combobox', { name: 'Conversation mode' })).toContainText('Plan');
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
     const results = provider.requests.at(-1).body.input.filter(item => item.type === 'custom_tool_call_output');
-    expect(JSON.parse(results.find(item => item.call_id === 'markdown').output).status).toBe('STAGED_FOR_REVIEW');
+    expect(JSON.parse(results.find(item => item.call_id === 'markdown').output).status).toBe('APPLIED_WITH_REVERT');
     expect(JSON.parse(results.find(item => item.call_id === 'code').output).error.message).toContain(
       'only edit Markdown',
     );

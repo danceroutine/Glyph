@@ -152,8 +152,8 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
                     appearance={ButtonAppearance.GHOST}
 
                     type="button"
-                    aria-label={`${file.autoApplied ? 'Revert' : 'Undo'} ${file.path}`}
-                    title={file.autoApplied ? 'Revert file change' : 'Dismiss proposed changes'}
+                    aria-label={`${'Revert'} ${file.path}`}
+                    title={'Revert file change'}
                     disabled={state.disabled}
                     onClick={file.undo}
                   >

@@ -1,3 +1,4 @@
+import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import { extname } from 'node:path';
 import { highlight, supportsLanguage } from 'cli-highlight';
 import type { Theme } from 'cli-highlight';
@@ -107,7 +108,7 @@ export function pendingEntries(proposals: readonly EditProposal[]): ReviewEntry[
 }
 
 export function pendingReviewEntries(entries: readonly ReviewEntry[]): ReviewEntry[] {
-  return entries.filter(entry => entry.item.decision === EditDecisionState.PENDING);
+  return entries.filter(entry => isReviewItemPending(entry.file, entry.item));
 }
 
 function numberReviewEntries(entries: readonly ReviewEntry[]): ReviewEntry[] {
@@ -146,6 +147,13 @@ export function renderEntry(
   mode: ReviewViewMode,
   colors: boolean,
 ): RenderedEntry {
+  const selectedFileItem = file.items.indexOf(item) + 1;
+  const itemCount = file.items.length;
+  if (item.appliedText?.before && item.appliedText.after) {
+    const displayItem = { ...item, decision: EditDecisionState.PENDING };
+    file = { ...file, base: item.appliedText.before, proposed: item.appliedText.after, items: [displayItem] };
+    item = displayItem;
+  }
   const path = `${file.sourcePath}${file.targetPath !== file.sourcePath ? ` → ${file.targetPath}` : ''}`;
   const title = style(`${file.operation} ${renderReviewText(path)}`, TerminalReviewColor.HEADING, colors);
   if (item.kind === EditReviewItemKind.RENAME && mode === ReviewViewMode.FOCUSED) {
@@ -176,11 +184,10 @@ export function renderEntry(
     end = Math.min(allDiffLines.length, selectedEnd + FOCUSED_CONTEXT_LINES + 1);
   }
 
-  const selectedFileItem = file.items.indexOf(item) + 1;
   const details =
     mode === ReviewViewMode.FULL_FILE
-      ? `Full file • selected change ${selectedFileItem}/${file.items.length}`
-      : `Focused change ${selectedFileItem}/${file.items.length} • press F for the full file`;
+      ? `Full file • selected change ${selectedFileItem}/${itemCount}`
+      : `Focused change ${selectedFileItem}/${itemCount} • press F for the full file`;
   const lines = [title, style(details, TerminalReviewColor.DIM, colors)];
   const beforeBom = file.base?.byteOrderMark ?? false;
   if (beforeBom !== file.proposed.byteOrderMark) {

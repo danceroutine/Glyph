@@ -48,7 +48,7 @@ export function useGlyphPendingReviewsState({ chatId, proposals, readOnly, actio
             ),
           status:
             file.applicability === GlyphProposalApplicability.STALE
-              ? 'File changed. Dismiss this proposal and request a fresh edit.'
+              ? 'File changed. Revert newer edits first, or keep this change.'
               : file.textOnly === false && !file.autoApplied
                 ? 'The file operation could not be applied. Revert to dismiss it.'
                 : undefined,
@@ -77,7 +77,7 @@ export function useGlyphPendingReviewsState({ chatId, proposals, readOnly, actio
     keepDisabled: readOnly || pending || files.some(file => !file.canKeep),
     summary: `${files.length} ${files.length === 1 ? 'File' : 'Files'}`,
     keepLabel: files.length === 1 ? 'Keep' : 'Keep All',
-    undoLabel: files.length === 1 ? 'Undo' : 'Undo All',
+    undoLabel: files.length === 1 ? 'Revert' : 'Revert All',
     toggle: () => setExpanded(value => !value),
     keep: () => decide(files, true),
     undo: () => decide(files, false),

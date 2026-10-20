@@ -33,7 +33,7 @@ export class ProjectToolRuntime implements ToolSource {
         namespace: ProjectToolNamespace.PROJECT,
         name: ProjectToolName.PROPOSE_PATCH,
         allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
-        description: `Stage a strict patch for user review. Prefer this for ordinary source edits. The grammar is:
+        description: `Apply a strict patch immediately, retaining changes for Keep/Revert review. Prefer this for ordinary source edits. The grammar is:
 *** Begin Patch
 *** Add File: path
 +new line
@@ -50,7 +50,7 @@ export class ProjectToolRuntime implements ToolSource {
 *** Revision: <revision>
 [\\ No newline at end of file]
 *** End Patch
-Every directive and context line is exact; no fuzzy matching occurs. Never claim the workspace changed until the user accepts review items.`,
+Every directive and context line is exact; no fuzzy matching occurs. Successful edits are applied immediately; the user can keep or revert them afterward.`,
         inputKind: ToolInputKind.TEXT,
         validateInput: input => {
           if (!input.trim()) throw new Error('Expected a nonempty patch.');
@@ -62,7 +62,7 @@ Every directive and context line is exact; no fuzzy matching occurs. Never claim
         name: ProjectToolName.PROPOSE_EDITS,
         allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
         description:
-          'Stage exact UTF-16 range edits for user review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
+          'Apply exact UTF-16 range edits immediately with Keep/Revert review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
         inputKind: ToolInputKind.JSON,
         parameters: toJsonSchema(EditProposalService.structuredSchema),
         validateInput: input => {
@@ -115,15 +115,19 @@ Every directive and context line is exact; no fuzzy matching occurs. Never claim
       const queuePosition = this.reviews.activeReviews.findIndex(review => review.id === stagedProposal.id) + 1;
       return JSON.stringify({
         proposal_id: proposal.id,
-        status: stagedProposal.files.some(file => file.automatic?.state === 'applied')
+        status: stagedProposal.files.some(
+          file => file.automatic?.state === 'applied' || file.items.some(item => item.appliedText?.state === 'applied'),
+        )
           ? 'APPLIED_WITH_REVERT'
           : 'STAGED_FOR_REVIEW',
         queue_position: queuePosition,
         active_reviews: this.reviews.activeReviews.length,
         files: proposal.files.length,
         review_items: proposal.files.reduce((sum, file) => sum + file.items.length, 0),
-        message: stagedProposal.files.some(file => file.automatic?.state === 'applied')
-          ? 'Structural file changes have been applied. The user can inspect and revert them in the review drawer. Any text hunks still pending require acceptance.'
+        message: stagedProposal.files.some(
+          file => file.automatic?.state === 'applied' || file.items.some(item => item.appliedText?.state === 'applied'),
+        )
+          ? 'Changes have been applied. You can read the updated files, run commands, and iterate immediately. The user can keep or revert the changes in review.'
           : 'The proposal was appended to the review queue, but no workspace changes have been written. The user must accept review items.',
       });
     } catch (error) {

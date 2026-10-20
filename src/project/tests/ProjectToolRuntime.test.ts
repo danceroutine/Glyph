@@ -23,7 +23,10 @@ describe(ProjectToolRuntime, () => {
       });
       const runtime = new ProjectToolRuntime(
         { definitions: [] } as unknown as ProjectAccess,
-        { proposePatch: vi.fn(async () => proposal) } as unknown as EditProposalService,
+        {
+          proposePatch: vi.fn(async () => proposal),
+          assertModeAllows: vi.fn(async () => {}),
+        } as unknown as EditProposalService,
         { stage, activeReviews } as unknown as ProposalReviewManager,
         new NullLogger(),
       );

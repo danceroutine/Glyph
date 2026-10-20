@@ -40,9 +40,19 @@ const reviewItemSchema = z
     removedText: z.string(),
     insertedText: z.string(),
     decision: z.enum(EditDecisionState),
+    appliedText: z
+      .object({
+        state: z.enum(['applying', 'applied', 'reverting', 'reverted', 'kept']),
+        before: snapshotSchema.nullable(),
+        after: snapshotSchema.nullable(),
+        revertTarget: snapshotSchema.nullable(),
+      })
+      .strict()
+      .optional(),
     rejectionComment: z.string().min(1).max(4000).optional(),
   })
-  .strict();
+  .strict()
+  .transform(({ appliedText, ...item }) => ({ ...item, ...(appliedText ? { appliedText } : {}) }));
 
 const fileEditPlanSchema = z
   .object({

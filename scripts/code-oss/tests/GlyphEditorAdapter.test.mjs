@@ -640,6 +640,13 @@ async function pendingEdit({
   const write = Promise.withResolvers();
   const written = Promise.withResolvers();
   const finish = Promise.withResolvers();
+  let dirty = true;
+  let diskText = initial;
+  const save = vi.fn(async resource => {
+    diskText = text;
+    dirty = false;
+    return resource;
+  });
   let folders = [{ name: 'A', uri: URI.file('/workspace/A') }];
   let workspaceId = 'workspace';
   let profileId = 'profile';
@@ -706,7 +713,7 @@ async function pendingEdit({
       },
     },
     { getModels: () => [model] },
-    { isDirty: () => true },
+    { isDirty: () => dirty, save },
     { isWorkspaceTrusted: () => true },
     {},
     { asCanonicalUri: resource => resource },
@@ -738,6 +745,8 @@ async function pendingEdit({
     written,
     finish,
     text: () => text,
+    diskText: () => diskText,
+    save,
     changeWorkspace: change => {
       if (change.startsWith('profile')) {
         if (change !== 'profile metadata') profileId = 'replacement-profile';
@@ -753,11 +762,12 @@ async function pendingEdit({
       folders = [];
       for (const listener of folderListeners) listener({});
     },
-    apply: () =>
+    apply: (save = false) =>
       adapter.handle({
         type: 'apply_text_mutation',
         mutation: {
           operationId: 'edit',
+          save,
           path: 'file.ts',
           text: replacement,
           byteOrderMark: false,
@@ -825,3 +835,42 @@ it.each(['trust revoked', 'destination occupied'])(
     }
   },
 );
+
+it('saves an applied text edit before reporting success even with Auto Save off', async () => {
+  const fixture = await pendingEdit();
+  try {
+    const operation = fixture.apply(true);
+    await fixture.entered.promise;
+    fixture.write.resolve();
+    fixture.finish.resolve();
+    const result = await operation;
+    expect(result.ok).toBe(true);
+    expect(fixture.diskText()).toBe('replacement');
+    expect(fixture.save).toHaveBeenCalledWith(expect.objectContaining({ path: '/workspace/A/file.ts' }), {
+      skipSaveParticipants: true,
+    });
+    expect((await fixture.apply(true)).ok).toBe(true);
+    expect(fixture.launch).toHaveBeenCalledTimes(1);
+  } finally {
+    fixture.adapter.dispose();
+  }
+});
+
+it('reports save failure and retries saving the applied edit without applying it again', async () => {
+  const fixture = await pendingEdit();
+  try {
+    fixture.save.mockRejectedValueOnce(new Error('disk full'));
+    const operation = fixture.apply(true);
+    await fixture.entered.promise;
+    fixture.write.resolve();
+    fixture.finish.resolve();
+    expect((await operation).ok).toBe(false);
+    expect(fixture.text()).toBe('replacement');
+    expect(fixture.diskText()).toBe('original');
+    expect((await fixture.apply(true)).ok).toBe(true);
+    expect(fixture.diskText()).toBe('replacement');
+    expect(fixture.launch).toHaveBeenCalledTimes(1);
+  } finally {
+    fixture.adapter.dispose();
+  }
+});

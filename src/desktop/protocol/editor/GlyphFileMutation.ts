@@ -9,6 +9,7 @@ export enum GlyphFileMutationKind {
 export type GlyphFileMutation = {
   readonly operationId: string;
   readonly undoGroupId: string;
+  readonly save?: boolean;
   readonly path: string;
 } & (
   | { readonly kind: GlyphFileMutationKind.CREATE; readonly text: string; readonly byteOrderMark: boolean }

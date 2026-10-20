@@ -37,7 +37,7 @@ function structured(path, revision, content, edits = []) {
 async function stage(glyph, provider, content = changed, path = 'review.txt') {
   const base = await read(glyph, provider, path);
   const result = await tool(glyph, provider, 'propose_edits', { files: [structured(path, base.revision, content)] });
-  expect(result.status).toBe('STAGED_FOR_REVIEW');
+  expect(result.status).toBe('APPLIED_WITH_REVERT');
   await expect(pending(glyph)).toBeVisible();
   return result;
 }
@@ -61,7 +61,7 @@ async function setText(glyph, text) {
 it.describe('Text proposal review', () => {
   it.use({ scriptedProvider: true, workspaceFiles: { 'review.txt': original, 'other.ts': 'const value = 1;\n' } });
 
-  it('renders a strict patch as reviewable changes without changing buffers or disk before acceptance', async ({
+  it('applies and saves a strict patch before review while retaining its original diff', async ({
     glyph,
     provider,
   }) => {
@@ -78,21 +78,21 @@ it.describe('Text proposal review', () => {
       '*** End Patch',
     ].join('\n');
     const result = await tool(glyph, provider, 'propose_patch', patch, 'text');
-    expect(result.status).toBe('STAGED_FOR_REVIEW');
+    expect(result.status).toBe('APPLIED_WITH_REVERT');
     await expect(pending(glyph)).toContainText('review.txt');
     await pending(glyph).getByRole('button', { name: 'Review', exact: true }).click();
     await expect(controls(glyph)).toBeVisible();
     await expect(glyph.page.locator('.monaco-diff-editor .view-lines')).toContainText(['one', 'ONE']);
-    expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
+    expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe('ONE\nunchanged\nthree\n');
     await save(glyph);
-    expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
+    expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe('ONE\nunchanged\nthree\n');
   });
 
-  it('applies accepted edits to the live editor and supports ordinary editor Undo', async ({ glyph, provider }) => {
+  it('keeps applied edits without a second write and supports ordinary editor Undo', async ({ glyph, provider }) => {
     await stage(glyph, provider, 'ONE\nunchanged\nthree\n');
     await pending(glyph).getByRole('button', { name: 'Keep', exact: true }).click();
     await expect(pending(glyph)).toHaveCount(0);
-    expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
+    expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe('ONE\nunchanged\nthree\n');
     await save(glyph);
     await expect.poll(() => readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe('ONE\nunchanged\nthree\n');
     await glyph.page.keyboard.press('ControlOrMeta+z');
@@ -100,21 +100,18 @@ it.describe('Text proposal review', () => {
     await expect.poll(() => readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
   });
 
-  it('rejects a proposal without changing the editor or disk', async ({ glyph, provider }) => {
+  it('reverts applied changes in both the editor and disk', async ({ glyph, provider }) => {
     await stage(glyph, provider);
-    await pending(glyph).getByRole('button', { name: 'Undo', exact: true }).click();
+    await pending(glyph).getByRole('button', { name: 'Revert', exact: true }).click();
     await expect(pending(glyph)).toHaveCount(0);
     await save(glyph);
     expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
   });
 
-  it('refuses an accepted proposal after the user changes the referenced editor content', async ({
-    glyph,
-    provider,
-  }) => {
+  it('refuses a revert after the user overwrites the applied content', async ({ glyph, provider }) => {
     await stage(glyph, provider);
     await setText(glyph, 'User-owned replacement\n');
-    await pending(glyph).getByRole('button', { name: 'Keep', exact: true }).click();
+    await pending(glyph).getByRole('button', { name: 'Revert', exact: true }).click();
     await expect(pending(glyph).getByRole('alert')).toBeVisible();
     await save(glyph);
     await expect.poll(() => readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe('User-owned replacement\n');
@@ -145,16 +142,8 @@ it.describe('Text proposal review', () => {
     await controls(glyph).getByRole('button', { name: 'Previous change', exact: true }).click();
     await controls(glyph).getByRole('button', { name: 'Keep', exact: true }).click();
     await expect(controls(glyph)).toContainText('1 of 1');
-    await controls(glyph).getByRole('button', { name: 'Undo', exact: true }).click();
+    await controls(glyph).getByRole('button', { name: 'Revert', exact: true }).click();
     await expect(pending(glyph)).toHaveCount(0);
-    const annotations = glyph.page.locator('.glyph-composer .glyph-annotation-pill');
-    await expect(annotations).toContainText('1 annotation');
-    await annotations.hover();
-    await expect(annotations).toContainText('Keep the final line unchanged');
-    await annotations.getByRole('button', { name: 'Edit annotation 1' }).click();
-    const annotationInput = glyph.page.getByRole('textbox', { name: 'Annotation comment' });
-    await expect(annotationInput).toHaveValue('Keep the final line unchanged; it is a public contract.');
-    await annotationInput.press('Enter');
     await save(glyph);
     await expect.poll(() => readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe('ONE\nunchanged\nthree\n');
     const count = provider.requests.length;
@@ -185,7 +174,7 @@ it.describe('Text proposal review', () => {
     await stage(glyph, provider);
     await pending(glyph).getByRole('button', { name: 'Review', exact: true }).click();
     const keep = controls(glyph).getByRole('button', { name: 'Keep', exact: true });
-    const undo = controls(glyph).getByRole('button', { name: 'Undo', exact: true });
+    const undo = controls(glyph).getByRole('button', { name: 'Revert', exact: true });
     const comment = controls(glyph).getByRole('button', { name: 'Reject with comments', exact: true });
     const modifier = process.platform === 'darwin' ? '⌘' : 'Ctrl+';
     await expect(keep).toContainText(`${modifier}Y`);
@@ -245,10 +234,10 @@ it.describe('Text proposal review', () => {
         }),
       ]),
     );
-    // The Undo shortcut dismisses a new pending item without changing the file.
+    // The Revert shortcut restores the content from before the latest applied edit.
     await stage(glyph, provider, 'ONE\nunchanged\nLAST\n');
     await pending(glyph).getByRole('button', { name: 'Review', exact: true }).click();
-    await controls(glyph).getByRole('button', { name: 'Undo', exact: true }).focus();
+    await controls(glyph).getByRole('button', { name: 'Revert', exact: true }).focus();
     await glyph.page.keyboard.press('ControlOrMeta+n');
     await expect(pending(glyph)).toHaveCount(0);
   });
@@ -381,7 +370,7 @@ it.describe('Text proposal review', () => {
     expect(
       (await tool(glyph, provider, 'propose_edits', { files: [structured('review.txt', base.revision, null, edits)] }))
         .status,
-    ).toBe('STAGED_FOR_REVIEW');
+    ).toBe('APPLIED_WITH_REVERT');
     await pending(glyph).getByRole('button', { name: 'Review', exact: true }).click();
     await expect(glyph.page.locator('.monaco-diff-editor')).toContainText('🌳');
     await pending(glyph).getByRole('button', { name: 'Keep', exact: true }).click();
@@ -452,7 +441,7 @@ it.describe('Text proposal review', () => {
           ],
         })
       ).status,
-    ).toBe('STAGED_FOR_REVIEW');
+    ).toBe('APPLIED_WITH_REVERT');
     await glyph.reload();
     await expect(pending(glyph)).toContainText('2 Files');
     const file = pending(glyph).getByRole('button', { name: 'Review review.txt', exact: true });
@@ -467,7 +456,7 @@ it.describe('Text proposal review', () => {
     await expect(fileControls(glyph)).toContainText('1 of 2 Files');
     await fileControls(glyph).getByRole('button', { name: 'Review Next File' }).click();
     await expect(fileControls(glyph)).toContainText('2 of 2 Files');
-    await fileControls(glyph).getByRole('button', { name: 'Undo File', exact: true }).click();
+    await fileControls(glyph).getByRole('button', { name: 'Revert File', exact: true }).click();
     await expect(pending(glyph)).toContainText('1 File');
     await pending(glyph).getByRole('button', { name: 'Keep', exact: true }).click();
     await expect(pending(glyph)).toHaveCount(0);

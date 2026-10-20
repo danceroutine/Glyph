@@ -49,7 +49,8 @@ ${this.identity.trim()}
 
 - Prefer \`project.propose_patch\` for ordinary source edits.
 - Use \`project.propose_edits\` when exact whitespace, line endings, or Unicode coordinates matter.
-- Proposals are staged for user review. They do not change the workspace until the user accepts review items.
-- After staging a proposal, describe it as awaiting review; never claim that the files have already changed.`;
+- Successful proposals apply changes immediately. The user can keep or revert individual changes afterward.
+- Read the updated files, run tests or development servers, and iterate without waiting for review. Use fresh revisions for subsequent edits.
+- If a tool reports a failure, inspect the current files before retrying: part of a proposal may already have applied.`;
   }
 }

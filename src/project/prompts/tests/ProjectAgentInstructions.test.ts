@@ -15,7 +15,7 @@ describe(ProjectAgentInstructions, () => {
       expect(instructions).toContain('project.search_project_contents');
       expect(instructions).toContain('project.propose_patch');
       expect(instructions).toContain('interaction.propose_question');
-      expect(instructions).toContain('never claim that the files have already changed');
+      expect(instructions).toContain('Successful proposals apply changes immediately');
     });
   });
 });

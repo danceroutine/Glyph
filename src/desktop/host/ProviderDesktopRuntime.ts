@@ -1,3 +1,4 @@
+import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
@@ -24,7 +25,6 @@ import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import type { ChatSession } from '#src/chat/sessions/ChatSession.js';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
-import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { ProtocolError } from '#src/errors/ProtocolError.js';
 import { toGlyphProposalFilePreview } from './toGlyphProposalFilePreview.ts';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
@@ -569,16 +569,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     ) {
       throw new ProtocolError('This proposal does not belong to that chat.');
     }
-    const automatic = review.files.find(
-      file => file.automatic?.itemId === command.itemId && file.automatic.state !== 'applying',
-    );
-    if (automatic)
-      await reviews.settleAutomatic(
-        command.proposalId,
-        command.itemId,
-        command.type === GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM,
-      );
-    else if (command.type === GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM)
+    if (command.type === GlyphWorkbenchCommandType.ACCEPT_PROPOSAL_ITEM)
       await reviews.acceptInReview(command.proposalId, command.itemId);
     else await reviews.rejectInReview(command.proposalId, command.itemId, command.comment);
     await glyph.commitReviewResults(session, { currentChatOnly: true });
@@ -1029,18 +1020,12 @@ function toProposal(proposal: EditProposal): GlyphProposalSummary {
       proposedUri: `glyph-proposal:/${encodeURIComponent(proposal.id)}/${encodeURIComponent(file.id)}`,
       textOnly: file.operation === EditOperation.UPDATE,
       additions: file.items
-        .filter(item => item.decision === EditDecisionState.PENDING || file.automatic?.itemId === item.id)
+        .filter(item => isReviewItemPending(file, item))
         .reduce((sum, item) => sum + changedLines(item.insertedText), 0),
       deletions: file.items
-        .filter(item => item.decision === EditDecisionState.PENDING || file.automatic?.itemId === item.id)
+        .filter(item => isReviewItemPending(file, item))
         .reduce((sum, item) => sum + changedLines(item.removedText), 0),
-      pendingItemIds: file.items
-        .filter(
-          item =>
-            item.decision === EditDecisionState.PENDING ||
-            (file.automatic?.itemId === item.id && ['applied', 'reverting'].includes(file.automatic.state)),
-        )
-        .map(item => item.id),
+      pendingItemIds: file.items.filter(item => isReviewItemPending(file, item)).map(item => item.id),
       applicability:
         Object.values(GlyphProposalApplicability).find(value => value === String(file.applicability).toLowerCase()) ??
         GlyphProposalApplicability.STALE,

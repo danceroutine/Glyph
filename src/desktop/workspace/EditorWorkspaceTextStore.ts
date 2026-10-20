@@ -121,6 +121,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       byteOrderMark,
       operationId: options.operationId ?? randomUUID(),
       undoGroupId: options.undoGroupId ?? options.operationId ?? randomUUID(),
+      ...(options.save ? { save: true } : {}),
     });
     return this.remember(requireSnapshot(response, path));
   }
@@ -131,15 +132,22 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     expectedRevision: string,
     options: WorkspaceMutationOptions = {},
   ): Promise<WorkspaceTextSnapshot> {
-    if (await this.recoverFileMutation(source, expectedRevision, options.operationId, target)) return this.read(target);
+    const recovered = await this.recoverFileMutation(source, expectedRevision, options.operationId, target);
+    if (recovered && !options.save) return this.read(target);
+    // A rename receipt proves the move, not a subsequent save. Replay its ID
+    // through the renderer to finish saving without reading the removed source.
+    const expectedToken = recovered
+      ? await this.fileToken(target, (await this.read(target)).revision)
+      : await this.fileToken(source, expectedRevision);
     const response = await this.mutateFile({
       kind: GlyphFileMutationKind.RENAME,
       path: this.normalizePath(source),
       target: this.normalizePath(target),
       expectedContentRevision: expectedRevision,
-      expectedToken: await this.fileToken(source, expectedRevision),
+      expectedToken,
       operationId: options.operationId ?? randomUUID(),
       undoGroupId: options.undoGroupId ?? options.operationId ?? randomUUID(),
+      ...(options.save ? { save: true } : {}),
     });
     return this.remember(requireSnapshot(response, target));
   }
@@ -153,6 +161,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       expectedToken: await this.fileToken(path, expectedRevision),
       operationId: options.operationId ?? randomUUID(),
       undoGroupId: options.undoGroupId ?? options.operationId ?? randomUUID(),
+      ...(options.save ? { save: true } : {}),
     });
   }
 
@@ -180,7 +189,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     }
     const operationId = options.operationId ?? randomUUID();
     const knownReceipt = this.receipts.get(operationId);
-    if (knownReceipt?.afterRevision) {
+    if (knownReceipt?.afterRevision && !options.save) {
       const current = await this.read(path);
       if (current.revision === knownReceipt.afterRevision) return current;
       throw new EditError(EditFailureReason.INCONSISTENT, 'The mutation receipt no longer matches the working copy.', {
@@ -197,6 +206,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
         text,
         byteOrderMark,
         undoGroupId: options.undoGroupId ?? operationId,
+        ...(options.save ? { save: true } : {}),
       },
     });
     if (!response.ok) throw responseError(response, path);
@@ -206,6 +216,10 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       });
     }
     this.receipts.set(operationId, response.receipt);
+    if (options.save && response.snapshot.dirty)
+      throw new EditError(EditFailureReason.INCONSISTENT, 'The editor applied the change but did not save it.', {
+        path,
+      });
     return this.remember(response.snapshot);
   }
 
@@ -252,6 +266,10 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       });
     this.receipts.set(mutation.operationId, response.receipt);
     this.capabilities.clear();
+    if (mutation.save && response.snapshot?.dirty)
+      throw new EditError(EditFailureReason.INCONSISTENT, 'The editor applied the file change but did not save it.', {
+        path: mutation.path,
+      });
     return response;
   }
 
