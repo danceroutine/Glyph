@@ -1,7 +1,41 @@
 import type { GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import { GlyphRunStatus, type GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import type { GlyphChatSummary } from '#src/desktop/protocol/events/GlyphChatSummary.js';
+
+export enum GlyphChatActivity {
+  WORKING = 'working',
+  AWAITING_INPUT = 'awaiting_input',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+  INTERRUPTED = 'interrupted',
+  FAILED = 'failed',
+  EMPTY = 'empty',
+}
+
+const GLYPH_RUN_STATUS_TO_GLYPH_CHAT_ACTIVITY: Record<GlyphRunStatus, GlyphChatActivity> = {
+  [GlyphRunStatus.STREAMING]: GlyphChatActivity.WORKING,
+  [GlyphRunStatus.WAITING_FOR_QUESTION]: GlyphChatActivity.AWAITING_INPUT,
+  [GlyphRunStatus.WAITING_FOR_APPROVAL]: GlyphChatActivity.AWAITING_INPUT,
+  [GlyphRunStatus.COMPLETED]: GlyphChatActivity.COMPLETED,
+  [GlyphRunStatus.CANCELLED]: GlyphChatActivity.CANCELLED,
+  [GlyphRunStatus.INTERRUPTED]: GlyphChatActivity.INTERRUPTED,
+  [GlyphRunStatus.FAILED]: GlyphChatActivity.FAILED,
+};
+
+const ACTIVE_RUN_STATUSES = [
+  GlyphRunStatus.STREAMING,
+  GlyphRunStatus.WAITING_FOR_QUESTION,
+  GlyphRunStatus.WAITING_FOR_APPROVAL,
+];
+
+function toChatActivity(chat: GlyphChatSummary, runs: readonly GlyphRunProjection[]): GlyphChatActivity {
+  const chatRuns = runs.filter(run => run.chatId === chat.id);
+  const run = chatRuns.find(value => ACTIVE_RUN_STATUSES.includes(value.status)) ?? chatRuns.at(-1);
+  if (run) return GLYPH_RUN_STATUS_TO_GLYPH_CHAT_ACTIVITY[run.status];
+  return chat.turnCount > 0 ? GlyphChatActivity.COMPLETED : GlyphChatActivity.EMPTY;
+}
 
 export interface GlyphChatHistoryStateOptions {
   readonly state: GlyphWorkbenchState;
@@ -25,13 +59,7 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
       title: chat.title,
       updatedAt: chat.updatedAt,
       selected: state.selectedChatId === chat.id,
-      active: state.runs.some(
-        run =>
-          run.chatId === chat.id &&
-          [GlyphRunStatus.STREAMING, GlyphRunStatus.WAITING_FOR_QUESTION, GlyphRunStatus.WAITING_FOR_APPROVAL].includes(
-            run.status,
-          ),
-      ),
+      activity: toChatActivity(chat, state.runs),
     }));
   const chats = allChats.filter(chat => !chat.archived);
   const unpinned = chats.filter(chat => !chat.pinned);
