@@ -1,6 +1,7 @@
 import type { GlyphModeSwap } from './GlyphModeSwap.ts';
 export interface GlyphApprovalRequest {
   readonly modeSwap?: GlyphModeSwap;
+  readonly goal?: { readonly objective: string };
   readonly id: string;
   readonly title: string;
   readonly detail: string;

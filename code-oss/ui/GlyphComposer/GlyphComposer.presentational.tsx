@@ -119,6 +119,7 @@ const styles = {
 };
 export type GlyphComposerProps = GlyphComposerState & {
   readonly modelControl?: ComponentChildren;
+  readonly goal?: ComponentChildren;
   readonly todos?: ComponentChildren;
   readonly terminals?: ComponentChildren;
   readonly reviews?: ComponentChildren;
@@ -189,6 +190,7 @@ export function GlyphComposer(state: GlyphComposerProps) {
           </div>
         </section>
       )}
+      {state.goal}
       {state.todos}
       {state.reviews}
       {state.terminals}

@@ -5,6 +5,7 @@ import { WiredGlyphAnnotations } from '#code-oss/ui/GlyphAnnotations/GlyphAnnota
 import { WiredGlyphPendingReviews } from '#code-oss/ui/GlyphPendingReviews/GlyphPendingReviews.wired.tsx';
 import { GlyphWorkbench } from './GlyphWorkbench.presentational.tsx';
 import { WiredGlyphTodoCard } from '#code-oss/ui/GlyphTodoCard/GlyphTodoCard.wired.tsx';
+import { WiredGlyphGoalRow } from '#code-oss/ui/GlyphGoalRow/GlyphGoalRow.wired.tsx';
 import { WiredGlyphQuestionCard } from '#code-oss/ui/GlyphQuestionCard/GlyphQuestionCard.wired.tsx';
 import { WiredGlyphComposer } from '#code-oss/ui/GlyphComposer/GlyphComposer.wired.tsx';
 import { WiredGlyphTranscript } from '#code-oss/ui/GlyphTranscript/GlyphTranscript.wired.tsx';
@@ -16,11 +17,21 @@ import { useGlyphWorkbenchState, type GlyphWorkbenchStateOptions } from './useGl
 export type WiredGlyphWorkbenchProps = GlyphWorkbenchStateOptions;
 
 export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps) {
-  const { questionRun, approvalRun, initialAnswers, onDraftChange, todos, proposals, plans, plansDisabled, ...view } =
-    useGlyphWorkbenchState({
-      state,
-      actions,
-    });
+  const {
+    questionRun,
+    approvalRun,
+    initialAnswers,
+    onDraftChange,
+    goal,
+    todos,
+    proposals,
+    plans,
+    plansDisabled,
+    ...view
+  } = useGlyphWorkbenchState({
+    state,
+    actions,
+  });
   return (
     <>
       <WiredGlyphAnnotations
@@ -110,6 +121,18 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
                   key={state.selectedChatId}
                   chatId={state.selectedChatId}
                   proposals={proposals}
+                  readOnly={state.readOnly}
+                  actions={actions}
+                />
+              )
+            }
+            goal={
+              state.selectedChatId &&
+              goal && (
+                <WiredGlyphGoalRow
+                  key={state.selectedChatId}
+                  chatId={state.selectedChatId}
+                  goal={goal}
                   readOnly={state.readOnly}
                   actions={actions}
                 />

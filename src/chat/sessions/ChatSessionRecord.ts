@@ -10,6 +10,7 @@ import type { TurnUsage } from '#src/chat/TurnUsage.js';
 import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
 import type { TodoItem } from '#src/todos/TodoItem.js';
+import type { ChatGoal } from '#src/goals/ChatGoal.js';
 
 /** Compact activity history with bounded shell display data; provider history owns complete tool results. */
 export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'> & {
@@ -60,6 +61,7 @@ export interface ChatSessionRecord {
   readonly transcript: readonly ChatTranscriptTurn[];
   readonly plans?: readonly GlyphPlan[];
   readonly todos?: readonly TodoItem[];
+  readonly goal?: ChatGoal;
 }
 
 export type ChatSessionSummary = Omit<ChatSessionRecord, 'providerState' | 'transcript'> & {

@@ -4,6 +4,7 @@ import {
   autoModel,
   navigationStateFixture,
   chatFixture,
+  goalFixture,
   todoItems,
   pendingProposals,
   workbenchStateFixture,
@@ -69,6 +70,15 @@ export const Todos: Story = {
     }),
   },
   play: expandTodos,
+};
+export const GoalWithTodos: Story = {
+  args: {
+    state: workbenchStateFixture({
+      selectedChatId: savedChat.id,
+      chats: [{ ...savedChat, todos: todoItems, goal: goalFixture() }],
+      transcript: conversationFixture(),
+    }),
+  },
 };
 export const TodosWithQueuedMessages: Story = {
   args: {

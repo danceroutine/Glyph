@@ -14,6 +14,11 @@ import type { ChatTitleGenerator } from './ChatTitleGenerator.ts';
 import { ExtractiveChatTitleGenerator } from './ExtractiveChatTitleGenerator.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { todoItemsSchema, todoUpdateSchema, type TodoUpdate } from '#src/todos/TodoUpdate.js';
+import { Goal } from '#src/goals/Goal.js';
+import { GoalError } from '#src/goals/GoalError.js';
+import { chatGoalSchema } from '#src/goals/GoalSchema.js';
+
+type ChatOwner = NonNullable<ToolExecutionContext['chat']>;
 
 export interface CreateChatSessionInput {
   readonly accountProvider: string;
@@ -96,8 +101,9 @@ export class ChatSessionManager {
     const { record, index, turn } = await session.historyAt(turnId);
     if (!turn.checkpoints) throw new ChatHistoryError('This message has no saved checkpoint.');
     const timestamp = this.now().toISOString();
+    const { goal: _goal, ...source } = record;
     const fork: ChatSessionRecord = {
-      ...record,
+      ...source,
       ...turn.checkpoints.after,
       id: this.createId(),
       title: `${record.title.slice(0, 70)} · Branch`,
@@ -147,6 +153,53 @@ export class ChatSessionManager {
       for (const item of update.items) byId.set(item.id, item);
       const todos = todoItemsSchema.parse([...byId.values()]);
       const updated = { ...current, todos, updatedAt: this.now().toISOString() };
+      await this.saveWith(chat.id, updated);
+      return toSummary(updated);
+    });
+  }
+
+  createGoal(chat: ChatOwner, objective: string, signal?: AbortSignal): Promise<ChatSessionSummary> {
+    this.requireInitialized();
+    return this.enqueue(async () => {
+      signal?.throwIfAborted();
+      const current = this.requireOwnedRecord(chat);
+      if (current.goal && Goal.from(current.goal).isOpen)
+        throw new GoalError('This chat already has a goal. Clear it before starting another.');
+      const goal = Goal.create(this.createId(), objective, this.now()).toChatGoal();
+      const untitled = current.titleOrigin === 'placeholder';
+      const updated: ChatSessionRecord = {
+        ...current,
+        goal,
+        ...(untitled
+          ? { title: normalizeGeneratedTitle(await this.titles.generate(goal.objective)), titleOrigin: 'generated' }
+          : {}),
+        updatedAt: this.now().toISOString(),
+      };
+      await this.saveWith(chat.id, updated);
+      return toSummary(updated);
+    });
+  }
+
+  updateGoal(chat: ChatOwner, transform: (goal: Goal) => Goal, signal?: AbortSignal): Promise<ChatSessionSummary> {
+    this.requireInitialized();
+    return this.enqueue(async () => {
+      signal?.throwIfAborted();
+      const current = this.requireOwnedRecord(chat);
+      if (!current.goal) throw new GoalError('This chat has no goal.');
+      const next = transform(Goal.from(current.goal)).toChatGoal();
+      if (next === current.goal) return toSummary(current);
+      const updated = { ...current, goal: chatGoalSchema.parse(next), updatedAt: this.now().toISOString() };
+      await this.saveWith(chat.id, updated);
+      return toSummary(updated);
+    });
+  }
+
+  clearGoal(chat: ChatOwner): Promise<ChatSessionSummary> {
+    this.requireInitialized();
+    return this.enqueue(async () => {
+      const { goal, ...current } = this.requireOwnedRecord(chat);
+      if (!goal) return toSummary(current);
+      const updated = { ...current, updatedAt: this.now().toISOString() };
       await this.saveWith(chat.id, updated);
       return toSummary(updated);
     });
@@ -287,6 +340,13 @@ export class ChatSessionManager {
   private requireRecord(id: string): ChatSessionRecord {
     const record = this.records.get(id);
     if (!record) throw new Error(`Chat "${id}" no longer exists.`);
+    return record;
+  }
+
+  private requireOwnedRecord(chat: ChatOwner): ChatSessionRecord {
+    const record = this.requireRecord(chat.id);
+    if (record.accountProvider !== chat.accountProvider || record.accountId !== chat.accountId)
+      throw new GoalError('Goals must belong to the requesting chat account.');
     return record;
   }
 

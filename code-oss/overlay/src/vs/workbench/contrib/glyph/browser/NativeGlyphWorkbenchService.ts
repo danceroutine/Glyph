@@ -42,6 +42,10 @@ import { GlyphEditorAdapter } from './GlyphEditorAdapter.js';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#glyph/workbench/GlyphTranscriptEntry.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
 import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#glyph/workbench/GlyphWorkbenchState.js';
+import { GlyphGoalReconciler, type GlyphGoalReconciliationSnapshot } from '#glyph/workbench/GlyphGoalReconciler.js';
+import { GOAL_COMMAND_USAGE, parseGoalCommand } from '#glyph/workbench/parseGoalCommand.js';
+
+const SYNTHETIC_RUN_PREFIXES = ['shell-event:', 'goal-continuation:'];
 
 /** Adapts the host's recoverable state and commands to the workbench interaction port. */
 export class NativeGlyphWorkbenchService extends Disposable implements GlyphWorkbenchService {
@@ -89,6 +93,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private readonly prompts = new Map<string, string>();
   private readonly planBuilds = new Map<string, { runId: string; chatId: string; title: string }>();
   private readonly errors: GlyphTranscriptEntry[] = [];
+  private readonly goals = new GlyphGoalReconciler({
+    snapshot: chatId => this.goalSnapshot(chatId),
+    continueGoal: (chatId, goalId) => this.request({ type: GlyphWorkbenchCommandType.CONTINUE_GOAL, chatId, goalId }),
+    onError: error => this.report(error),
+  });
   constructor(
     @IStorageService private readonly storageService: IStorageService,
     @IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
@@ -204,6 +213,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         editor.invalidate();
         this.pendingRunId = undefined;
         this.planBuilds.clear();
+        this.goals.reset();
         this.projection.accept({
           type: GlyphHostEventType.HOST_STATUS,
           status: GlyphHostStatus.DISCONNECTED,
@@ -398,7 +408,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           ? [
               {
                 id: `${run.options?.turnId ?? run.runId}:user`,
-                role: (run.options?.turnId ?? run.runId).startsWith('shell-event:')
+                role: SYNTHETIC_RUN_PREFIXES.some(prefix => (run.options?.turnId ?? run.runId).startsWith(prefix))
                   ? GlyphTranscriptRole.DIAGNOSTIC
                   : GlyphTranscriptRole.USER,
                 text: prompt,
@@ -854,6 +864,18 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     return this.request({ type: GlyphWorkbenchCommandType.STOP_SHELL_SESSION, chatId, sessionId });
   }
 
+  pauseGoal(chatId: string, goalId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.PAUSE_GOAL, chatId, goalId });
+  }
+
+  resumeGoal(chatId: string, goalId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.RESUME_GOAL, chatId, goalId });
+  }
+
+  clearGoal(chatId: string, goalId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.CLEAR_GOAL, chatId, goalId });
+  }
+
   answerQuestion(chatId: string, runId: string, questionId: string, answer: unknown): Promise<void> {
     return this.request({ type: GlyphWorkbenchCommandType.ANSWER_QUESTION, chatId, runId, questionId, answer });
   }
@@ -984,6 +1006,27 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         });
       return;
     }
+    for (const chatId of new Set([...this.openChatIds, this.selectedChatId ?? '']))
+      if (chatId) this.goals.reconcile(chatId);
+  }
+
+  private goalSnapshot(chatId: string): GlyphGoalReconciliationSnapshot | undefined {
+    const chat = this.projection.state.chats.find(value => value.id === chatId);
+    if (!chat) return undefined;
+    const composer = this.composers.get(chatId)?.snapshot;
+    return {
+      ...(chat.goal ? { goal: chat.goal } : {}),
+      runs: this.projection.state.runs.filter(run => run.chatId === chatId),
+      connected: this.projection.status === GlyphHostStatus.READY && !this.sessionChanged && !this.workspaceBlocked,
+      ownsWorkspace: !this.projection.state.readOnly,
+      submitting:
+        this.sending ||
+        this.navigationPending ||
+        this.immediatePending ||
+        Boolean(composer?.submitting || composer?.queueSubmitting) ||
+        (chatId === this.selectedChatId && this.pendingRunId !== undefined),
+      queuedMessages: composer?.queued.length ?? 0,
+    };
   }
 
   /** Human decisions keep their distinct state instead of looking like ordinary streaming. */
@@ -1105,6 +1148,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     // run guard so the composer retains a prompt submitted after invalidation.
     this.assertSessionBinding();
     const prompt = text.trim();
+    const objective = parseGoalCommand(prompt);
+    if (objective === '') throw new Error(GOAL_COMMAND_USAGE);
     if (
       !prompt ||
       this.sending ||
@@ -1136,6 +1181,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       if (options.mode !== undefined && this.state.chats.find(chat => chat.id === chatId)?.mode !== options.mode)
         await this.request({ type: GlyphWorkbenchCommandType.SET_CHAT_MODE, chatId, mode: options.mode });
       this.assertWorkspaceRevision(workspaceRevision);
+      if (objective !== undefined) {
+        await this.request({ type: GlyphWorkbenchCommandType.CREATE_GOAL, chatId, objective });
+        return;
+      }
       const runId = generateUuid();
       if (chatId === this.selectedChatId) this.pendingRunId = runId;
       this.prompts.set(runId, prompt);

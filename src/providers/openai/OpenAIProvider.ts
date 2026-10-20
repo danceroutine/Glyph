@@ -365,9 +365,11 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
   };
 }
 
+const USER_CONTEXT_EVENT_TYPES: ReadonlySet<unknown> = new Set(['shell_wake', 'shell_exit', 'goal_continuation']);
+
 function toContextEventInput(event: ChatContextEvent): ResponseInputItem {
   return {
-    role: event.type === 'shell_wake' || event.type === 'shell_exit' ? 'user' : 'developer',
+    role: USER_CONTEXT_EVENT_TYPES.has(event.type) ? 'user' : 'developer',
     content: JSON.stringify({ schema: 'glyph.context-event.v1', event }),
   };
 }
@@ -390,7 +392,7 @@ function contextEventId(item: ResponseInputItem): string | undefined {
       typeof value.event.id !== 'string'
     )
       return undefined;
-    if (item.role === 'user' && value.event.type !== 'shell_wake' && value.event.type !== 'shell_exit')
+    if (item.role === 'user' && !USER_CONTEXT_EVENT_TYPES.has(value.event.type))
       return undefined;
     return value.event.id;
   } catch {

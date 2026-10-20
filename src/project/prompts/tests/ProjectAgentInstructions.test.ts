@@ -17,5 +17,15 @@ describe(ProjectAgentInstructions, () => {
       expect(instructions).toContain('interaction.propose_question');
       expect(instructions).toContain('Successful proposals apply changes immediately');
     });
+
+    it('explains how goal continuations arrive and when a goal may be completed', () => {
+      const instructions = new ProjectAgentInstructions('You are a careful software engineer.').render();
+
+      expect(instructions).toContain('## Goals');
+      expect(instructions).toContain('`goal_continuation` context event');
+      expect(instructions).toContain('`goal.create_goal` only when the human explicitly asks');
+      expect(instructions).toContain('`goal.update_goal` with status `complete` only when that audit proves');
+      expect(instructions).toContain('Never mark a goal complete merely because you are stopping work.');
+    });
   });
 });

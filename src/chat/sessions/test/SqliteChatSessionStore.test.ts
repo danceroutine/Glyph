@@ -12,6 +12,7 @@ import { ProjectContextResolver } from '#src/project/context/ProjectContextResol
 import type { ChatSessionRecord } from '#src/chat/sessions/ChatSessionRecord.js';
 import { SqliteChatSessionStore } from '#src/chat/sessions/SqliteChatSessionStore.js';
 import { TodoStatus } from '#src/todos/TodoStatus.js';
+import { Goal } from '#src/goals/Goal.js';
 
 const temporaryPaths: string[] = [];
 
@@ -253,6 +254,59 @@ describe(SqliteChatSessionStore, () => {
       } finally {
         await store.dispose();
       }
+    }
+  });
+
+  it('upgrades catalogs without goals and keeps a chat goal through repeated reopen and its removal', async () => {
+    const directory = await fixture('glyph-chat-goals-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-chat-project-'), 'local');
+    const seed = new SqliteChatSessionStore(directory);
+    await seed.initialize(context);
+    await seed.save(record(context.id));
+    await seed.save({ ...record(context.id), id: 'other' });
+    await seed.dispose();
+    const database = new Database(join(directory, 'chats.sqlite3'));
+    database.exec('ALTER TABLE chats DROP COLUMN goal');
+    database.close();
+    const goal = {
+      ...Goal.create('goal', 'Make CI green', new Date('2026-10-20T14:00:00.000Z')).toChatGoal(),
+      continuationCount: 2,
+      idleContinuationsWithoutToolCalls: 1,
+    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const store = new SqliteChatSessionStore(directory);
+      try {
+        await store.initialize(context);
+        const records = await store.load(context.id);
+        const first = records.find(value => value.id === record(context.id).id)!;
+        expect(records.find(value => value.id === 'other')?.goal).toBeUndefined();
+        if (attempt === 0) {
+          expect(first.goal).toBeUndefined();
+          await store.save({ ...first, goal });
+        } else if (attempt === 1) {
+          expect(first.goal).toEqual(goal);
+          const { goal: _goal, ...cleared } = first;
+          await store.save(cleared);
+        } else {
+          expect(first.goal).toBeUndefined();
+        }
+      } finally {
+        await store.dispose();
+      }
+    }
+  });
+
+  it('rejects a malformed goal before it reaches storage', async () => {
+    const directory = await fixture('glyph-chat-goals-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-chat-project-'), 'local');
+    const store = new SqliteChatSessionStore(directory);
+    await store.initialize(context);
+    try {
+      const goal = { ...Goal.create('goal', 'Make CI green', new Date()).toChatGoal(), continuationCount: -1 };
+
+      await expect(store.save({ ...record(context.id), goal })).rejects.toThrow('Could not persist saved chat.');
+    } finally {
+      await store.dispose();
     }
   });
 

@@ -9,6 +9,7 @@ import { DuckDuckGoSearch } from '#src/web/DuckDuckGoSearch.js';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { ModeSwitchToolRuntime } from '#src/interaction/modes/ModeSwitchToolRuntime.js';
 import { PlanToolRuntime } from '#src/planning/PlanToolRuntime.js';
+import { GoalToolRuntime } from '#src/goals/GoalToolRuntime.js';
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { realpath } from 'node:fs/promises';
@@ -272,6 +273,16 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
           return summary.todos ?? [];
         }),
+        new GoalToolRuntime(
+          (chat, objective, signal) => {
+            if (!runtime || !signal) throw new Error('Goals require an active desktop run.');
+            return runtime.proposeGoal(chat, objective, signal);
+          },
+          (chat, status, signal) => {
+            if (!runtime) throw new Error('Goals require an active desktop run.');
+            return runtime.updateGoalFromTool(chat, status, signal);
+          },
+        ),
       ].flatMap(source => source.tools),
     );
     const store = this.accounts.borrowStore();

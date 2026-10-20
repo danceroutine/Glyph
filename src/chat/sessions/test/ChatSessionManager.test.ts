@@ -16,7 +16,9 @@ import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
 import type { ChatSessionRecord } from '#src/chat/sessions/ChatSessionRecord.js';
 import type { ChatSessionStore } from '#src/chat/sessions/ChatSessionStore.js';
 import { TodoStatus } from '#src/todos/TodoStatus.js';
-
+import { GoalError } from '#src/goals/GoalError.js';
+import { GoalPauseReason } from '#src/goals/GoalPauseReason.js';
+import { GoalStatus } from '#src/goals/GoalStatus.js';
 const temporaryPaths: string[] = [];
 
 afterEach(async () => {
@@ -170,6 +172,107 @@ describe(ChatSessionManager, () => {
     expect(session.summary.todos).toEqual([item]);
     await manager.updateTodos(owner, { items: [{ ...item, status: TodoStatus.COMPLETED }], replace: false });
     expect(session.summary.todos?.[0]?.status).toBe(TodoStatus.COMPLETED);
+  });
+
+  it('arms one durable goal per chat and replaces it only after it is cleared or complete', async () => {
+    const store = new MemoryChatSessionStore();
+    const context = await ProjectContextResolver.folder(await projectFixture());
+    const manager = new ChatSessionManager(store, context);
+    await manager.initialize();
+    const first = await manager.create(input(), conversation());
+    const second = await manager.create(input(), conversation());
+    const owner = { id: first.id, accountProvider: 'fixture', accountId: 'account' };
+
+    const created = await manager.createGoal(owner, '  Make CI green  ');
+
+    expect(created.goal).toMatchObject({ objective: 'Make CI green', status: GoalStatus.ACTIVE });
+    expect(second.summary.goal).toBeUndefined();
+    await expect(manager.createGoal(owner, 'Another objective')).rejects.toThrow('already has a goal');
+    const restored = new ChatSessionManager(store, context);
+    await restored.initialize();
+    expect(restored.list().find(chat => chat.id === first.id)?.goal).toEqual(created.goal);
+    await manager.updateGoal(owner, goal => goal.complete(new Date()));
+    expect((await manager.createGoal(owner, 'Next objective')).goal?.objective).toBe('Next objective');
+    expect((await manager.clearGoal(owner)).goal).toBeUndefined();
+    expect(first.summary.goal).toBeUndefined();
+  });
+
+  it('titles an untitled chat from its goal objective but keeps an existing title', async () => {
+    const store = new MemoryChatSessionStore();
+    const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+    await manager.initialize();
+    const untitled = await manager.create(input(), conversation());
+    const titled = await manager.create(input(), conversation());
+    await manager.rename(titled.id, 'Release checklist');
+
+    await manager.createGoal(
+      { id: untitled.id, accountProvider: 'fixture', accountId: 'account' },
+      'Make CI green again',
+    );
+    await manager.createGoal(
+      { id: titled.id, accountProvider: 'fixture', accountId: 'account' },
+      'Make CI green again',
+    );
+
+    expect(untitled.summary).toMatchObject({ title: 'Make CI Green Again', titleOrigin: 'generated' });
+    expect(titled.summary).toMatchObject({ title: 'Release checklist', titleOrigin: 'human' });
+  });
+
+  it('keeps the durable goal when an update is refused, cancelled, or for another account', async () => {
+    const store = new MemoryChatSessionStore();
+    const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+    await manager.initialize();
+    const session = await manager.create(input(), conversation());
+    const owner = { id: session.id, accountProvider: 'fixture', accountId: 'account' };
+    const { goal } = await manager.createGoal(owner, 'Make CI green');
+
+    await expect(manager.updateGoal(owner, value => value.resume(new Date()))).rejects.toThrow(GoalError);
+    await expect(
+      manager.updateGoal(owner, value => value.pause(GoalPauseReason.USER, new Date()), AbortSignal.abort()),
+    ).rejects.toThrow();
+    await expect(manager.updateGoal({ ...owner, accountId: 'other' }, value => value)).rejects.toThrow(
+      'requesting chat account',
+    );
+    await expect(manager.clearGoal({ ...owner, accountId: 'other' })).rejects.toThrow('requesting chat account');
+    store.failure = new Error('Disk full');
+    await expect(manager.clearGoal(owner)).rejects.toThrow('Disk full');
+    store.failure = undefined;
+
+    expect(session.summary.goal).toEqual(goal);
+  });
+
+  it('skips persistence when a goal update or clear changes nothing', async () => {
+    const store = new MemoryChatSessionStore();
+    const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+    await manager.initialize();
+    const session = await manager.create(input(), conversation());
+    const owner = { id: session.id, accountProvider: 'fixture', accountId: 'account' };
+    const calls = store.saveCalls;
+
+    expect((await manager.clearGoal(owner)).goal).toBeUndefined();
+    await expect(manager.updateGoal(owner, value => value)).rejects.toThrow('This chat has no goal.');
+    await manager.createGoal(owner, 'Make CI green');
+    await manager.updateGoal(owner, value => value);
+
+    expect(store.saveCalls).toBe(calls + 1);
+  });
+
+  it('does not carry a goal into a branched chat', async () => {
+    const store = new MemoryChatSessionStore();
+    const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+    await manager.initialize();
+    const session = await manager.create(input(), conversation());
+    await session.send(
+      { text: 'first', attachments: [], turnId: 'first' },
+      { push: () => {} },
+      new AbortController().signal,
+    );
+    await manager.createGoal({ id: session.id, accountProvider: 'fixture', accountId: 'account' }, 'Make CI green');
+
+    const fork = await manager.branch(session, 'first', record => conversation(record.providerState));
+
+    expect(fork.summary.goal).toBeUndefined();
+    expect(session.summary.goal?.objective).toBe('Make CI green');
   });
 
   it('bounds the merged todo list before persistence', async () => {

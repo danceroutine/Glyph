@@ -4,6 +4,7 @@ import { planSchema } from '#src/planning/PlanSchema.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
 import { shellCommandSummarySchema } from '#src/shell/ShellCommandSummary.js';
 import { todoItemsSchema } from '#src/todos/TodoUpdate.js';
+import { chatGoalSchema } from '#src/goals/GoalSchema.js';
 import { chmod, mkdir, readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
@@ -248,13 +249,15 @@ const storedRecordSchema = z
     transcript: z.array(transcriptTurnSchema),
     plans: z.array(planSchema).max(100).optional(),
     todos: todoItemsSchema.optional(),
+    goal: chatGoalSchema.optional(),
   })
   .strict()
-  .transform(({ todos, plans, mode, ...record }) => ({
+  .transform(({ todos, plans, mode, goal, ...record }) => ({
     ...(mode !== undefined ? { mode } : {}),
     ...record,
     ...(plans ? { plans } : {}),
     ...(todos === undefined ? {} : { todos }),
+    ...(goal === undefined ? {} : { goal }),
   }));
 
 interface ChatRow {
@@ -273,6 +276,7 @@ interface ChatRow {
   readonly provider_state: string;
   readonly plans: string | null;
   readonly todos: string | null;
+  readonly goal: string | null;
 }
 
 interface TurnRow {
@@ -455,6 +459,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         if (!chatColumns.some(value => value.name === 'mode')) database.exec('ALTER TABLE chats ADD COLUMN mode TEXT');
         if (!chatColumns.some(value => value.name === 'plans'))
           database.exec('ALTER TABLE chats ADD COLUMN plans TEXT');
+        if (!chatColumns.some(value => value.name === 'goal')) database.exec('ALTER TABLE chats ADD COLUMN goal TEXT');
         const columns = database.prepare<[], { name: string }>('PRAGMA table_info(chat_turns)').all();
         for (const column of [
           'usage',
@@ -557,8 +562,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         `INSERT INTO chats(
            id, schema_version, project_context_id, title, title_origin,
            account_client_id, account_subject, model_slug, model_name,
-           created_at, updated_at, provider_state, todos, plans, mode
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           created_at, updated_at, provider_state, todos, plans, mode, goal
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            schema_version = excluded.schema_version,
            project_context_id = excluded.project_context_id,
@@ -573,7 +578,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
            provider_state = excluded.provider_state,
            todos = excluded.todos,
            plans = excluded.plans,
-           mode = excluded.mode`,
+           mode = excluded.mode,
+           goal = excluded.goal`,
       )
       .run(
         record.id,
@@ -591,6 +597,7 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         record.todos ? JSON.stringify(record.todos) : null,
         record.plans ? JSON.stringify(record.plans) : null,
         record.mode ?? null,
+        record.goal ? JSON.stringify(record.goal) : null,
       );
     database.prepare('DELETE FROM chat_turns WHERE chat_id = ?').run(record.id);
     const insertTurn = database.prepare(
@@ -638,6 +645,7 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
     providerState: storedProviderStateSchema.parse(JSON.parse(row.provider_state)),
     ...(row.plans == null ? {} : { plans: JSON.parse(row.plans) as unknown }),
     ...(row.todos === null ? {} : { todos: JSON.parse(row.todos) as unknown }),
+    ...(row.goal == null ? {} : { goal: JSON.parse(row.goal) as unknown }),
     transcript: turns.map(turn => ({
       ...(turn.steering == null ? {} : { steering: JSON.parse(turn.steering) as unknown }),
       ...(turn.mode_swaps == null ? {} : { modeSwaps: JSON.parse(turn.mode_swaps) as unknown }),

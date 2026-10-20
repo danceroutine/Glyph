@@ -20,6 +20,11 @@ import type { ChatSession } from '#src/chat/sessions/ChatSession.js';
 import type { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
 import type { ChatSessionSummary } from '#src/chat/sessions/ChatSessionRecord.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
+import type { Goal } from '#src/goals/Goal.js';
+import { GoalError } from '#src/goals/GoalError.js';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+
+type GoalOwner = NonNullable<ToolExecutionContext['chat']>;
 
 interface ReviewResultDestination {
   readonly id?: string;
@@ -61,6 +66,21 @@ export class GlyphService {
   setChatMode(id: string, mode: AgentModeID): Promise<ChatSessionSummary> {
     if (!this.chatSessions) throw new PlanError('Chat storage is unavailable.');
     return this.chatSessions.setMode(id, mode);
+  }
+
+  createGoal(chat: GoalOwner, objective: string, signal?: AbortSignal): Promise<ChatSessionSummary> {
+    if (!this.chatSessions) throw new GoalError('Goal storage is unavailable.');
+    return this.chatSessions.createGoal(chat, objective, signal);
+  }
+
+  updateGoal(chat: GoalOwner, transform: (goal: Goal) => Goal, signal?: AbortSignal): Promise<ChatSessionSummary> {
+    if (!this.chatSessions) throw new GoalError('Goal storage is unavailable.');
+    return this.chatSessions.updateGoal(chat, transform, signal);
+  }
+
+  clearGoal(chat: GoalOwner): Promise<ChatSessionSummary> {
+    if (!this.chatSessions) throw new GoalError('Goal storage is unavailable.');
+    return this.chatSessions.clearGoal(chat);
   }
 
   linkPlan(
