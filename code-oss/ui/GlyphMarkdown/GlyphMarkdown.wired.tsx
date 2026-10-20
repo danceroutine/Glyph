@@ -17,7 +17,7 @@ export function WiredGlyphMarkdown({
       items={items}
       code={(source, language) => <WiredGlyphCodeBlock copyText={copyText} source={source} language={language} />}
       openLink={openLink}
-      diagram={source => <WiredGlyphDiagram source={source} />}
+      diagram={source => <WiredGlyphDiagram source={source} openLink={openLink} />}
     />
   );
 }

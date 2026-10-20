@@ -9,7 +9,6 @@ const styles = {
     overflow: 'auto',
     padding: '32px 8px 8px',
     minHeight: 80,
-    '& > img': { display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto' },
   }),
 
   expanded: css({
@@ -18,10 +17,18 @@ const styles = {
     zIndex: 1002,
     background: tokens.surface.canvas,
     border: tokens.border.default,
-    '& > img': { width: '100%', height: '100%', objectFit: 'contain' },
   }),
 };
-export function GlyphDiagram({ root, diagram, error, source, expanded, toggle }: GlyphDiagramState) {
+export function GlyphDiagram({
+  root,
+  canvas,
+  rendered,
+  interactive,
+  error,
+  source,
+  expanded,
+  toggle,
+}: GlyphDiagramState) {
   if (error)
     return (
       <details>
@@ -40,8 +47,13 @@ export function GlyphDiagram({ root, diagram, error, source, expanded, toggle }:
       >
         {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </IconButton>
-      {diagram !== undefined && diagram !== '' ? (
-        <img src={diagram} alt="Plan diagram" />
+      {rendered ? (
+        <div
+          ref={canvas}
+          role={interactive ? 'figure' : 'img'}
+          aria-label="Plan diagram"
+          data-expanded={expanded ? '' : undefined}
+        />
       ) : (
         <span role="status">Rendering diagram…</span>
       )}
