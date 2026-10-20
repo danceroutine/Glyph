@@ -132,6 +132,5 @@ pnpm test
 
 ### Further reading
 
-- [code-oss/README.md](code-oss/README.md) covers how Glyph integrates with Code OSS, including the overlay, the workbench UI conventions, and the design system.
-- [code-oss/tests/electron/README.md](code-oss/tests/electron/README.md) explains the integration test runtimes and how to run individual behaviors.
 - [docs/code-oss-integration-plan.md](docs/code-oss-integration-plan.md) records the architecture behind the desktop host, the editor adapter, and process ownership.
+- [docs/code-oss-walkthrough.md](docs/code-oss-walkthrough.md) traces how Glyph registers with, calls into, and runs inside Code OSS.
