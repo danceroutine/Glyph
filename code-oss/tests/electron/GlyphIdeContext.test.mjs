@@ -9,10 +9,9 @@ import { test as it } from './GlyphWorkbench.fixture.mjs';
 // editor, inline composer, recorded provider input, and saved chat history in
 // GlyphAttachments.test.mjs. The remaining lifecycle dependencies stay explicit.
 it.describe('Pending context lifecycle contracts', () => {
-  it.fixme(
-    'reattaches the host and editor to changed workspace folders without a reload and never reinterprets old paths or document tokens under the new roots',
-    async () => {},
-  );
+  // Rank 16 folder rebinding, history, captures, cancellation, and managed-process
+  // shutdown run in GlyphWorkspaceChanges.test.mjs. Old-token rejection and
+  // rapid-change ordering run in the editor/service regression suites.
   // Editable drafts and failed-send recovery are covered by GlyphAttachments;
   // actual queued delivery belongs to the rank-19 queue/steering work.
   it.fixme(

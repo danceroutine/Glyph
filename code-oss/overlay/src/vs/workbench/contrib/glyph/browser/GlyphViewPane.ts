@@ -95,6 +95,7 @@ export class GlyphViewPane extends ViewPane {
           return handled;
         },
       },
+      reconnectWorkspace: () => this.glyphService.connect(),
       reserveHistoryWidth: width => {
         const location = this.glyphViewDescriptors.getViewLocationById(this.id);
         const part =

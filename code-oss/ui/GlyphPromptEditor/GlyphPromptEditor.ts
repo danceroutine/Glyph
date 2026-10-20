@@ -89,14 +89,15 @@ export class GlyphPromptEditor {
           dom.contentEditable = 'false';
           const attachment: GlyphContextAttachment = node.attrs.attachment;
           const range = attachment.range ? ` (${attachment.range.start.line}-${attachment.range.end.line})` : '';
-          const title = `${attachment.path}${range}`;
+          const title = `${attachment.path}${range}${attachment.unavailable ? `\n${attachment.unavailable}` : ''}`;
           let disposed = false;
           const describe = () => {
             void callbacks
               .describe?.(attachment)
               .then(status => {
                 const button = dom.querySelector('button');
-                if (!disposed && button) button.title = status ? `${title}\n${status}` : title;
+                if (!disposed && button)
+                  button.title = status && !attachment.unavailable ? `${title}\n${status}` : title;
               })
               .catch(() => {});
           };
@@ -104,7 +105,7 @@ export class GlyphPromptEditor {
           dom.addEventListener('focusin', describe);
           render(
             h(GlyphContextBadge, {
-              label: `${attachment.path.split('/').at(-1)}${range}`,
+              label: `${attachment.path.split('/').at(-1)}${range}${attachment.unavailable ? ' (unavailable)' : ''}`,
               title,
               actionLabel: ['file', 'selection', 'folder'].includes(attachment.kind) ? 'Preview' : 'Open',
               onClick: () => callbacks.preview(attachment),

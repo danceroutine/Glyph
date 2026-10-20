@@ -1,4 +1,4 @@
-import { ButtonAppearance, IconButton } from '#code-oss/ui/Button/Button.tsx';
+import { Button, ButtonAppearance, IconButton } from '#code-oss/ui/Button/Button.tsx';
 import { GlyphSidebarIcon } from '#code-oss/ui/GlyphSidebarIcon/GlyphSidebarIcon.tsx';
 import type { ComponentChildren } from 'preact';
 import type { GlyphWorkbenchState } from './useGlyphWorkbenchState.ts';
@@ -64,6 +64,7 @@ const styles = {
   body: css({ position: 'relative', display: 'flex', flex: 1, minHeight: 0, minWidth: 0, overflowX: 'auto' }),
   conversation: css({ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }),
   error: css({ padding: space('md', 'lg'), color: tokens.text.error, overflowWrap: 'anywhere' }),
+  workspaceStatus: css({ padding: space('md', 'lg'), color: tokens.text.muted, overflowWrap: 'anywhere' }),
 };
 
 export type GlyphWorkbenchProps = Pick<
@@ -81,6 +82,8 @@ export type GlyphWorkbenchProps = Pick<
   | 'closeHistory'
 > & {
   readonly recentChats: ComponentChildren;
+  readonly workspaceMessage?: string;
+  readonly retryWorkspace?: () => void;
   readonly menu: ComponentChildren;
   readonly transcript: ComponentChildren;
   readonly usage: ComponentChildren;
@@ -102,6 +105,8 @@ export function GlyphWorkbench({
   toggleHistory,
   closeHistory,
   recentChats,
+  workspaceMessage,
+  retryWorkspace,
   menu,
   transcript,
   usage,
@@ -209,6 +214,16 @@ export function GlyphWorkbench({
               </IconButton>
             )}
           </header>
+          {workspaceMessage && (
+            <div role="status" class={styles.workspaceStatus}>
+              {workspaceMessage}
+              {retryWorkspace && (
+                <Button appearance={ButtonAppearance.BORDERLESS_GHOST} onClick={retryWorkspace}>
+                  Retry
+                </Button>
+              )}
+            </div>
+          )}
           {transcript}
           {navigationError && (
             <div class={styles.error} role="alert">

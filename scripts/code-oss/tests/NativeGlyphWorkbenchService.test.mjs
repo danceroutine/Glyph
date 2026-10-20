@@ -120,7 +120,11 @@ async function fixture({
   const editors = { openEditor: vi.fn() };
   const opener = { open: vi.fn() };
   const service = new NativeGlyphWorkbenchService(
-    { get: key => storage.get(key), store: (key, value) => storage.set(key, value) },
+    {
+      get: key => storage.get(key),
+      getObject: (key, _scope, fallback) => storage.get(key) ?? fallback,
+      store: (key, value) => storage.set(key, value),
+    },
     {
       getWorkspace: () => ({
         folders: [{ name: 'project', uri: { scheme: 'file', fsPath: '/project', toString: () => 'file:///project' } }],

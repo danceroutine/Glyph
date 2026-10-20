@@ -59,7 +59,7 @@ async function modules() {
           builder.onLoad({ filter: /.*/, namespace: 'transport' }, args => ({
             contents: args.path.endsWith('ipc.mp.js')
               ? 'export const acquirePort = async () => globalThis.__glyphTrustPort;'
-              : 'export const ipcRenderer = { on() {}, removeListener() {} };',
+              : 'export const ipcRenderer = { on() {}, removeListener() {}, send() {} };',
           }));
           builder.onResolve({ filter: /^#vs\// }, args => {
             if (args.path.startsWith('#vs/base/') || args.path.endsWith('/browserViewUri.js'))
@@ -125,7 +125,7 @@ it('loads saved history through the latest untrusted attachment when revocation 
   let trusted = true;
   let onTrust;
   const service = new NativeGlyphWorkbenchService(
-    { get: () => undefined, store: () => {} },
+    { get: () => undefined, getObject: (_key, _scope, fallback) => fallback, store: () => {} },
     {
       getWorkspace: () => ({
         folders: [{ name: 'project', uri: { scheme: 'file', fsPath: '/project', toString: () => 'file:///project' } }],
@@ -144,6 +144,8 @@ it('loads saved history through the latest untrusted attachment when revocation 
     {
       createInstance: () => ({
         invalidate() {},
+        rebindWorkspace() {},
+        rebindAttachment: value => value,
         dispose() {},
         handle() {},
         changed() {},
@@ -228,7 +230,7 @@ it.each(['handshake', 'attach acknowledgement'])(
     let trusted = true;
     let onTrust;
     const service = new NativeGlyphWorkbenchService(
-      { get: () => undefined, store: () => {} },
+      { get: () => undefined, getObject: (_key, _scope, fallback) => fallback, store: () => {} },
       {
         getWorkspace: () => ({
           folders: [
@@ -249,6 +251,8 @@ it.each(['handshake', 'attach acknowledgement'])(
       {
         createInstance: () => ({
           invalidate() {},
+          rebindWorkspace() {},
+          rebindAttachment: value => value,
           dispose() {},
           handle() {},
           changed() {},
@@ -365,7 +369,7 @@ it.each(
           scenario.description ??
           (scenario.change === 'display only'
             ? 'keeps Glyph connected when a display-name notification leaves its workspace binding unchanged'
-            : `disconnects Glyph with a reload instruction when the workspace ${scenario.change ?? 'identity'} changes during ${scenario.phase} through its ${scenario.event} event`),
+            : `rebinds Glyph without reloading when the workspace ${scenario.change ?? 'identity'} changes during ${scenario.phase} through its ${scenario.event} event`),
       };
     }),
 )('$description', async ({ phase, event, change, action, args, type, boundary }) => {
@@ -431,7 +435,7 @@ it.each(
   };
   const invalidate = vi.fn();
   const service = new NativeGlyphWorkbenchService(
-    { get: () => undefined, store: () => {} },
+    { get: () => undefined, getObject: (_key, _scope, fallback) => fallback, store: () => {} },
     {
       getWorkspace: () => ({
         id: workspaceId,
@@ -446,6 +450,8 @@ it.each(
     {
       createInstance: () => ({
         invalidate,
+        rebindWorkspace() {},
+        rebindAttachment: value => value,
         dispose() {},
         handle() {},
         changed() {},
@@ -490,7 +496,7 @@ it.each(
       const result = await (waitingCommand ?? invoke());
       await Promise.allSettled(tasks);
       expect.soft(handle.mock.calls.filter(([command]) => command.type === type)).toEqual([]);
-      expect.soft(service.state.status).toBe('disconnected');
+      if (boundary === 'profile') expect.soft(service.state.status).toBe('disconnected');
       if (action !== 'cancel') expect(result).toBeInstanceOf(Error);
     }
     await connecting;
@@ -501,6 +507,16 @@ it.each(
       await service.selectModel('other');
       expect(handle.mock.calls.filter(([command]) => command.type === 'select_model')).toHaveLength(1);
       expect(dispose).not.toHaveBeenCalled();
+      return;
+    }
+    if (boundary !== 'profile') {
+      await vi.waitFor(() => expect(service.state.workspaceMessage).toMatch(/Workspace updated/));
+      expect(service.state.workspaceMessage).toMatch(/Workspace updated/);
+      expect(invalidate).toHaveBeenCalled();
+      expect(service.composer.snapshot.draft).toBe('Keep my unsent prompt.');
+      await service.selectModel('new-workspace-model');
+      expect(handle.mock.calls.filter(([command]) => command.type === 'select_model')).toHaveLength(1);
+      expect(commands.filter(command => command.type === 'attach_workspace').length).toBeGreaterThanOrEqual(1);
       return;
     }
     expect.soft(service.state.status).toBe('disconnected');
@@ -529,6 +545,151 @@ it.each(
   } finally {
     releasePort?.();
     releaseAcknowledgement?.();
+    service.dispose();
+    await Promise.allSettled(tasks);
+    await host.dispose();
+    delete globalThis.__glyphTrustPort;
+  }
+});
+
+it('drains the old runtime before rebinding, coalesces folder changes, and preserves paused drafts through an empty workspace', async () => {
+  const { NativeGlyphWorkbenchService, GlyphDesktopHost } = await modules();
+  const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
+  const configurations = [];
+  let release;
+  let cleanup = false;
+  let failNext = false;
+  const handle = vi.fn(async () => {});
+  const host = new GlyphDesktopHost({
+    create: async configuration => {
+      configurations.push(configuration);
+      if (failNext) {
+        failNext = false;
+        throw new Error('Temporary initialization failure');
+      }
+      const first = configurations.length === 1;
+      return {
+        snapshot: async () => ({ accounts: [], models: [], chats: [], runs: [], proposals: [] }),
+        handle,
+        connectionLost: async () => {},
+        dispose: async () => {
+          if (first && !cleanup)
+            await new Promise(resolve => {
+              release = resolve;
+            });
+        },
+      };
+    },
+  });
+  const tasks = [];
+  class Port extends EventTarget {
+    start() {
+      this.emit({ type: 'glyph_connection_ready', identity, hostGeneration: host.generation });
+    }
+    close() {}
+    postMessage(request) {
+      tasks.push(host.receive('connection', request));
+    }
+    emit(data) {
+      this.dispatchEvent(new MessageEvent('message', { data }));
+    }
+  }
+  const port = new Port();
+  globalThis.__glyphTrustPort = port;
+  host.connect('connection', identity, envelope => port.emit(envelope));
+  let names = ['original'];
+  let changed;
+  const rebind = vi.fn();
+  const service = new NativeGlyphWorkbenchService(
+    { get: () => undefined, getObject: (_key, _scope, fallback) => fallback, store() {} },
+    {
+      getWorkspace: () => ({
+        id: 'workspace',
+        folders: names.map(name => ({
+          name,
+          uri: { scheme: 'file', fsPath: `/${name}`, toString: () => `file:///${name}` },
+        })),
+      }),
+      onDidChangeWorkspaceFolders: listener => {
+        changed = listener;
+        return { dispose() {} };
+      },
+      onDidChangeWorkspaceName: () => ({ dispose() {} }),
+      onDidChangeWorkbenchState: () => ({ dispose() {} }),
+    },
+    { isWorkspaceTrusted: () => true, onDidChangeTrust: () => ({ dispose() {} }) },
+    {
+      createInstance: () => ({
+        invalidate() {},
+        rebindWorkspace: rebind,
+        rebindAttachment: value => value,
+        dispose() {},
+        handle() {},
+        changed() {},
+        update() {},
+        refresh: async () => {},
+      }),
+    },
+    { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
+    {},
+    {},
+    {},
+    { getValue: () => undefined, onDidChangeConfiguration: () => ({ dispose() {} }) },
+  );
+  try {
+    await service.connect();
+    service.composer.setDraft('Queued message');
+    service.composer.enqueueDraft();
+    service.composer.setDraft('Editable draft');
+    names = ['intermediate'];
+    changed();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    expect(service.state.readOnly).toBe(true);
+    expect(rebind).not.toHaveBeenCalled();
+    expect(configurations).toHaveLength(1);
+    service.composer.setDraft('Edited while refreshing');
+    await expect(service.selectModel('forbidden')).rejects.toThrow(/Updating workspace/);
+    names = ['latest'];
+    changed();
+    release();
+    await vi.waitFor(() => expect(service.state.workspaceMessage).toContain('Workspace updated: latest.'));
+    expect(configurations.map(value => value.roots.map(root => root.name))).toEqual([['original'], ['latest']]);
+    expect(service.composer.snapshot.draft).toBe('Edited while refreshing');
+    expect(service.composer.snapshot.queued).toHaveLength(1);
+    expect(service.composer.snapshot.queuePaused).toBe(true);
+    expect(handle.mock.calls).toEqual([]);
+    let finishConnection;
+    vi.spyOn(service.client, 'connect').mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          finishConnection = resolve;
+        }),
+    );
+    const staleAction = service.stopShell('chat', 'old-shell').catch(error => error);
+    names = ['interleaved'];
+    changed();
+    await vi.waitFor(() => expect(service.state.workspaceMessage).toContain('Workspace updated: interleaved.'));
+    finishConnection();
+    expect(await staleAction).toBeInstanceOf(Error);
+    expect(handle.mock.calls).toEqual([]);
+    names = [];
+    changed();
+    await vi.waitFor(() => expect(service.state.workspaceMessage).toMatch(/Add a local workspace folder/));
+    expect(service.state.readOnly).toBe(true);
+    expect(service.composer.snapshot.draft).toBe('Edited while refreshing');
+    failNext = true;
+    names = ['returned'];
+    changed();
+    await vi.waitFor(() => expect(service.state.workspaceRetryable).toBe(true));
+    expect(service.state.workspaceMessage).toContain('Temporary initialization failure');
+    await service.connect();
+    expect(service.state.readOnly).toBe(false);
+    expect(service.state.workspaceMessage).toContain('Workspace updated: returned.');
+    expect(service.composer.snapshot.queuePaused).toBe(true);
+    expect(handle.mock.calls).toEqual([]);
+  } finally {
+    cleanup = true;
+    release?.();
     service.dispose();
     await Promise.allSettled(tasks);
     await host.dispose();

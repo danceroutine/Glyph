@@ -17,6 +17,7 @@ export interface GlyphWorkbenchView {
 
 /** Callbacks preserve the service's ownership of application behavior. */
 export interface GlyphWorkbenchViewActions {
+  reconnectWorkspace?(): Promise<void>;
   readonly fileIconClasses?: (path: string) => readonly string[];
   readonly composer: GlyphComposerState;
   readonly context: GlyphContextActions;

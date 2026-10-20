@@ -398,8 +398,12 @@ export class GlyphDesktopHost {
     const stopping = (async () => {
       // A failed initialization has no runtime to stop and releases its own reservation.
       const initialized = record ?? (await this.runtimeCreations.get(key)?.catch(() => undefined));
-      await initialized?.runtime.connectionLost(connection.identity.windowId);
-      await initialized?.runtime.dispose();
+      // Disposal revokes managed shells and reviews while active turns drain.
+      // Do not wait for a blocked turn before initiating that revocation.
+      await Promise.all([
+        initialized?.runtime.connectionLost(connection.identity.windowId),
+        initialized?.runtime.dispose(),
+      ]);
       this.runtimes.delete(key);
       this.ownership.release(connection.identity);
     })();

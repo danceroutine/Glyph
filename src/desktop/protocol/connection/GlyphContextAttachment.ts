@@ -22,6 +22,8 @@ export interface GlyphContextAttachment {
   readonly path: string;
   readonly text: string;
   readonly contentRevision: string;
+  /** The capture remains visible, but cannot be sent under the current workspace authority. */
+  readonly unavailable?: string;
   /** Historical snapshots have no live editor capability. */
   readonly token?: GlyphDocumentToken;
   readonly sourceVersion?: number;

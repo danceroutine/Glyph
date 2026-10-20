@@ -317,10 +317,20 @@ These regressions reproduced all five findings before their fixes:
 | 04      | Search returns its completed page at the maximum offset without fetching an invalid next page                           | [MultiRootWorkspacePathIndex](../src/context/search/tests/MultiRootWorkspacePathIndex.test.ts)                             |
 | 05      | Foreground commands return immediately when the process group is absent; surviving descendants still receive escalation | [ShellCleanup](../src/shell/test/ShellCleanup.regression.test.ts)                                                          |
 
-Workspace-folder changes currently detach Glyph and require a window reload to
-establish a new host/editor binding. Requests against the old binding fail closed
-with `WORKSPACE_CHANGED`, including reads or mutations already awaiting editor
-work. Automatic rebinding is tracked in the IDE-context fixmes.
+Workspace-folder changes automatically drain the old runtime and establish a new
+host/editor binding. Active turns, reviews, and managed shells stop; queued
+messages stay paused until explicitly resumed. Chat tabs, history, and editable
+drafts remain in place. Retained file captures keep their original bytes and are
+qualified against the new roots by URI. Removed-folder captures remain visible
+as unavailable and cannot be sent. Old document tokens never authorize edits in
+the new binding. An empty workspace waits for a local folder; a failed refresh
+shows Retry. Profile changes still require a window reload.
+
+The native lifecycle coverage is in
+[GlyphWorkspaceChanges](tests/electron/GlyphWorkspaceChanges.test.mjs); editor
+capability and rapid-change/drain ordering coverage lives in
+[GlyphEditorAdapter](../scripts/code-oss/tests/GlyphEditorAdapter.test.mjs) and
+[GlyphTrustSynchronization](../scripts/code-oss/tests/GlyphTrustSynchronization.test.mjs).
 
 Shell matching is deliberately case-insensitive on every platform. These tests
 inspect policy construction and simulate process events; they do not execute a
@@ -622,9 +632,8 @@ at the attached range. Opening a badge does not replace the stored capture. The 
 badge is available in Storybook as a visual component. Skill discovery and
 activation remain rank 21.
 
-The existing workspace/profile-change guard still requires a window reload;
-hot reattachment remains an explicit lifecycle contract. Queued delivery remains
-with rank 19; this pass covers editable drafts and failed-send recovery.
+Workspace-folder changes preserve these drafts and captures through automatic
+reattachment. Profile switches retain the explicit reload boundary.
 
 ### Browser iteration with Storybook
 

@@ -98,6 +98,17 @@ export class GlyphDesktopClient extends Disposable {
       }));
   }
 
+  /** Drain the old workspace runtime while retaining the authenticated transport. */
+  async detachWorkspace(): Promise<void> {
+    ipcRenderer.send('vscode:glyph:preserveWorkspaceHistory');
+    // Keep the authenticated port and journal, but drain the old runtime before
+    // the renderer can grant a new editor binding. Never reuse old attach state.
+    await this.connecting?.catch(() => {});
+    if (this.port && this.identity) await this.postRequest({ type: GlyphWorkbenchCommandType.DETACH });
+    this.attached = false;
+    this.appliedAttachment = undefined;
+  }
+
   /** Resolves only after the host acknowledges the request id or returns its correlated error. */
   async request(command: GlyphWorkbenchCommand): Promise<void> {
     if (command.type === GlyphWorkbenchCommandType.ATTACH_WORKSPACE)

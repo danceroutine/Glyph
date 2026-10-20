@@ -16,6 +16,28 @@ const attachment = {
 };
 
 describe(GlyphComposerState, () => {
+  it('rebinds draft, queued, and recoverable captures without changing text or caret positions', () => {
+    const composer = new GlyphComposerState();
+    composer.insertAttachments([attachment]);
+    composer.enqueueDraft();
+    composer.insertAttachments([attachment]);
+    composer.restoreDraft({ parts: [{ type: 'attachment', attachment }], from: 1, to: 1 });
+    composer.pauseQueue();
+    composer.mapAttachments(value => ({ ...value, path: 'project/a.ts', unavailable: 'Folder removed' }));
+    const check = (document: typeof composer.snapshot.document) => {
+      expect(document.from).toBe(1);
+      expect(document.to).toBe(1);
+      expect(document.parts[0]).toEqual({
+        type: 'attachment',
+        attachment: { ...attachment, path: 'project/a.ts', unavailable: 'Folder removed' },
+      });
+    };
+    check(composer.snapshot.document);
+    check(composer.snapshot.queued[0]!.document);
+    expect(composer.snapshot.queuePaused).toBe(true);
+    composer.editUnsent(0);
+    check(composer.snapshot.document);
+  });
   it('saves attachment positions independently of matching literal mentions and leading whitespace', async () => {
     const model = new GlyphComposerState();
     model.setDraft('  🌱 @a.ts (2-3) then ');

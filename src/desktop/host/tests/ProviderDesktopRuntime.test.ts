@@ -1190,6 +1190,41 @@ describe(ProviderDesktopRuntime, () => {
     expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
   });
 
+  it('stops managed shells before waiting for a cancelled provider to settle', async () => {
+    let started!: () => void;
+    const running = new Promise<void>(resolve => {
+      started = resolve;
+    });
+    let finish!: () => void;
+    const drained = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    const harness = await fixture(async options => {
+      started();
+      await new Promise<void>(resolve => options.signal.addEventListener('abort', () => resolve(), { once: true }));
+      await drained;
+    });
+    harness.shells.dispose.mockImplementation(async () => {
+      finish();
+    });
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'blocked',
+        text: 'Continue',
+        attachments: [],
+      });
+      await running;
+      await harness.runtime.dispose();
+      expect(harness.shells.dispose).toHaveBeenCalledOnce();
+      expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
+    } finally {
+      finish();
+      await harness.runtime.dispose();
+    }
+  });
+
   it('drains an admitted proposal decision before disposing its chat storage', async () => {
     const harness = await fixture(async () => {});
     let finish!: () => void;

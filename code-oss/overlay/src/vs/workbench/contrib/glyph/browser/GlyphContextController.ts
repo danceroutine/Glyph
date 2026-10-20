@@ -259,6 +259,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }));
   }
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
+    if (attachment.unavailable) return attachment.unavailable;
     if (!['file', 'selection', 'folder'].includes(attachment.kind)) {
       const model = this.models.getModel(URI.parse(attachment.uri));
       return `${attachment.token && model && !this.adapter.isCurrentContext(model, attachment) ? 'Source changed; this capture is stale. ' : ''}Captured IDE context. Capture again from the originating surface to refresh; the original snapshot is preserved.`;
@@ -273,6 +274,20 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     if (!this.adapter.isCurrentContext(model, attachment))
       return 'Source changed. Refresh explicitly to replace the captured text.';
     return undefined;
+  }
+
+  rebindAttachment(attachment: GlyphContextAttachment): GlyphContextAttachment {
+    const { unavailable: _unavailable, token: _token, ...capture } = attachment;
+    const uri = URI.parse(attachment.uri);
+    if (uri.scheme === 'untitled') return capture;
+    if (uri.scheme !== 'file')
+      return { ...capture, unavailable: 'Workspace changed. Capture this context again before sending.' };
+    if (!this.workspace.isInsideWorkspace(uri))
+      return {
+        ...capture,
+        unavailable: 'Source folder was removed. Remove this attachment or add its folder again before sending.',
+      };
+    return { ...capture, path: this.adapter.contextPath(uri) };
   }
   async openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void> {
     if (attachment.uri && (await this.ide.openSource(URI.parse(attachment.uri), this.editors, attachment.range)))

@@ -173,6 +173,27 @@ export class GlyphComposerState {
     });
     this.setDocument({ ...document, parts, from, to });
   }
+
+  /** Revalidate context metadata without changing captured text, selection, or queue order. */
+  mapAttachments(map: (attachment: GlyphContextAttachment) => GlyphContextAttachment): void {
+    const transform = (document: GlyphPromptDocument): GlyphPromptDocument => ({
+      ...document,
+      parts: document.parts.map(part =>
+        part.type === 'attachment' ? { ...part, attachment: map(part.attachment) } : part,
+      ),
+    });
+    this.documents = this.documents.map(transform);
+    const document = transform(this.value.document);
+    this.update({
+      document,
+      draft: toGlyphPromptText(document.parts),
+      unsent: this.documents.map(value => toGlyphPromptText(value.parts)),
+      queued: this.value.queued.map(message => {
+        const document = transform(message.document);
+        return { ...message, document, text: toGlyphPromptText(document.parts) };
+      }),
+    });
+  }
   editUnsent(index: number): void {
     const document = this.documents[index];
     if (!document) return;

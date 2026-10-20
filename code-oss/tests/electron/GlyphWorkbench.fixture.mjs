@@ -178,6 +178,7 @@ export const test = base.extend({
       page.on('pageerror', error => logs.push(`[renderer error] ${error.stack}\n`));
       const glyph = new GlyphWorkbench(page, application);
       glyph.workspace = workspace;
+      glyph.workspaceTarget = workspaceTarget;
       glyph.rootPaths = rootPaths;
       await glyph.open();
       await use(glyph);

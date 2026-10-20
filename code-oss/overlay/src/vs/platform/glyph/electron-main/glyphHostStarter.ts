@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { IStateService } from '#vs/platform/state/node/state.js';
 import { GlyphTransportMessageType } from '#glyph/protocol/connection/GlyphTransportMessage.js';
 import type { IpcMainEvent, WebContents } from 'electron';
 import { generateUuid } from '#vs/base/common/uuid.js';
@@ -20,12 +21,14 @@ const responseChannel = 'vscode:glyph:createHostMessageChannelResult';
  * renderer from impersonating another profile, workspace, or window.
  */
 export class GlyphHostStarter extends Disposable {
+  private readonly historyIdentities = new Map<number, { profileId: string; workspaceId: string }>();
   /** Shared process keeps workspace/runtime state alive across renderer reloads. */
   private utilityProcess: UtilityProcess | undefined;
   /** Tracked senders receive an explicit host-exit signal instead of hanging requests. */
   private readonly senders = new Map<number, WebContents>();
 
   constructor(
+    @IStateService private readonly stateService: IStateService,
     @IEnvironmentMainService private readonly environmentMainService: IEnvironmentMainService,
     @ILifecycleMainService private readonly lifecycleMainService: ILifecycleMainService,
     @ILogService private readonly logService: ILogService,
@@ -35,6 +38,19 @@ export class GlyphHostStarter extends Disposable {
     const listener = (event: IpcMainEvent, nonce: unknown) => void this.connectWindow(event, nonce);
     validatedIpcMain.on(requestChannel, listener);
     this._register(toDisposable(() => validatedIpcMain.removeListener(requestChannel, listener)));
+    const preserveHistory = (event: IpcMainEvent) => {
+      const window = this.windowsMainService.getWindowByWebContents(event.sender);
+      const previous = this.historyIdentities.get(event.sender.id);
+      if (!window?.openedWorkspace || !previous || previous.profileId !== (window.profile?.id ?? 'default')) return;
+      // Both identities come from Electron main. The renderer supplies no source
+      // or destination IDs and cannot claim another workspace's conversation store.
+      const key = `glyph.historyWorkspace.${previous.profileId}.${window.openedWorkspace.id}`;
+      if (!this.stateService.getItem<string>(key)) this.stateService.setItem(key, previous.workspaceId);
+    };
+    validatedIpcMain.on('vscode:glyph:preserveWorkspaceHistory', preserveHistory);
+    this._register(
+      toDisposable(() => validatedIpcMain.removeListener('vscode:glyph:preserveWorkspaceHistory', preserveHistory)),
+    );
     this._register(
       toDisposable(() => {
         this.utilityProcess?.kill();
@@ -49,12 +65,17 @@ export class GlyphHostStarter extends Disposable {
     if (typeof nonce !== 'string' || event.sender.isDestroyed()) return;
     const window = this.windowsMainService.getWindowByWebContents(event.sender);
     if (!window) return this.fail(event.sender, nonce, 'The requesting Glyph window is not registered.');
-    const workspaceId = window.openedWorkspace?.id ?? `empty:${window.id}`;
+    const currentWorkspaceId = window.openedWorkspace?.id ?? `empty:${window.id}`;
+    const profileId = window.profile?.id ?? 'default';
+    const workspaceId =
+      this.stateService.getItem<string>(`glyph.historyWorkspace.${profileId}.${currentWorkspaceId}`) ??
+      currentWorkspaceId;
     const identity = {
       profileId: window.profile?.id ?? 'default',
       windowId: String(window.id),
       workspaceId,
     };
+    this.historyIdentities.set(event.sender.id, { profileId, workspaceId });
     try {
       this.logService.info(
         `[Glyph host] connection requested (profile=${identity.profileId}, window=${identity.windowId}, workspace=${identity.workspaceId})`,
@@ -116,7 +137,10 @@ export class GlyphHostStarter extends Disposable {
   private track(sender: WebContents): void {
     if (this.senders.has(sender.id)) return;
     this.senders.set(sender.id, sender);
-    sender.once('destroyed', () => this.senders.delete(sender.id));
+    sender.once('destroyed', () => {
+      this.senders.delete(sender.id);
+      this.historyIdentities.delete(sender.id);
+    });
   }
 
   /** Correlates setup failures with the renderer's nonce before any port exists. */

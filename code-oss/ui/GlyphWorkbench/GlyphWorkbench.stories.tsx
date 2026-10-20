@@ -146,3 +146,31 @@ export const RecentChatPicker: Story = {
     canvasElement.querySelector<HTMLButtonElement>('button[aria-label="Recent chats"]')?.click();
   },
 };
+
+export const UpdatingWorkspace: Story = {
+  args: {
+    state: workbenchStateFixture({
+      transcript: conversationFixture(),
+      readOnly: true,
+      navigationPending: true,
+      workspaceMessage: 'Updating workspace folders…',
+    }),
+    actions: previewActionsFixture({
+      composer: composerFixture({
+        document: { parts: [{ type: 'text', text: 'Keep this draft while folders update.' }], from: 0, to: 0 },
+      }),
+    }),
+  },
+};
+export const WorkspaceUpdateFailed: Story = {
+  args: {
+    state: workbenchStateFixture({
+      transcript: conversationFixture(),
+      readOnly: true,
+      navigationPending: true,
+      workspaceMessage: 'Could not update workspace folders. The host is unavailable.',
+      workspaceRetryable: true,
+    }),
+    actions: previewActionsFixture({ reconnectWorkspace: async () => {} }),
+  },
+};

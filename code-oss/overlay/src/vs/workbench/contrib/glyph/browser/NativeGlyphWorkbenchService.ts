@@ -77,7 +77,12 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private sessionChanged = false;
   private invalidationMessage = 'Workspace changed. Reload the window to reconnect Glyph.';
   private readonly profileId: string;
-  private readonly workspaceBinding: string;
+  private workspaceBinding: string;
+  private readonly editor: GlyphEditorAdapter;
+  private workspaceRefresh: Promise<void> | undefined;
+  private workspaceBlocked = false;
+  private workspaceRevision = 0;
+  private workspaceMessage: string | undefined;
   private readonly prompts = new Map<string, string>();
   private readonly errors: GlyphTranscriptEntry[] = [];
   constructor(
@@ -113,6 +118,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.profileId = this.userDataProfileService.currentProfile.id;
     this.workspaceBinding = this.currentWorkspaceBinding();
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
+    this.editor = editor;
     this.client = this._register(new GlyphDesktopClient(request => editor.handle(request)));
     this.context = this._register(
       instantiationService.createInstance(GlyphContextController, editor, () => this.composer),
@@ -154,7 +160,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         if (event.affectsConfiguration('glyph.chat.followUpBehavior')) this.changeEmitter.fire(this.state);
       }),
     );
-    this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => this.invalidateSession()));
+    this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => this.invalidateChangedSession()));
     for (const event of [
       this.workspaceContextService.onDidChangeWorkspaceName,
       this.workspaceContextService.onDidChangeWorkbenchState,
@@ -371,6 +377,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       });
     return {
       ...snapshot,
+      readOnly: snapshot.readOnly || this.workspaceBlocked,
+      workspaceRetryable: this.workspaceBlocked && !this.workspaceRefresh && this.workspaceRoots().length > 0,
       openChatIds: [...new Set([...this.openChatIds, this.selectedChatId ?? ''])].filter(
         id => !id || snapshot.chats.some(chat => chat.id === id),
       ),
@@ -380,7 +388,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       ...(this.draftAccount ? { selectedAccount: this.draftAccount } : {}),
       ...(this.draftModel ? { selectedModel: this.draftModel } : {}),
       catalogPending: this.catalogPending || this.modelPending,
-      navigationPending: this.navigationPending || this.sending,
+      navigationPending: this.navigationPending || this.sending || this.workspaceBlocked,
+      ...(this.workspaceMessage ? { workspaceMessage: this.workspaceMessage } : {}),
       ...(this.navigationError ? { navigationError: this.navigationError } : {}),
       status: this.workbenchStatus(active?.status),
       transcript: [
@@ -398,6 +407,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   async connect(): Promise<void> {
+    if (this.workspaceBlocked && !this.workspaceRefresh && this.workspaceRoots().length) this.refreshWorkspace();
+    if (this.workspaceRefresh) await this.workspaceRefresh;
     this.assertSessionBinding();
     await this.client.connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted());
     this.assertSessionBinding();
@@ -492,6 +503,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.assertSessionBinding();
     if (this.immediatePending || this.navigationPending) throw new Error('A chat transition is already in progress.');
     const chatId = this.selectedChatId;
+    const workspaceRevision = this.workspaceRevision;
     const run = this.projection.state.runs.find(value => value.chatId === chatId && isActive(value.status));
     this.immediatePending = true;
     try {
@@ -519,6 +531,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           check();
         });
       }
+      this.assertWorkspaceRevision(workspaceRevision);
       await this.sendToChat(text, attachments, options, chatId);
     } finally {
       this.immediatePending = false;
@@ -532,6 +545,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     options: GlyphTurnOptions = {},
   ): Promise<void> {
     this.assertSessionBinding();
+    if (attachments.some(value => value.unavailable))
+      throw new Error(attachments.find(value => value.unavailable)!.unavailable);
     const run = this.projection.state.runs.find(
       value => value.chatId === this.selectedChatId && isActive(value.status),
     );
@@ -581,7 +596,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   /** Draft setup belongs to this window; saved chats retain their original account/model. */
-  selectAccount(provider: string, accountId: string): Promise<void> {
+  async selectAccount(provider: string, accountId: string): Promise<void> {
+    this.assertSessionBinding();
     if (this.selectedChatId) return Promise.resolve();
     const revision = ++this.catalogRevision;
     this.modelOperation = undefined;
@@ -595,7 +611,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.changeEmitter.fire(this.state);
     return (this.catalogOperation = this.loadModels(provider, accountId, revision));
   }
-  selectModel(model: string): Promise<void> {
+  async selectModel(model: string): Promise<void> {
+    this.assertSessionBinding();
     this.modelPending = true;
     this.changeEmitter.fire(this.state);
     return (this.modelOperation = this.changeModel(model, this.catalogRevision, ++this.modelRevision));
@@ -615,7 +632,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   newChat(): void {
-    if (this.invalidateChangedSession()) return;
+    if (this.invalidateChangedSession() || this.workspaceBlocked) return;
     if (this.sending) return;
     this.navigationRevision++;
     this.navigationPending = false;
@@ -783,6 +800,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     return this.request({ type: GlyphWorkbenchCommandType.REJECT_PROPOSAL_ITEM, chatId, proposalId, itemId, comment });
   }
 
+  override dispose(): void {
+    this.sessionChanged = true;
+    super.dispose();
+  }
+
   private createComposer(): GlyphComposerState {
     const composer = new GlyphComposerState();
     this._register({ dispose: composer.subscribe(() => queueMicrotask(() => this.flushQueues())) });
@@ -792,6 +814,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private flushQueues(): void {
     if (
       this.sessionChanged ||
+      this.workspaceBlocked ||
       this.sending ||
       this.navigationPending ||
       this.pendingRunId ||
@@ -822,7 +845,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
 
   /** Human decisions keep their distinct state instead of looking like ordinary streaming. */
   private workbenchStatus(activeStatus: GlyphRunStatus | undefined): GlyphWorkbenchStatus {
-    if (this.sessionChanged) return GlyphWorkbenchStatus.DISCONNECTED;
+    if (this.sessionChanged || this.workspaceBlocked) return GlyphWorkbenchStatus.DISCONNECTED;
     switch (activeStatus) {
       case GlyphRunStatus.WAITING_FOR_QUESTION:
         return GlyphWorkbenchStatus.WAITING_FOR_QUESTION;
@@ -869,6 +892,12 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     options: GlyphTurnOptions = {},
     targetChatId = this.selectedChatId,
   ): Promise<void> {
+    if (this.workspaceRevision)
+      attachments = attachments.map(value =>
+        URI.parse(value.uri).scheme === 'file' ? this.context.rebindAttachment(value) : value,
+      );
+    const unavailable = attachments.find(value => value.unavailable);
+    if (unavailable) throw new Error(unavailable.unavailable);
     const bytes = attachments.reduce(
       (total, attachment) => total + new TextEncoder().encode(attachment.text).byteLength,
       0,
@@ -891,23 +920,28 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     )
       throw new Error('The chat is busy. Queue the message or send it immediately.');
     this.sending = true;
+    const workspaceRevision = this.workspaceRevision;
     try {
       await this.connect();
+      this.assertWorkspaceRevision(workspaceRevision);
       if (this.projection.state.readOnly) throw new Error('Another window owns this workspace’s Glyph session.');
       if (!targetChatId) {
         await this.catalogOperation;
         await this.modelOperation;
+        this.assertWorkspaceRevision(workspaceRevision);
         const account = this.draftAccount;
         if (!account) throw new Error('Sign in to a Glyph account with inference access before sending a message.');
         if (!this.draftModel)
           throw new Error(this.navigationError ?? 'No models are available for the selected account.');
         await this.createChat(account.provider, account.id, this.draftModel);
+        this.assertWorkspaceRevision(workspaceRevision);
         targetChatId = this.selectedChatId;
       }
       const chatId = targetChatId;
       if (!chatId) throw new Error('Create or open a chat before sending.');
       if (options.mode && this.state.chats.find(chat => chat.id === chatId)?.mode !== options.mode)
         await this.request({ type: GlyphWorkbenchCommandType.SET_CHAT_MODE, chatId, mode: options.mode });
+      this.assertWorkspaceRevision(workspaceRevision);
       const runId = generateUuid();
       if (chatId === this.selectedChatId) this.pendingRunId = runId;
       this.prompts.set(runId, prompt);
@@ -945,18 +979,104 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private invalidateChangedSession(): boolean {
     if (this.userDataProfileService.currentProfile.id !== this.profileId)
       this.invalidateSession('Profile changed. Reload the window to reconnect Glyph.');
-    if (this.currentWorkspaceBinding() !== this.workspaceBinding) this.invalidateSession();
+    if (this.currentWorkspaceBinding() !== this.workspaceBinding && !this.sessionChanged) {
+      this.refreshWorkspace();
+      return true;
+    }
     return this.sessionChanged;
   }
   private assertSessionBinding(): void {
-    if (this.invalidateChangedSession()) throw new Error(this.invalidationMessage);
+    if (this.invalidateChangedSession())
+      throw new Error(this.sessionChanged ? this.invalidationMessage : this.workspaceMessage);
+    if (this.workspaceBlocked) throw new Error(this.workspaceMessage ?? 'Updating workspace folders.');
   }
+
+  private refreshWorkspace(): void {
+    if (this.workspaceRefresh || this.sessionChanged) return;
+    this.workspaceBlocked = true;
+    this.selectionInitialized = true;
+    this.workspaceRevision++;
+    this.workspaceMessage = 'Updating workspace folders…';
+    this.editor.invalidate();
+    this.navigationRevision++;
+    this.catalogRevision++;
+    this.modelRevision++;
+    this.catalogOperation = undefined;
+    this.modelOperation = undefined;
+    for (const composer of this.composers.values()) composer.pauseQueue();
+    this.changeEmitter.fire(this.state);
+    let attempted = this.currentWorkspaceBinding();
+    this.workspaceRefresh = Promise.resolve()
+      .then(async () => {
+        do {
+          attempted = this.currentWorkspaceBinding();
+          try {
+            await this.client.detachWorkspace();
+            if (this.sessionChanged) return;
+            // Capture the latest folders after draining: another edit may have
+            // arrived while the old run was checkpointing its final result.
+            attempted = this.currentWorkspaceBinding();
+            this.workspaceBinding = attempted;
+            this.editor.rebindWorkspace();
+            for (const composer of this.composers.values())
+              composer.mapAttachments(value => this.context.rebindAttachment(value));
+            const roots = this.workspaceRoots();
+            if (!roots.length) {
+              this.workspaceMessage =
+                'Add a local workspace folder to continue. Your conversation and draft are preserved.';
+              return;
+            }
+            await this.client.connect(roots, this.workspaceTrustService.isWorkspaceTrusted());
+            if (attempted !== this.currentWorkspaceBinding()) continue;
+            if (this.selectedChatId)
+              await this.client.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
+            if (this.draftAccount && this.workspaceTrustService.isWorkspaceTrusted())
+              await this.client.request({
+                type: GlyphWorkbenchCommandType.SELECT_ACCOUNT,
+                accountProvider: this.draftAccount.provider,
+                accountId: this.draftAccount.id,
+              });
+            if (this.draftModel && this.workspaceTrustService.isWorkspaceTrusted())
+              await this.client.request({ type: GlyphWorkbenchCommandType.SELECT_MODEL, model: this.draftModel });
+            if (attempted !== this.currentWorkspaceBinding()) continue;
+            this.persistChatTabs();
+            this.storageService.store(
+              'glyph.selectedChat',
+              this.selectedChatId ?? '',
+              StorageScope.WORKSPACE,
+              StorageTarget.MACHINE,
+            );
+            this.workspaceBlocked = false;
+            this.workspaceMessage = `Workspace updated: ${roots.map(root => root.name).join(', ')}. Continue when ready.`;
+          } catch (error) {
+            if (attempted !== this.currentWorkspaceBinding()) continue;
+            this.workspaceMessage = `Could not update workspace folders: ${error instanceof Error ? error.message : String(error)}`;
+            return;
+          }
+        } while (attempted !== this.currentWorkspaceBinding());
+      })
+      .finally(() => {
+        this.workspaceRefresh = undefined;
+        this.pendingRunId = undefined;
+        this.navigationPending = false;
+        this.catalogPending = false;
+        this.modelPending = false;
+        this.changeEmitter.fire(this.state);
+        if (!this.sessionChanged && attempted !== this.currentWorkspaceBinding()) this.refreshWorkspace();
+      });
+  }
+  private assertWorkspaceRevision(revision: number): void {
+    this.assertSessionBinding();
+    if (revision !== this.workspaceRevision)
+      throw new Error('Workspace changed while the action was pending. Please try again.');
+  }
+
   private async request(command: GlyphWorkbenchCommand): Promise<void> {
     this.assertSessionBinding();
+    const revision = this.workspaceRevision;
     await this.client.connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted());
-    // Configuration initialization delays workspace events. Recheck the live
-    // identity after attachment settles, immediately before dispatching work.
-    this.assertSessionBinding();
+    // A completed rebind is still a different authority from the one this action started with.
+    this.assertWorkspaceRevision(revision);
     return this.client.request(command);
   }
   private invalidateSession(message = 'Workspace changed. Reload the window to reconnect Glyph.'): void {
@@ -964,9 +1084,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.sessionChanged = true;
     this.invalidationMessage = message;
     this.pendingRunId = undefined;
-    // Saving a workspace or switching profiles can change its storage identity
-    // while retaining the renderer. Retire the runtime and its editor capabilities;
-    // the replacement binding is established when the window reloads.
+    // Profiles have separate accounts and history. Retire this port until reload.
     this.client.dispose();
     this.report(new Error(this.invalidationMessage));
   }

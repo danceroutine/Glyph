@@ -59,7 +59,7 @@ export class GlyphEditorAdapter extends Disposable {
   private readonly undoGroups = new Map<string, UndoRedoGroup>();
   private readonly removedResources = new Set<string>();
   private workspaceGeneration = generateUuid();
-  private readonly workspaceBinding: string;
+  private workspaceBinding: string;
   private workspaceChanged = false;
   /** Keep unopened models alive while the host holds their incarnation tokens. */
   private readonly references = new Map<string, Awaited<ReturnType<ITextModelService['createModelReference']>>>();
@@ -161,6 +161,13 @@ export class GlyphEditorAdapter extends Disposable {
     this.workspaceGeneration = generateUuid();
     for (const reference of this.references.values()) reference.dispose();
     this.references.clear();
+  }
+
+  /** Called only after the previous runtime has drained, before attaching its replacement. */
+  rebindWorkspace(): void {
+    this.invalidate();
+    this.workspaceBinding = this.currentWorkspaceBinding();
+    this.workspaceChanged = false;
   }
 
   override dispose(): void {

@@ -421,21 +421,24 @@ describe('Editor workspace binding', () => {
     }
   });
 
-  it.each(['invalidate', 'dispose'])('cancels a queued edit when the adapter receives %s', async operation => {
-    const fixture = await pendingEdit();
-    try {
-      const applying = fixture.apply();
-      await fixture.entered.promise;
-      fixture.adapter[operation]();
-      fixture.write.resolve();
-      fixture.finish.resolve();
-      expect((await applying).ok).toBe(false);
-      expect(fixture.text()).toBe('original');
-      expect(await fixture.adapter.inspectReceipt('edit')).toBeUndefined();
-    } finally {
-      fixture.adapter.dispose();
-    }
-  });
+  it.each(['invalidate', 'dispose', 'rebindWorkspace'])(
+    'cancels a queued edit when the adapter receives %s',
+    async operation => {
+      const fixture = await pendingEdit();
+      try {
+        const applying = fixture.apply();
+        await fixture.entered.promise;
+        fixture.adapter[operation]();
+        fixture.write.resolve();
+        fixture.finish.resolve();
+        expect((await applying).ok).toBe(false);
+        expect(fixture.text()).toBe('original');
+        expect(await fixture.adapter.inspectReceipt('edit')).toBeUndefined();
+      } finally {
+        fixture.adapter.dispose();
+      }
+    },
+  );
 
   it('cancels a prepared edit when its folder is removed before the model write', async () => {
     const fixture = await pendingEdit();
@@ -449,6 +452,19 @@ describe('Editor workspace binding', () => {
       expect.soft(fixture.text()).toBe('original');
       expect(result).toMatchObject({ ok: false, error: { code: 'WORKSPACE_CHANGED' } });
       expect(await fixture.adapter.inspectReceipt('edit')).toBeUndefined();
+    } finally {
+      fixture.adapter.dispose();
+    }
+  });
+
+  it('rejects old document tokens after rebinding', async () => {
+    const fixture = await pendingEdit();
+    try {
+      fixture.adapter.rebindWorkspace();
+      expect(await fixture.apply()).toMatchObject({ ok: false, error: { code: 'STALE_DOCUMENT' } });
+      expect(fixture.launch).not.toHaveBeenCalled();
+      const fresh = await fixture.adapter.read('file.ts');
+      expect(fresh.token.workspaceGeneration).not.toBe(fixture.before.token.workspaceGeneration);
     } finally {
       fixture.adapter.dispose();
     }

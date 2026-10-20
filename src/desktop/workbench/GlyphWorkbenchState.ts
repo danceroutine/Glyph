@@ -23,4 +23,6 @@ export interface GlyphWorkbenchState extends GlyphDesktopSnapshot {
   readonly navigationPending?: boolean;
   readonly catalogPending?: boolean;
   readonly navigationError?: string;
+  readonly workspaceMessage?: string;
+  readonly workspaceRetryable?: boolean;
 }

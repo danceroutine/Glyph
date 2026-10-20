@@ -577,20 +577,23 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   private async stop(): Promise<void> {
     this.disposed = true;
-    await this.connectionLost(this.options.ownerWindowId);
+    // Revoke all workspace execution together. A provider or pending decision
+    // must not keep background shells or agent review alive while it drains.
+    const stopped = await Promise.allSettled([
+      this.connectionLost(this.options.ownerWindowId),
+      this.options.agentReviews?.dispose(),
+      this.options.shellSessions.dispose(),
+    ]);
     // Proposal decisions checkpoint after their editor side effect. Closing
     // persistence before those admitted commands settle would lose the outcome.
     await Promise.allSettled(this.commands);
-    await this.options.agentReviews?.dispose();
     this.unsubscribeAgentReviews?.();
     this.unsubscribe?.();
     this.unsubscribeShells();
     this.unsubscribeWakes();
-    try {
-      await this.options.shellSessions.dispose();
-    } finally {
-      await this.options.glyph.dispose();
-    }
+    await this.options.glyph.dispose();
+    const failure = stopped.find(result => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
   }
 
   /** Recheck inference access at use time rather than trusting a previously selected account. */

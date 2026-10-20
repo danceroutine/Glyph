@@ -1,0 +1,20 @@
+{
+  "name": "glyph-workspace-changes-fixture",
+  "publisher": "glyph-tests",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "main": "./extension.cjs",
+  "activationEvents": [
+    "*"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "glyphFixture.addWorkspaceFolder",
+        "title": "Glyph Fixture: Add Workspace Folder"
+      }
+    ]
+  }
+}

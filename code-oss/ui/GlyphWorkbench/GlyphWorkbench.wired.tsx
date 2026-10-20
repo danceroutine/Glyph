@@ -30,6 +30,10 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
       />
       <GlyphWorkbench
         {...view}
+        {...(state.workspaceMessage ? { workspaceMessage: state.workspaceMessage } : {})}
+        {...(state.workspaceRetryable && actions.reconnectWorkspace
+          ? { retryWorkspace: () => void actions.reconnectWorkspace?.().catch(() => {}) }
+          : {})}
         recentChats={<GlyphRecentChats state={state} actions={actions} />}
         menu={<GlyphChatMenu state={state} actions={actions} />}
         transcript={
