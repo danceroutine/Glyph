@@ -117,10 +117,10 @@ const styles = {
     minWidth: 0,
     lineHeight: tokens.font.lineHeight.normal,
     '& dt': { color: tokens.text.muted },
-    '& dt:first-child': { paddingRight: 64 },
     '& dd': { margin: 0, marginTop: tokens.space.xs, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' },
     '& dd + dt': { marginTop: tokens.space.md },
   }),
+  detailsBesideActions: css({ '& dt:first-child': { paddingRight: 64 } }),
   actions: css({
     position: 'absolute',
     top: tokens.space.xs,
@@ -129,6 +129,22 @@ const styles = {
     gap: tokens.space.xs,
   }),
 };
+export function GlyphAnnotationDetails({
+  annotation,
+  class: className,
+}: {
+  readonly annotation: GlyphAnnotation;
+  readonly class?: string;
+}) {
+  return (
+    <dl class={className ? `${styles.details} ${className}` : styles.details}>
+      <dt>Selected text:</dt>
+      <dd>{annotation.quote}</dd>
+      <dt>User comment:</dt>
+      <dd>{annotation.comment}</dd>
+    </dl>
+  );
+}
 export function GlyphAnnotationPill({
   annotations,
   edit,
@@ -176,12 +192,7 @@ export function GlyphAnnotationPill({
             aria-label={`Annotation ${annotation.order}: ${annotation.label}`}
           >
             <span class={styles.order}>{annotation.order}.</span>
-            <dl class={styles.details}>
-              <dt>Selected text:</dt>
-              <dd>{annotation.quote}</dd>
-              <dt>User comment:</dt>
-              <dd>{annotation.comment}</dd>
-            </dl>
+            <GlyphAnnotationDetails annotation={annotation} class={styles.detailsBesideActions} />
             <div class={styles.actions}>
               {edit && (
                 <IconButton

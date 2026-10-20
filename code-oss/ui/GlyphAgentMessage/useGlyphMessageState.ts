@@ -36,6 +36,9 @@ export function useGlyphMessageState({
       setAttachmentError({ id, message: error instanceof Error ? error.message : String(error) });
     }
   };
+  const annotations = new Map(
+    entries.flatMap(entry => entry.options?.annotations ?? []).map(annotation => [annotation.id, annotation]),
+  );
   const historyAction = (entry: GlyphTranscriptEntry, action: ((turnId: string) => Promise<void>) | undefined) => {
     if (!action || entry.checkpointTurnId === undefined || entry.checkpointTurnId === '' || historyPending) return;
     setHistoryPending(true);
@@ -67,6 +70,7 @@ export function useGlyphMessageState({
           : undefined,
       attachmentError: attachmentError?.id === entry.id ? attachmentError.message : undefined,
       copyText,
+      annotation: (id: string) => annotations.get(id),
       copy: () => {
         void copyText(entry.text).catch(error => {
           setAttachmentError({ id: entry.id, message: String(error) });

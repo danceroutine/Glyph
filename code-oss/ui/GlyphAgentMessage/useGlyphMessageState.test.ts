@@ -17,6 +17,27 @@ function contextActions(openAttachment: GlyphContextActions['openAttachment']) {
 }
 
 describe(useGlyphMessageState, () => {
+  it('resolves citations only from annotations in this conversation', () => {
+    const annotation = {
+      id: 'note',
+      order: 1,
+      kind: 'chat' as const,
+      sourceId: 'source',
+      revision: '1',
+      label: 'Glyph',
+      quote: 'quoted',
+      from: 0,
+      to: 6,
+      comment: 'Explain',
+    };
+    const { result } = renderHook(useGlyphMessageState, {
+      initialProps: {
+        entries: [transcriptEntry({ options: { annotations: [annotation] } }), transcriptEntry({ id: 'reply' })],
+      },
+    });
+    expect(result.current.entries[1]!.annotation('note')).toEqual(annotation);
+    expect(result.current.entries[1]!.annotation('unknown')).toBeUndefined();
+  });
   it('labels each speaker', () => {
     const { result } = renderHook(useGlyphMessageState, {
       initialProps: {

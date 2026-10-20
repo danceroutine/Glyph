@@ -49,6 +49,28 @@ const predictablePlaceholders = () => {
 };
 
 describe(WiredGlyphTranscriptContent, () => {
+  it('wires known annotation citations and leaves unknown citations as text', () => {
+    const annotation = {
+      id: 'note',
+      order: 1,
+      kind: 'chat',
+      sourceId: 'source',
+      revision: '1',
+      label: 'Glyph',
+      quote: 'quoted',
+      from: 0,
+      to: 6,
+      comment: 'Explain',
+    };
+    const entry = contentEntry(
+      [{ type: 'text', text: '[Annotation 1](glyph-annotation:note) [Unknown](glyph-annotation:missing)' }],
+      { annotation: (id: string) => (id === 'note' ? annotation : undefined) },
+    );
+    render(<WiredGlyphTranscriptContent entry={entry} />);
+    expect(screen.getByRole('link', { name: 'Annotation 1' }).className).toBe('glyph-annotation-citation');
+    expect(screen.queryByRole('link', { name: 'Unknown' })).toBeNull();
+    expect(screen.getByText('Unknown')).not.toBeNull();
+  });
   it('renders message text as markdown with links opened through the entry', () => {
     const entry = contentEntry([{ type: 'text', text: '**Bold** and [docs](https://example.com)' }]);
     const { container } = render(<WiredGlyphTranscriptContent entry={entry} />);

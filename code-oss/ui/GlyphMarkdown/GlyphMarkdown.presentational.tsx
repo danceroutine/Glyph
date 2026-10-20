@@ -69,12 +69,14 @@ export function GlyphMarkdown({
   diagram,
   code,
   inline,
+  link,
   text = value => value,
 }: {
   readonly items: readonly Token[];
   readonly openLink: (href: string) => void;
   readonly text?: (value: string) => ComponentChildren;
   readonly inline?: (token: GlyphContextToken) => ComponentChildren;
+  readonly link?: (token: Tokens.Link, children: ComponentChildren) => ComponentChildren | undefined;
   readonly code: (source: string, language: string | undefined) => ComponentChildren;
   readonly diagram: (source: string) => ComponentChildren;
 }) {
@@ -118,15 +120,17 @@ export function GlyphMarkdown({
           return token.lang?.trim().toLowerCase() === 'mermaid' ? diagram(token.text) : code(token.text, token.lang);
         case 'link':
           return (
-            <a
-              href="#"
-              onClick={event => {
-                event.preventDefault();
-                openLink(token.autolink === true ? token.href : decodeHTMLStrict(token.href));
-              }}
-            >
-              {children}
-            </a>
+            link?.(token, children) ?? (
+              <a
+                href="#"
+                onClick={event => {
+                  event.preventDefault();
+                  openLink(token.autolink === true ? token.href : decodeHTMLStrict(token.href));
+                }}
+              >
+                {children}
+              </a>
+            )
           );
         case 'list':
           return token.ordered ? (

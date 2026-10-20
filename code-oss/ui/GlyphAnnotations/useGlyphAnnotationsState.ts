@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { GlyphAnnotation } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { GlyphAnnotationPosition, GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
+import { annotationRange, findAnnotationSource } from './GlyphAnnotationSource.ts';
 
 interface PositionedAnnotation extends GlyphAnnotationPosition {
   readonly annotation: GlyphAnnotation;
@@ -20,34 +21,10 @@ function samePosition(a: PositionedAnnotation | undefined, b: PositionedAnnotati
       a.container === b.container)
   );
 }
-function sourceRange(source: Element, from: number, to: number): Range | undefined {
-  const walker = document.createTreeWalker(source, NodeFilter.SHOW_TEXT);
-  const range = document.createRange();
-  let offset = 0,
-    started = false;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const length = node.textContent!.length;
-    if (!started && from <= offset + length) {
-      range.setStart(node, Math.max(0, from - offset));
-      started = true;
-    }
-    if (started && to <= offset + length) {
-      range.setEnd(node, to - offset);
-      return range;
-    }
-    offset += length;
-  }
-  return undefined;
-}
-function findSource(annotation: GlyphAnnotation): HTMLElement | undefined {
-  return [...document.querySelectorAll<HTMLElement>('[data-glyph-source]')].find(
-    node => node.dataset.glyphSource === annotation.sourceId && node.dataset.revision === annotation.revision,
-  );
-}
 function position(annotation: GlyphAnnotation, selection = false): PositionedAnnotation | undefined {
-  const source = findSource(annotation);
-  const range = source && sourceRange(source, annotation.from, annotation.to);
-  if (!range || range.toString() !== annotation.quote) return undefined;
+  const source = findAnnotationSource(annotation);
+  const range = annotationRange(annotation);
+  if (!range) return undefined;
   const rect = [...range.getClientRects()].findLast(rect => rect.width > 0 && rect.height > 0);
   if (!rect || rect.bottom < 0 || rect.top > innerHeight) return undefined;
   if (selection) {
@@ -151,7 +128,7 @@ export function useGlyphAnnotationsState({
         setDraft(undefined);
       return undefined;
     }
-    findSource(annotation)?.scrollIntoView({ block: 'center' });
+    findAnnotationSource(annotation)?.scrollIntoView({ block: 'center' });
     let cancelled = false;
     void composer
       .revealAnnotation(annotation)
