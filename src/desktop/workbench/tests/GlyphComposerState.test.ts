@@ -192,3 +192,47 @@ describe('queued composer documents', () => {
     expect(composer.snapshot.queued).toEqual([]);
   });
 });
+
+describe('turn context while a plan is building', () => {
+  it('records build progress on messages sent or queued at that moment', async () => {
+    const composer = new GlyphComposerState();
+    let progress: { planId: string; title: string; completed: number; total: number } | undefined = {
+      planId: 'plan',
+      title: 'Queue composer messages',
+      completed: 1,
+      total: 4,
+    };
+    composer.provideTurnOptions(() => (progress ? { planProgress: progress } : undefined));
+    composer.setDraft('Keep the order stable');
+    composer.enqueueDraft();
+    composer.setDraft('Also check edits');
+    let sent: unknown;
+    await composer.submit(async (_text, _attachments, options) => {
+      sent = options?.planProgress;
+    });
+    progress = undefined;
+
+    expect(sent).toEqual({ planId: 'plan', title: 'Queue composer messages', completed: 1, total: 4 });
+    expect(composer.snapshot.queued[0]!.document.options?.planProgress).toEqual(sent);
+  });
+
+  it('drops progress from a queued message edited after the build finished', async () => {
+    const composer = new GlyphComposerState();
+    let building = true;
+    composer.provideTurnOptions(() =>
+      building ? { planProgress: { planId: 'plan', title: 'Plan', completed: 0, total: 2 } } : undefined,
+    );
+    composer.setDraft('Queued during the build');
+    composer.enqueueDraft();
+    building = false;
+    const queued = composer.snapshot.queued[0]!;
+    composer.editQueued(queued.id);
+    composer.enqueueDraft();
+    let sent: unknown = 'unset';
+    await composer.sendQueued(queued.id, async (_text, _attachments, options) => {
+      sent = options?.planProgress;
+    });
+
+    expect(sent).toBeUndefined();
+  });
+});

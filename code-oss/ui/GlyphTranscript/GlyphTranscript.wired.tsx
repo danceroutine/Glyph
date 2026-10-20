@@ -8,6 +8,7 @@ import {
 } from '#code-oss/ui/GlyphAgentMessage/GlyphAgentMessage.wired.tsx';
 import { WiredGlyphTranscriptContent } from './GlyphTranscriptContent.wired.tsx';
 import { GlyphTranscript, GlyphTranscriptMessage } from './GlyphTranscript.presentational.tsx';
+import { GlyphPlanBuildMessage } from './GlyphPlanBuildMessage.presentational.tsx';
 import { useGlyphTranscriptState, type GlyphTranscriptStateOptions } from './useGlyphTranscriptState.ts';
 
 export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
@@ -17,6 +18,8 @@ export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
   readonly pendingApproval?: GlyphRunProjection;
   readonly actions?: GlyphMessageActions;
   readonly readOnly?: boolean;
+  readonly buildingPlanIds?: readonly string[];
+  readonly openPlan?: (sourceChatId: string, planId: string) => void;
 }
 
 export function WiredGlyphTranscript({
@@ -27,7 +30,15 @@ export function WiredGlyphTranscript({
   pendingApproval,
   actions,
   readOnly = false,
+  buildingPlanIds = [],
+  openPlan,
 }: WiredGlyphTranscriptProps) {
+  const activeBuilds = new Set(
+    buildingPlanIds.flatMap(planId => {
+      const entry = entries.findLast(value => value.role === 'user' && value.options?.planBuild?.planId === planId);
+      return entry ? [entry.id] : [];
+    }),
+  );
   const state = useGlyphTranscriptState({
     entries,
     context: actions?.context,
@@ -41,8 +52,9 @@ export function WiredGlyphTranscript({
   });
   return (
     <GlyphTranscript transcript={state.transcript} plans={plans}>
-      {state.entries.map(entry =>
-        entry.role === 'assistant' ? (
+      {state.entries.map(entry => {
+        const build = entry.role === 'user' ? entry.options?.planBuild : undefined;
+        return entry.role === 'assistant' ? (
           <GlyphAgentMessageWithState
             key={entry.id}
             entry={entry}
@@ -65,14 +77,23 @@ export function WiredGlyphTranscript({
             actions={actions}
             readOnly={readOnly}
           />
+        ) : build ? (
+          <GlyphPlanBuildMessage
+            key={entry.id}
+            entry={entry}
+            build={build}
+            building={activeBuilds.has(entry.id)}
+            content={<WiredGlyphTranscriptContent entry={entry} />}
+            openPlan={openPlan && (() => openPlan(build.sourceChatId, build.planId))}
+          />
         ) : (
           <GlyphTranscriptMessage
             key={entry.id}
             entry={entry}
             content={<WiredGlyphTranscriptContent entry={entry} />}
           />
-        ),
-      )}
+        );
+      })}
     </GlyphTranscript>
   );
 }

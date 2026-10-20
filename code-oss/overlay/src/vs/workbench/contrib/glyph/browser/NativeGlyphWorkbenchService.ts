@@ -8,6 +8,8 @@ import { AgentModeID } from '#glyph/protocol/index.js';
 import { IConfigurationService } from '#vs/platform/configuration/common/configuration.js';
 import { toGlyphTranscriptParts } from '#glyph/workbench/toGlyphTranscriptParts.js';
 import type { GlyphPlan } from '#glyph/protocol/events/GlyphPlan.js';
+import type { GlyphPlanProgress } from '#glyph/protocol/events/GlyphPlanProgress.js';
+import { GlyphPlanPromptIntent, toGlyphPlanPrompt } from '#glyph/workbench/GlyphPlanPrompt.js';
 import { GlyphPlanInput } from './GlyphPlanEditor.js';
 import { IEditorService } from '#vs/workbench/services/editor/common/editorService.js';
 import { IOpenerService } from '#vs/platform/opener/common/opener.js';
@@ -84,7 +86,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private workspaceRevision = 0;
   private workspaceMessage: string | undefined;
   private readonly prompts = new Map<string, string>();
-  private readonly planBuilds = new Map<string, string>();
+  private readonly planBuilds = new Map<string, { runId: string; chatId: string; title: string }>();
   private readonly errors: GlyphTranscriptEntry[] = [];
   constructor(
     @IStorageService private readonly storageService: IStorageService,
@@ -205,7 +207,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
               this.selectChat(event.state.chats[0]?.id);
             }
             this.pendingRunId = undefined;
-            for (const [planId, runId] of this.planBuilds)
+            for (const [planId, { runId }] of this.planBuilds)
               if (!event.state.runs.some(run => run.runId === runId && isActive(run.status)))
                 this.planBuilds.delete(planId);
             break;
@@ -247,7 +249,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           case GlyphHostEventType.RUN_STATE:
             if (event.run.runId === this.pendingRunId) this.pendingRunId = undefined;
             if (!isActive(event.run.status))
-              for (const [planId, runId] of this.planBuilds)
+              for (const [planId, { runId }] of this.planBuilds)
                 if (runId === event.run.runId) this.planBuilds.delete(planId);
             break;
         }
@@ -485,20 +487,28 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     const composer = this.composer;
     await this.selectMode(AgentModeID.AGENT);
     const document = composer.snapshot.document;
-    const text = `\n\n${this.planPrompt(plan, 'Build this approved plan')}`;
+    const text = `\n\n${toGlyphPlanPrompt(GlyphPlanPromptIntent.BUILD, plan)}`;
     composer.setDocument({ ...document, parts: [...document.parts, { type: 'text', text }] });
+    const targetChatId = this.selectedChatId!;
     await this.request({
       type: GlyphWorkbenchCommandType.LINK_PLAN,
       chatId,
       planId: plan.id,
-      targetChatId: this.selectedChatId!,
+      targetChatId,
       role: 'Builder',
     });
+    const planBuild = {
+      planId: plan.id,
+      revision: plan.revision,
+      title: plan.title,
+      sourceChatId: chatId,
+      todos: plan.todos.map(todo => ({ ...todo })),
+    };
     await composer.submit(async (text, attachments, options) => {
       if (this.immediatePending) throw new Error('Waiting for the current response to stop.');
-      const runId = await this.sendToChat(text, attachments, options);
+      const runId = await this.sendToChat(text, attachments, { ...options, planBuild });
       if (this.projection.state.runs.some(run => run.runId === runId && !isActive(run.status))) return;
-      this.planBuilds.set(plan.id, runId);
+      this.planBuilds.set(plan.id, { runId, chatId: targetChatId, title: plan.title });
       this.changeEmitter.fire(this.state);
     });
   }
@@ -823,6 +833,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
 
   private createComposer(): GlyphComposerState {
     const composer = new GlyphComposerState();
+    composer.provideTurnOptions(() => {
+      const chatId = [...this.composers].find(([, value]) => value === composer)?.[0];
+      const planProgress = chatId ? this.planProgress(chatId) : undefined;
+      return planProgress ? { planProgress } : undefined;
+    });
     this._register({ dispose: composer.subscribe(() => queueMicrotask(() => this.flushQueues())) });
     return composer;
   }
@@ -894,12 +909,23 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       role: 'Reviewer',
     });
     this.composer.setMode(AgentModeID.PLAN);
-    this.composer.setDraft(this.planPrompt(plan, 'Review this plan'));
+    this.composer.setDraft(toGlyphPlanPrompt(GlyphPlanPromptIntent.REVIEW, plan));
     this.composer.focus();
   }
 
-  private planPrompt(plan: GlyphPlan, intent: string): string {
-    return `${intent}: ${plan.title} (plan ${plan.id}, revision ${plan.revision}).\n\n${plan.markdown}\n\nTodos:\n${plan.todos.map(todo => `- [${todo.completed ? 'x' : ' '}] ${todo.text}`).join('\n')}`;
+  private planProgress(chatId: string): GlyphPlanProgress | undefined {
+    const build = [...this.planBuilds].find(([, value]) => value.chatId === chatId);
+    if (!build) return undefined;
+    const [planId, { title }] = build;
+    const todos = this.state.chats.find(chat => chat.id === chatId)?.todos ?? [];
+    const current = todos.find(todo => todo.status === 'in_progress')?.text;
+    return {
+      planId,
+      title,
+      ...(current ? { current } : {}),
+      completed: todos.filter(todo => todo.status === 'completed').length,
+      total: todos.length,
+    };
   }
 
   private async sendToChat(

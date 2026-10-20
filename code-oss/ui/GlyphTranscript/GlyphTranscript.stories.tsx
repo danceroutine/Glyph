@@ -5,12 +5,14 @@ import {
   messageActionsConversation,
   longConversationFixture,
   conversationFixture,
+  planBuildConversationFixture,
+  planBuildFixture,
 } from '#code-oss/storybook/fixtures/MessageFixtures.ts';
 
 import { useState } from 'preact/hooks';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
-import { WiredGlyphTranscript } from './GlyphTranscript.wired.tsx';
+import { WiredGlyphTranscript, type WiredGlyphTranscriptProps } from './GlyphTranscript.wired.tsx';
 import { workbenchClassName } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.presentational.tsx';
 
 import { previewActionsFixture } from '#code-oss/storybook/fixtures/ActionFixtures.ts';
@@ -93,4 +95,26 @@ function HistoryPreview({ initialEntries }: { readonly initialEntries?: ReturnTy
 
 export const MessageActions: Story = {
   render: () => <HistoryPreview />,
+};
+
+export const PlanBuildOrder: Story = {
+  args: {
+    entries: planBuildConversationFixture(),
+    openPlan: fn<NonNullable<WiredGlyphTranscriptProps['openPlan']>>().mockName('GlyphTranscript.openPlan'),
+  },
+};
+
+export const PlanBuilding: Story = {
+  args: {
+    entries: planBuildConversationFixture(),
+    buildingPlanIds: [planBuildFixture.planId],
+    openPlan: fn<NonNullable<WiredGlyphTranscriptProps['openPlan']>>().mockName('GlyphTranscript.openPlan'),
+  },
+  decorators: [
+    Story => (
+      <div style={{ height: 420, display: 'flex', flexDirection: 'column' }}>
+        <Story />
+      </div>
+    ),
+  ],
 };

@@ -1,4 +1,5 @@
 import { toGlyphTranscriptParts } from '#src/desktop/workbench/toGlyphTranscriptParts.js';
+import { toGlyphPlanBuildLead } from '#src/desktop/workbench/GlyphPlanPrompt.js';
 import type { GlyphContextActions } from '#src/desktop/workbench/GlyphContextActions.js';
 import type { GlyphAttachmentPreview } from '#src/desktop/protocol/events/GlyphAttachmentPreview.js';
 import type { GlyphToolActivity } from '#src/desktop/protocol/events/GlyphToolActivity.js';
@@ -71,7 +72,11 @@ export function useGlyphMessageState({
           ? new Date(entry.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
           : undefined,
       openAttachment: (attachment: GlyphAttachmentPreview) => void open(entry.id, attachment),
-      parts: toGlyphTranscriptParts(entry).map(part =>
+      parts: toGlyphTranscriptParts(
+        entry.options?.planBuild
+          ? { ...entry, text: toGlyphPlanBuildLead(entry.text, entry.options.planBuild) }
+          : entry,
+      ).map(part =>
         part.type === 'text'
           ? part
           : {
