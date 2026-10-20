@@ -3,6 +3,7 @@ export interface GlyphPlanViewState {
   readonly plan: GlyphPlan;
   readonly modelLabel?: string;
   readonly disabled: boolean;
+  readonly building?: boolean;
   readonly agents: readonly { readonly chatId: string; readonly title: string; readonly role: string }[];
 }
 export interface GlyphPlanViewActions {

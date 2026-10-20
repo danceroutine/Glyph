@@ -429,3 +429,119 @@ it('opens web links externally by default and uses the native browser editor whe
     }
   }
 });
+
+it.each([false, true])('shows a plan as building until its build finishes (new chat: %s)', async newChat => {
+  const plan = {
+    id: 'plan',
+    revision: 1,
+    title: 'Approved work',
+    summary: '',
+    markdown: 'Change source',
+    todos: [],
+    agents: [],
+  };
+  let build;
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }],
+    handler: async (command, { state, emit }) => {
+      if (command.type === 'create_chat') {
+        state.chats.push(chat('builder'));
+        emit({ type: 'chat_updated', chat: chat('builder'), creationId: command.creationId });
+      }
+      if (command.type !== 'send') return;
+      build = {
+        chatId: command.chatId,
+        runId: command.runId,
+        userText: command.text,
+        text: '',
+        reasoning: '',
+        tools: [],
+      };
+      emit({ type: 'run_state', run: { ...build, status: 'streaming' } });
+    },
+  });
+  try {
+    expect(test.service.state.buildingPlanIds).toBeUndefined();
+    await test.service.buildPlan('alpha', plan, newChat);
+    expect(build.chatId).toBe(newChat ? 'builder' : 'alpha');
+    expect(test.service.state.buildingPlanIds).toEqual(['plan']);
+    test.emit({ type: 'run_state', run: { ...build, status: 'completed' } });
+    expect(test.service.state.buildingPlanIds).toBeUndefined();
+  } finally {
+    test.dispose();
+  }
+});
+
+it('does not show a plan as building when its build finishes before the request settles', async () => {
+  const plan = {
+    id: 'plan',
+    revision: 1,
+    title: 'Approved work',
+    summary: '',
+    markdown: 'Change source',
+    todos: [],
+    agents: [],
+  };
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }],
+    handler: async (command, { emit }) => {
+      if (command.type !== 'send') return;
+      emit({
+        type: 'run_state',
+        run: {
+          chatId: command.chatId,
+          runId: command.runId,
+          userText: command.text,
+          text: 'Done',
+          reasoning: '',
+          tools: [],
+          status: 'completed',
+        },
+      });
+    },
+  });
+  try {
+    await test.service.buildPlan('alpha', plan);
+    expect(test.service.state.buildingPlanIds).toBeUndefined();
+  } finally {
+    test.dispose();
+  }
+});
+
+it('stops showing a plan as building when the host no longer reports its build', async () => {
+  const plan = {
+    id: 'plan',
+    revision: 1,
+    title: 'Approved work',
+    summary: '',
+    markdown: 'Change source',
+    todos: [],
+    agents: [],
+  };
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }],
+    handler: async (command, { emit }) => {
+      if (command.type !== 'send') return;
+      emit({
+        type: 'run_state',
+        run: {
+          chatId: command.chatId,
+          runId: command.runId,
+          userText: command.text,
+          text: '',
+          reasoning: '',
+          tools: [],
+          status: 'streaming',
+        },
+      });
+    },
+  });
+  try {
+    await test.service.buildPlan('alpha', plan);
+    expect(test.service.state.buildingPlanIds).toEqual(['plan']);
+    test.emit({ type: 'initial_state', state: { ...test.state, runs: [] } });
+    expect(test.service.state.buildingPlanIds).toBeUndefined();
+  } finally {
+    test.dispose();
+  }
+});

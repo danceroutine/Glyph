@@ -5,6 +5,7 @@ export function useGlyphPlanState(state: GlyphPlanViewState, actions: GlyphPlanV
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
+  const [requested, setRequested] = useState(false);
   const busy = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -24,9 +25,21 @@ export function useGlyphPlanState(state: GlyphPlanViewState, actions: GlyphPlanV
       setPending(false);
     }
   };
+  const build = (newChat?: boolean) => {
+    if (state.building) return Promise.resolve();
+    return perform(async () => {
+      setRequested(true);
+      try {
+        await (newChat ? actions.build(true) : actions.build());
+      } finally {
+        setRequested(false);
+      }
+    });
+  };
   return {
     ...state,
     disabled: state.disabled || pending,
+    building: !!state.building || requested,
     error,
     todo,
     adding,
@@ -50,8 +63,8 @@ export function useGlyphPlanState(state: GlyphPlanViewState, actions: GlyphPlanV
           todos: state.plan.todos.map(item => (item.id === id ? { ...item, completed: !item.completed } : item)),
         }),
       ),
-    build: () => perform(() => actions.build()),
-    buildNew: () => perform(() => actions.build(true)),
+    build: () => build(),
+    buildNew: () => build(true),
     newAgent: () => perform(actions.newAgent),
     openChat: (id: string) => perform(() => actions.openChat(id)),
     openLink: (href: string) => {

@@ -29,7 +29,12 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
               {state.modelLabel}
             </span>
           )}
-          <GlyphPlanBuild disabled={state.disabled} build={state.build} buildNew={state.buildNew} />
+          <GlyphPlanBuild
+            disabled={state.disabled}
+            building={state.building}
+            build={state.build}
+            buildNew={state.buildNew}
+          />
         </div>
       </header>
       <main class={planStyles.main}>

@@ -45,6 +45,7 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
                   plans={plans}
                   actions={actions}
                   disabled={plansDisabled}
+                  {...(state.buildingPlanIds ? { buildingPlanIds: state.buildingPlanIds } : {})}
                 />
               )
             }
