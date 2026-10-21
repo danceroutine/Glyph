@@ -10,6 +10,7 @@ import {
   Circle,
   CircleAlert,
   CircleCheck,
+  CircleDashed,
   CircleQuestionMark,
   Pin,
   PinOff,
@@ -81,6 +82,7 @@ const styles = {
       overflow: 'hidden',
       textOverflow: 'ellipsis',
     },
+    '&&[data-draft]': { color: tokens.text.muted },
     '&&[aria-current="true"]': { color: tokens.list.selected.foreground },
     ':focus-visible': { outlineOffset: tokens.focus.inset },
   }),
@@ -122,6 +124,7 @@ const activityLabels: Record<GlyphChatActivity, string> = {
   [GlyphChatActivity.INTERRUPTED]: 'Interrupted',
   [GlyphChatActivity.FAILED]: 'Failed',
   [GlyphChatActivity.EMPTY]: 'No messages yet',
+  [GlyphChatActivity.DRAFT]: 'Draft',
 };
 
 function ActivityIcon({ activity }: { readonly activity: GlyphChatActivity }) {
@@ -138,6 +141,8 @@ function ActivityIcon({ activity }: { readonly activity: GlyphChatActivity }) {
       return <CircleAlert size={14} aria-hidden="true" />;
     case GlyphChatActivity.EMPTY:
       return <Circle size={14} aria-hidden="true" />;
+    case GlyphChatActivity.DRAFT:
+      return <CircleDashed size={14} aria-hidden="true" />;
   }
 }
 
@@ -177,6 +182,7 @@ export function GlyphChatHistory({
         aria-current={chat.selected ? 'true' : undefined}
         aria-label={chat.title}
         title={chat.title}
+        data-draft={chat.draft || undefined}
         disabled={navigationPending}
         onClick={() => openChat(chat.id)}
       >
@@ -191,33 +197,35 @@ export function GlyphChatHistory({
         </span>
         {chat.title}
       </Button>
-      <div class="chat-row-actions">
-        {!chat.archived && (
+      {!chat.draft && (
+        <div class="chat-row-actions">
+          {!chat.archived && (
+            <IconButton
+              appearance={ButtonAppearance.BORDERLESS_GHOST}
+              size={ButtonSize.SMALL}
+              iconSize={14}
+              type="button"
+              aria-label={`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`}
+              title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
+              onClick={() => pin(chat.id, !chat.pinned)}
+            >
+              {chat.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+            </IconButton>
+          )}
           <IconButton
             appearance={ButtonAppearance.BORDERLESS_GHOST}
             size={ButtonSize.SMALL}
             iconSize={14}
             type="button"
-            aria-label={`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`}
-            title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
-            onClick={() => pin(chat.id, !chat.pinned)}
+            disabled={newChatDisabled}
+            aria-label={`${chat.archived ? 'Unarchive' : 'Archive'} ${chat.title}`}
+            title={chat.archived ? 'Unarchive chat' : 'Archive chat'}
+            onClick={() => archive(chat.id, !chat.archived)}
           >
-            {chat.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+            {chat.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
           </IconButton>
-        )}
-        <IconButton
-          appearance={ButtonAppearance.BORDERLESS_GHOST}
-          size={ButtonSize.SMALL}
-          iconSize={14}
-          type="button"
-          disabled={newChatDisabled}
-          aria-label={`${chat.archived ? 'Unarchive' : 'Archive'} ${chat.title}`}
-          title={chat.archived ? 'Unarchive chat' : 'Archive chat'}
-          onClick={() => archive(chat.id, !chat.archived)}
-        >
-          {chat.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-        </IconButton>
-      </div>
+        </div>
+      )}
     </div>
   );
   return (

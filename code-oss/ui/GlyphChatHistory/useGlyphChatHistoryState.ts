@@ -12,6 +12,7 @@ export enum GlyphChatActivity {
   INTERRUPTED = 'interrupted',
   FAILED = 'failed',
   EMPTY = 'empty',
+  DRAFT = 'draft',
 }
 
 const GLYPH_RUN_STATUS_TO_GLYPH_CHAT_ACTIVITY: Record<GlyphRunStatus, GlyphChatActivity> = {
@@ -49,20 +50,39 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
   const [query, setQuery] = useState('');
   const search = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => search.current?.focus(), []);
+  const matches = (title: string) => title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const allChats = [...state.chats]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
-    .filter(chat => chat.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    .filter(chat => matches(chat.title))
     .map(chat => ({
       id: chat.id,
       archived: state.archivedChatIds?.includes(chat.id) ?? false,
       pinned: state.pinnedChatIds?.includes(chat.id) ?? false,
+      draft: false,
       title: chat.title,
       updatedAt: chat.updatedAt,
       selected: state.selectedChatId === chat.id,
       activity: toChatActivity(chat, state.runs),
     }));
+  const draft = state.newChatDraft;
+  const draftTitle = draft && `Draft: ${draft.text.trim().split('\n')[0]?.trim()}`;
+  const drafts =
+    draft && draftTitle && matches(draftTitle)
+      ? [
+          {
+            id: '',
+            archived: false,
+            pinned: false,
+            draft: true,
+            title: draftTitle,
+            updatedAt: draft.createdAt,
+            selected: state.selectedChatId === undefined,
+            activity: GlyphChatActivity.DRAFT,
+          },
+        ]
+      : [];
   const chats = allChats.filter(chat => !chat.archived);
-  const unpinned = chats.filter(chat => !chat.pinned);
+  const unpinned = [...drafts, ...chats.filter(chat => !chat.pinned)];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const yesterday = new Date(today);
@@ -88,14 +108,13 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
     setQuery,
     search,
     groups,
-    emptyMessage: chats.length ? undefined : query ? 'No matching chats.' : 'Your conversations will appear here.',
+    emptyMessage:
+      chats.length || drafts.length ? undefined : query ? 'No matching chats.' : 'Your conversations will appear here.',
     newChatDisabled: state.navigationPending || state.readOnly,
     navigationPending: !!state.navigationPending,
     newChat: () => {
       actions.newChat();
     },
-    openChat: (id: string) => {
-      void actions.openChat(id);
-    },
+    openChat: (id: string) => (id ? void actions.openChat(id) : actions.newChat()),
   };
 }

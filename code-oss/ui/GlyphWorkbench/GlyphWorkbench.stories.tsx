@@ -8,7 +8,12 @@ import {
   pendingProposals,
   workbenchStateFixture,
 } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
-import { userMessageFixture, usageFixture, conversationFixture } from '#code-oss/storybook/fixtures/MessageFixtures.ts';
+import {
+  userMessageFixture,
+  usageFixture,
+  conversationFixture,
+  fixtureCreatedAt,
+} from '#code-oss/storybook/fixtures/MessageFixtures.ts';
 
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
@@ -110,6 +115,7 @@ export const ChatHistoryStatuses: Story = {
         chatFixture({ id: 'failed', title: 'Fix the flaky shell test' }),
         chatFixture({ id: 'empty', title: 'New chat', turnCount: 0 }),
       ],
+      newChatDraft: { text: 'Get me a screenshot of the sidebar', createdAt: fixtureCreatedAt },
       runs: [
         statusRun('working', GlyphRunStatus.STREAMING),
         statusRun('question', GlyphRunStatus.WAITING_FOR_QUESTION),
