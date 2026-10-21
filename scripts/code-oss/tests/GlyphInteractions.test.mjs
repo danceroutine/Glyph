@@ -287,6 +287,84 @@ it('wires account and model choices and keeps filtered history open until explic
   }
 });
 
+it('shows whether each saved chat is working, awaiting input, completed, ended early, or empty', async () => {
+  const page = await pageForTest();
+  try {
+    await page.evaluate(() => {
+      const updatedAt = new Date().toISOString();
+      const chat = (id, turnCount = 1) => ({
+        id,
+        title: `${id} chat`,
+        accountProvider: 'provider',
+        accountId: 'a',
+        modelSlug: 'first',
+        updatedAt,
+        turnCount,
+      });
+      const run = (chatId, runId, status) => ({ chatId, runId, status, text: '', reasoning: '', tools: [] });
+      window.update({
+        selectedChatId: undefined,
+        status: 'ready',
+        chats: [
+          chat('working'),
+          chat('question'),
+          chat('approval'),
+          chat('completed'),
+          chat('cancelled'),
+          chat('interrupted'),
+          chat('failed'),
+          chat('unopened'),
+          chat('empty', 0),
+        ],
+        runs: [
+          run('working', 'earlier', 'completed'),
+          run('working', 'current', 'streaming'),
+          run('question', 'current', 'waiting_for_question'),
+          run('approval', 'current', 'waiting_for_approval'),
+          run('completed', 'current', 'completed'),
+          run('cancelled', 'current', 'cancelled'),
+          run('interrupted', 'current', 'interrupted'),
+          run('failed', 'earlier', 'completed'),
+          run('failed', 'current', 'failed'),
+        ],
+      });
+    });
+    await page.getByRole('button', { name: 'Chat history', exact: true }).click();
+    const status = (id, name) =>
+      page.getByRole('button', { name: `${id} chat`, exact: true }).getByRole('img', { name, exact: true });
+    await expect(status('working', 'Working')).toBeVisible();
+    await expect(status('question', 'Awaiting input')).toBeVisible();
+    await expect(status('approval', 'Awaiting input')).toBeVisible();
+    await expect(status('completed', 'Completed')).toBeVisible();
+    await expect(status('cancelled', 'Cancelled')).toBeVisible();
+    await expect(status('interrupted', 'Interrupted')).toBeVisible();
+    await expect(status('failed', 'Failed')).toBeVisible();
+    await expect(status('unopened', 'Completed')).toBeVisible();
+    await expect(status('empty', 'No messages yet')).toBeVisible();
+    await page.evaluate(
+      () => (document.getElementById('root').style.cssText += '; --vscode-editorError-foreground: rgb(241, 76, 76)'),
+    );
+    for (const [id, name] of [
+      ['cancelled', 'Cancelled'],
+      ['interrupted', 'Interrupted'],
+      ['failed', 'Failed'],
+    ])
+      await expect(status(id, name)).toHaveCSS('color', 'rgb(241, 76, 76)');
+    const pulse = status('working', 'Working').locator('span');
+    await expect(pulse).toHaveCSS('animation-iteration-count', 'infinite');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(pulse).toHaveCSS('animation-name', 'none');
+    await page.evaluate(() =>
+      window.update({
+        runs: [{ chatId: 'working', runId: 'current', status: 'completed', text: '', reasoning: '', tools: [] }],
+      }),
+    );
+    await expect(status('working', 'Completed')).toBeVisible();
+  } finally {
+    await page.close();
+  }
+});
+
 it('spins the model retry arrows while loading and permits another attempt after failure', async () => {
   const page = await pageForTest();
   try {

@@ -94,6 +94,7 @@ export const tokens = {
     layer: 2,
     drawerWidth: 280,
     columnWidth: 260,
+    alertForeground: codeOss.editorError.foreground,
   },
 } as const;
 

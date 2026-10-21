@@ -12,6 +12,7 @@ import { userMessageFixture, usageFixture, conversationFixture } from '#code-oss
 
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
+import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { WiredGlyphWorkbench } from './GlyphWorkbench.wired.tsx';
 import { InteractiveWorkbench } from '#code-oss/storybook/InteractiveWorkbench.tsx';
 
@@ -88,6 +89,35 @@ const expandHistory = async ({ canvasElement }: { canvasElement: HTMLElement }) 
 };
 export const ChatHistory: Story = {
   args: { state: { ...navigationState, selectedChatId: 'settings', transcript: conversationFixture() } },
+  play: expandHistory,
+};
+const statusRun = (chatId: string, status: GlyphRunStatus) => ({
+  chatId,
+  runId: `${chatId}-run`,
+  status,
+  text: '',
+  reasoning: '',
+  tools: [],
+});
+export const ChatHistoryStatuses: Story = {
+  args: {
+    state: {
+      ...navigationState,
+      chats: [
+        chatFixture({ id: 'working', title: 'Refactor the session store' }),
+        chatFixture({ id: 'question', title: 'Choose a migration strategy' }),
+        chatFixture({ id: 'completed', title: 'Review the settings migration' }),
+        chatFixture({ id: 'failed', title: 'Fix the flaky shell test' }),
+        chatFixture({ id: 'empty', title: 'New chat', turnCount: 0 }),
+      ],
+      runs: [
+        statusRun('working', GlyphRunStatus.STREAMING),
+        statusRun('question', GlyphRunStatus.WAITING_FOR_QUESTION),
+        statusRun('completed', GlyphRunStatus.COMPLETED),
+        statusRun('failed', GlyphRunStatus.FAILED),
+      ],
+    },
+  },
   play: expandHistory,
 };
 export const NewChatSetup: Story = { args: { state: navigationState }, play: expandHistory };
