@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
 const { chromium, expect } = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url))(
   '@playwright/test',
 );
@@ -22,6 +23,7 @@ beforeAll(async () => {
     write: false,
     format: 'iife',
     platform: 'browser',
+    ...coverageBuildOptions,
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   script = result.outputFiles[0].text;
@@ -29,7 +31,7 @@ beforeAll(async () => {
 }, 30000);
 afterAll(async () => browser?.close());
 async function mount() {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   await page.clock.install({ time: new Date('2026-10-18T11:59:59Z') });
   await page.clock.pauseAt(new Date('2026-10-18T12:00:00Z'));
   await page.setContent('<div id="root" style="width:600px"></div>');

@@ -9,6 +9,6 @@ export function WiredGlyphAnnotations({
   readonly composer: GlyphComposerState;
   readonly disabled: boolean;
 }) {
-  const state = useGlyphAnnotationsState(composer, disabled);
+  const state = useGlyphAnnotationsState({ composer, disabled });
   return createPortal(<GlyphAnnotations {...state} />, document.querySelector('.monaco-workbench') ?? document.body);
 }

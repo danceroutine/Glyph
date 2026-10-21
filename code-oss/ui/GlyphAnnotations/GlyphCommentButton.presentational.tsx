@@ -71,12 +71,12 @@ export function GlyphCommentButton({
       type="button"
       class={`glyph-annotation-marker ${styles.button} ${position ? styles.positioned : ''}`}
       style={position ? { left: `${left}px`, top: `${position.y}px` } : {}}
-      aria-label={order ? `Edit annotation ${order}` : 'Comment on selection'}
+      aria-label={`Edit annotation ${order}`}
       onMouseDown={event => event.preventDefault()}
       onClick={open}
     >
       <MessageCircle aria-hidden="true" strokeWidth={1.8} />
-      {order && <span>{order}</span>}
+      <span>{order}</span>
     </Button>
   );
 }

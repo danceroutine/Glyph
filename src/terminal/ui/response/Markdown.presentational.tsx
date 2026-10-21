@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import { Lexer } from 'marked';
 import type { Tokens } from 'marked';
+import { decodeHTMLStrict } from 'entities';
 import stringWidth from 'string-width';
 import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
 import { inlineMarkdownText } from './parseInlineMarkdown.ts';
@@ -110,34 +111,40 @@ function renderBlock(token: BlockToken, key: number): ReactNode {
   }
 }
 
-function InlineTokens({ tokens }: { tokens: readonly InlineToken[] }): ReactElement {
-  return <>{tokens.map((token, index) => renderInline(token, index))}</>;
+function InlineTokens({
+  tokens,
+  decodeEntities = true,
+}: {
+  tokens: readonly InlineToken[];
+  decodeEntities?: boolean;
+}): ReactElement {
+  return <>{tokens.map((token, index) => renderInline(token, index, decodeEntities))}</>;
 }
 
-function renderInline(token: InlineToken, key: number): ReactNode {
+function renderInline(token: InlineToken, key: number, decodeEntities: boolean): ReactNode {
   switch (token.type) {
     case 'strong':
       return (
         <Text key={key} bold>
-          <InlineTokens tokens={token.tokens as InlineToken[]} />
+          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities} />
         </Text>
       );
     case 'em':
       return (
         <Text key={key} italic>
-          <InlineTokens tokens={token.tokens as InlineToken[]} />
+          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities} />
         </Text>
       );
     case 'del':
       return (
         <Text key={key} strikethrough>
-          <InlineTokens tokens={token.tokens as InlineToken[]} />
+          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities} />
         </Text>
       );
     case 'link':
       return (
         <Text key={key} underline>
-          <InlineTokens tokens={token.tokens as InlineToken[]} />
+          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities && !token.autolink} />
         </Text>
       );
     case 'codespan':
@@ -149,7 +156,7 @@ function renderInline(token: InlineToken, key: number): ReactNode {
     case 'image':
       return (
         <Text key={key} dimColor>
-          {sanitizeText(token.text)}
+          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities} />
         </Text>
       );
     case 'br':
@@ -159,7 +166,8 @@ function renderInline(token: InlineToken, key: number): ReactNode {
     case 'escape':
       return sanitizeText(token.text);
     case 'text':
-      return sanitizeText(token.text);
+      // Marked decodes numeric references already; raw text avoids decoding twice.
+      return sanitizeText(decodeEntities && !token.escaped ? decodeHTMLStrict(token.raw) : token.text);
   }
 }
 

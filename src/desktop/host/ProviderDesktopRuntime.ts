@@ -66,6 +66,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     string,
     { readonly chatId: string; readonly label: string; readonly context: ChatContextEvent }
   >();
+  /** Failed checkpoints may retry on an owner command, never in the completion drain. */
+  private readonly deferredShellEvents = new Set<string>();
   private readonly previousShells = new Map<string, ShellSessionSnapshot>();
   private readonly stoppingShells = new Set<string>();
   private readonly unsubscribeWakes: () => void;
@@ -147,17 +149,18 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   /** Dispatch commands without holding the request acknowledgement open for an entire model turn. */
   handle(command: GlyphRuntimeCommand, context?: { readonly windowId?: string }): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('The workspace runtime has stopped.'));
-    if (!context?.windowId || context.windowId === this.options.ownerWindowId) this.connected = true;
+    const ownerCommand = !context?.windowId || context.windowId === this.options.ownerWindowId;
+    if (ownerCommand) this.connected = true;
     const pending = this.dispatch(command);
     this.commands.add(pending);
     void pending.then(
       () => {
         this.commands.delete(pending);
-        this.drainShellEvents();
+        this.drainShellEvents(ownerCommand);
       },
       () => {
         this.commands.delete(pending);
-        this.drainShellEvents();
+        this.drainShellEvents(ownerCommand);
       },
     );
     return pending;
@@ -403,7 +406,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               ...command,
               options: {
                 ...command.options,
-                mode: command.options?.mode ?? session.summary.mode ?? AgentMode.default.id,
+                mode: command.options?.mode ?? session.summary.mode,
               },
             },
             session,
@@ -470,7 +473,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         const result = command.answer as QuestionFormResult;
         const response = {
           id: request.id,
-          answers: (request.questions ?? [{ id: request.id, prompt: request.prompt, options: [] }]).map(question => {
+          answers: request.questions!.map(question => {
             const answer = result.answers.find(value => value.questionId === question.id)!;
             return {
               question: question.prompt,
@@ -729,6 +732,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       this.publishUsage(session);
       this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
     } catch (error) {
+      if (shellEvent && this.pendingShellEvents.has(shellEvent.context.id)) {
+        this.deferredShellEvents.add(shellEvent.context.id);
+      }
       const run = this.runs.get(command.runId)!;
       // A failed or cancelled turn must not leave an actionable approval behind.
       const { question: _question, approval: _approval, ...settled } = run;
@@ -909,15 +915,21 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   }
 
   /** Reserve the same per-chat turn lock before any asynchronous context persistence. */
-  private drainShellEvents(): void {
+  private drainShellEvents(retryDeferred = false): void {
     if (this.disposed || !this.connected) return;
     for (const [id, event] of this.pendingShellEvents) {
       if (event.context.type === 'shell_wake' && !this.options.shellSessions.peekPendingWake(wake => wake.id === id)) {
         this.pendingShellEvents.delete(id);
+        this.deferredShellEvents.delete(id);
         continue;
       }
       const runId = `shell-event:${id}`;
-      if (this.active.has(event.chatId) || this.historyChanges.has(event.chatId) || this.runs.has(runId)) continue;
+      if (
+        this.active.has(event.chatId) ||
+        this.historyChanges.has(event.chatId) ||
+        (this.runs.has(runId) && !(retryDeferred && this.deferredShellEvents.has(id)))
+      )
+        continue;
       let session: ChatSession;
       try {
         session = this.session(event.chatId);
@@ -926,6 +938,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       const controller = new AbortController();
       const steering = new ChatSteeringQueue();
+      this.deferredShellEvents.delete(id);
       const completion = Promise.resolve().then(() =>
         this.send(
           {
@@ -934,7 +947,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
             runId,
             text: event.label,
             attachments: [],
-            options: { mode: session.summary.mode ?? AgentMode.default.id },
+            options: { mode: session.summary.mode },
           },
           session,
           controller.signal,

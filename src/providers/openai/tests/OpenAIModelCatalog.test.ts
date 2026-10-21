@@ -71,5 +71,49 @@ describe(OpenAIModelCatalog, () => {
         }),
       );
     });
+
+    it('reports unsuccessful discovery responses', async () => {
+      const catalog = new OpenAIModelCatalog(configuration, {
+        get: vi.fn(async () => ({ ok: false, status: 403, headers: new Headers(), body: {} })),
+        post: vi.fn(),
+      });
+
+      await expect(catalog.list('oauth-token')).rejects.toThrow(
+        'Model discovery returned HTTP 403. Check ChatGPT plan permissions or try again later. No API-key fallback is available.',
+      );
+    });
+
+    it('rejects catalogs without a model list', async () => {
+      const catalog = new OpenAIModelCatalog(configuration, {
+        get: vi.fn(async () => ({ ok: true, status: 200, headers: new Headers(), body: { data: [] } })),
+        post: vi.fn(),
+      });
+
+      await expect(catalog.list('oauth-token')).rejects.toThrow(
+        'Unexpected subscription model catalog. Expected models[].',
+      );
+    });
+
+    it('rejects catalogs without selectable models', async () => {
+      const catalog = new OpenAIModelCatalog(configuration, {
+        get: vi.fn(async () => ({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          body: {
+            models: [
+              { slug: 'hidden', display_name: 'Hidden', visibility: 'hide' },
+              { slug: 7, display_name: 'Numeric', visibility: 'list' },
+              { slug: 'unnamed', visibility: 'list' },
+            ],
+          },
+        })),
+        post: vi.fn(),
+      });
+
+      await expect(catalog.list('oauth-token')).rejects.toThrow(
+        'No selectable models are available to this ChatGPT account.',
+      );
+    });
   });
 });

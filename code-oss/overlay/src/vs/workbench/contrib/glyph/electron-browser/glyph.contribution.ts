@@ -1,11 +1,11 @@
 import { GlyphAgentReviewScope, glyphAgentReviewLabels } from '#glyph/workbench/GlyphAgentReview.js';
-import { GlyphAgentReviewPane } from '../browser/GlyphAgentReviewPane.js';
-import { GlyphBuiltinChat } from '../browser/GlyphBuiltinChat.js';
+import { GlyphAgentReviewPane } from '#vs/workbench/contrib/glyph/browser/GlyphAgentReviewPane.js';
+import { GlyphBuiltinChat } from '#vs/workbench/contrib/glyph/browser/GlyphBuiltinChat.js';
 import {
   GlyphDiagnosticHover,
   GlyphTerminalSelectionActions,
   useGlyphContext,
-} from '../browser/GlyphNativeContextActions.js';
+} from '#vs/workbench/contrib/glyph/browser/GlyphNativeContextActions.js';
 import { HoverParticipantRegistry } from '#vs/editor/contrib/hover/browser/hoverTypes.js';
 import { WorkbenchPhase, registerWorkbenchContribution2 } from '#vs/workbench/common/contributions.js';
 import { VIEWLET_ID as SCM_VIEWLET_ID } from '#vs/workbench/contrib/scm/common/scm.js';
@@ -235,8 +235,9 @@ registerAction2(
     }
     async run(accessor: ServicesAccessor): Promise<void> {
       const glyph = accessor.get(GlyphWorkbenchService);
+      const views = accessor.get(IViewsService);
       await glyph.attachIdeContext();
-      await accessor.get(IViewsService).openView(GlyphViewPane.ID, true);
+      await views.openView(GlyphViewPane.ID, true);
       glyph.composer.focus();
     }
   },

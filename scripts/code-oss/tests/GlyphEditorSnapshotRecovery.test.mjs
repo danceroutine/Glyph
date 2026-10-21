@@ -50,6 +50,10 @@ beforeAll(async () => {
                 service as IUserDataProfileService, service as IInstantiationService };
         export const Progress = { None: {} };
         export class BulkTextEdits {}
+              export class ResourceFileEdit {
+                constructor(oldResource, newResource, options) { Object.assign(this, { oldResource, newResource, options }); }
+              }
+              export const UNDO_REDO_SOURCE = { id: 1 };
               export const EndOfLineSequence = { LF: 0, CRLF: 1 };
         export class ResourceTextEdit {
                 constructor(resource, edit, version) { Object.assign(this, { resource, edit, version }); }

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { beforeAll, afterAll, it } from 'vitest';
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
 const { chromium, expect } = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url))(
   '@playwright/test',
 );
@@ -32,6 +33,7 @@ beforeAll(async () => {
       write: false,
       format: 'iife',
       platform: 'browser',
+      ...coverageBuildOptions,
       define: { 'process.env.NODE_ENV': '"production"' },
       tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
     })
@@ -43,7 +45,7 @@ afterAll(async () => {
 });
 
 it('opens upward like a drawer with keyboard access, keeps items read-only, and derives live counts', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });

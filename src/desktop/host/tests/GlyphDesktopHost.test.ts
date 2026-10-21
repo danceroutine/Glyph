@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#src/desktop/protocol/GlyphDesktopProtocolVersion.js';
 import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphHostStatus } from '#src/desktop/protocol/events/GlyphHostStatus.js';
@@ -554,6 +554,473 @@ describe(GlyphDesktopHost, () => {
     expect(fixture.runtime.connectionLost).toHaveBeenCalledWith('owner');
     expect(fixture.runtime.dispose).toHaveBeenCalledTimes(1);
   });
+
+  it('names an unknown owner when a read-only window of an unowned workspace tries to change it', async () => {
+    const fixture = new HostFixture();
+    const connection = {
+      identity: peer,
+      attached: true,
+      ready: true,
+      pendingAttachments: 0,
+      trusted: true,
+      readOnly: true,
+    };
+
+    const events = await (
+      fixture.host as unknown as {
+        dispatch(connection: unknown, requestId: string, command: GlyphRuntimeCommand): Promise<GlyphHostEvent[]>;
+      }
+    ).dispatch(connection, 'mutate', { type: GlyphWorkbenchCommandType.CANCEL_RUN, chatId: 'chat', runId: 'run' });
+
+    expect(events).toEqual([
+      {
+        type: GlyphHostEventType.ERROR,
+        requestId: 'mutate',
+        error: {
+          code: 'WORKSPACE_BUSY',
+          message: "Window unknown owns this workspace's Glyph session.",
+          retryable: true,
+        },
+      },
+    ]);
+    expect(fixture.runtime.handle).not.toHaveBeenCalled();
+  });
+
+  it('reports an unavailable runtime to an attached window whose workspace has none', async () => {
+    const fixture = new HostFixture();
+    const connection = {
+      identity: owner,
+      attached: true,
+      ready: true,
+      pendingAttachments: 0,
+      trusted: true,
+      readOnly: false,
+    };
+
+    const events = await (
+      fixture.host as unknown as {
+        dispatch(connection: unknown, requestId: string, command: GlyphRuntimeCommand): Promise<GlyphHostEvent[]>;
+      }
+    ).dispatch(connection, 'list', { type: GlyphWorkbenchCommandType.LIST_CHATS });
+
+    expect(events).toEqual([
+      {
+        type: GlyphHostEventType.ERROR,
+        requestId: 'list',
+        error: {
+          code: 'HOST_UNAVAILABLE',
+          message: 'The Glyph workspace runtime is unavailable.',
+          retryable: true,
+        },
+      },
+    ]);
+    expect(fixture.runtime.handle).not.toHaveBeenCalled();
+  });
+
+  describe(GlyphDesktopHost.prototype.connect, () => {
+    it('refuses connections once the host has stopped', async () => {
+      const fixture = new HostFixture();
+      await fixture.host.dispose();
+      expect(() => fixture.connect('owner', owner)).toThrow('The Glyph desktop host has stopped.');
+    });
+
+    it('refuses a connection id that is already registered', () => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      expect(() => fixture.connect('owner', peer)).toThrow('Connection owner is already registered.');
+    });
+
+    it('refuses a second live connection for the same window', () => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      expect(() => fixture.connect('owner-again', owner)).toThrow(
+        'Window owner already has an active Glyph connection.',
+      );
+    });
+  });
+
+  describe(GlyphDesktopHost.prototype.receive, () => {
+    it('rejects requests from an unknown connection', async () => {
+      const fixture = new HostFixture();
+      await expect(
+        fixture.host.receive('missing', request(owner, 'list', { type: GlyphWorkbenchCommandType.LIST_CHATS })),
+      ).rejects.toThrow('Unknown desktop connection: missing');
+    });
+
+    it.each([
+      ['profileId', 'The request profile does not match its connection.'],
+      ['workspaceId', 'The request workspace does not match its connection.'],
+    ])('rejects a request with a spoofed %s', async (field, message) => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      await fixture.host.receive('owner', {
+        ...request(owner, 'spoof', { type: GlyphWorkbenchCommandType.LIST_CHATS }),
+        [field]: 'other',
+      });
+      expect(fixture.events('owner').map(envelope => envelope.event)).toEqual([
+        {
+          type: GlyphHostEventType.ERROR,
+          requestId: 'spoof',
+          error: { code: 'UNAUTHORIZED', message, retryable: false },
+        },
+      ]);
+    });
+
+    it('reports a snapshot request made before any workspace is attached', async () => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      await fixture.receive('owner', owner, 'snapshot', {
+        type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+        afterSequence: 0,
+      });
+      expect(fixture.events('owner').map(envelope => envelope.event)).toEqual([
+        {
+          type: GlyphHostEventType.ERROR,
+          requestId: 'snapshot',
+          error: { code: 'INVALID_REQUEST', message: 'The Glyph workspace runtime is unavailable.', retryable: true },
+        },
+      ]);
+    });
+
+    it('reports non-error runtime failures as text', async () => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      await fixture.receive('owner', owner, 'attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: true,
+      });
+      fixture.runtime.handle.mockRejectedValueOnce('runtime busy');
+      await fixture.receive('owner', owner, 'list', { type: GlyphWorkbenchCommandType.LIST_CHATS });
+      expect(fixture.events('owner').at(-1)?.event).toEqual({
+        type: GlyphHostEventType.ERROR,
+        requestId: 'list',
+        error: { code: 'INVALID_REQUEST', message: 'runtime busy', retryable: true },
+      });
+      await fixture.host.dispose();
+    });
+
+    it('lets a command broadcast events to every attached window of its workspace', async () => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      fixture.connect('peer', peer);
+      const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+      await fixture.receive('owner', owner, 'attach-owner', attach);
+      await fixture.receive('peer', peer, 'attach-peer', attach);
+      fixture.runtime.handle.mockImplementationOnce(async (_command, context) => {
+        context?.emit({ type: GlyphHostEventType.HOST_STATUS, status: GlyphHostStatus.READY, message: 'from command' });
+      });
+      await fixture.receive('owner', owner, 'list', { type: GlyphWorkbenchCommandType.LIST_CHATS });
+      expect(fixture.runtime.handle).toHaveBeenCalledWith(
+        { type: GlyphWorkbenchCommandType.LIST_CHATS },
+        { windowId: 'owner', signal: expect.any(AbortSignal), emit: expect.any(Function) },
+      );
+      for (const connectionId of ['owner', 'peer'])
+        expect(fixture.events(connectionId).map(envelope => envelope.event)).toContainEqual({
+          type: GlyphHostEventType.HOST_STATUS,
+          status: GlyphHostStatus.READY,
+          message: 'from command',
+        });
+      await fixture.host.dispose();
+    });
+
+    it('gives up on a snapshot whose state keeps changing during capture', async () => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      await fixture.receive('owner', owner, 'attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: true,
+      });
+      const snapshot = vi.spyOn(fixture.runtime, 'snapshot').mockImplementation(async () => {
+        fixture.runtime.emit({ type: GlyphHostEventType.HOST_STATUS, status: GlyphHostStatus.READY });
+        return { accounts: [], models: [], chats: [], runs: [], proposals: [] };
+      });
+      await fixture.receive('owner', owner, 'snapshot', {
+        type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+        afterSequence: 0,
+      });
+      expect(snapshot).toHaveBeenCalledTimes(8);
+      expect(fixture.events('owner').at(-1)?.event).toEqual({
+        type: GlyphHostEventType.ERROR,
+        requestId: 'snapshot',
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Workspace state changed during snapshot capture. Retry the snapshot request.',
+          retryable: true,
+        },
+      });
+      await fixture.host.dispose();
+    });
+
+    it('reports a snapshot interrupted by detaching the workspace', async () => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      await fixture.receive('owner', owner, 'attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: true,
+      });
+      let finish!: (state: GlyphRuntimeSnapshot) => void;
+      vi.spyOn(fixture.runtime, 'snapshot').mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            finish = resolve;
+          }),
+      );
+      const capturing = fixture.receive('owner', owner, 'snapshot', {
+        type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+        afterSequence: 0,
+      });
+      await fixture.receive('owner', owner, 'detach', { type: GlyphWorkbenchCommandType.DETACH });
+      finish({ accounts: [], models: [], chats: [], runs: [], proposals: [] });
+      await capturing;
+      expect(fixture.events('owner').at(-1)?.event).toEqual({
+        type: GlyphHostEventType.ERROR,
+        requestId: 'snapshot',
+        error: { code: 'INVALID_REQUEST', message: 'The workspace detached during snapshot capture.', retryable: true },
+      });
+    });
+
+    it('acknowledges a detach from a window that never attached', async () => {
+      const fixture = new HostFixture();
+      fixture.connect('peer', peer);
+      await fixture.receive('peer', peer, 'detach', { type: GlyphWorkbenchCommandType.DETACH });
+      expect(fixture.events('peer').map(envelope => envelope.event)).toEqual([
+        { type: GlyphHostEventType.COMMAND_RESULT, requestId: 'detach', ok: true },
+      ]);
+      expect(fixture.runtime.connectionLost).not.toHaveBeenCalled();
+    });
+
+    it('keeps the workspace running when a read-only peer detaches', async () => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      fixture.connect('peer', peer);
+      const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+      await fixture.receive('owner', owner, 'attach-owner', attach);
+      await fixture.receive('peer', peer, 'attach-peer', attach);
+      await fixture.receive('peer', peer, 'detach', { type: GlyphWorkbenchCommandType.DETACH });
+      expect(fixture.runtime.connectionLost).toHaveBeenCalledExactlyOnceWith('peer');
+      expect(fixture.runtime.dispose).not.toHaveBeenCalled();
+      await fixture.receive('owner', owner, 'list', { type: GlyphWorkbenchCommandType.LIST_CHATS });
+      expect(fixture.runtime.handle).toHaveBeenCalledOnce();
+      await fixture.host.dispose();
+    });
+
+    it('only notifies windows of the detached workspace', async () => {
+      const fixture = new HostFixture();
+      const elsewhere = { ...peer, workspaceId: 'elsewhere' };
+      fixture.connect('owner', owner);
+      fixture.connect('elsewhere', elsewhere);
+      await fixture.receive('owner', owner, 'attach-owner', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: true,
+      });
+      await fixture.receive('elsewhere', elsewhere, 'attach-elsewhere', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: [{ name: 'other', uri: 'file:///other', canonicalPath: '/other' }],
+        trusted: true,
+      });
+      await fixture.receive('owner', owner, 'detach', { type: GlyphWorkbenchCommandType.DETACH });
+      expect(fixture.events('owner').map(envelope => envelope.event)).toContainEqual({
+        type: GlyphHostEventType.HOST_STATUS,
+        status: GlyphHostStatus.DISCONNECTED,
+        message: 'The owning window detached.',
+      });
+      expect(
+        fixture
+          .events('elsewhere')
+          .some(
+            envelope =>
+              envelope.event.type === GlyphHostEventType.HOST_STATUS &&
+              envelope.event.status === GlyphHostStatus.DISCONNECTED,
+          ),
+      ).toBe(false);
+      await fixture.host.dispose();
+    });
+
+    it('refuses a peer whose attachment completes after the owner abandoned initialization', async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const fixture = new HostFixture();
+      let initialize!: (runtime: GlyphDesktopWorkspaceRuntime) => void;
+      fixture.factory.create.mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            initialize = resolve;
+          }),
+      );
+      let finishStop!: () => void;
+      fixture.runtime.dispose.mockImplementationOnce(
+        () =>
+          new Promise<void>(resolve => {
+            finishStop = resolve;
+          }),
+      );
+      fixture.connect('owner', owner);
+      fixture.connect('peer', peer);
+      const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+      const owning = fixture.receive('owner', owner, 'attach-owner', attach);
+      const peering = fixture.receive('peer', peer, 'attach-peer', attach);
+      await fixture.host.disconnect('owner');
+      await vi.advanceTimersByTimeAsync(30_000);
+      initialize(fixture.runtime);
+      await Promise.all([owning, peering]);
+      expect(fixture.events('peer').map(envelope => envelope.event)).toEqual([
+        {
+          type: GlyphHostEventType.HOST_STATUS,
+          status: GlyphHostStatus.DISCONNECTED,
+          message: 'The owning window detached.',
+        },
+        {
+          type: GlyphHostEventType.ERROR,
+          requestId: 'attach-peer',
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'The owning window disconnected during workspace initialization.',
+            retryable: true,
+          },
+        },
+      ]);
+      await vi.waitFor(() => expect(fixture.runtime.dispose).toHaveBeenCalledOnce());
+      finishStop();
+      await fixture.host.dispose();
+    });
+
+    it('releases an abandoned owner whose runtime initialization then fails', async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const fixture = new HostFixture();
+      let fail!: (error: Error) => void;
+      fixture.factory.create.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            fail = reject;
+          }),
+      );
+      fixture.connect('owner', owner);
+      const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+      const owning = fixture.receive('owner', owner, 'attach-owner', attach);
+      await fixture.host.disconnect('owner');
+      await vi.advanceTimersByTimeAsync(30_000);
+      fail(new Error('Initialization failed'));
+      await owning;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.runtime.dispose).not.toHaveBeenCalled();
+      fixture.connect('replacement', peer);
+      await fixture.receive('replacement', peer, 'attach-replacement', attach);
+      expect(
+        fixture.events('replacement').find(envelope => envelope.event.type === GlyphHostEventType.INITIAL_STATE)?.event,
+      ).toMatchObject({ state: { ownerWindowId: peer.windowId, readOnly: false } });
+      await fixture.host.dispose();
+    });
+
+    it('joins the stop already in progress when a detaching owner also expires', async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const fixture = new HostFixture();
+      let finishStop!: () => void;
+      fixture.runtime.dispose.mockImplementationOnce(
+        () =>
+          new Promise<void>(resolve => {
+            finishStop = resolve;
+          }),
+      );
+      fixture.connect('owner', owner);
+      await fixture.receive('owner', owner, 'attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: true,
+      });
+      const detaching = fixture.receive('owner', owner, 'detach', { type: GlyphWorkbenchCommandType.DETACH });
+      await vi.waitFor(() => expect(fixture.runtime.dispose).toHaveBeenCalledOnce());
+      await fixture.host.disconnect('owner');
+      await vi.advanceTimersByTimeAsync(30_000);
+      finishStop();
+      await detaching;
+      expect(fixture.runtime.dispose).toHaveBeenCalledOnce();
+      expect(fixture.runtime.connectionLost).toHaveBeenCalledOnce();
+      await fixture.host.dispose();
+    });
+
+    it('refuses a replacement writer while cleanup of an abandoned window has failed', async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const fixture = new HostFixture();
+      fixture.runtime.dispose.mockRejectedValueOnce(new Error('Stop failed'));
+      fixture.connect('owner', owner);
+      const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+      await fixture.receive('owner', owner, 'attach-owner', attach);
+      await fixture.host.disconnect('owner');
+      await vi.advanceTimersByTimeAsync(30_000);
+      fixture.connect('replacement', peer);
+      await fixture.receive('replacement', peer, 'attach-replacement', attach);
+      expect(fixture.events('replacement').map(envelope => envelope.event)).toEqual([
+        {
+          type: GlyphHostEventType.ERROR,
+          requestId: 'attach-replacement',
+          error: { code: 'INVALID_REQUEST', message: 'Stop failed', retryable: true },
+        },
+      ]);
+      await fixture.host.dispose();
+    });
+  });
+
+  describe(GlyphDesktopHost.prototype.disconnect, () => {
+    it('ignores unknown connections', async () => {
+      const fixture = new HostFixture();
+      await expect(fixture.host.disconnect('missing')).resolves.toBeUndefined();
+    });
+  });
+
+  describe(GlyphDesktopHost.prototype.dispose, () => {
+    it('cancels reconnect grace periods of disconnected windows', async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      await fixture.receive('owner', owner, 'attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: true,
+      });
+      await fixture.host.disconnect('owner');
+      await fixture.host.dispose();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fixture.runtime.connectionLost).toHaveBeenCalledOnce();
+      expect(fixture.runtime.dispose).toHaveBeenCalledOnce();
+    });
+
+    it('reports every runtime that fails to stop', async () => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      await fixture.receive('owner', owner, 'attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: true,
+      });
+      const failure = new Error('Stop failed');
+      fixture.runtime.dispose.mockRejectedValueOnce(failure);
+      await expect(fixture.host.dispose()).rejects.toThrow(
+        expect.objectContaining({
+          name: 'AggregateError',
+          message: 'One or more desktop workspace runtimes failed to stop.',
+          errors: [failure],
+        }),
+      );
+    });
+  });
 });
 
 class HostFixture {
@@ -593,7 +1060,7 @@ class HostFixture {
 
 class FakeRuntime implements GlyphDesktopWorkspaceRuntime {
   emit: (event: GlyphHostEvent) => void = () => {};
-  readonly handle = vi.fn(async (_command: GlyphRuntimeCommand) => {
+  readonly handle = vi.fn(async (_command: GlyphRuntimeCommand, _context?: GlyphRuntimeContext) => {
     this.emit({ type: GlyphHostEventType.HOST_STATUS, status: GlyphHostStatus.READY });
   });
   readonly connectionLost = vi.fn(async () => {
@@ -605,6 +1072,8 @@ class FakeRuntime implements GlyphDesktopWorkspaceRuntime {
     return Promise.resolve({ accounts: [], models: [], chats: [], runs: [], proposals: [] });
   }
 }
+
+type GlyphRuntimeContext = Parameters<GlyphDesktopWorkspaceRuntime['handle']>[1];
 
 function request(
   identity: GlyphConnectionIdentity,

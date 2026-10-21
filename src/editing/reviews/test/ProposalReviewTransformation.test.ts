@@ -31,6 +31,63 @@ const configuration: EditingConfiguration = {
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
 
 describe(ProposalReviewManager, () => {
+  it.each(['recovery', 'acceptance'])(
+    'preserves conflict evidence when the second synchronization rebase fails during %s',
+    async action => {
+      const { root, manager, service, workspace, store } = await fixture('first\nmiddle\n   \ncontext\nlast\n');
+      const replace = workspace.replace.bind(workspace);
+      vi.spyOn(workspace, 'replace').mockImplementation((path, revision, text, bom) =>
+        replace(path, revision, text.replace('   \n', '\n'), bom),
+      );
+      const proposal = await proposeLineChanges(service, workspace, [
+        { line: 0, expected: 'first', replacement: 'FIRST\nEXTRA' },
+        { line: 2, expected: '   ', replacement: 'cleaned' },
+        { line: 4, expected: 'last', replacement: 'LAST' },
+      ]);
+      await manager.stage(proposal);
+      const file = proposal.files[0]!;
+      expect(file.items).toHaveLength(3);
+      await manager.accept(file.items[0]!.id);
+      expect(file.applicability).toBe(EditApplicabilityState.STALE);
+      expect(file.base!.revision).not.toBe(file.current!.revision);
+      // Reject the hunk invalidated by editor cleanup. The remaining hunk can
+      // move from the original base to the observed result of the accepted edit.
+      await manager.reject(file.items[1]!.id);
+      const before = structuredClone(file);
+      const live = file.current!.text.replace('last\n', 'human\n');
+      await writeFile(join(root, 'file.txt'), live);
+
+      let observed = file;
+      if (action === 'recovery') {
+        const recovered = new ProposalReviewManager(workspace, store);
+        await recovered.initialize();
+        observed = recovered.activeReviews[0]!.files[0]!;
+      } else {
+        await expect(manager.accept(file.items[2]!.id)).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      }
+      expect(observed.applicability).toBe(EditApplicabilityState.STALE);
+      expect(observed.base).toEqual(before.base);
+      expect(observed.proposed).toEqual(before.proposed);
+      expect(observed.current).toEqual(before.current);
+      expect(observed.items).toEqual(before.items);
+      expect((await workspace.read('file.txt')).text).toBe(live);
+      const restarted = new ProposalReviewManager(workspace, store);
+      await restarted.initialize();
+      expect(restarted.activeReviews[0]!.files[0]!.base).toEqual(before.base);
+      if (action === 'recovery') {
+        await restarted.rejectAll();
+        expect((await workspace.read('file.txt')).text).toBe(live);
+      } else {
+        // A later compatible snapshot can still complete both rebases and apply
+        // the pending hunk at its new offset without repeating the accepted edit.
+        const compatible = `human heading\n${before.current!.text}`;
+        await writeFile(join(root, 'file.txt'), compatible);
+        await restarted.accept(file.items[2]!.id);
+        expect((await workspace.read('file.txt')).text).toBe(compatible.replace('last\n', 'LAST\n'));
+      }
+    },
+  );
+
   it('recovers an insertion collapsed onto a replacement boundary as stale without modifying either pending edit', async () => {
     const { root, manager, service, workspace, store } = await fixture('first\nmiddle\nlast\n');
     const proposal = await proposeLineChanges(service, workspace, [

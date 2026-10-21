@@ -15,7 +15,7 @@ import { INotificationService } from '#vs/platform/notification/common/notificat
 import { IKeybindingService } from '#vs/platform/keybinding/common/keybinding.js';
 import { IViewsService } from '#vs/workbench/services/views/common/viewsService.js';
 import { ITerminalService, ITerminalInstance } from '#vs/workbench/contrib/terminal/browser/terminal.js';
-import { GlyphWorkbenchService } from '../common/GlyphWorkbenchService.js';
+import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
 import { GlyphViewPane } from './GlyphViewPane.js';
 import { mountGlyphContextButton } from './ui/mountGlyphWorkbench.js';
 import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
@@ -44,7 +44,10 @@ export async function useGlyphContext(
       options: { ...options, ...(mode ? { mode } : {}) },
     });
   composer.insertAttachments(attachments);
+  const actionDocument = composer.snapshot.document;
   await views.openView(GlyphViewPane.ID, true);
+  if (glyph.composer !== composer || composer.snapshot.document !== actionDocument)
+    throw new Error('The active draft changed while opening Chat. Review the draft before trying again.');
   composer.focus();
   if (prompt) await composer.submit((text, captured, options) => glyph.send(text, captured, options));
 }

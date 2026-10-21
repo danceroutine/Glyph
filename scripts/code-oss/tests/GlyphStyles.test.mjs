@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
 
 const requireUpstream = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
 const { chromium, expect } = requireUpstream('@playwright/test');
@@ -32,7 +33,12 @@ beforeAll(async () => {
     write: false,
     format: 'iife',
     platform: 'browser',
-    define: { 'process.env.NODE_ENV': '"production"' },
+    ...coverageBuildOptions,
+    // The IIFE harness supplies the module URL that the production ESM build provides.
+    define: {
+      'process.env.NODE_ENV': '"production"',
+      'import.meta.url': '"https://glyph.test/ui/mountGlyphWorkbench.js"',
+    },
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   script = result.outputFiles[0].text;
@@ -44,7 +50,7 @@ afterAll(async () => {
 });
 
 it('uses live theme variables without styling controls outside Glyph', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<textarea id="outside"></textarea><div id="root" style="height:400px"></div>');
     const outside = page.locator('#outside');
@@ -66,7 +72,7 @@ it('uses live theme variables without styling controls outside Glyph', async () 
 });
 
 it('preserves production styles when style elements are cloned into another document', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root" style="height:400px;--vscode-input-background:rgb(49,49,49)"></div>');
     await page.addScriptTag({ content: script });
@@ -92,7 +98,7 @@ it('preserves production styles when style elements are cloned into another docu
 });
 
 it('themes the real controls in Storybook and honors native overrides and optional border fallbacks', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root" style="height:600px;width:900px"></div>');
     await page.addScriptTag({ content: script });
@@ -137,7 +143,7 @@ it('themes the real controls in Storybook and honors native overrides and option
 });
 
 it('expands the host for side-by-side history and releases its width on close or unmount', async () => {
-  const page = await browser.newPage({ viewport: { width: 1400, height: 800 } });
+  const page = await newCoveredPage(browser, { viewport: { width: 1400, height: 800 } });
   try {
     await page.setContent('<div id="root" style="width:900px;height:600px"></div>');
     await page.addScriptTag({ content: script });

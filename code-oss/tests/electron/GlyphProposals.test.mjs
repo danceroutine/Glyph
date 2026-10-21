@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { basename, join } from 'node:path';
+import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
 const original = 'one\nunchanged\nthree\n';
 const changed = 'ONE\nunchanged\nTHREE\n';
+const reloadsWindow = isolatedLaunch('reloads the window');
 const pending = glyph => glyph.page.getByRole('region', { name: 'Pending reviews', exact: true });
 const fileControls = glyph => glyph.page.getByRole('region', { name: 'File review controls', exact: true }).last();
 const controls = glyph => glyph.page.getByRole('region', { name: 'Edit review controls', exact: true }).first();
@@ -44,6 +45,7 @@ async function stage(glyph, provider, content = changed, path = 'review.txt') {
 async function openFile(glyph, path = 'review.txt') {
   await glyph.page.keyboard.press('ControlOrMeta+p');
   await glyph.page.locator('.quick-input-widget input').fill(join(glyph.workspace, path));
+  await expect(glyph.page.locator('.quick-input-list').getByRole('option').first()).toContainText(basename(path));
   await glyph.page.keyboard.press('Enter');
   await expect(glyph.page.locator('.editor-instance .monaco-editor:not(.gutter):visible').first()).toBeVisible();
 }
@@ -59,7 +61,12 @@ async function setText(glyph, text) {
 }
 
 it.describe('Text proposal review', () => {
-  it.use({ scriptedProvider: true, workspaceFiles: { 'review.txt': original, 'other.ts': 'const value = 1;\n' } });
+  it.describe.configure({ mode: 'default' });
+  it.use({
+    sharedLaunch: true,
+    scriptedProvider: true,
+    workspaceFiles: { 'review.txt': original, 'other.ts': 'const value = 1;\n' },
+  });
 
   it('applies and saves a strict patch before review while retaining its original diff', async ({
     glyph,
@@ -289,7 +296,7 @@ it.describe('Text proposal review', () => {
     await expectCodeBelowPrompt();
     await input.press('Enter');
     await expect(pending(glyph)).toBeVisible();
-    expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(original);
+    expect(await readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(changed);
     const marker = glyph.page.locator('.monaco-diff-editor').getByRole('button', { name: 'Edit annotation 1' });
     await expect(marker).toBeVisible();
     await expect(marker.locator('xpath=ancestor::*[contains(@class, "glyph-margin-widgets")]')).toHaveCount(1);
@@ -426,44 +433,45 @@ it.describe('Text proposal review', () => {
     await expect.poll(() => readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe('New buffer\n');
   });
 
-  it('restores pending reviews after reload, exposes file actions on focus, and navigates multiple files', async ({
-    glyph,
-    provider,
-  }, testInfo) => {
-    const first = await read(glyph, provider);
-    const second = await read(glyph, provider, 'other.ts');
-    expect(
-      (
-        await tool(glyph, provider, 'propose_edits', {
-          files: [
-            structured('review.txt', first.revision, changed),
-            structured('other.ts', second.revision, 'const value = 2;\n'),
-          ],
-        })
-      ).status,
-    ).toBe('APPLIED_WITH_REVERT');
-    await glyph.reload();
-    await expect(pending(glyph)).toContainText('2 Files');
-    const file = pending(glyph).getByRole('button', { name: 'Review review.txt', exact: true });
-    await file.focus();
-    await expect(file).toHaveAttribute('title', 'review.txt');
-    await expect(pending(glyph).getByRole('button', { name: 'Keep review.txt', exact: true })).toHaveCSS(
-      'opacity',
-      '1',
-    );
-    await glyph.page.screenshot({ path: testInfo.outputPath('pending-hover.png') });
-    await file.click();
-    await expect(fileControls(glyph)).toContainText('1 of 2 Files');
-    await fileControls(glyph).getByRole('button', { name: 'Review Next File' }).click();
-    await expect(fileControls(glyph)).toContainText('2 of 2 Files');
-    await fileControls(glyph).getByRole('button', { name: 'Revert File', exact: true }).click();
-    await expect(pending(glyph)).toContainText('1 File');
-    await pending(glyph).getByRole('button', { name: 'Keep', exact: true }).click();
-    await expect(pending(glyph)).toHaveCount(0);
-    await save(glyph);
-    await expect.poll(() => readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(changed);
-    expect(await readFile(join(glyph.workspace, 'other.ts'), 'utf8')).toBe('const value = 1;\n');
-  });
+  it(
+    'restores pending reviews after reload, exposes file actions on focus, and navigates multiple files',
+    reloadsWindow,
+    async ({ glyph, provider }, testInfo) => {
+      const first = await read(glyph, provider);
+      const second = await read(glyph, provider, 'other.ts');
+      expect(
+        (
+          await tool(glyph, provider, 'propose_edits', {
+            files: [
+              structured('review.txt', first.revision, changed),
+              structured('other.ts', second.revision, 'const value = 2;\n'),
+            ],
+          })
+        ).status,
+      ).toBe('APPLIED_WITH_REVERT');
+      await glyph.reload();
+      await expect(pending(glyph)).toContainText('2 Files');
+      const file = pending(glyph).getByRole('button', { name: 'Review review.txt', exact: true });
+      await file.focus();
+      await expect(file).toHaveAttribute('title', 'review.txt');
+      await expect(pending(glyph).getByRole('button', { name: 'Keep review.txt', exact: true })).toHaveCSS(
+        'opacity',
+        '1',
+      );
+      await glyph.page.screenshot({ path: testInfo.outputPath('pending-hover.png') });
+      await file.click();
+      await expect(fileControls(glyph)).toContainText('1 of 2 Files');
+      await fileControls(glyph).getByRole('button', { name: 'Review Next File' }).click();
+      await expect(fileControls(glyph)).toContainText('2 of 2 Files');
+      await fileControls(glyph).getByRole('button', { name: 'Revert File', exact: true }).click();
+      await expect(pending(glyph)).toContainText('1 File');
+      await pending(glyph).getByRole('button', { name: 'Keep', exact: true }).click();
+      await expect(pending(glyph)).toHaveCount(0);
+      await save(glyph);
+      await expect.poll(() => readFile(join(glyph.workspace, 'review.txt'), 'utf8')).toBe(changed);
+      expect(await readFile(join(glyph.workspace, 'other.ts'), 'utf8')).toBe('const value = 1;\n');
+    },
+  );
   it('keeps all files through the bulk review action', async ({ glyph, provider }) => {
     const first = await read(glyph, provider);
     const second = await read(glyph, provider, 'other.ts');

@@ -70,7 +70,7 @@ class DeterministicDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   async handle(command: GlyphRuntimeCommand): Promise<void> {
     if (command.type === GlyphWorkbenchCommandType.SEND) {
-      await this.send(command);
+      void this.send(command);
       return;
     }
     if (command.type === GlyphWorkbenchCommandType.CANCEL_RUN) {

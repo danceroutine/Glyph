@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
 
 const requireUpstream = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
 const { chromium, expect } = requireUpstream('@playwright/test');
@@ -34,7 +35,12 @@ beforeAll(async () => {
     write: false,
     format: 'iife',
     platform: 'browser',
-    define: { 'process.env.NODE_ENV': '"production"' },
+    ...coverageBuildOptions,
+    // The IIFE harness supplies the module URL that the production ESM build provides.
+    define: {
+      'process.env.NODE_ENV': '"production"',
+      'import.meta.url': '"https://glyph.test/ui/mountGlyphWorkbench.js"',
+    },
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   script = result.outputFiles[0].text;
@@ -44,7 +50,7 @@ afterAll(async () => {
   await browser?.close();
 });
 async function pageForTest() {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   await page.setContent('<div id="root" style="width:400px;height:700px"></div>');
   await page.addScriptTag({ content: script });
   return page;

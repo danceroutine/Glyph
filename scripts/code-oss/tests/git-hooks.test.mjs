@@ -28,4 +28,32 @@ describe('generated Code OSS Git hooks', () => {
     await expect(access(join(hooks, 'pre-commit'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(join(hooks, 'pre-push'), 'utf8')).resolves.toContain('user-owned hook');
   });
+
+  it('reports nothing when the repository has no hooks directory', async () => {
+    const repository = await mkdtemp(join(tmpdir(), 'glyph-code-oss-hooks-'));
+    repositories.push(repository);
+    execFileSync('git', ['init', '--quiet'], { cwd: repository });
+    await rm(join(repository, '.git', 'hooks'), { recursive: true, force: true });
+
+    await expect(removeLeakedCodeOssHuskyHooks(repository)).resolves.toEqual([]);
+  });
+
+  it('skips nested directories inside the hooks directory', async () => {
+    const repository = await mkdtemp(join(tmpdir(), 'glyph-code-oss-hooks-'));
+    repositories.push(repository);
+    execFileSync('git', ['init', '--quiet'], { cwd: repository });
+    await mkdir(join(repository, '.git', 'hooks', 'husky'), { recursive: true });
+
+    await expect(removeLeakedCodeOssHuskyHooks(repository)).resolves.toEqual([]);
+  });
+
+  it('propagates failures to read a hooks path that is not a directory', async () => {
+    const repository = await mkdtemp(join(tmpdir(), 'glyph-code-oss-hooks-'));
+    repositories.push(repository);
+    execFileSync('git', ['init', '--quiet'], { cwd: repository });
+    await rm(join(repository, '.git', 'hooks'), { recursive: true, force: true });
+    await writeFile(join(repository, '.git', 'hooks'), 'not a directory');
+
+    await expect(removeLeakedCodeOssHuskyHooks(repository)).rejects.toMatchObject({ code: 'ENOTDIR' });
+  });
 });

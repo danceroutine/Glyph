@@ -72,7 +72,7 @@ export async function captureGlyphAgentReview(
         else item.working = resource;
         grouped.set(key, item);
       }
-    changes = [...grouped.values()].map(({ staged, working }) => {
+    changes = [...grouped.values()].flatMap(({ staged, working }) => {
       const resource = (working ?? staged)!;
       let originalUri = staged ? staged.multiDiffEditorOriginalUri : resource.multiDiffEditorOriginalUri;
       // All local changes compare HEAD to working text, not index to working text.
@@ -87,9 +87,13 @@ export async function captureGlyphAgentReview(
           : resource.multiDiffEditorModifiedUri
             ? resource.sourceUri
             : undefined;
-      if (!originalUri && !modifiedUri)
+      if (!originalUri && !modifiedUri) {
+        // A staged addition deleted in the worktree has no net HEAD-to-worktree change.
+        if (scope === Scope.ALL_LOCAL && staged?.multiDiffEditorModifiedUri && working?.multiDiffEditorOriginalUri)
+          return [];
         throw new Error(`Git did not expose a text comparison for ${resource.sourceUri.fsPath}.`);
-      return { uri: resource.sourceUri, originalUri, modifiedUri };
+      }
+      return [{ uri: resource.sourceUri, originalUri, modifiedUri }];
     });
     label =
       scope === Scope.STAGED
@@ -99,9 +103,11 @@ export async function captureGlyphAgentReview(
   if (!changes.length) throw new Error('There are no changes in the selected review scope.');
   if (changes.length > 32) throw new Error('This review exceeds 32 changed files. Select a smaller scope.');
   const signature = () =>
-    provider.groups
-      .map(group => `${group.id}:${group.resources.map(resource => resource.sourceUri.toString()).join(',')}`)
-      .join('|');
+    scope === Scope.STAGED || scope === Scope.ALL_LOCAL
+      ? provider.groups
+          .map(group => `${group.id}:${group.resources.map(resource => resource.sourceUri.toString()).join(',')}`)
+          .join('|')
+      : '';
   const before = signature();
   const attachments: GlyphContextAttachment[] = [];
   for (const change of changes)

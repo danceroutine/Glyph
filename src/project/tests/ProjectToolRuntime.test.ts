@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
 import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import type { Logger } from '#src/observability/Logger.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
+import type { Tool } from '#src/tools/Tool.js';
 import type { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ProjectToolName } from '#src/project/ProjectToolName.js';
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
@@ -40,5 +42,177 @@ describe(ProjectToolRuntime, () => {
         origin: { chatId: 'chat-1', accountProvider: 'provider', accountId: 'account-1' },
       });
     });
+
+    it.each([ProjectToolName.LIST_FILES, ProjectToolName.READ_FILE, ProjectToolName.SEARCH_CONTENTS])(
+      'delegates %s to project access',
+      async name => {
+        const execute = vi.fn(async () => '{"result":true}');
+        const runtime = new ProjectToolRuntime(
+          { execute } as unknown as ProjectAccess,
+          {} as EditProposalService,
+          {} as ProposalReviewManager,
+        );
+        const signal = new AbortController().signal;
+
+        await expect(runtime.execute(name, '{}', signal)).resolves.toBe('{"result":true}');
+
+        expect(execute).toHaveBeenCalledWith(name, '{}', signal);
+      },
+    );
+
+    it('reports an unknown tool as a failed tool call', async () => {
+      const logger = recordingLogger();
+      const runtime = new ProjectToolRuntime(
+        {} as ProjectAccess,
+        {} as EditProposalService,
+        {} as ProposalReviewManager,
+        logger,
+      );
+
+      const result = JSON.parse(await runtime.execute('unknown_tool', '{}'));
+
+      expect(result).toEqual({ error: { code: 'TOOL_FAILED', message: 'Unknown project tool: unknown_tool' } });
+      expect(logger.error).toHaveBeenCalledWith('failed', {
+        name: 'unknown_tool',
+        error: { message: 'Unknown project tool: unknown_tool' },
+      });
+    });
+
+    it('reports a failure that is not an error object without exposing it to the model', async () => {
+      const logger = recordingLogger();
+      const runtime = new ProjectToolRuntime(
+        {} as ProjectAccess,
+        { proposePatch: vi.fn(async () => Promise.reject('compiler crashed')) } as unknown as EditProposalService,
+        {} as ProposalReviewManager,
+        logger,
+      );
+
+      const result = JSON.parse(await runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch'));
+
+      expect(result).toEqual({ error: { code: 'TOOL_FAILED', message: 'Project tool failed.' } });
+      expect(logger.error).toHaveBeenCalledWith('failed', {
+        name: ProjectToolName.PROPOSE_PATCH,
+        error: { message: 'compiler crashed' },
+      });
+    });
+
+    it('rethrows the abort reason when cancellation interrupts a proposal', async () => {
+      const controller = new AbortController();
+      const reason = new Error('user stopped');
+      const runtime = new ProjectToolRuntime(
+        {} as ProjectAccess,
+        {
+          proposePatch: vi.fn(async () => {
+            controller.abort(reason);
+            throw new Error('compilation interrupted');
+          }),
+        } as unknown as EditProposalService,
+        {} as ProposalReviewManager,
+      );
+
+      await expect(runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch', controller.signal)).rejects.toBe(reason);
+    });
+
+    it('rethrows the original failure when an aborted signal carries no reason', async () => {
+      let aborted = false;
+      const signal = {
+        get aborted() {
+          return aborted;
+        },
+        reason: undefined,
+        throwIfAborted: () => {},
+      } as unknown as AbortSignal;
+      const failure = new Error('compilation interrupted');
+      const runtime = new ProjectToolRuntime(
+        {} as ProjectAccess,
+        {
+          proposePatch: vi.fn(async () => {
+            aborted = true;
+            throw failure;
+          }),
+        } as unknown as EditProposalService,
+        {} as ProposalReviewManager,
+      );
+
+      await expect(runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch', signal)).rejects.toBe(failure);
+    });
+  });
+
+  describe('tools', () => {
+    it('extends the project access tools with patch and structured edit proposals', () => {
+      const accessTool = { name: ProjectToolName.LIST_FILES } as Tool;
+      const runtime = new ProjectToolRuntime(
+        { tools: [accessTool] } as unknown as ProjectAccess,
+        {} as EditProposalService,
+        {} as ProposalReviewManager,
+      );
+
+      const tools = runtime.tools;
+
+      expect(tools.map(tool => tool.name)).toEqual([
+        ProjectToolName.LIST_FILES,
+        ProjectToolName.PROPOSE_PATCH,
+        ProjectToolName.PROPOSE_EDITS,
+      ]);
+      expect(tools[0]).toBe(accessTool);
+      expect(tools[2]?.parameters).toMatchObject({ type: 'object', required: ['files'] });
+      expect(tools[2]?.parameters).not.toHaveProperty('$schema');
+    });
+
+    it('requires a nonempty patch', () => {
+      const runtime = new ProjectToolRuntime(
+        { tools: [] } as unknown as ProjectAccess,
+        {} as EditProposalService,
+        {} as ProposalReviewManager,
+      );
+      const patch = runtime.tools.find(tool => tool.name === ProjectToolName.PROPOSE_PATCH)!;
+
+      expect(() => patch.validateInput(' \n ')).toThrow('Expected a nonempty patch.');
+      expect(() => patch.validateInput('*** Begin Patch')).not.toThrow();
+    });
+
+    it('requires structured edits that match the proposal schema', () => {
+      const runtime = new ProjectToolRuntime(
+        { tools: [] } as unknown as ProjectAccess,
+        {} as EditProposalService,
+        {} as ProposalReviewManager,
+      );
+      const edits = runtime.tools.find(tool => tool.name === ProjectToolName.PROPOSE_EDITS)!;
+
+      expect(() => edits.validateInput('{"files":[]}')).not.toThrow();
+      expect(() => edits.validateInput('{"files":"file.txt"}')).toThrow();
+      expect(() => edits.validateInput('not json')).toThrow(SyntaxError);
+    });
+
+    it.each([ProjectToolName.PROPOSE_PATCH, ProjectToolName.PROPOSE_EDITS])(
+      'executes %s through the runtime with its signal and context',
+      async name => {
+        const runtime = new ProjectToolRuntime(
+          { tools: [] } as unknown as ProjectAccess,
+          {} as EditProposalService,
+          {} as ProposalReviewManager,
+        );
+        const execute = vi.spyOn(runtime, 'execute').mockResolvedValue('{"status":"ok"}');
+        const tool = runtime.tools.find(candidate => candidate.name === name)!;
+        const signal = new AbortController().signal;
+        const context = { executionId: 'execution-1' };
+
+        await expect(tool.execute('input', signal, context)).resolves.toBe('{"status":"ok"}');
+
+        expect(execute).toHaveBeenCalledWith(name, 'input', signal, context);
+      },
+    );
   });
 });
+
+function recordingLogger() {
+  const logger = {
+    forNamespace: (): Logger => logger,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } satisfies Logger;
+  return logger;
+}

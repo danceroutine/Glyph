@@ -49,6 +49,52 @@ describe(toShellCommandSummary, () => {
     expect(summary?.output).toContain('second · running');
     expect(summary!.output.length).toBeLessThan(5000);
   });
+  it('summarizes a started command before it reports output', () => {
+    expect(toShellCommandSummary({ ...activity, phase: ToolActivityPhase.STARTED })).toEqual({
+      command: 'pwd',
+      output: '',
+      background: false,
+      workingDirectory: 'nested',
+    });
+  });
+  it('labels lifecycle tools without a command and reports their missing output as empty', () => {
+    expect(
+      toShellCommandSummary({
+        ...activity,
+        name: 'close_shell',
+        arguments: JSON.stringify({ terminal_id: 'session' }),
+        output: JSON.stringify({ terminal_id: 'session' }),
+      }),
+    ).toEqual({ command: 'Close shell', output: '', background: false, sessionId: 'session' });
+  });
+  it('reports an empty shell list and the exit codes of listed shells', () => {
+    const empty = toShellCommandSummary({
+      ...activity,
+      name: 'list_shells',
+      arguments: '{}',
+      output: JSON.stringify({ terminals: [] }),
+    });
+    const exited = toShellCommandSummary({
+      ...activity,
+      name: 'list_shells',
+      arguments: '{}',
+      output: JSON.stringify({
+        terminals: [
+          {
+            terminal_id: 'done',
+            command: 'pnpm test',
+            working_directory: '/workspace',
+            status: 'idle',
+            output_tail: 'ok',
+            exit_code: 0,
+          },
+        ],
+      }),
+    });
+
+    expect(empty).toEqual({ command: 'List shells', output: 'No shell sessions.', background: false });
+    expect(exited?.output).toBe('done · idle · Exit 0\npnpm test\n/workspace\nok');
+  });
   it('does not interpret another namespace or malformed tool output as shell display data', () => {
     expect(toShellCommandSummary({ ...activity, namespace: 'untrusted' })).toBeUndefined();
     expect(toShellCommandSummary({ ...activity, output: '{' })).toBeUndefined();

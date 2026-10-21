@@ -33,4 +33,25 @@ describe(toGlyphTranscriptParts, () => {
       { type: 'attachment', attachment },
     ]);
   });
+  it('renders a message without attachments as a single text part', () => {
+    expect(toGlyphTranscriptParts({ id: 'turn', role: GlyphTranscriptRole.USER, text: 'Plain message' })).toEqual([
+      { type: 'text', text: 'Plain message' },
+    ]);
+  });
+  it('renders ranged mentions that begin and end the message without empty text parts', () => {
+    const ranged = {
+      path: 'b.ts',
+      text: 'selected',
+      revision: '2',
+      range: { start: { line: 3, column: 1 }, end: { line: 5, column: 1 } },
+    };
+    expect(
+      toGlyphTranscriptParts({
+        id: 'turn',
+        role: GlyphTranscriptRole.USER,
+        text: '@b.ts (3-5)',
+        attachments: [ranged],
+      }),
+    ).toEqual([{ type: 'attachment', attachment: ranged }]);
+  });
 });

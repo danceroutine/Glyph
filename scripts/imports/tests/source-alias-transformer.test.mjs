@@ -51,6 +51,27 @@ describe(sourceAliasTransformer, () => {
     }
   });
 
+  it('lowers import-equals requires while leaving relative and computed specifiers untouched', () => {
+    const result = ts.transpileModule(
+      [
+        "import service = require('#src/application/GlyphService.js');",
+        "import local = require('./local.js');",
+        'export const load = (name: string) => import(name);',
+        'export const bare = () => import(`./static.js`);',
+        'export { service, local };',
+      ].join('\n'),
+      {
+        fileName: file,
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023 },
+        transformers: { before: [sourceAliasTransformer] },
+      },
+    );
+    expect(result.outputText).toContain('require("../../application/GlyphService.js")');
+    expect(result.outputText).toContain('require("./local.js")');
+    expect(result.outputText).toContain('Promise.resolve(`${name}`).then(s => require(s))');
+    expect(result.outputText).toContain('require(`./static.js`)');
+  });
+
   it('rejects a source alias that tries to leave its source root', () => {
     expect(() =>
       ts.transpileModule("import '#src/../outside.js';", {

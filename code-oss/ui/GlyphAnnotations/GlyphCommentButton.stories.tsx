@@ -36,7 +36,7 @@ function AnnotationExample({ kind, empty = false }: { readonly kind: 'chat' | 'p
       );
     return composer;
   });
-  const state = useGlyphAnnotationsState(composer, false);
+  const state = useGlyphAnnotationsState({ composer, disabled: false });
   return (
     <div className={surface}>
       {kind === 'plan' ? <h2>Queue composer messages</h2> : <p>Worked for 3s</p>}

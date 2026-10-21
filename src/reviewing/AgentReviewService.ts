@@ -7,7 +7,7 @@ import {
 import type { AgentReviewExecutor } from './AgentReviewExecutor.ts';
 import type { AgentReviewStore } from './AgentReviewStore.ts';
 import { agentReviewInputSchema } from './AgentReviewSchema.ts';
-import { parseAgentReviewFindings } from './parseAgentReviewFindings.ts';
+import { parseAgentReviewFindings, type AgentReviewFileLines } from './parseAgentReviewFindings.ts';
 
 /** Serializes durable transitions independently of chat sessions and renderer lifetimes. */
 export class AgentReviewService {
@@ -66,7 +66,7 @@ export class AgentReviewService {
       const completion = Promise.resolve().then(() => this.execute(review, controller.signal));
       this.active = { id: review.id, controller, completion };
       void completion.finally(() => {
-        if (this.active?.id === review.id) this.active = undefined;
+        this.active = undefined;
       });
     });
   }
@@ -108,8 +108,15 @@ export class AgentReviewService {
   private async execute(review: AgentReview, signal: AbortSignal): Promise<void> {
     let text = '';
     let progress: Promise<unknown> = Promise.resolve();
-    const files = new Map(
-      review.files.map(file => [file.path, Math.max(1, (file.after || file.before).split('\n').length)]),
+    const files = new Map<string, AgentReviewFileLines>(
+      review.files.map(file => [
+        file.path,
+        {
+          original: file.before.split('\n').length,
+          modified: file.after.split('\n').length,
+          defaultSide: file.after ? 'modified' : 'original',
+        },
+      ]),
     );
     try {
       signal.throwIfAborted();

@@ -1,8 +1,139 @@
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
-import { expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 let loaded;
+const approvedPlan = () => ({
+  id: 'plan',
+  revision: 1,
+  title: 'Approved work',
+  summary: '',
+  markdown: 'Change source',
+  todos: [],
+  agents: [],
+});
+
+it('stops building after failed navigation without consuming another chat draft', async () => {
+  const plan = approvedPlan();
+  const test = await fixture({
+    chats: [chat('alpha'), { ...chat('beta'), plans: [plan] }],
+    handler: async command => {
+      if (command.type === 'open_chat' && command.chatId === 'beta') throw new Error('Could not open source chat');
+    },
+  });
+  try {
+    test.service.composer.setDraft('Private alpha draft');
+    await expect(test.service.buildPlan('beta', plan)).rejects.toThrow();
+    expect(test.request.mock.calls.map(([command]) => command.type)).not.toContain('send');
+    expect(test.request.mock.calls.map(([command]) => command.type)).not.toContain('link_plan');
+    expect(test.service.composer.snapshot.draft).toBe('Private alpha draft');
+  } finally {
+    test.dispose();
+  }
+});
+
+it.each(['set_chat_mode', 'link_plan'])('keeps the plan target stable while %s is pending', async pendingType => {
+  const plan = approvedPlan();
+  let release;
+  let entered;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  const started = new Promise(resolve => {
+    entered = resolve;
+  });
+  let hold = true;
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }, chat('beta')],
+    handler: async command => {
+      if (hold && command.type === pendingType) {
+        hold = false;
+        entered();
+        await gate;
+      }
+    },
+  });
+  try {
+    test.service.composer.setDraft('Alpha draft');
+    const build = test.service.buildPlan('alpha', plan);
+    await started;
+    await test.service.openChat('beta');
+    test.service.composer.setDraft('Private beta draft');
+    release();
+    await build;
+    const sent = test.request.mock.calls.map(([command]) => command).filter(command => command.type === 'send');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ chatId: 'alpha' });
+    expect(sent[0].text).toContain('Alpha draft');
+    expect(sent[0].text).toContain('Build this approved plan');
+    expect(test.service.composer.snapshot.draft).toBe('Private beta draft');
+    expect(test.request.mock.calls.map(([command]) => command).filter(command => command.type === 'link_plan')).toEqual(
+      [expect.objectContaining({ chatId: 'alpha', targetChatId: 'alpha', role: 'Builder' })],
+    );
+  } finally {
+    release();
+    test.dispose();
+  }
+});
+
+it.each(['create_chat', 'link_plan'])('keeps a new plan chat bound while %s is pending', async pendingType => {
+  const plan = approvedPlan();
+  let release;
+  let entered;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  const started = new Promise(resolve => {
+    entered = resolve;
+  });
+  let hold = true;
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }, chat('beta')],
+    handler: async (command, { state, emit }) => {
+      if (command.type === 'create_chat') {
+        const created = chat('created');
+        state.chats.push(created);
+        emit({ type: 'chat_updated', chat: created, creationId: command.creationId });
+      }
+      if (hold && command.type === pendingType) {
+        hold = false;
+        entered();
+        await gate;
+      }
+    },
+  });
+  try {
+    const build = test.service.buildPlan('alpha', plan, true);
+    await started;
+    await test.service.openChat('beta');
+    test.service.composer.setDraft('Private beta draft');
+    release();
+    await build;
+    const sent = test.request.mock.calls.map(([command]) => command).filter(command => command.type === 'send');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ chatId: 'created' });
+    expect(sent[0].text).not.toContain('Private beta draft');
+    expect(test.service.composer.snapshot.draft).toBe('Private beta draft');
+  } finally {
+    release();
+    test.dispose();
+  }
+});
+
+it('requires a matching creation acknowledgment before building in a new chat', async () => {
+  const plan = approvedPlan();
+  const test = await fixture({ chats: [{ ...chat('alpha'), plans: [plan] }] });
+  try {
+    test.service.composer.setDraft('Private alpha draft');
+    await expect(test.service.buildPlan('alpha', plan, true)).rejects.toThrow('not acknowledged');
+    expect(test.request.mock.calls.map(([command]) => command.type)).not.toContain('send');
+    expect(test.request.mock.calls.map(([command]) => command.type)).not.toContain('link_plan');
+    expect(test.service.composer.snapshot.draft).toBe('Private alpha draft');
+  } finally {
+    test.dispose();
+  }
+});
+
 async function modules() {
   const result = await build({
     entryPoints: ['code-oss/overlay/src/vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.ts'],
@@ -71,6 +202,7 @@ async function fixture({
   accounts = [],
   handler = async () => {},
   openInGlyph = false,
+  attachedState = true,
 } = {}) {
   const { NativeGlyphWorkbenchService } = await (loaded ??= modules());
   const listeners = new Set();
@@ -91,7 +223,7 @@ async function fixture({
     for (const listener of listeners) listener({ event });
   };
   const request = vi.fn(async command => {
-    if (command.type === 'attach_workspace' || command.type === 'request_snapshot')
+    if ((command.type === 'attach_workspace' && attachedState) || command.type === 'request_snapshot')
       emit({ type: 'initial_state', state: { ...state } });
     await handler(command, { state, emit });
     if (command.type === 'open_chat')
@@ -178,6 +310,82 @@ async function fixture({
     },
   };
 }
+
+describe('NativeGlyphWorkbenchService', () => {
+  it('reopens the most recent chat in place of the loading tab and keeps a draft typed before the host was ready', async () => {
+    const test = await fixture({ chats: [chat('alpha'), chat('beta')], attachedState: false });
+    try {
+      expect(test.service.state.openChatIds).toEqual(['']);
+      test.service.composer.setDraft('Typed while Glyph loads');
+      test.emit({ type: 'initial_state', state: { ...test.state } });
+      expect(test.service.state.selectedChatId).toBe('alpha');
+      expect(test.service.state.openChatIds).toEqual(['alpha']);
+      expect(test.service.composer.snapshot.draft).toBe('Typed while Glyph loads');
+      expect(test.storage.get('glyph.openChatTabs')).toEqual(['alpha']);
+      test.service.newChat();
+      expect(test.service.composer.snapshot.draft).toBe('');
+    } finally {
+      test.dispose();
+    }
+  });
+
+  it('sends a queued message after a turn the host started first instead of pausing the queue', async () => {
+    const run = (runId, status) => ({
+      type: 'run_state',
+      run: { chatId: 'alpha', runId, text: '', reasoning: '', tools: [], status },
+    });
+    let hostTurnFirst = true;
+    const test = await fixture({
+      handler: async (command, { emit }) => {
+        if (command.type !== 'send' || !hostTurnFirst) return;
+        hostTurnFirst = false;
+        emit(run('shell-event:wake', 'streaming'));
+        throw new Error('INVALID_REQUEST: This chat already has an active run or history change.');
+      },
+    });
+    try {
+      test.emit(run('turn', 'streaming'));
+      test.service.composer.setDraft('A queued follow-up.');
+      test.service.composer.enqueueDraft();
+      test.emit(run('turn', 'completed'));
+      await vi.waitFor(() => expect(hostTurnFirst).toBe(false));
+      await vi.waitFor(() => expect(test.service.composer.snapshot.queueSubmitting).toBeUndefined());
+      expect(test.service.composer.snapshot).toMatchObject({ queuePaused: false, queueError: undefined });
+      expect(test.service.composer.snapshot.queued).toHaveLength(1);
+      expect(test.service.state.transcript.filter(entry => entry.role === 'diagnostic')).toEqual([]);
+      test.emit(run('shell-event:wake', 'completed'));
+      await vi.waitFor(() => expect(test.service.composer.snapshot.queued).toEqual([]));
+      expect(test.request.mock.calls.filter(([command]) => command.type === 'send')).toHaveLength(2);
+    } finally {
+      test.dispose();
+    }
+  });
+
+  it('pauses the queue and reports a queued message that fails while the chat is idle', async () => {
+    const test = await fixture({
+      handler: async command => {
+        if (command.type === 'send') throw new Error('The provider rejected the message.');
+      },
+    });
+    try {
+      test.service.composer.setDraft('A queued follow-up.');
+      test.service.composer.enqueueDraft();
+      await vi.waitFor(() =>
+        expect(test.service.composer.snapshot).toMatchObject({
+          queuePaused: true,
+          queueError: 'The provider rejected the message.',
+          queueSubmitting: undefined,
+        }),
+      );
+      expect(test.service.composer.snapshot.queued).toHaveLength(1);
+      expect(test.service.state.transcript.filter(entry => entry.role === 'diagnostic')).toEqual([
+        expect.objectContaining({ text: expect.stringContaining('The provider rejected the message.') }),
+      ]);
+    } finally {
+      test.dispose();
+    }
+  });
+});
 
 it('rehydrates saved conversation history after both trust revocation and restoration', async () => {
   const test = await fixture();

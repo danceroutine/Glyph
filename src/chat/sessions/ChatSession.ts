@@ -1,5 +1,5 @@
 import type { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
-import { AgentMode } from '#src/chat/AgentMode.js';
+import { AgentMode, type AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
 import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
@@ -54,7 +54,7 @@ export class ChatSession {
     return this.conversation.isTraceEnabled;
   }
 
-  get summary(): ChatSessionSummary {
+  get summary(): ReturnType<typeof toSummary> {
     return toSummary(this.record());
   }
 
@@ -274,7 +274,7 @@ export class ChatSession {
   }
 }
 
-export function toSummary(record: ChatSessionRecord): ChatSessionSummary {
+export function toSummary(record: ChatSessionRecord): ChatSessionSummary & { readonly mode: AgentModeID } {
   const { providerState: _, transcript, ...summary } = record;
   return {
     ...summary,

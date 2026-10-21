@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { pathToFileURL } from 'node:url';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 import { ProjectContextResolver } from '#src/project/context/ProjectContextResolver.js';
 
@@ -113,6 +114,109 @@ describe(ProjectContextResolver, () => {
     await expect(ProjectContextResolver.workspace(manifest, root, 'ssh:example')).rejects.toThrow(
       'unsupported folder URI',
     );
+  });
+
+  it('resolves a local file URI folder to its canonical directory', async () => {
+    const root = await fixture();
+    await mkdir(join(root, 'local'));
+    const manifest = join(root, 'local.code-workspace');
+    await writeFile(manifest, JSON.stringify({ folders: [{ uri: pathToFileURL(join(root, 'local')).href }] }));
+
+    const context = await ProjectContextResolver.workspace(manifest, root, 'test');
+
+    expect(context.roots).toEqual([{ name: 'local', path: await realpath(join(root, 'local')) }]);
+  });
+
+  it('rejects a manifest that parses but does not describe any folders', async () => {
+    const root = await fixture();
+    const manifest = join(root, 'empty.code-workspace');
+    await writeFile(manifest, JSON.stringify({ folders: [] }));
+
+    await expect(ProjectContextResolver.workspace(manifest, root, 'test')).rejects.toThrow(
+      `Invalid workspace file ${await realpath(manifest)}:`,
+    );
+  });
+
+  it('rejects a folder entry that names a file instead of a directory', async () => {
+    const root = await fixture();
+    await writeFile(join(root, 'file.txt'), 'not a directory');
+    const manifest = join(root, 'file.code-workspace');
+    await writeFile(manifest, JSON.stringify({ folders: [{ path: 'file.txt' }] }));
+
+    await expect(ProjectContextResolver.workspace(manifest, root, 'test')).rejects.toThrow(
+      `Project root is not a directory: ${await realpath(join(root, 'file.txt'))}`,
+    );
+  });
+
+  it.each([
+    ['a blank name', '   '],
+    ['a path separator', 'one/two'],
+    ['a control character', 'one\u0007'],
+  ])('rejects a folder name containing %s', async (_description, name) => {
+    const root = await fixture();
+    await mkdir(join(root, 'one'));
+    const manifest = join(root, 'names.code-workspace');
+    await writeFile(manifest, JSON.stringify({ folders: [{ name, path: 'one' }] }));
+
+    await expect(ProjectContextResolver.workspace(manifest, root, 'test')).rejects.toThrow(
+      'contains an invalid folder name',
+    );
+  });
+
+  describe(ProjectContextResolver.resolve, () => {
+    it('resolves the current directory as a folder context when no workspace file is given', async () => {
+      const root = await fixture();
+
+      const context = await ProjectContextResolver.resolve({ currentDirectory: root, authority: 'test' });
+
+      expect(context).toMatchObject({
+        kind: ProjectContextKind.FOLDER,
+        authority: 'test',
+        roots: [{ path: await realpath(root) }],
+      });
+    });
+
+    it('resolves a workspace file relative to the current directory', async () => {
+      const root = await fixture();
+      await mkdir(join(root, 'api'));
+      await writeFile(join(root, 'product.code-workspace'), JSON.stringify({ folders: [{ path: 'api' }] }));
+
+      const context = await ProjectContextResolver.resolve({
+        currentDirectory: root,
+        workspaceFile: 'product.code-workspace',
+        authority: 'test',
+      });
+
+      expect(context).toMatchObject({
+        kind: ProjectContextKind.WORKSPACE,
+        name: 'product',
+        roots: [{ name: 'api', path: await realpath(join(root, 'api')) }],
+      });
+    });
+
+    it('defaults to the local authority outside an SSH session', async () => {
+      const root = await fixture();
+      vi.stubEnv('SSH_CONNECTION', '');
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+
+      const context = await ProjectContextResolver.resolve({ currentDirectory: root });
+
+      expect(context.authority).toBe('local');
+    });
+
+    it('defaults to an SSH authority naming this host inside an SSH session', async () => {
+      const root = await fixture();
+      vi.stubEnv('SSH_CONNECTION', '192.0.2.1 50000 192.0.2.2 22');
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+
+      const context = await ProjectContextResolver.resolve({ currentDirectory: root });
+
+      expect(context.authority).toBe(`ssh:${hostname()}`);
+    });
   });
 });
 

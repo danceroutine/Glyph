@@ -12,7 +12,7 @@ import { Slice } from 'prosemirror-model';
 import { EditorState, TextSelection, type Command } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { history, undo, redo, closeHistory } from 'prosemirror-history';
-import { keymap } from 'prosemirror-keymap';
+import { keydownHandler, keymap } from 'prosemirror-keymap';
 import {
   baseKeymap,
   chainCommands,
@@ -51,6 +51,7 @@ export class GlyphPromptEditor {
   private readonly containKeydown = (event: KeyboardEvent): void => {
     if (event.defaultPrevented) event.stopPropagation();
   };
+  private readonly historyKeydown = keydownHandler({ 'Mod-z': undo, 'Shift-Mod-z': redo, 'Mod-y': redo });
   private readonly newline = chainCommands(
     (state, dispatch) => {
       const { $from, empty } = state.selection;
@@ -122,12 +123,13 @@ export class GlyphPromptEditor {
           };
         },
       },
-      handleKeyDown: (_view, event) => !event.isComposing && callbacks.keydown(event),
+      handleKeyDown: (view, event) =>
+        !event.isComposing && (this.historyKeydown(view, event) || callbacks.keydown(event)),
       handlePaste: (view, event) => {
         // Clipboard HTML cannot forge trusted context badges.
         const text = event.clipboardData?.getData('text/plain');
         if (text === undefined) return false;
-        if (!/[\n*`_>#[\]]/.test(text)) {
+        if (view.state.selection.$from.parent.type.spec.code || !/[\n*`_>#[\]]/.test(text)) {
           view.dispatch(view.state.tr.insertText(text));
           return true;
         }
@@ -211,9 +213,6 @@ export class GlyphPromptEditor {
       let position = direction === -1 ? boundary - 1 : boundary + 1;
       // Reuse the adjacent paragraph; otherwise create one on the requested side.
       if (adjacent?.type !== paragraph) {
-        const parent = $cursor.node(-1);
-        const index = direction === -1 ? $cursor.index(-1) : $cursor.indexAfter(-1);
-        if (!parent.canReplaceWith(index, index, paragraph)) return false;
         transaction.insert(boundary, paragraph.create());
         position = boundary + 1;
       }
@@ -283,7 +282,6 @@ export class GlyphPromptEditor {
             dispatch?.(state.tr.setSelection(TextSelection.create(state.doc, 1, state.doc.content.size - 1)));
             return true;
           },
-          'Mod-z': undo,
           Backspace: chainCommands(undoInputRule, (state, dispatch) => {
             if (!state.selection.empty || state.selection.$from.nodeBefore?.type !== schema.nodes.attachment)
               return false;
@@ -296,8 +294,6 @@ export class GlyphPromptEditor {
             dispatch?.(state.tr.delete(state.selection.from, state.selection.from + 1));
             return true;
           },
-          'Shift-Mod-z': redo,
-          'Mod-y': redo,
           ...(this.callbacks.nativeKeybindings
             ? {}
             : {

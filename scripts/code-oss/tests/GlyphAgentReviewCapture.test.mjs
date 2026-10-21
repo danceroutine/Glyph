@@ -95,6 +95,37 @@ it('does not manufacture a HEAD version for a newly staged file, including stage
   await capture(f.ide, f.repository, 'staged', '');
   expect(f.ide.captureDiff.mock.calls[0][1]).toBeUndefined();
 });
+it('omits a staged addition deleted from the worktree while retaining unrelated all-local changes', async () => {
+  const f = fixture();
+  const changed = URI.file('/workspace/changed.ts');
+  f.repository.provider.groups = [
+    { id: 'index', resources: [{ sourceUri: f.uri, multiDiffEditorModifiedUri: f.git('') }] },
+    {
+      id: 'workingTree',
+      resources: [
+        { sourceUri: f.uri, multiDiffEditorOriginalUri: f.git('HEAD') },
+        {
+          sourceUri: changed,
+          multiDiffEditorOriginalUri: changed.with({
+            scheme: 'git',
+            query: JSON.stringify({ path: changed.fsPath, ref: 'HEAD' }),
+          }),
+          multiDiffEditorModifiedUri: changed,
+        },
+      ],
+    },
+  ];
+  const captured = await capture(f.ide, f.repository, 'allLocal', '');
+  expect(captured.map(value => value.uri)).toEqual([changed.toString()]);
+  expect(f.ide.captureDiff.mock.calls.every(([uri]) => uri.toString() === changed.toString())).toBe(true);
+  f.ide.captureDiff.mockClear();
+  await capture(f.ide, f.repository, 'staged', '');
+  expect(f.ide.captureDiff.mock.calls[0][0].toString()).toBe(f.uri.toString());
+  expect(f.ide.captureDiff.mock.calls[0][1]).toBeUndefined();
+  expect(f.ide.captureDiff.mock.calls[0][2].toString()).toBe(f.git('').toString());
+  f.repository.provider.groups[1].resources.pop();
+  await expect(capture(f.ide, f.repository, 'allLocal', '')).rejects.toThrow('no changes');
+});
 it('rejects oversized reviews and mutable captures that change across the batch', async () => {
   const f = fixture();
   f.history.provideHistoryItemChanges.mockResolvedValue(Array(33).fill({ uri: f.uri }));

@@ -1,8 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+const restartsHost = isolatedLaunch('restarts the host and reloads the window');
+const persistsGrant = isolatedLaunch('persists a command grant and restarts the host');
 const language = {
   id: 'language',
   prompt: 'Which language?',
@@ -43,7 +45,8 @@ const outputs = (provider, callId) =>
 const finished = glyph => expect(glyph.sendButton).toHaveText('Send (Enter)');
 
 it.describe('Questions and command approvals', () => {
-  it.use({ scriptedProvider: true, workspaceFiles: { 'nested/.keep': '' } });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true, workspaceFiles: { 'nested/.keep': '' } });
 
   it('renders a host question as an accessible answer form with a submit control connected to the waiting run', async ({
     glyph,
@@ -139,64 +142,70 @@ it.describe('Questions and command approvals', () => {
     await glyph.composer.fill('Keep this as my next message.');
     await glyph.composer.press('Enter');
     await expect(form(glyph)).toBeVisible();
+    const queue = glyph.page.getByRole('region', { name: 'Queued messages', exact: true });
+    await expect(queue.getByRole('listitem')).toContainText(['Keep this as my next message.']);
     expect(provider.requests).toHaveLength(1);
-    await expect(glyph.composer).toHaveText('Keep this as my next message.');
     await form(glyph).getByRole('button', { name: 'Cancel turn' }).click();
     await finished(glyph);
+    await expect(queue.getByRole('listitem')).toContainText(['Keep this as my next message.']);
+    expect(provider.requests).toHaveLength(1);
   });
 
-  it('returns selected choices and Other free-text answers to the requesting run exactly once', async ({
-    glyph,
-    provider,
-  }) => {
-    provider.enqueue({
-      output: [
-        question([
-          language,
-          {
-            ...language,
-            id: 'priorities',
-            prompt: 'Which priorities?',
-            allow_multiple: true,
-            options: [
-              { id: 'clarity', label: 'Clarity' },
-              { id: 'speed', label: 'Speed' },
-            ],
-          },
-          { ...language, id: 'notes', prompt: 'Anything else?' },
-        ]),
-      ],
-    });
-    await glyph.send('Ask me three questions.');
-    await form(glyph).getByRole('group').nth(0).getByRole('radio', { name: 'Rust', exact: true }).check();
-    await form(glyph).getByRole('button', { name: 'Continue' }).click();
-    await form(glyph).getByRole('checkbox', { name: 'Clarity', exact: true }).check();
-    await form(glyph).getByRole('checkbox', { name: 'Speed', exact: true }).check();
-    await form(glyph).getByRole('button', { name: 'Previous question' }).click();
-    await expect(form(glyph).getByRole('group').nth(0).getByRole('radio', { name: 'Rust', exact: true })).toBeChecked();
-    await form(glyph).getByRole('button', { name: 'Next question' }).click();
-    await expect(form(glyph).getByRole('checkbox', { name: 'Clarity', exact: true })).toBeChecked();
-    await expect(form(glyph).getByRole('checkbox', { name: 'Speed', exact: true })).toBeChecked();
-    await form(glyph).getByRole('button', { name: 'Continue' }).click();
-    await form(glyph).getByRole('group').nth(2).getByRole('radio', { name: 'Other…', exact: true }).check();
-    await form(glyph).getByRole('textbox', { name: 'Your answer' }).fill('Custom answer — café 🌱');
-    provider.enqueue({ chunks: ['All three answers received.'] });
-    // Two same-tick submissions exercise the guard before the DOM disables.
-    await form(glyph).evaluate(element => {
-      element.requestSubmit();
-      element.requestSubmit();
-    });
-    await finished(glyph);
-    expect(outputs(provider, 'question')).toEqual([
-      { answers: { language: 'rust', priorities: ['clarity', 'speed'], notes: 'Custom answer — café 🌱' } },
-    ]);
-    expect(provider.requests).toHaveLength(2);
-    const summaries = glyph.page.getByRole('region', { name: 'Submitted answers' });
-    await expect(summaries.locator('dd')).toHaveText(['Rust', 'Clarity, Speed', 'Custom answer — café 🌱']);
-    await glyph.crashHost();
-    await glyph.reload();
-    await expect(summaries.locator('dd')).toHaveText(['Rust', 'Clarity, Speed', 'Custom answer — café 🌱']);
-  });
+  it(
+    'returns selected choices and Other free-text answers to the requesting run exactly once',
+    restartsHost,
+    async ({ glyph, provider }) => {
+      provider.enqueue({
+        output: [
+          question([
+            language,
+            {
+              ...language,
+              id: 'priorities',
+              prompt: 'Which priorities?',
+              allow_multiple: true,
+              options: [
+                { id: 'clarity', label: 'Clarity' },
+                { id: 'speed', label: 'Speed' },
+              ],
+            },
+            { ...language, id: 'notes', prompt: 'Anything else?' },
+          ]),
+        ],
+      });
+      await glyph.send('Ask me three questions.');
+      await form(glyph).getByRole('group').nth(0).getByRole('radio', { name: 'Rust', exact: true }).check();
+      await form(glyph).getByRole('button', { name: 'Continue' }).click();
+      await form(glyph).getByRole('checkbox', { name: 'Clarity', exact: true }).check();
+      await form(glyph).getByRole('checkbox', { name: 'Speed', exact: true }).check();
+      await form(glyph).getByRole('button', { name: 'Previous question' }).click();
+      await expect(
+        form(glyph).getByRole('group').nth(0).getByRole('radio', { name: 'Rust', exact: true }),
+      ).toBeChecked();
+      await form(glyph).getByRole('button', { name: 'Next question' }).click();
+      await expect(form(glyph).getByRole('checkbox', { name: 'Clarity', exact: true })).toBeChecked();
+      await expect(form(glyph).getByRole('checkbox', { name: 'Speed', exact: true })).toBeChecked();
+      await form(glyph).getByRole('button', { name: 'Continue' }).click();
+      await form(glyph).getByRole('group').nth(2).getByRole('radio', { name: 'Other…', exact: true }).check();
+      await form(glyph).getByRole('textbox', { name: 'Your answer' }).fill('Custom answer — café 🌱');
+      provider.enqueue({ chunks: ['All three answers received.'] });
+      // Two same-tick submissions exercise the guard before the DOM disables.
+      await form(glyph).evaluate(element => {
+        element.requestSubmit();
+        element.requestSubmit();
+      });
+      await finished(glyph);
+      expect(outputs(provider, 'question')).toEqual([
+        { answers: { language: 'rust', priorities: ['clarity', 'speed'], notes: 'Custom answer — café 🌱' } },
+      ]);
+      expect(provider.requests).toHaveLength(2);
+      const summaries = glyph.page.getByRole('region', { name: 'Submitted answers' });
+      await expect(summaries.locator('dd')).toHaveText(['Rust', 'Clarity, Speed', 'Custom answer — café 🌱']);
+      await glyph.crashHost();
+      await glyph.reload();
+      await expect(summaries.locator('dd')).toHaveText(['Rust', 'Clarity, Speed', 'Custom answer — café 🌱']);
+    },
+  );
 
   it('cancels a waiting question with its run and rejects a late answer instead of reviving the cancelled run', async ({
     glyph,
@@ -219,32 +228,33 @@ it.describe('Questions and command approvals', () => {
     expect(provider.requests).toHaveLength(2);
   });
 
-  it('remembers an exact command across host restarts while requiring approval in another directory', async ({
-    glyph,
-    provider,
-  }) => {
-    provider.enqueue({ output: [shell()] });
-    await glyph.send('Remember this command.');
-    await expect(approval(glyph)).toBeVisible();
-    provider.enqueue({ chunks: ['Remembered.'] });
-    await approval(glyph).getByRole('button', { name: 'Always Run', exact: true }).click();
-    await finished(glyph);
-    expect(await proof(glyph)).toBe('approved');
-    await glyph.crashHost();
-    await glyph.reload();
-    provider.enqueue({ output: [shell(null, 'remembered')] }, { chunks: ['Ran the remembered command.'] });
-    await glyph.send('Run the exact command again.');
-    await finished(glyph);
-    expect(await proof(glyph)).toBe('approvedapproved');
-    provider.enqueue({ output: [shell('nested', 'different-directory')] });
-    await glyph.send('Run it in nested instead.');
-    await expect(approval(glyph)).toBeVisible();
-    await expect(approval(glyph)).toContainText(join(glyph.workspace, 'nested'));
-    provider.enqueue({ chunks: ['Declined in the other directory.'] });
-    await approval(glyph).getByRole('button', { name: 'Skip', exact: true }).click();
-    await finished(glyph);
-    expect(await proof(glyph, 'nested/approval-proof.txt')).toBeNull();
-  });
+  it(
+    'remembers an exact command across host restarts while requiring approval in another directory',
+    persistsGrant,
+    async ({ glyph, provider }) => {
+      provider.enqueue({ output: [shell()] });
+      await glyph.send('Remember this command.');
+      await expect(approval(glyph)).toBeVisible();
+      provider.enqueue({ chunks: ['Remembered.'] });
+      await approval(glyph).getByRole('button', { name: 'Always Run', exact: true }).click();
+      await finished(glyph);
+      expect(await proof(glyph)).toBe('approved');
+      await glyph.crashHost();
+      await glyph.reload();
+      provider.enqueue({ output: [shell(null, 'remembered')] }, { chunks: ['Ran the remembered command.'] });
+      await glyph.send('Run the exact command again.');
+      await finished(glyph);
+      expect(await proof(glyph)).toBe('approvedapproved');
+      provider.enqueue({ output: [shell('nested', 'different-directory')] });
+      await glyph.send('Run it in nested instead.');
+      await expect(approval(glyph)).toBeVisible();
+      await expect(approval(glyph)).toContainText(join(glyph.workspace, 'nested'));
+      provider.enqueue({ chunks: ['Declined in the other directory.'] });
+      await approval(glyph).getByRole('button', { name: 'Skip', exact: true }).click();
+      await finished(glyph);
+      expect(await proof(glyph, 'nested/approval-proof.txt')).toBeNull();
+    },
+  );
 
   it('advances queued question forms without replaying answers', async ({ glyph, provider }) => {
     provider.enqueue({
@@ -269,22 +279,26 @@ it.describe('Questions and command approvals', () => {
     ]);
     expect(provider.requests).toHaveLength(2);
   });
-  it('removes interrupted question and approval controls after reload or host failure', async ({ glyph, provider }) => {
-    provider.enqueue({ output: [question()] });
-    await glyph.send('Wait for an answer.');
-    await expect(form(glyph)).toBeVisible();
-    await glyph.reload();
-    await expect(form(glyph)).toHaveCount(0);
-    await finished(glyph);
-    provider.enqueue({ output: [shell()] });
-    await glyph.send('Wait for approval.');
-    await expect(approval(glyph)).toBeVisible();
-    await glyph.crashHost();
-    await expect(approval(glyph)).toHaveCount(0);
-    await finished(glyph);
-    expect(await proof(glyph)).toBeNull();
-    await glyph.reload();
-    await expect(approval(glyph)).toHaveCount(0);
-    expect(provider.requests).toHaveLength(2);
-  });
+  it(
+    'removes interrupted question and approval controls after reload or host failure',
+    restartsHost,
+    async ({ glyph, provider }) => {
+      provider.enqueue({ output: [question()] });
+      await glyph.send('Wait for an answer.');
+      await expect(form(glyph)).toBeVisible();
+      await glyph.reload();
+      await expect(form(glyph)).toHaveCount(0);
+      await finished(glyph);
+      provider.enqueue({ output: [shell()] });
+      await glyph.send('Wait for approval.');
+      await expect(approval(glyph)).toBeVisible();
+      await glyph.crashHost();
+      await expect(approval(glyph)).toHaveCount(0);
+      await finished(glyph);
+      expect(await proof(glyph)).toBeNull();
+      await glyph.reload();
+      await expect(approval(glyph)).toHaveCount(0);
+      expect(provider.requests).toHaveLength(2);
+    },
+  );
 });

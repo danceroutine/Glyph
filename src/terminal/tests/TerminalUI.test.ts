@@ -1,6 +1,22 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { Duplex, PassThrough, Writable } from 'node:stream';
 import { stripVTControlCharacters } from 'node:util';
-import { describe, expect, it, vi } from 'vitest';
+import { render } from 'ink-testing-library';
+import type { ReactElement } from 'react';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import type { ChatAccount } from '#src/chat/ChatAccount.js';
+import type { ChatBackendPresentation } from '#src/chat/ChatBackend.js';
+import type { Model } from '#src/chat/Model.js';
+import type { Usage } from '#src/chat/Usage.js';
+import { DiagnosticSeverity } from '#src/chat/DiagnosticSeverity.js';
+import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import type { ProjectContext } from '#src/project/context/ProjectContext.js';
+import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
+import { AccountSelectionType } from '#src/terminal/AccountSelectionType.js';
+import { createProposalReviewFixture } from '#src/terminal/ui/proposal/test/ProposalReviewFixture.js';
+import { TerminalInkRenderer } from '#src/terminal/ui/runtime/TerminalInkRenderer.js';
+import type { TerminalOutputStream } from '#src/terminal/ui/runtime/TerminalOutputStream.js';
 import { ChatResponsePartType } from '#src/chat/ChatResponsePartType.js';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
@@ -10,6 +26,11 @@ import { TerminalUI } from '#src/terminal/TerminalUI.js';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
+
+vi.mock('node:child_process', async importOriginal => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+  spawn: vi.fn(),
+}));
 
 describe(TerminalUI, () => {
   describe(TerminalUI.prototype.nextAction, () => {
@@ -563,8 +584,940 @@ describe(TerminalUI, () => {
       expect(renderer.entries).toHaveLength(1);
       ui.close();
     });
+
+    it('replays a chat in Ink at the default width when the terminal reports no columns', () => {
+      const { ui, renderer } = inkTerminal({ output: new ColumnlessOutput() });
+
+      ui.showChatActivated(chatSummary('chat-123456', 'Saved work', 0), []);
+
+      expect(renderer.replaceTranscript).toHaveBeenCalledOnce();
+      expect(frame(renderer.replaceTranscript.mock.calls[0]?.[0])).toContain('Saved work');
+    });
+  });
+
+  describe(TerminalUI.clean, () => {
+    it('removes terminal control sequences from untrusted text', () => {
+      expect(TerminalUI.clean('\u001b[31mred\u001b[0m')).toBe('red');
+    });
+  });
+
+  describe(TerminalUI.prototype.on, () => {
+    it('stops notifying an interrupt listener after it is removed', async () => {
+      const input = new PassThrough();
+      const ui = new TerminalUI(input, new MemoryOutput(true), new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+      const removed = vi.fn();
+      ui.on('SIGINT', removed);
+      ui.off('SIGINT', removed);
+      const interrupted = new Promise<void>(resolve => ui.on('SIGINT', resolve));
+      void ui.confirmInferenceAccess('Enable?', new AbortController().signal);
+
+      input.write('\u0003');
+
+      await interrupted;
+      expect(removed).not.toHaveBeenCalled();
+    });
+
+    it('forwards an interrupt requested by the Ink renderer', () => {
+      const { ui, renderer } = inkTerminal();
+      const listener = vi.fn();
+      ui.on('SIGINT', listener);
+
+      (renderer.setBackgroundShells.mock.contexts[0] as TerminalInkRenderer | undefined)?.requestInterrupt();
+
+      expect(listener).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe(TerminalUI.prototype.onClose, () => {
+    it('announces closure when redirected input ends', () => {
+      const input = new PassThrough();
+      const ui = new TerminalUI(input, new MemoryOutput(false), new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+      const listener = vi.fn();
+      ui.onClose(listener);
+
+      input.emit('end');
+
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('announces closure when the Ink input ends', () => {
+      const { ui, terminal } = inkTerminal();
+      const listener = vi.fn();
+      ui.onClose(listener);
+
+      terminal.emit('end');
+
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('announces closure when a pending redirected prompt is closed', () => {
+      const input = new PassThrough();
+      const ui = new TerminalUI(input, new MemoryOutput(false), new MemoryOutput(false));
+      const listener = vi.fn();
+      ui.onClose(listener);
+      void ui.confirmInferenceAccess('Enable?', new AbortController().signal);
+
+      ui.close();
+
+      expect(listener).toHaveBeenCalledOnce();
+    });
+
+    it('ignores the closure of a prompt reader that is no longer active', () => {
+      const input = new PassThrough();
+      const ui = new TerminalUI(input, new MemoryOutput(false), new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+      const listener = vi.fn();
+      ui.onClose(listener);
+      void ui.confirmInferenceAccess('Enable?', new AbortController().signal);
+      (ui as unknown as { reader: unknown }).reader = undefined;
+
+      input.emit('end');
+
+      expect(listener).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe(TerminalUI.prototype.close, () => {
+    it('can be called more than once', () => {
+      const shutdown = vi.fn();
+      const ui = new TerminalUI(new PassThrough(), new MemoryOutput(false), new MemoryOutput(false), undefined, {
+        sessions: [],
+        onDidChange: () => () => {},
+        shutdown,
+      } as unknown as ShellSessionManager);
+
+      ui.close();
+      ui.close();
+
+      expect(shutdown).toHaveBeenCalledOnce();
+    });
+
+    it('rejects prompts after the session is closed', async () => {
+      const ui = new TerminalUI(new PassThrough(), new MemoryOutput(false), new MemoryOutput(false));
+      ui.close();
+
+      await expect(ui.confirmInferenceAccess('Enable?', new AbortController().signal)).rejects.toThrow(
+        'Session closed.',
+      );
+    });
+  });
+
+  describe(TerminalUI.prototype.connectShellSessions, () => {
+    it('coalesces background shell refreshes and cancels a pending refresh when replaced or closed', () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const firstListeners: (() => void)[] = [];
+      const firstStop = vi.fn();
+      const first = {
+        sessions: [],
+        onDidChange: (listener: () => void) => {
+          firstListeners.push(listener);
+          return firstStop;
+        },
+        shutdown: vi.fn(),
+      } as unknown as ShellSessionManager;
+      const secondListeners: (() => void)[] = [];
+      const second = {
+        sessions: [],
+        onDidChange: (listener: () => void) => {
+          secondListeners.push(listener);
+          return () => {};
+        },
+        shutdown: vi.fn(),
+      } as unknown as ShellSessionManager;
+      const ui = new TerminalUI(new PassThrough(), new MemoryOutput(false), new MemoryOutput(false), undefined, first);
+
+      firstListeners[0]?.();
+      firstListeners[0]?.();
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(50);
+      expect(vi.getTimerCount()).toBe(0);
+      firstListeners[0]?.();
+      ui.connectShellSessions(second);
+      expect(firstStop).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      secondListeners[0]?.();
+      expect(vi.getTimerCount()).toBe(1);
+      ui.close();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('shows the background shells known when the Ink terminal starts', () => {
+      const sessions = [
+        {
+          id: 'terminal-one',
+          workingDirectory: '/project',
+          command: 'pnpm dev',
+          status: ShellSessionStatus.RUNNING,
+          background: true,
+          outputTail: 'ready',
+          startedAt: '2026-10-07T00:00:00.000Z',
+        },
+      ];
+      const { renderer } = inkTerminal({
+        shellSessions: {
+          sessions,
+          onDidChange: () => () => {},
+          shutdown: vi.fn(),
+        } as unknown as ShellSessionManager,
+      });
+
+      expect(renderer.setBackgroundShells).toHaveBeenCalledWith(sessions);
+    });
+  });
+
+  describe(TerminalUI.prototype.showHelp, () => {
+    it('prints the command help', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.showHelp();
+
+      expect(output.value).toBe(`${TerminalUI.help}\n`);
+    });
+  });
+
+  describe(TerminalUI.prototype.showWelcome, () => {
+    it('describes the provider, project roots, log, and tracing in redirected output', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.showWelcome(projectContext(), '/state/trace.log', true, presentation());
+
+      expect(output.value).toBe(
+        `Glyph | Fixture\nProject: Project (workspace)\n  App: /project/app\n  Docs: /project/docs\nFixture usage\nLog: /state/trace.log\nFull provider tracing: on\n${TerminalUI.help}\n`,
+      );
+    });
+
+    it('falls back to a generic greeting with logging and tracing off in redirected output', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.showWelcome(projectContext(), undefined, false);
+
+      expect(output.value).toBe(
+        `Glyph\nProject: Project (workspace)\n  App: /project/app\n  Docs: /project/docs\nLog: off\nFull provider tracing: off\n${TerminalUI.help}\n`,
+      );
+    });
+
+    it('describes the provider, project roots, log, and tracing in Ink', () => {
+      const { ui, renderer } = inkTerminal();
+
+      ui.showWelcome(projectContext(), '/state/trace.log', true, presentation());
+
+      const rendered = frame(renderer.append.mock.calls[0]?.[0]);
+      expect(rendered).toContain('Glyph | Fixture');
+      expect(rendered).toContain('Project: Project (workspace)');
+      expect(rendered).toContain('  App: /project/app');
+      expect(rendered).toContain('  Docs: /project/docs');
+      expect(rendered).toContain('Fixture usage');
+      expect(rendered).toContain('Log: /state/trace.log');
+      expect(rendered).toContain('Full provider tracing: on');
+    });
+
+    it('falls back to a generic greeting with logging and tracing off in Ink', () => {
+      const { ui, renderer } = inkTerminal();
+
+      ui.showWelcome(projectContext(), undefined, false);
+
+      const rendered = frame(renderer.append.mock.calls[0]?.[0]);
+      expect(rendered).toContain('Glyph');
+      expect(rendered).toContain('Log: off');
+      expect(rendered).toContain('Full provider tracing: off');
+      expect(rendered).not.toContain('Fixture usage');
+    });
+  });
+
+  describe(TerminalUI.prototype.chooseAccount, () => {
+    it('selects the only account when the answer is left empty', async () => {
+      const account = chatAccount({ detail: 'Team' });
+      const { ui, output } = scriptedTerminal(['']);
+
+      await expect(ui.chooseAccount([account], presentation(), new AbortController().signal)).resolves.toEqual({
+        type: AccountSelectionType.ACCOUNT,
+        account,
+      });
+      expect(output.value).toBe(
+        '\nAccounts\n1. developer@example.com [Team]\na. Add account\nAccount number [1], or a to add: ',
+      );
+    });
+
+    it('chooses to add an account', async () => {
+      const { ui } = scriptedTerminal([' A ']);
+
+      await expect(ui.chooseAccount([chatAccount()], presentation(), new AbortController().signal)).resolves.toEqual({
+        type: AccountSelectionType.ADD,
+      });
+    });
+
+    it('asks again until a listed account number is entered', async () => {
+      const first = chatAccount({ id: 'first' });
+      const second = chatAccount({ id: 'second', label: 'other@example.com', connected: false });
+      const { ui, output } = scriptedTerminal(['', '3', '1.0', '2']);
+
+      await expect(ui.chooseAccount([first, second], presentation(), new AbortController().signal)).resolves.toEqual({
+        type: AccountSelectionType.ACCOUNT,
+        account: second,
+      });
+      expect(output.value).toContain('2. other@example.com (signed out)\n');
+      expect(output.prompts).toEqual(Array.from({ length: 4 }, () => 'Account number, or a to add: '));
+      expect(occurrences(output.value, 'Choose an account number or a to add one.')).toBe(3);
+    });
+
+    it('lists accounts in Ink and reads the choice from the Ink prompt', async () => {
+      const first = chatAccount({ id: 'first', detail: 'Team' });
+      const second = chatAccount({ id: 'second', label: 'other@example.com', connected: false });
+      const { ui, renderer } = inkTerminal();
+      renderer.prompt.mockResolvedValueOnce({ prompt: 'x', attachmentPaths: [] });
+      renderer.prompt.mockResolvedValueOnce({ prompt: '2', attachmentPaths: [] });
+
+      await expect(ui.chooseAccount([first, second], presentation(), new AbortController().signal)).resolves.toEqual({
+        type: AccountSelectionType.ACCOUNT,
+        account: second,
+      });
+      const rendered = frame(renderer.append.mock.calls[0]?.[0]);
+      expect(rendered).toContain('1. developer@example.com [Team]');
+      expect(rendered).toContain('2. other@example.com (signed out)');
+      expect(rendered).toContain('a. Add account');
+      expect(frame(renderer.append.mock.calls[1]?.[0])).toContain('Choose an account number or a to add one.');
+      expect(renderer.prompt).toHaveBeenCalledWith('Account number, or a to add: ', expect.any(AbortSignal));
+    });
+  });
+
+  describe(TerminalUI.prototype.chooseModel, () => {
+    it('uses the configured model without asking', async () => {
+      const { ui, output } = scriptedTerminal([]);
+
+      await expect(ui.chooseModel(models(), 'model-b', new AbortController().signal)).resolves.toEqual({
+        slug: 'model-b',
+        name: 'Model B',
+      });
+      expect(output.value).toBe('1. Model A (model-a)\n2. Model B (model-b)\n');
+    });
+
+    it('warns about an unavailable configured model and asks until a listed number is entered', async () => {
+      const { ui, output } = scriptedTerminal(['abc', '9', '1']);
+
+      await expect(ui.chooseModel(models(), 'retired', new AbortController().signal)).resolves.toEqual({
+        slug: 'model-a',
+        name: 'Model A',
+      });
+      expect(output.value).toContain('CHAT_MODEL is not in this account catalog. Choose an available model.\n');
+      expect(output.prompts).toEqual(['Model number: ', 'Model number: ', 'Model number: ']);
+    });
+
+    it('lists models in Ink and asks without a configured model', async () => {
+      const { ui, renderer } = inkTerminal();
+      renderer.prompt.mockResolvedValueOnce({ prompt: '2', attachmentPaths: [] });
+
+      await expect(ui.chooseModel(models(), undefined, new AbortController().signal)).resolves.toEqual({
+        slug: 'model-b',
+        name: 'Model B',
+      });
+      const rendered = frame(renderer.append.mock.calls[0]?.[0]);
+      expect(rendered).toContain('Available models');
+      expect(rendered).toContain('2. Model B (model-b)');
+      expect(renderer.append).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe(TerminalUI.prototype.confirmInferenceAccess, () => {
+    it.each([
+      { answer: ' Y ', expected: true },
+      { answer: 'n', expected: false },
+      { answer: '', expected: false },
+    ])('treats "$answer" as consent $expected', async ({ answer, expected }) => {
+      const { ui, output } = scriptedTerminal([answer]);
+
+      await expect(ui.confirmInferenceAccess('Enable model access?', new AbortController().signal)).resolves.toBe(
+        expected,
+      );
+      expect(output.prompts).toEqual(['Enable model access? [y/N]: ']);
+    });
+  });
+
+  describe(TerminalUI.prototype.acknowledgeAccountNotice, () => {
+    it('shows the notice and waits for acknowledgement', async () => {
+      const { ui, output } = scriptedTerminal(['']);
+
+      await ui.acknowledgeAccountNotice(
+        { message: 'Preview terms changed.', acknowledgementPrompt: 'Press Enter: ' },
+        new AbortController().signal,
+      );
+
+      expect(output.value).toBe('Preview terms changed.\nPress Enter: ');
+    });
+  });
+
+  describe(TerminalUI.prototype.authorize, () => {
+    it('prints the sign-in link and opens it with the macOS browser launcher', async () => {
+      setPlatform('darwin');
+      const child = Object.assign(new EventEmitter(), { unref: vi.fn() });
+      vi.mocked(spawn).mockReturnValueOnce(child as unknown as ChildProcess);
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      await ui.authorize({ url: 'https://auth.example/login', title: 'Sign in', message: 'Continue in the browser.' });
+      child.emit('error', new Error('launcher missing'));
+
+      expect(output.value).toBe(
+        '\nSign in\nContinue in the browser.\n\nIf the browser does not open, visit:\nhttps://auth.example/login\n\n',
+      );
+      expect(spawn).toHaveBeenLastCalledWith('open', ['https://auth.example/login'], { stdio: 'ignore' });
+      expect(child.unref).toHaveBeenCalledOnce();
+    });
+
+    it('opens the sign-in link with the desktop launcher on other Unix systems', async () => {
+      setPlatform('linux');
+      const child = Object.assign(new EventEmitter(), { unref: vi.fn() });
+      vi.mocked(spawn).mockReturnValueOnce(child as unknown as ChildProcess);
+      const ui = new TerminalUI(new PassThrough(), new MemoryOutput(false), new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      await ui.authorize({ url: 'https://auth.example/login', title: 'Sign in', message: 'Continue.' });
+
+      expect(spawn).toHaveBeenLastCalledWith('xdg-open', ['https://auth.example/login'], { stdio: 'ignore' });
+    });
+
+    it('only shows the sign-in link in Ink on Windows', async () => {
+      setPlatform('win32');
+      vi.mocked(spawn).mockClear();
+      const { ui, renderer } = inkTerminal();
+
+      await ui.authorize({ url: 'https://auth.example/login', title: 'Sign in', message: 'Continue.' });
+
+      const rendered = frame(renderer.append.mock.calls[0]?.[0]);
+      expect(rendered).toContain('Sign in');
+      expect(rendered).toContain('If the browser does not open, visit:');
+      expect(rendered).toContain('https://auth.example/login');
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe(TerminalUI.prototype.nextAction, () => {
+    it('asks again after an empty prompt and reports unknown slash commands', async () => {
+      const { ui, output } = scriptedTerminal(['   ', '/unknown']);
+
+      await expect(ui.nextAction(new AbortController().signal)).resolves.toEqual({
+        type: TerminalActionType.UNKNOWN_COMMAND,
+      });
+      expect(output.prompts).toEqual(['you> ', 'you> ']);
+    });
+
+    it('passes project files and pending change counts to the Ink prompt', async () => {
+      const files = fileSearch(async (query, { generation }) => ({ generation, query, fileCount: 0, matches: [] }));
+      const { ui, renderer } = inkTerminal({ files });
+      renderer.prompt.mockResolvedValueOnce({ prompt: ' ', attachmentPaths: [] });
+      renderer.prompt.mockResolvedValueOnce({ prompt: '/help', attachmentPaths: [] });
+      const signal = new AbortController().signal;
+
+      await expect(ui.nextAction(signal, 2)).resolves.toEqual({ type: TerminalActionType.HELP });
+      expect(renderer.prompt).toHaveBeenCalledTimes(2);
+      expect(renderer.prompt).toHaveBeenLastCalledWith('you> ', signal, files, 2);
+    });
+  });
+
+  describe(TerminalUI.prototype.preservePromptDraft, () => {
+    it('keeps the Ink prompt draft', () => {
+      const { ui, renderer } = inkTerminal();
+
+      ui.preservePromptDraft();
+
+      expect(renderer.preservePromptDraft).toHaveBeenCalledOnce();
+    });
+
+    it('does nothing in redirected IO', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.preservePromptDraft();
+
+      expect(output.value).toBe('');
+    });
+  });
+
+  describe(TerminalUI.prototype.push, () => {
+    it('writes diagnostics to the error stream and starts a fresh response section afterwards', () => {
+      const output = new MemoryOutput(false);
+      const errorOutput = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, errorOutput);
+      onTestFinished(() => ui.close());
+
+      ui.push({ type: ChatResponsePartType.TEXT, value: 'Before.' });
+      ui.push({ type: ChatResponsePartType.DIAGNOSTIC, severity: DiagnosticSeverity.ERROR, message: 'Trace failed.' });
+      ui.push({ type: ChatResponsePartType.TEXT, value: 'After.' });
+
+      expect(output.value).toBe('assistant> Before.assistant> After.');
+      expect(errorOutput.value).toBe('Trace failed.\n');
+    });
+
+    it('separates tool activity from preceding text and reports started and silent tools', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.push({ type: ChatResponsePartType.TEXT, value: 'Reading.' });
+      ui.push({
+        type: ChatResponsePartType.TOOL,
+        activity: { phase: ToolActivityPhase.STARTED, namespace: 'project', name: 'read', callId: 'a', arguments: '' },
+      });
+      ui.push({
+        type: ChatResponsePartType.TOOL,
+        activity: { phase: ToolActivityPhase.COMPLETED, name: 'read', callId: 'a', arguments: '' },
+      });
+
+      expect(output.value).toBe('assistant> Reading.\n\n[project.read …]\n[read ✓]\n');
+    });
+
+    it.each([
+      { name: 'a plain message', error: 'Denied.', expected: 'Error: Denied.' },
+      { name: 'an empty value', error: null, expected: 'Error: null' },
+      { name: 'a list', error: ['first', 2], expected: 'Error: first, 2' },
+      { name: 'a message without code', error: { message: 'Only message.' }, expected: 'Error: Only message.' },
+      { name: 'a code without message', error: { code: 'DENIED' }, expected: 'Error: DENIED' },
+      {
+        name: 'an object without a readable code or message',
+        error: { code: 5, message: false },
+        expected: 'Error: {"code":5,"message":false}',
+      },
+    ])('describes a failed tool reporting $name', ({ error, expected }) => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.push({
+        type: ChatResponsePartType.TOOL,
+        activity: {
+          phase: ToolActivityPhase.COMPLETED,
+          name: 'write',
+          callId: 'call',
+          arguments: 'line one\nline two\n',
+          output: JSON.stringify({ error }),
+        },
+      });
+
+      expect(output.value).toBe(`[write ×]\n  line one\n  line two\n  ${expected}\n`);
+    });
+
+    it('describes tool error details that cannot be serialized', () => {
+      vi.spyOn(JSON, 'parse').mockReturnValueOnce({ error: { size: 10n, missing: undefined } });
+      onTestFinished(() => {
+        vi.restoreAllMocks();
+      });
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.push({
+        type: ChatResponsePartType.TOOL,
+        activity: { phase: ToolActivityPhase.COMPLETED, name: 'write', callId: 'call', arguments: '', output: '{}' },
+      });
+
+      expect(output.value).toBe(
+        '[write ×]\n  Error: Unprintable error details (size=Unprintable error details; missing=undefined)\n',
+      );
+    });
+  });
+
+  describe(TerminalUI.prototype.showTurnCompleted, () => {
+    it('prints the duration and token usage in redirected output', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.showTurnCompleted(1_500, usage());
+
+      expect(output.value).toBe('\n[1.5s | input 10 (cached 2) | output 5 (reasoning 1) | total 15]\n\n');
+    });
+
+    it('completes the Ink response with the duration and token usage', () => {
+      const { ui, renderer } = inkTerminal();
+
+      ui.showTurnCompleted(2_000, usage());
+
+      expect(frame(renderer.completeResponse.mock.calls[0]?.[0])).toBe(
+        '[2.0s | input 10 (cached 2) | output 5 (reasoning 1) | total 15]',
+      );
+    });
+  });
+
+  describe(TerminalUI.prototype.showTurnFailed, () => {
+    it('reports the failure on the error stream in redirected output', () => {
+      const errorOutput = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), new MemoryOutput(false), errorOutput);
+      onTestFinished(() => ui.close());
+
+      ui.showTurnFailed('Provider failed.');
+
+      expect(errorOutput.value).toBe('\nProvider failed.\nThis turn was not added to history.\n\n');
+    });
+
+    it('completes the Ink response with the failure', () => {
+      const { ui, renderer } = inkTerminal();
+
+      ui.showTurnFailed('Provider failed.');
+
+      expect(frame(renderer.completeResponse.mock.calls[0]?.[0])).toBe(
+        'Provider failed.\nThis turn was not added to history.',
+      );
+    });
+  });
+
+  describe(TerminalUI.prototype.showActive, () => {
+    it('prints the active account and model in redirected output', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.showActive(chatAccount({ detail: 'Team' }), { slug: 'model-a', name: 'Model A' }, presentation());
+      ui.showActive(chatAccount(), { slug: 'model-a', name: 'Model A' }, presentation());
+
+      expect(output.value).toBe(
+        '\nActive  developer@example.com [Team]\nModel   model-a  Fixture access\n\n' +
+          '\nActive  developer@example.com\nModel   model-a  Fixture access\n\n',
+      );
+    });
+
+    it('shows the active account and model in Ink', () => {
+      const { ui, renderer } = inkTerminal();
+
+      ui.showActive(chatAccount({ detail: 'Team' }), { slug: 'model-a', name: 'Model A' }, presentation());
+      ui.showActive(chatAccount(), { slug: 'model-a', name: 'Model A' }, presentation());
+
+      expect(frame(renderer.append.mock.calls[0]?.[0])).toContain('Active  developer@example.com [Team]');
+      expect(frame(renderer.append.mock.calls[1]?.[0])).toContain('Active  developer@example.com\n');
+      expect(frame(renderer.append.mock.calls[1]?.[0])).toContain('Model   model-a  Fixture access');
+    });
+  });
+
+  describe('status messages', () => {
+    it('prints conversation, command, usage, trace, logout, and error notices in redirected output', () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      ui.showConversationReset();
+      ui.showUnknownCommand();
+      ui.showUsage(usage());
+      ui.showTrace(true, '/state/trace.log');
+      ui.showTrace(true, undefined);
+      ui.showTrace(false, '/state/trace.log');
+      ui.showLogout(true);
+      ui.showLogout(false);
+      ui.showError('\u001b[31mBroken\u001b[0m');
+
+      expect(output.value).toBe(
+        [
+          'Conversation cleared.',
+          'Unknown command. Use /help.',
+          'input 10 (cached 2) | output 5 (reasoning 1) | total 15',
+          'Completed requests only. Plan/credit limits: https://chatgpt.com/settings/usage',
+          'Full provider tracing is on: /state/trace.log',
+          'Full provider tracing is on: logger destination unavailable',
+          'Full provider tracing is off.',
+          'Signed out. Renewable session revoked.',
+          "Local credentials cleared. Remote revocation was not confirmed; review the provider's credential settings.",
+          'Broken',
+          '',
+        ].join('\n'),
+      );
+    });
+
+    it('shows notices in Ink', () => {
+      const { ui, renderer } = inkTerminal();
+
+      ui.showError('Broken');
+
+      expect(frame(renderer.append.mock.calls[0]?.[0])).toBe('Broken');
+    });
+  });
+
+  describe(TerminalUI.prototype.reviewProposals, () => {
+    it('does nothing when no reviews are active', async () => {
+      const output = new MemoryOutput(false);
+      const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
+      onTestFinished(() => ui.close());
+
+      await ui.reviewProposals(
+        { activeReviews: [] } as unknown as ProposalReviewManager,
+        new AbortController().signal,
+        () => {},
+      );
+
+      expect(output.value).toBe('');
+    });
+
+    it('hands active reviews to the Ink reviewer', async () => {
+      const fixture = createProposalReviewFixture();
+      const { ui, renderer } = inkTerminal();
+      const signal = new AbortController().signal;
+      const interrupt = vi.fn();
+
+      await ui.reviewProposals(fixture.manager, signal, interrupt);
+
+      expect(renderer.review).toHaveBeenCalledWith(fixture.manager, signal, interrupt);
+    });
+
+    it('asks again after an unrecognized answer and keeps the change when confirmed', async () => {
+      const fixture = createProposalReviewFixture();
+      const { ui, output } = scriptedTerminal(['maybe', 'Y']);
+
+      await ui.reviewProposals(fixture.manager, new AbortController().signal, () => {});
+
+      expect(output.prompts).toEqual(['Keep / revert? [y/n/q]: ', 'Keep / revert? [y/n/q]: ']);
+      expect(output.value).toContain('src/App.tsx');
+      expect(fixture.accept).toHaveBeenCalledWith('proposal', 'item');
+      expect(fixture.reject).not.toHaveBeenCalled();
+    });
+
+    it('reverts a change', async () => {
+      const fixture = createProposalReviewFixture();
+      const { ui } = scriptedTerminal(['n']);
+
+      await ui.reviewProposals(fixture.manager, new AbortController().signal, () => {});
+
+      expect(fixture.reject).toHaveBeenCalledWith('proposal', 'item');
+    });
+
+    it('stops reviewing when asked to quit', async () => {
+      const fixture = createProposalReviewFixture();
+      const { ui } = scriptedTerminal(['q']);
+
+      await ui.reviewProposals(fixture.manager, new AbortController().signal, () => {});
+
+      expect(fixture.accept).not.toHaveBeenCalled();
+      expect(fixture.reject).not.toHaveBeenCalled();
+    });
+
+    it('reports failed decisions and keeps the change pending', async () => {
+      const fixture = createProposalReviewFixture();
+      const accept = fixture.accept.getMockImplementation();
+      fixture.accept
+        .mockRejectedValueOnce(new Error('File changed\u0007'))
+        .mockRejectedValueOnce('locked')
+        .mockImplementationOnce(async (...values) => accept?.(...values));
+      const { ui, errorOutput } = scriptedTerminal(['y', 'y', 'y']);
+
+      await ui.reviewProposals(fixture.manager, new AbortController().signal, () => {});
+
+      expect(errorOutput.value).toBe('Error: File changed\nError: locked\n');
+      expect(fixture.accept).toHaveBeenCalledTimes(3);
+    });
+
+    it('retries saving a pending checkpoint before continuing the review', async () => {
+      const fixture = createProposalReviewFixture();
+      const checkpoints = [true, true, true];
+      const flushPendingCheckpoint = vi
+        .fn(async () => {})
+        .mockRejectedValueOnce(new Error('save failed'))
+        .mockRejectedValueOnce('disk offline');
+      const manager = {
+        activeReviews: fixture.manager.activeReviews,
+        get hasPendingCheckpoint() {
+          return checkpoints.shift() ?? false;
+        },
+        flushPendingCheckpoint,
+        acceptInReview: fixture.accept,
+        rejectInReview: fixture.reject,
+      } as unknown as ProposalReviewManager;
+      const { ui, output, errorOutput } = scriptedTerminal(['r', ' R ', 'q']);
+
+      await ui.reviewProposals(manager, new AbortController().signal, () => {});
+
+      expect(flushPendingCheckpoint).toHaveBeenCalledTimes(3);
+      expect(errorOutput.value).toBe('Error: save failed\nError: disk offline\n');
+      expect(output.prompts).toEqual([
+        'Retry saving review? [r/q]: ',
+        'Retry saving review? [r/q]: ',
+        'Keep / revert? [y/n/q]: ',
+      ]);
+    });
+
+    it('stops reviewing when a failed checkpoint is not retried', async () => {
+      const fixture = createProposalReviewFixture();
+      const flushPendingCheckpoint = vi.fn(async () => {
+        throw new Error('save failed');
+      });
+      const manager = {
+        activeReviews: fixture.manager.activeReviews,
+        hasPendingCheckpoint: true,
+        flushPendingCheckpoint,
+      } as unknown as ProposalReviewManager;
+      const { ui } = scriptedTerminal(['q']);
+
+      await ui.reviewProposals(manager, new AbortController().signal, () => {});
+
+      expect(flushPendingCheckpoint).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe(TerminalUI.prototype.present, () => {
+    it('asks untitled questions through redirected IO', async () => {
+      const { ui, output } = scriptedTerminal(['2']);
+
+      await expect(
+        ui.present({ questions: [question('single', false)] }, new AbortController().signal),
+      ).resolves.toEqual({ answers: [{ questionId: 'single', type: 'SELECTION', optionIds: ['second'] }] });
+      expect(output.value.startsWith('\nChoose for single.\n')).toBe(true);
+    });
+
+    it('forwards an interrupt raised by the Ink question form', async () => {
+      const { ui, renderer } = inkTerminal();
+      renderer.presentQuestionForm.mockImplementationOnce(async (_form, _signal, interrupt) => {
+        interrupt();
+        return { answers: [] };
+      });
+      const listener = vi.fn();
+      ui.on('SIGINT', listener);
+
+      await expect(
+        ui.present({ questions: [question('single', false)] }, new AbortController().signal),
+      ).resolves.toEqual({ answers: [] });
+      expect(listener).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe(TerminalUI.prototype.presentShellPermission, () => {
+    it.each([
+      { choice: '1', decision: ShellPermissionDecision.ALLOW_ONCE },
+      { choice: '2', decision: ShellPermissionDecision.ALWAYS_ALLOW },
+      { choice: '3', decision: ShellPermissionDecision.ALLOW_SAFE },
+      { choice: '4', decision: ShellPermissionDecision.ALLOW_OUTSIDE_SANDBOX_ONCE },
+      { choice: '6', decision: ShellPermissionDecision.DENY },
+    ])('returns $decision for choice $choice', async ({ choice, decision }) => {
+      const { ui } = scriptedTerminal([choice]);
+
+      await expect(
+        ui.presentShellPermission({ command: 'pnpm test', workingDirectory: '/project' }, new AbortController().signal),
+      ).resolves.toBe(decision);
+    });
+
+    it('forwards an interrupt raised by the Ink permission prompt', async () => {
+      const { ui, renderer } = inkTerminal();
+      renderer.presentShellPermission.mockImplementationOnce(async (_request, _signal, interrupt) => {
+        interrupt();
+        return ShellPermissionDecision.DENY;
+      });
+      const listener = vi.fn();
+      ui.on('SIGINT', listener);
+
+      await expect(
+        ui.presentShellPermission({ command: 'pnpm test', workingDirectory: '/project' }, new AbortController().signal),
+      ).resolves.toBe(ShellPermissionDecision.DENY);
+      expect(listener).toHaveBeenCalledOnce();
+    });
   });
 });
+
+function inkTerminal(
+  options: { output?: TerminalOutputStream; files?: WorkspacePathIndex; shellSessions?: ShellSessionManager } = {},
+) {
+  const renderer = {
+    append: vi.spyOn(TerminalInkRenderer.prototype, 'append').mockImplementation(() => {}),
+    replaceTranscript: vi.spyOn(TerminalInkRenderer.prototype, 'replaceTranscript').mockImplementation(() => {}),
+    completeResponse: vi.spyOn(TerminalInkRenderer.prototype, 'completeResponse').mockImplementation(() => {}),
+    prompt: vi.spyOn(TerminalInkRenderer.prototype, 'prompt'),
+    review: vi.spyOn(TerminalInkRenderer.prototype, 'review').mockResolvedValue(undefined),
+    presentQuestionForm: vi.spyOn(TerminalInkRenderer.prototype, 'presentQuestionForm'),
+    presentShellPermission: vi.spyOn(TerminalInkRenderer.prototype, 'presentShellPermission'),
+    preservePromptDraft: vi.spyOn(TerminalInkRenderer.prototype, 'preservePromptDraft'),
+    setBackgroundShells: vi.spyOn(TerminalInkRenderer.prototype, 'setBackgroundShells'),
+  };
+  const terminal = new VirtualTTY();
+  const ui = new TerminalUI(
+    terminal,
+    options.output ?? new MemoryOutput(true),
+    new MemoryOutput(false),
+    options.files,
+    options.shellSessions,
+  );
+  onTestFinished(() => {
+    ui.close();
+    vi.restoreAllMocks();
+  });
+  return { ui, terminal, renderer };
+}
+
+function scriptedTerminal(answers: readonly string[]) {
+  const input = new PassThrough();
+  const output = new ScriptedOutput(input, answers);
+  const errorOutput = new MemoryOutput(false);
+  const ui = new TerminalUI(input, output, errorOutput);
+  onTestFinished(() => ui.close());
+  return { ui, output, errorOutput };
+}
+
+function frame(node: unknown): string {
+  const view = render(node as ReactElement);
+  const text = stripVTControlCharacters(view.lastFrame() ?? '');
+  view.unmount();
+  return text;
+}
+
+function setPlatform(platform: NodeJS.Platform): void {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { ...original, value: platform });
+  onTestFinished(() => {
+    Object.defineProperty(process, 'platform', original);
+  });
+}
+
+function chatAccount(overrides: Partial<ChatAccount> = {}): ChatAccount {
+  return {
+    provider: 'fixture',
+    id: 'account',
+    label: 'developer@example.com',
+    connected: true,
+    inferenceAccess: true,
+    ...overrides,
+  };
+}
+
+function presentation(): ChatBackendPresentation {
+  return {
+    name: 'Fixture',
+    welcome: 'Glyph | Fixture',
+    usageDescription: 'Fixture usage',
+    accountsHeading: 'Accounts',
+    addAccountLabel: 'Add account',
+    activeAccessLabel: 'Fixture access',
+  };
+}
+
+function projectContext(): ProjectContext {
+  return {
+    id: 'project',
+    mutationIdentity: 'project-root',
+    kind: ProjectContextKind.WORKSPACE,
+    name: 'Project',
+    authority: 'local',
+    roots: [
+      { name: 'App', path: '/project/app' },
+      { name: 'Docs', path: '/project/docs' },
+    ],
+  };
+}
+
+function models(): Model[] {
+  return [
+    { slug: 'model-a', name: 'Model A' },
+    { slug: 'model-b', name: 'Model B' },
+  ];
+}
+
+function usage(): Usage {
+  return { inputTokens: 10, cachedInputTokens: 2, outputTokens: 5, reasoningTokens: 1, totalTokens: 15 };
+}
 
 function chatSummary(id: string, title: string, turnCount: number) {
   return {
@@ -625,6 +1578,37 @@ class MemoryOutput extends Writable {
 
   override _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     this.value += String(chunk);
+    callback();
+  }
+}
+
+class ScriptedOutput extends MemoryOutput {
+  readonly prompts: string[] = [];
+  private readonly answers: string[];
+
+  constructor(
+    private readonly input: PassThrough,
+    answers: readonly string[],
+  ) {
+    super(false);
+    this.answers = [...answers];
+  }
+
+  override _write(chunk: Buffer | string, encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    const text = String(chunk);
+    if (!text.endsWith('\n')) {
+      this.prompts.push(text);
+      const answer = this.answers.shift();
+      if (answer !== undefined) setImmediate(() => this.input.write(`${answer}\n`));
+    }
+    super._write(chunk, encoding, callback);
+  }
+}
+
+class ColumnlessOutput extends Writable {
+  readonly isTTY = true;
+
+  override _write(_chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     callback();
   }
 }

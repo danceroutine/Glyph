@@ -306,3 +306,5 @@ function modelInput(request: ChatRequest): ChatRequest {
       .join('\n\n'),
   };
 }
+
+export { toolInterruptionOutput as toolInterruptionOutput__TESTING_ONLY, errorDetails as errorDetails__TESTING_ONLY };

@@ -22,7 +22,7 @@ const styles = {
   }),
   completedActions: css({ display: 'flex', gap: tokens.space.sm, flexShrink: 0, '& > button': { flex: 1 } }),
   reviewAgain: css({ '&&': { border: tokens.border.default } }),
-  findings: css({ minHeight: 0, overflowY: 'auto' }),
+  findings: css({ minHeight: 0, overflowY: 'auto', paddingRight: tokens.space.md }),
   spinner: css({
     animation: 'glyph-review-spin 1s linear infinite',
     '@keyframes glyph-review-spin': { to: { transform: 'rotate(360deg)' } },

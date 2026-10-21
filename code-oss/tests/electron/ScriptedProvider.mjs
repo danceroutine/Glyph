@@ -73,6 +73,23 @@ export class ScriptedProvider {
     assert.equal(this.rounds.length, 0, 'Not all scripted provider rounds were requested.');
   }
 
+  get settled() {
+    return (
+      this.errors.length === 0 &&
+      this.rounds.length === 0 &&
+      this.requests.every(request => request.completed || request.closed)
+    );
+  }
+
+  reset() {
+    this.fallback = undefined;
+    this.rounds = [];
+    this.requests = [];
+    this.errors = [];
+    this.webRoutes.clear();
+    this.webRequests = [];
+  }
+
   async close() {
     const closed = new Promise((resolve, reject) => this.server.close(error => (error ? reject(error) : resolve())));
     this.server.closeAllConnections();
@@ -121,7 +138,7 @@ export class ScriptedProvider {
       'Model does not belong to the selected account.',
     );
     assert.equal(body.stream, true);
-    const round = this.rounds.shift();
+    const round = this.rounds.shift() ?? this.fallback;
     assert.ok(round, 'Unexpected extra provider request.');
     const id = `response-${this.requests.length}`;
     const messageId = `message-${id}`;

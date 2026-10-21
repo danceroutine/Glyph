@@ -1,7 +1,8 @@
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
 it.describe('Docked chat history', () => {
-  it.use({ scriptedProvider: true });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true });
 
   it('expands the native panel beside the conversation and restores its width when closed', async ({ glyph }) => {
     const panel = glyph.page.locator('.part.auxiliarybar');

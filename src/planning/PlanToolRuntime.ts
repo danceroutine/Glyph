@@ -1,4 +1,4 @@
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
 import type { ToolSource } from '#src/tools/ToolSource.js';

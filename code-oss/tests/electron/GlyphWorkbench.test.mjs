@@ -1,9 +1,17 @@
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
 it.describe('Glyph in the native Code OSS workbench', () => {
+  it.fixme('becomes usable within two seconds of loading the workbench window', async ({ glyph }) => {
+    const started = Date.now();
+    await glyph.reload();
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
   it('keeps Glyph as the only chat tab across window reloads', async ({ glyph }) => {
     const expectOnlyGlyph = async () => {
-      await expect(glyph.page.getByRole('tab', { name: /^Glyph(?:\s|$)/ })).toBeVisible();
+      await expect(
+        glyph.page.getByRole('tablist', { name: 'Open chats' }).getByRole('tab', { name: 'Native integration' }),
+      ).toBeVisible();
       await expect(glyph.page.getByRole('tab', { name: /^Chat(?:\s|$)/ })).toHaveCount(0);
       await expect(glyph.page.locator('[id="workbench.panel.chat"]')).toHaveCount(0);
     };
@@ -19,7 +27,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await expect(glyph.composer).toBeEditable();
     await expect(glyph.composer).toHaveAttribute('aria-multiline', 'true');
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
-    await expect(glyph.page.getByText('No active text editor', { exact: true })).toBeVisible();
+    await expect(glyph.page.getByRole('button', { name: /^Attach active file/ })).toHaveCount(0);
   });
 
   it('sends a message to the packaged utility host and renders its complete response exactly once', async ({
@@ -104,7 +112,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     const message = '<strong>literal markup</strong> & <img src="fixture">';
     await glyph.send(message);
     await glyph.waitForResponse();
-    await expect(glyph.userEntries.first().locator('div')).toHaveText(message);
+    await expect(glyph.userEntries.first().locator('[data-glyph-source]')).toHaveText(message);
     await expect(glyph.userEntries.locator('img')).toHaveCount(0);
   });
 
@@ -127,7 +135,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await glyph.waitForResponse();
     await glyph.send('Second question.');
     await glyph.waitForResponse(1);
-    await expect(glyph.userEntries.locator('div')).toHaveText(['First question.', 'Second question.']);
+    await expect(glyph.userEntries.locator('[data-glyph-source]')).toHaveText(['First question.', 'Second question.']);
     await expect(glyph.assistantEntries).toHaveCount(2);
     await expect(glyph.assistantEntries.first()).toContainText('transport.');
   });
@@ -152,7 +160,9 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await glyph.command('Developer: Reload Window');
     await reloaded;
     await glyph.open();
-    await expect(glyph.userEntries.locator('div')).toHaveText(['Remember this conversation across a window reload.']);
+    await expect(glyph.userEntries.locator('[data-glyph-source]')).toHaveText([
+      'Remember this conversation across a window reload.',
+    ]);
     await expect(glyph.assistantEntries).toHaveCount(1);
     await glyph.waitForResponse();
   });
@@ -161,8 +171,9 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await glyph.send('Keep this workspace owned by the original window.');
     await glyph.waitForResponse();
     const duplicate = await glyph.duplicateWorkspace();
-    await duplicate.send('Try to use the same files from the duplicated workspace.');
+    await duplicate.composer.fill('Try to use the same files from the duplicated workspace.');
     await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
+    await expect(duplicate.sendButton).toBeDisabled();
     await expect(duplicate.assistantEntries).toHaveCount(0);
     await glyph.send('The original workspace remains usable.');
     await glyph.waitForResponse(1);

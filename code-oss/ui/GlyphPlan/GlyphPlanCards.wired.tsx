@@ -13,7 +13,7 @@ export function WiredGlyphPlanCards({
   readonly actions: GlyphWorkbenchViewActions;
   readonly disabled: boolean;
 }) {
-  const decision = useGlyphPlanCardsState(chatId, plans, actions);
+  const decision = useGlyphPlanCardsState({ chatId, plans, actions });
   return (
     <>
       {decision.plans.map(plan => (

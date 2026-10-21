@@ -42,7 +42,7 @@ async function adapterModule() {
         export class BulkTextEdits {}
         export const EndOfLineSequence = { LF: 0, CRLF: 1 };
         export class ResourceFileEdit { constructor(oldResource, newResource, options) { Object.assign(this, { oldResource, newResource, options }); } }
-        export class ResourceTextEdit { constructor(resource, edit, version) { Object.assign(this, { resource, edit, version }); } }
+        export class ResourceTextEdit { constructor(resource, edit, version, metadata) { Object.assign(this, { resource, edit, version, metadata }); } }
         export class UndoRedoGroup { id = 1; }
         export const UNDO_REDO_SOURCE = { id: 1 };
         export const EditSources = { unknown: metadata => ({ metadata }) };
@@ -337,6 +337,76 @@ describe('Editor workspace binding', () => {
       }
     },
   );
+
+  it('keeps astral characters intact when an open editor would shrink the replacement', async () => {
+    const { GlyphEditorAdapter, URI } = await adapterModule();
+    const built = await build({
+      entryPoints: ['.code-oss/src/src/vs/editor/test/common/testTextModel.ts'],
+      bundle: true,
+      write: false,
+      platform: 'node',
+      format: 'esm',
+      tsconfigRaw: { compilerOptions: { experimentalDecorators: true } },
+      loader: { '.css': 'empty' },
+    });
+    const { createTextModel } = await import(
+      `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`
+    );
+    const resource = URI.file('/workspace/file.ts');
+    const model = createTextModel('café 🌱\n', null, {}, resource);
+    const adapter = new GlyphEditorAdapter(
+      { createModelReference: async () => ({ object: { textEditorModel: model }, dispose() {} }) },
+      {
+        apply: async ([edit], options) => {
+          model.pushEditOperations(
+            null,
+            [
+              edit.metadata
+                ? edit.edit
+                : { range: { startLineNumber: 1, startColumn: 7, endLineNumber: 1, endColumn: 8 }, text: '\uDF33' },
+            ],
+            () => null,
+            undefined,
+            options.reason,
+          );
+          return { isApplied: true };
+        },
+      },
+      {
+        getWorkspace: () => ({ id: 'workspace', folders: [{ name: 'workspace', uri: URI.file('/workspace') }] }),
+        isInsideWorkspace: () => true,
+        onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+        onDidChangeWorkspaceName: () => ({ dispose() {} }),
+        onDidChangeWorkbenchState: () => ({ dispose() {} }),
+      },
+      { getModels: () => [model] },
+      { isDirty: () => true },
+      { isWorkspaceTrusted: () => true },
+      {},
+      { asCanonicalUri: resource => resource },
+      { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
+    );
+    try {
+      const before = await adapter.read('file.ts');
+      const response = await adapter.handle({
+        type: 'apply_text_mutation',
+        mutation: {
+          operationId: 'astral',
+          path: 'file.ts',
+          text: 'café 🌳\n',
+          byteOrderMark: false,
+          undoGroupId: 'astral',
+          expectedContentRevision: before.contentRevision,
+          expectedToken: before.token,
+        },
+      });
+      expect(response).toMatchObject({ ok: true, snapshot: { text: 'café 🌳\n' }, receipt: { state: 'applied' } });
+      expect(model.getValue()).toBe('café 🌳\n');
+    } finally {
+      adapter.dispose();
+      model.dispose();
+    }
+  });
 
   it('does not claim an unrelated matching user edit when Bulk Edit rejects its stale version', async () => {
     const fixture = await pendingEdit({ sourceTagged: false, failAfterWrite: true });

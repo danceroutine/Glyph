@@ -1,5 +1,6 @@
-import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+const restartsHost = isolatedLaunch('restarts the host and reloads the window');
 async function planMode(glyph) {
   await glyph.page.getByRole('combobox', { name: 'Conversation mode' }).click();
   await glyph.page.getByRole('option', { name: 'Plan', exact: true }).click();
@@ -16,25 +17,30 @@ const patch = (path, callId) =>
     inputKind: 'text',
   });
 it.describe('Mode switches', () => {
-  it.use({ scriptedProvider: true });
-  it('switches only on approval and restores the announcement from durable history', async ({ glyph, provider }) => {
-    await planMode(glyph);
-    provider.enqueue({ output: [swap()] }, { chunks: ['Implementation can now begin.'] });
-    await glyph.send('Request Agent mode to implement this plan.');
-    const card = glyph.page.getByRole('region', { name: 'Mode switch' });
-    await expect(card).toContainText('Switch to Agent Mode');
-    await expect(card.getByRole('progressbar', { name: 'Automatic denial countdown' })).toBeVisible();
-    await card.getByRole('button', { name: 'Approve', exact: true }).click();
-    await expect(card).toContainText('Switched to Agent Mode');
-    await expect(glyph.page.getByRole('combobox', { name: 'Conversation mode' })).toContainText('Agent');
-    await expect(glyph.page.getByText('Implementation can now begin.', { exact: true })).toBeVisible();
-    await expect(glyph.sendButton).toHaveText('Send (Enter)');
-    await glyph.crashHost();
-    await glyph.reload();
-    await expect(card).toContainText('Switched to Agent Mode');
-    await expect(card.getByRole('button')).toHaveCount(0);
-    await glyph.page.screenshot({ path: '.artifacts/mode-switch-native-approved.png' });
-  });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true });
+  it(
+    'switches only on approval and restores the announcement from durable history',
+    restartsHost,
+    async ({ glyph, provider }) => {
+      await planMode(glyph);
+      provider.enqueue({ output: [swap()] }, { chunks: ['Implementation can now begin.'] });
+      await glyph.send('Request Agent mode to implement this plan.');
+      const card = glyph.page.getByRole('region', { name: 'Mode switch' });
+      await expect(card).toContainText('Switch to Agent Mode');
+      await expect(card.getByRole('progressbar', { name: 'Automatic denial countdown' })).toBeVisible();
+      await card.getByRole('button', { name: 'Approve', exact: true }).click();
+      await expect(card).toContainText('Switched to Agent Mode');
+      await expect(glyph.page.getByRole('combobox', { name: 'Conversation mode' })).toContainText('Agent');
+      await expect(glyph.page.getByText('Implementation can now begin.', { exact: true })).toBeVisible();
+      await expect(glyph.sendButton).toHaveText('Send (Enter)');
+      await glyph.crashHost();
+      await glyph.reload();
+      await expect(card).toContainText('Switched to Agent Mode');
+      await expect(card.getByRole('button')).toHaveCount(0);
+      await glyph.page.screenshot({ path: '.artifacts/mode-switch-native-approved.png' });
+    },
+  );
   it('denies manually, retains Plan mode, and blocks a follow-up code edit', async ({ glyph, provider }) => {
     await planMode(glyph);
     provider.enqueue(

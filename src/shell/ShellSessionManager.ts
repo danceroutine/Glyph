@@ -615,7 +615,7 @@ async function waitForCommand(
   const combined = AbortSignal.any([signal, timeout]);
   if (combined.aborted) throw combined.reason;
   return new Promise((resolve, reject) => {
-    const abort = (): void => reject(combined.reason ?? new Error('Shell command cancelled.'));
+    const abort = (): void => reject(combined.reason);
     combined.addEventListener('abort', abort, { once: true });
     void completion.then(
       result => {

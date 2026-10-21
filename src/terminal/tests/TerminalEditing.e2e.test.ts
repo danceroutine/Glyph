@@ -81,7 +81,7 @@ describe(TerminalEditReviewer, () => {
       const reviewer = new TerminalEditReviewer(ui);
 
       const reviewing = reviewer.review(manager, new AbortController().signal);
-      await waitUntil(() => tty.rawTransitions.at(-1) === true && rendered.includes('Y accept'));
+      await waitUntil(() => tty.rawTransitions.at(-1) === true && rendered.includes('Y keep'));
       tty.push('Y');
       await reviewing;
       await waitUntil(() => rendered.includes('Review complete'));
@@ -157,7 +157,7 @@ describe(TerminalEditReviewer, () => {
       const reviewer = new TerminalEditReviewer(ui);
 
       const firstReview = reviewer.review(manager, new AbortController().signal);
-      await waitUntil(() => rendered.includes('Y accept'));
+      await waitUntil(() => rendered.includes('Y keep'));
       await sendKeys(tty, ['\x1b[B', '\x1b[C', '\x1b[D', 'F', '\x1b[6~', '\x1b[5~', '\x1b[F', '\x1b[H', 'q']);
       await firstReview;
       expect(manager.active?.files.flatMap(file => file.items).every(item => item.decision === 'PENDING')).toBe(true);
@@ -221,7 +221,7 @@ describe(TerminalEditReviewer, () => {
       });
       const ui = new TerminalUI(tty, output, output);
       const review = new TerminalEditReviewer(ui).review(manager, new AbortController().signal);
-      await waitUntil(() => rendered.includes('Y accept'));
+      await waitUntil(() => rendered.includes('Y keep'));
       tty.push('Y');
       await waitUntil(() => rendered.includes('Error: The file changed'));
       tty.push('Q');

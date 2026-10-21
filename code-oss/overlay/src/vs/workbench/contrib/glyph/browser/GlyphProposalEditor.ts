@@ -221,8 +221,10 @@ export class GlyphProposalEditor extends Disposable {
       !this.editor?.getDomNode()?.isConnected
     )
       await this.open(proposal.chatId, proposalId, fileId);
-    const model = this.editor?.getModel();
+    const editor = this.editor;
+    const model = editor?.getModel();
     if (
+      !editor ||
       !model ||
       annotation.revision !== `${model.id}:${model.getVersionId()}` ||
       model.getValue().slice(annotation.from, annotation.to) !== annotation.quote
@@ -230,22 +232,22 @@ export class GlyphProposalEditor extends Disposable {
       return;
     const start = model.getPositionAt(annotation.from),
       end = model.getPositionAt(annotation.to);
-    this.editor?.setSelection({
+    editor.setSelection({
       startLineNumber: start.lineNumber,
       startColumn: start.column,
       endLineNumber: end.lineNumber,
       endColumn: end.column,
     });
-    this.editor?.revealPositionInCenterIfOutsideViewport(start, ScrollType.Immediate);
-    const container = this.installAnnotationEditor(start.lineNumber);
-    const point = this.editor?.getScrolledVisiblePosition(start);
-    const bounds = this.editor?.getDomNode()?.getBoundingClientRect();
+    editor.revealPositionInCenterIfOutsideViewport(start, ScrollType.Immediate);
+    const container = this.installAnnotationEditor(editor, start.lineNumber);
+    const point = editor.getScrolledVisiblePosition(start);
+    const bounds = editor.getDomNode()?.getBoundingClientRect();
     if (point && bounds)
       return {
-        ...(container ? { container } : {}),
+        container,
         x: bounds.left + point.left,
         y: bounds.top + point.top + point.height,
-        minX: bounds.left + (this.editor?.getLayoutInfo().contentLeft ?? 0),
+        minX: bounds.left + editor.getLayoutInfo().contentLeft,
         maxX: bounds.right,
       };
     return undefined;
@@ -365,10 +367,8 @@ export class GlyphProposalEditor extends Disposable {
     this.reveal();
   }
 
-  private installAnnotationEditor(lineNumber: number): HTMLElement | undefined {
+  private installAnnotationEditor(editor: ICodeEditor, lineNumber: number): HTMLElement {
     this.annotationEditor.clear();
-    const editor = this.editor;
-    if (!editor) return;
     const node = document.createElement('div');
     node.style.boxSizing = 'border-box';
     node.style.padding = '8px';
@@ -595,7 +595,7 @@ export class GlyphProposalEditor extends Disposable {
       this.widgets.add(editor.onDidLayoutChange(layout));
       const view = mountGlyphReview(node, this.properties(full));
       const observer = new ResizeObserver(entries => {
-        const height = Math.ceil(entries[0]?.borderBoxSize[0]?.blockSize ?? 40);
+        const height = Math.ceil(entries[0]!.borderBoxSize[0]!.blockSize);
         if (zone.heightInPx !== height) {
           zone.heightInPx = height;
           editor.changeViewZones(accessor => accessor.layoutZone(id));

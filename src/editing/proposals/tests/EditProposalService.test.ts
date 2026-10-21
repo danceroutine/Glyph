@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { OverlappingWorkspaceFixture } from '#src/workspace/tests/fixtures/OverlappingWorkspaceFixture.js';
@@ -1063,6 +1063,516 @@ describe(EditProposalService, () => {
       await expect(
         service.proposePatch('*** Begin Patch\n*** Update File: file.txt\n@@\n-base\n+next\n*** End Patch'),
       ).rejects.toMatchObject({ reason: EditFailureReason.MALFORMED });
+    });
+
+    it('rejects a patch that contains no files', async () => {
+      const { service } = await fixture('base');
+
+      await expect(service.proposePatch('*** Begin Patch\n\n*** End Patch')).rejects.toMatchObject({
+        reason: EditFailureReason.EMPTY,
+        message: 'Patch contains no files.',
+      });
+    });
+
+    it('ignores blank lines before the first file and between directives', async () => {
+      const { service, workspace } = await fixture('one\ntwo\n');
+      const base = await workspace.read('file.txt');
+
+      const proposal = await service.proposePatch(
+        `*** Begin Patch\n\n*** Update File: file.txt\n\n*** Revision: ${base.revision}\n@@\n one\n-two\n+TWO\n*** End Patch`,
+      );
+
+      expect(proposal.files[0]?.proposed.text).toBe('one\nTWO\n');
+    });
+
+    it('rejects an unrecognized directive inside a file section', async () => {
+      const { service } = await fixture('base');
+
+      await expect(
+        service.proposePatch('*** Begin Patch\n*** Add File: new.txt\n*** Frobnicate\n*** End Patch'),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.MALFORMED,
+        message: 'Unrecognized patch directive: *** Frobnicate',
+        details: { path: 'new.txt' },
+      });
+    });
+
+    it('creates an empty file when an added file reaches compilation without content', async () => {
+      const { service } = await fixture('base');
+      const internals = service as unknown as {
+        preflightFiles(
+          files: readonly Record<string, unknown>[],
+          signal?: AbortSignal,
+        ): Promise<Record<string, unknown>[]>;
+      };
+      const preflight = internals.preflightFiles.bind(service);
+      vi.spyOn(internals, 'preflightFiles').mockImplementationOnce(async (files, signal) =>
+        (await preflight(files, signal)).map(({ content: _content, ...file }) => file),
+      );
+
+      const proposal = await service.proposePatch('*** Begin Patch\n*** Add File: empty.txt\n+ignored\n*** End Patch');
+
+      expect(proposal.files[0]).toMatchObject({ operation: EditOperation.CREATE, proposed: { text: '' } });
+    });
+
+    it('creates an empty file from an added file without content lines', async () => {
+      const { service } = await fixture('base');
+
+      const proposal = await service.proposePatch('*** Begin Patch\n*** Add File: empty.txt\n*** End Patch');
+
+      expect(proposal.files[0]).toMatchObject({ operation: EditOperation.CREATE, proposed: { text: '' } });
+    });
+
+    it.each([
+      ['LF', 'one\ntwo\n'],
+      ['CRLF', 'one\r\ntwo\r\n'],
+      ['CR', 'one\rtwo\r'],
+    ])('writes created content with the %s line ending directive', async (directive, expected) => {
+      const { service } = await fixture('base');
+
+      const proposal = await service.proposePatch(
+        `*** Begin Patch\n*** Add File: new.txt\n*** Line Ending: ${directive}\n+one\n+two\n*** End Patch`,
+      );
+
+      expect(proposal.files[0]?.proposed.text).toBe(expected);
+    });
+
+    it('rejects an unknown line ending directive', async () => {
+      const { service } = await fixture('base');
+
+      await expect(
+        service.proposePatch('*** Begin Patch\n*** Add File: new.txt\n*** Line Ending: NEL\n+one\n*** End Patch'),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.MALFORMED,
+        message: 'Line Ending directive must be LF, CRLF, or CR.',
+      });
+    });
+
+    it.each([
+      ['true', true],
+      ['false', false],
+    ])('honors a byte order mark directive of %s', async (directive, expected) => {
+      const { service } = await fixture('base');
+
+      const proposal = await service.proposePatch(
+        `*** Begin Patch\n*** Add File: new.txt\n*** Byte Order Mark: ${directive}\n+one\n*** End Patch`,
+      );
+
+      expect(proposal.files[0]?.proposed.byteOrderMark).toBe(expected);
+    });
+
+    it('rejects a byte order mark directive that is not a boolean', async () => {
+      const { service } = await fixture('base');
+
+      await expect(
+        service.proposePatch('*** Begin Patch\n*** Add File: new.txt\n*** Byte Order Mark: yes\n+one\n*** End Patch'),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.MALFORMED,
+        message: 'Byte Order Mark directive must be true or false.',
+      });
+    });
+
+    it('omits the final line ending when the patch marks its absence', async () => {
+      const { service, workspace } = await fixture('one\ntwo\n');
+      const base = await workspace.read('file.txt');
+
+      const created = await service.proposePatch(
+        '*** Begin Patch\n*** Add File: new.txt\n+one\n+two\n\\ No newline at end of file\n*** End Patch',
+      );
+      const updated = await service.proposePatch(
+        `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${base.revision}\n@@\n one\n-two\n+TWO\n\\ No newline at end of file\n*** End Patch`,
+      );
+
+      expect(created.files[0]?.proposed.text).toBe('one\ntwo');
+      expect(updated.files[0]?.proposed.text).toBe('one\nTWO');
+    });
+
+    it('requires an update change line to follow a hunk marker', async () => {
+      const { service, workspace } = await fixture('one\n');
+      const base = await workspace.read('file.txt');
+
+      await expect(
+        service.proposePatch(
+          `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${base.revision}\n-one\n+ONE\n*** End Patch`,
+        ),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.MALFORMED,
+        message: 'Patch change lines require an @@ hunk marker.',
+        details: { path: 'file.txt' },
+      });
+    });
+
+    it.each(['Update', 'Move'])('rejects a %s patch without hunks', async kind => {
+      const { service, workspace } = await fixture('one\n');
+      const base = await workspace.read('file.txt');
+      const move = kind === 'Move' ? '*** Move to: moved.txt\n' : '';
+
+      await expect(
+        service.proposePatch(
+          `*** Begin Patch\n*** Update File: file.txt\n${move}*** Revision: ${base.revision}\n*** End Patch`,
+        ),
+      ).rejects.toMatchObject({ reason: EditFailureReason.EMPTY, message: 'Update patch contains no hunks.' });
+    });
+
+    it('rejects a patch whose revision no longer matches the file', async () => {
+      const { service, workspace } = await fixture('one\n');
+      const base = await workspace.read('file.txt');
+
+      await expect(
+        service.proposePatch(
+          '*** Begin Patch\n*** Update File: file.txt\n*** Revision: outdated\n@@\n-one\n+ONE\n*** End Patch',
+        ),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+        details: { path: 'file.txt', currentRevision: base.revision },
+      });
+    });
+
+    it('compiles a delete patch into a delete proposal', async () => {
+      const { service, workspace } = await fixture('one\n');
+      const base = await workspace.read('file.txt');
+
+      const proposal = await service.proposePatch(
+        `*** Begin Patch\n*** Delete File: file.txt\n*** Revision: ${base.revision}\n*** End Patch`,
+      );
+
+      expect(proposal.files[0]).toMatchObject({
+        operation: EditOperation.DELETE,
+        sourcePath: 'file.txt',
+        items: [{ kind: EditReviewItemKind.DELETE, removedText: 'one\n', insertedText: '' }],
+      });
+    });
+
+    it('rejects a patch for a file that does not exist', async () => {
+      const { service } = await fixture('one\n');
+
+      await expect(
+        service.proposePatch('*** Begin Patch\n*** Delete File: missing.txt\n*** Revision: any\n*** End Patch'),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Proposal source does not exist.',
+        details: { path: 'missing.txt' },
+      });
+    });
+
+    it('propagates a source read failure other than the size budget', async () => {
+      const { service, workspace } = await fixture('one\n');
+      await writeFile(join(workspace.root, 'binary.txt'), Buffer.from([0, 1, 2]));
+
+      await expect(
+        service.proposePatch('*** Begin Patch\n*** Delete File: binary.txt\n*** Revision: any\n*** End Patch'),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+        message: 'Binary/NUL files are not supported.',
+      });
+    });
+
+    it.each([
+      ['context that is absent from the file', ' missing\n-one\n+ONE'],
+      ['context that runs past the end of the file', ' two\n three\n-four'],
+      ['a hunk that only adds lines', '+added'],
+    ])('rejects %s', async (_description, hunk) => {
+      const { service, workspace } = await fixture('one\ntwo\n');
+      const base = await workspace.read('file.txt');
+
+      await expect(
+        service.proposePatch(
+          `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${base.revision}\n@@\n${hunk}\n*** End Patch`,
+        ),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Patch context does not exactly match the base file.',
+      });
+    });
+
+    it('removes matched lines entirely when a hunk only deletes', async () => {
+      const { service, workspace } = await fixture('one\ntwo\nthree\n');
+      const base = await workspace.read('file.txt');
+
+      const proposal = await service.proposePatch(
+        `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${base.revision}\n@@\n-two\n*** End Patch`,
+      );
+
+      expect(proposal.files[0]?.proposed.text).toBe('one\nthree\n');
+    });
+
+    it('inserts lines with the most common line ending of a mixed file', async () => {
+      const { service, workspace } = await fixture('one\r\ntwo\r\nthree\n');
+      const base = await workspace.read('file.txt');
+
+      const proposal = await service.proposePatch(
+        `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${base.revision}\n@@\n one\n+added\n two\n*** End Patch`,
+      );
+
+      expect(proposal.files[0]?.proposed.text).toBe('one\r\nadded\r\ntwo\r\nthree\n');
+    });
+  });
+
+  describe('structured validation', () => {
+    it('rejects input that does not match the structured proposal schema', async () => {
+      const { service } = await fixture('base');
+
+      await expect(service.proposeStructured({ files: 'file.txt' })).rejects.toMatchObject({
+        reason: EditFailureReason.MALFORMED,
+        message: expect.stringContaining('Malformed structured edit proposal:'),
+      });
+    });
+
+    it('rejects a proposal without files', async () => {
+      const { service } = await fixture('base');
+
+      await expect(service.proposeStructured({ files: [] })).rejects.toMatchObject({
+        reason: EditFailureReason.EMPTY,
+        message: 'An edit proposal must contain at least one file.',
+      });
+    });
+
+    it('rejects a create that declares a base revision', async () => {
+      const { service } = await fixture('base');
+
+      await expect(
+        service.proposeStructured({ files: [{ ...structuredCreate('new.txt'), base_revision: 'revision' }] }),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.MALFORMED,
+        message: 'CREATE requires content and null revision/new_path with no edits.',
+      });
+    });
+
+    it('requires a base revision for an existing file', async () => {
+      const { service } = await fixture('base');
+
+      await expect(
+        service.proposeStructured({
+          files: [{ ...structuredCreate('file.txt'), operation: EditOperation.UPDATE, content: 'next' }],
+        }),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.MALFORMED,
+        message: 'Existing-file operations require base_revision.',
+      });
+    });
+
+    it('rejects a delete that also supplies content', async () => {
+      const { service, workspace } = await fixture('base');
+      const base = await workspace.read('file.txt');
+
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              ...structuredCreate('file.txt'),
+              operation: EditOperation.DELETE,
+              base_revision: base.revision,
+              content: 'next',
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.MALFORMED,
+        message: 'DELETE accepts only path and base_revision.',
+      });
+    });
+
+    it('rejects an update that names a new path', async () => {
+      const { service, workspace } = await fixture('base');
+      const base = await workspace.read('file.txt');
+
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              ...structuredCreate('file.txt'),
+              operation: EditOperation.UPDATE,
+              new_path: 'other.txt',
+              base_revision: base.revision,
+              content: 'next',
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.MALFORMED, message: 'UPDATE does not accept new_path.' });
+    });
+
+    it('rejects a rename without a destination', async () => {
+      const { service, workspace } = await fixture('base');
+      const base = await workspace.read('file.txt');
+
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              ...structuredCreate('file.txt'),
+              operation: EditOperation.RENAME,
+              base_revision: base.revision,
+              content: null,
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.EMPTY, message: 'RENAME requires a distinct new_path.' });
+    });
+
+    it('rejects a rename onto its own path', async () => {
+      const { service, workspace } = await fixture('base');
+      const base = await workspace.read('file.txt');
+
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              ...structuredCreate('file.txt'),
+              operation: EditOperation.RENAME,
+              new_path: 'file.txt',
+              base_revision: base.revision,
+              content: null,
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.AMBIGUOUS,
+        message: 'Rename chains and swaps are not supported in one proposal.',
+      });
+    });
+
+    it('rejects a case-only rename on a case-insensitive workspace', async () => {
+      const { service, workspace } = await fixture('base', {}, { caseSensitive: false });
+      const base = await workspace.read('file.txt');
+
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              ...structuredCreate('file.txt'),
+              operation: EditOperation.RENAME,
+              new_path: 'FILE.txt',
+              base_revision: base.revision,
+              content: null,
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+        message: 'Case-only renames are not portable across workspace filesystems.',
+      });
+    });
+
+    it('rejects a file that declares both full content and ranged edits', async () => {
+      const { service, workspace } = await fixture('base');
+      const base = await workspace.read('file.txt');
+
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              ...structuredCreate('file.txt'),
+              operation: EditOperation.UPDATE,
+              base_revision: base.revision,
+              content: 'next',
+              edits: [
+                {
+                  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+                  expected_text: 'base',
+                  replacement_text: 'next',
+                },
+              ],
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'A file cannot declare both full content and ranged edits.',
+      });
+    });
+
+    it('rejects an existing-file operation when its source resolves to nothing', async () => {
+      const { service, workspace } = await fixture('base');
+      const base = await workspace.read('file.txt');
+      const internals = service as unknown as { readSource(path: string): Promise<unknown> };
+      vi.spyOn(internals, 'readSource').mockResolvedValueOnce(undefined);
+
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              ...structuredCreate('file.txt'),
+              operation: EditOperation.UPDATE,
+              base_revision: base.revision,
+              content: 'next',
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Proposal source does not exist.',
+        details: { path: 'file.txt' },
+      });
+    });
+
+    it('records an encoding change observed while compiling an otherwise identical replacement', async () => {
+      const { service, workspace } = await fixture('base');
+      const base = await workspace.read('file.txt');
+      let reads = 0;
+      const shifting = {
+        ...base,
+        get byteOrderMark() {
+          reads++;
+          return reads > 1;
+        },
+      };
+      const internals = service as unknown as { readSource(path: string): Promise<unknown> };
+      vi.spyOn(internals, 'readSource').mockResolvedValueOnce(shifting);
+
+      const proposal = await service.proposeStructured({
+        files: [
+          {
+            ...structuredCreate('file.txt'),
+            operation: EditOperation.UPDATE,
+            base_revision: base.revision,
+            content: 'base',
+            byte_order_mark: false,
+          },
+        ],
+      });
+
+      expect(proposal.files[0]?.items).toEqual([
+        expect.objectContaining({ kind: EditReviewItemKind.TEXT, removedText: 'base', insertedText: 'base' }),
+      ]);
+    });
+
+    it('rejects a diff that finishes after the configured time budget', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'proposal-service-diff-budget-'));
+      directories.push(root);
+      await writeFile(join(root, 'file.txt'), 'base\n');
+      const workspace = new FileSystemWorkspaceTextStore(root);
+      const base = await workspace.read('file.txt');
+      let now = 0;
+      const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+      onTestFinished(() => clock.mockRestore());
+      const differ = new JsDiffTextDiffer();
+      const service = new EditProposalService(
+        workspace,
+        {
+          createReviewItems: (fileId, before, after, options) => {
+            const items = differ.createReviewItems(fileId, before, after, options);
+            now += 5_000;
+            return items;
+          },
+        },
+        configuration,
+      );
+
+      await expect(
+        service.proposeStructured({
+          files: [
+            {
+              ...structuredCreate('file.txt'),
+              operation: EditOperation.UPDATE,
+              base_revision: base.revision,
+              content: 'next\n',
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.LIMIT_EXCEEDED,
+        message: 'Diff computation exceeded the configured time budget.',
+      });
     });
   });
 });

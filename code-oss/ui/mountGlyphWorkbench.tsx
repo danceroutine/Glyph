@@ -14,7 +14,7 @@ import { render } from 'preact';
 import type { GlyphWorkbenchMount } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { WiredGlyphWorkbench } from './GlyphWorkbench/GlyphWorkbench.wired.tsx';
 
-if (import.meta.url) configureGlyphDiagramRenderer(new URL('./glyph-diagram.html', import.meta.url).href);
+configureGlyphDiagramRenderer(new URL('./glyph-diagram.html', import.meta.url).href);
 
 /** Unmounting through Preact releases component effects when Code OSS disposes the pane. */
 export const mountGlyphWorkbench: GlyphWorkbenchMount = (container, state, actions) => {

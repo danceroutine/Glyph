@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { beforeAll, afterAll, it } from 'vitest';
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
 const { chromium, expect } = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url))(
   '@playwright/test',
 );
@@ -22,6 +23,7 @@ beforeAll(async () => {
       write: false,
       format: 'iife',
       platform: 'browser',
+      ...coverageBuildOptions,
       tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
     })
   ).outputFiles[0].text;
@@ -33,7 +35,7 @@ afterAll(async () => {
 
 for (const inline of [false, true]) {
   it(`finishes a file through ${inline ? 'inline decisions' : 'Keep File'} and keeps global acceptance on the right`, async () => {
-    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    const page = await newCoveredPage(browser, { viewport: { width: 1200, height: 800 } });
     try {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
@@ -80,7 +82,7 @@ for (const inline of [false, true]) {
 }
 
 it('shortens Keep all changes before wrapping and restores its label when space returns', async () => {
-  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  const page = await newCoveredPage(browser, { viewport: { width: 1200, height: 800 } });
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });

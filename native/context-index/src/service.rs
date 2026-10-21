@@ -14,6 +14,7 @@ use crate::cache::{self, CachedPaths};
 use crate::content_search::{ContentSearchContext, ContentSearchError};
 use crate::index::{SearchFailure, SearchIndex, SearchResult};
 use crate::path_glob::{find_matches, GlobResult};
+use crate::workers::{SystemWorkers, WorkerFactory, WorkerRole};
 
 const DEFAULT_MAX_FILES: u32 = 2_000_000;
 const DEFAULT_SEARCH_LIMIT: u32 = 20;
@@ -150,10 +151,9 @@ impl IndexPolicy {
         {
             return true;
         }
-        let mut parts = relative_path.split('/');
-        let Some(name) = parts.next_back() else {
-            return true;
-        };
+        let name = relative_path
+            .rsplit_once('/')
+            .map_or(relative_path, |(_, name)| name);
         if relative_path.split('/').any(|part| {
             self.ignored_directories
                 .iter()
@@ -283,6 +283,36 @@ impl ServiceError {
     }
 }
 
+/// The native path and its protocol representation refer to the same canonical directory.
+struct ProjectRoot {
+    path: PathBuf,
+    text: String,
+}
+
+impl ProjectRoot {
+    fn resolve(input: &Path) -> Result<Self, ServiceError> {
+        let path = fs::canonicalize(input).map_err(|error| {
+            ServiceError::initialization(format!("Could not resolve the project root: {error}"))
+        })?;
+        if !path.is_dir() {
+            return Err(ServiceError::invalid_request(
+                "root must refer to a directory.",
+            ));
+        }
+        Self::from_canonical(path)
+    }
+
+    fn from_canonical(path: PathBuf) -> Result<Self, ServiceError> {
+        let text = path
+            .to_str()
+            .ok_or_else(|| {
+                ServiceError::initialization("The canonical project root is not valid UTF-8.")
+            })?
+            .to_owned();
+        Ok(Self { path, text })
+    }
+}
+
 struct ScanResult {
     paths: Vec<String>,
     truncated: bool,
@@ -319,6 +349,14 @@ impl ContextIndexService {
         &mut self,
         params: InitializeParams,
     ) -> Result<IndexStatus, ServiceError> {
+        self.initialize_with_workers(params, &SystemWorkers)
+    }
+
+    fn initialize_with_workers(
+        &mut self,
+        params: InitializeParams,
+        workers: &impl WorkerFactory,
+    ) -> Result<IndexStatus, ServiceError> {
         if self.initialized.is_some() {
             return Err(ServiceError::invalid_request(
                 "The context index has already been initialized.",
@@ -338,20 +376,10 @@ impl ContextIndexService {
                 "root must be an absolute path.",
             ));
         }
-        let root = fs::canonicalize(root_input).map_err(|error| {
-            ServiceError::initialization(format!("Could not resolve the project root: {error}"))
-        })?;
-        if !root.is_dir() {
-            return Err(ServiceError::invalid_request(
-                "root must refer to a directory.",
-            ));
-        }
-        let root_text = root
-            .to_str()
-            .ok_or_else(|| {
-                ServiceError::initialization("The canonical project root is not valid UTF-8.")
-            })?
-            .to_owned();
+        let ProjectRoot {
+            path: root,
+            text: root_text,
+        } = ProjectRoot::resolve(root_input)?;
         if params
             .cache_path
             .as_ref()
@@ -399,7 +427,7 @@ impl ContextIndexService {
         };
 
         let known_paths = Arc::new(RwLock::new(paths.iter().cloned().collect()));
-        let index = SearchIndex::from_paths(paths).map_err(ServiceError::initialization)?;
+        let index = SearchIndex::from_paths(paths);
         let file_count = index.file_count();
         let shared = Arc::new(Mutex::new(index));
         let truncated_state = Arc::new(AtomicBool::new(truncated));
@@ -438,6 +466,7 @@ impl ContextIndexService {
                 reconcile_after_startup_delay,
             },
             watcher,
+            workers,
         )?;
         self.initialized = Some(initialized);
         self.monitor = Some(monitor);
@@ -597,7 +626,7 @@ impl ContextIndexService {
             }
         }
         let known_paths: BTreeSet<_> = scan.paths.iter().cloned().collect();
-        let index = SearchIndex::from_paths(scan.paths).map_err(ServiceError::internal)?;
+        let index = SearchIndex::from_paths(scan.paths);
         let file_count = index.file_count();
         *initialized
             .index
@@ -661,10 +690,21 @@ struct FilesystemWatcher {
 }
 
 fn start_watcher(root: &Path) -> Option<FilesystemWatcher> {
+    start_watcher_with(root, |sender| {
+        notify::recommended_watcher(move |event| {
+            let _ = sender.send(event);
+        })
+    })
+}
+
+fn start_watcher_with(
+    root: &Path,
+    create: impl FnOnce(
+        mpsc::Sender<notify::Result<Event>>,
+    ) -> notify::Result<notify::RecommendedWatcher>,
+) -> Option<FilesystemWatcher> {
     let (event_sender, events) = mpsc::channel::<notify::Result<Event>>();
-    let mut watcher = match notify::recommended_watcher(move |event| {
-        let _ = event_sender.send(event);
-    }) {
+    let mut watcher = match create(event_sender) {
         Ok(watcher) => watcher,
         Err(error) => {
             eprintln!(
@@ -689,10 +729,9 @@ fn start_watcher(root: &Path) -> Option<FilesystemWatcher> {
 fn spawn_monitor(
     state: MonitorState,
     mut watcher: Option<FilesystemWatcher>,
+    workers: &impl WorkerFactory,
 ) -> Result<JoinHandle<()>, ServiceError> {
-    thread::Builder::new()
-        .name("context-index-monitor".to_owned())
-        .spawn(move || {
+    workers.spawn(WorkerRole::FilesystemMonitor, move || {
             if state.reconcile_immediately {
                 reconcile_shared(&state);
             }
@@ -780,45 +819,55 @@ fn spawn_monitor(
         })
 }
 
-fn reconcile_shared(state: &MonitorState) {
-    let scan = match scan_paths(
-        &state.root,
-        &state.policy,
-        state.cache_path.as_deref(),
-        &state.stop,
-    ) {
-        Ok(scan) => scan,
-        Err(error) => {
-            if !state.stop.load(Ordering::Acquire) {
-                eprintln!(
-                    "glyph-context-index: background reconcile failed: {}",
-                    error.message
-                );
-            }
-            return;
+/// The authoritative catalog scan and its optional durable checkpoint form the
+/// repository boundary. Publication to live readers remains the service's job.
+trait CatalogRepository {
+    fn scan(&self) -> Result<ScanResult, ServiceError>;
+    fn save(&self, snapshot: &ScanResult) -> Result<(), String>;
+}
+
+struct FilesystemCatalog<'a>(&'a MonitorState);
+
+impl CatalogRepository for FilesystemCatalog<'_> {
+    fn scan(&self) -> Result<ScanResult, ServiceError> {
+        scan_paths(
+            &self.0.root,
+            &self.0.policy,
+            self.0.cache_path.as_deref(),
+            &self.0.stop,
+        )
+    }
+
+    fn save(&self, snapshot: &ScanResult) -> Result<(), String> {
+        if let Some(path) = self.0.cache_path.as_deref() {
+            cache::store(
+                path,
+                &self.0.root_text,
+                &self.0.policy_hash,
+                &snapshot.paths,
+                snapshot.truncated,
+            )?;
         }
+        Ok(())
+    }
+}
+
+fn reconcile_shared(state: &MonitorState) {
+    reconcile_catalog(state, &FilesystemCatalog(state));
+}
+
+fn reconcile_catalog(state: &MonitorState, catalog: &impl CatalogRepository) {
+    let Ok(scan) = catalog.scan() else {
+        // The scan's only failure is cancellation; stop is never cleared.
+        return;
     };
     if state.stop.load(Ordering::Acquire) {
         return;
     }
     let known_paths: BTreeSet<_> = scan.paths.iter().cloned().collect();
-    let index = match SearchIndex::from_paths(scan.paths.clone()) {
-        Ok(index) => index,
-        Err(error) => {
-            eprintln!("glyph-context-index: background index build failed: {error}");
-            return;
-        }
-    };
-    if let Some(path) = state.cache_path.as_deref() {
-        if let Err(error) = cache::store(
-            path,
-            &state.root_text,
-            &state.policy_hash,
-            &scan.paths,
-            scan.truncated,
-        ) {
-            eprintln!("glyph-context-index: cache write failed: {error}");
-        }
+    let index = SearchIndex::from_paths(scan.paths.clone());
+    if let Err(error) = catalog.save(&scan) {
+        eprintln!("glyph-context-index: cache write failed: {error}");
     }
     if state.stop.load(Ordering::Acquire) {
         return;
@@ -932,9 +981,6 @@ fn scan_paths(
         .ignore(policy.respect_git_ignore)
         .parents(policy.respect_git_ignore)
         .filter_entry(move |entry| {
-            if entry.depth() == 0 {
-                return true;
-            }
             let is_directory = entry.file_type().is_some_and(|kind| kind.is_dir());
             if !is_directory {
                 return true;
@@ -953,7 +999,9 @@ fn scan_paths(
             })
         });
 
-    let paths = Arc::new(Mutex::new(Vec::new()));
+    // WalkParallel::run joins its visitors before returning. Borrow the local
+    // accumulator so no shared owner or fallible ownership recovery is needed.
+    let paths = Mutex::new(Vec::new());
     let observed = Arc::new(AtomicUsize::new(0));
     let truncated = Arc::new(AtomicBool::new(false));
     let policy = Arc::new(policy.clone());
@@ -961,7 +1009,7 @@ fn scan_paths(
     let cache_path = cache_path.map(Path::to_path_buf).map(Arc::new);
 
     builder.build_parallel().run(|| {
-        let paths = Arc::clone(&paths);
+        let paths = &paths;
         let observed = Arc::clone(&observed);
         let truncated = Arc::clone(&truncated);
         let policy = Arc::clone(&policy);
@@ -994,10 +1042,12 @@ fn scan_paths(
                 truncated.store(true, Ordering::Release);
                 return WalkState::Quit;
             }
-            match paths.lock() {
-                Ok(mut paths) => paths.push(relative),
-                Err(_) => return WalkState::Quit,
-            }
+            // Only Vec<String>::push runs under this private lock; no callback
+            // can unwind while holding it.
+            paths
+                .lock()
+                .expect("scan accumulator cannot be poisoned")
+                .push(relative);
             WalkState::Continue
         })
     });
@@ -1005,10 +1055,9 @@ fn scan_paths(
     if stop.load(Ordering::Acquire) {
         return Err(ServiceError::initialization("File indexing was cancelled."));
     }
-    let mut paths = Arc::try_unwrap(paths)
-        .map_err(|_| ServiceError::internal("File scan paths are still shared."))?
+    let mut paths = paths
         .into_inner()
-        .map_err(|_| ServiceError::internal("The file scan lock is poisoned."))?;
+        .expect("scan accumulator cannot be poisoned");
     paths.sort_unstable();
     paths.dedup();
     Ok(ScanResult {
@@ -1109,438 +1158,4 @@ fn default_search_limit() -> u32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs::{create_dir_all, write};
-    use std::thread::sleep;
-
-    use notify::event::{CreateKind, ModifyKind};
-    use tempfile::tempdir;
-
-    use super::*;
-
-    fn params(root: &Path) -> InitializeParams {
-        InitializeParams {
-            root: root.to_string_lossy().into_owned(),
-            cache_path: None,
-            ignored_directories: default_ignored_directories(),
-            sensitive_file_names: default_sensitive_file_names(),
-            sensitive_file_prefixes: default_sensitive_file_prefixes(),
-            sensitive_file_extensions: default_sensitive_file_extensions(),
-            allowed_file_names: default_allowed_file_names(),
-            excluded_paths: Vec::new(),
-            respect_git_ignore: true,
-            max_files: DEFAULT_MAX_FILES,
-            case_sensitive: default_case_sensitive(),
-            max_content_search_file_bytes: DEFAULT_MAX_CONTENT_SEARCH_FILE_BYTES,
-        }
-    }
-
-    #[test]
-    fn scan_excludes_sensitive_names_using_filesystem_case_policy() {
-        let directory = tempdir().expect("fixture directory");
-        for name in [
-            ".ENV",
-            ".ENV.production",
-            "private.PEM",
-            "public.txt",
-            ".ENV.EXAMPLE",
-        ] {
-            write(directory.path().join(name), "harmless search fixture").unwrap();
-        }
-        let mut input = params(directory.path());
-        input.case_sensitive = false;
-        input.respect_git_ignore = false;
-        let policy = IndexPolicy::from(&input);
-        let result = scan_paths(directory.path(), &policy, None, &AtomicBool::new(false)).unwrap();
-        assert_eq!(result.paths, vec![".ENV.EXAMPLE", "public.txt"]);
-        assert!(policy.excludes(".GIT/config"));
-        assert!(policy.excludes("folder/private.PEM"));
-    }
-
-    #[test]
-    fn excluded_paths_require_normalized_project_relative_paths() {
-        let directory = tempdir().expect("temporary directory should exist");
-        for invalid in [
-            "",
-            "/src/generated",
-            "C:/src/generated",
-            "src/generated/",
-            "src//generated",
-            ".",
-            "..",
-            "src/./generated",
-            "src/../generated",
-            "src\\generated",
-            "src\0generated",
-        ] {
-            let mut configuration = params(directory.path());
-            configuration.excluded_paths = vec![invalid.to_owned()];
-            let error = IndexPolicy::from(&configuration)
-                .validate()
-                .expect_err("invalid excluded path should be rejected");
-            assert_eq!(error.code, "INVALID_REQUEST", "accepted {invalid:?}");
-            assert!(error.message.contains("excludedPaths"));
-        }
-
-        let mut configuration = params(directory.path());
-        configuration.excluded_paths =
-            vec!["src/generated".to_owned(), "docs/private.md".to_owned()];
-        IndexPolicy::from(&configuration)
-            .validate()
-            .expect("normalized excluded paths should be accepted");
-    }
-
-    #[test]
-    fn excluded_paths_match_exact_paths_and_descendants_at_component_boundaries() {
-        let directory = tempdir().expect("temporary directory should exist");
-        let mut configuration = params(directory.path());
-        configuration.excluded_paths =
-            vec!["src/generated".to_owned(), "docs/private.md".to_owned()];
-        let policy = IndexPolicy::from(&configuration);
-
-        assert!(policy.excludes("src/generated"));
-        assert!(policy.excludes("src/generated/client/api.ts"));
-        assert!(policy.excludes("docs/private.md"));
-        assert!(!policy.excludes("src/generated-client/api.ts"));
-        assert!(!policy.excludes("docs/private.md.backup"));
-    }
-
-    #[test]
-    fn excluded_paths_change_the_cache_policy_fingerprint() {
-        let directory = tempdir().expect("temporary directory should exist");
-        let baseline = IndexPolicy::from(&params(directory.path()));
-        let mut configuration = params(directory.path());
-        configuration.excluded_paths = vec!["src/generated".to_owned()];
-        let excluded = IndexPolicy::from(&configuration);
-
-        assert_ne!(
-            cache::policy_fingerprint(&baseline).expect("baseline policy should hash"),
-            cache::policy_fingerprint(&excluded).expect("excluded policy should hash")
-        );
-    }
-
-    #[test]
-    fn scan_prunes_excluded_files_and_subtrees() {
-        let directory = tempdir().expect("temporary directory should exist");
-        create_dir_all(directory.path().join("src/generated/nested"))
-            .expect("excluded directory should exist");
-        create_dir_all(directory.path().join("src/generated-client"))
-            .expect("included sibling directory should exist");
-        create_dir_all(directory.path().join("docs")).expect("docs should exist");
-        write(directory.path().join("src/generated/nested/api.ts"), "")
-            .expect("excluded subtree fixture should write");
-        write(directory.path().join("src/generated-client/api.ts"), "")
-            .expect("included sibling fixture should write");
-        write(directory.path().join("docs/private.md"), "")
-            .expect("excluded file fixture should write");
-        write(directory.path().join("docs/public.md"), "")
-            .expect("included file fixture should write");
-        let mut configuration = params(directory.path());
-        configuration.excluded_paths =
-            vec!["src/generated".to_owned(), "docs/private.md".to_owned()];
-        let policy = IndexPolicy::from(&configuration);
-
-        let result = scan_paths(directory.path(), &policy, None, &AtomicBool::new(false))
-            .expect("scan should complete");
-
-        assert_eq!(
-            result.paths,
-            vec!["docs/public.md", "src/generated-client/api.ts"]
-        );
-    }
-
-    #[test]
-    fn watcher_ignores_events_inside_excluded_subtrees() {
-        let directory = tempdir().expect("temporary directory should exist");
-        create_dir_all(directory.path().join("src/generated"))
-            .expect("excluded directory should exist");
-        let path = directory.path().join("src/generated/new.ts");
-        write(&path, "").expect("excluded fixture should write");
-        let known = RwLock::new(BTreeSet::new());
-        let mut configuration = params(directory.path());
-        configuration.excluded_paths = vec!["src/generated".to_owned()];
-        let policy = IndexPolicy::from(&configuration);
-        let event = Event {
-            kind: EventKind::Create(CreateKind::File),
-            paths: vec![path],
-            attrs: Default::default(),
-        };
-
-        assert!(!event_requires_reconcile(
-            &event,
-            directory.path(),
-            &policy,
-            None,
-            &known,
-        ));
-    }
-
-    #[test]
-    fn scan_respects_project_and_sensitive_file_exclusions() {
-        let directory = tempdir().expect("temporary directory should exist");
-        create_dir_all(directory.path().join("src")).expect("src should exist");
-        create_dir_all(directory.path().join("node_modules/pkg"))
-            .expect("dependency directory should exist");
-        create_dir_all(directory.path().join("target/release"))
-            .expect("Rust build directory should exist");
-        write(directory.path().join("src/App.tsx"), "export {}")
-            .expect("source fixture should write");
-        write(directory.path().join("node_modules/pkg/index.js"), "")
-            .expect("dependency fixture should write");
-        write(directory.path().join("target/release/native-artifact"), "")
-            .expect("Rust build fixture should write");
-        write(directory.path().join(".env"), "SECRET=1").expect("secret fixture should write");
-        write(directory.path().join(".env.example"), "SECRET=")
-            .expect("allowed fixture should write");
-
-        let policy = IndexPolicy::from(&params(directory.path()));
-        let result = scan_paths(directory.path(), &policy, None, &AtomicBool::new(false))
-            .expect("scan should complete");
-
-        assert_eq!(result.paths, vec![".env.example", "src/App.tsx"]);
-    }
-
-    #[test]
-    fn scan_respects_gitignore_and_can_disable_it() {
-        let directory = tempdir().expect("temporary directory should exist");
-        create_dir_all(directory.path().join("generated"))
-            .expect("generated directory should exist");
-        create_dir_all(directory.path().join(".git")).expect("git marker should exist");
-        write(directory.path().join(".gitignore"), "generated/\n")
-            .expect("ignore fixture should write");
-        write(directory.path().join("generated/output.ts"), "")
-            .expect("generated fixture should write");
-
-        let respected = IndexPolicy::from(&params(directory.path()));
-        let respected_paths =
-            scan_paths(directory.path(), &respected, None, &AtomicBool::new(false))
-                .expect("scan should complete")
-                .paths;
-        let mut disabled_params = params(directory.path());
-        disabled_params.respect_git_ignore = false;
-        let disabled = IndexPolicy::from(&disabled_params);
-        let disabled_paths = scan_paths(directory.path(), &disabled, None, &AtomicBool::new(false))
-            .expect("scan should complete")
-            .paths;
-
-        assert!(!respected_paths.contains(&"generated/output.ts".to_owned()));
-        assert!(disabled_paths.contains(&"generated/output.ts".to_owned()));
-    }
-
-    #[test]
-    fn service_loads_cache_then_reconciles_it() {
-        let directory = tempdir().expect("temporary directory should exist");
-        let cache_directory = tempdir().expect("cache directory should exist");
-        write(directory.path().join("first.ts"), "").expect("fixture should write");
-        let cache_path = cache_directory.path().join("index.bin");
-
-        let mut first_service = ContextIndexService::new();
-        let mut first_params = params(directory.path());
-        first_params.cache_path = Some(cache_path.clone());
-        let first = first_service
-            .initialize(first_params)
-            .expect("first initialization should work");
-        assert!(!first.from_cache);
-        let _ = first_service.shutdown();
-
-        write(directory.path().join("second.ts"), "").expect("new fixture should write");
-        let mut second_service = ContextIndexService::new();
-        let mut second_params = params(directory.path());
-        second_params.cache_path = Some(cache_path);
-        let second = second_service
-            .initialize(second_params)
-            .expect("cached initialization should work");
-        assert!(second.from_cache);
-        assert_eq!(second.file_count, 1);
-
-        assert!(wait_for_match(&second_service, "second", "second.ts"));
-        let _ = second_service.shutdown();
-    }
-
-    #[test]
-    fn monitor_adds_a_file_created_after_initialization() {
-        let directory = tempdir().expect("temporary directory should exist");
-        write(directory.path().join("first.ts"), "").expect("fixture should write");
-        let mut service = ContextIndexService::new();
-        service
-            .initialize(params(directory.path()))
-            .expect("initialization should work");
-
-        write(directory.path().join("created-after-init.ts"), "")
-            .expect("new fixture should write");
-
-        assert!(wait_for_match(
-            &service,
-            "createdafter",
-            "created-after-init.ts"
-        ));
-        let _ = service.shutdown();
-    }
-
-    #[test]
-    fn editor_paths_use_catalog_spelling_and_preserve_case_and_exclusion_policy() {
-        for case_sensitive in [true, false] {
-            let directory = tempdir().unwrap();
-            create_dir_all(directory.path().join("src")).unwrap();
-            write(directory.path().join("src/Café.ts"), "text").unwrap();
-            write(directory.path().join(".env"), "secret").unwrap();
-            let mut configuration = params(directory.path());
-            configuration.case_sensitive = case_sensitive;
-            let mut service = ContextIndexService::new();
-            service.initialize(configuration).unwrap();
-            let paths = service
-                .filter_paths(vec!["SRC/CAFÉ.TS".to_owned(), ".env".to_owned()])
-                .unwrap();
-            assert_eq!(
-                paths,
-                if case_sensitive {
-                    vec![]
-                } else {
-                    vec!["src/Café.ts"]
-                }
-            );
-            assert!(service.filter_paths(vec!["../outside".to_owned()]).is_err());
-            service.shutdown();
-        }
-    }
-
-    #[test]
-    fn service_glob_uses_the_shared_filtered_path_catalog() {
-        let directory = tempdir().expect("temporary directory should exist");
-        create_dir_all(directory.path().join("src/nested")).expect("source directory should exist");
-        create_dir_all(directory.path().join("tests")).expect("test directory should exist");
-        write(directory.path().join("src/App.tsx"), "").expect("fixture should write");
-        write(directory.path().join("src/nested/Card.tsx"), "").expect("fixture should write");
-        write(directory.path().join("tests/App.test.tsx"), "").expect("fixture should write");
-        write(directory.path().join(".env.local"), "SECRET=1")
-            .expect("sensitive fixture should write");
-        let mut configuration = params(directory.path());
-        configuration.case_sensitive = true;
-        let mut service = ContextIndexService::new();
-        service
-            .initialize(configuration)
-            .expect("initialization should work");
-
-        let result = service
-            .glob(GlobParams {
-                pattern: "*.tsx".to_owned(),
-                target_directory: Some("src".to_owned()),
-                limit: 20,
-            })
-            .expect("glob should work");
-        let secrets = service
-            .glob(GlobParams {
-                pattern: ".env*".to_owned(),
-                target_directory: None,
-                limit: 20,
-            })
-            .expect("glob should work");
-
-        assert_eq!(
-            result.files,
-            ["src/App.tsx".to_owned(), "src/nested/Card.tsx".to_owned()]
-        );
-        assert!(!result.truncated);
-        assert!(secrets.files.is_empty());
-        let _ = service.shutdown();
-    }
-
-    #[test]
-    fn service_glob_rejects_unsafe_target_directories_and_limits() {
-        let directory = tempdir().expect("temporary directory should exist");
-        let mut service = ContextIndexService::new();
-        service
-            .initialize(params(directory.path()))
-            .expect("initialization should work");
-
-        for params in [
-            GlobParams {
-                pattern: "*.ts".to_owned(),
-                target_directory: Some("../outside".to_owned()),
-                limit: 20,
-            },
-            GlobParams {
-                pattern: "*.ts".to_owned(),
-                target_directory: None,
-                limit: 0,
-            },
-        ] {
-            assert_eq!(
-                service
-                    .glob(params)
-                    .expect_err("invalid glob request should fail")
-                    .code,
-                "INVALID_REQUEST"
-            );
-        }
-        let _ = service.shutdown();
-    }
-
-    #[test]
-    fn content_changes_do_not_require_a_path_reconcile() {
-        let directory = tempdir().expect("temporary directory should exist");
-        let path = directory.path().join("src.ts");
-        write(&path, "before").expect("fixture should write");
-        let known = RwLock::new(BTreeSet::from(["src.ts".to_owned()]));
-        let policy = IndexPolicy::from(&params(directory.path()));
-        let event = Event {
-            kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
-            paths: vec![path],
-            attrs: Default::default(),
-        };
-
-        assert!(!event_requires_reconcile(
-            &event,
-            directory.path(),
-            &policy,
-            None,
-            &known,
-        ));
-    }
-
-    #[test]
-    fn ignore_file_content_changes_require_a_reconcile() {
-        let directory = tempdir().expect("temporary directory should exist");
-        let path = directory.path().join(".gitignore");
-        write(&path, "generated/\n").expect("fixture should write");
-        let known = RwLock::new(BTreeSet::new());
-        let policy = IndexPolicy::from(&params(directory.path()));
-        let event = Event {
-            kind: EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
-            paths: vec![path],
-            attrs: Default::default(),
-        };
-
-        assert!(event_requires_reconcile(
-            &event,
-            directory.path(),
-            &policy,
-            None,
-            &known,
-        ));
-    }
-
-    fn wait_for_match(service: &ContextIndexService, query: &str, expected_path: &str) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut generation = 0;
-        while Instant::now() < deadline {
-            generation += 1;
-            let latest = AtomicU64::new(generation);
-            let result = service
-                .search(
-                    SearchParams {
-                        query: query.to_owned(),
-                        limit: 20,
-                        generation,
-                    },
-                    &latest,
-                )
-                .expect("search should work while waiting for reconciliation");
-            if result.matches.iter().any(|item| item.path == expected_path) {
-                return true;
-            }
-            sleep(Duration::from_millis(50));
-        }
-        false
-    }
-}
+mod tests;

@@ -70,7 +70,7 @@ function EditorAnnotationsPreview({ annotations }: { readonly annotations: reado
     for (const annotation of annotations) value.saveAnnotation(structuredClone(annotation));
     return value;
   });
-  const state = useGlyphAnnotationsState(composer, false);
+  const state = useGlyphAnnotationsState({ composer, disabled: false });
   const editor = useRef<HTMLDivElement>(null);
   const [annotationHost, setAnnotationHost] = useState<HTMLDivElement | null>(null);
   const [annotationHeight, setAnnotationHeight] = useState(128);

@@ -40,7 +40,7 @@ export function useGlyphPendingReviewsState({ chatId, proposals, readOnly, actio
           ...file,
           proposalId: proposal.id,
           key: `${proposal.id}/${file.id}`,
-          name: file.path.split('/').at(-1) ?? file.path,
+          name: file.path.slice(file.path.lastIndexOf('/') + 1),
           canKeep:
             (file.textOnly === true || file.autoApplied === true) &&
             [GlyphProposalApplicability.READY, GlyphProposalApplicability.FAILED_RETRYABLE].includes(

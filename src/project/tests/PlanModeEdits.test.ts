@@ -1,4 +1,4 @@
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

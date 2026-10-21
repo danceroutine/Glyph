@@ -14,6 +14,7 @@ use crate::service::{
     content_search_error, ContextIndexService, GlobParams, InitializeParams, SearchParams,
     ServiceError,
 };
+use crate::workers::{SystemWorkers, WorkerFactory, WorkerRole};
 
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -112,16 +113,28 @@ enum ProtocolLine {
 /// Standard output is reserved exclusively for response envelopes. Operational
 /// diagnostics are emitted by the service on standard error.
 pub fn run() -> Result<(), String> {
+    serve(
+        || BufReader::new(io::stdin().lock()),
+        || BufWriter::new(io::stdout().lock()),
+        SystemWorkers,
+    )
+}
+
+/// Owns the protocol transport and worker lifetimes. Streams are opened on the
+/// same threads and in the same order as the standard-I/O composition.
+fn serve<R: BufRead, W: Write>(
+    input: impl FnOnce() -> R,
+    output: impl FnOnce() -> W + Send + 'static,
+    workers: impl WorkerFactory,
+) -> Result<(), String> {
     let latest_generation = Arc::new(AtomicU64::new(0));
     let cancellations: CancellationRegistry = Arc::new(Mutex::new(HashMap::new()));
     let (work_sender, work_receiver) = mpsc::sync_channel(CHANNEL_CAPACITY);
     let (response_sender, response_receiver) = mpsc::sync_channel(CHANNEL_CAPACITY);
 
-    let writer = thread::Builder::new()
-        .name("context-index-protocol-writer".to_owned())
-        .spawn(move || {
-            let stdout = io::stdout();
-            let mut output = BufWriter::new(stdout.lock());
+    let writer = workers
+        .spawn(WorkerRole::ProtocolWriter, move || {
+            let mut output = output();
             write_responses(response_receiver, &mut output)
                 .map_err(|error| format!("could not write a protocol response: {error}"))
         })
@@ -129,16 +142,16 @@ pub fn run() -> Result<(), String> {
 
     let worker_latest_generation = Arc::clone(&latest_generation);
     let worker_cancellations = Arc::clone(&cancellations);
-    let worker = match thread::Builder::new()
-        .name("context-index-service".to_owned())
-        .spawn(move || {
-            service_loop(
-                work_receiver,
-                response_sender,
-                &worker_latest_generation,
-                worker_cancellations,
-            )
-        }) {
+    let service_workers = workers.clone();
+    let worker = match workers.spawn(WorkerRole::Service, move || {
+        service_loop(
+            work_receiver,
+            response_sender,
+            &worker_latest_generation,
+            worker_cancellations,
+            &service_workers,
+        )
+    }) {
         Ok(worker) => worker,
         Err(error) => {
             drop(work_sender);
@@ -149,12 +162,7 @@ pub fn run() -> Result<(), String> {
         }
     };
 
-    let read_result = read_requests(
-        BufReader::new(io::stdin().lock()),
-        &work_sender,
-        &latest_generation,
-        &cancellations,
-    );
+    let read_result = read_requests(input(), &work_sender, &latest_generation, &cancellations);
     drop(work_sender);
 
     let worker_result = worker
@@ -238,6 +246,7 @@ fn service_loop(
     sender: SyncSender<Response>,
     latest_generation: &AtomicU64,
     cancellations: CancellationRegistry,
+    workers: &impl WorkerFactory,
 ) -> Result<(), String> {
     let mut service = ContextIndexService::new();
     let mut searches: Vec<thread::JoinHandle<()>> = Vec::new();
@@ -287,15 +296,20 @@ fn service_loop(
                         let response_sender = sender.clone();
                         let search_cancellations = Arc::clone(&cancellations);
                         let request_id = decoded.id;
-                        searches.push(thread::spawn(move || {
-                            let result = context
-                                .search(params, &cancellation)
-                                .map_err(content_search_error);
-                            if let Ok(mut registry) = search_cancellations.lock() {
-                                registry.remove(&request_id);
-                            }
-                            let _ = response_sender.send(result_response(Some(request_id), result));
-                        }));
+                        searches.push(
+                            workers
+                                .spawn(WorkerRole::ContentSearch, move || {
+                                    let result = context
+                                        .search(params, &cancellation)
+                                        .map_err(content_search_error);
+                                    if let Ok(mut registry) = search_cancellations.lock() {
+                                        registry.remove(&request_id);
+                                    }
+                                    let _ = response_sender
+                                        .send(result_response(Some(request_id), result));
+                                })
+                                .expect("failed to spawn thread"),
+                        );
                         continue;
                     }
                     Request::Cancel(params) => {
@@ -535,234 +549,4 @@ fn read_protocol_line<R: BufRead>(input: &mut R) -> io::Result<ProtocolLine> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io::Cursor;
-
-    use super::*;
-
-    #[test]
-    fn decodes_a_search_request_and_preserves_a_string_id() {
-        let decoded = decode_request(
-            br#"{"version":1,"id":"request-7","method":"search","params":{"query":"chat","limit":12,"generation":7}}"#,
-        )
-        .expect("request should decode");
-
-        assert_eq!(decoded.id, RequestId::String("request-7".to_owned()));
-        let Request::Search(params) = decoded.request else {
-            panic!("expected a search request");
-        };
-        assert_eq!(params.query, "chat");
-        assert_eq!(params.limit, 12);
-        assert_eq!(params.generation, 7);
-    }
-
-    #[test]
-    fn decodes_a_glob_request_with_an_optional_target_directory() {
-        let decoded = decode_request(
-            br#"{"version":1,"id":8,"method":"glob","params":{"pattern":"*.tsx","targetDirectory":"src","limit":2000}}"#,
-        )
-        .expect("request should decode");
-
-        let Request::Glob(params) = decoded.request else {
-            panic!("expected a glob request");
-        };
-        assert_eq!(params.pattern, "*.tsx");
-        assert_eq!(params.target_directory.as_deref(), Some("src"));
-        assert_eq!(params.limit, 2_000);
-    }
-
-    #[test]
-    fn decodes_project_relative_excluded_paths_during_initialization() {
-        let decoded = decode_request(
-            br#"{"version":1,"id":1,"method":"initialize","params":{"root":"/project","excludedPaths":["src/generated","docs/private.md"]}}"#,
-        )
-        .expect("request should decode");
-
-        let Request::Initialize(params) = decoded.request else {
-            panic!("expected an initialize request");
-        };
-        assert_eq!(params.excluded_paths, ["src/generated", "docs/private.md"]);
-    }
-
-    #[test]
-    fn rejects_unknown_method_parameters_and_echoes_the_request_id() {
-        let (id, error) = decode_request(
-            br#"{"version":1,"id":42,"method":"refresh","params":{"unexpected":true}}"#,
-        )
-        .expect_err("unknown parameter should be rejected");
-
-        assert_eq!(id, Some(RequestId::Number(42.into())));
-        assert_eq!(error.code, "INVALID_REQUEST");
-        assert!(error.message.contains("unknown field"));
-    }
-
-    #[test]
-    fn a_malformed_id_is_rendered_as_null_in_the_error_response() {
-        let (id, error) =
-            decode_request(br#"{"version":1,"id":false,"method":"shutdown","params":{}}"#)
-                .expect_err("boolean request id should be rejected");
-        let response = error_response(id, error);
-
-        let encoded = serde_json::to_value(response).expect("response should serialize");
-        assert_eq!(encoded["id"], Value::Null);
-        assert_eq!(encoded["error"]["code"], "INVALID_REQUEST");
-    }
-
-    #[test]
-    fn rejects_an_unsupported_protocol_version() {
-        let (id, error) =
-            decode_request(br#"{"version":2,"id":9,"method":"shutdown","params":{}}"#)
-                .expect_err("version should be rejected");
-
-        assert_eq!(id, Some(RequestId::Number(9.into())));
-        assert!(error.message.contains("Unsupported protocol version 2"));
-    }
-
-    #[test]
-    fn an_oversized_line_is_drained_before_the_next_request() {
-        let mut bytes = vec![b'x'; MAX_REQUEST_BYTES + 1];
-        bytes.extend_from_slice(b"\n{}\n");
-        let mut input = Cursor::new(bytes);
-
-        assert!(matches!(
-            read_protocol_line(&mut input).expect("line read should work"),
-            ProtocolLine::TooLong
-        ));
-        let ProtocolLine::Line(next) =
-            read_protocol_line(&mut input).expect("next line should work")
-        else {
-            panic!("expected the second request line");
-        };
-        assert_eq!(next, b"{}");
-    }
-
-    #[test]
-    fn search_before_initialization_returns_a_structured_error() {
-        let latest = Arc::new(AtomicU64::new(1));
-        let (work_sender, work_receiver) = mpsc::sync_channel(1);
-        let (response_sender, response_receiver) = mpsc::sync_channel(1);
-        let worker_latest = Arc::clone(&latest);
-        let cancellations = Arc::new(Mutex::new(HashMap::new()));
-        let worker = thread::spawn(move || {
-            service_loop(
-                work_receiver,
-                response_sender,
-                &worker_latest,
-                cancellations,
-            )
-        });
-
-        work_sender
-            .send(WorkItem::Request(DecodedRequest {
-                id: RequestId::Number(1.into()),
-                request: Request::Search(SearchParams {
-                    query: "app".to_owned(),
-                    limit: 20,
-                    generation: 1,
-                }),
-                cancellation: None,
-            }))
-            .expect("work should send");
-        drop(work_sender);
-
-        let response = response_receiver.recv().expect("response should arrive");
-        let encoded = serde_json::to_value(response).expect("response should serialize");
-        assert_eq!(encoded["id"], 1);
-        assert_eq!(encoded["error"]["code"], "NOT_INITIALIZED");
-        worker
-            .join()
-            .expect("worker should not panic")
-            .expect("worker should stop cleanly");
-    }
-
-    #[test]
-    fn reader_publishes_the_latest_generation_before_work_is_processed() {
-        let input = Cursor::new(concat!(
-            "{\"version\":1,\"id\":1,\"method\":\"search\",\"params\":{\"query\":\"a\",\"generation\":4}}\n",
-            "{\"version\":1,\"id\":2,\"method\":\"search\",\"params\":{\"query\":\"app\",\"generation\":9}}\n",
-            "{\"version\":1,\"id\":3,\"method\":\"shutdown\",\"params\":{}}\n",
-        ));
-        let latest = AtomicU64::new(0);
-        let cancellations = Arc::new(Mutex::new(HashMap::new()));
-        let (sender, receiver) = mpsc::sync_channel(3);
-
-        read_requests(input, &sender, &latest, &cancellations)
-            .expect("reader should finish at shutdown");
-
-        assert_eq!(latest.load(Ordering::Acquire), 9);
-        assert!(matches!(
-            receiver.recv().expect("first request should arrive"),
-            WorkItem::Request(DecodedRequest {
-                request: Request::Search(SearchParams { generation: 4, .. }),
-                ..
-            })
-        ));
-        assert!(matches!(
-            receiver.recv().expect("second request should arrive"),
-            WorkItem::Request(DecodedRequest {
-                request: Request::Search(SearchParams { generation: 9, .. }),
-                ..
-            })
-        ));
-        assert!(matches!(
-            receiver.recv().expect("shutdown should arrive"),
-            WorkItem::Request(DecodedRequest {
-                request: Request::Shutdown,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn reader_cancels_a_content_search_before_queued_work_handles_the_cancel_request() {
-        let input = Cursor::new(concat!(
-            "{\"version\":1,\"id\":7,\"method\":\"contentSearch\",\"params\":{\"pattern\":\"needle\",\"patternKind\":\"literal\",\"path\":null,\"fileGlob\":null,\"fileType\":null,\"outputMode\":\"content\",\"linesBefore\":0,\"linesAfter\":0,\"caseSensitive\":true,\"multiline\":false,\"limit\":20,\"offset\":0}}\n",
-            "{\"version\":1,\"id\":8,\"method\":\"cancel\",\"params\":{\"requestId\":7}}\n",
-            "{\"version\":1,\"id\":9,\"method\":\"shutdown\",\"params\":{}}\n",
-        ));
-        let latest = AtomicU64::new(0);
-        let cancellations = Arc::new(Mutex::new(HashMap::new()));
-        let (sender, receiver) = mpsc::sync_channel(3);
-
-        read_requests(input, &sender, &latest, &cancellations)
-            .expect("reader should finish at shutdown");
-
-        let WorkItem::Request(search) = receiver.recv().expect("search should arrive") else {
-            panic!("expected content search");
-        };
-        assert!(matches!(search.request, Request::ContentSearch(_)));
-        assert!(search
-            .cancellation
-            .expect("search should have a cancellation flag")
-            .load(Ordering::Acquire));
-        assert!(matches!(
-            receiver.recv().expect("cancel should arrive"),
-            WorkItem::Request(DecodedRequest {
-                request: Request::Cancel(_),
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn each_response_is_flushed_as_one_json_line() {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        sender
-            .send(success_response(
-                Some(RequestId::String("done".to_owned())),
-                serde_json::json!({ "shutdown": true }),
-            ))
-            .expect("response should send");
-        drop(sender);
-        let mut output = Vec::new();
-
-        write_responses(receiver, &mut output).expect("responses should write");
-
-        let text = String::from_utf8(output).expect("response should be UTF-8");
-        assert_eq!(text.lines().count(), 1);
-        let value: Value = serde_json::from_str(text.trim_end()).expect("JSON should parse");
-        assert_eq!(value["version"], PROTOCOL_VERSION);
-        assert_eq!(value["id"], "done");
-        assert_eq!(value["result"]["shutdown"], true);
-    }
-}
+mod tests;

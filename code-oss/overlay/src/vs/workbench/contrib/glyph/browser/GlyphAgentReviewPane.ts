@@ -26,7 +26,7 @@ import { IViewDescriptorService } from '#vs/workbench/common/views.js';
 import { ISCMService, ISCMRepository } from '#vs/workbench/contrib/scm/common/scm.js';
 import { IQuickInputService } from '#vs/platform/quickinput/common/quickInput.js';
 import { IViewsService } from '#vs/workbench/services/views/common/viewsService.js';
-import { GlyphWorkbenchService } from '../common/GlyphWorkbenchService.js';
+import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
 import {
   GlyphAgentReviewScope as Scope,
   GlyphAgentReviewControls,
@@ -321,7 +321,7 @@ export class GlyphAgentReviewPane extends ViewPane {
       this.glyphService,
       this.views,
       async () => attachments,
-      `${findings.length === 1 ? 'Fix this agent review issue' : 'Fix all of these agent review issues'}.\n\n${findings.map(finding => `${finding.path}:${finding.line} — ${finding.title}\n${finding.body}`).join('\n\n')}\n\nCheck each issue against the current source before changing files; the attached revisions are the reviewed snapshots.`,
+      `${findings.length === 1 ? 'Fix this agent review issue' : 'Fix all of these agent review issues'}.\n\n${findings.map(finding => `${finding.path}:${finding.line} (${finding.side ?? (review.files.find(file => file.path === finding.path)?.after ? 'modified' : 'original')}) — ${finding.title}\n${finding.body}`).join('\n\n')}\n\nCheck each issue against the current source before changing files; the attached revisions are the reviewed snapshots.`,
       AgentModeID.AGENT,
     );
   }

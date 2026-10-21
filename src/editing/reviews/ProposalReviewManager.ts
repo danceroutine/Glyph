@@ -48,7 +48,7 @@ export class ProposalReviewManager {
     { readonly reviewId: string; readonly decision: EditDecisionState }
   >();
   private readonly logger: Logger;
-  private readonly maxReadBytes: number;
+  private readonly maxAllowableReadBytes: number;
   private readonly autoApplyStructural: boolean;
   private readonly autoApply: boolean;
   private readonly listeners = new Set<(change: ProposalReviewChange) => void>();
@@ -67,8 +67,8 @@ export class ProposalReviewManager {
   ) {
     this.autoApply = options.autoApply ?? false;
     this.autoApplyStructural = this.autoApply || (options.autoApplyStructural ?? false);
-    this.maxReadBytes = options.maxReadBytes ?? 2 * 1024 * 1024 + 3;
-    if (!Number.isSafeInteger(this.maxReadBytes) || this.maxReadBytes < 0) {
+    this.maxAllowableReadBytes = options.maxReadBytes ?? 2 * 1024 * 1024 + 3;
+    if (!Number.isSafeInteger(this.maxAllowableReadBytes) || this.maxAllowableReadBytes < 0) {
       throw new Error('Review read budget must be a non-negative safe integer.');
     }
     this.logger = logger.forNamespace('editing.review');
@@ -406,7 +406,7 @@ export class ProposalReviewManager {
         automatic.state = wasReverting ? 'reverting' : 'applied';
         throw error;
       }
-      const current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxReadBytes });
+      const current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxAllowableReadBytes });
       if (file.operation === EditOperation.CREATE) {
         if (current) {
           if (current.revision !== automatic.appliedRevision) throw this.stale(file, current.revision);
@@ -517,7 +517,7 @@ export class ProposalReviewManager {
         throw error;
       }
     } else {
-      const current = await this.workspace.read(file.currentPath, { maxBytes: this.maxReadBytes });
+      const current = await this.workspace.read(file.currentPath, { maxBytes: this.maxAllowableReadBytes });
       if (edit.state === 'applying') {
         // A failed proposal can be dismissed only when its side effect is absent.
         if (edit.before && current.revision !== edit.before.revision) throw this.stale(file, current.revision);
@@ -856,30 +856,52 @@ export class ProposalReviewManager {
     });
   }
 
+  /**
+   * Re-aligns a plan with the workspace after something happened outside its view: a restart, an
+   * interrupted or failed mutation, or edits made while the review sat in the queue. Every decision on a
+   * file with an outstanding intent passes through here first, so no decision is ever based on a guess
+   * about what is on disk.
+   *
+   * The outcome is either a plan that is safe to act on or one marked stale. Unreviewable files never
+   * throw, because one broken file must not block recovery, bulk rejection, or the rest of the queue.
+   */
   private async reconcile(review: EditProposal, file: FileEditPlan): Promise<void> {
+    // With no write in flight and the file expected to be absent, the only question is whether the path is
+    // still free. Reading content here would spend the read budget on a file the plan never relied on.
     if (file.currentRevision === null && !file.applyingItemId) {
       if (!(await this.synchronizeNewFile(file))) file.applicability = EditApplicabilityState.STALE;
       return;
     }
     let current: FileEditPlan['current'] | undefined;
     try {
-      current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxReadBytes });
+      // This runs for every queued file at startup. Bound each read so one huge replacement file cannot
+      // exhaust memory before the user even sees the queue.
+      current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxAllowableReadBytes });
     } catch (error) {
       if (!isUnreviewableSnapshot(error)) throw error;
       // A path replaced by a directory, binary file, or disallowed resource is
       // stale, not absent, as is content beyond the recovery read budget or a
       // file identity that changed while opening. None proves a pending DELETE ran.
       // Retain the reviewed text so the user can inspect and reject the proposal.
+      // Dropping the unresolvable intent stops every later decision from re-running this same failed recovery.
       file.applicability = EditApplicabilityState.STALE;
       file.applyingItemId = null;
       return;
     }
+    // An interrupted write may have landed. Check for that before treating the difference as outside edits.
+    // Otherwise our own change would look foreign and mark the file stale, or a landed acceptance would stay
+    // pending and be applied a second time.
     const applying = file.applyingItemId ? file.items.find(item => item.id === file.applyingItemId) : undefined;
     if (applying) {
       const recovered = await this.reconcileApplying(review, file, applying, current);
       if (recovered) return;
     }
-    if (this.synchronizeSnapshot(file, current)) return;
+    // The write did not land, or could not be proven to. Treat the disk as authoritative and try to carry the
+    // pending hunks over whatever it holds, as for any concurrent edit.
+    if (this.synchronizePlanAgainstLiveSnapshot(file, current)) return;
+    // The pending hunks no longer fit the file. Fail closed: the human can still inspect and reject, but
+    // nothing will be written on outdated assumptions.
+    // TODO Not sure we actually have provided a recovery path for the human yet
     file.applicability = EditApplicabilityState.STALE;
     file.applyingItemId = null;
   }
@@ -894,7 +916,7 @@ export class ProposalReviewManager {
     if (item.kind === EditReviewItemKind.RENAME) {
       let target: FileEditPlan['current'];
       try {
-        target = (await this.workspace.readOptional(file.targetPath, { maxBytes: this.maxReadBytes })) ?? null;
+        target = (await this.workspace.readOptional(file.targetPath, { maxBytes: this.maxAllowableReadBytes })) ?? null;
       } catch (error) {
         if (!isUnreviewableSnapshot(error)) throw error;
         // An unreadable destination cannot prove the rename completed. Retain
@@ -965,14 +987,14 @@ export class ProposalReviewManager {
     }
     let current: FileEditPlan['current'] | undefined;
     try {
-      current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxReadBytes });
+      current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxAllowableReadBytes });
     } catch (error) {
       if (!isUnreviewableSnapshot(error)) throw error;
       file.applicability = EditApplicabilityState.STALE;
       await this.persist();
       throw this.stale(file);
     }
-    if (this.synchronizeSnapshot(file, current)) {
+    if (this.synchronizePlanAgainstLiveSnapshot(file, current)) {
       await this.persist();
       return;
     }
@@ -981,6 +1003,11 @@ export class ProposalReviewManager {
     throw this.stale(file, current?.revision);
   }
 
+  /**
+   * Synchronizes intents that operate on a new file against the workspace. The expectation is that the file does not exist.
+   * @param file - The file edit plan to synchronize.
+   * @returns false if the file exists, indicating that the intent to create the file at that location is now stale
+   */
   private async synchronizeNewFile(file: FileEditPlan): Promise<boolean> {
     // Pending CREATE only needs proof that the path is absent. Content is needed
     // solely when recovering an applying CREATE to recognize its expected hash.
@@ -990,10 +1017,20 @@ export class ProposalReviewManager {
       if (!isUnreviewableSnapshot(error)) throw error;
       return false;
     }
-    return this.synchronizeSnapshot(file, undefined);
+    return this.synchronizePlanAgainstLiveSnapshot(file, undefined);
   }
 
-  private synchronizeSnapshot(file: FileEditPlan, current: FileEditPlan['current'] | undefined): boolean {
+  /**
+   * Adopts a freshly observed snapshot as the plan's new starting point, carrying the pending hunks over
+   * any edits made since the plan last looked. This is what lets a review stay useful while the user keeps
+   * working in the same file, instead of forcing the agent to re-propose after every keystroke.
+   *
+   * Returns false whenever the pending hunks cannot be placed with certainty. The caller then marks the file
+   * stale, because applying a hunk at a guessed offset would silently corrupt the user's file.
+   */
+  private synchronizePlanAgainstLiveSnapshot(file: FileEditPlan, current: FileEditPlan['current'] | undefined): boolean {
+    // The plan expects no file here, so any file that now exists was put there outside the review.
+    // Creating over it would destroy that content.
     if (file.currentRevision === null) {
       if (current !== undefined) return false;
       file.current = null;
@@ -1001,21 +1038,43 @@ export class ProposalReviewManager {
       file.applyingItemId = null;
       return true;
     }
+    // A file that vanished leaves the pending hunks nothing to apply to, and its absence must not be
+    // mistaken for an approved delete.
     if (!current || !file.current) return false;
 
-    if (file.base && file.base.revision !== file.current.revision) {
-      if (!rebasePendingTextItems(file, file.base.text, file.current.text)) return false;
-      updateBaseline(file, file.current);
+    const previous = captureFileState(file);
+    let synchronized = false;
+    try {
+      // Hunk offsets are relative to `base`, but the last observation may already have moved past it. That
+      // happens when an accepted write landed with different bytes than predicted and the old base was kept
+      // as conflict evidence. Catch the hunks up to that observation first, so the next rebase diffs against
+      // the text their offsets actually describe.
+      if (file.base && file.base.revision !== file.current.revision) {
+        if (!rebasePendingTextItems(file, file.base.text, file.current.text)) return false;
+        updateBaseline(file, file.current);
+      }
+      if (current.revision !== file.currentRevision) {
+        // Someone edited the file since the plan last saw it. Only content-level hunks can move with those
+        // edits. A delete was approved for the exact content the human reviewed, so carrying it over different
+        // content would discard edits nobody reviewed. Any outside edit that overlaps a pending hunk also fails
+        // here rather than being merged by guesswork.
+        if (!canRebase(file) || !rebasePendingTextItems(file, file.current.text, current.text)) return false;
+        updateBaseline(file, current);
+      } else {
+        // Same bytes, but `proposed` must still be recomputed from only the hunks that remain pending, and the
+        // fresh read may carry newer metadata such as permissions or the editor's canonical identity.
+        updateBaseline(file, current);
+      }
+      // The plan now matches the disk exactly, so whatever write was in flight is resolved and decisions are
+      // safe to apply again.
+      file.applicability = EditApplicabilityState.READY;
+      file.applyingItemId = null;
+      synchronized = true;
+      return true;
+    } finally {
+      // Both rebases must succeed before replacing the original conflict evidence.
+      if (!synchronized) restoreFileState(file, previous);
     }
-    if (current.revision !== file.currentRevision) {
-      if (!canRebase(file) || !rebasePendingTextItems(file, file.current.text, current.text)) return false;
-      updateBaseline(file, current);
-    } else {
-      updateBaseline(file, current);
-    }
-    file.applicability = EditApplicabilityState.READY;
-    file.applyingItemId = null;
-    return true;
   }
 
   private async persist(): Promise<void> {
@@ -1211,6 +1270,13 @@ function simulatePendingTextChanges(file: FileEditPlan): NonNullable<FileEditPla
   return snapshotForProposal(file, file.current, text, file.proposed.byteOrderMark);
 }
 
+/**
+ * Rebases the pending text items for the given file to the new text. Mutates the file edit plan in place.
+ * @param file - The file edit plan to rebase the pending text items for.
+ * @param previousText - The text of the previous snapshot.
+ * @param currentText - The text of the current snapshot.
+ * @returns true if the pending text items were rebased successfully, false otherwise.
+ */
 function rebasePendingTextItems(file: FileEditPlan, previousText: string, currentText: string): boolean {
   const items = file.items.filter(
     item => item.kind === EditReviewItemKind.TEXT && item.decision === EditDecisionState.PENDING,
@@ -1221,6 +1287,13 @@ function rebasePendingTextItems(file: FileEditPlan, previousText: string, curren
   return true;
 }
 
+/**
+ * Plans the text acceptance for the given item, non-destructively, working only in memory.
+ * @param file - The file edit plan to plan the text acceptance for.
+ * @param item - The item to plan the text acceptance for.
+ * @param actualText - The actual text of the item.
+ * @returns The text with the first pending text edit applied and the transformed items after the first pending text edit is applied.
+ */
 function planTextAcceptance(
   file: FileEditPlan,
   item: FileEditPlan['items'][number],
@@ -1238,7 +1311,7 @@ function planTextAcceptance(
   } catch {
     return undefined;
   }
-  const remaining = file.items.filter(
+  const remainingPendingTextEdits = file.items.filter(
     candidate =>
       candidate.id !== item.id &&
       candidate.kind === EditReviewItemKind.TEXT &&
@@ -1246,11 +1319,11 @@ function planTextAcceptance(
   );
   // Editor-backed stores may normalize EOLs or automatic whitespace. Pending
   // ranges must follow the observed result, never predicted replacement bytes.
-  const ranges = transformTextEditRanges(file.current.text, actualText ?? text, remaining);
+  const ranges = transformTextEditRanges(file.current.text, actualText ?? text, remainingPendingTextEdits);
   if (!ranges) return undefined;
   return {
     text,
-    transformedItems: remaining.map((candidate, index) => ({ item: candidate, range: ranges[index]! })),
+    transformedItems: remainingPendingTextEdits.map((candidate, index) => ({ item: candidate, range: ranges[index]! })),
   };
 }
 
@@ -1320,6 +1393,12 @@ function applyTransformedRanges(items: readonly TransformedItem[]): void {
   }
 }
 
+/**
+ * Attempts to apply a edit plan item to the given text, throwing an error if the transformed edit no longer matches its expected text.
+ * @param text - The text to apply the edit to.
+ * @param item - The edit plan item to apply.
+ * @returns the transformed text
+ */
 function applyTextItem(text: string, item: FileEditPlan['items'][number]): string {
   if (text.slice(item.sourceStart, item.sourceEnd) !== item.removedText) {
     throw new Error('The transformed edit no longer matches its expected text.');

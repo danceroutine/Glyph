@@ -106,6 +106,9 @@ export class GlyphComposerState {
   }
   setDocument(document: GlyphPromptDocument): void {
     document = { ...document, options: document.options ?? this.value.document.options ?? {} };
+    for (const annotation of document.options?.annotations ?? []) {
+      this.annotationSequence = Math.max(this.annotationSequence, annotation.order);
+    }
     this.update({ document, draft: toGlyphPromptText(document.parts) });
   }
   requestAnnotation(annotation: GlyphAnnotation): void {
@@ -230,8 +233,18 @@ export class GlyphComposerState {
   }
   cancelQueueEdit(): void {
     if (!this.value.editingQueuedMessage) return;
-    this.setDraft('');
-    this.update({ editingQueuedMessage: undefined });
+    this.update({
+      draft: '',
+      document: {
+        parts: [],
+        from: 0,
+        to: 0,
+        options: { mode: this.value.document.options?.mode ?? AgentMode.default.id },
+      },
+      editingQueuedMessage: undefined,
+      editingAnnotation: undefined,
+      annotationDraft: undefined,
+    });
   }
   removeQueued(id: string): void {
     if (this.value.queueSubmitting === id) return;

@@ -39,7 +39,7 @@ const answersSchema = z.object({
 
 /** Routes human decisions to the originating run even when several chats execute concurrently. */
 export class DesktopInteractionBroker implements QuestionPresenter, ShellPermissionPresenter {
-  private readonly scope = new AsyncLocalStorage<RunIdentity>();
+  private readonly scope = new AsyncLocalStorage<Required<RunIdentity>>();
   private readonly pending = new Map<string, PendingDecision>();
   private readonly queues = new Map<string, Promise<void>>();
 
@@ -134,7 +134,7 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     settle: (id: string, status: GlyphModeSwap['status']) => void,
   ): Promise<boolean> {
     const identity = this.requireRun();
-    const policy = modeSwapPolicySchema.parse(identity.modeSwapPolicy ?? {});
+    const policy = identity.modeSwapPolicy;
     const id = randomUUID();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let committed = false;
@@ -211,7 +211,7 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     pending.resolve(input.value);
   }
 
-  private requireRun(): RunIdentity {
+  private requireRun(): Required<RunIdentity> {
     const identity = this.scope.getStore();
     if (!identity) throw new Error('Human interaction requires an active chat run.');
     return identity;

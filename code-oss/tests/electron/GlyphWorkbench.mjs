@@ -50,7 +50,6 @@ export class GlyphWorkbench {
   }
 
   async send(text) {
-    await this.page.bringToFront();
     await this.composer.fill(text);
     await this.sendButton.click();
   }

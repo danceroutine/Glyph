@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import { ToolRegistry } from '#src/tools/ToolRegistry.js';
@@ -101,5 +101,55 @@ describe(ToolExecutor, () => {
     f.tool.execute.mockRejectedValue(new Error('Failed after an effect'));
     const result = await f.executor.execute(call, f.options);
     expect(JSON.parse(result.output).error).toMatchObject({ code: 'TOOL_EXECUTION_FAILED', outcome: 'unknown' });
+  });
+
+  describe(ToolExecutor.prototype.execute, () => {
+    it('reports a generic malformed-input message when validation fails with a non-error value', async () => {
+      const f = fixture([AgentModeID.PLAN]);
+      f.tool.validateInput.mockImplementation(() => {
+        throw 'bad input';
+      });
+
+      const result = await f.executor.execute(call, f.options);
+
+      expect(JSON.parse(result.output).error).toEqual({
+        code: 'MALFORMED',
+        message: 'Invalid tool input.',
+        outcome: 'not_started',
+      });
+    });
+
+    it('reports a generic not-started message when cancelled with a non-error reason', async () => {
+      const f = fixture([AgentModeID.PLAN]);
+      f.controller.abort('stopped');
+
+      const result = await f.executor.execute(call, f.options);
+
+      expect(JSON.parse(result.output).error).toEqual({
+        code: 'TOOL_NOT_STARTED',
+        message: 'The call was not started.',
+        outcome: 'not_started',
+      });
+      expect(result.interruption).toBe('stopped');
+    });
+
+    it('reports the thrown failure as the interruption when cancellation carries no reason', async () => {
+      const f = fixture([AgentModeID.PLAN]);
+      const signal = { aborted: false, reason: undefined, throwIfAborted: () => {} };
+      const failure = new Error('Interrupted mid-flight');
+      f.tool.execute.mockImplementation(async () => {
+        signal.aborted = true;
+        throw failure;
+      });
+
+      const result = await f.executor.execute(call, { ...f.options, signal: signal as unknown as AbortSignal });
+
+      expect(JSON.parse(result.output).error).toEqual({
+        code: 'TOOL_EXECUTION_INTERRUPTED',
+        message: 'The call was interrupted; it may have produced side effects before cancellation.',
+        outcome: 'unknown',
+      });
+      expect(result.interruption).toBe(failure);
+    });
   });
 });

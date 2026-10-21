@@ -45,7 +45,7 @@ export class FileLogger implements Logger {
     const record = `${JSON.stringify(entry)}\n`;
     const file = await open(
       this.destination,
-      constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW,
+      constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
       0o600,
     );
     let key: string;

@@ -32,8 +32,16 @@ pub(crate) fn load(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("Could not open the file-index cache: {error}")),
     };
-    let mut reader = BufReader::new(file);
+    decode(BufReader::new(file), canonical_root, policy_hash, max_files)
+}
 
+/// The on-disk format is independent of how its bytes are obtained.
+fn decode(
+    mut reader: impl Read,
+    canonical_root: &str,
+    policy_hash: &[u8; 32],
+    max_files: usize,
+) -> Result<Option<CachedPaths>, String> {
     let mut magic = [0_u8; CACHE_MAGIC.len()];
     read_exact(&mut reader, &mut magic)?;
     if &magic != CACHE_MAGIC {
@@ -98,13 +106,34 @@ pub(crate) fn store(
     paths: &[String],
     truncated: bool,
 ) -> Result<(), String> {
-    let parent = cache_path
-        .parent()
-        .ok_or_else(|| "The file-index cache path has no parent directory.".to_owned())?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("Could not create the file-index cache directory: {error}"))?;
+    store_with_file(
+        cache_path,
+        canonical_root,
+        policy_hash,
+        paths,
+        truncated,
+        create_file,
+    )
+}
 
-    let temporary = temporary_path(cache_path);
+/// A pending cache has a buffered byte stream and a separate durability barrier.
+/// Publication must happen only after both encoding and synchronization succeed.
+trait PendingCacheFile {
+    fn writer(&self) -> impl Write + '_;
+    fn synchronize(&self) -> io::Result<()>;
+}
+
+impl PendingCacheFile for File {
+    fn writer(&self) -> impl Write + '_ {
+        BufWriter::new(self)
+    }
+
+    fn synchronize(&self) -> io::Result<()> {
+        self.sync_all()
+    }
+}
+
+fn create_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.create_new(true).write(true);
     #[cfg(unix)]
@@ -112,29 +141,30 @@ pub(crate) fn store(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let file = options
-        .open(&temporary)
+    options.open(path)
+}
+
+fn store_with_file<F: PendingCacheFile>(
+    cache_path: &Path,
+    canonical_root: &str,
+    policy_hash: &[u8; 32],
+    paths: &[String],
+    truncated: bool,
+    create: impl FnOnce(&Path) -> io::Result<F>,
+) -> Result<(), String> {
+    let parent = cache_path
+        .parent()
+        .ok_or_else(|| "The file-index cache path has no parent directory.".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Could not create the file-index cache directory: {error}"))?;
+
+    let temporary = temporary_path(cache_path);
+    let file = create(&temporary)
         .map_err(|error| format!("Could not create a temporary file-index cache: {error}"))?;
 
     let result = (|| -> Result<(), String> {
-        let mut writer = BufWriter::new(&file);
-        writer
-            .write_all(CACHE_MAGIC)
-            .and_then(|_| writer.write_all(policy_hash))
-            .map_err(|error| format!("Could not write the file-index cache header: {error}"))?;
-        write_string(&mut writer, canonical_root)?;
-        writer
-            .write_all(&[u8::from(truncated)])
-            .and_then(|_| writer.write_all(&(paths.len() as u64).to_le_bytes()))
-            .map_err(|error| format!("Could not write the file-index cache metadata: {error}"))?;
-        for path in paths {
-            write_string(&mut writer, path)?;
-        }
-        writer
-            .flush()
-            .map_err(|error| format!("Could not flush the file-index cache: {error}"))?;
-        drop(writer);
-        file.sync_all()
+        encode(file.writer(), canonical_root, policy_hash, paths, truncated)?;
+        file.synchronize()
             .map_err(|error| format!("Could not synchronize the file-index cache: {error}"))?;
 
         replace_file(&temporary, cache_path)
@@ -146,6 +176,30 @@ pub(crate) fn store(
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+fn encode(
+    mut writer: impl Write,
+    canonical_root: &str,
+    policy_hash: &[u8; 32],
+    paths: &[String],
+    truncated: bool,
+) -> Result<(), String> {
+    writer
+        .write_all(CACHE_MAGIC)
+        .and_then(|_| writer.write_all(policy_hash))
+        .map_err(|error| format!("Could not write the file-index cache header: {error}"))?;
+    write_string(&mut writer, canonical_root)?;
+    writer
+        .write_all(&[u8::from(truncated)])
+        .and_then(|_| writer.write_all(&(paths.len() as u64).to_le_bytes()))
+        .map_err(|error| format!("Could not write the file-index cache metadata: {error}"))?;
+    for path in paths {
+        write_string(&mut writer, path)?;
+    }
+    writer
+        .flush()
+        .map_err(|error| format!("Could not flush the file-index cache: {error}"))
 }
 
 fn read_exact(reader: &mut impl Read, bytes: &mut [u8]) -> Result<(), String> {
@@ -228,66 +282,4 @@ fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[derive(Serialize)]
-    struct Policy<'a> {
-        ignored: &'a [&'a str],
-    }
-
-    #[test]
-    fn cache_round_trips_sorted_paths() {
-        let directory = tempdir().expect("temporary directory should exist");
-        let path = directory.path().join("index.bin");
-        let hash = policy_fingerprint(&Policy { ignored: &["dist"] }).expect("policy should hash");
-        let paths = vec!["src/App.tsx".to_owned(), "src/main.ts".to_owned()];
-
-        store(&path, "/project", &hash, &paths, false).expect("cache should write");
-        let cached = load(&path, "/project", &hash, 100)
-            .expect("cache should read")
-            .expect("cache should match");
-
-        assert_eq!(cached.paths, paths);
-        assert!(!cached.truncated);
-    }
-
-    #[test]
-    fn cache_miss_when_policy_or_root_changes() {
-        let directory = tempdir().expect("temporary directory should exist");
-        let path = directory.path().join("index.bin");
-        let first = policy_fingerprint(&Policy { ignored: &["dist"] }).expect("policy should hash");
-        let second = policy_fingerprint(&Policy {
-            ignored: &["build"],
-        })
-        .expect("policy should hash");
-        store(
-            &path,
-            "/project",
-            &first,
-            &["src/main.ts".to_owned()],
-            false,
-        )
-        .expect("cache should write");
-
-        assert!(load(&path, "/other", &first, 100)
-            .expect("cache should read")
-            .is_none());
-        assert!(load(&path, "/project", &second, 100)
-            .expect("cache should read")
-            .is_none());
-    }
-
-    #[test]
-    fn rejects_truncated_cache_data() {
-        let directory = tempdir().expect("temporary directory should exist");
-        let path = directory.path().join("index.bin");
-        fs::write(&path, CACHE_MAGIC).expect("fixture should write");
-        let hash = policy_fingerprint(&Policy { ignored: &[] }).expect("policy should hash");
-
-        let error = load(&path, "/project", &hash, 100).expect_err("truncated cache should fail");
-
-        assert!(error.contains("incomplete"));
-    }
-}
+mod tests;

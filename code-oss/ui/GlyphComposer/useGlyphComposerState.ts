@@ -217,8 +217,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     };
   }, [preview, actions.context]);
   useEffect(() => {
-    const input = editor.current?.view.dom;
-    if (!input) return;
+    const input = editor.current!.view.dom;
     input.setAttribute('aria-expanded', String(!!query));
     if (query) input.setAttribute('aria-controls', pickerId);
     else input.removeAttribute('aria-controls');

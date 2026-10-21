@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { formatFolderContextOutline } from '../formatFolderContextOutline.ts';
+import { formatFolderContextOutline } from '#src/desktop/workbench/formatFolderContextOutline.js';
 
 it('groups and sorts paths into an outline without duplicating ancestors', () => {
   expect(formatFolderContextOutline(['z.txt', 'src/b.ts', 'src/nested/a.ts', 'src/b.ts', 'empty/'])).toBe(

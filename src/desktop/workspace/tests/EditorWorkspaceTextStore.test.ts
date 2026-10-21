@@ -1,13 +1,19 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 import type { GlyphEditorTextSnapshot } from '#src/desktop/protocol/editor/GlyphEditorTextSnapshot.js';
 import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
-import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
+import { GlyphFileMutationKind } from '#src/desktop/protocol/editor/GlyphFileMutation.js';
+import {
+  GlyphMutationReceiptState,
+  type GlyphMutationReceipt,
+} from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import type { EditorWorkspaceClient } from '#src/desktop/workspace/EditorWorkspaceClient.js';
 import { contentRevision, EditorWorkspaceTextStore } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
+import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationOptions.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 
 describe(EditorWorkspaceTextStore, () => {
@@ -175,7 +181,541 @@ describe(EditorWorkspaceTextStore, () => {
     client.invalidHash = true;
     await expect(store.read('file.ts')).rejects.toMatchObject({ reason: EditFailureReason.INCONSISTENT });
   });
+
+  describe(EditorWorkspaceTextStore.prototype.list, () => {
+    it('lists paths through the editor client', async () => {
+      const listPaths = vi.fn(async () => ({ files: ['src/a.ts'], truncated: true }));
+      const store = new EditorWorkspaceTextStore('/project', true, {
+        canonicalPath: async path => path,
+        request: vi.fn(),
+        listPaths,
+      });
+      await expect(store.list(10, '*.ts', 'src')).resolves.toEqual({ files: ['src/a.ts'], truncated: true });
+      expect(listPaths).toHaveBeenCalledExactlyOnceWith(10, '*.ts', 'src');
+    });
+  });
+
+  describe(EditorWorkspaceTextStore.prototype.normalizePath, () => {
+    it.each(['', '/etc/passwd', 'a\0b', '.'])('rejects %j as a project-relative file path', path => {
+      const store = new EditorWorkspaceTextStore('/project', true, editorClient(vi.fn()));
+      expect(() => store.normalizePath(path)).toThrowError(/project-relative/);
+    });
+
+    it('normalizes redundant segments', () => {
+      const store = new EditorWorkspaceTextStore('/project', true, editorClient(vi.fn()));
+      expect(store.normalizePath('src/./nested/../file.ts')).toBe('src/file.ts');
+    });
+  });
+
+  describe(EditorWorkspaceTextStore.prototype.exists, () => {
+    it('translates editor failures into edit errors', async () => {
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({
+          operationId: operationIdOf(request),
+          ok: false,
+          error: { code: GlyphDesktopErrorCode.STALE_DOCUMENT, message: 'Document changed', retryable: true },
+        })),
+      );
+      await expect(store.exists('file.ts')).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+        message: 'Document changed',
+        details: { path: 'file.ts' },
+      });
+    });
+  });
+
+  describe(EditorWorkspaceTextStore.prototype.read, () => {
+    it('reports unsupported resources as unsupported', async () => {
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({
+          operationId: operationIdOf(request),
+          ok: false,
+          error: { code: GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE, message: 'Binary file', retryable: false },
+        })),
+      );
+      await expect(store.read('image.png')).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+        message: 'Binary file',
+      });
+    });
+
+    it('reports a generic failure when the editor gives no error details', async () => {
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({ operationId: operationIdOf(request), ok: false })),
+      );
+      await expect(store.read('file.ts')).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'The editor workspace request failed.',
+      });
+    });
+
+    it('reports a successful response without a snapshot as inconsistent', async () => {
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({ operationId: operationIdOf(request), ok: true })),
+      );
+      await expect(store.read('file.ts')).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'The editor did not return a text snapshot.',
+      });
+    });
+
+    it('accepts snapshots whose revision covers a byte-order mark', async () => {
+      const snapshot = editorSnapshot('file.ts', 'text', { byteOrderMark: true });
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({ operationId: operationIdOf(request), ok: true, snapshot })),
+      );
+      await expect(store.read('file.ts')).resolves.toEqual({
+        path: 'file.ts',
+        text: 'text',
+        byteOrderMark: true,
+        revision: contentRevision('text', true),
+        byteLength: 4,
+        mode: 0o644,
+        identity: 'file:///project/file.ts',
+      });
+    });
+  });
+
+  describe(EditorWorkspaceTextStore.prototype.create, () => {
+    it('creates and saves a file under the given operation', async () => {
+      const request = vi.fn(async (request: GlyphEditorRequest): Promise<GlyphEditorResponse> => ({
+        operationId: operationIdOf(request),
+        ok: true,
+        receipt: mutationReceipt(operationIdOf(request)),
+        snapshot: editorSnapshot('new.ts', 'created', { dirty: false }),
+      }));
+      const store = new EditorWorkspaceTextStore('/project', true, editorClient(request));
+      await expect(
+        store.create('new.ts', 'created', false, 0o644, { operationId: 'op', save: true }),
+      ).resolves.toMatchObject({ path: 'new.ts', text: 'created' });
+      expect(request).toHaveBeenCalledExactlyOnceWith({
+        type: GlyphEditorRequestType.APPLY_FILE_MUTATION,
+        mutation: {
+          kind: GlyphFileMutationKind.CREATE,
+          path: 'new.ts',
+          text: 'created',
+          byteOrderMark: false,
+          operationId: 'op',
+          undoGroupId: 'op',
+          save: true,
+        },
+      });
+    });
+
+    it('generates an operation while keeping a supplied undo group', async () => {
+      const request = vi.fn(async (request: GlyphEditorRequest): Promise<GlyphEditorResponse> => ({
+        operationId: operationIdOf(request),
+        ok: true,
+        receipt: mutationReceipt(operationIdOf(request)),
+        snapshot: editorSnapshot('new.ts', 'created'),
+      }));
+      const store = new EditorWorkspaceTextStore('/project', true, editorClient(request));
+      await store.create('new.ts', 'created', false, undefined, { undoGroupId: 'group' });
+      const sent = request.mock.calls[0]?.[0];
+      expect(sent).toMatchObject({ mutation: { undoGroupId: 'group', operationId: expect.any(String) } });
+      expect(sent && 'mutation' in sent && 'save' in sent.mutation).toBe(false);
+    });
+
+    it('reports a file operation the editor did not confirm', async () => {
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({ operationId: operationIdOf(request), ok: true })),
+      );
+      await expect(store.create('new.ts', '', false)).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'The editor did not confirm the file operation.',
+      });
+    });
+
+    it('reports a saved file operation that left the working copy dirty', async () => {
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({
+          operationId: operationIdOf(request),
+          ok: true,
+          receipt: mutationReceipt(operationIdOf(request)),
+          snapshot: editorSnapshot('new.ts', ''),
+        })),
+      );
+      await expect(store.create('new.ts', '', false, undefined, { save: true })).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'The editor applied the file change but did not save it.',
+      });
+    });
+  });
+
+  describe(EditorWorkspaceTextStore.prototype.rename, () => {
+    it('renames with the current source token when no earlier attempt was recorded', async () => {
+      const source = editorSnapshot('source.ts', 'body');
+      const request = vi.fn(async (request: GlyphEditorRequest): Promise<GlyphEditorResponse> => {
+        if (request.type === GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT)
+          return { operationId: request.operationId, ok: true };
+        if (request.type === GlyphEditorRequestType.READ_SNAPSHOT)
+          return { operationId: request.operationId, ok: true, snapshot: source };
+        return {
+          operationId: operationIdOf(request),
+          ok: true,
+          receipt: mutationReceipt(operationIdOf(request)),
+          snapshot: editorSnapshot('target.ts', 'body'),
+        };
+      });
+      const store = new EditorWorkspaceTextStore('/project', true, editorClient(request));
+      await expect(
+        store.rename('source.ts', 'target.ts', source.contentRevision, { operationId: 'op' }),
+      ).resolves.toMatchObject({ path: 'target.ts', text: 'body' });
+      expect(request).toHaveBeenLastCalledWith({
+        type: GlyphEditorRequestType.APPLY_FILE_MUTATION,
+        mutation: {
+          kind: GlyphFileMutationKind.RENAME,
+          path: 'source.ts',
+          target: 'target.ts',
+          expectedContentRevision: source.contentRevision,
+          expectedToken: source.token,
+          operationId: 'op',
+          undoGroupId: 'op',
+        },
+      });
+    });
+
+    it.each<WorkspaceMutationOptions>([{}, { undoGroupId: 'group' }])(
+      'generates missing identifiers for %j',
+      async options => {
+        const source = editorSnapshot('source.ts', 'body');
+        const request = vi.fn(async (request: GlyphEditorRequest): Promise<GlyphEditorResponse> => {
+          if (request.type === GlyphEditorRequestType.READ_SNAPSHOT)
+            return { operationId: request.operationId, ok: true, snapshot: source };
+          return {
+            operationId: operationIdOf(request),
+            ok: true,
+            receipt: mutationReceipt(operationIdOf(request)),
+            snapshot: editorSnapshot('target.ts', 'body'),
+          };
+        });
+        const store = new EditorWorkspaceTextStore('/project', true, editorClient(request));
+        await store.rename('source.ts', 'target.ts', source.contentRevision, options);
+        expect(request).toHaveBeenLastCalledWith({
+          type: GlyphEditorRequestType.APPLY_FILE_MUTATION,
+          mutation: expect.objectContaining({
+            undoGroupId: options.undoGroupId ?? expect.any(String),
+            operationId: expect.any(String),
+          }),
+        });
+      },
+    );
+
+    it('fails when an earlier attempt cannot be inspected', async () => {
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({
+          operationId: operationIdOf(request),
+          ok: false,
+          error: { code: GlyphDesktopErrorCode.HOST_UNAVAILABLE, message: 'Editor offline', retryable: true },
+        })),
+      );
+      await expect(store.rename('source.ts', 'target.ts', 'revision', { operationId: 'op' })).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Editor offline',
+        details: { path: 'source.ts' },
+      });
+    });
+
+    it('refuses to recover a rename whose target changed afterwards', async () => {
+      const target = editorSnapshot('target.ts', 'edited later');
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => {
+          if (request.type === GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT)
+            return {
+              operationId: request.operationId,
+              ok: true,
+              receipt: mutationReceipt(request.operationId, {
+                beforeRevision: 'source-revision',
+                afterRevision: contentRevision('moved', false),
+              }),
+            };
+          if (request.type === GlyphEditorRequestType.EXISTS)
+            return { operationId: request.operationId, ok: true, exists: false };
+          return { operationId: operationIdOf(request), ok: true, snapshot: target };
+        }),
+      );
+      await expect(
+        store.rename('source.ts', 'target.ts', 'source-revision', { operationId: 'op' }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.STALE, details: { path: 'target.ts' } });
+    });
+
+    it.each([
+      { state: GlyphMutationReceiptState.UNDONE, expectedRevision: 'source-revision' },
+      { state: GlyphMutationReceiptState.APPLIED, expectedRevision: 'other-revision' },
+    ])('refuses to recover a $state receipt when expecting $expectedRevision', async ({ state, expectedRevision }) => {
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({
+          operationId: operationIdOf(request),
+          ok: true,
+          receipt: mutationReceipt(operationIdOf(request), { state, beforeRevision: 'source-revision' }),
+        })),
+      );
+      await expect(
+        store.rename('source.ts', 'target.ts', expectedRevision, { operationId: 'op' }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.STALE, details: { path: 'source.ts' } });
+    });
+  });
+
+  describe(EditorWorkspaceTextStore.prototype.delete, () => {
+    it('deletes and saves with the current token when no earlier attempt was recorded', async () => {
+      const current = editorSnapshot('file.ts', 'body');
+      const request = vi.fn(async (request: GlyphEditorRequest): Promise<GlyphEditorResponse> => {
+        if (request.type === GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT)
+          return { operationId: request.operationId, ok: true };
+        if (request.type === GlyphEditorRequestType.READ_SNAPSHOT)
+          return { operationId: request.operationId, ok: true, snapshot: current };
+        return { operationId: operationIdOf(request), ok: true, receipt: mutationReceipt(operationIdOf(request)) };
+      });
+      const store = new EditorWorkspaceTextStore('/project', true, editorClient(request));
+      await expect(
+        store.delete('file.ts', current.contentRevision, { operationId: 'op', save: true }),
+      ).resolves.toBeUndefined();
+      expect(request).toHaveBeenLastCalledWith({
+        type: GlyphEditorRequestType.APPLY_FILE_MUTATION,
+        mutation: {
+          kind: GlyphFileMutationKind.DELETE,
+          path: 'file.ts',
+          expectedContentRevision: current.contentRevision,
+          expectedToken: current.token,
+          operationId: 'op',
+          undoGroupId: 'op',
+          save: true,
+        },
+      });
+    });
+
+    it.each<WorkspaceMutationOptions>([{}, { undoGroupId: 'group' }])(
+      'generates missing identifiers for %j',
+      async options => {
+        const current = editorSnapshot('file.ts', 'body');
+        const request = vi.fn(async (request: GlyphEditorRequest): Promise<GlyphEditorResponse> => {
+          if (request.type === GlyphEditorRequestType.READ_SNAPSHOT)
+            return { operationId: request.operationId, ok: true, snapshot: current };
+          return { operationId: operationIdOf(request), ok: true, receipt: mutationReceipt(operationIdOf(request)) };
+        });
+        const store = new EditorWorkspaceTextStore('/project', true, editorClient(request));
+        await store.delete('file.ts', current.contentRevision, options);
+        const sent = request.mock.calls.at(-1)?.[0];
+        expect(sent).toMatchObject({
+          mutation: {
+            operationId: expect.any(String),
+            undoGroupId: options.undoGroupId ?? expect.any(String),
+          },
+        });
+        expect(sent && 'mutation' in sent && 'save' in sent.mutation).toBe(false);
+      },
+    );
+  });
+
+  describe(EditorWorkspaceTextStore.prototype.replace, () => {
+    it('revalidates an unread revision before mutating', async () => {
+      const before = editorSnapshot('file.ts', 'before');
+      const after = editorSnapshot('file.ts', 'after');
+      const request = vi.fn(async (request: GlyphEditorRequest): Promise<GlyphEditorResponse> => {
+        if (request.type === GlyphEditorRequestType.READ_SNAPSHOT)
+          return { operationId: request.operationId, ok: true, snapshot: before };
+        return {
+          operationId: operationIdOf(request),
+          ok: true,
+          receipt: mutationReceipt(operationIdOf(request), { afterRevision: after.contentRevision }),
+          snapshot: after,
+        };
+      });
+      const store = new EditorWorkspaceTextStore('/project', true, editorClient(request));
+      await expect(store.replace('file.ts', before.contentRevision, 'after', false)).resolves.toMatchObject({
+        text: 'after',
+      });
+      expect(request).toHaveBeenLastCalledWith({
+        type: GlyphEditorRequestType.APPLY_TEXT_MUTATION,
+        mutation: {
+          operationId: expect.any(String),
+          path: 'file.ts',
+          expectedContentRevision: before.contentRevision,
+          expectedToken: before.token,
+          text: 'after',
+          byteOrderMark: false,
+          undoGroupId: expect.any(String),
+        },
+      });
+    });
+
+    it('treats a snapshot reported under a different path as stale', async () => {
+      const elsewhere = editorSnapshot('other.ts', 'before');
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => ({ operationId: operationIdOf(request), ok: true, snapshot: elsewhere })),
+      );
+      const error = await store.replace('file.ts', elsewhere.contentRevision, 'after', false).catch(error => error);
+      expect(error).toMatchObject({
+        reason: EditFailureReason.STALE,
+        details: { path: 'file.ts', retry: 'Read the current working copy and submit a new proposal.' },
+      });
+      expect(error.details).not.toHaveProperty('currentRevision');
+    });
+
+    it('refuses to change the byte-order mark', async () => {
+      const before = editorSnapshot('file.ts', 'before');
+      const request = vi.fn(async (request: GlyphEditorRequest): Promise<GlyphEditorResponse> => ({
+        operationId: operationIdOf(request),
+        ok: true,
+        snapshot: before,
+      }));
+      const store = new EditorWorkspaceTextStore('/project', true, editorClient(request));
+      await store.read('file.ts');
+      await expect(store.replace('file.ts', before.contentRevision, 'after', true)).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+        message: 'Changing a document byte-order mark is not supported.',
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a repeated operation after the working copy moved past its receipt', async () => {
+      let current = editorSnapshot('file.ts', 'before');
+      const before = current;
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request => {
+          if (request.type === GlyphEditorRequestType.READ_SNAPSHOT)
+            return { operationId: request.operationId, ok: true, snapshot: current };
+          current = editorSnapshot('file.ts', 'after');
+          return {
+            operationId: operationIdOf(request),
+            ok: true,
+            receipt: mutationReceipt(operationIdOf(request), { afterRevision: current.contentRevision }),
+            snapshot: current,
+          };
+        }),
+      );
+      await store.read('file.ts');
+      await store.replace('file.ts', before.contentRevision, 'after', false, { operationId: 'op' });
+      current = editorSnapshot('file.ts', 'manual edit');
+      await expect(
+        store.replace('file.ts', before.contentRevision, 'after', false, { operationId: 'op' }),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'The mutation receipt no longer matches the working copy.',
+      });
+    });
+
+    it('surfaces editor rejections of the mutation', async () => {
+      const before = editorSnapshot('file.ts', 'before');
+      const store = new EditorWorkspaceTextStore(
+        '/project',
+        true,
+        editorClient(async request =>
+          request.type === GlyphEditorRequestType.READ_SNAPSHOT
+            ? { operationId: request.operationId, ok: true, snapshot: before }
+            : {
+                operationId: operationIdOf(request),
+                ok: false,
+                error: { code: GlyphDesktopErrorCode.STALE_DOCUMENT, message: 'Token expired', retryable: true },
+              },
+        ),
+      );
+      await expect(store.replace('file.ts', before.contentRevision, 'after', false)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+        message: 'Token expired',
+      });
+    });
+
+    it.each([{ receipt: mutationReceipt('op') }, { snapshot: editorSnapshot('file.ts', 'after') }])(
+      'reports an incomplete mutation result %#',
+      async partial => {
+        const before = editorSnapshot('file.ts', 'before');
+        const store = new EditorWorkspaceTextStore(
+          '/project',
+          true,
+          editorClient(async request =>
+            request.type === GlyphEditorRequestType.READ_SNAPSHOT
+              ? { operationId: request.operationId, ok: true, snapshot: before }
+              : { operationId: operationIdOf(request), ok: true, ...partial },
+          ),
+        );
+        await expect(store.replace('file.ts', before.contentRevision, 'after', false)).rejects.toMatchObject({
+          reason: EditFailureReason.INCONSISTENT,
+          message: 'The editor returned an incomplete mutation result.',
+        });
+      },
+    );
+  });
 });
+
+describe(contentRevision, () => {
+  it('hashes the byte-order mark together with the text', () => {
+    expect(contentRevision('text', true)).toBe(
+      createHash('sha256')
+        .update(Buffer.from([0xef, 0xbb, 0xbf]))
+        .update('text', 'utf8')
+        .digest('hex'),
+    );
+    expect(contentRevision('text', true)).not.toBe(contentRevision('text', false));
+  });
+});
+
+function editorClient(request: EditorWorkspaceClient['request']): EditorWorkspaceClient {
+  return {
+    canonicalPath: async path => `/project/${path}`,
+    listPaths: async () => ({ files: [], truncated: false }),
+    request,
+  };
+}
+
+function operationIdOf(request: GlyphEditorRequest): string {
+  return 'mutation' in request ? request.mutation.operationId : request.operationId;
+}
+
+function editorSnapshot(
+  path: string,
+  text: string,
+  overrides: Partial<GlyphEditorTextSnapshot> = {},
+): GlyphEditorTextSnapshot {
+  const byteOrderMark = overrides.byteOrderMark ?? false;
+  return {
+    uri: `file:///project/${path}`,
+    path,
+    text,
+    byteOrderMark,
+    contentRevision: contentRevision(text, byteOrderMark),
+    byteLength: Buffer.byteLength(text),
+    mode: 0o644,
+    identity: `file:///project/${path}`,
+    dirty: true,
+    token: { workspaceGeneration: 'generation', resource: `file:///project/${path}`, incarnation: 'model', version: 1 },
+    ...overrides,
+  };
+}
+
+function mutationReceipt(operationId: string, overrides: Partial<GlyphMutationReceipt> = {}): GlyphMutationReceipt {
+  return {
+    operationId,
+    state: GlyphMutationReceiptState.APPLIED,
+    beforeRevision: 'before',
+    observedAt: '2026-10-08T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 class FixtureEditorClient implements EditorWorkspaceClient {
   mutationCount = 0;

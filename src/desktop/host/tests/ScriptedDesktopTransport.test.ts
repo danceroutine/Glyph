@@ -27,6 +27,15 @@ describe(ScriptedDesktopTransport, () => {
     }
   });
 
+  it('asks web fixtures for HTML when the caller states no preference', async () => {
+    const network = vi.fn<typeof fetch>().mockResolvedValue(new Response('page'));
+    vi.stubGlobal('fetch', network);
+    const transport = new ScriptedDesktopTransport('http://127.0.0.1:1234');
+    await transport.fetch('http://127.0.0.1:1234/web/article?id=1');
+    expect(String(network.mock.calls[0]![0])).toBe('http://127.0.0.1:1234/web/article?id=1');
+    expect(network.mock.calls[0]![1]?.headers).toEqual({ Accept: 'text/html' });
+  });
+
   it.each([
     'https://127.0.0.1:1234',
     'http://localhost:1234',

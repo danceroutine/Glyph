@@ -323,7 +323,215 @@ describe(OpenAISession, () => {
     });
   });
 
+  describe(OpenAISession.prototype.signIn, () => {
+    it('requires an authorization handler', async () => {
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      const signIn = vi.spyOn(authentication, 'signIn');
+      const session = new OpenAISession(store(account()), authentication, configuration);
+
+      await expect(session.signIn()).rejects.toThrow('An authorization handler is required to sign in.');
+      expect(signIn).not.toHaveBeenCalled();
+    });
+
+    it('registers a new account, persists it, and redacts its credentials', async () => {
+      const savedStore = store(account());
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      const signal = new AbortController().signal;
+      const authorize = vi.fn();
+      vi.spyOn(authentication, 'signIn').mockResolvedValue({
+        clientId: 'new-client',
+        subject: 'new-subject',
+        email: 'new@example.com',
+        tokens: {
+          accessToken: 'new-access',
+          refreshToken: 'new-refresh',
+          idToken: 'new-id',
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          scopes: ['plan'],
+        },
+      });
+      const session = new OpenAISession(savedStore, authentication, configuration, signal);
+
+      const signedIn = await session.signIn(undefined, true, authorize);
+
+      expect(authentication.signIn).toHaveBeenCalledWith('urn:uuid:test', undefined, true, signal, authorize);
+      expect(signedIn).toMatchObject({ clientId: 'new-client', subject: 'new-subject', planNoticeSeen: false });
+      expect(savedStore.state.accounts).toHaveLength(2);
+      expect(savedStore.state.accounts[1]).toBe(signedIn);
+      expect(savedStore.save).toHaveBeenCalledOnce();
+      expect(session.redact('new-access new-refresh new-id')).toBe('[REDACTED] [REDACTED] [REDACTED]');
+    });
+
+    it('replaces a reauthorized account and keeps its notice acknowledgement', async () => {
+      const existing = { ...account(), planNoticeSeen: true };
+      const savedStore = store(existing);
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      vi.spyOn(authentication, 'signIn').mockResolvedValue({
+        clientId: existing.clientId,
+        subject: existing.subject,
+        email: existing.email,
+        tokens: { ...existing.tokens!, accessToken: 'reauthorized' },
+      });
+      const session = new OpenAISession(savedStore, authentication, configuration);
+
+      const signedIn = await session.signIn(existing, false, vi.fn());
+
+      expect(savedStore.state.accounts).toEqual([signedIn]);
+      expect(signedIn).toMatchObject({ planNoticeSeen: true, tokens: { accessToken: 'reauthorized' } });
+    });
+  });
+
+  describe(OpenAISession.prototype.redact, () => {
+    it('redacts JSON web tokens and skips signed-out accounts', () => {
+      const savedStore = store({ clientId: 'client', subject: 'subject', email: 'developer@example.com' });
+      const session = new OpenAISession(
+        savedStore,
+        new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() }),
+        configuration,
+      );
+
+      expect(session.redact('token eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl end')).toBe('token [REDACTED JWT] end');
+    });
+  });
+
+  describe(OpenAISession.prototype.accessToken, () => {
+    it('returns unexpired saved credentials without refreshing or saving', async () => {
+      const saved = account();
+      const savedStore = store(saved);
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      const refresh = vi.spyOn(authentication, 'refresh');
+      const session = new OpenAISession(savedStore, authentication, configuration);
+
+      await expect(session.accessToken(saved)).resolves.toBe('access-secret');
+      expect(refresh).not.toHaveBeenCalled();
+      expect(savedStore.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects signed-out accounts', async () => {
+      const saved = { clientId: 'client', subject: 'subject', email: 'developer@example.com' };
+      const session = new OpenAISession(
+        store(saved),
+        new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() }),
+        configuration,
+      );
+
+      await expect(session.accessToken(saved)).rejects.toThrow(
+        'This account is signed out. Use /login or restart to sign in.',
+      );
+    });
+
+    it('refreshes expired credentials once a pending sign-in has been persisted', async () => {
+      const savedStore = store(account());
+      vi.spyOn(savedStore, 'save').mockRejectedValueOnce(new Error('disk unavailable'));
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      vi.spyOn(authentication, 'signIn').mockResolvedValue({
+        ...account(0),
+        subject: 'expired-subject',
+        tokens: account(0).tokens!,
+      });
+      const refresh = vi
+        .spyOn(authentication, 'refresh')
+        .mockResolvedValue({ ...account().tokens!, accessToken: 'refreshed' });
+      const session = new OpenAISession(savedStore, authentication, configuration);
+      await expect(session.signIn(undefined, false, vi.fn())).rejects.toThrow('disk unavailable');
+      const pendingAccount = savedStore.state.accounts[1]!;
+
+      await expect(session.accessToken(pendingAccount)).resolves.toBe('refreshed');
+      expect(refresh).toHaveBeenCalledOnce();
+    });
+
+    it('rejects when the account signs out while its pending sign-in is persisted', async () => {
+      const savedStore = store(account());
+      let finish!: () => void;
+      vi.spyOn(savedStore, 'save')
+        .mockRejectedValueOnce(new Error('disk unavailable'))
+        .mockImplementationOnce(
+          () =>
+            new Promise(resolve => {
+              finish = resolve;
+            }),
+        );
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      vi.spyOn(authentication, 'signIn').mockResolvedValue({
+        ...account(),
+        subject: 'pending-subject',
+        tokens: account().tokens!,
+      });
+      const session = new OpenAISession(savedStore, authentication, configuration);
+      await expect(session.signIn(undefined, false, vi.fn())).rejects.toThrow('disk unavailable');
+      const pendingAccount = savedStore.state.accounts[1]!;
+
+      const pending = session.accessToken(pendingAccount);
+      await vi.waitFor(() => expect(savedStore.save).toHaveBeenCalledTimes(2));
+      delete pendingAccount.tokens;
+      finish();
+
+      await expect(pending).rejects.toThrow(new AuthenticationError('This account is signed out.'));
+    });
+
+    it('rejects when the account is removed while its credentials are persisted', async () => {
+      const savedStore = store(account());
+      let finish!: () => void;
+      vi.spyOn(savedStore, 'save')
+        .mockRejectedValueOnce(new Error('disk unavailable'))
+        .mockImplementationOnce(
+          () =>
+            new Promise(resolve => {
+              finish = resolve;
+            }),
+        );
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      vi.spyOn(authentication, 'signIn').mockResolvedValue({
+        ...account(),
+        subject: 'removed-subject',
+        tokens: account().tokens!,
+      });
+      const session = new OpenAISession(savedStore, authentication, configuration);
+      await expect(session.signIn(undefined, false, vi.fn())).rejects.toThrow('disk unavailable');
+      const pendingAccount = savedStore.state.accounts[1]!;
+
+      const pending = session.accessToken(pendingAccount);
+      await vi.waitFor(() => expect(savedStore.save).toHaveBeenCalledTimes(2));
+      savedStore.state.accounts.pop();
+      finish();
+
+      await expect(pending).rejects.toThrow('The account session changed during authentication.');
+    });
+
+    it('rejects refreshed credentials that no longer grant plan usage', async () => {
+      const saved = account(0);
+      const savedStore = store(saved);
+      const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
+      vi.spyOn(authentication, 'refresh').mockResolvedValue({
+        ...saved.tokens!,
+        accessToken: 'unplanned',
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        scopes: ['openid'],
+      });
+      const session = new OpenAISession(savedStore, authentication, configuration);
+
+      await expect(session.accessToken(saved)).rejects.toThrow(
+        'ChatGPT plan usage is disabled. Use /login to enable it.',
+      );
+      expect(saved.tokens?.accessToken).toBe('unplanned');
+      expect(savedStore.save).toHaveBeenCalledOnce();
+    });
+  });
+
   describe(OpenAISession.prototype.logout, () => {
+    it('saves and confirms logout for an already signed-out account', async () => {
+      const saved = { clientId: 'client', subject: 'subject', email: 'developer@example.com' };
+      const savedStore = store(saved);
+      const session = new OpenAISession(
+        savedStore,
+        new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() }),
+        configuration,
+      );
+
+      await expect(session.logout(saved)).resolves.toBe(true);
+      expect(savedStore.save).toHaveBeenCalledOnce();
+    });
+
     it('clears local tokens when remote revocation cannot be confirmed', async () => {
       const saved = account();
       const savedStore = store(saved);

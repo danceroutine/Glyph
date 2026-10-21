@@ -81,7 +81,9 @@ async function editFile(glyph, path, text) {
 }
 
 it.describe('Project file discovery and reads', () => {
+  it.describe.configure({ mode: 'default' });
   it.use({
+    sharedLaunch: true,
     scriptedProvider: true,
     workspaceFiles: {
       'src/alpha.ts': 'before\nNeedle café 🌱\nafter\nneedle lowercase\n',
@@ -347,7 +349,9 @@ it.describe('Project file discovery and reads', () => {
 });
 
 it.describe('Bounded editor search', () => {
+  it.describe.configure({ mode: 'default' });
   it.use({
+    sharedLaunch: true,
     scriptedProvider: true,
     workspaceFiles: {
       'large.txt': 'Needle disk\n' + ('x'.repeat(99) + '\n').repeat(5200),
@@ -420,7 +424,9 @@ it.describe('Bounded file listing', () => {
 });
 
 it.describe('Multi-root file discovery', () => {
+  it.describe.configure({ mode: 'default' });
   it.use({
+    sharedLaunch: true,
     scriptedProvider: true,
     workspaceFiles: { 'shared.txt': 'First root marker' },
     additionalRoots: [[{ name: 'second', files: { 'shared.txt': 'Second root marker' } }], { scope: 'test' }],

@@ -110,7 +110,6 @@ export class GlyphDesktopHost {
     // background processes owned by a vanished window indefinitely.
     const timer = setTimeout(() => {
       this.disconnectTimers.delete(connection);
-      if (connection.send) return;
       this.sessions.delete(connectionKey(connection.identity));
       void this.detach(connection).catch(() => {
         // Keep ownership reserved if cleanup failed; do not grant a second writer.

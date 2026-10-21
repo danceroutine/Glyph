@@ -1,8 +1,14 @@
 import type { AgentReviewFinding } from './AgentReview.ts';
+
+export interface AgentReviewFileLines {
+  readonly original: number;
+  readonly modified: number;
+  readonly defaultSide: 'original' | 'modified';
+}
 /** Only complete, bounded records referring to captured files become actionable findings. */
 export function parseAgentReviewFindings(
   text: string,
-  files: ReadonlyMap<string, number>,
+  files: ReadonlyMap<string, AgentReviewFileLines>,
 ): { findings: AgentReviewFinding[]; complete: boolean } {
   const report = text.split('<glyph_review>')[1];
   const body = report?.split('</glyph_review>')[0] ?? '';
@@ -33,16 +39,19 @@ export function parseAgentReviewFindings(
       complete = true;
       continue;
     }
+    const file = 'path' in value && typeof value.path === 'string' ? files.get(value.path) : undefined;
+    const side = 'side' in value ? value.side : file?.defaultSide;
     if (!(
-      Object.keys(value).every(key => ['path', 'line', 'title', 'body'].includes(key)) &&
+      Object.keys(value).every(key => ['path', 'line', 'side', 'title', 'body'].includes(key)) &&
       'path' in value &&
       typeof value.path === 'string' &&
-      files.has(value.path) &&
+      file &&
+      (side === 'original' || side === 'modified') &&
       'line' in value &&
       typeof value.line === 'number' &&
       Number.isSafeInteger(value.line) &&
       value.line >= 1 &&
-      value.line <= files.get(value.path)! &&
+      value.line <= file[side] &&
       'title' in value &&
       typeof value.title === 'string' &&
       value.title.trim() &&
@@ -63,6 +72,7 @@ export function parseAgentReviewFindings(
       id: `${value.path}:${value.line}:${findings.length}`,
       path: value.path,
       line: value.line,
+      side,
       title: value.title,
       body: value.body,
     });

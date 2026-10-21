@@ -1,11 +1,15 @@
 import { highlightGlyphCode } from '#code-oss/ui/GlyphSyntaxHighlighting/GlyphSyntaxHighlighting.ts';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 
-export function useGlyphCodeBlockState(
-  source: string,
-  info: string | undefined,
-  copyText: ((text: string) => Promise<void>) | undefined,
-) {
+export function useGlyphCodeBlockState({
+  source,
+  info,
+  copyText,
+}: {
+  readonly source: string;
+  readonly info: string | undefined;
+  readonly copyText: ((text: string) => Promise<void>) | undefined;
+}) {
   const language = info?.trim().split(/\s+/)[0]?.toLowerCase() || 'text';
   const nodes = useMemo(() => highlightGlyphCode(source, language), [source, language]);
   const [wrap, setWrap] = useState(false);

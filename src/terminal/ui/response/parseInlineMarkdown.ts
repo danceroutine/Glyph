@@ -1,5 +1,6 @@
 import { Lexer } from 'marked';
 import type { Tokens } from 'marked';
+import { decodeHTMLStrict } from 'entities';
 
 export interface InlineMarkdownSegment {
   value: string;
@@ -35,16 +36,20 @@ function appendTokens(
   tokens: readonly InlineToken[],
   inheritedStrong: boolean,
   segments: InlineMarkdownSegment[],
+  decodeEntities = true,
 ): void {
   for (const token of tokens) {
     switch (token.type) {
       case 'strong':
-        appendTokens(token.tokens as InlineToken[], true, segments);
+        appendTokens(token.tokens as InlineToken[], true, segments, decodeEntities);
         break;
       case 'del':
       case 'em':
+      case 'image':
+        appendTokens(token.tokens as InlineToken[], inheritedStrong, segments, decodeEntities);
+        break;
       case 'link':
-        appendTokens(token.tokens as InlineToken[], inheritedStrong, segments);
+        appendTokens(token.tokens as InlineToken[], inheritedStrong, segments, decodeEntities && !token.autolink);
         break;
       case 'br':
         appendSegment('\n', inheritedStrong, segments);
@@ -52,16 +57,21 @@ function appendTokens(
       case 'codespan':
       case 'escape':
       case 'html':
-      case 'image':
-      case 'text':
         appendSegment(token.text, inheritedStrong, segments);
+        break;
+      case 'text':
+        // Marked decodes numeric references already; raw text avoids decoding twice.
+        appendSegment(
+          decodeEntities && !token.escaped ? decodeHTMLStrict(token.raw) : token.text,
+          inheritedStrong,
+          segments,
+        );
         break;
     }
   }
 }
 
 function appendSegment(value: string, strong: boolean, segments: InlineMarkdownSegment[]): void {
-  if (!value) return;
   const previous = segments.at(-1);
   if (previous?.strong === strong) previous.value += value;
   else segments.push({ value, strong });

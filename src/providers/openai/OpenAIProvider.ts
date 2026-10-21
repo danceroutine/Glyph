@@ -139,14 +139,15 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
       reportedReasoningSummary += delta;
       context.onReasoningSummary?.(delta);
     };
-    const beginReasoningSummaryPart = (key: string): void => {
-      if (reasoningSummaryParts.has(key)) return;
+    const beginReasoningSummaryPart = (key: string): string => {
+      const part = reasoningSummaryParts.get(key);
+      if (part !== undefined) return part;
       if (reasoningSummaryParts.size > 0) reportReasoningSummary('\n\n');
       reasoningSummaryParts.set(key, '');
+      return '';
     };
     const completeReasoningSummaryPart = (key: string, text: string): void => {
-      beginReasoningSummaryPart(key);
-      const streamedPart = reasoningSummaryParts.get(key) ?? '';
+      const streamedPart = beginReasoningSummaryPart(key);
       if (!text.startsWith(streamedPart)) return;
       reasoningSummaryParts.set(key, text);
       reportReasoningSummary(text.slice(streamedPart.length));
@@ -161,8 +162,8 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
           break;
         case 'response.reasoning_summary_text.delta': {
           const key = `${event.item_id}:${event.summary_index}`;
-          beginReasoningSummaryPart(key);
-          reasoningSummaryParts.set(key, `${reasoningSummaryParts.get(key) ?? ''}${event.delta}`);
+          const streamedPart = beginReasoningSummaryPart(key);
+          reasoningSummaryParts.set(key, `${streamedPart}${event.delta}`);
           reportReasoningSummary(event.delta);
           break;
         }

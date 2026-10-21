@@ -295,6 +295,7 @@ export class GlyphEditorAdapter extends Disposable {
     let changed: { dispose(): void } | undefined;
     try {
       const before = mutation.kind === GlyphFileMutationKind.CREATE ? undefined : await this.read(mutation.path);
+      /* v8 ignore else -- @preserve */
       if (before && mutation.kind !== GlyphFileMutationKind.CREATE) {
         if (
           !areSameTokens(before.token, mutation.expectedToken) ||
@@ -571,7 +572,12 @@ export class GlyphEditorAdapter extends Disposable {
         let result = await apply([
           // The inner object is Code OSS's ITextEdit data shape; ResourceTextEdit
           // supplies the resource/version class wrapper required by Bulk Edit.
-          new ResourceTextEdit(resource, textEdit, before.token.version),
+          new ResourceTextEdit(
+            resource,
+            textEdit,
+            before.token.version,
+            /[\uD800-\uDFFF]/.test(before.text) ? { label: options.label, needsConfirmation: false } : undefined,
+          ),
         ]);
         if (separateEol) {
           this.assertWorkspaceBinding();

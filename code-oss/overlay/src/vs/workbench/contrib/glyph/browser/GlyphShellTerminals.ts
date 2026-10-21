@@ -110,7 +110,7 @@ class GlyphShellOutput extends Disposable implements ITerminalChildProcess {
     if (!this.started) return;
     const output = shell.output.replace(/\r?\n/g, '\r\n');
     if (output.startsWith(this.output)) this.data.fire(output.slice(this.output.length));
-    else if (output !== this.output) this.data.fire(`\x1b[2J\x1b[H${output}`);
+    else this.data.fire(`\u001B[2J\u001B[H${output}`);
     this.output = output;
     const status = shell.running
       ? 'running'

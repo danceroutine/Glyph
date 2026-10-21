@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
 import type { AgentToolCall } from '#src/chat/runtime/AgentModelAdapter.js';
-import type { AgentModeID } from "#src/chat/AgentMode.js";
+import type { AgentModeID } from '#src/chat/AgentMode.js';
 import type { ToolExecutionContext } from './ToolExecutionContext.ts';
 import type { ToolRegistry } from './ToolRegistry.ts';
 

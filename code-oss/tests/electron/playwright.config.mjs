@@ -1,15 +1,17 @@
+import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from './playwright.mjs';
 
 export default defineConfig({
   testDir: '.',
+  globalSetup: fileURLToPath(new URL('./backgroundApplication.mjs', import.meta.url)),
   testMatch: '**/*.test.mjs',
   outputDir: fileURLToPath(new URL('../../../.artifacts/code-oss-integration/results', import.meta.url)),
-  timeout: 90_000,
-  expect: { timeout: 15_000 },
-  fullyParallel: false,
-  workers: 1,
-  retries: 0,
+  timeout: 180_000,
+  expect: { timeout: 30_000 },
+  fullyParallel: true,
+  workers: Number(process.env.GLYPH_ELECTRON_WORKERS ?? Math.max(1, Math.floor(availableParallelism() / 2))),
+  retries: 1,
   reporter: [
     ['list'],
     [

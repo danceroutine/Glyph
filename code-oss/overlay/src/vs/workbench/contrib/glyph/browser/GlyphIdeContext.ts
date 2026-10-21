@@ -451,17 +451,10 @@ export class GlyphIdeContext {
               listener.dispose();
               resolve([]);
             });
-            query.then(
-              value => {
-                listener.dispose();
-                resolve(value);
-              },
-              () => {
-                unavailable++;
-                listener.dispose();
-                resolve([]);
-              },
-            );
+            void query.then(value => {
+              listener.dispose();
+              resolve(value);
+            });
             if (cancellation.token.isCancellationRequested) {
               listener.dispose();
               resolve([]);

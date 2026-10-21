@@ -5,6 +5,8 @@ coverage/
 .artifacts/
 .code-oss/
 *.tsbuildinfo
+*.profraw
+.vitest/
 .env
 .env.*
 !.env.example

@@ -1,5 +1,4 @@
-import { AgentMode } from '#src/chat/AgentMode.js';
-import { AgentModeID } from "../AgentMode.ts";
+import { AgentMode, AgentModeID } from '#src/chat/AgentMode.js';
 import { ChatHistoryError } from './ChatHistoryError.ts';
 import { PlanError } from '#src/planning/PlanError.js';
 import { planUpdateSchema, type PlanUpdate } from '#src/planning/PlanSchema.js';

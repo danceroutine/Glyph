@@ -1,9 +1,10 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+const firstTerminal = isolatedLaunch('expects the first terminal of a fresh window');
 const tool = (name, args) => ScriptedProvider.tool(name, args, { namespace: 'shell', callId: randomUUID() });
 const card = glyph => glyph.page.getByRole('region', { name: 'Shell command', exact: true }).first();
 const drawer = glyph => glyph.page.getByRole('region', { name: 'Background terminals', exact: true });
@@ -52,59 +53,61 @@ async function input(glyph, text) {
 }
 
 it.describe('Background shell wakes and native terminal drawer', () => {
-  it.use({ scriptedProvider: true });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true });
 
   for (const stopWith of ['drawer', 'native terminal'])
-    it(`returns control, opens the read-only terminal, and reports Stop from the ${stopWith}`, async ({
-      glyph,
-      provider,
-    }, testInfo) => {
-      await start(
-        glyph,
-        provider,
-        `trap 'printf "READY after stop\\n"; exit 0' TERM; printf "ticker started\\n"; while :; do sleep 1; done`,
-      );
-      await expect(card(glyph)).toContainText('Wake on: READY');
-      await drawer(glyph).getByRole('button', { name: '1 background terminal', exact: true }).click();
-      await expect(drawer(glyph)).toContainText('Wake on: READY');
-      await drawer(glyph)
-        .getByRole('button', { name: /printf/ })
-        .click();
-      await expect(glyph.page.locator('.terminal-wrapper')).toBeVisible();
-      const terminalInput = glyph.page.getByRole('textbox', { name: /^Terminal 1,/ });
-      await expect(terminalInput).toBeFocused();
-      await terminalInput.pressSequentially('READ ONLY INPUT');
-      await terminalInput.press('Enter');
-      await expect(drawer(glyph)).toContainText('1 background terminal');
-      // The native terminal's accessibility buffer contains the host's actual output.
-      await glyph.command('Open Accessible View');
-      await expect(glyph.page.locator('.accessible-view')).toContainText('ticker started');
-      await expect(glyph.page.locator('.accessible-view')).toContainText('Agent terminals are read-only');
-      await expect(glyph.page.locator('.accessible-view')).not.toContainText('READ ONLY INPUT');
-      await glyph.page.keyboard.press('Escape');
-      await glyph.open();
-      await glyph.page.screenshot({ path: testInfo.outputPath('background-terminal.png') });
-      provider.enqueue({ chunks: ['The terminal was stopped; its last output was ticker started.'] });
-      if (stopWith === 'drawer') await drawer(glyph).getByRole('button', { name: 'Stop', exact: true }).click();
-      else await glyph.command('Terminal: Kill the Active Terminal Instance');
-      await expect(drawer(glyph)).toHaveCount(0);
-      await expect(glyph.diagnostics).toContainText('Stopped trap');
-      await expect(glyph.assistantEntries.last()).toContainText('The terminal was stopped');
-      expect(contexts(provider).some(event => event.type === 'shell_wake')).toBe(false);
-      expect(contexts(provider).find(event => event.type === 'shell_exit')?.payload.outputTail).toContain(
-        'READY after stop',
-      );
-      expect(provider.requests).toHaveLength(3);
-      expect(contexts(provider).filter(event => event.type === 'shell_exit')).toEqual([
-        expect.objectContaining({
-          role: 'user',
-          payload: expect.objectContaining({
-            reason: 'stopped',
-            outputTail: expect.stringContaining('ticker started'),
+    it(
+      `returns control, opens the read-only terminal, and reports Stop from the ${stopWith}`,
+      firstTerminal,
+      async ({ glyph, provider }, testInfo) => {
+        await start(
+          glyph,
+          provider,
+          `trap 'printf "READY after stop\\n"; exit 0' TERM; printf "ticker started\\n"; while :; do sleep 1; done`,
+        );
+        await expect(card(glyph)).toContainText('Wake on: READY');
+        await drawer(glyph).getByRole('button', { name: '1 background terminal', exact: true }).click();
+        await expect(drawer(glyph)).toContainText('Wake on: READY');
+        await drawer(glyph)
+          .getByRole('button', { name: /printf/ })
+          .click();
+        await expect(glyph.page.locator('.terminal-wrapper')).toBeVisible();
+        const terminalInput = glyph.page.getByRole('textbox', { name: /^Terminal 1,/ });
+        await expect(terminalInput).toBeFocused();
+        await terminalInput.pressSequentially('READ ONLY INPUT');
+        await terminalInput.press('Enter');
+        await expect(drawer(glyph)).toContainText('1 background terminal');
+        // The native terminal's accessibility buffer contains the host's actual output.
+        await glyph.command('Open Accessible View');
+        await expect(glyph.page.locator('.accessible-view')).toContainText('ticker started');
+        await expect(glyph.page.locator('.accessible-view')).toContainText('Agent terminals are read-only');
+        await expect(glyph.page.locator('.accessible-view')).not.toContainText('READ ONLY INPUT');
+        await glyph.page.keyboard.press('Escape');
+        await glyph.open();
+        await glyph.page.screenshot({ path: testInfo.outputPath('background-terminal.png') });
+        provider.enqueue({ chunks: ['The terminal was stopped; its last output was ticker started.'] });
+        if (stopWith === 'drawer') await drawer(glyph).getByRole('button', { name: 'Stop', exact: true }).click();
+        else await glyph.command('Terminal: Kill the Active Terminal Instance');
+        await expect(drawer(glyph)).toHaveCount(0);
+        await expect(glyph.diagnostics).toContainText('Stopped trap');
+        await expect(glyph.assistantEntries.last()).toContainText('The terminal was stopped');
+        expect(contexts(provider).some(event => event.type === 'shell_wake')).toBe(false);
+        expect(contexts(provider).find(event => event.type === 'shell_exit')?.payload.outputTail).toContain(
+          'READY after stop',
+        );
+        expect(provider.requests).toHaveLength(3);
+        expect(contexts(provider).filter(event => event.type === 'shell_exit')).toEqual([
+          expect.objectContaining({
+            role: 'user',
+            payload: expect.objectContaining({
+              reason: 'stopped',
+              outputTail: expect.stringContaining('ticker started'),
+            }),
           }),
-        }),
-      ]);
-    });
+        ]);
+      },
+    );
 
   it('wakes its owning agent with the literal match and output as durable context', async ({ glyph, provider }) => {
     await start(glyph, provider, 'read line; printf "READY with output\\n"; sleep 60');

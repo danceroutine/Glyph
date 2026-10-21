@@ -1,4 +1,4 @@
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DesktopInteractionBroker } from '#src/desktop/host/DesktopInteractionBroker.js';
 import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';

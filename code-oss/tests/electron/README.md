@@ -12,7 +12,8 @@ requests or reading account credentials. It still loads the packaged host and
 native dependencies. Passing these tests proves desktop transport and UI
 behavior; it does not prove provider inference, durable chat storage, or proposal
 editing. Each test has its own Electron process, temporary workspace, user-data
-directory, and extensions directory. A sentinel file must remain unchanged.
+directory, and extensions directory unless it opts into a shared launch. A
+sentinel file must remain unchanged.
 
 The production-startup group sets the `productionRuntime` fixture option and
 leaves the runtime selector unset. It verifies that the real service composition
@@ -49,6 +50,28 @@ publish their usage only when released.
 file read through the production agent and asserting its unique fixture content
 in the next provider request. Future tool contracts should use this path and
 assert the recorded continuation as well as visible workbench behavior.
+
+## Shared launches
+
+Starting Code OSS takes longer than most test bodies. A describe block can opt in
+with `it.use({ sharedLaunch: true })` and `it.describe.configure({ mode: 'default' })`.
+Its tests then run in order on one worker and reuse that worker's launch whenever
+every launch option matches: runtime, accounts, workspace files, additional roots,
+settings, keybindings, and extension path.
+
+Before a reused test, the fixture reverts and closes editors, hides the panel,
+clears notifications, keeps leftover pending reviews, closes every chat tab,
+restores the declared workspace files, and resets the scripted provider. It then
+compares the layout and chat surfaces with the state recorded right after launch.
+Any difference starts a fresh launch instead. A launch is discarded after a failed
+test, a window reload, a host restart, an extra window, unfinished provider work,
+queued messages, or changed user settings. Only scripted-provider launches are
+reused, because the deterministic runtime cannot open a new chat.
+
+Tests that need a pristine process pass `isolatedLaunch(reason)` as their test
+details. Every test records `glyph launch`, `glyph setup ms`, `glyph body ms`, and
+`glyph teardown ms` annotations. Set `GLYPH_ELECTRON_SHARED_LAUNCH=0` to give every
+test its own launch.
 
 ## Run
 

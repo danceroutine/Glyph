@@ -26,7 +26,7 @@ function sourceRange(source: Element, from: number, to: number): Range | undefin
   let offset = 0,
     started = false;
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const length = node.textContent?.length ?? 0;
+    const length = (node as Text).data.length;
     if (!started && from <= offset + length) {
       range.setStart(node, Math.max(0, from - offset));
       started = true;
@@ -67,7 +67,13 @@ function position(annotation: GlyphAnnotation, selection = false): PositionedAnn
     ...(annotation.kind === 'proposal' && source ? { minX: source.getBoundingClientRect().left } : {}),
   };
 }
-export function useGlyphAnnotationsState(composer: GlyphComposerState, disabled: boolean) {
+export function useGlyphAnnotationsState({
+  composer,
+  disabled,
+}: {
+  readonly composer: GlyphComposerState;
+  readonly disabled: boolean;
+}) {
   const [snapshot, setSnapshot] = useState(composer.snapshot);
   const [candidate, setCandidate] = useState<PositionedAnnotation>();
   const [draft, setDraft] = useState<PositionedAnnotation>();

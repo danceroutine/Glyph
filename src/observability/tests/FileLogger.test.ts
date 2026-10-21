@@ -1,8 +1,11 @@
+import { execFileSync } from 'node:child_process';
+import { constants } from 'node:fs';
 import { link, mkdtemp, open, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FileLogger } from '#src/observability/FileLogger.js';
+import { FetchHttpClient } from '#src/http/FetchHttpClient.js';
 import type { Logger } from '#src/observability/Logger.js';
 
 vi.mock('node:fs/promises', async importOriginal => {
@@ -20,6 +23,41 @@ afterEach(async () => {
 
 describe(FileLogger, () => {
   describe(FileLogger.prototype.trace, () => {
+    it.skipIf(process.platform === 'win32')('rejects a FIFO without blocking logging or HTTP requests', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'glyph-log-fifo-'));
+      temporaryDirectories.push(directory);
+      const path = join(directory, 'glyph.log');
+      execFileSync('mkfifo', [path]);
+      let settled = false;
+      let failure: unknown;
+      const writing = new FileLogger(path).trace('must not block').then(
+        () => {
+          settled = true;
+        },
+        error => {
+          settled = true;
+          failure = error;
+        },
+      );
+      const transport = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
+      const client = new FetchHttpClient(new FileLogger(path), transport);
+      let responseBody: unknown;
+      const requesting = client.get('https://fixture.invalid/', { timeoutMs: 20 }).then(response => {
+        responseBody = response.body;
+      });
+      try {
+        await vi.waitFor(() => expect(settled).toBe(true), { timeout: 1000 });
+        expect(failure).toBeInstanceOf(Error);
+        await vi.waitFor(() => expect(responseBody).toEqual({ ok: true }), { timeout: 1000 });
+        expect(transport).toHaveBeenCalledTimes(1);
+      } finally {
+        // Release a blocking open even when the regression fails, before removing the fixture.
+        const reader = await filesystem.open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+        await Promise.all([writing, requesting]);
+        await reader.close();
+      }
+    });
+
     it.each(['one logger', 'nested namespaces', 'independent loggers', 'relative path aliases'])(
       'keeps simultaneous large trace records valid when written through %s',
       async writers => {

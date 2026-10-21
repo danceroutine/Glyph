@@ -7,10 +7,27 @@
   "ignorePatterns": ["target/**", "dist/**", "coverage/**", ".next/**"],
   "options": {
     "denyWarnings": true,
-    "reportUnusedDisableDirectives": "error"
+    "reportUnusedDisableDirectives": "error",
+    "typeAware": true
+  },
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error",
+    "pedantic": "error"
   },
   "rules": {
     "no-control-regex": "off",
+    "max-classes-per-file": "off",
+    "max-depth": "off",
+    "max-lines": "off",
+    "max-lines-per-function": "off",
+    "max-nested-callbacks": "off",
+    "no-negated-condition": "off",
+    "unicorn/no-negated-condition": "off",
+    "require-await": "off",
+    "typescript/require-await": "off",
+    "typescript/prefer-readonly-parameter-types": "off",
     "perfectionist/sort-classes": [
       "error",
       {

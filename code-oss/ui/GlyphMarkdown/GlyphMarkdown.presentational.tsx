@@ -1,4 +1,5 @@
 import { type Token, type Tokens } from 'marked';
+import { decodeHTMLStrict } from 'entities';
 import type { ComponentChildren } from 'preact';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 const style = css({
@@ -23,6 +24,15 @@ const style = css({
   '& table': { borderCollapse: 'collapse' },
   '& td, & th': { border: tokens.border.default, padding: tokens.space.sm },
 });
+export interface GlyphContextToken extends Tokens.Generic {
+  readonly type: 'glyph_context';
+  readonly index: number;
+}
+
+function isGlyphContextToken(token: Token): token is GlyphContextToken {
+  return token.type === 'glyph_context';
+}
+
 /** Render tokens as elements; raw HTML and executable links are never interpreted. */
 export function GlyphMarkdown({
   items,
@@ -35,17 +45,24 @@ export function GlyphMarkdown({
   readonly items: readonly Token[];
   readonly openLink: (href: string) => void;
   readonly text?: (value: string) => ComponentChildren;
-  readonly inline?: (token: Token) => ComponentChildren;
+  readonly inline?: (token: GlyphContextToken) => ComponentChildren;
   readonly code: (source: string, language: string | undefined) => ComponentChildren;
   readonly diagram: (source: string) => ComponentChildren;
 }) {
-  const render = (items: readonly Token[]): ComponentChildren =>
+  const render = (items: readonly Token[], decodeEntities = true): ComponentChildren =>
     items.map((token): ComponentChildren => {
       const children =
-        'tokens' in token && token.tokens ? render(token.tokens) : 'text' in token ? text(token.text) : '';
+        'tokens' in token && token.tokens
+          ? render(token.tokens, decodeEntities && !(token.type === 'link' && token.autolink))
+          : 'text' in token
+            ? text(
+                // Marked already decodes numeric entities in text. Start with
+                // raw source so both numeric and named entities decode once.
+                token.type === 'text' && !token.escaped && decodeEntities ? decodeHTMLStrict(token.raw) : token.text,
+              )
+            : '';
+      if (isGlyphContextToken(token)) return inline?.(token);
       switch (token.type) {
-        case 'glyph_context':
-          return inline?.(token);
         case 'heading':
           return token.depth === 1 ? (
             <h1>{children}</h1>
@@ -72,7 +89,7 @@ export function GlyphMarkdown({
               href="#"
               onClick={event => {
                 event.preventDefault();
-                openLink(token.href);
+                openLink(token.autolink ? token.href : decodeHTMLStrict(token.href));
               }}
             >
               {children}
@@ -92,6 +109,8 @@ export function GlyphMarkdown({
               ))}
             </ul>
           );
+        case 'checkbox':
+          return <input type="checkbox" checked={token.checked} disabled aria-label="Task status" />;
         case 'table':
           return (
             <table>
@@ -122,7 +141,7 @@ export function GlyphMarkdown({
         case 'space':
           return null;
         case 'image':
-          return <span>{token.text}</span>;
+          return <span>{children}</span>;
         default:
           return children;
       }

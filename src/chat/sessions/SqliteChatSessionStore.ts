@@ -1,4 +1,4 @@
-import { AgentModeID } from '../AgentMode.ts';
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { planSchema } from '#src/planning/PlanSchema.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';

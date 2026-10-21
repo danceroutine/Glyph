@@ -157,7 +157,13 @@ export class OpenAIAuthenticationClient {
       response.setHeader('Content-Type', 'text/plain; charset=utf-8');
       response.setHeader('Content-Security-Policy', "default-src 'none'");
       response.setHeader('Referrer-Policy', 'no-referrer');
-      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      let url: URL;
+      try {
+        url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      } catch {
+        response.writeHead(400).end('Invalid request URL.');
+        return;
+      }
       if (request.method !== 'GET' || url.pathname !== '/auth/callback' || !attempt || consumed) {
         response.writeHead(404).end('Not found.');
         return;

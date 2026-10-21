@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AgentMode } from '#src/chat/AgentMode.js';
-import { AgentModeID } from "../AgentMode.ts";
+import { AgentMode, AgentModeID } from '#src/chat/AgentMode.js';
 
 describe(AgentMode, () => {
   it('resolves every serializable ID to one immutable mode', () => {
@@ -26,5 +25,11 @@ describe(AgentMode, () => {
     const plan = AgentMode.resolve(AgentModeID.PLAN);
     expect(plan.getEditDenial(path) === undefined).toBe(allowed);
     expect(AgentMode.resolve(AgentModeID.AGENT).getEditDenial(path)).toBeUndefined();
+  });
+  it('titles each mode and reports whether it restricts edits', () => {
+    expect(AgentMode.resolve(AgentModeID.AGENT).title).toBe('Agent Mode');
+    expect(AgentMode.resolve(AgentModeID.PLAN).title).toBe('Plan Mode');
+    expect(AgentMode.resolve(AgentModeID.AGENT).restrictsEdits).toBe(false);
+    expect(AgentMode.resolve(AgentModeID.PLAN).restrictsEdits).toBe(true);
   });
 });

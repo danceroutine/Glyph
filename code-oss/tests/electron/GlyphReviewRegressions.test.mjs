@@ -58,8 +58,9 @@ it.describe('Review regressions — rejected send from an overlapping workspace'
     await glyph.waitForResponse();
     const duplicate = await glyph.duplicateWorkspace();
     const draft = 'Do not discard this question when workspace ownership is denied.';
-    await duplicate.send(draft);
+    await duplicate.composer.fill(draft);
     await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
+    await expect(duplicate.sendButton).toBeDisabled();
     await expect(duplicate.composer).toHaveText(draft);
     await expect(glyph.userEntries).toHaveCount(1);
   });

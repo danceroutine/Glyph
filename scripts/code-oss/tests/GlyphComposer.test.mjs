@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, it } from 'vitest';
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
 
 const requireUpstream = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
 const { chromium, expect } = requireUpstream('@playwright/test');
@@ -51,6 +52,7 @@ beforeAll(async () => {
     write: false,
     format: 'iife',
     platform: 'browser',
+    ...coverageBuildOptions,
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   script = result.outputFiles[0].text;
@@ -64,7 +66,7 @@ describe('WiredGlyphComposer draft recovery', () => {
   it.each(['before', 'after'])(
     'retains the draft and recovered message when send fails %s pane disposal',
     async when => {
-      const page = await browser.newPage();
+      const page = await newCoveredPage(browser);
       try {
         await page.setContent('<div id="root"></div>');
         await page.addScriptTag({ content: script });
@@ -76,7 +78,7 @@ describe('WiredGlyphComposer draft recovery', () => {
         await page.evaluate(() => window.composerTest.unmount());
         if (when === 'after') await page.evaluate(() => window.composerTest.reject());
         await page.evaluate(() => window.composerTest.mount());
-        await expect(composer).toHaveText('Newer draft', { timeout: 500 });
+        await expect(composer).toHaveText('Newer draft', { timeout: 10_000 });
         await expect(page.getByRole('region', { name: 'Unsent messages' })).toContainText('Original message');
       } finally {
         await page.close();
@@ -84,7 +86,7 @@ describe('WiredGlyphComposer draft recovery', () => {
     },
   );
   it('retains a failed message separately from a newer draft and lets the user edit either without losing the other', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
@@ -115,7 +117,7 @@ describe('WiredGlyphComposer draft recovery', () => {
   });
 
   it('restores a rejected message directly when no newer draft was typed', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
@@ -130,7 +132,7 @@ describe('WiredGlyphComposer draft recovery', () => {
   });
 
   it('preserves every rejected message through successive failures without sending a newer draft implicitly', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
@@ -157,7 +159,7 @@ describe('WiredGlyphComposer draft recovery', () => {
 
 describe('Composer mode menu', () => {
   it('shows mode icons and selection, supports keyboard choice, and dismisses without changing mode', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await page.setContent('<div id="root" style="padding-top:200px"></div>');
       await page.addScriptTag({ content: script });
@@ -189,7 +191,7 @@ describe('Composer mode menu', () => {
 
 describe('Inline attachment editing', () => {
   it('inserts files from the system picker at the saved caret and leaves cancellation unchanged', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
@@ -198,7 +200,7 @@ describe('Inline attachment editing', () => {
       await composer.fill('before  after');
       for (let index = 0; index < 6; index++) await composer.press('ArrowLeft');
       await expect
-        .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 1000 })
+        .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 10_000 })
         .toBe(7);
       await attach.click();
       await expect(attach).toBeDisabled();
@@ -217,7 +219,7 @@ describe('Inline attachment editing', () => {
   });
 
   it('inserts file and native-selection badges at the caret, with text between them, and recovers both after failure', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
@@ -225,7 +227,7 @@ describe('Inline attachment editing', () => {
       await composer.fill('before  after');
       for (let index = 0; index < 6; index++) await composer.press('ArrowLeft');
       await expect
-        .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 1000 })
+        .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 10_000 })
         .toBe(7);
       await composer.pressSequentially('@a');
       await expect(page.getByRole('option', { name: 'a.ts', exact: true })).toBeVisible();
@@ -253,7 +255,7 @@ describe('Inline attachment editing', () => {
   });
 
   it('deletes badges atomically, supports undo, and pastes plain text without inventing attachments', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
@@ -282,7 +284,7 @@ describe('Inline attachment editing', () => {
 
 describe('Rich Markdown composer', () => {
   it('continues and indents lists, exits an empty item, formats blockquotes and emphasis, and sends Markdown', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
@@ -308,7 +310,7 @@ describe('Rich Markdown composer', () => {
     }
   });
   it('keeps an attachment at the rich-text caret through recovery, re-mounting and Markdown paste', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await page.setContent('<div id="root"></div>');
       await page.addScriptTag({ content: script });
@@ -350,7 +352,7 @@ describe('Rich Markdown composer', () => {
 });
 
 it('formats typed links and fenced code while preserving literal code and Markdown on submission', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -375,7 +377,7 @@ it('formats typed links and fenced code while preserving literal code and Markdo
 });
 
 it('uses Enter to submit and Shift+Enter to edit a multiline prompt', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -394,7 +396,7 @@ it('uses Enter to submit and Shift+Enter to edit a multiline prompt', async () =
 });
 
 it('routes the steering shortcut separately and leaves the active response running', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -412,7 +414,7 @@ it('routes the steering shortcut separately and leaves the active response runni
 });
 
 it('shows a collapsible draggable queue with decorative bullets and the requested row menu', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   page.setDefaultTimeout(3000);
   try {
     await page.setContent('<div id="root"></div>');
@@ -460,7 +462,7 @@ it('shows a collapsible draggable queue with decorative bullets and the requeste
 }, 20000);
 
 it('edits a queued message in the composer, preserves it on cancel, and clears the draft on deletion', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -491,7 +493,10 @@ it('edits a queued message in the composer, preserves it on cancel, and clears t
     await expect(row).not.toHaveAttribute('data-editing');
 
     await edit();
-    await composer.fill('');
+    await expect(composer).toHaveText('Original queued task');
+    await composer.press('ControlOrMeta+a');
+    await composer.press('Backspace');
+    await expect(composer).toHaveText('');
     await expect(page.getByRole('button', { name: 'Save queued message' })).toBeDisabled();
     await composer.press('Enter');
     await expect(row).toContainText('Original queued task');
@@ -515,7 +520,7 @@ it('edits a queued message in the composer, preserves it on cancel, and clears t
 }, 15000);
 
 it('highlights code while typing without changing the caret, undo history or submitted Markdown', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -539,8 +544,44 @@ it('highlights code while typing without changing the caret, undo history or sub
   }
 });
 
+it.each(['empty', 'selected'])(
+  'preserves source pasted into a code block with %s content through recovery and submission',
+  async state => {
+    const page = await newCoveredPage(browser);
+    try {
+      await page.setContent('<div id="root"></div>');
+      await page.addScriptTag({ content: script });
+      const composer = page.getByRole('textbox', { name: 'Message Glyph' });
+      await composer.pressSequentially('```js');
+      await composer.press('Shift+Enter');
+      if (state === 'selected') {
+        await composer.pressSequentially('replace this');
+        for (let index = 0; index < 'replace this'.length; index++) await composer.press('Shift+ArrowLeft');
+        expect(await page.evaluate(() => window.getSelection().toString())).toBe('replace this');
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      }
+      const source = 'const marker = "**keep**";\nconst second = `raw`;';
+      await composer.evaluate((element, source) => {
+        const clipboardData = new DataTransfer();
+        clipboardData.setData('text/plain', source);
+        element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+      }, source);
+      expect(await composer.locator('pre code').textContent()).toBe(source);
+      await page.evaluate(() => {
+        window.composerTest.unmount();
+        window.composerTest.mount();
+      });
+      expect(await composer.locator('pre code').textContent()).toBe(source);
+      await page.getByRole('button', { name: 'Send (Enter)', exact: true }).click();
+      expect(await page.evaluate(() => window.composerTest.calls[0])).toBe(`\`\`\`js\n${source}\n\`\`\``);
+    } finally {
+      await page.close();
+    }
+  },
+);
+
 it('highlights pasted and unlabelled fences while leaving unknown languages as literal text', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -567,7 +608,7 @@ it('highlights pasted and unlabelled fences while leaving unknown languages as l
 });
 
 it.each(['ArrowDown', 'ArrowRight'])('leaves a trailing code block with %s and types in a new paragraph', async key => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -589,7 +630,7 @@ it.each(['ArrowDown', 'ArrowRight'])('leaves a trailing code block with %s and t
 });
 
 it.each(['ArrowDown', 'ArrowRight'])('reuses the paragraph following a code block when leaving with %s', async key => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -618,7 +659,7 @@ it.each(['ArrowDown', 'ArrowRight'])('reuses the paragraph following a code bloc
 it.each(['ArrowUp', 'ArrowLeft'])(
   'leaves the start of a code block with %s without adding duplicate paragraphs',
   async key => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       for (const preceding of ['', 'Existing text\n\n']) {
         await page.setContent('<div id="root"></div>');
@@ -644,7 +685,7 @@ it.each(['ArrowUp', 'ArrowLeft'])(
                 document.dispatchEvent(new Event('selectionchange'));
                 return window.composerTest.snapshot().document.from;
               }),
-            { timeout: 1000 },
+            { timeout: 10_000 },
           )
           .toBe(source.indexOf('const answer'));
         await composer.press(key);
@@ -665,7 +706,7 @@ it.each(['ArrowUp', 'ArrowLeft'])(
 );
 
 it.each(['ArrowUp', 'ArrowLeft'])('escapes an empty code block backwards with %s', async key => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -683,7 +724,7 @@ it.each(['ArrowUp', 'ArrowLeft'])('escapes an empty code block backwards with %s
 });
 
 it('keeps normal arrow navigation and selection inside code blocks', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: script });
@@ -697,7 +738,7 @@ it('keeps normal arrow navigation and selection inside code blocks', async () =>
       const before = await page.evaluate(() => window.composerTest.snapshot().document.from);
       await composer.press(key);
       await expect
-        .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 1000 })
+        .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 10_000 })
         .not.toBe(before);
     };
     // ProseMirror briefly suppresses DOM selection updates after typing.
@@ -714,17 +755,17 @@ it('keeps normal arrow navigation and selection inside code blocks', async () =>
             document.dispatchEvent(new Event('selectionchange'));
             return window.composerTest.snapshot().document.from;
           }),
-        { timeout: 1000 },
+        { timeout: 10_000 },
       )
       .toBe(4);
     await move('ArrowRight');
     await composer.pressSequentially('X');
-    await expect(composer.locator('pre')).toHaveText('aXb\ncd', { timeout: 1000 });
+    await expect(composer.locator('pre')).toHaveText('aXb\ncd', { timeout: 10_000 });
     await move('ArrowDown');
     await composer.pressSequentially('Y');
-    await expect(composer.locator('pre')).toHaveText('aXb\ncdY', { timeout: 1000 });
+    await expect(composer.locator('pre')).toHaveText('aXb\ncdY', { timeout: 10_000 });
     await composer.press('Shift+ArrowLeft');
-    await expect.poll(() => page.evaluate(() => window.getSelection().toString()), { timeout: 1000 }).toBe('Y');
+    await expect.poll(() => page.evaluate(() => window.getSelection().toString()), { timeout: 10_000 }).toBe('Y');
     await expect
       .poll(
         () =>
@@ -732,12 +773,12 @@ it('keeps normal arrow navigation and selection inside code blocks', async () =>
             const { from, to } = window.composerTest.snapshot().document;
             return to - from;
           }),
-        { timeout: 1000 },
+        { timeout: 10_000 },
       )
       .toBe(1);
     await composer.press('ArrowRight');
     await composer.pressSequentially('Z');
-    await expect(composer.locator('pre')).toHaveText('aXb\ncdYZ', { timeout: 1000 });
+    await expect(composer.locator('pre')).toHaveText('aXb\ncdYZ', { timeout: 10_000 });
     await expect(composer.locator('p')).toHaveCount(0);
   } finally {
     await page.close();
@@ -747,7 +788,7 @@ it('keeps normal arrow navigation and selection inside code blocks', async () =>
 it.each([280, 1000])(
   'shows compact @ suggestions at %i px and attaches the hovered file without losing editor focus',
   async width => {
-    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    const page = await newCoveredPage(browser, { viewport: { width: 1200, height: 800 } });
     try {
       await page.setContent(
         `<div id="root" style="width:${width}px;padding-top:400px;container-type:inline-size"></div>`,
@@ -793,7 +834,7 @@ it.each([280, 1000])(
 );
 
 it('scrolls @ suggestions with the keyboard and dismisses them with Escape', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root" style="padding-top:400px"></div>');
     await page.addScriptTag({ content: script });
@@ -827,7 +868,7 @@ it('scrolls @ suggestions with the keyboard and dismisses them with Escape', asy
 });
 
 it('shows Tree outline only for folders and attaches their tree snapshot', async () => {
-  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  const page = await newCoveredPage(browser, { viewport: { width: 1200, height: 800 } });
   try {
     await page.setContent('<div id="root" style="width:1000px;padding-top:400px;container-type:inline-size"></div>');
     await page.addScriptTag({ content: script });

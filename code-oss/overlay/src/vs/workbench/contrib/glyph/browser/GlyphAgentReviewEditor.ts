@@ -19,7 +19,7 @@ export interface GlyphAgentReviewFile {
 /** Immutable reviewed revisions with native diff navigation and inline finding comments. */
 export class GlyphAgentReviewEditor extends Disposable {
   private readonly comments = this._register(new DisposableStore());
-  private readonly resources: URI[] = [];
+  private readonly resources = new Map<string, { readonly uri: URI; readonly source: URI; readonly text: string }>();
   private readonly comparisons = new WeakMap<GlyphAgentReviewFile, { before: URI; after: URI }>();
   private readonly issueComments = new Map<string, DisposableStore>();
   private revision = 0;
@@ -32,10 +32,27 @@ export class GlyphAgentReviewEditor extends Disposable {
     super();
     this._register(
       resolver.registerTextModelContentProvider('glyph-agent-review', {
-        provideTextContent: async uri => this.models.getModel(uri),
+        provideTextContent: async uri => {
+          const existing = this.models.getModel(uri);
+          if (existing) return existing;
+          const resource = this.resources.get(uri.toString());
+          if (!resource) return null;
+          // Code OSS disposes virtual models when their final editor reference closes.
+          // Keep the captured revision available when the finding is reopened.
+          return this.models.createModel(
+            resource.text,
+            this.languages.createByFilepathOrFirstLine(resource.source),
+            uri,
+          );
+        },
       }),
     );
-    this._register(toDisposable(() => this.resources.forEach(uri => this.models.getModel(uri)?.dispose())));
+    this._register(
+      toDisposable(() => {
+        for (const { uri } of this.resources.values()) this.models.getModel(uri)?.dispose();
+        this.resources.clear();
+      }),
+    );
   }
   async open(
     file: GlyphAgentReviewFile,
@@ -49,8 +66,7 @@ export class GlyphAgentReviewEditor extends Disposable {
     const id = generateUuid();
     const resource = (side: string, text: string) => {
       const uri = URI.from({ scheme: 'glyph-agent-review', path: `/${id}/${side}/${file.uri.path.split('/').at(-1)}` });
-      this.models.createModel(text, this.languages.createByFilepathOrFirstLine(file.uri), uri);
-      this.resources.push(uri);
+      this.resources.set(uri.toString(), { uri, source: file.uri, text });
       return uri;
     };
     let comparison = this.comparisons.get(file);
@@ -68,13 +84,16 @@ export class GlyphAgentReviewEditor extends Disposable {
     const diff = pane.getControl();
     if (!isDiffEditor(diff)) throw new Error('The native review diff editor is unavailable.');
     diff.updateOptions({ readOnly: true, originalEditable: false, renderSideBySide: true });
-    const editor = file.after ? diff.getModifiedEditor() : diff.getOriginalEditor();
+    const editorFor = (issue: GlyphAgentReviewFinding) =>
+      (issue.side ?? (file.after ? 'modified' : 'original')) === 'original'
+        ? diff.getOriginalEditor()
+        : diff.getModifiedEditor();
     for (const issue of findings.filter(issue => issue.path === finding.path)) {
       const comment = this.comments.add(new DisposableStore());
       this.issueComments.set(issue.id, comment);
       comment.add(
         new GlyphReviewCommentWidget(
-          editor,
+          editorFor(issue),
           issue,
           () => fix(issue),
           () => dismiss(issue),
@@ -82,7 +101,7 @@ export class GlyphAgentReviewEditor extends Disposable {
       );
       comment.add(toDisposable(() => this.issueComments.delete(issue.id)));
     }
-    editor.revealLineInCenter(finding.line);
+    editorFor(finding).revealLineInCenter(finding.line);
   }
   dismiss(id: string): void {
     this.issueComments.get(id)?.dispose();

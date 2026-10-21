@@ -1,6 +1,7 @@
-import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+const reloadsWindow = isolatedLaunch('reloads the window');
 const pageHtml = text =>
   `<html><head><title>Octopus source</title></head><body><main><h1>Octopus source</h1><p>${text}</p></main></body></html>`;
 const searchHtml = url =>
@@ -18,48 +19,50 @@ async function run(glyph, provider, output, text = 'Web research complete.', ren
 }
 
 it.describe('Web fetch and search', () => {
-  it.use({ scriptedProvider: true, userSettings: { 'glyph.preferOpeningWebLinksInGlyph': true } });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true, userSettings: { 'glyph.preferOpeningWebLinksInGlyph': true } });
 
-  it('fetches a page, cites its final URL and opens its source in the configured integrated browser', async ({
-    glyph,
-    provider,
-  }) => {
-    provider.webRoutes.set('/web/start', { status: 302, headers: { location: '/web/article' } });
-    provider.webRoutes.set('/web/article', { body: pageHtml('The source says eight arms.') });
-    const url = provider.url + '/web/article';
-    const [result] = await run(
-      glyph,
-      provider,
-      [call('web_fetch', { url: provider.url + '/web/start' })],
-      `The source has eight arms. [Octopus source](${url}).`,
-      'The source has eight arms. Octopus source.',
-    );
-    expect(result).toMatchObject({
-      kind: 'web_fetch',
-      source: { url, title: 'Octopus source' },
-      provenance: 'untrusted_web_content',
-    });
-    expect(result.content).toContain('eight arms');
-    const activity = glyph.page.locator('[data-tool-id] summary').filter({ hasText: 'Fetched page' });
-    await activity.click();
-    await glyph.page
-      .getByRole('list', { name: 'Fetched page sources' })
-      .getByRole('link', { name: 'Octopus source', exact: true })
-      .click();
-    await expect(glyph.page.locator('.tab.active')).toContainText('Octopus source');
-    await expect
-      .poll(() => provider.webRequests.filter(request => request.url === '/web/article').length)
-      .toBeGreaterThanOrEqual(2);
-    await glyph.command('Focus Glyph');
-    await glyph.reload();
-    await expect(activity).toBeVisible();
-    await activity.click();
-    await expect(
-      glyph.page
+  it(
+    'fetches a page, cites its final URL and opens its source in the configured integrated browser',
+    reloadsWindow,
+    async ({ glyph, provider }) => {
+      provider.webRoutes.set('/web/start', { status: 302, headers: { location: '/web/article' } });
+      provider.webRoutes.set('/web/article', { body: pageHtml('The source says eight arms.') });
+      const url = provider.url + '/web/article';
+      const [result] = await run(
+        glyph,
+        provider,
+        [call('web_fetch', { url: provider.url + '/web/start' })],
+        `The source has eight arms. [Octopus source](${url}).`,
+        'The source has eight arms. Octopus source.',
+      );
+      expect(result).toMatchObject({
+        kind: 'web_fetch',
+        source: { url, title: 'Octopus source' },
+        provenance: 'untrusted_web_content',
+      });
+      expect(result.content).toContain('eight arms');
+      const activity = glyph.page.locator('[data-tool-id] summary').filter({ hasText: 'Fetched page' });
+      await activity.click();
+      await glyph.page
         .getByRole('list', { name: 'Fetched page sources' })
-        .getByRole('link', { name: 'Octopus source', exact: true }),
-    ).toBeVisible();
-  });
+        .getByRole('link', { name: 'Octopus source', exact: true })
+        .click();
+      await expect(glyph.page.locator('.tab.active')).toContainText('Octopus source');
+      await expect
+        .poll(() => provider.webRequests.filter(request => request.url === '/web/article').length)
+        .toBeGreaterThanOrEqual(2);
+      await glyph.command('Focus Glyph');
+      await glyph.reload();
+      await expect(activity).toBeVisible();
+      await activity.click();
+      await expect(
+        glyph.page
+          .getByRole('list', { name: 'Fetched page sources' })
+          .getByRole('link', { name: 'Octopus source', exact: true }),
+      ).toBeVisible();
+    },
+  );
 
   it('reports HTTP errors, unsupported content and response-size limits without inventing page text', async ({
     glyph,

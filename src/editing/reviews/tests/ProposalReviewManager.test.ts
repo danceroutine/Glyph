@@ -13,7 +13,15 @@ import { EditProposalService } from '#src/editing/proposals/EditProposalService.
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
-import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import {
+  ProposalReviewChangeType,
+  ProposalReviewManager,
+  type ProposalReviewChange,
+} from '#src/editing/reviews/ProposalReviewManager.js';
+import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
+import type { ProposalReviewStore } from '#src/editing/reviews/persistence/ProposalReviewStore.js';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import type { Logger } from '#src/observability/Logger.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
@@ -1105,7 +1113,1339 @@ describe(ProposalReviewManager, () => {
       expect(recovered.active?.files[0]?.applyingItemId).toBeNull();
     });
   });
+
+  it('refuses to enumerate an empty review queue', async () => {
+    const { manager } = await reviewFixture({});
+    const internals = manager as unknown as { requireReviews(): unknown };
+
+    expect(() => internals.requireReviews()).toThrow(
+      expect.objectContaining({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'There are no active edit reviews.',
+      }),
+    );
+  });
+
+  it('tolerates review items disappearing while a failed change is rolled back', async () => {
+    const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'one\ntwo\nthree\n' });
+    const proposal = await proposeUpdate(service, workspace, 'file.txt', 'ONE\ntwo\nTHREE\n');
+    await manager.stage(proposal);
+    vi.spyOn(workspace, 'replace').mockImplementationOnce(async () => {
+      manager.active!.files[0]!.items.splice(1, 1);
+      throw new Error('disk offline');
+    });
+
+    await expect(manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toThrow('disk offline');
+
+    expect(manager.active?.files[0]?.items.map(item => item.decision)).toEqual([EditDecisionState.PENDING]);
+    expect((await workspace.read('file.txt')).text).toBe('one\ntwo\nthree\n');
+  });
+
+  it('accepts a rename whose plan lost both its base and current documents during the move', async () => {
+    const { service, workspace, manager, store } = await reviewFixture({ 'file.txt': 'base' });
+    const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+    await manager.stage(proposal);
+    const rename = workspace.rename.bind(workspace);
+    vi.spyOn(workspace, 'rename').mockImplementationOnce(async (...args) => {
+      const file = manager.active!.files[0]!;
+      file.base = null;
+      file.current = null;
+      return rename(...args);
+    });
+
+    await manager.accept(proposal.files[0]!.items[0]!.id);
+
+    expect(store.proposals[0]?.files[0]).toMatchObject({
+      currentPath: 'renamed.txt',
+      base: { path: 'renamed.txt', text: 'base' },
+      current: { path: 'renamed.txt', text: 'base' },
+    });
+    expect((await workspace.read('renamed.txt')).text).toBe('base');
+  });
+
+  describe(ProposalReviewManager.prototype.onDidChange, () => {
+    it('notifies a listener until it unsubscribes', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' });
+      const changes: ProposalReviewChange[] = [];
+      const unsubscribe = manager.onDidChange(change => changes.push(change));
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+
+      await manager.stage(proposal);
+      expect(unsubscribe()).toBe(true);
+      await manager.rejectAll();
+
+      expect(changes).toEqual([
+        { type: ProposalReviewChangeType.STAGED, proposalIds: [proposal.id], pendingChangeCount: 1 },
+      ]);
+    });
+  });
+
+  describe('retainedReviews', () => {
+    it('retains active reviews and settled reviews that applied structural changes', async () => {
+      const { service, workspace, manager } = await reviewFixture(
+        { 'file.txt': 'base', 'other.txt': 'other' },
+        { autoApplyStructural: true },
+      );
+      const created = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(created);
+      await manager.settleAutomatic(created.id, created.files[0]!.automatic!.itemId, true);
+      const rejected = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(rejected);
+      await manager.reject(rejected.files[0]!.items[0]!.id);
+      const pending = await proposeUpdate(service, workspace, 'other.txt', 'changed');
+      await manager.stage(pending);
+
+      expect(manager.retainedReviews.map(review => review.id)).toEqual([pending.id, created.id]);
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.initialize, () => {
+    it('restores persisted reviews without touching the workspace when reconciliation is deferred', async () => {
+      const { service, workspace, manager, recover, root } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      await writeFile(join(root, 'file.txt'), 'changed elsewhere');
+      const recovered = recover();
+      const read = vi.spyOn(workspace, 'readOptional');
+
+      await recovered.initialize({ reconcileWorkspace: false });
+
+      expect(recovered.active?.id).toBe(proposal.id);
+      expect(recovered.active?.files[0]?.applicability).toBe(EditApplicabilityState.READY);
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('marks an interrupted structural revert as stale', async () => {
+      const { service, manager, store, recover } = await reviewFixture({}, { autoApplyStructural: true });
+      await manager.stage(await proposeCreate(service, 'new.txt', 'created'));
+      store.proposals[0]!.files[0]!.automatic!.state = 'reverting';
+      const recovered = recover();
+
+      await recovered.initialize();
+
+      expect(recovered.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+      expect(recovered.active?.files[0]?.automatic?.state).toBe('reverting');
+    });
+
+    it('completes a structural change that was accepted before its application was recorded', async () => {
+      const { service, workspace, manager, store, recover } = await reviewFixture({}, { autoApplyStructural: true });
+      await manager.stage(await proposeCreate(service, 'new.txt', 'created'));
+      const persisted = store.proposals[0]!.files[0]!;
+      persisted.automatic!.state = 'applying';
+      persisted.automatic!.appliedRevision = null;
+      const recovered = recover();
+
+      await recovered.initialize();
+
+      expect(recovered.active?.files[0]?.automatic).toMatchObject({
+        state: 'applied',
+        appliedRevision: (await workspace.read('new.txt')).revision,
+      });
+    });
+
+    it('propagates an unexpected workspace failure while reconciling a persisted review', async () => {
+      const { service, workspace, manager, recover } = await reviewFixture({ 'file.txt': 'base' });
+      await manager.stage(await proposeUpdate(service, workspace, 'file.txt', 'next'));
+      const recovered = recover();
+      vi.spyOn(workspace, 'readOptional').mockRejectedValueOnce(new Error('workspace offline'));
+
+      await expect(recovered.initialize()).rejects.toThrow('workspace offline');
+    });
+
+    it('treats an interrupted rename whose destination never appeared as not applied', async () => {
+      const { service, workspace, store, recover } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+      const file = proposal.files[0]!;
+      file.applyingItemId = file.items[0]!.id;
+      file.applicability = EditApplicabilityState.APPLYING;
+      await store.save([proposal]);
+      const recovered = recover();
+
+      await recovered.initialize();
+
+      expect(recovered.active?.files[0]).toMatchObject({
+        applicability: EditApplicabilityState.READY,
+        applyingItemId: null,
+        currentPath: 'file.txt',
+      });
+      expect(recovered.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
+    });
+
+    it('propagates an unexpected failure while inspecting an interrupted rename destination', async () => {
+      const { service, workspace, store, recover } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+      const file = proposal.files[0]!;
+      file.applyingItemId = file.items[0]!.id;
+      file.applicability = EditApplicabilityState.APPLYING;
+      await store.save([proposal]);
+      const readOptional = workspace.readOptional.bind(workspace);
+      vi.spyOn(workspace, 'readOptional').mockImplementation(async (path, options) =>
+        path === 'renamed.txt' ? Promise.reject(new Error('destination unavailable')) : readOptional(path, options),
+      );
+
+      await expect(recover().initialize()).rejects.toThrow('destination unavailable');
+    });
+
+    it('recognizes an interrupted delete that landed and records its applied evidence', async () => {
+      const { service, workspace, store, recover, root } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeDelete(service, workspace, 'file.txt');
+      const file = proposal.files[0]!;
+      const item = file.items[0]!;
+      item.appliedText = { state: 'applying', before: null, after: null, revertTarget: null };
+      file.applyingItemId = item.id;
+      file.applicability = EditApplicabilityState.APPLYING;
+      await store.save([proposal]);
+      await rm(join(root, 'file.txt'));
+      const recovered = recover();
+
+      await recovered.initialize();
+
+      expect(recovered.active?.files[0]?.items[0]).toMatchObject({
+        decision: EditDecisionState.ACCEPTED,
+        appliedText: { state: 'applied', after: null },
+      });
+      expect(recovered.active?.files[0]?.currentRevision).toBeNull();
+    });
+
+    it('records a landed interrupted text change while leaving a plan without prior content stale', async () => {
+      const { service, workspace, store, recover, root } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', '');
+      const file = proposal.files[0]!;
+      file.applyingItemId = file.items[0]!.id;
+      file.applicability = EditApplicabilityState.APPLYING;
+      file.current = null;
+      await store.save([proposal]);
+      await writeFile(join(root, 'file.txt'), '');
+      const recovered = recover();
+
+      await recovered.initialize();
+
+      expect(recovered.active).toBeUndefined();
+      expect(store.proposals[0]?.files[0]).toMatchObject({
+        applicability: EditApplicabilityState.STALE,
+        applyingItemId: null,
+      });
+      expect(recovered.pendingResults[0]?.items[0]?.decision).toBe(EditDecisionState.ACCEPTED);
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.stage, () => {
+    it('rejects a proposal whose review ID is already queued', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+
+      await expect(manager.stage(proposal)).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'A proposal with this review ID is already queued.',
+      });
+    });
+
+    it('applies only the structural part of a rename that also changes text', async () => {
+      const { service, workspace, manager } = await reviewFixture(
+        { 'file.txt': 'one\ntwo\n' },
+        { autoApplyStructural: true },
+      );
+      const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt', 'one\nTWO\n');
+
+      await manager.stage(proposal);
+
+      const file = manager.active!.files[0]!;
+      expect(file.automatic?.state).toBe('applied');
+      expect(file.items.map(item => [item.kind, item.decision])).toEqual([
+        [EditReviewItemKind.RENAME, EditDecisionState.ACCEPTED],
+        [EditReviewItemKind.TEXT, EditDecisionState.PENDING],
+      ]);
+      expect((await workspace.read('renamed.txt')).text).toBe('one\ntwo\n');
+    });
+
+    it('records an automatically applied creation whose acknowledgement was lost', async () => {
+      const { service, workspace, manager } = await reviewFixture({}, { autoApplyStructural: true });
+      const create = workspace.create.bind(workspace);
+      vi.spyOn(workspace, 'create').mockImplementationOnce(async (...args) => {
+        await create(...args);
+        throw new Error('connection lost');
+      });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+
+      await expect(manager.stage(proposal)).rejects.toThrow('connection lost');
+
+      expect(manager.active?.files[0]?.automatic).toMatchObject({
+        state: 'applied',
+        appliedRevision: (await workspace.read('new.txt')).revision,
+      });
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.acceptAll, () => {
+    it('does nothing without active reviews', async () => {
+      const { manager, store } = await reviewFixture({});
+      const save = vi.spyOn(store, 'save');
+
+      await manager.acceptAll();
+
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it('keeps automatically applied structural changes', async () => {
+      const { service, workspace, manager } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApplyStructural: true },
+      );
+      const proposal = await proposeDelete(service, workspace, 'file.txt');
+      await manager.stage(proposal);
+
+      await manager.acceptAll();
+
+      expect(manager.active).toBeUndefined();
+      expect(manager.retainedReviews[0]?.files[0]?.automatic?.state).toBe('kept');
+      await expect(workspace.exists('file.txt')).resolves.toBe(false);
+    });
+
+    it('recovers an interrupted acceptance before accepting the queue', async () => {
+      const { service, workspace, store, recover } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      const file = proposal.files[0]!;
+      file.applyingItemId = file.items[0]!.id;
+      file.applicability = EditApplicabilityState.APPLYING;
+      await store.save([proposal]);
+      const manager = recover();
+      await manager.initialize({ reconcileWorkspace: false });
+
+      await manager.acceptAll();
+
+      expect((await workspace.read('file.txt')).text).toBe('next');
+      expect(manager.active).toBeUndefined();
+    });
+
+    it('fails when a pending text change no longer has a document to apply to', async () => {
+      const { service, workspace, store, recover, root } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      const file = proposal.files[0]!;
+      file.current = null;
+      file.currentRevision = null;
+      await store.save([proposal]);
+      await rm(join(root, 'file.txt'));
+      const manager = recover();
+      await manager.initialize({ reconcileWorkspace: false });
+
+      await expect(manager.acceptAll()).rejects.toThrow('Cannot simulate text changes without a current document.');
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.rejectAll, () => {
+    it('recovers an interrupted acceptance that landed instead of rejecting it', async () => {
+      const { service, workspace, store, recover, root } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      const file = proposal.files[0]!;
+      file.applyingItemId = file.items[0]!.id;
+      file.applicability = EditApplicabilityState.APPLYING;
+      await store.save([proposal]);
+      await writeFile(join(root, 'file.txt'), 'next');
+      const manager = recover();
+      await manager.initialize({ reconcileWorkspace: false });
+
+      await manager.rejectAll();
+
+      expect(manager.pendingResults.flatMap(result => result.items.map(item => item.decision))).toEqual([
+        EditDecisionState.ACCEPTED,
+      ]);
+      expect((await workspace.read('file.txt')).text).toBe('next');
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.acknowledgeResults, () => {
+    it('acknowledges only the named results and ignores unknown ones', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({ 'file.txt': 'one\ntwo\nthree\n' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'ONE\ntwo\nTHREE\n');
+      await manager.stage(proposal);
+      await manager.rejectAll();
+      const [first, second] = manager.pendingResults;
+      const save = vi.spyOn(store, 'save');
+
+      await manager.acknowledgeResults([first!.id]);
+      await manager.acknowledgeResults(['unknown-result']);
+
+      expect(manager.pendingResults.map(result => result.id)).toEqual([second!.id]);
+      expect(save).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears the acknowledgements of a review whose identity changed during a failed save', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({ 'file.txt': 'one\ntwo\nthree\n' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'ONE\ntwo\nTHREE\n');
+      await manager.stage(proposal);
+      await manager.reject(proposal.files[0]!.items[0]!.id);
+      const [result] = manager.pendingResults;
+      vi.spyOn(store, 'save').mockImplementationOnce(async () => {
+        (manager.active as unknown as { id: string }).id = 'replaced';
+        throw new Error('disk full');
+      });
+
+      await expect(manager.acknowledgeResults([result!.id])).rejects.toThrow('disk full');
+
+      expect(manager.active).toMatchObject({ id: 'replaced', acknowledgedResultIds: [] });
+    });
+
+    it('restores acknowledgements when they cannot be saved', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      await manager.rejectAll();
+      const [result] = manager.pendingResults;
+      vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(manager.acknowledgeResults([result!.id])).rejects.toThrow('disk full');
+
+      expect(manager.pendingResults.map(pending => pending.id)).toEqual([result!.id]);
+      await manager.acknowledgeResults([result!.id]);
+      expect(manager.pendingResults).toEqual([]);
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.settleAutomatic, () => {
+    it('rejects an unknown review', async () => {
+      const { manager } = await reviewFixture({});
+
+      await expect(manager.settleAutomatic('missing', 'item', true)).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Unknown edit review.',
+      });
+    });
+
+    it('rejects an item that is not an automatically applied change', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+
+      await expect(manager.settleAutomatic(proposal.id, proposal.files[0]!.items[0]!.id, true)).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Unknown applied file change.',
+      });
+    });
+
+    it('treats settling an already kept change as complete while its review stays active', async () => {
+      const { service, workspace, manager, store } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApplyStructural: true },
+      );
+      const base = await workspace.read('file.txt');
+      const proposal = await service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'new.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'created',
+            byte_order_mark: null,
+            edits: [],
+          },
+          {
+            operation: EditOperation.UPDATE,
+            path: 'file.txt',
+            new_path: null,
+            base_revision: base.revision,
+            content: 'next',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.automatic!.itemId;
+      await manager.settleAutomatic(proposal.id, itemId, true);
+      const save = vi.spyOn(store, 'save');
+
+      await manager.settleAutomatic(proposal.id, itemId, true);
+      await manager.settleAutomatic(proposal.id, itemId, false);
+
+      expect(save).not.toHaveBeenCalled();
+      expect(manager.active?.files[0]?.automatic?.state).toBe('kept');
+      await expect(workspace.exists('new.txt')).resolves.toBe(true);
+    });
+
+    it('keeps the change applied when keeping it cannot be saved', async () => {
+      const { service, manager, store } = await reviewFixture({}, { autoApplyStructural: true });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+      vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(manager.settleAutomatic(proposal.id, proposal.files[0]!.automatic!.itemId, true)).rejects.toThrow(
+        'disk full',
+      );
+
+      expect(manager.active?.files[0]?.automatic?.state).toBe('applied');
+    });
+
+    it('keeps the change applied when its revert intent cannot be saved', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({}, { autoApplyStructural: true });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+      vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(manager.settleAutomatic(proposal.id, proposal.files[0]!.automatic!.itemId, false)).rejects.toThrow(
+        'disk full',
+      );
+
+      expect(manager.active?.files[0]?.automatic?.state).toBe('applied');
+      await expect(workspace.exists('new.txt')).resolves.toBe(true);
+    });
+
+    it('stays reverting when a retried revert intent cannot be saved', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({}, { autoApplyStructural: true });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.automatic!.itemId;
+      vi.spyOn(workspace, 'delete').mockRejectedValueOnce(new Error('locked'));
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toThrow('locked');
+      vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toThrow('disk full');
+
+      expect(manager.active?.files[0]?.automatic?.state).toBe('reverting');
+    });
+
+    it('refuses to keep a change whose revert is in progress', async () => {
+      const { service, workspace, manager } = await reviewFixture({}, { autoApplyStructural: true });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.automatic!.itemId;
+      vi.spyOn(workspace, 'delete').mockRejectedValueOnce(new Error('locked'));
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toThrow('locked');
+
+      await expect(manager.settleAutomatic(proposal.id, itemId, true)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+      });
+    });
+
+    it('reverts a creation whose file the user already removed', async () => {
+      const { service, workspace, manager, root } = await reviewFixture({}, { autoApplyStructural: true });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+      await rm(join(root, 'new.txt'));
+      const remove = vi.spyOn(workspace, 'delete');
+
+      await manager.settleAutomatic(proposal.id, proposal.files[0]!.automatic!.itemId, false);
+
+      expect(remove).not.toHaveBeenCalled();
+      expect(manager.retainedReviews[0]?.files[0]).toMatchObject({
+        automatic: { state: 'reverted' },
+        current: null,
+        currentRevision: null,
+      });
+    });
+
+    it('refuses to revert a creation the user has since edited', async () => {
+      const { service, workspace, manager, root } = await reviewFixture({}, { autoApplyStructural: true });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+      await writeFile(join(root, 'new.txt'), 'edited');
+
+      await expect(
+        manager.settleAutomatic(proposal.id, proposal.files[0]!.automatic!.itemId, false),
+      ).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+        details: { currentRevision: (await workspace.read('new.txt')).revision },
+      });
+    });
+
+    it.each([
+      ['identical', 'base'],
+      ['different', 'recreated'],
+    ])('refuses to revert a deletion after the user recreated %s content', async (_description, content) => {
+      const { service, workspace, manager, root } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApplyStructural: true },
+      );
+      const proposal = await proposeDelete(service, workspace, 'file.txt');
+      await manager.stage(proposal);
+      await writeFile(join(root, 'file.txt'), content);
+
+      await expect(
+        manager.settleAutomatic(proposal.id, proposal.files[0]!.automatic!.itemId, false),
+      ).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      expect((await workspace.read('file.txt')).text).toBe(content);
+    });
+
+    it('completes a deletion revert whose restored file landed without acknowledgement', async () => {
+      const { service, workspace, manager } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApplyStructural: true },
+      );
+      const proposal = await proposeDelete(service, workspace, 'file.txt');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.automatic!.itemId;
+      const create = workspace.create.bind(workspace);
+      vi.spyOn(workspace, 'create').mockImplementationOnce(async (...args) => {
+        await create(...args);
+        throw new Error('connection lost');
+      });
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toThrow('connection lost');
+
+      await manager.settleAutomatic(proposal.id, itemId, false);
+
+      expect(manager.retainedReviews[0]?.files[0]?.automatic?.state).toBe('reverted');
+      expect((await workspace.read('file.txt')).text).toBe('base');
+    });
+
+    it('completes a rename revert whose move landed without acknowledgement', async () => {
+      const { service, workspace, manager } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApplyStructural: true },
+      );
+      const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.automatic!.itemId;
+      const rename = workspace.rename.bind(workspace);
+      vi.spyOn(workspace, 'rename').mockImplementationOnce(async (...args) => {
+        await rename(...args);
+        throw new Error('connection lost');
+      });
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toThrow('connection lost');
+
+      await manager.settleAutomatic(proposal.id, itemId, false);
+
+      expect(manager.retainedReviews[0]?.files[0]).toMatchObject({
+        automatic: { state: 'reverted' },
+        currentPath: 'file.txt',
+      });
+      await expect(workspace.exists('renamed.txt')).resolves.toBe(false);
+    });
+
+    it('refuses to revert a rename after the user created a file at the original path', async () => {
+      const { service, workspace, manager, root } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApplyStructural: true },
+      );
+      const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+      await manager.stage(proposal);
+      await writeFile(join(root, 'file.txt'), 'base');
+
+      await expect(
+        manager.settleAutomatic(proposal.id, proposal.files[0]!.automatic!.itemId, false),
+      ).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+    });
+
+    it('refuses to retry a rename revert once both paths exist', async () => {
+      const { service, workspace, manager, root } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApplyStructural: true },
+      );
+      const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.automatic!.itemId;
+      vi.spyOn(workspace, 'rename').mockRejectedValueOnce(new Error('locked'));
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toThrow('locked');
+      await writeFile(join(root, 'file.txt'), 'base');
+
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+      });
+    });
+
+    it('refuses to finish a landed rename revert after the restored file changed', async () => {
+      const { service, workspace, manager, root } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApplyStructural: true },
+      );
+      const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.automatic!.itemId;
+      const rename = workspace.rename.bind(workspace);
+      vi.spyOn(workspace, 'rename').mockImplementationOnce(async (...args) => {
+        await rename(...args);
+        throw new Error('connection lost');
+      });
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toThrow('connection lost');
+      await writeFile(join(root, 'file.txt'), 'edited');
+
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+      });
+    });
+
+    it.each(['deleted', 'edited'])('refuses to revert a rename whose destination was %s', async change => {
+      const { service, workspace, manager, root } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApplyStructural: true },
+      );
+      const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+      await manager.stage(proposal);
+      if (change === 'deleted') await rm(join(root, 'renamed.txt'));
+      else await writeFile(join(root, 'renamed.txt'), 'edited');
+
+      await expect(
+        manager.settleAutomatic(proposal.id, proposal.files[0]!.automatic!.itemId, false),
+      ).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+    });
+
+    it('applies a kept change whose earlier application failed before reaching the workspace', async () => {
+      const { service, workspace, manager } = await reviewFixture({}, { autoApplyStructural: true });
+      vi.spyOn(workspace, 'create').mockRejectedValueOnce(new Error('disk offline'));
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await expect(manager.stage(proposal)).rejects.toThrow('disk offline');
+
+      await manager.settleAutomatic(proposal.id, proposal.files[0]!.automatic!.itemId, true);
+
+      expect(manager.retainedReviews[0]?.files[0]?.automatic?.state).toBe('kept');
+      expect((await workspace.read('new.txt')).text).toBe('created');
+    });
+
+    it('dismisses a reverted change whose earlier application never reached the workspace', async () => {
+      const { service, workspace, manager } = await reviewFixture({}, { autoApplyStructural: true });
+      vi.spyOn(workspace, 'create').mockRejectedValueOnce(new Error('disk offline'));
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await expect(manager.stage(proposal)).rejects.toThrow('disk offline');
+
+      await manager.settleAutomatic(proposal.id, proposal.files[0]!.automatic!.itemId, false);
+
+      expect(manager.retainedReviews[0]?.files[0]?.automatic?.state).toBe('reverted');
+      await expect(workspace.exists('new.txt')).resolves.toBe(false);
+    });
+
+    it('restores an unapplied change when dismissing it cannot be saved', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({}, { autoApplyStructural: true });
+      vi.spyOn(workspace, 'create').mockRejectedValueOnce(new Error('disk offline'));
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await expect(manager.stage(proposal)).rejects.toThrow('disk offline');
+      vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+      const itemId = proposal.files[0]!.automatic!.itemId;
+
+      await expect(manager.settleAutomatic(proposal.id, itemId, false)).rejects.toThrow('disk full');
+
+      expect(manager.active?.files[0]?.automatic?.state).toBe('applying');
+      expect(manager.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
+    });
+
+    it('recovers an interrupted structural application before keeping it', async () => {
+      const { service, manager, store, recover } = await reviewFixture({}, { autoApplyStructural: true });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+      const persisted = store.proposals[0]!.files[0]!;
+      persisted.automatic!.state = 'applying';
+      persisted.applyingItemId = persisted.automatic!.itemId;
+      persisted.items[0]!.decision = EditDecisionState.PENDING;
+      const recovered = recover();
+      await recovered.initialize({ reconcileWorkspace: false });
+
+      await recovered.settleAutomatic(proposal.id, persisted.automatic!.itemId, true);
+
+      expect(recovered.retainedReviews[0]?.files[0]?.automatic?.state).toBe('kept');
+    });
+
+    it('refuses to dismiss an interrupted structural application that became stale', async () => {
+      const { service, workspace, manager, store, recover, root } = await reviewFixture(
+        {},
+        { autoApplyStructural: true },
+      );
+      vi.spyOn(workspace, 'create').mockRejectedValueOnce(new Error('disk offline'));
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await expect(manager.stage(proposal)).rejects.toThrow('disk offline');
+      const persisted = store.proposals[0]!.files[0]!;
+      persisted.applyingItemId = persisted.automatic!.itemId;
+      await writeFile(join(root, 'new.txt'), 'collaborator');
+      const recovered = recover();
+      await recovered.initialize({ reconcileWorkspace: false });
+
+      await expect(recovered.settleAutomatic(proposal.id, persisted.automatic!.itemId, false)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+      });
+      expect((await workspace.read('new.txt')).text).toBe('collaborator');
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.rejectInReview, () => {
+    it('validates and records comments when reverting an automatically applied change', async () => {
+      const { service, workspace, manager } = await reviewFixture({}, { autoApplyStructural: true });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.automatic!.itemId;
+
+      await expect(manager.rejectInReview(proposal.id, itemId, '   ')).rejects.toThrow('Review comments');
+      await expect(manager.rejectInReview(proposal.id, itemId, 'x'.repeat(4001))).rejects.toThrow('Review comments');
+      await manager.rejectInReview(proposal.id, itemId, '  Not needed  ');
+
+      expect(manager.pendingResults[0]?.items[0]?.rejectionComment).toBe('Not needed');
+      await expect(workspace.exists('new.txt')).resolves.toBe(false);
+    });
+
+    it('rejects an empty comment for an applied text change', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' }, { autoApply: true });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+
+      await expect(manager.rejectInReview(proposal.id, proposal.files[0]!.items[0]!.id, '   ')).rejects.toThrow(
+        'Review comments',
+      );
+    });
+
+    it('treats a settled item from another review as unknown', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base', 'other.txt': 'other' });
+      const settled = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(settled);
+      await manager.reject(settled.files[0]!.items[0]!.id);
+      const active = await proposeUpdate(service, workspace, 'other.txt', 'changed');
+      await manager.stage(active);
+
+      await expect(manager.acceptInReview(active.id, settled.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Unknown review item.',
+      });
+    });
+
+    it('treats an item outside the named review as unknown', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+
+      await expect(manager.rejectInReview(proposal.id, 'missing-item')).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Unknown review item.',
+        details: { hunkId: 'missing-item' },
+      });
+    });
+
+    it('refuses to dismiss an unapplied text change after the file changed', async () => {
+      const { service, workspace, manager, root } = await reviewFixture({ 'file.txt': 'base' }, { autoApply: true });
+      vi.spyOn(workspace, 'replace').mockRejectedValueOnce(new Error('disk offline'));
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await expect(manager.stage(proposal)).rejects.toThrow('disk offline');
+      await writeFile(join(root, 'file.txt'), 'edited');
+
+      await expect(manager.rejectInReview(proposal.id, proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+      });
+    });
+
+    it('restores an unapplied text change when dismissing it cannot be saved', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({ 'file.txt': 'base' }, { autoApply: true });
+      vi.spyOn(workspace, 'replace').mockRejectedValueOnce(new Error('disk offline'));
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await expect(manager.stage(proposal)).rejects.toThrow('disk offline');
+      vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(manager.rejectInReview(proposal.id, proposal.files[0]!.items[0]!.id, 'Not this')).rejects.toThrow(
+        'disk full',
+      );
+
+      expect(manager.active?.files[0]?.items[0]).toMatchObject({
+        decision: EditDecisionState.PENDING,
+        appliedText: { state: 'applying' },
+      });
+      expect(manager.active?.files[0]?.items[0]?.rejectionComment).toBeUndefined();
+    });
+
+    it('keeps an applied text change when its revert intent cannot be saved', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({ 'file.txt': 'base' }, { autoApply: true });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(manager.rejectInReview(proposal.id, proposal.files[0]!.items[0]!.id)).rejects.toThrow('disk full');
+
+      expect(manager.active?.files[0]?.items[0]?.appliedText).toMatchObject({ state: 'applied', revertTarget: null });
+      expect((await workspace.read('file.txt')).text).toBe('next');
+    });
+
+    it('refuses to continue a revert that lost its target', async () => {
+      const { service, workspace, manager, store, recover } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApply: true },
+      );
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      const persisted = store.proposals[0]!.files[0]!.items[0]!;
+      persisted.appliedText!.state = 'reverting';
+      persisted.appliedText!.revertTarget = null;
+      const recovered = recover();
+      await recovered.initialize();
+
+      await expect(recovered.rejectInReview(proposal.id, persisted.id)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+      });
+    });
+
+    it('refuses to retry a revert after the file changed again', async () => {
+      const { service, workspace, manager, root } = await reviewFixture({ 'file.txt': 'base' }, { autoApply: true });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.items[0]!.id;
+      vi.spyOn(workspace, 'replace').mockRejectedValueOnce(new Error('locked'));
+      await expect(manager.rejectInReview(proposal.id, itemId)).rejects.toThrow('locked');
+      await writeFile(join(root, 'file.txt'), 'edited');
+
+      await expect(manager.rejectInReview(proposal.id, itemId)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+        details: { currentRevision: (await workspace.read('file.txt')).revision },
+      });
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.reject, () => {
+    it('reverts an automatically applied structural change', async () => {
+      const { service, workspace, manager } = await reviewFixture({}, { autoApplyStructural: true });
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+
+      await manager.reject(proposal.files[0]!.automatic!.itemId);
+
+      expect(manager.retainedReviews[0]?.files[0]?.automatic?.state).toBe('reverted');
+      await expect(workspace.exists('new.txt')).resolves.toBe(false);
+    });
+
+    it('rejects an item already accepted in an active review', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'one\ntwo\nthree\n' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'ONE\ntwo\nTHREE\n');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.items[0]!.id;
+      await manager.accept(itemId);
+
+      await manager.accept(itemId);
+      await expect(manager.reject(itemId)).rejects.toMatchObject({ reason: EditFailureReason.DECISION_CONFLICT });
+
+      expect((await workspace.read('file.txt')).text).toBe('ONE\ntwo\nthree\n');
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.accept, () => {
+    it('rejects an item that no active review contains', async () => {
+      const { manager } = await reviewFixture({});
+
+      await expect(manager.accept('missing-item')).rejects.toMatchObject({
+        reason: EditFailureReason.INCONSISTENT,
+        message: 'Unknown review item.',
+      });
+    });
+
+    it('rejects an item ID shared by more than one active review', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      await manager.stage({ ...structuredClone(proposal), id: 'copy' });
+
+      await expect(manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.AMBIGUOUS,
+        message: 'Review item ID is not unique across active reviews.',
+      });
+    });
+
+    it('keeps an applied text change and treats keeping it again as complete', async () => {
+      const { service, workspace, manager } = await reviewFixture(
+        { 'file.txt': 'one\ntwo\nthree\n' },
+        { autoApply: true },
+      );
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'ONE\ntwo\nTHREE\n');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.items[0]!.id;
+      await manager.accept(itemId);
+
+      await manager.acceptInReview(proposal.id, itemId);
+      await expect(manager.rejectInReview(proposal.id, itemId)).rejects.toMatchObject({
+        reason: EditFailureReason.DECISION_CONFLICT,
+      });
+
+      expect(manager.active?.files[0]?.items[0]?.appliedText?.state).toBe('kept');
+    });
+
+    it('keeps the applied state when keeping a text change cannot be saved', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({ 'file.txt': 'base' }, { autoApply: true });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toThrow('disk full');
+
+      expect(manager.active?.files[0]?.items[0]?.appliedText?.state).toBe('applied');
+    });
+
+    it('refuses to keep a text change whose revert is in progress', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' }, { autoApply: true });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      const itemId = proposal.files[0]!.items[0]!.id;
+      vi.spyOn(workspace, 'replace').mockRejectedValueOnce(new Error('locked'));
+      await expect(manager.reject(itemId)).rejects.toThrow('locked');
+
+      await expect(manager.accept(itemId)).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+    });
+
+    it('applies a kept text change whose earlier application failed before reaching the workspace', async () => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' }, { autoApply: true });
+      vi.spyOn(workspace, 'replace').mockRejectedValueOnce(new Error('disk offline'));
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await expect(manager.stage(proposal)).rejects.toThrow('disk offline');
+
+      await manager.accept(proposal.files[0]!.items[0]!.id);
+
+      expect((await workspace.read('file.txt')).text).toBe('next');
+      expect(manager.retainedReviews).toEqual([]);
+    });
+
+    it('recovers an interrupted text application before keeping it', async () => {
+      const { service, workspace, manager, store, recover } = await reviewFixture(
+        { 'file.txt': 'base' },
+        { autoApply: true },
+      );
+      vi.spyOn(workspace, 'replace').mockRejectedValueOnce(new Error('disk offline'));
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await expect(manager.stage(proposal)).rejects.toThrow('disk offline');
+      const persisted = store.proposals[0]!.files[0]!;
+      persisted.applyingItemId = persisted.items[0]!.id;
+      persisted.applicability = EditApplicabilityState.APPLYING;
+      const recovered = recover();
+      await recovered.initialize({ reconcileWorkspace: false });
+
+      await recovered.accept(persisted.items[0]!.id);
+
+      expect((await workspace.read('file.txt')).text).toBe('next');
+      expect(recovered.active).toBeUndefined();
+    });
+
+    it('recovers an interrupted acceptance before applying it', async () => {
+      const { service, workspace, store, recover } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      const file = proposal.files[0]!;
+      file.applyingItemId = file.items[0]!.id;
+      file.applicability = EditApplicabilityState.APPLYING;
+      await store.save([proposal]);
+      const manager = recover();
+      await manager.initialize({ reconcileWorkspace: false });
+
+      await manager.accept(file.items[0]!.id);
+
+      expect((await workspace.read('file.txt')).text).toBe('next');
+    });
+
+    it('refuses to apply a text change without a current document and records no prior content', async () => {
+      const { service, workspace, store, recover, root } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      const file = proposal.files[0]!;
+      const item = file.items[0]!;
+      item.appliedText = { state: 'applying', before: null, after: null, revertTarget: null };
+      file.current = null;
+      file.currentRevision = null;
+      await store.save([proposal]);
+      await rm(join(root, 'file.txt'));
+      const manager = recover();
+      await manager.initialize({ reconcileWorkspace: false });
+
+      await expect(manager.accept(item.id)).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+
+      expect(manager.active?.files[0]?.items[0]?.appliedText?.before).toBeNull();
+    });
+
+    it.each([EditOperation.DELETE, EditOperation.RENAME])(
+      'refuses to apply a %s whose file is expected to be absent',
+      async operation => {
+        const { service, workspace, store, recover, root } = await reviewFixture({ 'file.txt': 'base' });
+        const proposal =
+          operation === EditOperation.DELETE
+            ? await proposeDelete(service, workspace, 'file.txt')
+            : await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+        const file = proposal.files[0]!;
+        file.current = null;
+        file.currentRevision = null;
+        await store.save([proposal]);
+        await rm(join(root, 'file.txt'));
+        const manager = recover();
+        await manager.initialize({ reconcileWorkspace: false });
+
+        await expect(manager.accept(file.items[0]!.id)).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      },
+    );
+
+    it('records a deleted file as the applied result of a deletion', async () => {
+      const { service, workspace, store, recover } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeDelete(service, workspace, 'file.txt');
+      const item = proposal.files[0]!.items[0]!;
+      item.appliedText = { state: 'applying', before: null, after: null, revertTarget: null };
+      await store.save([proposal]);
+      const manager = recover();
+      await manager.initialize({ reconcileWorkspace: false });
+
+      await manager.accept(item.id);
+
+      expect(store.proposals[0]?.files[0]?.items[0]?.appliedText).toMatchObject({ state: 'kept', after: null });
+      await expect(workspace.exists('file.txt')).resolves.toBe(false);
+    });
+
+    it('refuses a text change that cannot be applied independently of other pending changes', async () => {
+      const { service, workspace, store, recover } = await reviewFixture({ 'file.txt': 'a\nb\nc\n' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'A\nb\nC\n');
+      const [first, second] = proposal.files[0]!.items;
+      Object.assign(first!, { sourceStart: 0, sourceEnd: 2, removedText: 'aY', insertedText: 'X' });
+      Object.assign(second!, { sourceStart: 1, sourceEnd: 2, removedText: '\n', insertedText: 'Y' });
+      await store.save([proposal]);
+      const manager = recover();
+      await manager.initialize({ reconcileWorkspace: false });
+
+      await expect(manager.accept(first!.id)).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      expect((await workspace.read('file.txt')).text).toBe('a\nb\nc\n');
+    });
+
+    it('fails when a pending text change no longer matches its own document', async () => {
+      const { service, workspace, store, recover } = await reviewFixture({ 'file.txt': 'a\nb\nc\n' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'A\nb\nC\n');
+      const [first] = proposal.files[0]!.items;
+      Object.assign(first!, { removedText: 'zzz' });
+      await store.save([proposal]);
+      const manager = recover();
+      await manager.initialize({ reconcileWorkspace: false });
+
+      await expect(manager.accept(first!.id)).rejects.toThrow(
+        'The transformed edit no longer matches its expected text.',
+      );
+    });
+
+    it('keeps the write intent when neither the write nor its recovery can be saved', async () => {
+      const { service, workspace, manager, store } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      vi.spyOn(workspace, 'replace').mockRejectedValueOnce(new Error('disk offline'));
+      const save = store.save.bind(store);
+      vi.spyOn(store, 'save')
+        .mockImplementationOnce(save)
+        .mockImplementationOnce(save)
+        .mockRejectedValueOnce(new Error('disk full'));
+      const itemId = proposal.files[0]!.items[0]!.id;
+
+      await expect(manager.accept(itemId)).rejects.toThrow('disk offline');
+
+      expect(manager.active?.files[0]).toMatchObject({
+        applyingItemId: itemId,
+        applicability: EditApplicabilityState.APPLYING,
+      });
+    });
+
+    it('logs a workspace failure that is not an error object', async () => {
+      const logger = new RecordingLogger();
+      const { service, workspace, store, root } = await reviewFixture({ 'file.txt': 'base' });
+      const manager = new ProposalReviewManager(workspace, store, logger, 8, root);
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      vi.spyOn(workspace, 'replace').mockRejectedValueOnce('disk offline');
+
+      await expect(manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toBe('disk offline');
+
+      expect(logger.errors).toEqual([
+        expect.objectContaining({
+          message: 'item.failed',
+          data: expect.objectContaining({ error: { message: 'disk offline' } }),
+        }),
+      ]);
+    });
+
+    it.each([
+      ['reading the file', 'readOptional'],
+      ['checking for the file', 'exists'],
+    ] as const)('propagates an unexpected workspace failure while %s', async (_description, method) => {
+      const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal =
+        method === 'exists'
+          ? await proposeCreate(service, 'new.txt', 'created')
+          : await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      vi.spyOn(workspace, method).mockRejectedValueOnce(new Error('workspace offline'));
+
+      await expect(manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toThrow('workspace offline');
+    });
+
+    it('marks a creation stale when another writer creates the file first', async () => {
+      const { service, workspace, manager, root } = await reviewFixture({});
+      const proposal = await proposeCreate(service, 'new.txt', 'created');
+      await manager.stage(proposal);
+      const create = workspace.create.bind(workspace);
+      vi.spyOn(workspace, 'create').mockImplementationOnce(async (...args) => {
+        await writeFile(join(root, 'new.txt'), 'collaborator');
+        return create(...args);
+      });
+
+      await expect(manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+      });
+
+      expect(manager.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+      expect((await workspace.read('new.txt')).text).toBe('collaborator');
+    });
+
+    it('marks an update stale when its file was deleted', async () => {
+      const { service, workspace, manager, root } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
+      await manager.stage(proposal);
+      await rm(join(root, 'file.txt'));
+
+      await expect(manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.STALE,
+      });
+
+      expect(manager.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+    });
+
+    it('recognizes a landed change to a file with a byte order mark', async () => {
+      const { service, workspace, manager } = await reviewFixture({
+        'file.txt': Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('base\n')]),
+      });
+      const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next\n');
+      await manager.stage(proposal);
+      const replace = workspace.replace.bind(workspace);
+      vi.spyOn(workspace, 'replace').mockImplementationOnce(async (...args) => {
+        await replace(...args);
+        throw new Error('connection lost');
+      });
+
+      await expect(manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toThrow('connection lost');
+
+      expect(manager.pendingResults[0]?.items[0]?.decision).toBe(EditDecisionState.ACCEPTED);
+      expect(await workspace.read('file.txt')).toMatchObject({ text: 'next\n', byteOrderMark: true });
+    });
+
+    it('accepts a rename whose plan has no recorded base', async () => {
+      const { service, workspace, store, recover } = await reviewFixture({ 'file.txt': 'base' });
+      const proposal = await proposeRename(service, workspace, 'file.txt', 'renamed.txt');
+      proposal.files[0]!.base = null;
+      await store.save([proposal]);
+      const manager = recover();
+      await manager.initialize({ reconcileWorkspace: false });
+
+      await manager.accept(proposal.files[0]!.items[0]!.id);
+
+      expect((await workspace.read('renamed.txt')).text).toBe('base');
+    });
+  });
 });
+
+class MemoryProposalReviewStore implements ProposalReviewStore {
+  proposals: EditProposal[] = [];
+
+  async load(): Promise<EditProposal[]> {
+    return structuredClone(this.proposals);
+  }
+
+  async save(proposals: readonly EditProposal[]): Promise<void> {
+    this.proposals = structuredClone([...proposals]);
+  }
+
+  async clear(): Promise<void> {
+    this.proposals = [];
+  }
+}
+
+class RecordingLogger implements Logger {
+  readonly errors: { message: string; data: unknown }[] = [];
+
+  forNamespace(): Logger {
+    return this;
+  }
+
+  trace(): void {}
+
+  debug(): void {}
+
+  info(): void {}
+
+  warn(): void {}
+
+  error(message: string, data?: unknown): void {
+    this.errors.push({ message, data });
+  }
+}
+
+async function reviewFixture(
+  files: Readonly<Record<string, string | Buffer>>,
+  options: { readonly autoApply?: boolean; readonly autoApplyStructural?: boolean } = {},
+) {
+  const root = await mkdtemp(join(tmpdir(), 'proposal-review-manager-'));
+  directories.push(root);
+  for (const [path, content] of Object.entries(files)) await writeFile(join(root, path), content);
+  const workspace = new FileSystemWorkspaceTextStore(root);
+  const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
+  const store = new MemoryProposalReviewStore();
+  const manager = new ProposalReviewManager(workspace, store, new NullLogger(), 8, root, options);
+  const recover = () => new ProposalReviewManager(workspace, store, new NullLogger(), 8, root, options);
+  return { root, workspace, service, store, manager, recover };
+}
+
+async function proposeUpdate(
+  service: EditProposalService,
+  workspace: WorkspaceTextStore,
+  path: string,
+  content: string,
+): Promise<EditProposal> {
+  const base = await workspace.read(path);
+  return service.proposeStructured({
+    files: [
+      {
+        operation: EditOperation.UPDATE,
+        path,
+        new_path: null,
+        base_revision: base.revision,
+        content,
+        byte_order_mark: null,
+        edits: [],
+      },
+    ],
+  });
+}
+
+function proposeCreate(service: EditProposalService, path: string, content: string): Promise<EditProposal> {
+  return service.proposeStructured({
+    files: [
+      {
+        operation: EditOperation.CREATE,
+        path,
+        new_path: null,
+        base_revision: null,
+        content,
+        byte_order_mark: null,
+        edits: [],
+      },
+    ],
+  });
+}
+
+async function proposeDelete(
+  service: EditProposalService,
+  workspace: WorkspaceTextStore,
+  path: string,
+): Promise<EditProposal> {
+  const base = await workspace.read(path);
+  return service.proposeStructured({
+    files: [
+      {
+        operation: EditOperation.DELETE,
+        path,
+        new_path: null,
+        base_revision: base.revision,
+        content: null,
+        byte_order_mark: null,
+        edits: [],
+      },
+    ],
+  });
+}
+
+async function proposeRename(
+  service: EditProposalService,
+  workspace: WorkspaceTextStore,
+  path: string,
+  newPath: string,
+  content: string | null = null,
+): Promise<EditProposal> {
+  const base = await workspace.read(path);
+  return service.proposeStructured({
+    files: [
+      {
+        operation: EditOperation.RENAME,
+        path,
+        new_path: newPath,
+        base_revision: base.revision,
+        content,
+        byte_order_mark: null,
+        edits: [],
+      },
+    ],
+  });
+}
 
 async function fixture(text: string, maxActiveReviews = 8, workspaceOptions: { caseSensitive?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'edit-session-root-'));

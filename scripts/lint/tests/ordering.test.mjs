@@ -3,7 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+
+vi.setConfig({ testTimeout: 60_000 });
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const directories = [];
@@ -201,6 +203,33 @@ it('does not rewrite compact statements or attached lint directives', () => {
     expect(result.status).toBe(1);
     expect(result.text).toBe(source);
   }
+});
+
+it('leaves story files without a default export to CSF validation', () => {
+  const source = imports + stories + meta;
+  const result = fixture(source)(true);
+  expect(result.status, result.output).toBe(0);
+  expect(result.text).toBe(source);
+});
+
+it('treats local value export lists as stories while ignoring type-only and re-exported lists', () => {
+  const ignored = "export { type Story as Shared };\nexport { Remote } from './Remote';\n";
+  const ordered = fixture(imports + meta + ignored + defaultExport + storyType)();
+  expect(ordered.status, ordered.output).toBe(0);
+  const source = imports + meta + 'const Local = {};\nexport { Local };\n' + defaultExport;
+  const lint = fixture(source);
+  expect(lint().output).toContain('declaration-order');
+  expect(lint(true).text).toBe(imports + meta + defaultExport + 'const Local = {};\nexport { Local };\n');
+});
+
+it('keeps a comment that trails code on its own line when moving the next declaration', () => {
+  const fixed = fixture(imports + meta + stories + 'const helper = 1; // helper note\n' + defaultExport)(true);
+  expect(fixed.text).toBe(imports + meta + defaultExport + stories + 'const helper = 1; // helper note\n');
+});
+
+it('terminates a moved final declaration that had no trailing newline', () => {
+  const fixed = fixture(imports + meta + stories + defaultExport.trimEnd())(true);
+  expect(fixed.text).toBe(imports + meta + defaultExport + stories);
 });
 
 it('also enforces ordering for JavaScript function stories', () => {

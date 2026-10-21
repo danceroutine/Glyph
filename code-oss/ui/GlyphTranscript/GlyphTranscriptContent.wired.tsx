@@ -1,7 +1,7 @@
 import { WiredGlyphCodeBlock } from '#code-oss/ui/GlyphCodeBlock/GlyphCodeBlock.wired.tsx';
 import { useMemo } from 'preact/hooks';
 import { Marked } from 'marked';
-import { GlyphMarkdown } from '#code-oss/ui/GlyphMarkdown/GlyphMarkdown.presentational.tsx';
+import { GlyphMarkdown, type GlyphContextToken } from '#code-oss/ui/GlyphMarkdown/GlyphMarkdown.presentational.tsx';
 import { WiredGlyphDiagram } from '#code-oss/ui/GlyphDiagram/GlyphDiagram.wired.tsx';
 import { GlyphContextBadge } from '#code-oss/ui/GlyphContextBadge/GlyphContextBadge.presentational.tsx';
 import type { GlyphMessageState } from '#code-oss/ui/GlyphAgentMessage/useGlyphMessageState.ts';
@@ -18,7 +18,8 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
           start: source => source.indexOf(prefix),
           tokenizer(source) {
             const match = expression.exec(source);
-            if (match) return { type: 'glyph_context', raw: match[0], index: Number(match[1]) };
+            if (match)
+              return { type: 'glyph_context', raw: match[0], index: Number(match[1]) } satisfies GlyphContextToken;
           },
         },
       ],
@@ -85,7 +86,7 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
           })}
         />
       )}
-      inline={token => ('index' in token ? badge(token.index) : null)}
+      inline={token => badge(token.index)}
     />
   );
 }

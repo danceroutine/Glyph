@@ -1,7 +1,8 @@
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
 it.describe('Queued follow-ups', () => {
-  it.use({ scriptedProvider: true });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true });
   it('reorders and edits queued messages before delivering them as separate turns', async ({ glyph, provider }) => {
     provider.enqueue(
       { chunks: ['Working on the original task.'], hold: true },
@@ -64,7 +65,8 @@ it.describe('Queued follow-ups', () => {
   });
 });
 it.describe('Queued message menu', () => {
-  it.use({ scriptedProvider: true });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true });
   it('opens message settings and moves a queued document into a new chat without interrupting the old run', async ({
     glyph,
     provider,
@@ -92,7 +94,12 @@ it.describe('Queued message menu', () => {
   });
 });
 it.describe('Immediate follow-up setting', () => {
-  it.use({ scriptedProvider: true, userSettings: { 'glyph.chat.followUpBehavior': 'sendImmediately' } });
+  it.describe.configure({ mode: 'default' });
+  it.use({
+    sharedLaunch: true,
+    scriptedProvider: true,
+    userSettings: { 'glyph.chat.followUpBehavior': 'sendImmediately' },
+  });
   it('makes Enter interrupt and send a normal message while steering remains separate', async ({ glyph, provider }) => {
     provider.enqueue({ chunks: ['Working.'], hold: true }, { chunks: ['New turn complete.'] });
     await glyph.send('Original task');

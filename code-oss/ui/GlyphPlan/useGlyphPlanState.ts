@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { GlyphPlanViewActions, GlyphPlanViewState } from '#src/desktop/workbench/GlyphPlanView.js';
-export function useGlyphPlanState(state: GlyphPlanViewState, actions: GlyphPlanViewActions) {
+export function useGlyphPlanState({
+  state,
+  actions,
+}: {
+  readonly state: GlyphPlanViewState;
+  readonly actions: GlyphPlanViewActions;
+}) {
   const [todo, setTodo] = useState('');
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string>();

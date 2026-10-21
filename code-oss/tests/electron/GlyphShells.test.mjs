@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+const restartsHost = isolatedLaunch('restarts the host and reloads the window');
 const tool = (name, input) => ScriptedProvider.tool(name, input, { namespace: 'shell', callId: randomUUID() });
 const execute = (command, options = {}) =>
   tool('execute_shell', {
@@ -62,36 +63,38 @@ async function file(glyph, path) {
 }
 
 it.describe('Shell execution, input, close, and listing', () => {
-  it.use({ scriptedProvider: true, workspaceFiles: { 'nested/.keep': '' } });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true, workspaceFiles: { 'nested/.keep': '' } });
 
-  it('runs an approved command in the requested workspace directory and shows its output and exit status', async ({
-    glyph,
-    provider,
-  }, testInfo) => {
-    const output = await runCommand(
-      glyph,
-      provider,
-      execute('pwd; printf "first\\nsecond\\nthird\\nfourth\\n"', { working_directory: 'nested' }),
-    );
-    expect(output.exit_code).toBe(0);
-    expect(output.output).toContain(join(glyph.workspace, 'nested'));
-    const card = cards(glyph).first();
-    const toggle = card.getByRole('button').first();
-    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(card.getByLabel('Command output')).toHaveText('second\nthird\nfourth');
-    await glyph.page.screenshot({ path: testInfo.outputPath('collapsed-command.png') });
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    await expect(card).toContainText('Exit 0');
-    await expect(card.getByLabel('Command output')).toContainText('first');
-    await expect(card).toContainText(join(glyph.workspace, 'nested'));
-    await glyph.page.screenshot({ path: testInfo.outputPath('expanded-command.png') });
-    await glyph.crashHost();
-    await glyph.reload();
-    await cards(glyph).first().getByRole('button').first().click();
-    await expect(cards(glyph).first().getByLabel('Command output')).toContainText('first');
-    await expect(cards(glyph).first()).toContainText('Exit 0');
-  });
+  it(
+    'runs an approved command in the requested workspace directory and shows its output and exit status',
+    restartsHost,
+    async ({ glyph, provider }, testInfo) => {
+      const output = await runCommand(
+        glyph,
+        provider,
+        execute('pwd; printf "first\\nsecond\\nthird\\nfourth\\n"', { working_directory: 'nested' }),
+      );
+      expect(output.exit_code).toBe(0);
+      expect(output.output).toContain(join(glyph.workspace, 'nested'));
+      const card = cards(glyph).first();
+      const toggle = card.getByRole('button').first();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await expect(card.getByLabel('Command output')).toHaveText('second\nthird\nfourth');
+      await glyph.page.screenshot({ path: testInfo.outputPath('collapsed-command.png') });
+      await toggle.click();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      await expect(card).toContainText('Exit 0');
+      await expect(card.getByLabel('Command output')).toContainText('first');
+      await expect(card).toContainText(join(glyph.workspace, 'nested'));
+      await glyph.page.screenshot({ path: testInfo.outputPath('expanded-command.png') });
+      await glyph.crashHost();
+      await glyph.reload();
+      await cards(glyph).first().getByRole('button').first().click();
+      await expect(cards(glyph).first().getByLabel('Command output')).toContainText('first');
+      await expect(cards(glyph).first()).toContainText('Exit 0');
+    },
+  );
 
   it('keeps a command from running while approval is pending or after the user denies it', async ({
     glyph,
