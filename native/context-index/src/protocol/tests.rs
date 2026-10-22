@@ -859,30 +859,34 @@ fn transport_reports_worker_startup_and_join_failures_without_changing_error_pre
         (
             WorkerRole::ProtocolWriter,
             false,
-            "could not start the protocol writer: worker unavailable",
+            Some("could not start the protocol writer: worker unavailable"),
         ),
         (
             WorkerRole::Service,
             false,
-            "could not start the context index service: worker unavailable",
+            Some("could not start the context index service: worker unavailable"),
         ),
         (
             WorkerRole::Service,
             true,
-            "the context index service thread panicked",
+            Some("the context index service thread panicked"),
         ),
         (
             WorkerRole::ProtocolWriter,
             true,
-            "the protocol writer thread panicked",
+            Some("the protocol writer thread panicked"),
         ),
+        (WorkerRole::ContentSearch, false, None),
     ] {
         let result = serve(
             || io::Cursor::new(Vec::<u8>::new()),
             Vec::<u8>::new,
             failing_workers(role, panic),
         );
-        assert_eq!(result, Err(message.into()));
+        assert_eq!(
+            result,
+            message.map_or(Ok(()), |message| Err(message.into()))
+        );
     }
 }
 
