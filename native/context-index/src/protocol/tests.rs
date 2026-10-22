@@ -741,6 +741,58 @@ fn each_response_is_flushed_as_one_json_line() {
     assert_eq!(value["id"], "done");
     assert_eq!(value["result"]["shutdown"], true);
 }
+
+struct FailingOutput {
+    bytes: Vec<u8>,
+    remaining: usize,
+    flushes: usize,
+}
+
+impl Write for FailingOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(io::Error::other("output unavailable"));
+        }
+        let length = bytes.len().min(self.remaining);
+        self.bytes.extend_from_slice(&bytes[..length]);
+        self.remaining -= length;
+        Ok(length)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flushes += 1;
+        Err(io::Error::other("flush unavailable"))
+    }
+}
+
+#[test]
+fn response_writing_propagates_json_newline_and_flush_failures() {
+    let response = || success_response(Some(RequestId::Number(1.into())), true);
+    let json = serde_json::to_vec(&response()).unwrap();
+    for limit in [0, json.len(), json.len() + 1] {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        sender.send(response()).unwrap();
+        sender.send(response()).unwrap();
+        drop(sender);
+        let mut output = FailingOutput {
+            bytes: Vec::new(),
+            remaining: limit,
+            flushes: 0,
+        };
+
+        let error = write_responses(receiver, &mut output).unwrap_err();
+
+        let expected = [json.as_slice(), b"\n"].concat();
+        assert_eq!(output.bytes, expected[..limit]);
+        assert_eq!(output.flushes, usize::from(limit > json.len()));
+        assert!(error.to_string().contains(if limit > json.len() {
+            "flush unavailable"
+        } else {
+            "output unavailable"
+        }));
+    }
+}
+
 #[derive(Clone)]
 struct FailingWorkers {
     role: WorkerRole,
@@ -832,6 +884,35 @@ fn transport_reports_worker_startup_and_join_failures_without_changing_error_pre
         );
         assert_eq!(result, Err(message.into()));
     }
+}
+
+#[test]
+fn transport_propagates_a_service_error_after_joining_its_workers() {
+    let project = project_with_needle();
+    let initialize = serde_json::json!({
+        "version": 1, "id": 1, "method": "initialize",
+        "params": { "root": project.path() }
+    });
+    let search = serde_json::json!({
+        "version": 1, "id": 2, "method": "contentSearch",
+        "params": {
+            "pattern": "needle", "patternKind": "literal", "outputMode": "count",
+            "linesBefore": 0, "linesAfter": 0, "caseSensitive": false,
+            "multiline": false, "limit": 5, "offset": 0
+        }
+    });
+    let input = format!("{initialize}\n{search}\n");
+
+    let result = serve(
+        || io::Cursor::new(input.into_bytes()),
+        Vec::<u8>::new,
+        failing_workers(WorkerRole::ContentSearch, true),
+    );
+
+    assert_eq!(
+        result,
+        Err("A project content search thread panicked.".into())
+    );
 }
 
 #[test]

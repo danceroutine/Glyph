@@ -25,6 +25,11 @@ Publication retains its exact sequence: encode, flush, drop the writer, synchron
 
 Each publication-failure case verifies the exact diagnostic, operation ordering, unchanged previous cache, and absence of temporary files. `cache_encoding_preserves_the_version_one_wire_format` checks the encoded bytes against the existing format. Existing filesystem round-trip and replacement tests still exercise the concrete adapter.
 
+Replacement also accepts the rename operation at its filesystem boundary. Portable
+tests supply `AlreadyExists` and `PermissionDenied`, verify that the old destination
+is removed before retrying, and cover both retry and removal failure. This preserves
+the replacement policy without depending on macOS immutable-file flags to reach it.
+
 ## Search scheduling
 
 [content_search.rs](../native/context-index/src/content_search.rs) now separates three responsibilities: reading searchable files, producing one ordered lane of file results, and collecting lanes in catalog order. `SearchableFiles` is the workspace content source; its production implementation calls the existing guarded file reader. Editor overrides retain precedence and their existing size/NUL checks.
