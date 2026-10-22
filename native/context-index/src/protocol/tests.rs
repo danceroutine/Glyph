@@ -935,6 +935,25 @@ fn transport_failure_precedence_is_input_then_service_then_writer() {
 }
 
 #[test]
+fn transport_reports_output_failure_after_accepting_a_request() {
+    let input = b"{\"version\":1,\"id\":1,\"method\":\"refresh\",\"params\":{}}\n";
+    let result = serve(
+        || io::Cursor::new(input),
+        || FailingOutput {
+            bytes: Vec::new(),
+            remaining: 0,
+            flushes: 0,
+        },
+        SystemWorkers,
+    );
+
+    assert_eq!(
+        result,
+        Err("could not write a protocol response: output unavailable".into())
+    );
+}
+
+#[test]
 fn a_finished_panicked_search_is_reported_before_the_next_request_is_executed() {
     let project = project_with_needle();
     let registry = Arc::new(Mutex::new(HashMap::new()));
