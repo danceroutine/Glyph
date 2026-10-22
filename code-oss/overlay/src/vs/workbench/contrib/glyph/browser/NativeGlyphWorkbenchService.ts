@@ -58,6 +58,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private openChatIds: string[] = [];
   private archivedChatIds: string[] = [];
   private pinnedChatIds: string[] = [];
+  private newChatDraft: { readonly text: string; readonly createdAt: string } | undefined;
   private pendingRunId: string | undefined;
   private pendingCreation: string | undefined;
   private draftAccount: { readonly provider: string; readonly id: string } | undefined;
@@ -114,6 +115,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     for (const key of ['archivedChatIds', 'pinnedChatIds'] as const) {
       const saved = this.storageService.getObject<object>(`glyph.${key}`, StorageScope.WORKSPACE);
       this[key] = Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : [];
+    }
+    const savedDraft = this.storageService.getObject<{ text?: unknown; createdAt?: unknown }>(
+      'glyph.newChatDraft',
+      StorageScope.WORKSPACE,
+    );
+    if (typeof savedDraft?.text === 'string' && savedDraft.text.trim() && typeof savedDraft.createdAt === 'string') {
+      this.newChatDraft = { text: savedDraft.text, createdAt: savedDraft.createdAt };
+      const composer = this.createComposer();
+      this.composers.set('', composer);
+      composer.setDraft(savedDraft.text);
     }
     this.profileId = this.userDataProfileService.currentProfile.id;
     this.workspaceBinding = this.currentWorkspaceBinding();
@@ -212,6 +223,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
               if (!this.selectedChatId) {
                 this.composers.delete('');
                 this.openChatIds = this.openChatIds.map(id => (id === '' ? event.chat.id : id));
+                this.syncNewChatDraft();
               }
               this.composers.set(event.chat.id, composer);
               this.selectChat(event.chat.id);
@@ -384,6 +396,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       ),
       archivedChatIds: this.archivedChatIds,
       pinnedChatIds: this.pinnedChatIds,
+      ...(this.newChatDraft ? { newChatDraft: this.newChatDraft } : {}),
       models: this.draftModels,
       ...(this.draftAccount ? { selectedAccount: this.draftAccount } : {}),
       ...(this.draftModel ? { selectedModel: this.draftModel } : {}),
@@ -808,7 +821,23 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private createComposer(): GlyphComposerState {
     const composer = new GlyphComposerState();
     this._register({ dispose: composer.subscribe(() => queueMicrotask(() => this.flushQueues())) });
+    this._register({
+      dispose: composer.subscribe(() => {
+        if (this.composers.get('') === composer && this.syncNewChatDraft()) this.changeEmitter.fire(this.state);
+      }),
+    });
     return composer;
+  }
+
+  private syncNewChatDraft(): boolean {
+    const text = this.composers.get('')?.snapshot.draft ?? '';
+    const next = text.trim()
+      ? { text, createdAt: this.newChatDraft?.createdAt ?? new Date().toISOString() }
+      : undefined;
+    if (next?.text === this.newChatDraft?.text) return false;
+    this.newChatDraft = next;
+    this.storageService.store('glyph.newChatDraft', next, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+    return true;
   }
 
   private flushQueues(): void {

@@ -25,6 +25,7 @@ beforeAll(async () => {
           selectAccount: async (...args) => { window.requests.push(['account', ...args]); },
           selectModel: async (...args) => { window.requests.push(['model', ...args]); },
           openChat: async (...args) => { window.requests.push(['open', ...args]); },
+          newChat: () => { window.requests.push(['new']); },
         });
         window.update = patch => { state = { ...state, ...patch }; view.update(state); };
         window.showApproval = () => window.update({ status: 'waiting_for_approval', runs: [{ ...run, status: 'waiting_for_approval', question: undefined, approval: { id: 'approval', title: 'Allow shell command?', detail: 'pwd', command: 'pwd', workingDirectory: '/workspace', sandboxed: true, canRemember: true } }] });
@@ -360,6 +361,61 @@ it('shows whether each saved chat is working, awaiting input, completed, ended e
       }),
     );
     await expect(status('working', 'Completed')).toBeVisible();
+  } finally {
+    await page.close();
+  }
+});
+
+it('lists an unsent new chat as a draft at the top of the day it was started and reopens it', async () => {
+  const page = await pageForTest();
+  try {
+    await page.evaluate(() => {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      yesterday.setHours(12, 0, 0, 0);
+      const chat = (id, updatedAt) => ({
+        id,
+        title: `${id} chat`,
+        accountProvider: 'provider',
+        accountId: 'a',
+        modelSlug: 'first',
+        updatedAt,
+        turnCount: 1,
+      });
+      window.update({
+        selectedChatId: 'today',
+        status: 'ready',
+        runs: [],
+        chats: [
+          chat('today', new Date().toISOString()),
+          chat('yesterday', new Date(yesterday.getTime() + 60_000).toISOString()),
+        ],
+        newChatDraft: {
+          text: '\n  Get me a screenshot of the sidebar\nwith every status',
+          createdAt: yesterday.toISOString(),
+        },
+      });
+    });
+    await page.getByRole('button', { name: 'Chat history', exact: true }).click();
+    const yesterdayGroup = page.getByRole('region', { name: 'Yesterday', exact: true });
+    const rows = yesterdayGroup.getByRole('button', { name: /chat|Draft/ });
+    await expect(rows).toHaveText(
+      ['Get me a screenshot of the sidebar', 'yesterday chat'].map(text => new RegExp(text)),
+    );
+    const draft = yesterdayGroup.getByRole('button', {
+      name: 'Draft: Get me a screenshot of the sidebar',
+      exact: true,
+    });
+    await expect(draft.getByRole('img', { name: 'Draft', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Today', exact: true })).not.toContainText('Draft');
+    await draft.hover();
+    await expect(page.getByRole('button', { name: /^(Pin|Archive) Draft/ })).toHaveCount(0);
+    await draft.click();
+    expect(await page.evaluate(() => window.requests)).toEqual([['new']]);
+    await page.evaluate(() => window.update({ selectedChatId: undefined }));
+    await expect(draft).toHaveAttribute('aria-current', 'true');
+    await page.getByRole('searchbox', { name: 'Search chats' }).fill('today');
+    await expect(draft).toHaveCount(0);
   } finally {
     await page.close();
   }

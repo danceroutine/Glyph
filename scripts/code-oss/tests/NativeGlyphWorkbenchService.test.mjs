@@ -71,11 +71,11 @@ async function fixture({
   accounts = [],
   handler = async () => {},
   openInGlyph = false,
+  storage = new Map(),
 } = {}) {
   const { NativeGlyphWorkbenchService } = await (loaded ??= modules());
   const listeners = new Set();
   const trustListeners = new Set();
-  const storage = new Map();
   let trusted = true;
   const state = {
     accounts,
@@ -235,6 +235,61 @@ it('ignores late navigation completions and retains a separate composer for each
 });
 
 const accounts = ['a', 'b'].map(id => ({ provider: 'fixture', id, label: id, connected: true, inferenceAccess: true }));
+
+it('keeps typed new-chat text as a draft across a reload until it becomes a conversation', async () => {
+  const storage = new Map();
+  const first = await fixture({ storage });
+  let createdAt;
+  try {
+    first.service.composer.setDraft('alpha draft');
+    expect(first.service.state.newChatDraft).toBeUndefined();
+    first.service.newChat();
+    first.service.composer.setDraft('   ');
+    expect(first.service.state.newChatDraft).toBeUndefined();
+    first.service.composer.setDraft('Get me a screenshot');
+    createdAt = first.service.state.newChatDraft.createdAt;
+    expect(Date.parse(createdAt)).not.toBeNaN();
+    first.service.composer.setDraft('Get me a screenshot of the sidebar');
+    expect(first.service.state.newChatDraft).toEqual({ text: 'Get me a screenshot of the sidebar', createdAt });
+  } finally {
+    first.dispose();
+  }
+  const reloaded = await fixture({ storage });
+  try {
+    expect(reloaded.service.state.newChatDraft).toEqual({ text: 'Get me a screenshot of the sidebar', createdAt });
+    expect(reloaded.service.composer.snapshot.draft).toBe('Get me a screenshot of the sidebar');
+    reloaded.service.composer.setDraft('');
+    expect(reloaded.service.state.newChatDraft).toBeUndefined();
+    expect(storage.get('glyph.newChatDraft')).toBeUndefined();
+  } finally {
+    reloaded.dispose();
+  }
+});
+
+it('stops listing the draft once its text moves into a created conversation', async () => {
+  const test = await fixture({
+    chats: [],
+    accounts: [{ provider: 'fixture', id: 'a', label: 'a', connected: true, inferenceAccess: true }],
+    handler: async (command, { state, emit }) => {
+      if (command.type === 'select_account') state.models = [{ slug: 'model', name: 'Model' }];
+      if (command.type === 'create_chat') {
+        state.chats.push(chat('created'));
+        emit({ type: 'chat_updated', chat: chat('created'), creationId: command.creationId });
+      }
+    },
+  });
+  try {
+    test.service.composer.setDraft('Carry this over');
+    expect(test.service.state.newChatDraft?.text).toBe('Carry this over');
+    await test.service.createChat('fixture', 'a', 'model');
+    expect(test.service.state.selectedChatId).toBe('created');
+    expect(test.service.composer.snapshot.draft).toBe('Carry this over');
+    expect(test.service.state.newChatDraft).toBeUndefined();
+    expect(test.storage.get('glyph.newChatDraft')).toBeUndefined();
+  } finally {
+    test.dispose();
+  }
+});
 
 it('restores the draft account catalog before changing models after host replacement', async () => {
   const test = await fixture({
