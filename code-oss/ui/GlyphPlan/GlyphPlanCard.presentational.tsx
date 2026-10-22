@@ -8,12 +8,14 @@ export function GlyphPlanCard({
   build,
   buildNew,
   disabled,
+  building = false,
 }: {
   readonly plan: GlyphPlan;
   readonly view: () => void;
   readonly build: () => void;
   readonly buildNew: () => void;
   readonly disabled: boolean;
+  readonly building?: boolean;
 }) {
   return (
     <article class={`glyph-plan-card ${planStyles.card}`} aria-label={`Plan: ${plan.title}`}>
@@ -24,7 +26,7 @@ export function GlyphPlanCard({
         <Button appearance={ButtonAppearance.GHOST} onClick={view}>
           View Plan
         </Button>
-        <GlyphPlanBuild build={build} buildNew={buildNew} disabled={disabled} />
+        <GlyphPlanBuild build={build} buildNew={buildNew} disabled={disabled} building={building} />
       </footer>
     </article>
   );

@@ -24,6 +24,10 @@ export enum IconButtonShape {
   SQUARE = 'square',
   CIRCLE = 'circle',
 }
+export enum ButtonLoadingPosition {
+  LEADING = 'leading',
+  TRAILING = 'trailing',
+}
 
 const base = css({
   boxSizing: 'border-box',
@@ -111,6 +115,7 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   readonly loading?: boolean;
   /** Replaces the default spinner glyph; the button supplies the rotation. */
   readonly loadingIcon?: ComponentChildren;
+  readonly loadingPosition?: ButtonLoadingPosition;
 }
 
 export function Button({
@@ -123,6 +128,7 @@ export function Button({
   shortcut,
   loading = false,
   loadingIcon,
+  loadingPosition = ButtonLoadingPosition.LEADING,
   children,
   class: className,
   style,
@@ -145,6 +151,13 @@ export function Button({
             foreground: tokens.button.secondary.foreground,
             hover: tokens.button.secondary.hoverBackground,
           };
+  const spinnerSlot = (
+    <span class={`${iconSlot} ${spinner}`} aria-hidden="true">
+      {loadingIcon ?? <LoaderCircle size={16} />}
+    </span>
+  );
+  const leading = loading && loadingPosition === ButtonLoadingPosition.LEADING;
+  const trailing = loading && loadingPosition === ButtonLoadingPosition.TRAILING;
   return (
     <button
       {...props}
@@ -167,24 +180,22 @@ export function Button({
         ...(typeof style === 'object' ? style : {}),
       }}
     >
-      {loading ? (
-        <span class={`${iconSlot} ${spinner}`} aria-hidden="true">
-          {loadingIcon ?? <LoaderCircle size={16} />}
-        </span>
-      ) : (
-        leadingIcon && (
-          <span class={iconSlot} aria-hidden="true">
-            {leadingIcon}
-          </span>
-        )
-      )}
+      {leading
+        ? spinnerSlot
+        : leadingIcon && (
+            <span class={iconSlot} aria-hidden="true">
+              {leadingIcon}
+            </span>
+          )}
       {children}
       {shortcut && <kbd class={shortcutStyle}>{shortcut}</kbd>}
-      {trailingIcon && (
-        <span class={iconSlot} aria-hidden="true">
-          {trailingIcon}
-        </span>
-      )}
+      {trailing
+        ? spinnerSlot
+        : trailingIcon && (
+            <span class={iconSlot} aria-hidden="true">
+              {trailingIcon}
+            </span>
+          )}
     </button>
   );
 }

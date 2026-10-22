@@ -2,7 +2,15 @@ import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { fn } from 'storybook/test';
 import { ArrowUp, Check, Copy, Plus, ChevronRight } from 'lucide-preact';
 import { AgentModeID } from '#src/chat/AgentMode.js';
-import { Button, IconButton, ButtonVariant, ButtonAppearance, ButtonSize, IconButtonShape } from './Button.tsx';
+import {
+  Button,
+  IconButton,
+  ButtonVariant,
+  ButtonAppearance,
+  ButtonSize,
+  ButtonLoadingPosition,
+  IconButtonShape,
+} from './Button.tsx';
 import { SplitButton } from './SplitButton.tsx';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 
@@ -122,6 +130,9 @@ export const Canvas: Story = {
         </Button>
         <Button loading onClick={click}>
           Saving
+        </Button>
+        <Button loading loadingPosition={ButtonLoadingPosition.TRAILING} onClick={click}>
+          Building
         </Button>
         <IconButton loading aria-label="Copying" onClick={click}>
           <Copy size={16} />

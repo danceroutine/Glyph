@@ -45,11 +45,23 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
                   plans={plans}
                   actions={actions}
                   disabled={plansDisabled}
+                  {...(state.buildingPlanIds ? { buildingPlanIds: state.buildingPlanIds } : {})}
                 />
               )
             }
             proposals={state.proposals}
             entries={state.transcript}
+            {...(state.buildingPlanIds ? { buildingPlanIds: state.buildingPlanIds } : {})}
+            {...(actions.viewPlan
+              ? {
+                  openPlan: (sourceChatId: string, planId: string) => {
+                    const plan = state.chats
+                      .find(chat => chat.id === sourceChatId)
+                      ?.plans?.findLast(value => value.id === planId);
+                    if (plan) void actions.viewPlan?.(sourceChatId, plan).catch(() => {});
+                  },
+                }
+              : {})}
             {...(state.selectedChatId ? { chatId: state.selectedChatId } : {})}
             actions={actions}
             readOnly={state.readOnly}

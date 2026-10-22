@@ -1,4 +1,6 @@
 import { AgentModeID } from '#src/chat/AgentMode.js';
+import type { GlyphPlanBuildOrder } from './GlyphPlanBuildOrder.ts';
+import type { GlyphPlanProgress } from './GlyphPlanProgress.ts';
 /** A comment carries its captured quote, not a live read of its source. Offsets are UTF-16. */
 export interface GlyphAnnotation {
   readonly id: string;
@@ -20,4 +22,6 @@ export interface GlyphTurnOptions {
   readonly agentReviewId?: string;
   readonly mode?: AgentModeID;
   readonly annotations?: readonly GlyphAnnotation[];
+  readonly planBuild?: GlyphPlanBuildOrder;
+  readonly planProgress?: GlyphPlanProgress;
 }
