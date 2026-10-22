@@ -9,8 +9,12 @@ const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url
  * @param {string[]} argv
  * @param {{ playwright?: string | null, missing?: string[] }} [options]
  */
-async function runScript(argv, { playwright = '/upstream/@playwright/test/cli.js', missing = [], selection } = {}) {
+async function runScript(
+  argv,
+  { playwright = '/upstream/@playwright/test/cli.js', missing = [], selection, recovery } = {},
+) {
   vi.stubEnv('GLYPH_ELECTRON_SELECTION', selection === undefined ? '' : '/selection.json');
+  vi.stubEnv('GLYPH_ELECTRON_RECOVERY', recovery === undefined ? '' : '/recovery.json');
   const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
   /** @type {Map<string, () => void>} */
   const signals = new Map();
@@ -23,7 +27,7 @@ async function runScript(argv, { playwright = '/upstream/@playwright/test/cli.js
     })),
   };
   const filesystem = {
-    readFile: vi.fn(async () => JSON.stringify(selection)),
+    readFile: vi.fn(async path => JSON.stringify(path === '/recovery.json' ? recovery : selection)),
     access: vi.fn(async (/** @type {URL} */ url) => {
       if (missing.some(file => url.href.endsWith(file))) throw new Error('missing');
     }),
@@ -57,6 +61,23 @@ async function runScript(argv, { playwright = '/upstream/@playwright/test/cli.js
 }
 
 describe('test-electron', () => {
+  it('filters recovery runs by exact test IDs using the pinned Playwright last-run format', async () => {
+    const run = await runScript(['--list'], { recovery: { status: 'failed', failedTests: ['exact-id'] } });
+    await run.loaded;
+    expect(run.childProcess.spawn.mock.calls[0][1]).toEqual(
+      expect.arrayContaining(['--last-failed', '--last-failed-file', '/recovery.json']),
+    );
+  });
+
+  it.each([{ status: 'passed', failedTests: ['id'] }, { status: 'failed', failedTests: [] }, {}])(
+    'rejects invalid or empty recovery evidence %j',
+    async recovery => {
+      const run = await runScript([], { recovery });
+      await expect(run.loaded).rejects.toThrow();
+      expect(run.childProcess.spawn).not.toHaveBeenCalled();
+    },
+  );
+
   it('passes selected suites as literal, end-anchored Playwright file filters', async () => {
     const run = await runScript(['--list'], {
       selection: { mode: 'selected', tests: ['code-oss/tests/electron/GlyphChats.test.mjs'] },

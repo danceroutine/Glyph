@@ -13,6 +13,12 @@ try {
   throw new Error('Code OSS Playwright is missing. Run pnpm code-oss:bootstrap and pnpm code-oss:install first.');
 }
 const args = process.argv.slice(2).filter(argument => argument !== '--');
+if (process.env.GLYPH_ELECTRON_RECOVERY) {
+  z.object({ status: z.literal('failed'), failedTests: z.array(z.string().min(1)).min(1) }).parse(
+    JSON.parse(await readFile(process.env.GLYPH_ELECTRON_RECOVERY, 'utf8')),
+  );
+  args.push('--last-failed', '--last-failed-file', process.env.GLYPH_ELECTRON_RECOVERY);
+}
 if (process.env.GLYPH_ELECTRON_SELECTION) {
   const selection = z
     .object({ mode: z.enum(['full', 'selected']), tests: z.array(z.string()).min(1) })

@@ -52,6 +52,41 @@ proof that changes cannot affect another feature. When a new dependency crosses
 feature boundaries, extend its rule or leave the affected shared source on the
 full-suite fallback. The full `main` run remains the backstop.
 
+## Recovering a failed PR run
+
+Every PR integration attempt writes a small `electron-recovery-<run>-<attempt>`
+artifact, even when tests fail. Its manifest records the validated head and base,
+PR, repository, runner platform/image, Node and Playwright versions, and exact identities of clean
+first-attempt passes. The normal evidence artifact includes the recovery plan
+and complete Playwright results, so reused results remain distinguishable from
+tests executed in the current run.
+
+The next run discovers its current tests before looking for compatible evidence
+from the same PR and workflow. It compares the prior tested head to the current
+head and invalidates successes using the same conservative ownership rules.
+Failures, flaky passes, interrupted or missing results, and new tests rerun.
+Previously passing tests in affected suites rerun too. Unaffected clean passes
+can be reused across consecutive attempts; a GitHub rerun of the same commit can
+therefore execute just the failures. Selection uses Playwright's exact test IDs,
+not title patterns. An explicit empty remaining set skips Electron safely.
+
+Changes to the base commit, a force-push that breaks ancestry, a different runner
+or Playwright version, or shared/unclassified changes invalidate reuse. Missing,
+expired, malformed, or inaccessible artifacts cause tests to run normally. Fork
+PRs do not consume prior artifacts. CI uses only read-only Actions access, never
+a privileged `pull_request_target` workflow. Native and component coverage gates
+always run afresh; main and manual runs never reuse integration results.
+
+A hard runner interruption before Playwright writes its report cannot contribute
+new passes, but previously validated inherited passes remain recoverable if the
+final artifact step runs. Reports are validated against the pre-run inventory;
+missing planned outcomes cannot turn an incomplete run green.
+
+CI stops an integration attempt after ten failures and preserves its report.
+Unexecuted tests remain unverified and run on the next attempt. This bounds the
+cost of a widespread regression without treating the stopped run as successful.
+Exclusive `test.only` declarations are rejected in CI.
+
 ## Inspect and reproduce a decision
 
 ```sh
