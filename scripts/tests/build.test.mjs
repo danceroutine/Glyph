@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 async function project(files) {
@@ -91,8 +92,10 @@ describe('build', () => {
     const result = await build(root);
 
     expect(result.exitCode, result.stderr).toBeUndefined();
-    expect(await readFile(join(root, 'dist', 'index.js'), 'utf8')).toMatch(
-      /^export \{ describeError \} from "(?:\.\.\/)+.*harness-chat\/src\/describeError\.js";$/mu,
+    const checkoutSource = fileURLToPath(new URL('../../src/describeError.js', import.meta.url));
+    const emittedPath = relative(join(root, 'dist'), checkoutSource).replaceAll('\\', '/');
+    expect((await readFile(join(root, 'dist', 'index.js'), 'utf8')).split('\n')[0]).toBe(
+      `export { describeError } from "${emittedPath}";`,
     );
   });
 
