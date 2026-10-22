@@ -76,7 +76,9 @@ jobs:
           GLYPH_ELECTRON_RECOVERY: .artifacts/electron-recovery/last-run.json
           PLAYWRIGHT_JSON_OUTPUT_FILE: .artifacts/electron-recovery/results.json
           GLYPH_ELECTRON_WORKERS: '2'
-        run: xvfb-run -a pnpm test:integration
+        run: |
+          pnpm code-oss:prepare-launch
+          xvfb-run -a node scripts/code-oss/test-electron.mjs
       - name: Record recoverable Electron evidence even after failures
         if: always() && steps.recovery.outcome == 'success'
         run: node scripts/coverage/recover-electron-tests.mjs finish

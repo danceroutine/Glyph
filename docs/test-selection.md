@@ -19,6 +19,10 @@ and a newer PR commit cancels its superseded run. Integration retries and pendin
 Node runtime. This installs the matching Electron binary and built-in extensions
 on a clean checkout and reuses a matching Electron installation on later runs.
 The local unit gate does not need this desktop runtime preparation.
+PR integration launches the same runner without V8 coverage instrumentation:
+its coverage requirement is already enforced by the fresh component tests,
+and neither suite selection nor recovery consumes Electron coverage. Full main
+and manual runs retain the instrumented integration and merged coverage check.
 
 ## How selection works
 
