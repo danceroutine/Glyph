@@ -63,6 +63,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-evidence-${{ github.run_id }}
+          include-hidden-files: true
           path: |
             .artifacts/electron-selection.json
             .artifacts/code-oss-integration/results.json
