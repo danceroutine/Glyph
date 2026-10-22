@@ -45,19 +45,22 @@ jobs:
       - name: Lint, format, type-check, and validate Rust
         run: pnpm check
       - name: Fast tests and 100% coverage across all projects
-        if: github.event_name == 'pull_request'
-        run: xvfb-run -a pnpm test
+        run: |
+          xvfb-run -a pnpm exec run-p --continue-on-error --print-label test:native test:vitest
+          pnpm test:coverage
       - name: Relevant Electron integration suites
         if: github.event_name == 'pull_request' && steps.electron.outputs.mode != 'skip'
         env:
           GLYPH_ELECTRON_SELECTION: .artifacts/electron-selection.json
           GLYPH_ELECTRON_WORKERS: '2'
         run: xvfb-run -a pnpm test:integration
-      - name: Full tests and coverage
+      - name: Full Electron integration and merged coverage
         if: github.event_name != 'pull_request'
         env:
           GLYPH_ELECTRON_WORKERS: '2'
-        run: xvfb-run -a pnpm test:all
+        run: |
+          xvfb-run -a pnpm test:integration
+          pnpm test:coverage:all
       - name: Preserve test selection, reports, and failure evidence
         if: always()
         uses: actions/upload-artifact@v4

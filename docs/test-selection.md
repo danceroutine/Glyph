@@ -7,8 +7,9 @@ file; native coverage must be 100% for lines and functions. The coverage merger
 reads only the explicitly supplied component directory, so a previous Electron
 run cannot fill a hole in the local result.
 
-`pnpm test:all` adds the complete Electron suite. CI runs it on every push to
-`main` and on manual workflow dispatch. PRs run the same local gate followed by
+`pnpm test:all` adds the complete Electron suite. CI runs the same gates on every
+push to `main` and on manual workflow dispatch, reusing the preparation already
+completed before lint and type-checking. PRs run the same local gate followed by
 the relevant Electron suites. Branch pushes do not create a duplicate CI run,
 and a newer PR commit cancels its superseded run. Integration retries and pending
 `fixme` contracts remain visible in the Playwright report.

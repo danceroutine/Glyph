@@ -339,6 +339,19 @@ describe(FileSystemWorkspaceTextStore, () => {
   });
 
   describe(FileSystemWorkspaceTextStore.prototype.list, () => {
+    it.each([true, false])('finds matching files with explicit caseSensitive=%s', async caseSensitive => {
+      const root = await workspaceRoot('workspace-list-glob-case-');
+      await mkdir(join(root, 'Nested'));
+      await writeFile(join(root, 'Nested', 'Example.TXT'), 'fixture');
+      const store = new FileSystemWorkspaceTextStore(root, { caseSensitive });
+
+      await expect(store.list(10, '*.TXT', 'Nested')).resolves.toEqual({
+        files: ['Nested/Example.TXT'],
+        truncated: false,
+      });
+      await expect(store.list(10, '*.md', 'Nested')).resolves.toEqual({ files: [], truncated: false });
+    });
+
     it('rejects a project root that is not a directory', async () => {
       const root = await workspaceRoot('workspace-list-file-root-');
       await writeFile(join(root, 'file.txt'), 'not a directory');
