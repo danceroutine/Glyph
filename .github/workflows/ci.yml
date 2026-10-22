@@ -44,7 +44,9 @@ jobs:
         run: pnpm test:native
       - name: Native coverage diagnostics
         if: always() && steps.native.outcome != 'skipped'
-        run: cargo llvm-cov report --show-missing-lines
+        run: |
+          cargo llvm-cov report --show-missing-lines
+          cargo llvm-cov report --json --output-path coverage/native/coverage.json
       - run: pnpm exec playwright install --with-deps chromium
       - name: Prepare Code OSS dependencies and generated types
         run: pnpm test:prepare
@@ -81,4 +83,5 @@ jobs:
             coverage/vitest/coverage-summary.json
             coverage/merged/coverage-summary.json
             coverage/native/html/
+            coverage/native/coverage.json
           retention-days: 7

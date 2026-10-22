@@ -390,6 +390,68 @@ fn replacing_a_file_retries_after_removing_a_destination_it_could_not_overwrite(
 }
 
 #[test]
+fn replacement_retries_only_after_removing_an_existing_destination() {
+    for kind in [
+        io::ErrorKind::AlreadyExists,
+        io::ErrorKind::PermissionDenied,
+    ] {
+        for retry_succeeds in [true, false] {
+            let directory = tempdir().unwrap();
+            let source = directory.path().join("source");
+            let destination = directory.path().join("destination");
+            fs::write(&source, "replacement").unwrap();
+            fs::write(&destination, "previous").unwrap();
+            let mut calls = 0;
+            let result = replace_file_with_rename(&source, &destination, |from, to| {
+                assert_eq!(from, source);
+                assert_eq!(to, destination);
+                calls += 1;
+                if calls == 1 {
+                    assert_eq!(fs::read_to_string(to).unwrap(), "previous");
+                    return Err(io::Error::from(kind));
+                }
+                assert!(!to.exists());
+                if retry_succeeds {
+                    fs::rename(from, to)
+                } else {
+                    Err(io::Error::from(io::ErrorKind::PermissionDenied))
+                }
+            });
+            assert_eq!(calls, 2);
+            if retry_succeeds {
+                assert!(result.is_ok());
+                assert_eq!(fs::read_to_string(destination).unwrap(), "replacement");
+                assert!(!source.exists());
+            } else {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+                assert!(!destination.exists());
+                assert_eq!(fs::read_to_string(source).unwrap(), "replacement");
+            }
+        }
+    }
+}
+
+#[test]
+fn replacement_does_not_retry_if_the_destination_cannot_be_removed() {
+    let directory = tempdir().unwrap();
+    let source = directory.path().join("source");
+    let destination = directory.path().join("destination");
+    fs::write(&source, "replacement").unwrap();
+    fs::create_dir(&destination).unwrap();
+    let mut calls = 0;
+
+    let result = replace_file_with_rename(&source, &destination, |_, _| {
+        calls += 1;
+        Err(io::Error::from(io::ErrorKind::AlreadyExists))
+    });
+
+    assert!(result.is_err());
+    assert_eq!(calls, 1);
+    assert!(destination.is_dir());
+    assert_eq!(fs::read_to_string(source).unwrap(), "replacement");
+}
+
+#[test]
 fn reports_cache_strings_that_cannot_be_written() {
     let mut storage = [0_u8; 2];
     let mut writer = &mut storage[..];

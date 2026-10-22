@@ -265,7 +265,18 @@ fn temporary_path(cache_path: &Path) -> PathBuf {
 }
 
 fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    match fs::rename(source, destination) {
+    replace_file_with_rename(source, destination, |source, destination| {
+        fs::rename(source, destination)
+    })
+}
+
+/// Rename failures vary by filesystem; retain the same remove-and-retry policy.
+fn replace_file_with_rename(
+    source: &Path,
+    destination: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    match rename(source, destination) {
         Ok(()) => Ok(()),
         Err(error)
             if destination.exists()
@@ -275,7 +286,7 @@ fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
                 ) =>
         {
             fs::remove_file(destination)?;
-            fs::rename(source, destination)
+            rename(source, destination)
         }
         Err(error) => Err(error),
     }
