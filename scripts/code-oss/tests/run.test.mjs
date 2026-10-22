@@ -154,6 +154,7 @@ describe('run', () => {
   });
 
   it.each([
+    [['prepare-launch'], [nodeBinary, 'build/lib/preLaunch.ts']],
     [
       ['run', '--', 'watch', '--fast'],
       ['npm', 'run', 'watch', '--fast'],

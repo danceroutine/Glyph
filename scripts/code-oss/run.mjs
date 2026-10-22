@@ -63,6 +63,9 @@ async function main() {
     case 'run':
       run('npm', ['run', ...forwardedArguments], sourceRoot, environment);
       break;
+    case 'prepare-launch':
+      run(nodeBinary, ['build/lib/preLaunch.ts'], sourceRoot, environment);
+      break;
     case 'launch':
       run('./scripts/code.sh', forwardedArguments, sourceRoot, environment);
       break;

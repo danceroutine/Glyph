@@ -15,6 +15,11 @@ the relevant Electron suites. Branch pushes do not create a duplicate CI run,
 and a newer PR commit cancels its superseded run. Integration retries and pending
 `fixme` contracts remain visible in the Playwright report.
 
+`pnpm test:integration` first runs upstream's pre-launch preparation with the pinned
+Node runtime. This installs the matching Electron binary and built-in extensions
+on a clean checkout and reuses a matching Electron installation on later runs.
+The local unit gate does not need this desktop runtime preparation.
+
 ## How selection works
 
 [`electron-test-policy.json`](../scripts/coverage/electron-test-policy.json)
