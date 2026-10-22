@@ -916,6 +916,25 @@ fn transport_propagates_a_service_error_after_joining_its_workers() {
 }
 
 #[test]
+fn transport_failure_precedence_is_input_then_service_then_writer() {
+    for (read, service, writer, expected) in [
+        (Ok(()), Ok(()), Ok(()), Ok(())),
+        (Err("input"), Err("service"), Err("writer"), Err("input")),
+        (Ok(()), Err("service"), Err("writer"), Err("service")),
+        (Ok(()), Ok(()), Err("writer"), Err("writer")),
+    ] {
+        assert_eq!(
+            transport_result(
+                read.map_err(str::to_owned),
+                service.map_err(str::to_owned),
+                writer.map_err(str::to_owned),
+            ),
+            expected.map_err(str::to_owned)
+        );
+    }
+}
+
+#[test]
 fn a_finished_panicked_search_is_reported_before_the_next_request_is_executed() {
     let project = project_with_needle();
     let registry = Arc::new(Mutex::new(HashMap::new()));

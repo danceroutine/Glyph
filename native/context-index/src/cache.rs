@@ -265,7 +265,7 @@ fn temporary_path(cache_path: &Path) -> PathBuf {
 }
 
 fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    replace_file_with_rename(source, destination, |source, destination| {
+    replace_file_with_rename(source, destination, &mut |source, destination| {
         fs::rename(source, destination)
     })
 }
@@ -274,7 +274,7 @@ fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
 fn replace_file_with_rename(
     source: &Path,
     destination: &Path,
-    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+    rename: &mut dyn FnMut(&Path, &Path) -> io::Result<()>,
 ) -> io::Result<()> {
     match rename(source, destination) {
         Ok(()) => Ok(()),

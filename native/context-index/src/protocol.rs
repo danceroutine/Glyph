@@ -172,6 +172,15 @@ fn serve<R: BufRead, W: Write>(
         .join()
         .map_err(|_| "the protocol writer thread panicked".to_owned())?;
 
+    transport_result(read_result, worker_result, writer_result)
+}
+
+/// Selects the transport outcome after both workers have been joined.
+fn transport_result(
+    read_result: Result<(), String>,
+    worker_result: Result<(), String>,
+    writer_result: Result<(), String>,
+) -> Result<(), String> {
     read_result?;
     worker_result?;
     writer_result
@@ -500,7 +509,7 @@ fn error_response(id: Option<RequestId>, error: ServiceError) -> Response {
     }
 }
 
-fn write_responses<W: Write>(receiver: Receiver<Response>, output: &mut W) -> io::Result<()> {
+fn write_responses(receiver: Receiver<Response>, output: &mut dyn Write) -> io::Result<()> {
     for response in receiver {
         serde_json::to_writer(&mut *output, &response)?;
         output.write_all(b"\n")?;

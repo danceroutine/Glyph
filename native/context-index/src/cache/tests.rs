@@ -402,7 +402,7 @@ fn replacement_retries_only_after_removing_an_existing_destination() {
             fs::write(&source, "replacement").unwrap();
             fs::write(&destination, "previous").unwrap();
             let mut calls = 0;
-            let result = replace_file_with_rename(&source, &destination, |from, to| {
+            let result = replace_file_with_rename(&source, &destination, &mut |from, to| {
                 assert_eq!(from, source);
                 assert_eq!(to, destination);
                 calls += 1;
@@ -440,7 +440,7 @@ fn replacement_does_not_retry_if_the_destination_cannot_be_removed() {
     fs::create_dir(&destination).unwrap();
     let mut calls = 0;
 
-    let result = replace_file_with_rename(&source, &destination, |_, _| {
+    let result = replace_file_with_rename(&source, &destination, &mut |_, _| {
         calls += 1;
         Err(io::Error::from(io::ErrorKind::AlreadyExists))
     });
