@@ -301,10 +301,10 @@ async function shellFixture(wakeOn = 'original readiness') {
       callback = undefined;
       complete(error);
     },
-    async write(input: string, wakeOn?: string, signal = new AbortController().signal) {
+    async write(input: string, wakePattern?: string, signal = new AbortController().signal) {
       const result = await runtime.execute(
         ShellToolName.WRITE_INPUT,
-        JSON.stringify({ terminal_id: terminalId, input, append_newline: true, wake_on: wakeOn ?? null }),
+        JSON.stringify({ terminal_id: terminalId, input, append_newline: true, wake_on: wakePattern ?? null }),
         signal,
         { chat: { id: 'chat', accountId: 'account', accountProvider: 'fixture' } },
       );

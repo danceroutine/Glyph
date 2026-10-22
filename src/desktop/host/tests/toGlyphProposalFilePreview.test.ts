@@ -82,7 +82,7 @@ describe(toGlyphProposalFilePreview, () => {
     file.items[1]!.decision = EditDecisionState.ACCEPTED;
     file.current = { ...snapshot, text: 'FIRST\r\n🌱\r\nlast\r\n' };
     const preview = toGlyphProposalFilePreview('proposal', file);
-    expect(preview.before).toBe(file.current!.text);
+    expect(preview.before).toBe(file.current.text);
     expect(preview.after).toBe('FIRST\r\n🌱\r\nLAST\r\n');
     expect(preview.items).toEqual([{ id: 'last', lineNumber: 3 }]);
   });

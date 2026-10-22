@@ -18,12 +18,9 @@ export class SqliteAgentReviewStore implements AgentReviewStore {
       'CREATE TABLE IF NOT EXISTS agent_reviews (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, record TEXT NOT NULL)',
     );
     return this.db
-      .prepare('SELECT record FROM agent_reviews ORDER BY updated_at')
+      .prepare<[], { record: string }>('SELECT record FROM agent_reviews ORDER BY updated_at')
       .all()
-      .map(row => {
-        const { record } = row as { record: string };
-        return agentReviewSchema.parse(JSON.parse(record));
-      });
+      .map(({ record }) => agentReviewSchema.parse(JSON.parse(record)));
   }
   async save(review: AgentReview): Promise<void> {
     if (!this.db) throw new Error('Review storage is not open.');

@@ -25,7 +25,9 @@ describe(useGlyphDiagramState, () => {
 
     expect(renderGlyphDiagram).toHaveBeenCalledWith('graph TD', true);
     expect(result.current.source).toBe('graph TD');
-    await waitFor(() => expect(result.current.diagram).toBe('data:image/svg+xml,dark'));
+    await waitFor(() => {
+      expect(result.current.diagram).toBe('data:image/svg+xml,dark');
+    });
     expect(result.current.error).toBe(false);
     expect(result.current.expanded).toBe(false);
   });
@@ -35,7 +37,9 @@ describe(useGlyphDiagramState, () => {
 
     const { result } = renderHook(useGlyphDiagramState, { initialProps: { source: 'graph ???' } });
 
-    await waitFor(() => expect(result.current.error).toBe(true));
+    await waitFor(() => {
+      expect(result.current.error).toBe(true);
+    });
     expect(result.current.diagram).toBeUndefined();
   });
 
@@ -70,9 +74,13 @@ describe(useGlyphDiagramState, () => {
     vi.mocked(renderGlyphDiagram).mockReturnValue(new Promise(() => {}));
     const { result } = renderHook(useGlyphDiagramState, { initialProps: { source: 'graph TD' } });
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     expect(result.current.expanded).toBe(true);
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
     expect(result.current.expanded).toBe(false);
   });
@@ -80,7 +88,9 @@ describe(useGlyphDiagramState, () => {
   it('collapses on Escape only while expanded', () => {
     vi.mocked(renderGlyphDiagram).mockReturnValue(new Promise(() => {}));
     const { result } = renderHook(useGlyphDiagramState, { initialProps: { source: 'graph TD' } });
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
     const other = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true });
     act(() => {

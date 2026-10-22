@@ -106,7 +106,7 @@ export function GlyphShellCommandCard({
         <span class={`${styles.status} ${failed ? styles.error : ''}`}>{status}</span>
       </Button>
       <div class={styles.body}>
-        {shell.wakePattern && (
+        {shell.wakePattern !== undefined && shell.wakePattern !== '' && (
           <div class={styles.details}>
             Wake on: <code>{shell.wakePattern}</code>
           </div>
@@ -115,10 +115,10 @@ export function GlyphShellCommandCard({
         <pre class={styles.output} aria-label="Command output">
           {expanded ? shell.output : preview}
         </pre>
-        {expanded && shell.workingDirectory && (
+        {expanded && shell.workingDirectory !== undefined && shell.workingDirectory !== '' && (
           <p class={styles.details}>Working directory: {shell.workingDirectory}</p>
         )}
-        {shell.error && <p class={styles.error}>{shell.error}</p>}
+        {shell.error !== undefined && shell.error !== '' && <p class={styles.error}>{shell.error}</p>}
         {expanded && shell.live && (
           <>
             {shell.running && (
@@ -135,7 +135,9 @@ export function GlyphShellCommandCard({
                   value={input}
                   maxLength={65536}
                   disabled={disabled}
-                  onInput={event => changeInput(event.currentTarget.value)}
+                  onInput={event => {
+                    changeInput(event.currentTarget.value);
+                  }}
                 />
                 <div class={styles.controls}>
                   <label>
@@ -143,7 +145,9 @@ export function GlyphShellCommandCard({
                       type="checkbox"
                       checked={appendNewline}
                       disabled={disabled}
-                      onChange={event => changeAppendNewline(event.currentTarget.checked)}
+                      onChange={event => {
+                        changeAppendNewline(event.currentTarget.checked);
+                      }}
                     />{' '}
                     Append newline
                   </label>
@@ -160,7 +164,7 @@ export function GlyphShellCommandCard({
             </div>
           </>
         )}
-        {error && (
+        {error !== undefined && error !== '' && (
           <p class={styles.error} role="alert">
             {error}
           </p>

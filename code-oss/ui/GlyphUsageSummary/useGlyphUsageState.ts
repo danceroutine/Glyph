@@ -21,10 +21,10 @@ export function useGlyphUsageState() {
     });
   }, [open]);
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
     const outside = (event: PointerEvent) => {
-      if (!trigger.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node))
-        setOpen(false);
+      const target = event.target instanceof Node ? event.target : null;
+      if (trigger.current?.contains(target) !== true && popup.current?.contains(target) !== true) setOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -33,7 +33,9 @@ export function useGlyphUsageState() {
         trigger.current?.focus();
       }
     };
-    const close = () => setOpen(false);
+    const close = () => {
+      setOpen(false);
+    };
     document.addEventListener('pointerdown', outside);
     document.addEventListener('keydown', escape, true);
     window.addEventListener('resize', close);
@@ -45,5 +47,14 @@ export function useGlyphUsageState() {
       document.removeEventListener('scroll', close, true);
     };
   }, [open]);
-  return { id, trigger, popup, open, position, toggle: () => setOpen(value => !value) };
+  return {
+    id,
+    trigger,
+    popup,
+    open,
+    position,
+    toggle: () => {
+      setOpen(value => !value);
+    },
+  };
 }

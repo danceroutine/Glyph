@@ -16,7 +16,13 @@ export function GlyphModePicker(state: GlyphModePickerState) {
   const presentation = AGENT_MODE_PRESENTATION[mode.id];
   const Icon = presentation.Icon;
   return (
-    <div class={styles.root} ref={state.root} onBlur={event => state.blur(event.relatedTarget)}>
+    <div
+      class={styles.root}
+      ref={state.root}
+      onBlur={event => {
+        state.blur(event.relatedTarget);
+      }}
+    >
       <Button
         type="button"
         class={styles.trigger}
@@ -41,20 +47,20 @@ export function GlyphModePicker(state: GlyphModePickerState) {
           id={state.id}
           label="Conversation modes"
           items={state.modes}
-          itemKey={mode => mode.id}
-          itemLabel={mode => mode.name}
+          itemKey={option => option.id}
+          itemLabel={option => option.name}
           activeIndex={state.activeIndex}
           selectedIndex={state.selectedIndex}
           highlight={state.highlight}
           choose={state.select}
           showCheck
           width={180}
-          renderItem={mode => {
-            const OptionIcon = AGENT_MODE_PRESENTATION[mode.id].Icon;
+          renderItem={option => {
+            const OptionIcon = AGENT_MODE_PRESENTATION[option.id].Icon;
             return (
               <>
                 <OptionIcon />
-                <span>{mode.name}</span>
+                <span>{option.name}</span>
               </>
             );
           }}

@@ -35,8 +35,8 @@ describe(WiredGlyphPendingReviews, () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Keep' }));
 
-    await waitFor(() =>
-      expect(decideProposalItems).toHaveBeenCalledWith('chat', [{ proposalId: 'proposal', itemId: 'item' }], true),
-    );
+    await waitFor(() => {
+      expect(decideProposalItems).toHaveBeenCalledWith('chat', [{ proposalId: 'proposal', itemId: 'item' }], true);
+    });
   });
 });

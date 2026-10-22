@@ -9,6 +9,8 @@ import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import type { ProjectAccess } from '#src/project/ProjectAccess.js';
 import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
+
+type ToolOutput = { status?: string; error: { message: string } };
 const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
@@ -54,18 +56,18 @@ it.each(['propose_patch', 'propose_edits'])(
         ? ['*** Begin Patch', ...paths.flatMap(path => [`*** Add File: ${path}`, '+# Plan']), '*** End Patch'].join(
             '\n',
           )
-        : JSON.stringify({ files: paths.map(create) });
+        : JSON.stringify({ files: paths.map(value => create(value)) });
     const allowed = JSON.parse(
       await f.runtime.execute(tool, input(['plan.md', 'notes.MARKDOWN']), undefined, { mode: AgentModeID.PLAN }),
-    );
+    ) as ToolOutput;
     expect(allowed.status).toBe('STAGED_FOR_REVIEW');
     expect(f.stage).toHaveBeenCalledTimes(1);
     f.stage.mockClear();
     for (const path of ['index.ts', 'plan.md.ts', 'package.json', '.env']) {
       const denied = JSON.parse(
         await f.runtime.execute(tool, input(['plan.md', path]), undefined, { mode: AgentModeID.PLAN }),
-      );
-      expect(denied.error.message).toMatch(path === '.env' ? /excluded from project access/ : /only edit Markdown/);
+      ) as ToolOutput;
+      expect(denied.error.message).toMatch(path === '.env' ? /excluded from project access/u : /only edit Markdown/u);
     }
     expect(f.stage).not.toHaveBeenCalled();
   },
@@ -89,7 +91,7 @@ it.each([
       undefined,
       { mode: AgentModeID.PLAN },
     ),
-  );
+  ) as ToolOutput;
   if (source.endsWith('.ts') || target.endsWith('.ts')) {
     expect(output.error.message).toContain('only edit Markdown');
     expect(f.stage).not.toHaveBeenCalled();
@@ -106,7 +108,7 @@ it('checks resolved paths so a Markdown alias cannot target a non-Markdown file'
     await f.runtime.execute('propose_edits', JSON.stringify({ files: [create('alias.md')] }), undefined, {
       mode: AgentModeID.PLAN,
     }),
-  );
+  ) as ToolOutput;
   expect(output.error.message).toContain('only edit Markdown');
   expect(f.stage).not.toHaveBeenCalled();
 });
@@ -116,6 +118,6 @@ it('keeps code edits available in Agent mode', async () => {
     await f.runtime.execute('propose_edits', JSON.stringify({ files: [create('index.ts')] }), undefined, {
       mode: AgentModeID.AGENT,
     }),
-  );
+  ) as ToolOutput;
   expect(output.status).toBe('STAGED_FOR_REVIEW');
 });

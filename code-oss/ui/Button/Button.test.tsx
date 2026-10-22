@@ -66,7 +66,7 @@ describe(Button, () => {
       </Button>,
     );
 
-    const button = screen.getByRole('button', { name: /Run/ });
+    const button = screen.getByRole('button', { name: /Run/u });
     expect(button.getAttribute('type')).toBe('submit');
     expect(button.classList.contains('custom')).toBe(true);
     expect(button.style.color).toBe('red');
@@ -127,7 +127,7 @@ describe(IconButton, () => {
     const button = screen.getByRole('button', { name: 'Close' });
     expect(button.dataset.shape).toBe(IconButtonShape.SQUARE);
     expect(button.dataset.appearance).toBe(ButtonAppearance.GHOST);
-    expect(button.hasAttribute('data-icon-button')).toBe(true);
+    expect(Object.hasOwn(button.dataset, 'iconButton')).toBe(true);
     expect(button.style.getPropertyValue('--button-icon-size')).toBe('');
     expect(screen.getByTestId('icon')).toBeTruthy();
   });

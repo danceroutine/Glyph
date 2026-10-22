@@ -71,7 +71,7 @@ describe(WiredGlyphModeSwapCard, () => {
 
     expect(countdown.getAttribute('aria-valuetext')).toBe('0 seconds remaining');
     expect(countdown.getAttribute('aria-valuenow')).toBe('0');
-    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Approve' }).disabled).toBe(true);
     const frames = vi.spyOn(window, 'requestAnimationFrame');
     act(() => {
       vi.advanceTimersByTime(1000);
@@ -202,7 +202,9 @@ describe(WiredGlyphModeSwapCard, () => {
       />,
     );
 
-    await act(async () => rendered.props!.approve());
+    await act(async () => {
+      rendered.props!.approve();
+    });
 
     expect(decideApproval).not.toHaveBeenCalled();
   });
@@ -219,7 +221,9 @@ describe(WiredGlyphModeSwapCard, () => {
       />,
     );
 
-    await act(async () => rendered.props!.deny());
+    await act(async () => {
+      rendered.props!.deny();
+    });
 
     expect(decideApproval).not.toHaveBeenCalled();
   });

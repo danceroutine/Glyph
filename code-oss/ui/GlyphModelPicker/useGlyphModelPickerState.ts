@@ -15,12 +15,19 @@ export function useGlyphModelPickerState({ state, actions }: GlyphModelPickerSta
     model,
     label:
       state.models.find(value => value.slug === model)?.name ??
-      (model || (state.catalogPending ? 'Loading models…' : 'No model available')),
-    disabled: !!chat || state.catalogPending || state.navigationPending || state.models.length === 0 || state.readOnly,
+      (model || (state.catalogPending === true ? 'Loading models…' : 'No model available')),
+    disabled:
+      !!chat ||
+      state.catalogPending === true ||
+      state.navigationPending === true ||
+      state.models.length === 0 ||
+      state.readOnly,
     models: chat
       ? [{ value: model, label: state.models.find(value => value.slug === model)?.name ?? model }]
       : [
-          ...(!model ? [{ value: '', label: state.catalogPending ? 'Loading models…' : 'No model available' }] : []),
+          ...(!model
+            ? [{ value: '', label: state.catalogPending === true ? 'Loading models…' : 'No model available' }]
+            : []),
           ...state.models.map(value => ({ value: value.slug, label: value.name })),
         ],
     selectModel: (value: string) => {

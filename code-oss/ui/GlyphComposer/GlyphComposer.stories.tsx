@@ -131,7 +131,7 @@ const contextPickerActions = previewActionsFixture({
     captureFolder: fn<NonNullable<typeof contextActions.context.captureFolder>>(async uri => ({
       id: crypto.randomUUID(),
       uri,
-      path: contextCandidates.find(file => file.uri === uri)!.path.replace(/\/$/, ''),
+      path: contextCandidates.find(file => file.uri === uri)!.path.replace(/\/$/u, ''),
       kind: GlyphContextAttachmentKind.FOLDER,
       text: 'Directory tree (preview)\n  AgentRuntime.ts',
       contentRevision: 'preview-tree',

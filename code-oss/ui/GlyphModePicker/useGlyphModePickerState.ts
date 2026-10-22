@@ -11,7 +11,9 @@ export function useGlyphModePickerState({ mode, change }: GlyphModePickerOptions
     items: modes,
     selectedIndex,
     label: value => value.name,
-    choose: value => change(value.id),
+    choose: value => {
+      change(value.id);
+    },
   });
   return { ...dropdown, mode, modes, selectedIndex };
 }

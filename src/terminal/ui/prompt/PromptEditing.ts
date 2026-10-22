@@ -41,7 +41,7 @@ const wordCharacter = /[\p{L}\p{M}\p{N}_]/u;
 
 export function editPrompt(input: string, key: EditingKey, text: string, cursor: number): PromptEditResult | undefined {
   const action = promptEditAction(input, key);
-  if (!action) return undefined;
+  if (action === undefined) return undefined;
   switch (action) {
     case PromptEditAction.MOVE_CHARACTER_BACKWARD:
       return { text, cursor: previousCharacterOffset(text, cursor) };

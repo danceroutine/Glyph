@@ -44,9 +44,13 @@ describe(useGlyphCodeBlockState, () => {
       initialProps: { source: 'x', info: 'text', copyText: undefined },
     });
 
-    act(() => result.current.toggleWrap());
+    act(() => {
+      result.current.toggleWrap();
+    });
     expect(result.current.wrap).toBe(true);
-    act(() => result.current.toggleWrap());
+    act(() => {
+      result.current.toggleWrap();
+    });
 
     expect(result.current.wrap).toBe(false);
   });
@@ -77,7 +81,9 @@ describe(useGlyphCodeBlockState, () => {
 
   it('copies through the system clipboard by default', async () => {
     const write = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
-    onTestFinished(() => write.mockRestore());
+    onTestFinished(() => {
+      write.mockRestore();
+    });
     const { result } = renderHook(useGlyphCodeBlockState, {
       initialProps: { source: 'ls', info: 'bash', copyText: undefined },
     });

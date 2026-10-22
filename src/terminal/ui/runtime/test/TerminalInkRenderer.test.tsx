@@ -49,7 +49,7 @@ describe(TerminalInkRenderer, () => {
       renderer.replaceTranscript(replacement);
 
       await waitUntil(() => output.value.includes('new chat'));
-      expect(rendererValue<readonly TranscriptEntry[]>(renderer, 'entries')).toEqual([
+      expect(rendererValue(renderer, 'entries') as readonly TranscriptEntry[]).toEqual([
         expect.objectContaining({ content: replacement }),
       ]);
       renderer.close();
@@ -119,7 +119,7 @@ describe(TerminalInkRenderer, () => {
       controller.abort(new Error('wake'));
 
       await expect(prompt).rejects.toThrow('wake');
-      expect(rendererRequest<ActivePromptRequest>(renderer, 'promptRequest').files).toBe(files);
+      expect((rendererRequest(renderer, 'promptRequest') as ActivePromptRequest).files).toBe(files);
       renderer.close();
     });
 
@@ -196,7 +196,7 @@ describe(TerminalInkRenderer, () => {
       await waitUntil(() => output.value.slice(outputOffset).includes('\u001B[7G\u001B[?25h'));
 
       const switchedOutput = output.value.slice(outputOffset);
-      expect(switchedOutput).not.toMatch(/\u001b\[\d+A\u001b\[7G\u001b\[\?25h/u);
+      expect(switchedOutput).not.toMatch(/\u001B\[\d+A\u001B\[7G\u001B\[\?25h/u);
       renderer.close();
       await expect(nextPrompt).rejects.toThrow('Session closed.');
     });
@@ -260,7 +260,7 @@ describe(TerminalInkRenderer, () => {
       const prompt = renderer.prompt('you> ', new AbortController().signal);
 
       await waitUntil(() => terminal.isRaw);
-      terminal.push('\x03');
+      terminal.push('\u0003');
       await waitUntil(() => listener.mock.calls.length === 1);
       renderer.close();
 
@@ -300,7 +300,7 @@ describe(TerminalInkRenderer, () => {
       const renderer = new TerminalInkRenderer(terminal, new TestOutput(), new TestOutput());
       const signal = new TestAbortSignal();
       const prompt = renderer.prompt('you> ', signal.value);
-      const request = rendererRequest<ActivePromptRequest>(renderer, 'promptRequest');
+      const request = rendererRequest(renderer, 'promptRequest') as ActivePromptRequest;
 
       await waitUntil(() => terminal.isRaw);
       terminal.push('done');
@@ -410,7 +410,7 @@ describe(TerminalInkRenderer, () => {
       const fixture = createProposalReviewFixture();
       const signal = new TestAbortSignal();
       const review = renderer.review(fixture.manager, signal.value, vi.fn());
-      const request = rendererRequest<ProposalReviewRequest>(renderer, 'reviewRequest');
+      const request = rendererRequest(renderer, 'reviewRequest') as ProposalReviewRequest;
 
       await waitUntil(() => terminal.isRaw);
       terminal.push('q');
@@ -466,7 +466,7 @@ describe(TerminalInkRenderer, () => {
       const renderer = new TerminalInkRenderer(terminal, new TestOutput(), new TestOutput());
       const signal = new TestAbortSignal();
       const question = renderer.presentQuestionForm(questionForm(), signal.value, vi.fn());
-      const request = rendererRequest<QuestionFormRequest>(renderer, 'questionRequest');
+      const request = rendererRequest(renderer, 'questionRequest') as QuestionFormRequest;
 
       await waitUntil(() => terminal.isRaw);
       terminal.push('\r');
@@ -558,7 +558,7 @@ describe(TerminalInkRenderer, () => {
       const renderer = new TerminalInkRenderer(terminal, new TestOutput(), new TestOutput());
       const signal = new TestAbortSignal();
       const permission = renderer.presentShellPermission(shellPermission(), signal.value, vi.fn());
-      const request = rendererRequest<TerminalShellPermissionRequest>(renderer, 'shellPermissionRequest');
+      const request = rendererRequest(renderer, 'shellPermissionRequest') as TerminalShellPermissionRequest;
 
       await waitUntil(() => terminal.isRaw);
       terminal.push('1');
@@ -590,15 +590,15 @@ describe(TerminalInkRenderer, () => {
   });
 });
 
-function rendererRequest<Request>(
+function rendererRequest(
   renderer: TerminalInkRenderer,
   key: 'promptRequest' | 'questionRequest' | 'shellPermissionRequest' | 'reviewRequest',
-): Request {
+): unknown {
   return rendererValue(renderer, key);
 }
 
-function rendererValue<Value>(renderer: TerminalInkRenderer, key: string): Value {
-  return (renderer as unknown as Record<string, Value>)[key]!;
+function rendererValue(renderer: TerminalInkRenderer, key: string): unknown {
+  return (renderer as unknown as Record<string, unknown>)[key];
 }
 
 class TestAbortSignal {
@@ -610,8 +610,12 @@ class TestAbortSignal {
     addEventListener: (_type: string, listener: EventListenerOrEventListenerObject): void => {
       const callback =
         typeof listener === 'function'
-          ? () => listener(new Event('abort'))
-          : () => listener.handleEvent(new Event('abort'));
+          ? () => {
+              listener(new Event('abort'));
+            }
+          : () => {
+              listener.handleEvent(new Event('abort'));
+            };
       this.lastListener = callback;
     },
     removeEventListener: (): void => {},
@@ -654,13 +658,17 @@ class TestOutput extends Writable {
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (predicate()) return;
-    await new Promise<void>(resolve => setTimeout(resolve, 1));
+    await new Promise<void>(resolve => {
+      setTimeout(resolve, 1);
+    });
   }
   throw new Error('Condition was not reached.');
 }
 
 async function tick(): Promise<void> {
-  await new Promise<void>(resolve => setImmediate(resolve));
+  await new Promise<void>(resolve => {
+    setImmediate(resolve);
+  });
 }
 
 function questionForm() {

@@ -25,7 +25,7 @@ export function composerFixture({
     composer.enqueueDraft();
   }
   if (document) composer.setDocument(structuredClone(document));
-  if (mode) composer.setMode(mode);
+  if (mode !== undefined) composer.setMode(mode);
   if (attachedSelection) {
     composer.setDraft('Explain ');
     composer.insertAttachments([selectionFixture()]);

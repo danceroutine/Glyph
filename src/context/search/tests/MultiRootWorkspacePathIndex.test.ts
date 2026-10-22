@@ -476,7 +476,9 @@ describe(MultiRootWorkspacePathIndex, () => {
       const parse = vi
         .spyOn(workspaceContentSearchOptionsSchema, 'parse')
         .mockReturnValueOnce({ ...resolved, outputMode: 'unknown' as 'content' });
-      onTestFinished(() => parse.mockRestore());
+      onTestFinished(() => {
+        parse.mockRestore();
+      });
       const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
 
       await expect(index.searchContents('x', {})).rejects.toThrow('Unsupported content-search output mode.');

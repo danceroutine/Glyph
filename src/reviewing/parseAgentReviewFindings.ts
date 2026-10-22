@@ -1,4 +1,5 @@
 import type { AgentReviewFinding } from './AgentReview.ts';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 export interface AgentReviewFileLines {
   readonly original: number;
@@ -27,7 +28,7 @@ export function parseAgentReviewFindings(
       valid = false;
       continue;
     }
-    if (!value || typeof value !== 'object') {
+    if (!isRecord(value)) {
       valid = false;
       continue;
     }

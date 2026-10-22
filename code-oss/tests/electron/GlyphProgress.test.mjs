@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+
 const restartsHost = isolatedLaunch('restarts the host and reloads the window');
 const read = () =>
   ScriptedProvider.tool('read_project_file', { path: 'progress.txt', start_line: null, end_line: null });
@@ -26,6 +28,10 @@ const question = () =>
     { namespace: 'interaction', callId: 'question' },
   );
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {number[]} values
+ */
 async function expectUsage(glyph, values) {
   const trigger = glyph.page.getByRole('button', { name: 'Conversation token usage', exact: true });
   if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();

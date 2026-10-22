@@ -1,7 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { editToolOutput, parseJson } from './ProviderPayloads.mjs';
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {string} name
+ * @param {unknown} args
+ */
 async function tool(glyph, provider, name, args) {
   const callId = randomUUID();
   const count = provider.requests.length;
@@ -9,9 +18,11 @@ async function tool(glyph, provider, name, args) {
   await glyph.send(`Run ${name}.`);
   await expect.poll(() => provider.requests.length).toBe(count + 2);
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
-  return JSON.parse(
-    provider.requests.at(-1).body.input.find(item => item.call_id === callId && item.type === 'function_call_output')
-      .output,
+  return editToolOutput.parse(
+    parseJson(
+      provider.requests.at(-1)?.body.input.find(item => item.call_id === callId && item.type === 'function_call_output')
+        ?.output,
+    ),
   );
 }
 

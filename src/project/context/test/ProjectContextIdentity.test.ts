@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ProjectContextIdentity } from '#src/project/context/ProjectContextIdentity.js';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 
-describe(ProjectContextIdentity, () => {
+describe('ProjectContextIdentity', () => {
   describe(ProjectContextIdentity.create, () => {
     it('derives the same hexadecimal identity for the same container', () => {
       const first = ProjectContextIdentity.create(ProjectContextKind.FOLDER, 'local', '/project');
@@ -38,7 +38,7 @@ describe(ProjectContextIdentity, () => {
       const reversed = ProjectContextIdentity.createMutationScope(
         ProjectContextKind.WORKSPACE,
         'local',
-        [...roots].reverse(),
+        roots.toReversed(),
       );
 
       expect(reversed).toBe(forward);

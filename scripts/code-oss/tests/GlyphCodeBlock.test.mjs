@@ -1,11 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
 import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
-const { chromium, expect } = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url))(
-  '@playwright/test',
-);
-let browser, script;
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let script;
 beforeAll(async () => {
   const result = await build({
     stdin: {
@@ -49,9 +49,9 @@ it('highlights syntax, wraps per block without pane overflow, and copies exact c
   const page = await mount();
   try {
     await page.evaluate(
-      source =>
+      value =>
         window.show([
-          { source, language: 'ts' },
+          { source: value, language: 'ts' },
           { source: 'print("hello")', language: 'python' },
         ]),
       source,
@@ -102,8 +102,8 @@ it('keeps HTML inert and unknown, unlabelled, and empty fences readable', async 
       '',
     ];
     await page.evaluate(
-      sources =>
-        window.show(sources.map((source, index) => ({ source, language: ['html', 'unknown', '', 'text'][index] }))),
+      values =>
+        window.show(values.map((code, index) => ({ source: code, language: ['html', 'unknown', '', 'text'][index] }))),
       sources,
     );
     const blocks = page.locator('.glyph-code-block');

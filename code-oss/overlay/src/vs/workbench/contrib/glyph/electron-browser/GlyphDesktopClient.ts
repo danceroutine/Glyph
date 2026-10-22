@@ -2,14 +2,12 @@ import { Emitter, type Event } from '#vs/base/common/event.js';
 import { Disposable, toDisposable } from '#vs/base/common/lifecycle.js';
 import { ipcRenderer } from '#vs/base/parts/sandbox/electron-browser/globals.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
-import {
-  GlyphTransportMessageType,
-  type GlyphTransportMessage,
-} from '#glyph/protocol/connection/GlyphTransportMessage.js';
+import { GlyphTransportMessageType } from '#glyph/protocol/connection/GlyphTransportMessage.js';
 import type { GlyphEditorRequest } from '#glyph/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#glyph/protocol/editor/GlyphEditorResponse.js';
 import { acquirePort } from '#vs/base/parts/ipc/electron-browser/ipc.mp.js';
 import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#glyph/protocol/GlyphDesktopProtocolVersion.js';
+import { isRecord } from '#glyph/protocol/isRecord.js';
 import { GlyphHostEventType } from '#glyph/protocol/events/GlyphHostEvent.js';
 import { GlyphHostStatus } from '#glyph/protocol/events/GlyphHostStatus.js';
 import { GlyphWorkbenchCommandType } from '#glyph/protocol/GlyphWorkbenchCommand.js';
@@ -49,10 +47,15 @@ export class GlyphDesktopClient extends Disposable {
 
   constructor(private readonly handleEditorRequest: (request: GlyphEditorRequest) => Promise<GlyphEditorResponse>) {
     super();
-    const hostExited = (): void =>
+    const hostExited = (): void => {
       this.disconnect(new Error('The Glyph desktop host exited. The response was interrupted.'));
+    };
     ipcRenderer.on('vscode:glyph:hostExited', hostExited);
-    this._register(toDisposable(() => ipcRenderer.removeListener('vscode:glyph:hostExited', hostExited)));
+    this._register(
+      toDisposable(() => {
+        ipcRenderer.removeListener('vscode:glyph:hostExited', hostExited);
+      }),
+    );
   }
 
   /** Reuses one connection attempt so concurrent view actions cannot create competing ports. */
@@ -147,12 +150,14 @@ export class GlyphDesktopClient extends Disposable {
       requestId,
       command,
     };
-    const completed = new Promise<void>((resolve, reject) => this.pending.set(requestId, { resolve, reject }));
+    const completed = new Promise<void>((resolve, reject) => {
+      this.pending.set(requestId, { resolve, reject });
+    });
     try {
       port.postMessage(envelope);
     } catch (error) {
       this.pending.delete(requestId);
-      return Promise.reject(error);
+      throw error;
     }
     return completed;
   }
@@ -184,7 +189,9 @@ export class GlyphDesktopClient extends Disposable {
         cleanup();
         reject(error);
       };
-      const timeout = setTimeout(() => cancel(new Error('The Glyph host connection timed out.')), 10_000);
+      const timeout = setTimeout(() => {
+        cancel(new Error('The Glyph host connection timed out.'));
+      }, 10_000);
       const listener = (event: MessageEvent) => {
         if (!isReadyMessage(event.data)) return;
         cleanup();
@@ -201,16 +208,15 @@ export class GlyphDesktopClient extends Disposable {
 
   private receive(value: unknown): void {
     if (isReadyMessage(value)) return;
-    const control = value as Partial<GlyphTransportMessage> | undefined;
-    if (control?.type === GlyphTransportMessageType.EDITOR_REQUEST && control.request) {
+    if (isRecord(value) && value.type === GlyphTransportMessageType.EDITOR_REQUEST && isEditorRequest(value.request)) {
       const port = this.port;
-      void this.handleEditorRequest(control.request).then(response =>
+      void this.handleEditorRequest(value.request).then(response =>
         port?.postMessage({ type: GlyphTransportMessageType.EDITOR_RESPONSE, response }),
       );
       return;
     }
-    if (control?.type === GlyphTransportMessageType.ERROR) {
-      this.failPending(new Error(control.message));
+    if (isRecord(value) && value.type === GlyphTransportMessageType.ERROR) {
+      this.failPending(new Error(typeof value.message === 'string' ? value.message : undefined));
       return;
     }
     if (!isHostEventEnvelope(value)) return;
@@ -233,7 +239,11 @@ export class GlyphDesktopClient extends Disposable {
       const pending = this.pending.get(value.event.requestId);
       this.pending.delete(value.event.requestId);
       pending?.resolve();
-    } else if (value.event.type === GlyphHostEventType.ERROR && value.event.requestId) {
+    } else if (
+      value.event.type === GlyphHostEventType.ERROR &&
+      value.event.requestId !== undefined &&
+      value.event.requestId !== ''
+    ) {
       const pending = this.pending.get(value.event.requestId);
       this.pending.delete(value.event.requestId);
       pending?.reject(new Error(`${value.event.error.code}: ${value.event.error.message}`));
@@ -290,18 +300,19 @@ export class GlyphDesktopClient extends Disposable {
 }
 
 function isReadyMessage(value: unknown): value is ReadyMessage {
-  return Boolean(
-    value && typeof value === 'object' && (value as Partial<ReadyMessage>).type === GlyphTransportMessageType.READY,
-  );
+  return isRecord(value) && value.type === GlyphTransportMessageType.READY;
+}
+
+function isEditorRequest(value: unknown): value is GlyphEditorRequest {
+  return isRecord(value) && typeof value.type === 'string';
 }
 
 function isHostEventEnvelope(value: unknown): value is GlyphHostEventEnvelope {
-  const candidate = value as Partial<GlyphHostEventEnvelope> | undefined;
-  return Boolean(
-    candidate &&
-    candidate.protocolVersion === GLYPH_DESKTOP_PROTOCOL_VERSION &&
-    typeof candidate.hostGeneration === 'string' &&
-    typeof candidate.sequence === 'number' &&
-    candidate.event,
+  return (
+    isRecord(value) &&
+    value.protocolVersion === GLYPH_DESKTOP_PROTOCOL_VERSION &&
+    typeof value.hostGeneration === 'string' &&
+    typeof value.sequence === 'number' &&
+    isRecord(value.event)
   );
 }

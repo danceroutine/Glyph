@@ -15,7 +15,7 @@ export function getGlyphWorkspaceRootId(
   if (
     unique &&
     root.name.length > 0 &&
-    !/[/\\\x00-\x1f\x7f]/u.test(root.name) &&
+    !/[/\\\u0000-\u001F\u007F]/u.test(root.name) &&
     root.name !== '.' &&
     root.name !== '..'
   )

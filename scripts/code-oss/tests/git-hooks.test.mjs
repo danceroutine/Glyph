@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { removeLeakedCodeOssHuskyHooks } from '#scripts/code-oss/git-hooks.mjs';
 
+/** @type {string[]} */
 const repositories = [];
 
 afterEach(async () => {

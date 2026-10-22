@@ -1,9 +1,34 @@
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { expect, it, vi } from 'vitest';
+import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
+import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.ts';
 
 // Keep service, client, coordinator, and Code OSS events real. Only Electron's
 // port acquisition, editor services, and the provider runtime are fixture ports.
+/**
+ * @typedef {{ type: string, trusted?: boolean }} PortCommand
+ * @typedef {Parameters<import('#src/desktop/host/GlyphDesktopWorkspaceRuntimeFactory.js').GlyphDesktopWorkspaceRuntimeFactory['create']>[0]} RuntimeConfiguration
+ * @typedef {'selectModel' | 'answerQuestion' | 'writeShellInput' | 'stopShell' | 'decideApproval' | 'acceptProposalItem' | 'rejectProposalItem' | 'cancel'} ServiceAction
+ * @typedef {'name' | 'state' | 'folders' | 'trust' | 'profile'} ListenerKind
+ * @typedef {InstanceType<Awaited<ReturnType<typeof modules>>['NativeGlyphWorkbenchService']>} WorkbenchService
+ * @typedef {{
+ *   phase: string,
+ *   event: ListenerKind | 'pending notification',
+ *   change?: string,
+ *   action?: ServiceAction,
+ *   invoke?: (service: WorkbenchService) => unknown,
+ *   type?: string,
+ *   boundary?: string,
+ *   description?: string,
+ * }} TrustScenario
+ */
+/**
+ * @returns {Promise<{
+ *   NativeGlyphWorkbenchService: typeof import('#vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.js').NativeGlyphWorkbenchService,
+ *   GlyphDesktopHost: typeof import('#src/desktop/host/GlyphDesktopHost.js').GlyphDesktopHost,
+ * }>}
+ */
 async function modules() {
   const result = await build({
     stdin: {
@@ -58,7 +83,7 @@ async function modules() {
           );
           builder.onLoad({ filter: /.*/, namespace: 'transport' }, args => ({
             contents: args.path.endsWith('ipc.mp.js')
-              ? 'export const acquirePort = async () => globalThis.__glyphTrustPort;'
+              ? 'export const acquirePort = async () => globalThis.glyphTrustPort;'
               : 'export const ipcRenderer = { on() {}, removeListener() {}, send() {} };',
           }));
           builder.onResolve({ filter: /^#vs\// }, args => {
@@ -82,12 +107,13 @@ async function modules() {
       },
     ],
   });
-  return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+  return importBundle(result.outputFiles[0].text, ['NativeGlyphWorkbenchService', 'GlyphDesktopHost']);
 }
 
 it('loads saved history through the latest untrusted attachment when revocation invalidates initial recovery', async () => {
   const { NativeGlyphWorkbenchService, GlyphDesktopHost } = await modules();
   const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
+  /** @type {RuntimeConfiguration[]} */
   const configurations = [];
   let denyRecovery;
   const handle = vi.fn(async () => {});
@@ -96,7 +122,9 @@ it('loads saved history through the latest untrusted attachment when revocation 
       configurations.push(configuration);
       if (configurations.length === 1)
         await new Promise((_resolve, reject) => {
-          denyRecovery = () => reject(new Error('Workspace trust is required to recover this review.'));
+          denyRecovery = () => {
+            reject(new Error('Workspace trust is required to recover this review.'));
+          };
         });
       return {
         snapshot: async () => ({ accounts: [], models: [], chats: [{ id: 'saved-chat' }], runs: [], proposals: [] }),
@@ -112,16 +140,20 @@ it('loads saved history through the latest untrusted attachment when revocation 
       this.emit({ type: 'glyph_connection_ready', identity, hostGeneration: host.generation });
     }
     close() {}
+    /** @param {{ command: PortCommand }} request */
     postMessage(request) {
       tasks.push(host.receive('connection', request));
     }
+    /** @param {unknown} data */
     emit(data) {
       this.dispatchEvent(new MessageEvent('message', { data }));
     }
   }
   const port = new Port();
-  globalThis.__glyphTrustPort = port;
-  host.connect('connection', identity, envelope => port.emit(envelope));
+  globalThis.glyphTrustPort = port;
+  host.connect('connection', identity, envelope => {
+    port.emit(envelope);
+  });
   let trusted = true;
   let onTrust;
   const service = new NativeGlyphWorkbenchService(
@@ -145,7 +177,7 @@ it('loads saved history through the latest untrusted attachment when revocation 
       createInstance: () => ({
         invalidate() {},
         rebindWorkspace() {},
-        rebindAttachment: value => value,
+        rebindAttachment: (/** @type {unknown} */ value) => value,
         dispose() {},
         handle() {},
         changed() {},
@@ -159,9 +191,11 @@ it('loads saved history through the latest untrusted attachment when revocation 
     {},
     { getValue: () => undefined, onDidChangeConfiguration: () => ({ dispose() {} }) },
   );
-  const connecting = service.connect().catch(error => error);
+  const connecting = service.connect().catch((/** @type {unknown} */ error) => error);
   try {
-    await vi.waitFor(() => expect(denyRecovery).toBeTypeOf('function'));
+    await vi.waitFor(() => {
+      expect(denyRecovery).toBeTypeOf('function');
+    });
     trusted = false;
     onTrust();
     denyRecovery();
@@ -183,7 +217,7 @@ it('loads saved history through the latest untrusted attachment when revocation 
     service.dispose();
     await Promise.allSettled(tasks);
     await host.dispose();
-    delete globalThis.__glyphTrustPort;
+    delete globalThis.glyphTrustPort;
   }
 });
 
@@ -201,8 +235,11 @@ it.each(['handshake', 'attach acknowledgement'])(
         dispose: async () => {},
       }),
     });
+    /** @type {PortCommand[]} */
     const commands = [];
     const tasks = [];
+    /** @type {(() => void) | undefined} */
+    /** @type {(() => void) | undefined} */
     let releaseAcknowledgement;
     let started = false;
     let ready;
@@ -211,22 +248,32 @@ it.each(['handshake', 'attach acknowledgement'])(
         started = true;
       }
       close() {}
+      /** @param {{ command: PortCommand }} request */
       postMessage(request) {
         commands.push(request.command);
         tasks.push(host.receive('connection', request));
       }
+      /** @param {unknown} data */
       emit(data) {
         this.dispatchEvent(new MessageEvent('message', { data }));
       }
     }
     const port = new Port();
-    globalThis.__glyphTrustPort = port;
+    globalThis.glyphTrustPort = port;
     host.connect('connection', identity, envelope => {
-      if (phase === 'attach acknowledgement' && !releaseAcknowledgement && envelope.event.type === 'command_result') {
-        releaseAcknowledgement = () => port.emit(envelope);
+      if (
+        phase === 'attach acknowledgement' &&
+        releaseAcknowledgement === undefined &&
+        envelope.event.type === GlyphHostEventType.COMMAND_RESULT
+      ) {
+        releaseAcknowledgement = () => {
+          port.emit(envelope);
+        };
       } else port.emit(envelope);
     });
-    ready = () => port.emit({ type: 'glyph_connection_ready', identity, hostGeneration: host.generation });
+    ready = () => {
+      port.emit({ type: 'glyph_connection_ready', identity, hostGeneration: host.generation });
+    };
     let trusted = true;
     let onTrust;
     const service = new NativeGlyphWorkbenchService(
@@ -252,7 +299,7 @@ it.each(['handshake', 'attach acknowledgement'])(
         createInstance: () => ({
           invalidate() {},
           rebindWorkspace() {},
-          rebindAttachment: value => value,
+          rebindAttachment: (/** @type {unknown} */ value) => value,
           dispose() {},
           handle() {},
           changed() {},
@@ -267,10 +314,14 @@ it.each(['handshake', 'attach acknowledgement'])(
       { getValue: () => undefined, onDidChangeConfiguration: () => ({ dispose() {} }) },
     );
     try {
-      await vi.waitFor(() => expect(started).toBe(true));
+      await vi.waitFor(() => {
+        expect(started).toBe(true);
+      });
       if (phase === 'attach acknowledgement') {
         ready();
-        await vi.waitFor(() => expect(releaseAcknowledgement).toBeTypeOf('function'));
+        await vi.waitFor(() => {
+          expect(releaseAcknowledgement).toBeTypeOf('function');
+        });
       }
       trusted = false;
       onTrust();
@@ -278,18 +329,18 @@ it.each(['handshake', 'attach acknowledgement'])(
         .request({ type: 'send', chatId: 'chat', runId: 'direct', text: 'direct port command', attachments: [] })
         .then(
           () => undefined,
-          error => error,
+          (/** @type {unknown} */ error) => error,
         );
       const sent = service.send('must not reach the runtime').then(
         () => undefined,
-        error => error,
+        (/** @type {unknown} */ error) => error,
       );
       if (phase === 'handshake') ready();
       else releaseAcknowledgement();
       await sent;
       expect(await direct).toBeInstanceOf(Error);
       expect(handle.mock.calls.filter(([command]) => command.type === 'send')).toEqual([]);
-      expect(commands.filter(command => command.type === 'attach_workspace').at(-1).trusted).toBe(false);
+      expect(commands.findLast(command => command.type === 'attach_workspace')?.trusted).toBe(false);
       // A later action must not quietly reuse the stale trusted attachment either.
       await service.send('still untrusted').catch(() => {});
       expect(handle.mock.calls.filter(([command]) => command.type === 'send')).toEqual([]);
@@ -301,50 +352,60 @@ it.each(['handshake', 'attach acknowledgement'])(
       service.dispose();
       await Promise.allSettled(tasks);
       await host.dispose();
-      delete globalThis.__glyphTrustPort;
+      delete globalThis.glyphTrustPort;
     }
   },
 );
 
-it.each(
+/** @type {[ServiceAction, (service: WorkbenchService) => unknown, string][]} */
+const blockedCommands = [
+  ['selectModel', service => service.selectModel('other'), 'select_model'],
+  ['answerQuestion', service => service.answerQuestion('chat', 'run', 'question', {}), 'answer_question'],
+  ['writeShellInput', service => service.writeShellInput('chat', 'session', 'input', true), 'write_shell_input'],
+  ['stopShell', service => service.stopShell('chat', 'session'), 'stop_shell_session'],
+  ['decideApproval', service => service.decideApproval('chat', 'run', 'approval', 'allow_once'), 'decide_approval'],
+  ['acceptProposalItem', service => service.acceptProposalItem('chat', 'proposal', 'item'), 'accept_proposal_item'],
+  ['rejectProposalItem', service => service.rejectProposalItem('chat', 'proposal', 'item'), 'reject_proposal_item'],
   [
-    { phase: 'port acquisition', event: 'name' },
-    { phase: 'handshake', event: 'name' },
-    { phase: 'attachment acknowledgement', event: 'name' },
-    { phase: 'ready', event: 'name' },
-    { phase: 'ready', event: 'state' },
-    { phase: 'ready', event: 'name', change: 'configuration' },
-    { phase: 'ready', event: 'name', change: 'display only' },
-    { phase: 'streaming', event: 'name' },
-    { phase: 'waiting_for_question', event: 'name' },
-    { phase: 'waiting_for_approval', event: 'name' },
-    ...[
-      ['selectModel', ['other'], 'select_model'],
-      ['answerQuestion', ['chat', 'run', 'question', {}], 'answer_question'],
-      ['writeShellInput', ['chat', 'session', 'input', true], 'write_shell_input'],
-      ['stopShell', ['chat', 'session'], 'stop_shell_session'],
-      ['decideApproval', ['chat', 'run', 'approval', 'allow_once'], 'decide_approval'],
-      ['acceptProposalItem', ['chat', 'proposal', 'item'], 'accept_proposal_item'],
-      ['rejectProposalItem', ['chat', 'proposal', 'item'], 'reject_proposal_item'],
-      ['cancel', [], 'cancel_run'],
-    ].map(([action, args, type]) => ({
-      phase: 'streaming',
-      event: 'pending notification',
-      action,
-      args,
-      type,
-      description: `blocks ${type} under the old identity before the workspace change notification arrives`,
-    })),
-    {
-      phase: 'attachment acknowledgement',
-      event: 'pending notification',
-      action: 'selectModel',
-      args: ['other'],
-      type: 'select_model',
-      description:
-        'rechecks workspace identity before dispatching a command that waited for attachment acknowledgement',
+    'cancel',
+    service => {
+      service.cancel();
     },
-  ]
+    'cancel_run',
+  ],
+];
+/** @type {TrustScenario[]} */
+const scenarios = [
+  { phase: 'port acquisition', event: 'name' },
+  { phase: 'handshake', event: 'name' },
+  { phase: 'attachment acknowledgement', event: 'name' },
+  { phase: 'ready', event: 'name' },
+  { phase: 'ready', event: 'state' },
+  { phase: 'ready', event: 'name', change: 'configuration' },
+  { phase: 'ready', event: 'name', change: 'display only' },
+  { phase: 'streaming', event: 'name' },
+  { phase: 'waiting_for_question', event: 'name' },
+  { phase: 'waiting_for_approval', event: 'name' },
+  ...blockedCommands.map(([action, invoke, type]) => ({
+    phase: 'streaming',
+    event: 'pending notification',
+    action,
+    invoke,
+    type,
+    description: `blocks ${type} under the old identity before the workspace change notification arrives`,
+  })),
+  {
+    phase: 'attachment acknowledgement',
+    event: 'pending notification',
+    action: 'selectModel',
+    invoke: service => service.selectModel('other'),
+    type: 'select_model',
+    description: 'rechecks workspace identity before dispatching a command that waited for attachment acknowledgement',
+  },
+];
+
+it.each(
+  scenarios
     .flatMap(scenario => [scenario, { ...scenario, boundary: 'profile' }])
     .map(scenario => {
       if (scenario.boundary === 'profile') {
@@ -372,7 +433,7 @@ it.each(
             : `rebinds Glyph without reloading when the workspace ${scenario.change ?? 'identity'} changes during ${scenario.phase} through its ${scenario.event} event`),
       };
     }),
-)('$description', async ({ phase, event, change, action, args, type, boundary }) => {
+)('$description', async ({ phase, event, change, action, invoke: call, type, boundary }) => {
   const { NativeGlyphWorkbenchService, GlyphDesktopHost } = await modules();
   const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
   const active = ['streaming', 'waiting_for_question', 'waiting_for_approval'].includes(phase);
@@ -394,44 +455,64 @@ it.each(
       connectionLost: async () => {},
     }),
   });
+  /** @type {PortCommand[]} */
   const commands = [];
   const tasks = [];
   let started = false;
+  /** @type {(() => void) | undefined} */
   let releaseAcknowledgement;
   class Port extends EventTarget {
     start() {
       started = true;
     }
     close() {}
+    /** @param {{ command: PortCommand }} request */
     postMessage(request) {
       commands.push(request.command);
       tasks.push(host.receive('connection', request));
     }
+    /** @param {unknown} data */
     emit(data) {
       this.dispatchEvent(new MessageEvent('message', { data }));
     }
   }
   const port = new Port();
   let releasePort;
-  globalThis.__glyphTrustPort =
+  globalThis.glyphTrustPort =
     phase === 'port acquisition'
-      ? new Promise(resolve => {
-          releasePort = () => resolve(port);
+      ? new Promise(settle => {
+          releasePort = () => {
+            settle(port);
+          };
         })
       : port;
   host.connect('connection', identity, envelope => {
-    if (phase === 'attachment acknowledgement' && !releaseAcknowledgement && envelope.event.type === 'command_result') {
-      releaseAcknowledgement = () => port.emit(envelope);
+    if (
+      phase === 'attachment acknowledgement' &&
+      releaseAcknowledgement === undefined &&
+      envelope.event.type === GlyphHostEventType.COMMAND_RESULT
+    ) {
+      releaseAcknowledgement = () => {
+        port.emit(envelope);
+      };
     } else port.emit(envelope);
   });
-  const ready = () => port.emit({ type: 'glyph_connection_ready', identity, hostGeneration: host.generation });
+  const ready = () => {
+    port.emit({ type: 'glyph_connection_ready', identity, hostGeneration: host.generation });
+  };
   let workspaceId = identity.workspaceId;
   let profileId = identity.profileId;
   let configuration = 'file:///original.code-workspace';
+  /** @type {Record<ListenerKind, Set<() => unknown>>} */
   const listeners = { name: new Set(), state: new Set(), folders: new Set(), trust: new Set(), profile: new Set() };
-  const subscribe = kind => listener => {
+  /** @param {ListenerKind} kind */
+  const subscribe = kind => (/** @type {() => unknown} */ listener) => {
     listeners[kind].add(listener);
-    return { dispose: () => listeners[kind].delete(listener) };
+    return {
+      dispose: () => {
+        listeners[kind].delete(listener);
+      },
+    };
   };
   const invalidate = vi.fn();
   const service = new NativeGlyphWorkbenchService(
@@ -451,7 +532,7 @@ it.each(
       createInstance: () => ({
         invalidate,
         rebindWorkspace() {},
-        rebindAttachment: value => value,
+        rebindAttachment: (/** @type {unknown} */ value) => value,
         dispose() {},
         handle() {},
         changed() {},
@@ -470,26 +551,34 @@ it.each(
     {},
     { getValue: () => undefined, onDidChangeConfiguration: () => ({ dispose() {} }) },
   );
-  const connecting = service.connect().catch(error => error);
+  const connecting = service.connect().catch((/** @type {unknown} */ error) => error);
   try {
-    if (phase !== 'port acquisition') await vi.waitFor(() => expect(started).toBe(true));
+    if (phase !== 'port acquisition')
+      await vi.waitFor(() => {
+        expect(started).toBe(true);
+      });
     if (phase !== 'port acquisition' && phase !== 'handshake') {
       ready();
       if (phase === 'attachment acknowledgement')
-        await vi.waitFor(() => expect(releaseAcknowledgement).toBeTypeOf('function'));
+        await vi.waitFor(() => {
+          expect(releaseAcknowledgement).toBeTypeOf('function');
+        });
       else await connecting;
     }
     service.composer.setDraft('Keep my unsent prompt.');
-    const invoke = () => Promise.resolve(service[action](...args)).catch(error => error);
+    const invoke = () => Promise.resolve(call?.(service)).catch((/** @type {unknown} */ error) => error);
     const waitingCommand = action && phase === 'attachment acknowledgement' ? invoke() : undefined;
     if (boundary === 'profile') {
       if (change !== 'display only') profileId = 'replacement-profile';
     } else if (change === 'configuration') configuration = 'file:///saved.code-workspace';
     else if (change !== 'display only') workspaceId = 'saved-workspace';
     const eventKind = boundary === 'profile' && event !== 'pending notification' ? 'profile' : event;
-    for (const listener of listeners[eventKind] ?? []) listener();
+    for (const listener of eventKind === 'pending notification' ? [] : listeners[eventKind]) listener();
     releasePort?.();
-    if (phase === 'port acquisition') await vi.waitFor(() => expect(started || service.sessionChanged).toBe(true));
+    if (phase === 'port acquisition')
+      await vi.waitFor(() => {
+        expect(started || service.sessionChanged).toBe(true);
+      });
     if (phase === 'port acquisition' || phase === 'handshake') ready();
     releaseAcknowledgement?.();
     if (action) {
@@ -510,7 +599,9 @@ it.each(
       return;
     }
     if (boundary !== 'profile') {
-      await vi.waitFor(() => expect(service.state.workspaceMessage).toMatch(/Workspace updated/));
+      await vi.waitFor(() => {
+        expect(service.state.workspaceMessage).toMatch(/Workspace updated/);
+      });
       expect(service.state.workspaceMessage).toMatch(/Workspace updated/);
       expect(invalidate).toHaveBeenCalled();
       expect(service.composer.snapshot.draft).toBe('Keep my unsent prompt.');
@@ -548,13 +639,14 @@ it.each(
     service.dispose();
     await Promise.allSettled(tasks);
     await host.dispose();
-    delete globalThis.__glyphTrustPort;
+    delete globalThis.glyphTrustPort;
   }
 });
 
 it('drains the old runtime before rebinding, coalesces folder changes, and preserves paused drafts through an empty workspace', async () => {
   const { NativeGlyphWorkbenchService, GlyphDesktopHost } = await modules();
   const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
+  /** @type {RuntimeConfiguration[]} */
   const configurations = [];
   let release;
   let cleanup = false;
@@ -574,8 +666,8 @@ it('drains the old runtime before rebinding, coalesces folder changes, and prese
         connectionLost: async () => {},
         dispose: async () => {
           if (first && !cleanup)
-            await new Promise(resolve => {
-              release = resolve;
+            await new Promise(settle => {
+              release = settle;
             });
         },
       };
@@ -587,16 +679,20 @@ it('drains the old runtime before rebinding, coalesces folder changes, and prese
       this.emit({ type: 'glyph_connection_ready', identity, hostGeneration: host.generation });
     }
     close() {}
+    /** @param {{ command: PortCommand }} request */
     postMessage(request) {
       tasks.push(host.receive('connection', request));
     }
+    /** @param {unknown} data */
     emit(data) {
       this.dispatchEvent(new MessageEvent('message', { data }));
     }
   }
   const port = new Port();
-  globalThis.__glyphTrustPort = port;
-  host.connect('connection', identity, envelope => port.emit(envelope));
+  globalThis.glyphTrustPort = port;
+  host.connect('connection', identity, envelope => {
+    port.emit(envelope);
+  });
   let names = ['original'];
   let changed;
   const rebind = vi.fn();
@@ -622,7 +718,7 @@ it('drains the old runtime before rebinding, coalesces folder changes, and prese
       createInstance: () => ({
         invalidate() {},
         rebindWorkspace: rebind,
-        rebindAttachment: value => value,
+        rebindAttachment: (/** @type {unknown} */ value) => value,
         dispose() {},
         handle() {},
         changed() {},
@@ -643,7 +739,9 @@ it('drains the old runtime before rebinding, coalesces folder changes, and prese
     service.composer.setDraft('Editable draft');
     names = ['intermediate'];
     changed();
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    await vi.waitFor(() => {
+      expect(release).toBeTypeOf('function');
+    });
     expect(service.state.readOnly).toBe(true);
     expect(rebind).not.toHaveBeenCalled();
     expect(configurations).toHaveLength(1);
@@ -652,35 +750,42 @@ it('drains the old runtime before rebinding, coalesces folder changes, and prese
     names = ['latest'];
     changed();
     release();
-    await vi.waitFor(() => expect(service.state.workspaceMessage).toContain('Workspace updated: latest.'));
+    await vi.waitFor(() => {
+      expect(service.state.workspaceMessage).toContain('Workspace updated: latest.');
+    });
     expect(configurations.map(value => value.roots.map(root => root.name))).toEqual([['original'], ['latest']]);
     expect(service.composer.snapshot.draft).toBe('Edited while refreshing');
     expect(service.composer.snapshot.queued).toHaveLength(1);
     expect(service.composer.snapshot.queuePaused).toBe(true);
     expect(handle.mock.calls).toEqual([]);
     let finishConnection;
-    vi.spyOn(service.client, 'connect').mockImplementationOnce(
-      () =>
-        new Promise(resolve => {
-          finishConnection = resolve;
-        }),
-    );
-    const staleAction = service.stopShell('chat', 'old-shell').catch(error => error);
+    vi.spyOn(service.client, 'connect').mockImplementationOnce(() => {
+      return new Promise(settle => {
+        finishConnection = settle;
+      });
+    });
+    const staleAction = service.stopShell('chat', 'old-shell').catch((/** @type {unknown} */ error) => error);
     names = ['interleaved'];
     changed();
-    await vi.waitFor(() => expect(service.state.workspaceMessage).toContain('Workspace updated: interleaved.'));
+    await vi.waitFor(() => {
+      expect(service.state.workspaceMessage).toContain('Workspace updated: interleaved.');
+    });
     finishConnection();
     expect(await staleAction).toBeInstanceOf(Error);
     expect(handle.mock.calls).toEqual([]);
     names = [];
     changed();
-    await vi.waitFor(() => expect(service.state.workspaceMessage).toMatch(/Add a local workspace folder/));
+    await vi.waitFor(() => {
+      expect(service.state.workspaceMessage).toMatch(/Add a local workspace folder/);
+    });
     expect(service.state.readOnly).toBe(true);
     expect(service.composer.snapshot.draft).toBe('Edited while refreshing');
     failNext = true;
     names = ['returned'];
     changed();
-    await vi.waitFor(() => expect(service.state.workspaceRetryable).toBe(true));
+    await vi.waitFor(() => {
+      expect(service.state.workspaceRetryable).toBe(true);
+    });
     expect(service.state.workspaceMessage).toContain('Temporary initialization failure');
     await service.connect();
     expect(service.state.readOnly).toBe(false);
@@ -693,6 +798,6 @@ it('drains the old runtime before rebinding, coalesces folder changes, and prese
     service.dispose();
     await Promise.allSettled(tasks);
     await host.dispose();
-    delete globalThis.__glyphTrustPort;
+    delete globalThis.glyphTrustPort;
   }
 });

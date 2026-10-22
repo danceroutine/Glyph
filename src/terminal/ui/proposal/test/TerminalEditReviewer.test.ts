@@ -263,7 +263,7 @@ it('renders literal ESC bytes visibly in an applied edit', () => {
   item.appliedText = {
     state: 'applied',
     before: file.base,
-    after: { ...file.proposed, text: '\u001b' },
+    after: { ...file.proposed, text: '\u001B' },
     revertTarget: null,
   };
   expect(renderEntry(file, item, ReviewViewMode.FOCUSED, false).lines.join('\n')).toContain('␛ = ESC');

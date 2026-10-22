@@ -15,9 +15,10 @@ describe(buildGlyphDiagram, () => {
 
     expect(await readdir(join(directory, 'nested', 'ui'))).toEqual(['glyph-diagram.html']);
     const html = await readFile(join(directory, 'nested', 'ui', 'glyph-diagram.html'), 'utf8');
-    const [, hash, script] = /script-src 'sha256-([^']+)'[\s\S]*<body><script>([\s\S]*)<\/script><\/body>$/.exec(html);
+    const [, hash = '', script = ''] =
+      /script-src 'sha256-([^']+)'[\s\S]*<body><script>([\s\S]*)<\/script><\/body>$/u.exec(html) ?? [];
     expect(createHash('sha256').update(script).digest('base64')).toBe(hash);
-    expect(script).not.toMatch(/<\/script/i);
+    expect(script).not.toMatch(/<\/script/iu);
     expect(html).toBe(
       `<!doctype html>\n<meta charset="utf-8">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-${hash}'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">\n<body><script>${script}</script></body>`,
     );

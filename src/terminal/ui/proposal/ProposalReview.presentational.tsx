@@ -22,7 +22,7 @@ export function ProposalReview({
       </Text>
       {diagnostic ? (
         <Text bold color="red" wrap="truncate">
-          {diagnostic.replace(/[\r\n]+/g, ' ')}
+          {diagnostic.replaceAll(/[\r\n]+/gu, ' ')}
         </Text>
       ) : null}
       <Text>{visibleLines.join('\n')}</Text>

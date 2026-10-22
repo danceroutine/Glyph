@@ -75,7 +75,9 @@ describe(resolveOverlayImports, () => {
       readFileSync: () =>
         JSON.stringify({ compilerOptions: { paths: { '#outside/*': ['../outside/*'], '#root/*': ['./overlay*'] } } }),
     }));
-    onTestFinished(() => vi.doUnmock('node:fs'));
+    onTestFinished(() => {
+      vi.doUnmock('node:fs');
+    });
     const { resolveOverlayImports: resolveWithConfig } = await import('#scripts/code-oss/resolve-overlay-imports.mjs');
 
     expect(() => resolveWithConfig("import '#outside/module.js';", browser)).toThrow(
@@ -94,7 +96,7 @@ describe(resolveOverlayImports, () => {
   it.each(['#missing/module.js', '#vs/../escape.js', '#glyph/../../escape.js', '#vs/'])(
     'rejects an unknown or invalid alias %s instead of emitting an unusable import',
     specifier => {
-      expect(() => resolveOverlayImports(`import '${specifier}';`, browser)).toThrow(/Code OSS import alias/);
+      expect(() => resolveOverlayImports(`import '${specifier}';`, browser)).toThrow(/Code OSS import alias/u);
     },
   );
 
@@ -127,6 +129,10 @@ describe(resolveOverlayImports, () => {
   });
 });
 
+/**
+ * @param {string} directory
+ * @returns {Generator<string>}
+ */
 function* files(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const file = join(directory, entry.name);

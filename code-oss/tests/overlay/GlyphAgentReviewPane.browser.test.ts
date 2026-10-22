@@ -189,7 +189,7 @@ const paneOf = (
     },
   };
   const pane = new GlyphAgentReviewPane(
-    { id: GlyphAgentReviewPane.ID, title: 'Agent Review' } as never,
+    { id: GlyphAgentReviewPane.ID, title: 'Agent Review' },
     {} as never,
     {} as never,
     services.configuration as never,
@@ -231,7 +231,10 @@ const paneOf = (
     },
     added,
     removed,
-    settled: () => vi.waitFor(() => expect(controls().busy).toBe(false)),
+    settled: () =>
+      vi.waitFor(() => {
+        expect(controls().busy).toBe(false);
+      }),
   };
 };
 
@@ -458,7 +461,7 @@ describe(GlyphAgentReviewPane, () => {
     expect(command).toBe('git.refresh');
     expect(root.toString()).toBe(URI.file('/repo').toString());
     expect(services.glyph.startAgentReview).toHaveBeenCalledWith({
-      id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      id: expect.stringMatching(/^[0-9a-f-]{36}$/u),
       repositoryUri: URI.file('/repo').toString(),
       scope: Scope.LAST_COMMIT,
       branch: '',

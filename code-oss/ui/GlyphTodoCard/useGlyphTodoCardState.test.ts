@@ -34,10 +34,14 @@ describe(useGlyphTodoCardState, () => {
   it('expands and collapses the list', () => {
     const { result } = renderHook(useGlyphTodoCardState, { initialProps: { items: [] } });
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     expect(result.current.expanded).toBe(true);
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     expect(result.current.expanded).toBe(false);
   });
 });

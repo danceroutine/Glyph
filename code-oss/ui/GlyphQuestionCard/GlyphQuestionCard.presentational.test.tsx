@@ -179,8 +179,8 @@ describe(GlyphQuestionCard, () => {
   it('cannot move past the first or last question', () => {
     render(<GlyphQuestionCard {...cardProps()} />);
 
-    expect((screen.getByRole('button', { name: 'Previous question' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Next question' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Previous question' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Next question' }).disabled).toBe(true);
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
   });
 
@@ -198,7 +198,7 @@ describe(GlyphQuestionCard, () => {
   it('cannot continue without a valid answer', () => {
     render(<GlyphQuestionCard {...cardProps({ valid: false })} />);
 
-    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Continue' }).disabled).toBe(true);
   });
 
   it('becomes busy and unavailable while submitting', () => {
@@ -206,15 +206,15 @@ describe(GlyphQuestionCard, () => {
 
     expect(screen.getByRole('form', { name: 'Questions' }).getAttribute('aria-busy')).toBe('true');
     for (const name of ['Submitting…', 'Cancel turn', 'Back', 'Previous question', 'Next question'])
-      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('group') as HTMLFieldSetElement).disabled).toBe(true);
+      expect(screen.getByRole<HTMLButtonElement>('button', { name }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLFieldSetElement>('group').disabled).toBe(true);
   });
 
   it('directs answers to the window that owns the chat', () => {
     render(<GlyphQuestionCard {...cardProps({ disabled: true })} />);
 
     expect(screen.getByText('Answer in the window that owns this chat.')).toBeTruthy();
-    expect((screen.getByRole('group') as HTMLFieldSetElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLFieldSetElement>('group').disabled).toBe(true);
   });
 
   it('shows why the last submission failed', () => {

@@ -21,12 +21,12 @@ describe(WiredPromptEditor, () => {
     try {
       await tick();
       view.stdin.write('hello');
-      view.stdin.write('\x1b[200~ world\nagain\x1b[201~');
-      view.stdin.write('\x7f');
+      view.stdin.write('\u001B[200~ world\nagain\u001B[201~');
+      view.stdin.write('\u007F');
       view.stdin.write('!');
       view.stdin.write('\r');
       view.stdin.write('\r');
-      view.stdin.write('\x1b[200~late paste\x1b[201~');
+      view.stdin.write('\u001B[200~late paste\u001B[201~');
       await tick();
       expect(complete).toHaveBeenCalledExactlyOnceWith({ prompt: 'hello world agai!', attachmentPaths: [] });
       expect(view.lastFrame()).not.toContain('late paste');
@@ -51,7 +51,9 @@ describe(WiredPromptEditor, () => {
     );
     try {
       await write(view, '@a');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('apple.ts'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('apple.ts');
+      });
       view.stdin.write('b');
       view.stdin.write('\t');
       view.stdin.write('\r');
@@ -78,8 +80,10 @@ describe(WiredPromptEditor, () => {
     );
     try {
       await write(view, '@a');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('apricot.ts'));
-      view.stdin.write('\x1b[B');
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('apricot.ts');
+      });
+      view.stdin.write('\u001B[B');
       view.stdin.write('\t');
       view.stdin.write('\r');
       await tick();
@@ -96,7 +100,7 @@ describe(WiredPromptEditor, () => {
     );
     try {
       await write(view, '/tr');
-      view.stdin.write('\x1b[B');
+      view.stdin.write('\u001B[B');
       view.stdin.write('\r');
       view.stdin.write('\r');
       await tick();
@@ -125,7 +129,9 @@ describe(WiredPromptEditor, () => {
     );
     try {
       await write(view, '@a');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('apple.ts'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('apple.ts');
+      });
       await write(view, 'b');
       await write(view, '\t');
       await write(view, '\r');
@@ -145,7 +151,9 @@ describe(WiredPromptEditor, () => {
       );
       try {
         await write(view, `${'a'.repeat(72)}界`);
-        await vi.waitFor(() => expect(cursorPosition.mock.lastCall?.[0].x).toBe(3));
+        await vi.waitFor(() => {
+          expect((cursorPosition.mock.lastCall?.[0] as { x: number } | undefined)?.x).toBe(3);
+        });
       } finally {
         view.unmount();
       }
@@ -172,7 +180,9 @@ describe(WiredPromptEditor, () => {
       );
       await write(first, '@a');
       await write(first, 'b');
-      await vi.waitFor(() => expect(first.lastFrame()).toContain('ab.ts'));
+      await vi.waitFor(() => {
+        expect(first.lastFrame()).toContain('ab.ts');
+      });
       first.unmount();
       const next = render(
         <WiredPromptEditor
@@ -182,7 +192,9 @@ describe(WiredPromptEditor, () => {
       );
       try {
         await write(next, '@fresh');
-        await vi.waitFor(() => expect(next.lastFrame()).toContain('fresh.ts'));
+        await vi.waitFor(() => {
+          expect(next.lastFrame()).toContain('fresh.ts');
+        });
       } finally {
         next.unmount();
       }
@@ -197,7 +209,7 @@ describe(WiredPromptEditor, () => {
       );
 
       await write(view, 'hello');
-      await write(view, '\x1b[200~ world\nagain\x1b[201~');
+      await write(view, '\u001B[200~ world\nagain\u001B[201~');
       view.stdin.write('\r');
       await waitUntil(() => complete.mock.calls.length === 1);
 
@@ -232,16 +244,16 @@ describe(WiredPromptEditor, () => {
       const seen = new Set<string>();
       for (let index = 0; index < TERMINAL_COMMANDS.length; index++) {
         for (const command of TERMINAL_COMMANDS) {
-          if (view.lastFrame()?.includes(command.value)) seen.add(command.value);
+          if (view.lastFrame()?.includes(command.value) === true) seen.add(command.value);
         }
-        await write(view, '\x1b[B');
+        await write(view, '\u001B[B');
       }
-      expect([...seen].sort()).toEqual(TERMINAL_COMMANDS.map(command => command.value).sort());
+      expect([...seen].toSorted()).toEqual(TERMINAL_COMMANDS.map(command => command.value).toSorted());
 
       await write(view, 'tr');
       expect(view.lastFrame()).toContain('/trace off');
       expect(view.lastFrame()).not.toContain('/help');
-      await write(view, '\x1b[B');
+      await write(view, '\u001B[B');
       await write(view, '\t');
       expect(view.lastFrame()).toContain('you> /trace on');
       expect(view.lastFrame()).not.toContain('Enable full provider tracing');
@@ -309,16 +321,16 @@ describe(WiredPromptEditor, () => {
 
       view.stdin.write('@app');
       await waitUntil(() => (view.lastFrame() ?? '').includes('src/second.ts'));
-      view.stdin.write('\x1b[B');
-      view.stdin.write('\x1b[B');
-      view.stdin.write('\x1b[A');
+      view.stdin.write('\u001B[B');
+      view.stdin.write('\u001B[B');
+      view.stdin.write('\u001B[A');
       await tick();
       view.stdin.write('\t');
       await waitUntil(() => (view.lastFrame() ?? '').includes('@first.ts'));
       expect(view.lastFrame()).not.toContain('src/first.ts');
-      await write(view, '\x1b[D');
+      await write(view, '\u001B[D');
       expect(view.lastFrame()).toContain('@src/first.ts');
-      await write(view, '\x1b[C');
+      await write(view, '\u001B[C');
       expect(view.lastFrame()).not.toContain('@src/first.ts');
       view.stdin.write('\r');
       await waitUntil(() => complete.mock.calls.length === 1);
@@ -356,7 +368,9 @@ describe(WiredPromptEditor, () => {
       view.stdin.write('\r');
       await waitUntil(() => complete.mock.calls.length === 1);
 
-      expect(complete.mock.calls[0]?.[0].attachmentPaths).toEqual(['src/App.tsx']);
+      expect((complete.mock.calls[0]?.[0] as { attachmentPaths: string[] } | undefined)?.attachmentPaths).toEqual([
+        'src/App.tsx',
+      ]);
       view.unmount();
     });
 
@@ -395,16 +409,16 @@ describe(WiredPromptEditor, () => {
 
       for (const input of [
         'a😀b',
-        '\x1b[D',
-        '\x7f',
-        '\x1b[C',
-        '\x1b[C',
-        '\x1b[3~',
-        '\x1b[H',
-        '\x7f',
-        '\x1b[3~',
-        '\x05',
-        '\x01',
+        '\u001B[D',
+        '\u007F',
+        '\u001B[C',
+        '\u001B[C',
+        '\u001B[3~',
+        '\u001B[H',
+        '\u007F',
+        '\u001B[3~',
+        '\u0005',
+        '\u0001',
         'z',
       ]) {
         await write(view, input);
@@ -426,10 +440,10 @@ describe(WiredPromptEditor, () => {
       );
 
       await write(view, '😀b');
-      await write(view, '\x1b[H');
-      await write(view, '\x1b[C');
+      await write(view, '\u001B[H');
+      await write(view, '\u001B[C');
       await write(view, 'x');
-      await write(view, '\x04');
+      await write(view, '\u0004');
       view.stdin.write('\r');
       await waitUntil(() => complete.mock.calls.length === 1);
 
@@ -508,7 +522,7 @@ describe(WiredPromptEditor, () => {
         />,
       );
 
-      view.stdin.write('\x03');
+      view.stdin.write('\u0003');
       await waitUntil(() => interrupt.mock.calls.length === 1);
 
       expect(interrupt).toHaveBeenCalledOnce();
@@ -520,14 +534,14 @@ describe(WiredPromptEditor, () => {
       const search = vi.fn<WorkspacePathIndex['search']>(
         query =>
           new Promise(resolve => {
-            pending.push(resultGeneration =>
+            pending.push(resultGeneration => {
               resolve({
                 generation: resultGeneration,
                 query,
                 fileCount: 1,
                 matches: [{ path: `${query}.ts`, score: 1, indices: [] }],
-              }),
-            );
+              });
+            });
           }),
       );
       const view = render(
@@ -592,7 +606,9 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 }
 
 async function tick(): Promise<void> {
-  await new Promise<void>(resolve => setImmediate(resolve));
+  await new Promise<void>(resolve => {
+    setImmediate(resolve);
+  });
 }
 
 async function write(view: ReturnType<typeof render>, input: string): Promise<void> {
@@ -601,6 +617,8 @@ async function write(view: ReturnType<typeof render>, input: string): Promise<vo
 }
 
 async function writeEscape(view: ReturnType<typeof render>): Promise<void> {
-  view.stdin.write('\x1b');
-  await new Promise<void>(resolve => setTimeout(resolve, 75));
+  view.stdin.write('\u001B');
+  await new Promise<void>(resolve => {
+    setTimeout(resolve, 75);
+  });
 }

@@ -1,6 +1,10 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { contextFiles } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+/** @typedef {import('./ScriptedProvider.mjs').ScriptedProvider} ScriptedProvider */
 
 it.describe.configure({ mode: 'default' });
 it.use({
@@ -16,14 +20,23 @@ it.use({
 
 const selectsSavedChat = isolatedLaunch('selects a saved chat by its title');
 const leavesUnsentDraft = isolatedLaunch('leaves an unsent draft that closing chats keeps');
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} name
+ */
 const item = (glyph, name) =>
   glyph.page.getByRole('tree', { name: 'Files Explorer', exact: true }).getByRole('treeitem', { name, exact: true });
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} name
+ * @param {string} action
+ */
 async function attach(glyph, name, action) {
   // Native menus block pointer events outside the popup. Keep the fixture-only
   // notification handler from trying to click behind an open context menu.
-  const notice = glyph.page.getByRole('dialog', { name: /All installed extensions are temporarily disabled/ });
+  const notice = glyph.page.getByRole('dialog', { name: /All installed extensions are temporarily disabled/u });
   await glyph.page.removeLocatorHandler(notice);
-  if (await notice.isVisible()) await notice.getByRole('button', { name: /^Clear Notification/ }).click();
+  if (await notice.isVisible()) await notice.getByRole('button', { name: /^Clear Notification/u }).click();
   await item(glyph, name).click({ button: 'right' });
   const menuAction = glyph.page.getByRole('menuitem', { name: action, exact: true });
   await expect(menuAction).toBeVisible();
@@ -32,16 +45,17 @@ async function attach(glyph, name, action) {
   glyph.extensionNoticeHandler = undefined;
   await glyph.dismissExtensionNotices();
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ */
 async function send(glyph, provider) {
   provider.enqueue({ chunks: ['Context received.'] });
   await glyph.sendButton.click();
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
   await expect.poll(() => provider.requests.length).toBeGreaterThan(0);
-  const user = provider.requests
-    .at(-1)
-    .body.input.filter(value => value.role === 'user')
-    .at(-1);
-  return JSON.parse(user.content[0].text).files;
+  const user = provider.requests.at(-1)?.body.input.findLast(value => value.role === 'user');
+  return contextFiles(user);
 }
 
 it('attaches selected Explorer files as badges using unsaved editor contents', async ({ glyph, provider }) => {
@@ -96,7 +110,7 @@ for (const directory of [false, true]) {
       await glyph.page
         .getByRole('navigation', { name: 'Saved chats' })
         .getByRole('button')
-        .filter({ hasText: /Original task/i })
+        .filter({ hasText: /Original task/iu })
         .click();
       if (
         (await glyph.page.getByRole('button', { name: 'Chat history', exact: true }).getAttribute('aria-expanded')) ===
@@ -140,7 +154,7 @@ it('keeps the chat and draft unchanged when a selected file cannot be captured',
   await item(glyph, 'alpha.txt').click();
   await item(glyph, 'beta.txt').click({ modifiers: ['ControlOrMeta'] });
   await attach(glyph, 'beta.txt', 'Add File to New Glyph Chat');
-  await expect(glyph.page.locator('.notifications-toasts')).toContainText(/512 KiB|READ_LIMIT_EXCEEDED/);
+  await expect(glyph.page.locator('.notifications-toasts')).toContainText(/512 KiB|READ_LIMIT_EXCEEDED/u);
   await expect(glyph.composer).toHaveText('Keep this draft');
   await expect(glyph.composer.getByRole('button')).toHaveCount(0);
   await expect(glyph.userEntries).toHaveCount(1);

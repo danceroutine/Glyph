@@ -70,7 +70,9 @@ async function fixture(
   const saved = new Map<string, ChatSessionRecord>((extras.records ?? []).map(record => [record.id, record]));
   const recorded: ChatContextEvent[][] = [];
   let runtime: ProviderDesktopRuntime;
-  const interactions = new DesktopInteractionBroker(event => runtime.publish(event));
+  const interactions = new DesktopInteractionBroker(event => {
+    runtime.publish(event);
+  });
   const account = {
     provider: 'fixture',
     id: 'account',
@@ -102,8 +104,8 @@ async function fixture(
       recorded.push(context);
       return {
         model: 'model',
-        recordContext: events => {
-          for (const event of events) if (!context.some(previous => previous.id === event.id)) context.push(event);
+        recordContext: incoming => {
+          for (const event of incoming) if (!context.some(previous => previous.id === event.id)) context.push(event);
         },
         exportState: () => {
           const data = structuredClone(context);
@@ -158,7 +160,7 @@ async function fixture(
         wakeListeners.delete(listener);
       };
     },
-    peekPendingWake: (accepts: (wake: ShellWakeEvent) => boolean) => wakes.find(accepts),
+    peekPendingWake: (accepts: (wake: ShellWakeEvent) => boolean) => wakes.find(value => accepts(value)),
     takePendingWake: (id?: string) => {
       const index = id === undefined ? 0 : wakes.findIndex(wake => wake.id === id);
       return index < 0 ? undefined : wakes.splice(index, 1)[0];
@@ -177,13 +179,15 @@ async function fixture(
     glyph,
     interactions,
     shellSessions: shells,
-    emit: event => events.push(event),
+    emit: event => {
+      events.push(event);
+    },
     ownerWindowId,
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
   });
   await runtime.handle({ type: Command.CREATE_CHAT, accountProvider: 'fixture', accountId: 'account', model: 'model' });
   const chatId = (await runtime.snapshot()).chats.find(
-    chat => !extras.records?.some(record => record.id === chat.id),
+    chat => extras.records?.some(record => record.id === chat.id) !== true,
   )!.id;
   return {
     runtime,
@@ -307,7 +311,9 @@ describe(ProviderDesktopRuntime, () => {
       await harness.runtime.handle(command);
       expect((await harness.runtime.snapshot()).runs[0]?.steering).toHaveLength(1);
       gate.resolve();
-      await vi.waitFor(() => expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(1));
+      await vi.waitFor(() => {
+        expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(1);
+      });
       expect(sends).toBe(1);
       expect(received.map(value => value.text)).toEqual(['Keep going']);
       expect(harness.saved.get(harness.chatId)?.transcript[0]?.steering?.[0]?.text).toBe('Keep going');
@@ -331,11 +337,11 @@ describe(ProviderDesktopRuntime, () => {
           text: runId,
           attachments: [],
         });
-        await vi.waitFor(async () =>
+        await vi.waitFor(async () => {
           expect((await harness.runtime.snapshot()).runs.find(run => run.runId === runId)?.status).toBe(
             GlyphRunStatus.COMPLETED,
-          ),
-        );
+          );
+        });
       }
       await harness.runtime.handle({
         type: Command.BRANCH_CHAT,
@@ -469,9 +475,9 @@ describe(ProviderDesktopRuntime, () => {
           text: 'Continue',
           attachments: [],
         });
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[index]?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[index]?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
       }
       const expected = {
         inputTokens: 4,
@@ -508,9 +514,9 @@ describe(ProviderDesktopRuntime, () => {
         text: 'First',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED);
+      });
       expect(harness.events.filter(event => event.type === GlyphHostEventType.USAGE)).toEqual([]);
       expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(0);
       harness.store.save = save;
@@ -521,9 +527,9 @@ describe(ProviderDesktopRuntime, () => {
         text: 'Next',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[1]?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[1]?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       expect((await harness.runtime.snapshot()).usageByChat?.[harness.chatId]).toEqual({
         ...usage,
         unreportedTurns: 0,
@@ -556,11 +562,11 @@ describe(ProviderDesktopRuntime, () => {
           text: 'Start a shell',
           attachments: [],
         });
-        await vi.waitFor(async () =>
+        await vi.waitFor(async () => {
           expect((await harness.runtime.snapshot()).runs.find(run => run.runId === runId)?.status).toBe(
             GlyphRunStatus.COMPLETED,
-          ),
-        );
+          );
+        });
       }
       harness.shells.allSessions = [1, 2].map(index => ({
         id: `session-${index}`,
@@ -613,9 +619,9 @@ describe(ProviderDesktopRuntime, () => {
         text: 'Read',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       const tools = (await harness.runtime.snapshot()).runs[0]!.tools;
       expect(tools.map(tool => tool.textOffset)).toEqual([0, 'Between calls.'.length]);
       expect(tools[1]!.summary).toBe(`${'x'.repeat(16_000)}\n… (truncated)`);
@@ -653,9 +659,9 @@ describe(ProviderDesktopRuntime, () => {
         text: 'Read',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       const expected = [
         {
           id: 'first',
@@ -733,12 +739,12 @@ describe(ProviderDesktopRuntime, () => {
           }),
         ),
       );
-      await vi.waitFor(async () =>
+      await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs.map(run => run.status)).toEqual([
           GlyphRunStatus.COMPLETED,
           GlyphRunStatus.COMPLETED,
-        ]),
-      );
+        ]);
+      });
       expect(harness.recorded).toEqual([[], []]);
       expect(reviews.pendingResults).toHaveLength(1);
       await harness.glyph.commitReviewResults(harness.glyph.openChat(harness.chatId, account));
@@ -777,11 +783,13 @@ describe(ProviderDesktopRuntime, () => {
         text: 'First',
         attachments: [],
       });
-      await vi.waitFor(() => expect(attempts).toBe(1));
+      await vi.waitFor(() => {
+        expect(attempts).toBe(1);
+      });
       await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'cancelled' });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
+      });
       await harness.runtime.handle({
         type: Command.SEND,
         chatId: harness.chatId,
@@ -791,9 +799,9 @@ describe(ProviderDesktopRuntime, () => {
       });
       expect(send).not.toHaveBeenCalled();
       release();
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[1]?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[1]?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       expect(send).toHaveBeenCalledOnce();
       expect(harness.recorded[0]).toHaveLength(1);
       expect(harness.saved.get(harness.chatId)?.providerState.data).toEqual(harness.recorded[0]);
@@ -851,13 +859,15 @@ describe(ProviderDesktopRuntime, () => {
           text: 'Wait',
           attachments: [],
         });
-        await vi.waitFor(async () =>
+        await vi.waitFor(async () => {
           expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(
             waitingOn === 'question' ? GlyphRunStatus.WAITING_FOR_QUESTION : GlyphRunStatus.WAITING_FOR_APPROVAL,
-          ),
-        );
+          );
+        });
         deciding = harness.runtime.handle({ type: Command.REJECT_PROPOSAL_ITEM, chatId: owner, ...proposal });
-        await vi.waitFor(() => expect(reviews.pendingResults).toHaveLength(1));
+        await vi.waitFor(() => {
+          expect(reviews.pendingResults).toHaveLength(1);
+        });
         await harness.runtime.handle({
           type: Command.SEND,
           chatId: other.id,
@@ -865,11 +875,11 @@ describe(ProviderDesktopRuntime, () => {
           text: 'Independent work',
           attachments: [],
         });
-        await vi.waitFor(async () =>
+        await vi.waitFor(async () => {
           expect((await harness.runtime.snapshot()).runs.find(run => run.runId === 'other-run')?.status).toBe(
             GlyphRunStatus.COMPLETED,
-          ),
-        );
+          );
+        });
         expect(calls).toEqual([owner, other.id]);
         expect(harness.recorded[1]).toEqual([]);
         expect(reviews.pendingResults).toHaveLength(1);
@@ -912,15 +922,19 @@ describe(ProviderDesktopRuntime, () => {
         text: 'Continue',
         attachments: [],
       });
-      await vi.waitFor(() => expect(saving).toBe(true));
+      await vi.waitFor(() => {
+        expect(saving).toBe(true);
+      });
       await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'run' });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
+      });
       expect(send).not.toHaveBeenCalled();
       expect(reviews.pendingResults).toHaveLength(1);
       stopping = harness.runtime.dispose();
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
       expect(close).not.toHaveBeenCalled();
       release();
       await stopping;
@@ -954,9 +968,9 @@ describe(ProviderDesktopRuntime, () => {
         attachments: [],
       });
       await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'run' });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.CANCELLED);
+      });
       expect(send).not.toHaveBeenCalled();
       release();
       await rejecting;
@@ -990,14 +1004,18 @@ describe(ProviderDesktopRuntime, () => {
           requestId: String(++request),
           command,
         });
-      host.connect('owner', identity, envelope => events.push(envelope.event));
+      host.connect('owner', identity, envelope => {
+        events.push(envelope.event);
+      });
       await receive('owner', { type: Command.ATTACH_WORKSPACE, roots, trusted: true });
       let release!: () => void;
       let discoverySignal: AbortSignal | undefined;
       first.backend.listModels = (_account, signal) =>
         new Promise((resolve, reject) => {
           discoverySignal = signal;
-          const abort = () => reject(signal?.reason);
+          const abort = () => {
+            reject(signal?.reason);
+          };
           release = () => {
             signal?.removeEventListener('abort', abort);
             resolve([{ slug: 'next', name: 'Next' }]);
@@ -1009,7 +1027,9 @@ describe(ProviderDesktopRuntime, () => {
         accountProvider: 'fixture',
         accountId: 'account',
       });
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
       let transitioned = false;
       const changing = receive(
         'owner',
@@ -1018,14 +1038,18 @@ describe(ProviderDesktopRuntime, () => {
         transitioned = true;
       });
       try {
-        await new Promise<void>(resolve => setImmediate(resolve));
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
         expect(discoverySignal?.aborted).toBe(true);
         expect(transitioned).toBe(true);
         if (transition === 'detach') {
-          host.connect('peer', { ...identity, windowId: 'peer' }, envelope => events.push(envelope.event));
+          host.connect('peer', { ...identity, windowId: 'peer' }, envelope => {
+            events.push(envelope.event);
+          });
           await receive('peer', { type: Command.ATTACH_WORKSPACE, roots, trusted: true });
         }
-        expect(events.filter(event => event.type === GlyphHostEventType.INITIAL_STATE).at(-1)).toMatchObject({
+        expect(events.findLast(event => event.type === GlyphHostEventType.INITIAL_STATE)).toMatchObject({
           state: { ownerWindowId: nextWindow, readOnly: false },
         });
         expect(first.shells.dispose).toHaveBeenCalledOnce();
@@ -1050,7 +1074,9 @@ describe(ProviderDesktopRuntime, () => {
       (_url, options) =>
         new Promise((resolve, reject) => {
           discoverySignal = options?.signal;
-          const abort = () => reject(discoverySignal?.reason);
+          const abort = () => {
+            reject(discoverySignal?.reason);
+          };
           release = () => {
             discoverySignal?.removeEventListener('abort', abort);
             resolve({
@@ -1062,7 +1088,7 @@ describe(ProviderDesktopRuntime, () => {
               },
             });
           };
-          if (discoverySignal?.aborted) abort();
+          if (discoverySignal?.aborted === true) abort();
           else discoverySignal?.addEventListener('abort', abort, { once: true });
         }),
     );
@@ -1087,7 +1113,9 @@ describe(ProviderDesktopRuntime, () => {
         outcome = 'cancelled';
       },
     );
-    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(get).toHaveBeenCalledOnce();
+    });
     let stopped = false;
     const stopping = (
       retirement === 'dispose' ? harness.runtime.dispose() : harness.runtime.connectionLost('owner')
@@ -1095,7 +1123,9 @@ describe(ProviderDesktopRuntime, () => {
       stopped = true;
     });
     try {
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
       expect(discoverySignal?.aborted).toBe(true);
       expect(outcome).toBe('cancelled');
       expect(stopped).toBe(true);
@@ -1115,7 +1145,9 @@ describe(ProviderDesktopRuntime, () => {
       let release!: () => void;
       harness.backend.listModels = () =>
         new Promise(resolve => {
-          release = () => resolve([{ slug: 'next', name: 'Next' }]);
+          release = () => {
+            resolve([{ slug: 'next', name: 'Next' }]);
+          };
         });
       const pending = harness.runtime.handle({ type, accountProvider: 'fixture', accountId: 'account', model: 'next' });
       const result = pending.then(
@@ -1184,10 +1216,14 @@ describe(ProviderDesktopRuntime, () => {
       () => 'completed',
       () => 'cancelled',
     );
-    await vi.waitFor(() => expect(saving).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(saving).toHaveBeenCalledOnce();
+    });
     const stopping = harness.runtime.dispose();
     try {
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
       expect(closed).not.toHaveBeenCalled();
     } finally {
       release();
@@ -1210,7 +1246,14 @@ describe(ProviderDesktopRuntime, () => {
     const harness = await fixture(async options => {
       await new Promise<void>((_resolve, reject) => {
         if (options.signal.aborted) reject(options.signal.reason);
-        else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        else
+          options.signal.addEventListener(
+            'abort',
+            () => {
+              reject(options.signal.reason);
+            },
+            { once: true },
+          );
       });
     });
     await harness.runtime.handle({
@@ -1236,7 +1279,15 @@ describe(ProviderDesktopRuntime, () => {
     });
     const harness = await fixture(async options => {
       started();
-      await new Promise<void>(resolve => options.signal.addEventListener('abort', () => resolve(), { once: true }));
+      await new Promise<void>(resolve => {
+        options.signal.addEventListener(
+          'abort',
+          () => {
+            resolve();
+          },
+          { once: true },
+        );
+      });
       await drained;
     });
     harness.shells.dispose.mockImplementation(async () => {
@@ -1281,7 +1332,9 @@ describe(ProviderDesktopRuntime, () => {
     });
     const stopping = harness.runtime.dispose();
     try {
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
       expect(disposed).not.toHaveBeenCalled();
     } finally {
       finish();
@@ -1311,9 +1364,9 @@ describe(ProviderDesktopRuntime, () => {
         text: 'Question',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       expect(harness.saved.get(harness.chatId)?.transcript).toMatchObject([
         { userText: 'Question', assistantText: 'Answer', reasoningSummary: 'Summary' },
       ]);
@@ -1361,9 +1414,9 @@ describe(ProviderDesktopRuntime, () => {
         text: 'Ask me',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_QUESTION),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_QUESTION);
+      });
       const question = (await harness.runtime.snapshot()).runs[0]!.question!;
       await harness.runtime.handle({
         type: Command.ANSWER_QUESTION,
@@ -1372,9 +1425,9 @@ describe(ProviderDesktopRuntime, () => {
         questionId: question.id,
         answer: { answers: [{ questionId: 'choice', type: QuestionAnswerType.SELECTION, optionIds: ['one'] }] },
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       expect((await harness.runtime.snapshot()).runs[0]?.question).toBeUndefined();
       expect(harness.events.some(event => event.type === GlyphHostEventType.QUESTION)).toBe(true);
     } finally {
@@ -1403,9 +1456,9 @@ describe(ProviderDesktopRuntime, () => {
           attachments: [],
         }),
       ).rejects.toThrow('active run');
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL);
+      });
       await harness.runtime.connectionLost('peer');
       expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL);
       await harness.runtime.connectionLost('owner');
@@ -1967,9 +2020,9 @@ describe(ProviderDesktopRuntime, () => {
           attachments: [],
         } as const;
         await harness.runtime.handle(send);
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
         await expect(harness.runtime.handle(send)).rejects.toThrow('This run id has already been used.');
       } finally {
         await harness.runtime.dispose();
@@ -2005,9 +2058,9 @@ describe(ProviderDesktopRuntime, () => {
             { ...capture, path: 'c.ts', kind: GlyphContextAttachmentKind.FILE },
           ],
         });
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
         expect((await harness.runtime.snapshot()).runs[0]?.attachments).toEqual([
           { uri: capture.uri, path: 'a.ts', text: 'abc', revision: 'content', range, side: 'modified' },
           { uri: capture.uri, path: 'b.ts', text: 'abc', revision: 'content' },
@@ -2034,9 +2087,9 @@ describe(ProviderDesktopRuntime, () => {
           text: 'Count',
           attachments: [],
         });
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
         expect((await harness.runtime.snapshot()).runs[0]?.usage).toEqual({ ...partial, unreportedTurns: 1 });
       } finally {
         await harness.runtime.dispose();
@@ -2055,12 +2108,12 @@ describe(ProviderDesktopRuntime, () => {
           text: 'Fail',
           attachments: [],
         });
-        await vi.waitFor(async () =>
+        await vi.waitFor(async () => {
           expect((await harness.runtime.snapshot()).runs[0]).toMatchObject({
             status: GlyphRunStatus.FAILED,
             terminalMessage: '[REDACTED] outage',
-          }),
-        );
+          });
+        });
       } finally {
         await harness.runtime.dispose();
       }
@@ -2088,9 +2141,9 @@ describe(ProviderDesktopRuntime, () => {
           text: 'Go',
           attachments: [],
         });
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
         expect(harness.events).toContainEqual({
           type: GlyphHostEventType.RESPONSE_DELTA,
           chatId: harness.chatId,
@@ -2136,11 +2189,11 @@ describe(ProviderDesktopRuntime, () => {
           text: 'Again',
           attachments: [],
         });
-        await vi.waitFor(async () =>
+        await vi.waitFor(async () => {
           expect((await harness.runtime.snapshot()).runs.find(run => run.runId === 'legacy-run')?.status).toBe(
             GlyphRunStatus.COMPLETED,
-          ),
-        );
+          );
+        });
         const run = (await harness.runtime.snapshot()).runs.find(value => value.runId === 'legacy-run')!;
         expect(run.createdAt).toBe('2026-09-01T00:00:00.000Z');
         expect(run).not.toHaveProperty('checkpointTurnId');
@@ -2222,9 +2275,9 @@ describe(ProviderDesktopRuntime, () => {
         await entered.promise;
         await harness.runtime.handle({ type: Command.CANCEL_RUN, chatId: harness.chatId, runId: 'another' });
         gate.resolve();
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
       } finally {
         gate.resolve();
         await harness.runtime.dispose();
@@ -2251,9 +2304,9 @@ describe(ProviderDesktopRuntime, () => {
           text: 'Ask',
           attachments: [],
         });
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_QUESTION),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_QUESTION);
+        });
         const question = (await harness.runtime.snapshot()).runs[0]!.question!;
         await harness.runtime.handle({
           type: Command.ANSWER_QUESTION,
@@ -2262,9 +2315,9 @@ describe(ProviderDesktopRuntime, () => {
           questionId: question.id,
           answer: { answers: [{ questionId: 'why', type: QuestionAnswerType.OTHER, text: '  It matters  ' }] },
         });
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
         expect((await harness.runtime.snapshot()).runs[0]?.questionResponses).toEqual([
           { id: question.id, answers: [{ question: 'Why?', answer: 'It matters' }] },
         ]);
@@ -2287,9 +2340,9 @@ describe(ProviderDesktopRuntime, () => {
           text: 'List',
           attachments: [],
         });
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL);
+        });
         const approval = (await harness.runtime.snapshot()).runs[0]!.approval!;
         await harness.runtime.handle({
           type: Command.DECIDE_APPROVAL,
@@ -2298,12 +2351,12 @@ describe(ProviderDesktopRuntime, () => {
           approvalId: approval.id,
           decision: GlyphApprovalDecision.ALLOW_ONCE,
         });
-        await vi.waitFor(async () =>
+        await vi.waitFor(async () => {
           expect((await harness.runtime.snapshot()).runs[0]).toMatchObject({
             status: GlyphRunStatus.COMPLETED,
             text: 'allow_once',
-          }),
-        );
+          });
+        });
         expect((await harness.runtime.snapshot()).runs[0]?.approval).toBeUndefined();
       } finally {
         await harness.runtime.dispose();
@@ -2439,7 +2492,9 @@ describe(ProviderDesktopRuntime, () => {
             { source: AgentModeID.PLAN, target: AgentModeID.AGENT, description },
             options.signal,
             async () => {},
-            (id, status) => harness.runtime.finishModeSwap(harness.chatId, id, status),
+            (id, status) => {
+              harness.runtime.finishModeSwap(harness.chatId, id, status);
+            },
           );
         options.onText('Switched');
       });
@@ -2452,9 +2507,9 @@ describe(ProviderDesktopRuntime, () => {
           attachments: [],
         });
         const pendingApproval = async () => {
-          await vi.waitFor(async () =>
-            expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL),
-          );
+          await vi.waitFor(async () => {
+            expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL);
+          });
           return (await harness.runtime.snapshot()).runs[0]!.approval!;
         };
         const first = await pendingApproval();
@@ -2483,9 +2538,9 @@ describe(ProviderDesktopRuntime, () => {
           approvalId: second.id,
           decision: GlyphApprovalDecision.ALLOW_ONCE,
         });
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
         expect((await harness.runtime.snapshot()).runs[0]?.modeSwaps?.map(swap => swap.status)).toEqual([
           GlyphModeSwapStatus.DENIED,
           GlyphModeSwapStatus.APPROVED,
@@ -2711,9 +2766,9 @@ describe(ProviderDesktopRuntime, () => {
         text: 'Start the server',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       expect((await harness.runtime.snapshot()).runs[0]?.tools.map(tool => [tool.id, tool.status, tool.shell])).toEqual(
         [
           ['read', GlyphToolActivityStatus.COMPLETED, undefined],
@@ -2823,13 +2878,13 @@ describe(ProviderDesktopRuntime, () => {
         { ...unrelated, status: ShellSessionStatus.EXITED, exitCode: 0 },
       ];
       harness.emitShells();
-      await vi.waitFor(async () =>
+      await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs.map(run => run.userText)).toEqual([
           'Start the server',
           'Exited npm start',
           'Finished watch',
-        ]),
-      );
+        ]);
+      });
     } finally {
       await harness.runtime.dispose();
     }
@@ -2885,15 +2940,17 @@ describe(ProviderDesktopRuntime, () => {
         output: 'READY\n',
         matchedAt: 'now',
       });
-      await vi.waitFor(() => expect(saving).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(saving).toHaveBeenCalledOnce();
+      });
       harness.shells.takePendingWake('wake-1');
       gate.resolve();
-      await vi.waitFor(async () =>
+      await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs[0]).toMatchObject({
           status: GlyphRunStatus.FAILED,
           terminalMessage: 'The shell wake was revoked because its terminal closed.',
-        }),
-      );
+        });
+      });
       expect(send).not.toHaveBeenCalled();
     } finally {
       gate.resolve();
@@ -3002,10 +3059,12 @@ describe('background shell continuation scheduling', () => {
       const wake = wakeFor(harness.chatId);
       harness.wake(wake);
       harness.wake(wake);
-      await vi.waitFor(() => expect(sends).toBe(1));
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(() => {
+        expect(sends).toBe(1);
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       harness.wake(wake);
       await harness.runtime.snapshot();
       expect(sends).toBe(1);
@@ -3029,14 +3088,18 @@ describe('background shell continuation scheduling', () => {
         text: 'Work',
         attachments: [],
       });
-      await vi.waitFor(() => expect(sends).toBe(1));
+      await vi.waitFor(() => {
+        expect(sends).toBe(1);
+      });
       harness.wake(wakeFor(harness.chatId));
       expect(harness.recorded.flat()).toHaveLength(0);
       gate.resolve();
-      await vi.waitFor(() => expect(sends).toBe(2));
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(() => {
+        expect(sends).toBe(2);
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       expect(harness.recorded.flat()).toHaveLength(1);
     } finally {
       gate.resolve();
@@ -3056,7 +3119,9 @@ describe('background shell continuation scheduling', () => {
         await save(record);
       });
       harness.wake(wakeFor(harness.chatId));
-      await vi.waitFor(() => expect(saving).toHaveBeenCalled());
+      await vi.waitFor(() => {
+        expect(saving).toHaveBeenCalled();
+      });
       await expect(
         harness.runtime.handle({
           type: Command.SEND,
@@ -3068,7 +3133,9 @@ describe('background shell continuation scheduling', () => {
       ).rejects.toThrow('active run');
       expect(sends).toBe(0);
       gate.resolve();
-      await vi.waitFor(() => expect(sends).toBe(1));
+      await vi.waitFor(() => {
+        expect(sends).toBe(1);
+      });
     } finally {
       gate.resolve();
       await harness.runtime.dispose();
@@ -3082,9 +3149,9 @@ describe('background shell continuation scheduling', () => {
     try {
       vi.spyOn(harness.store, 'save').mockRejectedValue(new Error('Disk unavailable'));
       harness.wake(wakeFor(harness.chatId));
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED);
+      });
       expect(sends).toBe(0);
       expect(harness.shells.peekPendingWake(() => true)?.id).toBe('wake-1');
     } finally {
@@ -3117,25 +3184,31 @@ describe('background shell continuation scheduling', () => {
           harness.shells.allSessions = [{ ...shell, status: ShellSessionStatus.EXITED, exitCode: 0 }];
           harness.emitShells();
         }
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED),
-        );
-        await new Promise<void>(resolve => setImmediate(resolve));
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED);
+        });
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
         expect(saving).toHaveBeenCalledTimes(1);
         expect(send).not.toHaveBeenCalled();
         expect(harness.recorded.flat()).toEqual([]);
         await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId }, { windowId: 'peer' });
         expect(saving).toHaveBeenCalledTimes(1);
         await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
-        await vi.waitFor(() => expect(saving).toHaveBeenCalledTimes(2));
-        await new Promise<void>(resolve => setImmediate(resolve));
+        await vi.waitFor(() => {
+          expect(saving).toHaveBeenCalledTimes(2);
+        });
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
         expect(saving).toHaveBeenCalledTimes(2);
         expect(send).not.toHaveBeenCalled();
         saving.mockImplementation(save);
         await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
         expect(send).toHaveBeenCalledTimes(1);
         expect(harness.recorded.flat()).toEqual([expect.objectContaining({ type: `shell_${kind}` })]);
         expect(harness.shells.peekPendingWake(() => true)).toBeUndefined();
@@ -3154,9 +3227,9 @@ describe('background shell continuation scheduling', () => {
     try {
       const wake = wakeFor(harness.chatId);
       harness.wake(wake);
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.FAILED);
+      });
       expect(harness.shells.peekPendingWake(() => true)).toBeUndefined();
       harness.wake(wake);
       await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
@@ -3177,7 +3250,9 @@ describe('background shell continuation scheduling', () => {
         await save(record);
       });
       harness.wake(wakeFor(harness.chatId));
-      await vi.waitFor(() => expect(saving).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => {
+        expect(saving).toHaveBeenCalledTimes(1);
+      });
       const disconnected = harness.runtime.connectionLost('owner');
       gate.resolve();
       await disconnected;
@@ -3185,9 +3260,9 @@ describe('background shell continuation scheduling', () => {
       expect(send).not.toHaveBeenCalled();
       expect(harness.shells.peekPendingWake(() => true)?.id).toBe('wake-1');
       await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs[0]?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       expect(send).toHaveBeenCalledTimes(1);
       expect(harness.recorded.flat()).toHaveLength(1);
       expect(harness.shells.peekPendingWake(() => true)).toBeUndefined();
@@ -3234,7 +3309,9 @@ describe('background shell continuation scheduling', () => {
       });
       await harness.runtime.handle({ type: Command.STOP_SHELL_SESSION, chatId: harness.chatId, sessionId: 'terminal' });
       gate.resolve();
-      await vi.waitFor(() => expect(sends).toBe(2));
+      await vi.waitFor(() => {
+        expect(sends).toBe(2);
+      });
       expect(harness.recorded.flat()).toEqual([
         expect.objectContaining({
           type: 'shell_exit',
@@ -3267,7 +3344,9 @@ describe('background shell continuation scheduling', () => {
       harness.emitShells();
       harness.shells.allSessions = [{ ...shell, status: ShellSessionStatus.EXITED, error: 'spawn ENOENT' }];
       harness.emitShells();
-      await vi.waitFor(() => expect(sends).toBe(1));
+      await vi.waitFor(() => {
+        expect(sends).toBe(1);
+      });
       expect((await harness.runtime.snapshot()).shells?.[0]).toMatchObject({ running: false, error: 'spawn ENOENT' });
       expect((await harness.runtime.snapshot()).runs.at(-1)?.userText).toBe('Failed server');
       expect(harness.recorded.flat()).toContainEqual(
@@ -3289,7 +3368,9 @@ describe('background shell continuation scheduling', () => {
       await harness.runtime.snapshot();
       expect(sends).toBe(0);
       await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
-      await vi.waitFor(() => expect(sends).toBe(1));
+      await vi.waitFor(() => {
+        expect(sends).toBe(1);
+      });
     } finally {
       await harness.runtime.dispose();
     }

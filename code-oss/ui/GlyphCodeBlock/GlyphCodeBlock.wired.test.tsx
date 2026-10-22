@@ -58,7 +58,9 @@ describe(WiredGlyphCodeBlock, () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy code' }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy failed. Try again' })).toBeTruthy());
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Copy failed. Try again' })).toBeTruthy();
+    });
   });
 });
 

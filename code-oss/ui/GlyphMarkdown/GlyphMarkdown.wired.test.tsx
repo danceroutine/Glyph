@@ -14,9 +14,11 @@ describe(WiredGlyphMarkdown, () => {
     render(<WiredGlyphMarkdown text={'```ts\nconst a = 1;\n```'} openLink={vi.fn()} copyText={copyText} />);
 
     expect(screen.getByLabelText('ts code').textContent).toContain('const a = 1;');
-    fireEvent.click(screen.getByRole('button', { name: /copy/i }));
+    fireEvent.click(screen.getByRole('button', { name: /copy/iu }));
 
-    await waitFor(() => expect(copyText).toHaveBeenCalledWith('const a = 1;'));
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith('const a = 1;');
+    });
   });
 
   it('renders Mermaid blocks as diagrams', async () => {

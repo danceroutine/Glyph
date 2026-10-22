@@ -22,7 +22,7 @@ export interface GlyphWorkbenchViewActions {
   readonly composer: GlyphComposerState;
   readonly context: GlyphContextActions;
   /** Adds room for history alongside the chat; cleanup releases only the added width. */
-  reserveHistoryWidth?(width: number): () => void;
+  readonly reserveHistoryWidth?: (width: number) => () => void;
   send(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
   /** Native hosts resolve shortcuts through the workbench; browser previews use editor defaults. */
   readonly composerKeybindings?: {
@@ -46,7 +46,7 @@ export interface GlyphWorkbenchViewActions {
   viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
   branchChat?(chatId: string, turnId: string): Promise<void>;
   restoreCheckpoint?(chatId: string, turnId: string): Promise<void>;
-  copyText?(text: string): Promise<void>;
+  readonly copyText?: (text: string) => Promise<void>;
   openLink?(href: string): Promise<void>;
   cancel(): void;
   writeShellInput(chatId: string, sessionId: string, input: string, appendNewline: boolean): Promise<void>;

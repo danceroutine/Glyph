@@ -104,7 +104,7 @@ describe(SqliteChatSessionStore, () => {
               target: AgentModeID.AGENT as const,
               description: 'Implement the approved plan.',
               status: GlyphModeSwapStatus.APPROVED as const,
-              ...(startedAt ? { startedAt } : {}),
+              ...(startedAt !== undefined && startedAt !== '' ? { startedAt } : {}),
               expiresAt: new Date(0).toISOString(),
               autoApprove: false,
             },

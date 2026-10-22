@@ -679,8 +679,8 @@ class StatefulProvider implements ChatProvider {
     this.messages = [];
   }
 
-  async send(input: ChatRequestInput, options: Parameters<ChatProvider['send']>[1]): Promise<TurnResult> {
-    const text = typeof input === 'string' ? input : input.text;
+  async send(requestInput: ChatRequestInput, options: Parameters<ChatProvider['send']>[1]): Promise<TurnResult> {
+    const text = typeof requestInput === 'string' ? requestInput : requestInput.text;
     this.messages.push(text);
     if (text === 'tool then fail') {
       this.messages.push('tool-result:mutation-complete');

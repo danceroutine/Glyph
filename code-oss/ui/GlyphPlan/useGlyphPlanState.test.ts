@@ -50,8 +50,12 @@ describe(useGlyphPlanState, () => {
   it('starts adding a todo and tracks its draft', () => {
     const { result } = renderHook(useGlyphPlanState, { initialProps: { state: viewState(), actions: planActions() } });
 
-    act(() => result.current.add());
-    act(() => result.current.setTodo('Draft'));
+    act(() => {
+      result.current.add();
+    });
+    act(() => {
+      result.current.setTodo('Draft');
+    });
 
     expect(result.current.adding).toBe(true);
     expect(result.current.todo).toBe('Draft');
@@ -65,8 +69,12 @@ describe(useGlyphPlanState, () => {
     const actions = planActions();
     const state = viewState();
     const { result } = renderHook(useGlyphPlanState, { initialProps: { state, actions } });
-    act(() => result.current.add());
-    act(() => result.current.setTodo('  Third  '));
+    act(() => {
+      result.current.add();
+    });
+    act(() => {
+      result.current.setTodo('  Third  ');
+    });
 
     await act(() => result.current.saveTodo());
 
@@ -81,8 +89,12 @@ describe(useGlyphPlanState, () => {
   it('does not save a blank todo', async () => {
     const actions = planActions();
     const { result } = renderHook(useGlyphPlanState, { initialProps: { state: viewState(), actions } });
-    act(() => result.current.add());
-    act(() => result.current.setTodo('   '));
+    act(() => {
+      result.current.add();
+    });
+    act(() => {
+      result.current.setTodo('   ');
+    });
 
     await act(() => result.current.saveTodo());
 
@@ -122,7 +134,9 @@ describe(useGlyphPlanState, () => {
 
     await act(() => result.current.newAgent());
     await act(() => result.current.openChat('chat'));
-    await act(async () => result.current.openLink('https://example.com'));
+    await act(async () => {
+      result.current.openLink('https://example.com');
+    });
 
     expect(actions.newAgent).toHaveBeenCalledOnce();
     expect(actions.openChat).toHaveBeenCalledWith('chat');
@@ -132,7 +146,12 @@ describe(useGlyphPlanState, () => {
   it('is disabled and ignores actions while one is pending', async () => {
     const actions = planActions();
     let finish!: () => void;
-    actions.build.mockImplementationOnce(() => new Promise<void>(resolve => (finish = resolve)));
+    actions.build.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        }),
+    );
     const { result } = renderHook(useGlyphPlanState, { initialProps: { state: viewState(), actions } });
 
     let first!: Promise<void>;

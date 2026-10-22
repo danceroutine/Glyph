@@ -145,13 +145,17 @@ describe(WiredGlyphWorkbench, () => {
 
     fireEvent.click(screen.getByRole('button', { name: '1 background terminal' }));
     fireEvent.click(screen.getByTitle('Open terminal: npm run dev'));
-    await waitFor(() => expect(openShell).toHaveBeenCalledWith('chat', 'mine'));
-    await waitFor(() =>
-      expect((screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(false),
-    );
+    await waitFor(() => {
+      expect(openShell).toHaveBeenCalledWith('chat', 'mine');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Stop' }).disabled).toBe(false);
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
 
-    await waitFor(() => expect(actions.stopShell).toHaveBeenCalledWith('chat', 'mine'));
+    await waitFor(() => {
+      expect(actions.stopShell).toHaveBeenCalledWith('chat', 'mine');
+    });
   });
 
   it('reports that terminals cannot be opened without a terminal viewer', async () => {
@@ -182,7 +186,7 @@ describe(WiredGlyphWorkbench, () => {
     rerender(<WiredGlyphWorkbench state={{ ...state, sequence: 1 }} actions={actions} />);
 
     expect(screen.getByRole('form', { name: 'Questions' })).toBeTruthy();
-    expect((screen.getByRole('textbox', { name: 'Your answer' }) as HTMLTextAreaElement).value).toBe('Because');
+    expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Your answer' }).value).toBe('Because');
   });
 
   it('shows workspace messages and retries reconnecting through the host', async () => {
@@ -222,7 +226,7 @@ describe(WiredGlyphWorkbench, () => {
   ])('disables the composer while %s', (_, overrides) => {
     render(<WiredGlyphWorkbench state={workbench(overrides)} actions={workbenchActions()} />);
 
-    expect((screen.getByRole('button', { name: 'Attach file' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Attach file' }).disabled).toBe(true);
   });
 
   it('keeps the composer of an existing chat available while the catalog loads', () => {
@@ -233,7 +237,7 @@ describe(WiredGlyphWorkbench, () => {
       />,
     );
 
-    expect((screen.getByRole('button', { name: 'Attach file' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Attach file' }).disabled).toBe(false);
   });
 
   it('opens chat history beside the conversation and closes it again', async () => {
@@ -246,7 +250,9 @@ describe(WiredGlyphWorkbench, () => {
 
     fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Search chats' }), { key: 'Escape' });
 
-    await waitFor(() => expect(screen.queryByRole('navigation', { name: 'Saved chats' })).toBeNull());
+    await waitFor(() => {
+      expect(screen.queryByRole('navigation', { name: 'Saved chats' })).toBeNull();
+    });
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Chat history' }));
   });
 
@@ -269,6 +275,6 @@ describe(WiredGlyphWorkbench, () => {
     });
     render(<WiredGlyphWorkbench state={state} actions={workbenchActions()} />);
 
-    expect(screen.getAllByText(/rm -rf build/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/rm -rf build/u).length).toBeGreaterThan(0);
   });
 });

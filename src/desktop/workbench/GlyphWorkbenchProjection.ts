@@ -117,28 +117,30 @@ export class GlyphWorkbenchProjection {
             this.setRun({ ...settled, status: GlyphRunStatus.INTERRUPTED });
           }
         }
-        if (event.message) this.diagnostics.push(event.message);
+        if (event.message !== undefined && event.message !== '') this.diagnostics.push(event.message);
         return;
       }
       case GlyphHostEventType.ERROR: {
-        if (!event.requestId) this.diagnostics.push(event.error.message);
-        return;
+        if (event.requestId === undefined || event.requestId === '') this.diagnostics.push(event.error.message);
+        break;
       }
       case GlyphHostEventType.COMMAND_RESULT:
+      case GlyphHostEventType.PROPOSAL_PREVIEW:
         return;
       case GlyphHostEventType.RESPONSE_DELTA: {
         const run = this.run(event.chatId, event.runId);
         switch (event.delta.kind) {
           case GlyphResponseDeltaKind.TEXT:
             this.setRun({ ...run, text: run.text + event.delta.value });
-            return;
+            break;
           case GlyphResponseDeltaKind.REASONING:
             this.setRun({ ...run, reasoning: run.reasoning + event.delta.value });
-            return;
+            break;
           case GlyphResponseDeltaKind.DIAGNOSTIC:
             this.diagnostics.push(event.delta.value);
-            return;
+            break;
         }
+        return;
       }
       case GlyphHostEventType.TOOL_ACTIVITY: {
         const run = this.run(event.chatId, event.runId);
@@ -158,7 +160,6 @@ export class GlyphWorkbenchProjection {
           approval: event.approval,
           ...(event.approval.modeSwap ? { modeSwaps: [...(run.modeSwaps ?? []), event.approval.modeSwap] } : {}),
         });
-        return;
       }
     }
   }

@@ -5,11 +5,13 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const sourceRoot = join(repositoryRoot, '.code-oss', 'src');
 const overlayRoot = join(repositoryRoot, 'code-oss', 'overlay');
+/** @param {string} path */
 const upstream = path => join(sourceRoot, path);
 
 const willRun =
   'await this._onWillRunWorkingCopyFileOperation.fireAsync(event, CancellationToken.None /* intentional: we currently only forward cancellation to participants */);';
 
+/** @returns {Record<string, string>} */
 function pristineCheckout() {
   return {
     [join(overlayRoot, 'src/vs/workbench/contrib/glyph/browser/Pane.ts')]:
@@ -61,33 +63,50 @@ function pristineCheckout() {
   };
 }
 
+/**
+ * @param {Record<string, string>} files
+ * @param {string} directory
+ */
 function directoryEntries(files, directory) {
+  /** @type {Map<string, boolean>} */
   const names = new Map();
   for (const path of Object.keys(files)) {
     if (!path.startsWith(`${directory}/`)) continue;
     const [name, ...rest] = path.slice(directory.length + 1).split('/');
-    names.set(name, rest.length > 0 || names.get(name) === true);
+    if (name !== undefined) names.set(name, rest.length > 0 || names.get(name) === true);
   }
   return [...names].map(([name, isDirectory]) => ({ name, isDirectory: () => isDirectory }));
 }
 
+/** @param {Record<string, string>} files */
 async function applyOverlay(files) {
+  /** @type {unknown[][]} */
   const operations = [];
   const filesystem = {
-    readFile: vi.fn(async path => {
+    readFile: vi.fn(async (/** @type {string} */ path) => {
       if (!(path in files)) throw Object.assign(new Error(`missing ${path}`), { code: 'ENOENT' });
       return files[path];
     }),
-    writeFile: vi.fn(async (path, contents) => {
+    writeFile: vi.fn(async (/** @type {string} */ path, /** @type {string} */ contents) => {
       operations.push(['writeFile', path]);
       files[path] = contents;
     }),
-    readdir: vi.fn(async directory => directoryEntries(files, directory)),
-    rm: vi.fn(async (...arguments_) => operations.push(['rm', ...arguments_])),
-    mkdir: vi.fn(async (...arguments_) => operations.push(['mkdir', ...arguments_])),
-    cp: vi.fn(async (...arguments_) => operations.push(['cp', ...arguments_])),
+    readdir: vi.fn(async (/** @type {string} */ directory) => directoryEntries(files, directory)),
+    rm: vi.fn(async (/** @type {unknown[]} */ ...arguments_) => {
+      operations.push(['rm', ...arguments_]);
+    }),
+    mkdir: vi.fn(async (/** @type {unknown[]} */ ...arguments_) => {
+      operations.push(['mkdir', ...arguments_]);
+    }),
+    cp: vi.fn(async (/** @type {unknown[]} */ ...arguments_) => {
+      operations.push(['cp', ...arguments_]);
+    }),
   };
-  const ui = { buildGlyphUi: vi.fn(async root => operations.push(['buildGlyphUi', root])) };
+  const ui = {
+    buildGlyphUi: vi.fn(async (/** @type {string} */ root) => {
+      operations.push(['buildGlyphUi', root]);
+    }),
+  };
   onTestFinished(() => {
     vi.doUnmock('node:fs/promises');
     vi.doUnmock('#scripts/code-oss/build-ui.mjs');
@@ -249,39 +268,41 @@ describe('apply-overlay', () => {
     await second.result;
 
     expect(second.files).toEqual(patched);
-    const anchored = [
-      'src/vs/workbench/workbench.desktop.main.ts',
-      'src/vs/workbench/contrib/testing/browser/testResultsView/testResultsSubject.ts',
-      'src/vs/workbench/browser/part.ts',
-      'src/vs/workbench/browser/parts/paneCompositePart.ts',
-      'src/vs/editor/browser/services/bulkEditService.ts',
-      'src/vs/workbench/services/workingCopy/common/workingCopyFileService.ts',
-      'src/vs/workbench/contrib/bulkEdit/browser/bulkFileEdits.ts',
-      'src/vs/code/electron-main/app.ts',
-    ].map(upstream);
-    expect(second.operations.filter(([kind, path]) => kind === 'writeFile' && anchored.includes(path))).toEqual([]);
+    const anchored = new Set(
+      [
+        'src/vs/workbench/workbench.desktop.main.ts',
+        'src/vs/workbench/contrib/testing/browser/testResultsView/testResultsSubject.ts',
+        'src/vs/workbench/browser/part.ts',
+        'src/vs/workbench/browser/parts/paneCompositePart.ts',
+        'src/vs/editor/browser/services/bulkEditService.ts',
+        'src/vs/workbench/services/workingCopy/common/workingCopyFileService.ts',
+        'src/vs/workbench/contrib/bulkEdit/browser/bulkFileEdits.ts',
+        'src/vs/code/electron-main/app.ts',
+      ].map(value => upstream(value)),
+    );
+    expect(second.operations.filter(([kind, path]) => kind === 'writeFile' && anchored.has(path))).toEqual([]);
   });
 
   it.each([
     [
       'src/vs/workbench/workbench.desktop.main.ts',
-      /^Pinned Code OSS anchor was not found in .*workbench\.desktop\.main\.ts$/,
+      /^Pinned Code OSS anchor was not found in .*workbench\.desktop\.main\.ts$/u,
     ],
     [
       'src/vs/workbench/contrib/testing/browser/testResultsView/testResultsSubject.ts',
-      /^Pinned test-message context anchor was not found\.$/,
+      /^Pinned test-message context anchor was not found\.$/u,
     ],
     [
       'src/vs/workbench/contrib/testing/browser/testResultsView/testResultsViewContent.ts',
-      /^Pinned test-message view anchor was not found\.$/,
+      /^Pinned test-message view anchor was not found\.$/u,
     ],
     [
       'src/vs/workbench/browser/part.ts',
-      /^Pinned chat-header layout anchor was not found: src\/vs\/workbench\/browser\/part\.ts$/,
+      /^Pinned chat-header layout anchor was not found: src\/vs\/workbench\/browser\/part\.ts$/u,
     ],
     [
       'src/vs/editor/browser/services/bulkEditService.ts',
-      /^Pinned structural mutation anchor missing: src\/vs\/editor\/browser\/services\/bulkEditService\.ts$/,
+      /^Pinned structural mutation anchor missing: src\/vs\/editor\/browser\/services\/bulkEditService\.ts$/u,
     ],
   ])('fails closed when %s no longer contains its anchor', async (path, message) => {
     const run = await applyOverlay({ ...pristineCheckout(), [upstream(path)]: 'unrecognized upstream source' });

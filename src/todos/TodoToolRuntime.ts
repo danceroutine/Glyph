@@ -8,6 +8,7 @@ import type { TodoItem } from './TodoItem.ts';
 import { todoUpdateSchema, type TodoUpdate } from './TodoUpdate.ts';
 import { TodoToolName } from './TodoToolName.ts';
 import { TodoToolNamespace } from './TodoToolNamespace.ts';
+import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 
 const { $schema: _, ...parameters } = z.toJSONSchema(todoUpdateSchema, { target: 'draft-7' });
 
@@ -38,7 +39,8 @@ export class TodoToolRuntime implements ToolSource {
   ) {}
 
   async execute(name: string, input: string, signal?: AbortSignal, context?: ToolExecutionContext): Promise<string> {
-    if (name !== TodoToolName.UPDATE_TODOS) throw new Error(`Unknown todo tool: ${name}`);
+    if (!isEnumValue(TodoToolName, name) || name !== TodoToolName.UPDATE_TODOS)
+      throw new Error(`Unknown todo tool: ${name}`);
     try {
       signal?.throwIfAborted();
       if (!context?.chat) throw new Error('A host-owned chat is required to update todos.');
@@ -46,7 +48,7 @@ export class TodoToolRuntime implements ToolSource {
       const items = await this.update(context.chat, update, signal);
       return JSON.stringify({ items });
     } catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error;
+      if (signal?.aborted === true) throw signal.reason ?? error;
       return JSON.stringify({
         error: {
           code: error instanceof z.ZodError || error instanceof SyntaxError ? 'MALFORMED' : 'TODO_UPDATE_FAILED',

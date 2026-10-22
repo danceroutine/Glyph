@@ -26,7 +26,7 @@ describe(sourceAliasTransformer, () => {
     expect(result.outputText).toContain('from "../protocol/GlyphDesktopError.js"');
     expect(result.outputText).toContain('import("../../terminal/TerminalUI.js")');
     expect(result.outputText).toContain("'#src/keep-this-string.js'");
-    expect(JSON.parse(result.sourceMapText).sources).toEqual(['Fixture.ts']);
+    expect(JSON.parse(result.sourceMapText ?? '')).toMatchObject({ sources: ['Fixture.ts'] });
   });
 
   it('lowers declaration imports and import types so consumers do not need Glyph’s source import map', () => {
@@ -84,9 +84,9 @@ describe(sourceAliasTransformer, () => {
   it('keeps first-party parent traversal out of module imports without forbidding relative paths in fixtures', () => {
     const violations = [];
     for (const directory of ['src', 'scripts', 'code-oss', 'examples']) {
-      for (const file of files(join(root, directory))) {
-        if (!/\.(?:[cm]?js|tsx?)$/.test(file)) continue;
-        const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+      for (const candidate of files(join(root, directory))) {
+        if (!/\.(?:[cm]?js|tsx?)$/u.test(candidate)) continue;
+        const source = ts.createSourceFile(candidate, readFileSync(candidate, 'utf8'), ts.ScriptTarget.Latest, true);
         const visit = node => {
           let specifier;
           if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) specifier = node.moduleSpecifier;
@@ -102,7 +102,7 @@ describe(sourceAliasTransformer, () => {
             (ts.isStringLiteral(specifier) || ts.isNoSubstitutionTemplateLiteral(specifier)) &&
             specifier.text.startsWith('../')
           )
-            violations.push(`${file}: ${specifier.text}`);
+            violations.push(`${candidate}: ${specifier.text}`);
           ts.forEachChild(node, visit);
         };
         visit(source);
@@ -115,8 +115,8 @@ describe(sourceAliasTransformer, () => {
 function* files(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (['node_modules', 'dist', '.code-oss', '.artifacts'].includes(entry.name)) continue;
-    const file = join(directory, entry.name);
-    if (entry.isDirectory()) yield* files(file);
-    else yield file;
+    const entryPath = join(directory, entry.name);
+    if (entry.isDirectory()) yield* files(entryPath);
+    else yield entryPath;
   }
 }

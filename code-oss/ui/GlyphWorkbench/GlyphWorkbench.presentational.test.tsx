@@ -1,6 +1,6 @@
 import { createRef } from 'preact';
 import { cleanup, fireEvent, render, screen } from '@testing-library/preact';
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import {
   GlyphWorkbench,
   type GlyphWorkbenchProps,
@@ -42,7 +42,7 @@ describe(GlyphWorkbench, () => {
     const root = container.firstElementChild as HTMLElement;
     expect(props.root.current).toBe(root);
     expect(root.classList.contains('glyph-workbench')).toBe(true);
-    expect(root.hasAttribute('data-history-open')).toBe(false);
+    expect(Object.hasOwn(root.dataset, 'historyOpen')).toBe(false);
     const main = screen.getByRole('main', { name: 'Current conversation' });
     expect([...main.children].slice(1).map(child => child.textContent)).toEqual([
       'Transcript',
@@ -67,13 +67,15 @@ describe(GlyphWorkbench, () => {
       ['Beta', 'true', 0],
       ['Gamma', 'false', -1],
     ]);
-    expect(tabs[1]!.parentElement!.hasAttribute('data-selected')).toBe(true);
-    expect(tabs[0]!.parentElement!.hasAttribute('data-selected')).toBe(false);
+    expect(Object.hasOwn(tabs[1]!.parentElement!.dataset, 'selected')).toBe(true);
+    expect(Object.hasOwn(tabs[0]!.parentElement!.dataset, 'selected')).toBe(false);
   });
 
   it('scrolls the selected tab into view', () => {
     const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
-    onTestFinished(() => scrollIntoView.mockRestore());
+    onTestFinished(() => {
+      scrollIntoView.mockRestore();
+    });
 
     render(<GlyphWorkbench {...workbenchProps()} />);
 
@@ -108,7 +110,7 @@ describe(GlyphWorkbench, () => {
     fireEvent.keyDown(tabs[1]!, { key: 'a' });
 
     expect(right.defaultPrevented).toBe(true);
-    expect((props.selectTab as ReturnType<typeof vi.fn>).mock.calls).toEqual([['a'], ['c'], ['a'], ['c']]);
+    expect((props.selectTab as Mock).mock.calls).toEqual([['a'], ['c'], ['a'], ['c']]);
     expect(document.activeElement).toBe(tabs[2]);
   });
 

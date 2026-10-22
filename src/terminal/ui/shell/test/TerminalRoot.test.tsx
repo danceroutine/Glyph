@@ -21,26 +21,42 @@ describe(TerminalRoot, () => {
       );
       const view = render(transcript());
       try {
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('seven'));
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('seven');
+        });
         for (let n = 0; n < 2; n++) {
-          view.stdin.write('\x1b[5~');
-          await new Promise<void>(resolve => setImmediate(resolve));
+          view.stdin.write('\u001B[5~');
+          await new Promise<void>(resolve => {
+            setImmediate(resolve);
+          });
         }
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('one'));
-        view.stdin.write('\x1b[6~');
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('five'));
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('one');
+        });
+        view.stdin.write('\u001B[6~');
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('five');
+        });
         expect(view.lastFrame()).not.toContain('seven');
         view.rerender(transcript('\neight'));
-        await new Promise<void>(resolve => setImmediate(resolve));
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
         expect(view.lastFrame()).toContain('three');
         expect(view.lastFrame()).not.toContain('eight');
         for (let n = 0; n < 2; n++) {
-          view.stdin.write('\x1b[6~');
-          await new Promise<void>(resolve => setImmediate(resolve));
+          view.stdin.write('\u001B[6~');
+          await new Promise<void>(resolve => {
+            setImmediate(resolve);
+          });
         }
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('eight'));
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('eight');
+        });
         view.rerender(transcript('\neight\nnine'));
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('nine'));
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('nine');
+        });
       } finally {
         view.unmount();
       }
@@ -58,11 +74,17 @@ describe(TerminalRoot, () => {
       );
       const view = render(rows(1, 'oldest\nsecond\nthird\nfourth\nlatest'));
       try {
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('latest'));
-        view.stdin.write('\u001b[5~');
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('oldest'));
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('latest');
+        });
+        view.stdin.write('\u001B[5~');
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('oldest');
+        });
         view.rerender(rows(2, 'other oldest\nsecond\nthird\nfourth\nother latest'));
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('other latest'));
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('other latest');
+        });
       } finally {
         view.unmount();
       }
@@ -78,12 +100,21 @@ describe(TerminalRoot, () => {
         />,
       );
       try {
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('latest'));
-        view.stdin.write('\u001b[5~');
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('oldest'), { timeout: 500 });
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('latest');
+        });
+        view.stdin.write('\u001B[5~');
+        await vi.waitFor(
+          () => {
+            expect(view.lastFrame()).toContain('oldest');
+          },
+          { timeout: 500 },
+        );
         expect(view.lastFrame()).toContain('prompt');
-        view.stdin.write('\u001b[6~');
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('latest'));
+        view.stdin.write('\u001B[6~');
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('latest');
+        });
       } finally {
         view.unmount();
       }
@@ -118,7 +149,9 @@ describe(TerminalRoot, () => {
         />,
       );
 
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
       expect(view.lastFrame()).toBe('middle two\nnewest\nresponse\nprompt');
       view.unmount();
     });

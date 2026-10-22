@@ -37,7 +37,9 @@ function mountSource(text: string): HTMLElement {
   source.style.marginTop = '300px';
   source.textContent = text;
   document.body.prepend(source);
-  onTestFinished(() => source.remove());
+  onTestFinished(() => {
+    source.remove();
+  });
   return source;
 }
 
@@ -111,7 +113,9 @@ describe(GlyphAnnotations, () => {
     mountSource('Hello world');
     const container = document.createElement('div');
     document.body.append(container);
-    onTestFinished(() => container.remove());
+    onTestFinished(() => {
+      container.remove();
+    });
     const composer = new GlyphComposerState();
     composer.setDocument({ parts: [], from: 0, to: 0, options: { annotations: [savedAnnotation()] } });
     function Annotations() {
@@ -123,7 +127,9 @@ describe(GlyphAnnotations, () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit annotation 1' }));
 
-    await waitFor(() => expect(container.querySelector('form')).not.toBeNull());
+    await waitFor(() => {
+      expect(container.querySelector('form')).not.toBeNull();
+    });
     expect(container.querySelector('form')!.getAttribute('style')).toBeNull();
   });
 });

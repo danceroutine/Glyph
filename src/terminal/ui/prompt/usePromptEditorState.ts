@@ -68,7 +68,13 @@ export function usePromptEditorState({
     current.current = { ...current.current, ...changes };
     setInteraction(current.current);
   };
-  const { text, cursor, selectedMatch, attachments, dismissedCompletion } = interaction;
+  const {
+    text: renderedText,
+    cursor: renderedCursor,
+    selectedMatch: renderedSelectedMatch,
+    attachments: renderedAttachments,
+    dismissedCompletion: renderedDismissedCompletion,
+  } = interaction;
   const [completion, setCompletion] = useState<{
     signature: string;
     files: WorkspacePathIndex;
@@ -76,7 +82,7 @@ export function usePromptEditorState({
   }>();
   const [searchError, setSearchError] = useState('');
   const generation = useRef(0);
-  const promptText = formatPromptText(text, attachments, cursor);
+  const promptText = formatPromptText(renderedText, renderedAttachments, renderedCursor);
   const getCompletions = (value: PromptInteraction) => {
     const { text, cursor, attachments, dismissedCompletion } = value;
     const formatted = formatPromptText(text, attachments, cursor);
@@ -94,8 +100,13 @@ export function usePromptEditorState({
       commandQuery && commandQuery.signature !== dismissedCompletion ? searchTerminalCommands(commandQuery.query) : [];
     return { mention, matches, commandQuery, commandMatches };
   };
-  const { mention, matches, commandQuery, commandMatches } = getCompletions(interaction);
-  const mentionSignature = mention?.signature;
+  const {
+    mention: renderedMention,
+    matches: renderedMatches,
+    commandQuery: renderedCommandQuery,
+    commandMatches: renderedCommandMatches,
+  } = getCompletions(interaction);
+  const mentionSignature = renderedMention?.signature;
   const { columns, rows } = useWindowSize();
   const { setCursorPosition } = useCursor();
 
@@ -104,23 +115,23 @@ export function usePromptEditorState({
     update({ selectedMatch: 0 });
     setSearchError('');
     const files = request.files;
-    if (!files || !mention || mention.signature === dismissedCompletion) return;
+    if (!files || !renderedMention || renderedMention.signature === renderedDismissedCompletion) return undefined;
     const currentGeneration = (searchGenerations.get(files) ?? 0) + 1;
     searchGenerations.set(files, currentGeneration);
     generation.current = currentGeneration;
     const controller = new AbortController();
     void files
-      .search(mention.query, { generation: currentGeneration, limit: SEARCH_LIMIT, signal: controller.signal })
+      .search(renderedMention.query, { generation: currentGeneration, limit: SEARCH_LIMIT, signal: controller.signal })
       .then(result => {
         if (
           controller.signal.aborted ||
           result.generation !== currentGeneration ||
           result.generation !== generation.current ||
-          result.query !== mention.query
+          result.query !== renderedMention.query
         )
           return;
         const safeMatches = result.matches.filter(match => isSafeAttachmentPath(match.path));
-        setCompletion({ signature: mention.signature, files, matches: safeMatches });
+        setCompletion({ signature: renderedMention.signature, files, matches: safeMatches });
         update({ selectedMatch: Math.min(current.current.selectedMatch, Math.max(0, safeMatches.length - 1)) });
         setSearchError('');
       })
@@ -130,11 +141,13 @@ export function usePromptEditorState({
         setCompletion(undefined);
         setSearchError(error instanceof Error ? error.message : 'File search failed.');
       });
-    return () => controller.abort();
-  }, [dismissedCompletion, mentionSignature, request.files]);
+    return () => {
+      controller.abort();
+    };
+  }, [renderedDismissedCompletion, mentionSignature, request.files]);
 
   const visiblePrefix = `${request.label}${sanitizeText(promptText.cursorPrefix)}`;
-  const completionCount = commandQuery ? commandMatches.length : matches.length;
+  const renderedCompletionCount = renderedCommandQuery ? renderedCommandMatches.length : renderedMatches.length;
   const viewport = getPromptViewport({
     text: request.label + promptText.segments.map(segment => sanitizeText(segment.value)).join(''),
     prefix: visiblePrefix,
@@ -144,7 +157,7 @@ export function usePromptEditorState({
       2 +
       Number(pendingChanges > 0) +
       Number(!request.acceptsSubmission) +
-      Math.min(3, completionCount) +
+      Math.min(3, renderedCompletionCount) +
       Number(Boolean(searchError)),
   });
   if (active && railTop !== undefined) {
@@ -173,11 +186,11 @@ export function usePromptEditorState({
 
   const attachSelected = (): boolean => {
     const { text, selectedMatch } = current.current;
-    const { matches, mention: active } = getCompletions(current.current);
+    const { matches, mention: mentionAtCursor } = getCompletions(current.current);
     const candidate = matches[selectedMatch];
-    if (!candidate || !active) return false;
-    const next = `${text.slice(0, active.start)}@${candidate.path} ${text.slice(active.end)}`;
-    updateText(next, active.start + candidate.path.length + 2);
+    if (!candidate || !mentionAtCursor) return false;
+    const next = `${text.slice(0, mentionAtCursor.start)}@${candidate.path} ${text.slice(mentionAtCursor.end)}`;
+    updateText(next, mentionAtCursor.start + candidate.path.length + 2);
     const attachments = current.current.attachments;
     if (!attachments.includes(candidate.path)) update({ attachments: [...attachments, candidate.path] });
     setCompletion(undefined);
@@ -188,7 +201,7 @@ export function usePromptEditorState({
     value => {
       if (settled.current) return;
       const { text, cursor } = current.current;
-      const safe = value.replace(/[\r\n]+/gu, ' ');
+      const safe = value.replaceAll(/[\r\n]+/gu, ' ');
       updateText(`${text.slice(0, cursor)}${safe}${text.slice(cursor)}`, cursor + safe.length);
     },
     { isActive: active },
@@ -204,9 +217,9 @@ export function usePromptEditorState({
         return;
       }
       if (key.escape) {
-        const completion = commandQuery ?? mention;
-        if (completion) {
-          update({ dismissedCompletion: completion.signature });
+        const dismissible = commandQuery ?? mention;
+        if (dismissible) {
+          update({ dismissedCompletion: dismissible.signature });
           setCompletion(undefined);
         }
         return;
@@ -252,12 +265,12 @@ export function usePromptEditorState({
     label: request.label,
     acceptsSubmission: request.acceptsSubmission,
     pendingChanges,
-    text,
-    cursor,
-    attachments,
-    matches: commandQuery ? [] : matches,
-    commandMatches,
-    selectedMatch,
+    text: renderedText,
+    cursor: renderedCursor,
+    attachments: renderedAttachments,
+    matches: renderedCommandQuery ? [] : renderedMatches,
+    commandMatches: renderedCommandMatches,
+    selectedMatch: renderedSelectedMatch,
     searchError,
     viewport,
   };
@@ -282,7 +295,7 @@ function activeMention(
 }
 
 function isPrintableInput(input: string, control: boolean, meta: boolean): boolean {
-  return input.length > 0 && !control && !meta && !/[\x00-\x1f\x7f]/u.test(input);
+  return input.length > 0 && !control && !meta && !/[\u0000-\u001F\u007F]/u.test(input);
 }
 
 function isSilentSearchCancellation(error: unknown): boolean {
@@ -303,5 +316,5 @@ function containsAttachment(text: string, path: string): boolean {
 }
 
 function isSafeAttachmentPath(path: string): boolean {
-  return !/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/u.test(path);
+  return !/[\u0000-\u001F\u007F\u202A-\u202E\u2066-\u2069]/u.test(path);
 }

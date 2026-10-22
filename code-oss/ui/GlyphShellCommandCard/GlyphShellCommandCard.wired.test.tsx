@@ -29,13 +29,15 @@ describe(WiredGlyphShellCommandCard, () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /read answer/ }));
+    fireEvent.click(screen.getByRole('button', { name: /read answer/u }));
     fireEvent.input(screen.getByRole('textbox', { name: 'Input to shell' }), { target: { value: 'y' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send input' }));
 
-    await waitFor(() => expect(writeShellInput).toHaveBeenCalledWith('chat', 'session', 'y', true));
-    await waitFor(() =>
-      expect((screen.getByRole('textbox', { name: 'Input to shell' }) as HTMLTextAreaElement).value).toBe(''),
-    );
+    await waitFor(() => {
+      expect(writeShellInput).toHaveBeenCalledWith('chat', 'session', 'y', true);
+    });
+    await waitFor(() => {
+      expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Input to shell' }).value).toBe('');
+    });
   });
 });

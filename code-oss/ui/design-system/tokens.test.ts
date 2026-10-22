@@ -19,7 +19,7 @@ it('serializes nested host groups to native property names and preserves fallbac
 });
 
 it('provides every referenced host variable in both preview themes', () => {
-  const references = [...JSON.stringify(tokens).matchAll(/var\((--vscode-[\w-]+)/g)].map(match => match[1]);
+  const references = [...JSON.stringify(tokens).matchAll(/var\((--vscode-[\w-]+)/gu)].map(match => match[1]);
   expect(references.length).toBeGreaterThan(0);
   for (const theme of ['dark', 'light'] as const) {
     const declarations = previewThemeStyles(theme);

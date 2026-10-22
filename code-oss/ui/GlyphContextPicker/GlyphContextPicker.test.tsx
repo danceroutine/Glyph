@@ -93,7 +93,9 @@ describe(GlyphContextPicker, () => {
     const outline = screen.getByText('Tree outline').closest('[aria-hidden="true"]')!;
     const branches = [...outline.firstElementChild!.children] as HTMLElement[];
     expect(branches.map(branch => branch.textContent)).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
-    expect(branches.every(branch => branch.querySelector('svg')?.getAttribute('class')?.includes('folder'))).toBe(true);
+    expect(
+      branches.every(branch => branch.querySelector('svg')?.getAttribute('class')?.includes('folder') === true),
+    ).toBe(true);
   });
 
   it('shows a search status instead of a preview while searching', () => {
@@ -155,6 +157,6 @@ describe(GlyphContextPicker, () => {
     const icon = (name: string) => screen.getByRole('option', { name }).querySelector('svg')!.getAttribute('class');
     expect(icon('app.tsx')).toContain('file-code');
     expect(icon('notes.log')).toContain('file-text');
-    expect(icon('photo.png')).toMatch(/lucide-file(?!-)/);
+    expect(icon('photo.png')).toMatch(/lucide-file(?!-)/u);
   });
 });

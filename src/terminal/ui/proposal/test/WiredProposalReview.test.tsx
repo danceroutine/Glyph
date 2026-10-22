@@ -54,18 +54,24 @@ describe(WiredProposalReview, () => {
         const request = { id: 1, manager: fixture.manager, complete, interrupt: vi.fn() };
         const view = render(<WiredProposalReview request={request} />);
         try {
-          await vi.waitFor(() => expect(view.lastFrame()).toContain('Error: save unavailable'));
+          await vi.waitFor(() => {
+            expect(view.lastFrame()).toContain('Error: save unavailable');
+          });
           expect(view.lastFrame()).toContain('R retry save');
           expect(complete).not.toHaveBeenCalled();
           view.stdin.write('y');
           expect(fixture.accept).not.toHaveBeenCalled();
           view.stdin.write('r');
           view.stdin.write('r');
-          await vi.waitFor(() => expect(view.lastFrame()).toContain('Saving…'));
+          await vi.waitFor(() => {
+            expect(view.lastFrame()).toContain('Saving…');
+          });
           expect(flush).toHaveBeenCalledTimes(2);
           expect(complete).not.toHaveBeenCalled();
           finish();
-          await vi.waitFor(() => expect(complete).toHaveBeenCalledExactlyOnceWith({ accepted: 1, rejected: 0 }));
+          await vi.waitFor(() => {
+            expect(complete).toHaveBeenCalledExactlyOnceWith({ accepted: 1, rejected: 0 });
+          });
           expect(view.lastFrame()).toContain('Review complete');
         } finally {
           finish?.();
@@ -128,7 +134,7 @@ describe(WiredProposalReview, () => {
       );
       try {
         await tick();
-        view.stdin.write('\x1b[C');
+        view.stdin.write('\u001B[C');
         view.stdin.write('y');
         expect(fixture.accept).not.toHaveBeenCalled();
         await tick();
@@ -168,7 +174,7 @@ describe(WiredProposalReview, () => {
       }
     });
 
-    it.each(['q', '\x03'])(
+    it.each(['q', '\u0003'])(
       'settles a deferred or interrupted review once and ignores later decisions (%j)',
       async key => {
         const fixture = createProposalReviewFixture();
@@ -181,7 +187,7 @@ describe(WiredProposalReview, () => {
           view.stdin.write(key);
           view.stdin.write('y');
           expect(complete).toHaveBeenCalledTimes(1);
-          expect(interrupt).toHaveBeenCalledTimes(key === '\x03' ? 1 : 0);
+          expect(interrupt).toHaveBeenCalledTimes(key === '\u0003' ? 1 : 0);
           expect(fixture.accept).not.toHaveBeenCalled();
         } finally {
           view.unmount();
@@ -355,14 +361,14 @@ describe(WiredProposalReview, () => {
         <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
       );
       await waitUntil(() => (view.lastFrame() ?? '').includes('File 1/2  change 2/2'));
-      view.stdin.write('\x1b[C');
+      view.stdin.write('\u001B[C');
       await waitUntil(() => (view.lastFrame() ?? '').includes('File 2/2  change 1/1'));
       view.unmount();
     });
 
     it('shows Error failures and non-Error failures', async () => {
       const errorFixture = createProposalReviewFixture();
-      errorFixture.accept.mockRejectedValueOnce(new Error('stale\u001b[31m'));
+      errorFixture.accept.mockRejectedValueOnce(new Error('stale\u001B[31m'));
       const errorView = render(
         <WiredProposalReview
           request={{ id: 1, manager: errorFixture.manager, complete: vi.fn(), interrupt: vi.fn() }}
@@ -393,11 +399,11 @@ describe(WiredProposalReview, () => {
           request={{ id: 1, manager: interrupted.manager, complete: interruptedComplete, interrupt }}
         />,
       );
-      interruptedView.stdin.write('\x03');
+      interruptedView.stdin.write('\u0003');
       await waitUntil(() => interrupt.mock.calls.length === 1);
       interruptedView.unmount();
 
-      for (const key of ['\x1b', 'q']) {
+      for (const key of ['\u001B', 'q']) {
         const deferred = createProposalReviewFixture();
         const complete = vi.fn();
         const view = render(
@@ -405,7 +411,10 @@ describe(WiredProposalReview, () => {
         );
         await tick();
         view.stdin.write(key);
-        if (key === '\x1b') await new Promise<void>(resolve => setTimeout(resolve, 75));
+        if (key === '\u001B')
+          await new Promise<void>(resolve => {
+            setTimeout(resolve, 75);
+          });
         await waitUntil(() => complete.mock.calls.length === 1);
         view.unmount();
       }
@@ -419,7 +428,16 @@ describe(WiredProposalReview, () => {
         <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
       );
 
-      for (const key of ['\x1b[B', '\x1b[A', '\x1b[6~', '\x1b[5~', '\x1b[H', '\x1b[F', '\x1b[C', '\x1b[D']) {
+      for (const key of [
+        '\u001B[B',
+        '\u001B[A',
+        '\u001B[6~',
+        '\u001B[5~',
+        '\u001B[H',
+        '\u001B[F',
+        '\u001B[C',
+        '\u001B[D',
+      ]) {
         view.stdin.write(key);
         await tick();
       }
@@ -482,7 +500,9 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 }
 
 async function tick(): Promise<void> {
-  await new Promise<void>(resolve => setImmediate(resolve));
+  await new Promise<void>(resolve => {
+    setImmediate(resolve);
+  });
 }
 
 it('keeps an already-applied hunk through the existing review controls', async () => {

@@ -19,6 +19,6 @@ export function GlyphFileIcon({ path }: { readonly path: string }) {
         <span class={`${icon} ${resolve(path).join(' ')}`} />
       </span>
     );
-  const Icon = /\.json$/i.test(path) ? FileJson : /\.(md|txt|log)$/i.test(path) ? FileText : FileCode;
+  const Icon = /\.json$/iu.test(path) ? FileJson : /\.(md|txt|log)$/iu.test(path) ? FileText : FileCode;
   return <Icon size={16} aria-hidden="true" />;
 }

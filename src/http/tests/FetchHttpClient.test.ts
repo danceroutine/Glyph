@@ -27,7 +27,9 @@ describe(FetchHttpClient, () => {
       const log = logger();
       const transport = vi.fn<typeof fetch>(async (_url, init) => {
         expect(new Headers(init?.headers).get('Content-Type')).toBe('application/x-www-form-urlencoded');
-        expect(String(init?.body)).toBe('client_id=client&refresh_token=secret');
+        expect(init?.body instanceof URLSearchParams && init.body.toString()).toBe(
+          'client_id=client&refresh_token=secret',
+        );
         return Response.json({ access_token: 'access' });
       });
       const client = new FetchHttpClient(log.value, transport);
@@ -76,7 +78,10 @@ describe(FetchHttpClient, () => {
       const transport = vi.fn<typeof fetch>(async () => Response.json({}));
       const client = new FetchHttpClient(logger().value, transport);
 
-      await client.post('https://example.test/items', { body: 42, ...(bodyEncoding ? { bodyEncoding } : {}) });
+      await client.post('https://example.test/items', {
+        body: 42,
+        ...(bodyEncoding !== undefined ? { bodyEncoding } : {}),
+      });
 
       const init = transport.mock.calls[0]?.[1];
       expect(init?.body).toBe('42');
@@ -125,7 +130,9 @@ describe(FetchHttpClient, () => {
       const log = logger();
       const client = new FetchHttpClient(
         log.value,
-        vi.fn<typeof fetch>(async () => Promise.reject('connection reset')),
+        vi.fn<typeof fetch>(async () => {
+          throw 'connection reset';
+        }),
       );
 
       await expect(client.post('https://example.test/items')).rejects.toThrow(

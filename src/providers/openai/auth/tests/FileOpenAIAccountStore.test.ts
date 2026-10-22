@@ -90,7 +90,9 @@ describe(FileOpenAIAccountStore, () => {
       await mkdir(join(directory, 'session.lock'));
       await writeFile(join(directory, 'session.lock', 'pid'), '424242');
       const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
-      onTestFinished(() => kill.mockRestore());
+      onTestFinished(() => {
+        kill.mockRestore();
+      });
       const store = new FileOpenAIAccountStore(directory);
 
       await expect(store.acquire()).rejects.toThrow(
@@ -107,7 +109,9 @@ describe(FileOpenAIAccountStore, () => {
       const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
         throw Object.assign(new Error('Operation not permitted'), { code: 'EPERM' });
       });
-      onTestFinished(() => kill.mockRestore());
+      onTestFinished(() => {
+        kill.mockRestore();
+      });
 
       await expect(new FileOpenAIAccountStore(directory).acquire()).rejects.toThrow(
         new ConcurrentInstanceError('The legacy account-lock owner could not be checked.'),
@@ -211,7 +215,7 @@ describe(FileOpenAIAccountStore, () => {
         ['scopes', { accessToken: 'a', refreshToken: 'r', idToken: 'i', expiresAt: 1 }],
         ['string scopes', { accessToken: 'a', refreshToken: 'r', idToken: 'i', expiresAt: 1, scopes: [1] }],
       ].map(([field, tokens]): [string, unknown] => [
-        `tokens with invalid ${String(field)}`,
+        `tokens with invalid ${field as string}`,
         { version: 1, hostId: 'urn:uuid:host', accounts: [{ clientId: 'c', subject: 's', email: 'e', tokens }] },
       ]),
     ])('rejects a credential file containing %s', async (_case, contents) => {

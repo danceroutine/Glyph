@@ -1,7 +1,21 @@
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { beforeAll, expect, it, vi } from 'vitest';
-let capture, URI;
+import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
+
+/**
+ * @typedef {import('#vs/base/common/uri.js').URI} URIValue
+ * @typedef {{
+ *   captureGlyphAgentReview: typeof import('#vs/workbench/contrib/glyph/browser/GlyphAgentReviewCapture.js').captureGlyphAgentReview,
+ *   URI: typeof import('#vs/base/common/uri.js').URI,
+ * }} CaptureModule
+ * @typedef {{ sourceUri: URIValue, multiDiffEditorOriginalUri?: URIValue, multiDiffEditorModifiedUri?: URIValue }} ScmResource
+ */
+
+/** @type {CaptureModule['URI']} */
+let URI;
+/** @type {CaptureModule['captureGlyphAgentReview']} */
+let capture;
 beforeAll(async () => {
   const result = await build({
     stdin: {
@@ -26,12 +40,13 @@ beforeAll(async () => {
       },
     ],
   });
-  ({ captureGlyphAgentReview: capture, URI } = await import(
-    `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`
-  ));
+  /** @type {CaptureModule} */
+  const api = await importBundle(result.outputFiles[0].text, ['captureGlyphAgentReview', 'URI']);
+  ({ captureGlyphAgentReview: capture, URI } = api);
 });
 function fixture() {
   const uri = URI.file('/workspace/a.ts');
+  /** @param {string} ref */
   const git = ref => uri.with({ scheme: 'git', query: JSON.stringify({ path: uri.fsPath, ref }) });
   const change = { uri, originalUri: git('parent'), modifiedUri: git('head') };
   const history = {
@@ -41,14 +56,23 @@ function fixture() {
     provideHistoryItemRefs: vi.fn(async () => [{ id: 'refs/heads/main', revision: 'base-tip' }]),
     resolveHistoryItemRefsCommonAncestor: vi.fn(async () => 'ancestor'),
   };
-  const repository = { provider: { historyProvider: { get: () => history }, groups: [] } };
+  /** @type {{ id: string, resources: ScmResource[] }[]} */
+  const groups = [];
+  const repository = { provider: { historyProvider: { get: () => history }, groups } };
   const ide = {
-    captureDiff: vi.fn(async (uri, original, modified, label) => ({
-      uri: uri.toString(),
-      path: 'a.ts',
-      text: label,
-      contentRevision: `${original}:${modified}`,
-    })),
+    captureDiff: vi.fn(
+      async (
+        /** @type {URIValue} */ resource,
+        /** @type {URIValue | undefined} */ original,
+        /** @type {URIValue | undefined} */ modified,
+        /** @type {string} */ label,
+      ) => ({
+        uri: resource.toString(),
+        path: 'a.ts',
+        text: label,
+        contentRevision: `${String(original)}:${String(modified)}`,
+      }),
+    ),
   };
   return { uri, git, history, repository, ide };
 }
@@ -85,7 +109,9 @@ it('keeps staged and all-local scopes distinct for a file modified in both index
   f.ide.captureDiff.mockClear();
   await capture(f.ide, f.repository, 'allLocal', '');
   expect(f.ide.captureDiff.mock.calls[0][2].scheme).toBe('file');
-  expect(JSON.parse(f.ide.captureDiff.mock.calls[0][1].query).ref).toBe('head');
+  /** @type {unknown} */
+  const query = JSON.parse(f.ide.captureDiff.mock.calls[0][1]?.query ?? '');
+  expect(query).toMatchObject({ ref: 'head' });
 });
 it('does not manufacture a HEAD version for a newly staged file, including staged additions then deletions', async () => {
   const f = fixture();
@@ -128,7 +154,7 @@ it('omits a staged addition deleted from the worktree while retaining unrelated 
 });
 it('rejects oversized reviews and mutable captures that change across the batch', async () => {
   const f = fixture();
-  f.history.provideHistoryItemChanges.mockResolvedValue(Array(33).fill({ uri: f.uri }));
+  f.history.provideHistoryItemChanges.mockResolvedValue(Array.from({ length: 33 }, () => ({ uri: f.uri })));
   await expect(capture(f.ide, f.repository, 'lastCommit', '')).rejects.toThrow('32');
   f.repository.provider.groups = [
     { id: 'index', resources: [{ sourceUri: f.uri, multiDiffEditorModifiedUri: f.git('') }] },

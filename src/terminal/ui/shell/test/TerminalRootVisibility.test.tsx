@@ -46,25 +46,35 @@ describe(WiredTerminalRoot, () => {
     };
     const view = render(<WiredTerminalRoot snapshot={state} />);
     try {
-      await new Promise(resolve => setTimeout(resolve, 30));
+      await new Promise(resolve => {
+        setTimeout(resolve, 30);
+      });
       for (let n = 0; n < 4; n++) {
-        view.stdin.write('\u001b[5~');
-        await new Promise(resolve => setTimeout(resolve, 30));
+        view.stdin.write('\u001B[5~');
+        await new Promise(resolve => {
+          setTimeout(resolve, 30);
+        });
       }
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('IMPORTANT OPENING'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('IMPORTANT OPENING');
+      });
       expect(view.lastFrame()).not.toContain('history 0');
       expect(complete).not.toHaveBeenCalled();
       view.stdin.write('\r');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('› ● Proceed'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('› ● Proceed');
+      });
       expect(complete).not.toHaveBeenCalled();
-      view.stdin.write('\u001b[B');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('› ● Do not proceed'));
+      view.stdin.write('\u001B[B');
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('› ● Do not proceed');
+      });
       view.stdin.write('\r');
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(complete).toHaveBeenCalledWith({
           answers: [{ questionId: 'long', type: QuestionAnswerType.SELECTION, optionIds: ['no'] }],
-        }),
-      );
+        });
+      });
     } finally {
       view.unmount();
     }
@@ -82,18 +92,22 @@ describe(WiredTerminalRoot, () => {
     }));
     const view = render(<WiredTerminalRoot snapshot={state} />);
     try {
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise(resolve => {
+        setTimeout(resolve, 20);
+      });
       view.stdin.write('VISIBLE DRAFT');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('you> VISIBLE DRAFT'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('you> VISIBLE DRAFT');
+      });
       expect(view.lastFrame()!.split('\n').length).toBeLessThanOrEqual(24);
       expect(view.lastFrame()).toContain('Background terminals (16)');
       view.stdin.write('\r');
-      await vi.waitFor(() =>
-        expect(state.prompt?.acceptsSubmission && state.prompt.complete).toHaveBeenCalledWith({
+      await vi.waitFor(() => {
+        expect(state.prompt?.acceptsSubmission === true ? state.prompt.complete : undefined).toHaveBeenCalledWith({
           prompt: 'VISIBLE DRAFT',
           attachmentPaths: [],
-        }),
-      );
+        });
+      });
     } finally {
       view.unmount();
     }
@@ -103,22 +117,30 @@ describe(WiredTerminalRoot, () => {
     const state = snapshot();
     const view = render(<WiredTerminalRoot snapshot={state} />);
     try {
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise(resolve => {
+        setTimeout(resolve, 20);
+      });
       view.stdin.write('START ' + 'draft '.repeat(450) + 'VISIBLE END');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('VISIBLE END'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('VISIBLE END');
+      });
       expect(view.lastFrame()!.split('\n').length).toBeLessThanOrEqual(24);
       view.stdin.write('\u0001');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('you> START'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('you> START');
+      });
       view.stdin.write('\u0005');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('VISIBLE END'));
-      expect(state.prompt?.acceptsSubmission && state.prompt.complete).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('VISIBLE END');
+      });
+      expect(state.prompt?.acceptsSubmission === true ? state.prompt.complete : undefined).not.toHaveBeenCalled();
       view.stdin.write('\r');
-      await vi.waitFor(() =>
-        expect(state.prompt?.acceptsSubmission && state.prompt.complete).toHaveBeenCalledWith({
+      await vi.waitFor(() => {
+        expect(state.prompt?.acceptsSubmission === true ? state.prompt.complete : undefined).toHaveBeenCalledWith({
           prompt: 'START ' + 'draft '.repeat(450) + 'VISIBLE END',
           attachmentPaths: [],
-        }),
-      );
+        });
+      });
     } finally {
       view.unmount();
     }
@@ -144,26 +166,36 @@ describe(WiredTerminalRoot, () => {
     };
     const view = render(<WiredTerminalRoot snapshot={state} />);
     try {
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise(resolve => {
+        setTimeout(resolve, 20);
+      });
       for (let n = 0; n < 29; n++) {
-        view.stdin.write('\u001b[B');
-        await new Promise(resolve => setTimeout(resolve, 5));
+        view.stdin.write('\u001B[B');
+        await new Promise(resolve => {
+          setTimeout(resolve, 5);
+        });
       }
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('› ● Option 30'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('› ● Option 30');
+      });
       expect(view.lastFrame()).toContain('Enter select');
       expect(view.lastFrame()!.split('\n').length).toBeLessThanOrEqual(24);
-      view.stdin.write('\u001b[5~');
-      await vi.waitFor(() => expect(view.lastFrame()).not.toContain('› ● Option 30'));
+      view.stdin.write('\u001B[5~');
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).not.toContain('› ● Option 30');
+      });
       expect(view.lastFrame()).not.toContain('history 0');
       expect(complete).not.toHaveBeenCalled();
-      view.stdin.write('\u001b[6~');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('› ● Option 30'));
+      view.stdin.write('\u001B[6~');
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('› ● Option 30');
+      });
       view.stdin.write('\r');
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(complete).toHaveBeenCalledWith({
           answers: [{ questionId: 'choice', type: QuestionAnswerType.SELECTION, optionIds: ['option-29'] }],
-        }),
-      );
+        });
+      });
     } finally {
       view.unmount();
     }

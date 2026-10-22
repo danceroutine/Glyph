@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
@@ -23,13 +23,13 @@ import { GlyphProposalEditor } from '#vs/workbench/contrib/glyph/browser/GlyphPr
 import { GlyphProposalReviewError } from '#vs/workbench/contrib/glyph/browser/GlyphProposalReviewError.js';
 import { GlyphShellTerminals } from '#vs/workbench/contrib/glyph/browser/GlyphShellTerminals.js';
 import { NativeGlyphWorkbenchService } from '#vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.js';
-import { GlyphDesktopClient } from '#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js';
 
 type Command = GlyphWorkbenchCommand & Record<string, unknown>;
 type Handler = (command: Command, host: FakeHost) => unknown;
 
 interface FakeHost {
   state: GlyphDesktopSnapshot;
+  snapshot(): GlyphDesktopSnapshot;
   emit(event: unknown): void;
   respond(command: Command): void;
   disconnect(error: Error): void;
@@ -37,21 +37,21 @@ interface FakeHost {
   detachHandler: () => unknown;
   handler: Handler;
   attachment: string | undefined;
-  readonly connect: ReturnType<typeof vi.fn>;
-  readonly request: ReturnType<typeof vi.fn>;
-  readonly detachWorkspace: ReturnType<typeof vi.fn>;
-  readonly dispose: ReturnType<typeof vi.fn>;
+  readonly connect: Mock;
+  readonly request: Mock;
+  readonly detachWorkspace: Mock;
+  readonly dispose: Mock;
 }
 
 const doubles = vi.hoisted(() => ({ hosts: [] as unknown[] }));
 
 vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', async () => {
-  const { Emitter } = await import('#vs/base/common/event.js');
-  const { GlyphHostEventType } = await import('#glyph/protocol/events/GlyphHostEvent.js');
-  const { GlyphWorkbenchCommandType } = await import('#glyph/protocol/GlyphWorkbenchCommand.js');
-  class GlyphDesktopClient {
-    private readonly events = new Emitter<{ event: unknown }>();
-    private readonly disconnects = new Emitter<Error>();
+  const { Emitter: HoistedEmitter } = await import('#vs/base/common/event.js');
+  const { GlyphHostEventType: HostEventType } = await import('#glyph/protocol/events/GlyphHostEvent.js');
+  const { GlyphWorkbenchCommandType: WorkbenchCommandType } = await import('#glyph/protocol/GlyphWorkbenchCommand.js');
+  class FakeGlyphDesktopClient {
+    private readonly events = new HoistedEmitter<{ event: unknown }>();
+    private readonly disconnects = new HoistedEmitter<Error>();
     readonly onDidReceiveEvent = this.events.event;
     readonly onDidDisconnect = this.disconnects.event;
     state = {
@@ -66,15 +66,17 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
     };
     attachment: string | undefined;
     created = 0;
-    handler: (command: never, host: GlyphDesktopClient) => unknown = command => this.respond(command);
+    handler: (command: never, host: FakeGlyphDesktopClient) => unknown = command => {
+      this.respond(command);
+    };
     connectHandler: (roots: unknown, trusted: boolean) => unknown = () => {};
     detachHandler: () => unknown = () => {};
     readonly connect = vi.fn(async (roots: unknown, trusted: boolean) => {
       await this.connectHandler(roots, trusted);
-      const attachment = JSON.stringify([roots, trusted]);
-      if (this.attachment === attachment) return;
-      this.attachment = attachment;
-      this.emit({ type: GlyphHostEventType.INITIAL_STATE, state: this.snapshot() });
+      const key = JSON.stringify([roots, trusted]);
+      if (this.attachment === key) return;
+      this.attachment = key;
+      this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
     });
     readonly request = vi.fn(async (command: never) => {
       await this.handler(command, this);
@@ -98,7 +100,7 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
     }
     respond(command: Record<string, never>): void {
       switch (command.type) {
-        case GlyphWorkbenchCommandType.SELECT_ACCOUNT:
+        case WorkbenchCommandType.SELECT_ACCOUNT:
           this.state = {
             ...this.state,
             selectedAccount: { provider: command.accountProvider, id: command.accountId },
@@ -107,11 +109,11 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
             ],
           } as never;
           return;
-        case GlyphWorkbenchCommandType.REQUEST_SNAPSHOT:
-          this.emit({ type: GlyphHostEventType.INITIAL_STATE, state: this.snapshot() });
+        case WorkbenchCommandType.REQUEST_SNAPSHOT:
+          this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
           return;
-        case GlyphWorkbenchCommandType.CREATE_CHAT: {
-          const chat = {
+        case WorkbenchCommandType.CREATE_CHAT: {
+          const summary = {
             id: `created-${++this.created}`,
             title: 'Created',
             accountProvider: command.accountProvider,
@@ -120,14 +122,13 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
             updatedAt: '',
             turnCount: 0,
           };
-          this.state = { ...this.state, chats: [...this.state.chats, chat] } as never;
-          this.emit({ type: GlyphHostEventType.CHAT_UPDATED, chat, creationId: command.creationId });
-          return;
+          this.state = { ...this.state, chats: [...this.state.chats, summary] } as never;
+          this.emit({ type: HostEventType.CHAT_UPDATED, chat: summary, creationId: command.creationId });
         }
       }
     }
   }
-  return { GlyphDesktopClient };
+  return { GlyphDesktopClient: FakeGlyphDesktopClient };
 });
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphShellTerminals.js', () => ({
   GlyphShellTerminals: class {
@@ -239,8 +240,12 @@ function folder(name: string, scheme = 'file') {
 function gate() {
   let release: () => void = () => {};
   let enter: () => void = () => {};
-  const released = new Promise<void>(resolve => (release = resolve));
-  const entered = new Promise<void>(resolve => (enter = resolve));
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const entered = new Promise<void>(resolve => {
+    enter = resolve;
+  });
   return {
     released,
     entered,
@@ -257,11 +262,11 @@ async function workbench({
   runs = [] as GlyphRunProjection[],
   accounts = [] as unknown[],
   readOnly = false,
-  extra = {} as Partial<GlyphDesktopSnapshot> & { catalog?: Record<string, unknown> },
-  saved = {} as Record<string, unknown>,
+  extra = {},
+  saved = {},
   folders = [folder('project')],
   trusted = true,
-  settings = {} as Record<string, unknown>,
+  settings = {},
   handler,
   connect = true,
 }: {
@@ -350,12 +355,12 @@ async function workbench({
     opener,
     shells: instance(GlyphShellTerminals) as unknown as {
       close: (shell: { id: string; chatId: string }) => void;
-      update: ReturnType<typeof vi.fn>;
-      open: ReturnType<typeof vi.fn>;
+      update: Mock;
+      open: Mock;
     },
-    editor: instance(GlyphEditorAdapter) as unknown as Record<string, ReturnType<typeof vi.fn>>,
-    context: instance(GlyphContextController) as unknown as Record<string, ReturnType<typeof vi.fn>>,
-    proposals: instance(GlyphProposalEditor) as unknown as Record<string, ReturnType<typeof vi.fn>> & {
+    editor: instance(GlyphEditorAdapter) as unknown as Record<string, Mock>,
+    context: instance(GlyphContextController) as unknown as Record<string, Mock>,
+    proposals: instance(GlyphProposalEditor) as unknown as Record<string, Mock> & {
       host: Record<string, (...args: never[]) => unknown>;
     },
     commands: () => host.request.mock.calls.map(([command]) => command as Command),
@@ -364,8 +369,12 @@ async function workbench({
       workspace.folders = next;
       if (notify) workspaceEvents.folders.fire();
     },
-    renameWorkspace: () => workspaceEvents.name.fire(),
-    changeWorkbenchState: () => workspaceEvents.state.fire(),
+    renameWorkspace: () => {
+      workspaceEvents.name.fire();
+    },
+    changeWorkbenchState: () => {
+      workspaceEvents.state.fire();
+    },
     changeProfile(id: string) {
       profile.currentProfile = { id };
       profileEvents.fire();
@@ -374,7 +383,9 @@ async function workbench({
       trust.trusted = value;
       trustEvents.fire();
     },
-    changeConfiguration: (key: string) => configurationEvents.fire({ affectsConfiguration: value => value === key }),
+    changeConfiguration: (key: string) => {
+      configurationEvents.fire({ affectsConfiguration: value => value === key });
+    },
   };
 }
 
@@ -757,7 +768,9 @@ describe(NativeGlyphWorkbenchService, () => {
       await expect(service.attachExplorerResources(['file:///project/a.ts'], false)).rejects.toThrow(
         'The active draft changed during capture. Choose the context again.',
       );
-      await vi.waitFor(() => expect(service.state.selectedChatId).toBe('beta'));
+      await vi.waitFor(() => {
+        expect(service.state.selectedChatId).toBe('beta');
+      });
     });
 
     it('rejects resources captured while a message was being sent', async () => {
@@ -887,7 +900,7 @@ describe(NativeGlyphWorkbenchService, () => {
       const [input, options] = test.editors.openEditor.mock.lastCall!;
       expect(input).toBeInstanceOf(GlyphPlanInput);
       expect(options).toEqual({ pinned: true });
-      return input as unknown as {
+      return input as {
         read: () => Record<string, unknown>;
         actions: Record<string, (...args: never[]) => Promise<unknown>>;
         onChange: (listener: () => void) => { dispose(): void };
@@ -932,7 +945,9 @@ describe(NativeGlyphWorkbenchService, () => {
         accounts: [account],
         chats: [chat('alpha', { plans: [plan()] })],
       });
-      await vi.waitFor(() => expect(test.service.state.selectedModel).toBe('model'));
+      await vi.waitFor(() => {
+        expect(test.service.state.selectedModel).toBe('model');
+      });
 
       const input = await planInput(test, 'alpha', plan());
 
@@ -953,10 +968,10 @@ describe(NativeGlyphWorkbenchService, () => {
       const updated = plan({ markdown: 'Changed' });
       const listener = vi.fn();
 
-      await input.actions.update!(updated as never);
-      await input.actions.openChat!('beta' as never);
-      await input.actions.openLink!('https://example.com' as never);
-      await input.actions.copyText!('Copied' as never);
+      await input.actions.update(updated as never);
+      await input.actions.openChat('beta' as never);
+      await input.actions.openLink('https://example.com' as never);
+      await input.actions.copyText('Copied' as never);
       const subscription = input.onChange(listener);
       test.service.newChat();
       subscription.dispose();
@@ -987,7 +1002,7 @@ describe(NativeGlyphWorkbenchService, () => {
       const test = await workbench({ chats: [chat('alpha', { plans: [plan()] })] });
       const input = await planInput(test, 'alpha', plan());
 
-      await input.actions.build!(true as never);
+      await input.actions.build(true as never);
 
       expect(test.commands()).toContainEqual(
         expect.objectContaining({ type: GlyphWorkbenchCommandType.LINK_PLAN, targetChatId: 'created-1' }),
@@ -998,7 +1013,7 @@ describe(NativeGlyphWorkbenchService, () => {
       const test = await workbench({ chats: [chat('alpha', { plans: [plan()] })] });
       const input = await planInput(test, 'alpha', plan());
 
-      await input.actions.newAgent!();
+      await input.actions.newAgent();
 
       expect(test.commands().slice(-2)).toEqual([
         {
@@ -1028,7 +1043,7 @@ describe(NativeGlyphWorkbenchService, () => {
       const test = await workbench();
       const input = await planInput(test, 'gone', plan());
 
-      await expect(input.actions.newAgent!()).rejects.toEqual(
+      await expect(input.actions.newAgent()).rejects.toEqual(
         new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'The plan chat is unavailable.'),
       );
     });
@@ -1175,7 +1190,9 @@ describe(NativeGlyphWorkbenchService, () => {
       await linking.entered;
 
       test.changeFolders([folder('project'), folder('docs')]);
-      await vi.waitFor(() => expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/));
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/u);
+      });
       linking.release();
 
       await expect(building).rejects.toThrow('Workspace changed while the action was pending. Please try again.');
@@ -1362,7 +1379,9 @@ describe(NativeGlyphWorkbenchService, () => {
     it('rebinds file captures after the workspace changed', async () => {
       const test = await workbench();
       test.changeFolders([folder('project'), folder('docs')]);
-      await vi.waitFor(() => expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/));
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/u);
+      });
       const file = attachment();
       const untitled = attachment({ uri: 'untitled:Untitled-1', path: 'Untitled-1' });
 
@@ -1421,7 +1440,9 @@ describe(NativeGlyphWorkbenchService, () => {
       const { service, host, types } = await workbench({ runs: [run('alpha', 'live', GlyphRunStatus.STREAMING)] });
 
       const sending = service.sendImmediately('Now');
-      await vi.waitFor(() => expect(types()).toContain(GlyphWorkbenchCommandType.CANCEL_RUN));
+      await vi.waitFor(() => {
+        expect(types()).toContain(GlyphWorkbenchCommandType.CANCEL_RUN);
+      });
       emit(host, { type: GlyphHostEventType.USAGE, chatId: 'alpha', usage: {} });
       expect(types()).not.toContain(GlyphWorkbenchCommandType.SEND);
       emit(host, { type: GlyphHostEventType.RUN_STATE, run: run('alpha', 'live', GlyphRunStatus.CANCELLED) });
@@ -1434,7 +1455,9 @@ describe(NativeGlyphWorkbenchService, () => {
       const { service, host, types } = await workbench({ runs: [run('alpha', 'live', GlyphRunStatus.STREAMING)] });
 
       const sending = service.sendImmediately('Now');
-      await vi.waitFor(() => expect(types()).toContain(GlyphWorkbenchCommandType.CANCEL_RUN));
+      await vi.waitFor(() => {
+        expect(types()).toContain(GlyphWorkbenchCommandType.CANCEL_RUN);
+      });
       host.disconnect(new Error('Host exited.'));
 
       await expect(sending).rejects.toThrow('Glyph disconnected while stopping the response.');
@@ -1445,7 +1468,9 @@ describe(NativeGlyphWorkbenchService, () => {
       const test = await workbench({ runs: [run('alpha', 'live', GlyphRunStatus.STREAMING)] });
 
       const sending = test.service.sendImmediately('Now');
-      await vi.waitFor(() => expect(test.types()).toContain(GlyphWorkbenchCommandType.CANCEL_RUN));
+      await vi.waitFor(() => {
+        expect(test.types()).toContain(GlyphWorkbenchCommandType.CANCEL_RUN);
+      });
       test.changeProfile('other');
 
       await expect(sending).rejects.toThrow('Glyph disconnected while stopping the response.');
@@ -1551,7 +1576,9 @@ describe(NativeGlyphWorkbenchService, () => {
 
     it('reviews with the new chat’s account and model', async () => {
       const { service, commands } = await workbench({ saved: { 'glyph.selectedChat': '' }, accounts: [account] });
-      await vi.waitFor(() => expect(service.state.selectedModel).toBe('model'));
+      await vi.waitFor(() => {
+        expect(service.state.selectedModel).toBe('model');
+      });
 
       await service.startAgentReview(review);
 
@@ -1620,13 +1647,13 @@ describe(NativeGlyphWorkbenchService, () => {
 
       service.cancel();
 
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(commands().at(-1)).toEqual({
           type: GlyphWorkbenchCommandType.CANCEL_RUN,
           chatId: 'alpha',
           runId: 'live',
-        }),
-      );
+        });
+      });
       expect(service.composer.snapshot.queuePaused).toBe(true);
     });
 
@@ -1644,9 +1671,9 @@ describe(NativeGlyphWorkbenchService, () => {
 
       service.cancel();
 
-      await vi.waitFor(() =>
-        expect(commands().at(-1)).toMatchObject({ type: GlyphWorkbenchCommandType.CANCEL_RUN, runId }),
-      );
+      await vi.waitFor(() => {
+        expect(commands().at(-1)).toMatchObject({ type: GlyphWorkbenchCommandType.CANCEL_RUN, runId });
+      });
       sending.release();
       await send;
     });
@@ -1674,7 +1701,9 @@ describe(NativeGlyphWorkbenchService, () => {
 
       service.cancel();
 
-      await vi.waitFor(() => expect(service.state.transcript.at(-1)?.text).toBe('Too late.'));
+      await vi.waitFor(() => {
+        expect(service.state.transcript.at(-1)?.text).toBe('Too late.');
+      });
     });
   });
 
@@ -1812,7 +1841,9 @@ describe(NativeGlyphWorkbenchService, () => {
         },
         ...(handler ? { handler } : {}),
       });
-      await vi.waitFor(() => expect(test.service.state.selectedModel).toBe('model'));
+      await vi.waitFor(() => {
+        expect(test.service.state.selectedModel).toBe('model');
+      });
       test.host.request.mockClear();
       return test;
     }
@@ -1947,7 +1978,7 @@ describe(NativeGlyphWorkbenchService, () => {
       const source = test.service.composer;
       source.setDraft('Later');
       source.enqueueDraft();
-      return { ...test, source, id: source.snapshot.queued[0]!.id };
+      return { ...test, source, id: source.snapshot.queued[0].id };
     }
 
     it('moves a queued message into a new chat draft', async () => {
@@ -2008,7 +2039,9 @@ describe(NativeGlyphWorkbenchService, () => {
 
       service.newChat();
 
-      await vi.waitFor(() => expect(service.state.transcript.at(-1)?.text).toBe('Host unavailable.'));
+      await vi.waitFor(() => {
+        expect(service.state.transcript.at(-1)?.text).toBe('Host unavailable.');
+      });
     });
 
     it('stays on the chat while a message is being sent', async () => {
@@ -2351,13 +2384,13 @@ describe(NativeGlyphWorkbenchService, () => {
 
       shells.close(shell);
 
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(commands().at(-1)).toEqual({
           type: GlyphWorkbenchCommandType.STOP_SHELL_SESSION,
           chatId: 'alpha',
           sessionId: 'shell',
-        }),
-      );
+        });
+      });
     });
 
     it('reports terminals that cannot be stopped', async () => {
@@ -2371,7 +2404,9 @@ describe(NativeGlyphWorkbenchService, () => {
 
       shells.close(shell);
 
-      await vi.waitFor(() => expect(service.state.transcript.at(-1)?.text).toBe('Already exited.'));
+      await vi.waitFor(() => {
+        expect(service.state.transcript.at(-1)?.text).toBe('Already exited.');
+      });
     });
 
     it('leaves finished terminals and terminals of read-only windows alone', async () => {
@@ -2453,7 +2488,7 @@ describe(NativeGlyphWorkbenchService, () => {
       const first = service.decideProposalItems('alpha', items, true);
       await deciding.entered;
 
-      await expect(proposals.host.decide!('alpha' as never, items as never, true as never)).rejects.toEqual(
+      await expect(proposals.host.decide('alpha' as never, items as never, true as never)).rejects.toEqual(
         new GlyphProposalReviewError(GlyphDesktopErrorCode.CHAT_BUSY, 'Another review decision is still being saved.'),
       );
       deciding.release();
@@ -2478,17 +2513,17 @@ describe(NativeGlyphWorkbenchService, () => {
     it('gives the review editor the window state, draft and diagnostics', async () => {
       const { service, proposals } = await workbench();
 
-      proposals.host.report!(new Error('Review failed.') as never);
+      proposals.host.report(new Error('Review failed.') as never);
 
-      expect(proposals.host.state!()).toEqual(service.state);
-      expect(proposals.host.composer!()).toBe(service.composer);
+      expect(proposals.host.state()).toEqual(service.state);
+      expect(proposals.host.composer()).toBe(service.composer);
       expect(service.state.transcript.at(-1)?.text).toBe('Review failed.');
     });
 
     it('lets the review editor read proposal files', async () => {
       const { proposals, commands } = await workbench();
 
-      await proposals.host.read!('alpha' as never, 'proposal' as never, 'file' as never);
+      await proposals.host.read('alpha' as never, 'proposal' as never, 'file' as never);
 
       expect(commands().at(-1)).toEqual({
         type: GlyphWorkbenchCommandType.READ_PROPOSAL_FILE,
@@ -2513,7 +2548,7 @@ describe(NativeGlyphWorkbenchService, () => {
         comment: 'Rename this.',
       } as GlyphAnnotation;
 
-      await proposals.host.annotate!('alpha' as never, annotation as never);
+      await proposals.host.annotate('alpha' as never, annotation as never);
 
       expect(service.state.selectedChatId).toBe('alpha');
       expect(service.composer.snapshot.document.options?.annotations).toEqual([{ ...annotation, order: 1 }]);
@@ -2536,11 +2571,11 @@ describe(NativeGlyphWorkbenchService, () => {
         comment: '',
       } as GlyphAnnotation;
 
-      await proposals.host.annotate!('alpha' as never, annotation as never);
+      await proposals.host.annotate('alpha' as never, annotation as never);
       expect(service.composer.snapshot.annotationDraft).toEqual({ ...annotation, order: 1 });
       service.composer.saveAnnotation({ ...annotation, id: 'first', comment: 'First.' });
       service.composer.saveAnnotation({ ...annotation, id: 'second', comment: 'Second.' });
-      await proposals.host.annotate!('alpha' as never, { ...annotation, id: 'third' } as never);
+      await proposals.host.annotate('alpha' as never, { ...annotation, id: 'third' } as never);
 
       expect(service.composer.snapshot.annotationDraft).toEqual({ ...annotation, id: 'third', order: 3 });
     });
@@ -2556,13 +2591,13 @@ describe(NativeGlyphWorkbenchService, () => {
 
       emit(host, { type: GlyphHostEventType.RUN_STATE, run: run('alpha', 'live', GlyphRunStatus.COMPLETED) });
 
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(commands().at(-1)).toMatchObject({
           type: GlyphWorkbenchCommandType.SEND,
           chatId: 'alpha',
           text: 'Next',
-        }),
-      );
+        });
+      });
     });
 
     it('sends queued messages of background chats', async () => {
@@ -2573,9 +2608,9 @@ describe(NativeGlyphWorkbenchService, () => {
 
       emit(host, { type: GlyphHostEventType.RUN_STATE, run: run('alpha', 'live', GlyphRunStatus.COMPLETED) });
 
-      await vi.waitFor(() =>
-        expect(commands().at(-1)).toMatchObject({ type: GlyphWorkbenchCommandType.SEND, chatId: 'alpha' }),
-      );
+      await vi.waitFor(() => {
+        expect(commands().at(-1)).toMatchObject({ type: GlyphWorkbenchCommandType.SEND, chatId: 'alpha' });
+      });
       expect(service.state.status).toBe(GlyphWorkbenchStatus.READY);
     });
 
@@ -2616,8 +2651,12 @@ describe(NativeGlyphWorkbenchService, () => {
 
       emit(host, { type: GlyphHostEventType.RUN_STATE, run: run('alpha', 'live', GlyphRunStatus.COMPLETED) });
 
-      await vi.waitFor(() => expect(hostTurnFirst).toBe(false));
-      await vi.waitFor(() => expect(service.composer.snapshot.queueSubmitting).toBeUndefined());
+      await vi.waitFor(() => {
+        expect(hostTurnFirst).toBe(false);
+      });
+      await vi.waitFor(() => {
+        expect(service.composer.snapshot.queueSubmitting).toBeUndefined();
+      });
       expect(service.composer.snapshot).toMatchObject({ queuePaused: false, queueError: undefined });
       expect(service.composer.snapshot.queued).toHaveLength(1);
       expect(service.state.transcript.filter(entry => entry.role === GlyphTranscriptRole.DIAGNOSTIC)).toEqual([]);
@@ -2627,7 +2666,9 @@ describe(NativeGlyphWorkbenchService, () => {
         run: run('alpha', 'shell-event:wake', GlyphRunStatus.COMPLETED),
       });
 
-      await vi.waitFor(() => expect(service.composer.snapshot.queued).toEqual([]));
+      await vi.waitFor(() => {
+        expect(service.composer.snapshot.queued).toEqual([]);
+      });
       expect(types().filter(type => type === GlyphWorkbenchCommandType.SEND)).toHaveLength(2);
     });
 
@@ -2641,13 +2682,13 @@ describe(NativeGlyphWorkbenchService, () => {
 
       service.composer.enqueueDraft();
 
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(service.composer.snapshot).toMatchObject({
           queuePaused: true,
           queueError: 'The provider rejected the message.',
           queueSubmitting: undefined,
-        }),
-      );
+        });
+      });
       expect(service.composer.snapshot.queued).toHaveLength(1);
       expect(service.state.transcript.filter(entry => entry.role === GlyphTranscriptRole.DIAGNOSTIC)).toEqual([
         expect.objectContaining({ text: 'The provider rejected the message.' }),
@@ -2674,9 +2715,9 @@ describe(NativeGlyphWorkbenchService, () => {
       });
       expect(test.service.composer.snapshot.queuePaused).toBe(true);
       expect(test.editor.invalidate).toHaveBeenCalled();
-      await vi.waitFor(() =>
-        expect(test.service.state.workspaceMessage).toBe('Workspace updated: project, docs. Continue when ready.'),
-      );
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toBe('Workspace updated: project, docs. Continue when ready.');
+      });
       expect(test.host.detachWorkspace).toHaveBeenCalled();
       expect(test.editor.rebindWorkspace).toHaveBeenCalled();
       expect(test.host.connect).toHaveBeenLastCalledWith(
@@ -2689,7 +2730,7 @@ describe(NativeGlyphWorkbenchService, () => {
       expect(test.commands()).toEqual([{ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: 'alpha' }]);
       expect(test.storage.get('glyph.selectedChat')).toBe('alpha');
       expect(test.service.state.readOnly).toBe(false);
-      expect(test.service.composer.snapshot.queued[0]!.document.parts).toEqual([{ type: 'text', text: 'Queued' }]);
+      expect(test.service.composer.snapshot.queued[0].document.parts).toEqual([{ type: 'text', text: 'Queued' }]);
     });
 
     it('rebinds captures in drafts to the changed workspace', async () => {
@@ -2697,7 +2738,9 @@ describe(NativeGlyphWorkbenchService, () => {
       test.service.composer.insertAttachments([attachment()]);
 
       test.changeFolders([folder('project'), folder('docs')]);
-      await vi.waitFor(() => expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/));
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/u);
+      });
 
       expect(test.service.composer.snapshot.document.parts).toEqual([
         { type: 'attachment', attachment: { ...attachment(), sourceRevision: 'rebound' } },
@@ -2708,11 +2751,15 @@ describe(NativeGlyphWorkbenchService, () => {
       const trusted = await workbench({ saved: { 'glyph.selectedChat': '' }, accounts: [account] });
       const untrusted = await workbench({ saved: { 'glyph.selectedChat': '' }, accounts: [account], trusted: false });
       for (const test of [trusted, untrusted]) {
-        await vi.waitFor(() => expect(test.service.state.selectedModel).toBe('model'));
+        await vi.waitFor(() => {
+          expect(test.service.state.selectedModel).toBe('model');
+        });
         test.host.request.mockClear();
 
         test.changeFolders([folder('docs')]);
-        await vi.waitFor(() => expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/));
+        await vi.waitFor(() => {
+          expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/u);
+        });
       }
 
       expect(trusted.commands()).toEqual([
@@ -2731,7 +2778,9 @@ describe(NativeGlyphWorkbenchService, () => {
       renamed.renameWorkspace();
       unchanged.changeWorkbenchState();
 
-      await vi.waitFor(() => expect(renamed.service.state.workspaceMessage).toMatch(/^Workspace updated/));
+      await vi.waitFor(() => {
+        expect(renamed.service.state.workspaceMessage).toMatch(/^Workspace updated/u);
+      });
       expect(unchanged.service.state.workspaceMessage).toBeUndefined();
       expect(unchanged.host.detachWorkspace).not.toHaveBeenCalled();
     });
@@ -2740,20 +2789,20 @@ describe(NativeGlyphWorkbenchService, () => {
       const test = await workbench();
 
       test.changeFolders([]);
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(test.service.state.workspaceMessage).toBe(
           'Add a local workspace folder to continue. Your conversation and draft are preserved.',
-        ),
-      );
+        );
+      });
 
       expect(test.service.state).toMatchObject({ readOnly: true, workspaceRetryable: false });
       await expect(test.service.send('Hello')).rejects.toThrow(
         'Add a local workspace folder to continue. Your conversation and draft are preserved.',
       );
       test.changeFolders([folder('docs')]);
-      await vi.waitFor(() =>
-        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs. Continue when ready.'),
-      );
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs. Continue when ready.');
+      });
     });
 
     it('lets the user retry a failed update', async () => {
@@ -2764,9 +2813,9 @@ describe(NativeGlyphWorkbenchService, () => {
         };
 
         test.changeFolders([folder('docs')]);
-        await vi.waitFor(() =>
-          expect(test.service.state.workspaceMessage).toBe('Could not update workspace folders: Host unavailable.'),
-        );
+        await vi.waitFor(() => {
+          expect(test.service.state.workspaceMessage).toBe('Could not update workspace folders: Host unavailable.');
+        });
 
         expect(test.service.state.workspaceRetryable).toBe(true);
         test.host.connectHandler = () => {};
@@ -2790,9 +2839,9 @@ describe(NativeGlyphWorkbenchService, () => {
       test.changeFolders([folder('docs'), folder('notes')]);
       connecting.release();
 
-      await vi.waitFor(() =>
-        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs, notes. Continue when ready.'),
-      );
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs, notes. Continue when ready.');
+      });
       expect(test.host.detachWorkspace).toHaveBeenCalledTimes(2);
     });
 
@@ -2809,9 +2858,9 @@ describe(NativeGlyphWorkbenchService, () => {
 
       test.changeFolders([folder('docs')]);
 
-      await vi.waitFor(() =>
-        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs, notes. Continue when ready.'),
-      );
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs, notes. Continue when ready.');
+      });
     });
 
     it('rebinds again when folders change as an update fails', async () => {
@@ -2826,16 +2875,16 @@ describe(NativeGlyphWorkbenchService, () => {
 
       test.changeFolders([folder('docs')]);
 
-      await vi.waitFor(() =>
-        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs, notes. Continue when ready.'),
-      );
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs, notes. Continue when ready.');
+      });
     });
 
     it('rebinds again when folders change as an update finishes', async () => {
       const test = await workbench();
       let added = false;
       const poll = (): void => {
-        if (test.service.state.workspaceMessage?.startsWith('Add a local')) {
+        if (test.service.state.workspaceMessage?.startsWith('Add a local') === true) {
           added = true;
           test.changeFolders([folder('docs')], false);
         } else queueMicrotask(poll);
@@ -2844,9 +2893,9 @@ describe(NativeGlyphWorkbenchService, () => {
       test.changeFolders([]);
       queueMicrotask(poll);
 
-      await vi.waitFor(() =>
-        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs. Continue when ready.'),
-      );
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toBe('Workspace updated: docs. Continue when ready.');
+      });
       expect(added).toBe(true);
     });
 
@@ -2871,7 +2920,9 @@ describe(NativeGlyphWorkbenchService, () => {
       const pending = test.service.cancelRun('alpha', 'run');
       await connecting.entered;
       test.changeFolders([folder('docs')]);
-      await vi.waitFor(() => expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/));
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceMessage).toMatch(/^Workspace updated/u);
+      });
       connecting.release();
 
       await expect(pending).rejects.toThrow('Workspace changed while the action was pending. Please try again.');
@@ -2883,7 +2934,9 @@ describe(NativeGlyphWorkbenchService, () => {
       test.setTrust(false);
 
       expect(test.editor.invalidate).toHaveBeenCalled();
-      await vi.waitFor(() => expect(test.host.connect).toHaveBeenLastCalledWith(expect.any(Array), false));
+      await vi.waitFor(() => {
+        expect(test.host.connect).toHaveBeenLastCalledWith(expect.any(Array), false);
+      });
     });
 
     it('reports reconnection failures', async () => {
@@ -2894,7 +2947,9 @@ describe(NativeGlyphWorkbenchService, () => {
 
       test.setTrust(false);
 
-      await vi.waitFor(() => expect(test.service.state.transcript.at(-1)?.text).toBe('Trust denied.'));
+      await vi.waitFor(() => {
+        expect(test.service.state.transcript.at(-1)?.text).toBe('Trust denied.');
+      });
     });
   });
 
@@ -2945,7 +3000,9 @@ describe(NativeGlyphWorkbenchService, () => {
         throw new Error('Host unavailable.');
       };
       test.changeFolders([folder('docs')]);
-      await vi.waitFor(() => expect(test.service.state.workspaceRetryable).toBe(true));
+      await vi.waitFor(() => {
+        expect(test.service.state.workspaceRetryable).toBe(true);
+      });
 
       test.changeProfile('other');
 
@@ -3025,7 +3082,9 @@ describe(NativeGlyphWorkbenchService, () => {
         },
       });
 
-      await vi.waitFor(() => expect(service.state.transcript.at(-1)?.text).toBe('History unavailable.'));
+      await vi.waitFor(() => {
+        expect(service.state.transcript.at(-1)?.text).toBe('History unavailable.');
+      });
     });
 
     it('reopens the saved chat when its history is not loaded', async () => {
@@ -3053,7 +3112,9 @@ describe(NativeGlyphWorkbenchService, () => {
         ],
       });
 
-      await vi.waitFor(() => expect(service.state.catalogPending).toBe(false));
+      await vi.waitFor(() => {
+        expect(service.state.catalogPending).toBe(false);
+      });
       expect(commands().filter(command => command.type === GlyphWorkbenchCommandType.SELECT_ACCOUNT)).toEqual([
         { type: GlyphWorkbenchCommandType.SELECT_ACCOUNT, accountProvider: 'provider', accountId: 'account' },
       ]);

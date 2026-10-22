@@ -1,8 +1,19 @@
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { beforeAll, expect, it, vi } from 'vitest';
+import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
 
-let useGlyphContext, GlyphComposerState;
+/**
+ * @typedef {{
+ *   useGlyphContext: typeof import('#vs/workbench/contrib/glyph/browser/GlyphNativeContextActions.js').useGlyphContext,
+ *   GlyphComposerState: typeof import('#glyph/workbench/GlyphComposerState.js').GlyphComposerState,
+ * }} ContextActionModule
+ */
+
+/** @type {ContextActionModule['GlyphComposerState']} */
+let GlyphComposerState;
+/** @type {ContextActionModule['useGlyphContext']} */
+let useGlyphContext;
 beforeAll(async () => {
   const built = await build({
     stdin: {
@@ -46,9 +57,9 @@ beforeAll(async () => {
       },
     ],
   });
-  ({ useGlyphContext, GlyphComposerState } = await import(
-    `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`
-  ));
+  /** @type {ContextActionModule} */
+  const api = await importBundle(built.outputFiles[0].text, ['useGlyphContext', 'GlyphComposerState']);
+  ({ useGlyphContext, GlyphComposerState } = api);
 });
 
 it.each(['chat', 'draft'])(
@@ -58,27 +69,23 @@ it.each(['chat', 'draft'])(
     const other = new GlyphComposerState();
     other.setDraft('Unrelated beta draft');
     const glyph = { composer: source, send: vi.fn(async () => {}) };
-    let release;
-    let entered;
-    const gate = new Promise(resolve => {
-      release = resolve;
-    });
-    const opening = new Promise(resolve => {
-      entered = resolve;
-    });
+    /** @type {PromiseWithResolvers<void>} */
+    const gate = Promise.withResolvers();
+    /** @type {PromiseWithResolvers<void>} */
+    const opening = Promise.withResolvers();
     const views = {
       openView: async () => {
-        entered();
-        await gate;
+        opening.resolve();
+        await gate.promise;
       },
     };
     const attachment = { path: 'alpha.ts', text: 'Captured alpha source', contentRevision: '1' };
     const action = useGlyphContext(glyph, views, async () => [attachment], 'Fix the attached diagnostic.');
-    await opening;
+    await opening.promise;
     const actionDocument = source.snapshot.document;
     if (change === 'chat') glyph.composer = other;
     else source.setDraft('A newer draft');
-    release();
+    gate.resolve();
     await expect(action).rejects.toThrow('draft changed');
     expect(glyph.send).not.toHaveBeenCalled();
     expect(other.snapshot.draft).toBe('Unrelated beta draft');

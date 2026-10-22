@@ -1,6 +1,6 @@
 # Agent editing
 
-Glyph applies agent edits through revision-guarded workspace operations and retains the results for Keep/Revert review. The desktop composition enables `autoApply: true` in [OpenAIDesktopRuntimeFactory](../src/desktop/host/OpenAIDesktopRuntimeFactory.ts), so these edits are reflected to the live file immediately on application, rather than being held for review. The sequences below follow an ordinary text update from the model's tool call into the live Code OSS document and back to its persisted review state. 
+Glyph applies agent edits through revision-guarded workspace operations and retains the results for Keep/Revert review. The desktop composition enables `autoApply: true` in [OpenAIDesktopRuntimeFactory](../src/desktop/host/OpenAIDesktopRuntimeFactory.ts), so these edits are reflected to the live file immediately on application, rather than being held for review. The sequences below follow an ordinary text update from the model's tool call into the live Code OSS document and back to its persisted review state.
 
 **Note**: Structural create, rename, and delete operations use a separate renderer path, `GlyphEditorAdapter.applyFile()`.
 

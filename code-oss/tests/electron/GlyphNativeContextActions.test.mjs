@@ -2,23 +2,26 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { contextFiles } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+/** @typedef {import('./ScriptedProvider.mjs').ScriptedProvider} ScriptedProvider */
 const firstTerminal = isolatedLaunch('expects the first terminal of a fresh window');
 const leavesUnsentDraft = isolatedLaunch('leaves an unsent draft that closing chats keeps');
 const createsRepository = isolatedLaunch('creates a Git repository');
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} path
+ */
 async function openFile(glyph, path) {
   await glyph.page.keyboard.press('ControlOrMeta+p');
   await glyph.page.locator('.quick-input-widget input').fill(path);
   await glyph.page.keyboard.press('Enter');
   await expect(glyph.page.locator('.quick-input-widget')).not.toBeVisible();
 }
-const files = provider =>
-  JSON.parse(
-    provider.requests
-      .at(-1)
-      .body.input.filter(item => item.role === 'user')
-      .at(-1).content[0].text,
-  ).files;
+/** @param {ScriptedProvider} provider */
+const files = provider => contextFiles(provider.requests.at(-1)?.body.input.findLast(item => item.role === 'user'));
 it.describe('Context actions on native workbench surfaces', () => {
   it.describe.configure({ mode: 'default' });
   it.use({
@@ -37,7 +40,7 @@ it.describe('Context actions on native workbench surfaces', () => {
       await expect(error).toBeVisible({ timeout: 30000 });
       await glyph.page
         .locator('.view-line span')
-        .filter({ hasText: /^INVALID$/ })
+        .filter({ hasText: /^INVALID$/u })
         .hover();
       const fix = glyph.page.getByRole('button', { name: 'Fix with Agent', exact: true });
       await expect(fix).toBeVisible();
@@ -54,15 +57,15 @@ it.describe('Context actions on native workbench surfaces', () => {
     firstTerminal,
     async ({ glyph, provider }) => {
       await glyph.command('Terminal: Create New Terminal');
-      const input = glyph.page.getByRole('textbox', { name: /^Terminal 1,/ });
+      const input = glyph.page.getByRole('textbox', { name: /^Terminal 1,/u });
       await expect(input).toBeFocused();
       await input.pressSequentially("printf 'NATIVE_SELECTION_EVIDENCE\\n'");
       await input.press('Enter');
       await glyph.command('Terminal: Select All');
-      const add = glyph.page.getByRole('button', { name: /^Add to Chat/ });
+      const add = glyph.page.getByRole('button', { name: /^Add to Chat/u });
       await expect(add).toBeVisible();
       await add.click();
-      await expect(glyph.composer.getByRole('button', { name: /Open Terminal/ })).toBeVisible();
+      await expect(glyph.composer.getByRole('button', { name: /Open Terminal/u })).toBeVisible();
       await expect(glyph.page.getByRole('region', { name: 'Attachment preview' })).not.toBeVisible();
       await glyph.composer.pressSequentially('Explain this output');
       provider.enqueue({ chunks: ['Output received.'] });
@@ -94,6 +97,7 @@ it.describe('Context actions on native workbench surfaces', () => {
       const scope = glyph.page.getByRole('combobox', { name: 'Review scope' });
       await expect(review).toBeDisabled();
       await expect(scope).toBeDisabled();
+      /** @param {string[]} args */
       const git = (...args) => execFileSync('git', args, { cwd: glyph.workspace });
       git('init', '-b', 'main');
       git('config', 'user.email', 'fixture@example.invalid');
@@ -128,6 +132,7 @@ it.describe('Context actions on native workbench surfaces', () => {
     'reviews last commit by default, persists staged scope, and uses the selected branch comparison',
     createsRepository,
     async ({ glyph, provider }) => {
+      /** @param {string[]} args */
       const git = (...args) => execFileSync('git', args, { cwd: glyph.workspace });
       git('init', '-b', 'main');
       git('config', 'user.email', 'fixture@example.invalid');

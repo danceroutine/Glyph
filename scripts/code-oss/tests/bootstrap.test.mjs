@@ -7,33 +7,51 @@ const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url
 const generatedRoot = join(repositoryRoot, '.code-oss');
 const sourceRoot = join(generatedRoot, 'src');
 const marker = join(sourceRoot, '.glyph-upstream.json');
+/** @param {string} bytes */
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
+/**
+ * @typedef {{ tag: string, commit: string, archiveSha256: string }} Pin
+ * @param {{
+ *   files?: (archive: string, pin: Pin) => Record<string, string>,
+ *   download?: { ok: boolean, status?: number, statusText?: string, arrayBuffer?: () => Promise<Buffer> },
+ *   statError?: Error,
+ * }} [options]
+ */
 async function runScript({ files = () => ({}), download, statError } = {}) {
   const pin = { tag: '1.2.3', commit: 'pinned', archiveSha256: sha256('verified archive') };
   const archive = join(generatedRoot, `vscode-${pin.tag}.tar.gz`);
   const contents = { [join(repositoryRoot, 'code-oss', 'upstream.json')]: JSON.stringify(pin), ...files(archive, pin) };
+  /** @type {unknown[][]} */
   const operations = [];
   const missing = () => Object.assign(new Error('missing'), { code: 'ENOENT' });
   const filesystem = {
-    readFile: vi.fn(async (path, encoding) => {
+    readFile: vi.fn(async (/** @type {string} */ path, /** @type {string | undefined} */ encoding) => {
       if (!(path in contents)) throw missing();
-      return encoding ? contents[path] : Buffer.from(contents[path]);
+      return encoding === undefined ? Buffer.from(contents[path] ?? '') : contents[path];
     }),
-    stat: vi.fn(async path => {
-      if (statError) throw statError;
+    stat: vi.fn(async (/** @type {string} */ path) => {
+      if (statError !== undefined) throw statError;
       if (!(path in contents)) throw missing();
       return {};
     }),
-    writeFile: vi.fn(async (path, data) => {
+    writeFile: vi.fn(async (/** @type {string} */ path, /** @type {string | Buffer} */ data) => {
       operations.push(['writeFile', path, typeof data === 'string' ? data : data.toString()]);
       contents[path] = data.toString();
     }),
-    mkdir: vi.fn(async (...arguments_) => operations.push(['mkdir', ...arguments_])),
-    rm: vi.fn(async (...arguments_) => operations.push(['rm', ...arguments_])),
+    mkdir: vi.fn(async (/** @type {unknown[]} */ ...arguments_) => {
+      operations.push(['mkdir', ...arguments_]);
+    }),
+    rm: vi.fn(async (/** @type {unknown[]} */ ...arguments_) => {
+      operations.push(['rm', ...arguments_]);
+    }),
   };
   const childProcess = {
-    execFileSync: vi.fn((command, arguments_, options) => operations.push(['exec', command, arguments_, options])),
+    execFileSync: vi.fn(
+      (/** @type {string} */ command, /** @type {string[]} */ arguments_, /** @type {unknown} */ options) => {
+        operations.push(['exec', command, arguments_, options]);
+      },
+    ),
   };
   const fetch = vi.fn(async () => download ?? { ok: true, arrayBuffer: async () => Buffer.from('verified archive') });
   vi.stubGlobal('fetch', fetch);

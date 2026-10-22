@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { parseJson, projectToolOutput } from './ProviderPayloads.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
 
 it.describe('Pending file references in agent messages', () => {
   it.fixme('opens a workspace file link at its requested one-based line', async () => {
@@ -21,11 +24,27 @@ it.describe('Pending file references in agent messages', () => {
   });
 });
 
+/**
+ * @param {string} [glob_pattern]
+ * @param {string | null} [target_directory]
+ * @returns {[string, unknown]}
+ */
 const list = (glob_pattern = '**/*', target_directory = null) => [
   'list_project_files',
   { glob_pattern, target_directory },
 ];
+/**
+ * @param {string} path
+ * @param {number | null} [start_line]
+ * @param {number | null} [end_line]
+ * @returns {[string, unknown]}
+ */
 const read = (path, start_line = null, end_line = null) => ['read_project_file', { path, start_line, end_line }];
+/**
+ * @param {string} pattern
+ * @param {Record<string, unknown>} [options]
+ * @returns {[string, unknown]}
+ */
 const search = (pattern, options = {}) => [
   'search_project_contents',
   {
@@ -45,6 +64,11 @@ const search = (pattern, options = {}) => [
   },
 ];
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {[string, unknown][]} calls
+ */
 async function runTools(glyph, provider, calls, answer = 'The requested project tools finished.') {
   const ids = calls.map(() => randomUUID());
   const requestCount = provider.requests.length;
@@ -60,10 +84,14 @@ async function runTools(glyph, provider, calls, answer = 'The requested project 
   return ids.map(id => {
     const outputs = input.filter(item => item.type === 'function_call_output' && item.call_id === id);
     expect(outputs).toHaveLength(1);
-    return JSON.parse(outputs[0].output);
+    return projectToolOutput.parse(parseJson(outputs[0].output));
   });
 }
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} path
+ */
 async function openFile(glyph, path) {
   await glyph.page.keyboard.press('ControlOrMeta+p');
   const input = glyph.page.locator('.quick-input-widget input');
@@ -72,6 +100,11 @@ async function openFile(glyph, path) {
   await expect(glyph.page.locator('.editor-instance .monaco-editor').first()).toBeVisible();
 }
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} path
+ * @param {string} text
+ */
 async function editFile(glyph, path, text) {
   await openFile(glyph, path);
   await glyph.page.keyboard.press('ControlOrMeta+a');
@@ -371,7 +404,7 @@ it.describe('Bounded editor search', () => {
     await expect(glyph.page.locator('.tab.dirty')).toHaveCount(1);
     await glyph.command('Focus Glyph');
     const [oversized] = await runTools(glyph, provider, [search('Needle', { path: 'large.txt' })]);
-    expect(oversized.error).toMatchObject({ message: expect.stringMatching(/large\.txt.*512 KiB/) });
+    expect(oversized.error).toMatchObject({ message: expect.stringMatching(/large\.txt.*512 KiB/u) });
     expect(oversized.matches).toBeUndefined();
     expect(await readFile(path, 'utf8')).not.toContain('y');
     await openFile(glyph, path);
@@ -440,12 +473,16 @@ it.describe('Multi-root file discovery', () => {
       read('workspace/shared.txt'),
       read('second/shared.txt'),
     ]);
-    expect(listed.files.sort()).toEqual(['second/shared.txt', 'workspace/shared.txt']);
+    expect(listed.files.toSorted()).toEqual(['second/shared.txt', 'workspace/shared.txt']);
     expect(first.lines[0].content).toBe('First root marker');
     expect(second.lines[0].content).toBe('Second root marker');
     await editFile(glyph, join(glyph.rootPaths[1], 'shared.txt'), 'Second root unsaved');
     const [found, stale] = await runTools(glyph, provider, [search('root'), search('Second root marker')]);
-    expect(found.matches.map(match => [match.path, match.lineText]).sort()).toEqual([
+    expect(
+      found.matches
+        ?.toSorted((left, right) => left.path.localeCompare(right.path))
+        .map(match => [match.path, match.lineText]),
+    ).toEqual([
       ['second/shared.txt', 'Second root unsaved'],
       ['workspace/shared.txt', 'First root marker'],
     ]);
@@ -466,7 +503,9 @@ it.describe('Multi-root file discovery', () => {
       search('live', { file_glob: 'workspace/*.txt' }),
       search('root marker'),
     ]);
-    const combined = [...first.matches, ...second.matches].map(match => [match.path, match.lineText]).sort();
+    const combined = [...(first.matches ?? []), ...(second.matches ?? [])]
+      .toSorted((left, right) => left.path.localeCompare(right.path))
+      .map(match => [match.path, match.lineText]);
     expect(combined).toEqual([
       ['second/shared.txt', 'live second root'],
       ['workspace/shared.txt', 'live first root'],

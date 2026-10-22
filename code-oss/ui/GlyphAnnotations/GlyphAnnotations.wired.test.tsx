@@ -28,7 +28,9 @@ function mountSource(text: string, options: SourceOptions = {}): HTMLElement {
   if (options.html === undefined) source.textContent = text;
   else source.innerHTML = options.html;
   document.body.prepend(source);
-  onTestFinished(() => source.remove());
+  onTestFinished(() => {
+    source.remove();
+  });
   return source;
 }
 
@@ -111,7 +113,9 @@ describe(WiredGlyphAnnotations, () => {
     const workbench = document.createElement('div');
     workbench.className = 'monaco-workbench';
     document.body.append(workbench);
-    onTestFinished(() => workbench.remove());
+    onTestFinished(() => {
+      workbench.remove();
+    });
     const source = mountSource('Hello world');
     render(<WiredGlyphAnnotations composer={composerWith()} disabled={false} />);
 
@@ -145,7 +149,9 @@ describe(WiredGlyphAnnotations, () => {
     const outside = document.createElement('p');
     outside.textContent = 'Outside';
     document.body.append(outside);
-    onTestFinished(() => outside.remove());
+    onTestFinished(() => {
+      outside.remove();
+    });
     render(<WiredGlyphAnnotations composer={composerWith()} disabled={false} />);
     const offer = () => screen.queryByRole('button', { name: 'Comment on selection' });
 
@@ -274,7 +280,9 @@ describe(WiredGlyphAnnotations, () => {
   it('reopens saved annotations from their markers and updates them', async () => {
     const source = mountSource('', { html: 'Hello <b>big</b> world' });
     const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
-    onTestFinished(() => scroll.mockRestore());
+    onTestFinished(() => {
+      scroll.mockRestore();
+    });
     const composer = composerWith([savedAnnotation({ quote: 'big world', from: 6, to: 15 })]);
     render(<WiredGlyphAnnotations composer={composer} disabled={false} />);
 
@@ -312,7 +320,7 @@ describe(WiredGlyphAnnotations, () => {
       />,
     );
 
-    expect(screen.getAllByRole('button', { name: /^Edit annotation/ }).map(button => button.textContent)).toEqual([
+    expect(screen.getAllByRole('button', { name: /^Edit annotation/u }).map(button => button.textContent)).toEqual([
       '1',
     ]);
   });
@@ -332,7 +340,9 @@ describe(WiredGlyphAnnotations, () => {
       source.textContent = 'Hello there';
     });
 
-    await waitFor(() => expect(marker()).toBeNull());
+    await waitFor(() => {
+      expect(marker()).toBeNull();
+    });
   });
 
   it('withdraws the selection offer once its text changes', () => {
@@ -369,7 +379,9 @@ describe(WiredGlyphAnnotations, () => {
     composer.registerAnnotationSource('plan-1', async () => ({ x: 500, y: 400, minX: 100, maxX: 380 }));
 
     render(<WiredGlyphAnnotations composer={composer} disabled={false} />);
-    act(() => composer.requestAnnotation(savedAnnotation({ sourceId: 'plan-1', comment: 'From plan' })));
+    act(() => {
+      composer.requestAnnotation(savedAnnotation({ sourceId: 'plan-1', comment: 'From plan' }));
+    });
 
     const comment = await screen.findByRole<HTMLTextAreaElement>('textbox', { name: 'Annotation comment' });
     expect(comment.value).toBe('From plan');
@@ -382,14 +394,20 @@ describe(WiredGlyphAnnotations, () => {
   it('opens annotations requested elsewhere inside their editor', async () => {
     const container = document.createElement('div');
     document.body.append(container);
-    onTestFinished(() => container.remove());
+    onTestFinished(() => {
+      container.remove();
+    });
     const composer = composerWith();
     composer.registerAnnotationSource('editor-1', async () => ({ x: 0, y: 0, container }));
 
     render(<WiredGlyphAnnotations composer={composer} disabled={false} />);
-    act(() => composer.requestAnnotation(savedAnnotation({ sourceId: 'editor-1' })));
+    act(() => {
+      composer.requestAnnotation(savedAnnotation({ sourceId: 'editor-1' }));
+    });
 
-    await waitFor(() => expect(container.querySelector('form')).not.toBeNull());
+    await waitFor(() => {
+      expect(container.querySelector('form')).not.toBeNull();
+    });
     expect(container.querySelector('form')!.getAttribute('style')).toBeNull();
   });
 
@@ -400,23 +418,43 @@ describe(WiredGlyphAnnotations, () => {
     });
     render(<WiredGlyphAnnotations composer={composer} disabled={false} />);
 
-    act(() => composer.requestAnnotation(savedAnnotation({ sourceId: 'unknown' })));
+    act(() => {
+      composer.requestAnnotation(savedAnnotation({ sourceId: 'unknown' }));
+    });
     await screen.findByRole('textbox', { name: 'Annotation comment' });
-    act(() => composer.editAnnotation(undefined));
-    act(() => composer.requestAnnotation(savedAnnotation({ id: 'note-2', sourceId: 'broken' })));
+    act(() => {
+      composer.editAnnotation(undefined);
+    });
+    act(() => {
+      composer.requestAnnotation(savedAnnotation({ id: 'note-2', sourceId: 'broken' }));
+    });
 
-    await waitFor(() => expect(screen.getByRole<HTMLTextAreaElement>('textbox').value).toBe('Explain'));
+    await waitFor(() => {
+      expect(screen.getByRole<HTMLTextAreaElement>('textbox').value).toBe('Explain');
+    });
   });
 
   it('ignores a reveal that finishes after the request was withdrawn', async () => {
     let reveal!: (position: { x: number; y: number }) => void;
     const composer = composerWith();
-    composer.registerAnnotationSource('slow', () => new Promise(resolve => (reveal = resolve)));
+    composer.registerAnnotationSource(
+      'slow',
+      () =>
+        new Promise(resolve => {
+          reveal = resolve;
+        }),
+    );
     render(<WiredGlyphAnnotations composer={composer} disabled={false} />);
 
-    act(() => composer.requestAnnotation(savedAnnotation({ sourceId: 'slow' })));
-    act(() => composer.editAnnotation(undefined));
-    await act(async () => reveal({ x: 10, y: 10 }));
+    act(() => {
+      composer.requestAnnotation(savedAnnotation({ sourceId: 'slow' }));
+    });
+    act(() => {
+      composer.editAnnotation(undefined);
+    });
+    await act(async () => {
+      reveal({ x: 10, y: 10 });
+    });
 
     expect(editor()).toBeNull();
   });
@@ -428,9 +466,13 @@ describe(WiredGlyphAnnotations, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit annotation 1' }));
     await screen.findByRole('textbox', { name: 'Annotation comment' });
 
-    act(() => composer.removeAnnotation('note-1'));
+    act(() => {
+      composer.removeAnnotation('note-1');
+    });
 
-    await waitFor(() => expect(editor()).toBeNull());
+    await waitFor(() => {
+      expect(editor()).toBeNull();
+    });
   });
 
   it('keeps editing a saved annotation when the edit request is cleared elsewhere', async () => {
@@ -440,7 +482,9 @@ describe(WiredGlyphAnnotations, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit annotation 1' }));
     await screen.findByRole('textbox', { name: 'Annotation comment' });
 
-    act(() => composer.editAnnotation(undefined));
+    act(() => {
+      composer.editAnnotation(undefined);
+    });
 
     expect(editor()).not.toBeNull();
   });
@@ -448,10 +492,14 @@ describe(WiredGlyphAnnotations, () => {
   it('keeps an unsaved annotation open when the request is cleared', async () => {
     const composer = composerWith();
     render(<WiredGlyphAnnotations composer={composer} disabled={false} />);
-    act(() => composer.requestAnnotation(savedAnnotation({ comment: '' })));
+    act(() => {
+      composer.requestAnnotation(savedAnnotation({ comment: '' }));
+    });
     await screen.findByRole('textbox', { name: 'Annotation comment' });
 
-    act(() => composer.editAnnotation(undefined));
+    act(() => {
+      composer.editAnnotation(undefined);
+    });
 
     expect(editor()).not.toBeNull();
   });

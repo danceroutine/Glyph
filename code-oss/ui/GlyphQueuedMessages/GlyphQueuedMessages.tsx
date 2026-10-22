@@ -80,15 +80,20 @@ export function GlyphQueuedMessages({ state }: { readonly state: GlyphComposerSt
     element.style.top = `${Math.max(8, Math.min(anchor.current.bottom + 4, window.innerHeight - bounds.height - 8))}px`;
   };
   useEffect(() => {
-    if (!menu) return;
+    if (menu === undefined || menu === '') return undefined;
     const outside = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setMenu(undefined);
+      if (!(event.target instanceof Node && root.current?.contains(event.target) === true)) setMenu(undefined);
     };
     document.addEventListener('pointerdown', outside);
-    return () => document.removeEventListener('pointerdown', outside);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+    };
   }, [menu]);
-  if (!state.queued.length) return null;
-  const blocked = state.disabled || !!state.queueSubmitting || !!state.editingQueuedMessage;
+  if (state.queued.length === 0) return null;
+  const blocked =
+    state.disabled ||
+    (state.queueSubmitting !== undefined && state.queueSubmitting !== '') ||
+    (state.editingQueuedMessage !== undefined && state.editingQueuedMessage !== '');
   return (
     <section
       class={`glyph-queued-messages ${drawer.card} ${styles.tray}`}
@@ -128,7 +133,7 @@ export function GlyphQueuedMessages({ state }: { readonly state: GlyphComposerSt
                 aria-label={`Queued message ${index + 1}: ${message.text}`}
                 aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
                 onDragStart={event => {
-                  if ((event.target as HTMLElement).closest('button')) {
+                  if (event.target instanceof Element && event.target.closest('button') !== null) {
                     event.preventDefault();
                     return;
                   }
@@ -140,11 +145,12 @@ export function GlyphQueuedMessages({ state }: { readonly state: GlyphComposerSt
                   dragged.current = undefined;
                 }}
                 onDragOver={event => {
-                  if (dragged.current && !blocked) event.preventDefault();
+                  if (dragged.current !== undefined && dragged.current !== '' && !blocked) event.preventDefault();
                 }}
                 onDrop={event => {
                   event.preventDefault();
-                  if (dragged.current && !blocked) state.moveQueued(dragged.current, index);
+                  if (dragged.current !== undefined && dragged.current !== '' && !blocked)
+                    state.moveQueued(dragged.current, index);
                   dragged.current = undefined;
                 }}
                 onKeyDown={event => {
@@ -166,7 +172,9 @@ export function GlyphQueuedMessages({ state }: { readonly state: GlyphComposerSt
 
                         type="button"
                         disabled={blocked}
-                        onClick={() => state.sendQueued(message.id)}
+                        onClick={() => {
+                          state.sendQueued(message.id);
+                        }}
                         aria-label="Send queued message immediately"
                       >
                         Send Now <CornerDownLeft size={14} aria-hidden="true" />
@@ -177,7 +185,9 @@ export function GlyphQueuedMessages({ state }: { readonly state: GlyphComposerSt
 
                         type="button"
                         disabled={blocked}
-                        onClick={() => state.editQueued(message.id)}
+                        onClick={() => {
+                          state.editQueued(message.id);
+                        }}
                         aria-label="Edit queued message"
                       >
                         <Pencil size={16} aria-hidden="true" />
@@ -191,10 +201,14 @@ export function GlyphQueuedMessages({ state }: { readonly state: GlyphComposerSt
                     type="button"
                     disabled={
                       state.disabled ||
-                      !!state.queueSubmitting ||
-                      (!!state.editingQueuedMessage && state.editingQueuedMessage !== message.id)
+                      (state.queueSubmitting !== undefined && state.queueSubmitting !== '') ||
+                      (state.editingQueuedMessage !== undefined &&
+                        state.editingQueuedMessage !== '' &&
+                        state.editingQueuedMessage !== message.id)
                     }
-                    onClick={() => state.removeQueued(message.id)}
+                    onClick={() => {
+                      state.removeQueued(message.id);
+                    }}
                     aria-label="Remove queued message"
                   >
                     <Trash2 size={16} aria-hidden="true" />
@@ -221,7 +235,7 @@ export function GlyphQueuedMessages({ state }: { readonly state: GlyphComposerSt
               </div>
             ))}
           </div>
-          {state.queueError && (
+          {state.queueError !== undefined && state.queueError !== '' && (
             <p class={styles.notice} role="alert">
               {state.queueError}
             </p>
@@ -240,7 +254,7 @@ export function GlyphQueuedMessages({ state }: { readonly state: GlyphComposerSt
           )}
         </div>
       </div>
-      {menu && (
+      {menu !== undefined && menu !== '' && (
         <div class={styles.menu} ref={positionMenu} role="menu">
           <Button
             appearance={ButtonAppearance.GHOST}

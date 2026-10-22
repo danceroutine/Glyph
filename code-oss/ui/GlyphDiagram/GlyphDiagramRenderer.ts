@@ -1,4 +1,5 @@
 import { GlyphDiagramError } from './GlyphDiagramError.ts';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 let rendererUrl = '/glyph-diagram.html';
 let frame: HTMLIFrameElement | undefined;
@@ -27,18 +28,22 @@ function start(): Promise<void> {
     border: '0',
   });
   ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new GlyphDiagramError('The diagram renderer did not load.')), 15000);
+    const timeout = setTimeout(() => {
+      reject(new GlyphDiagramError('The diagram renderer did not load.'));
+    }, 15000);
     window.addEventListener('message', event => {
-      if (event.source !== frame?.contentWindow || !event.data || event.data.channel !== 'glyph-diagram') return;
-      if (event.data.ready) {
+      const data: unknown = event.data;
+      if (event.source !== frame?.contentWindow || !isRecord(data) || data.channel !== 'glyph-diagram') return;
+      if (data.ready === true) {
         clearTimeout(timeout);
         resolve();
         return;
       }
-      const job = pending.get(event.data.id);
+      if (typeof data.id !== 'string') return;
+      const job = pending.get(data.id);
       if (!job) return;
-      pending.delete(event.data.id);
-      if (typeof event.data.svg === 'string') job.resolve(event.data.svg);
+      pending.delete(data.id);
+      if (typeof data.svg === 'string') job.resolve(data.svg);
       else job.reject(new GlyphDiagramError('Unable to render this diagram.'));
     });
   });

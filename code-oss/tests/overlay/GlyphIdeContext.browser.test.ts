@@ -48,7 +48,9 @@ function ideServices() {
     runs,
     model: (uri: URI, text: string, languageId: string | null = null) => {
       const model = createTextModel(text, languageId, undefined, uri);
-      onTestFinished(() => model.dispose());
+      onTestFinished(() => {
+        model.dispose();
+      });
       models.push(model);
       return model;
     },
@@ -78,7 +80,7 @@ function ideServices() {
     },
     markerService: {
       read: vi.fn((filter?: { resource: URI }) =>
-        markers.filter(marker => !filter || marker.resource.toString() === filter.resource.toString()),
+        markers.filter(entry => !filter || entry.resource.toString() === filter.resource.toString()),
       ),
     },
     languages: {
@@ -823,7 +825,8 @@ describe(GlyphIdeContext, () => {
   });
 
   describe(GlyphIdeContext.prototype.captureTestFailure, () => {
-    function failureRun(message: object, item: object = { label: 'adds' }, completedAt?: number): TestRun {
+    function failureRun(message: object, testItem?: object, completedAt?: number): TestRun {
+      const item = testItem ?? { label: 'adds' };
       return {
         id: 'run',
         name: 'Run',
@@ -871,7 +874,7 @@ describe(GlyphIdeContext, () => {
       );
       const [attachment] = await createIdeContext(services).captureTestFailure('run', 'test', 0, 0);
       expect(attachment.text).toMatch(
-        /^Test: adds \(test\)\nSource: file:\/\/\/workspace\/a\.ts:3\nRun state: completed\n\nExpected: 1\nActual: 2\n\nTest run: Run\n/,
+        /^Test: adds \(test\)\nSource: file:\/\/\/workspace\/a\.ts:3\nRun state: completed\n\nExpected: 1\nActual: 2\n\nTest run: Run\n/u,
       );
     });
 
@@ -883,7 +886,7 @@ describe(GlyphIdeContext, () => {
       );
       const [attachment] = await createIdeContext(services).captureTestFailure('run', 'test', 0, 0);
       expect(attachment.text).toMatch(
-        /^Test: adds \(test\)\nSource: file:\/\/\/workspace\/a\.test\.ts\nRun state: running \(partial\)\n\nExpected: unavailable\nActual: unavailable\n\n/,
+        /^Test: adds \(test\)\nSource: file:\/\/\/workspace\/a\.test\.ts\nRun state: running \(partial\)\n\nExpected: unavailable\nActual: unavailable\n\n/u,
       );
     });
 
@@ -893,7 +896,7 @@ describe(GlyphIdeContext, () => {
       services.runs.push(failureRun({ message: 'failed', expected: '1' }));
       const [attachment] = await createIdeContext(services).captureTestFailure('run', 'test', 0, 0);
       expect(attachment.text).toMatch(
-        /^Test: adds \(test\)\nSource: unavailable\n.*\n\nExpected: 1\nActual: unavailable\n/,
+        /^Test: adds \(test\)\nSource: unavailable\n.*\n\nExpected: 1\nActual: unavailable\n/u,
       );
     });
 
@@ -903,13 +906,17 @@ describe(GlyphIdeContext, () => {
       services.runs.push(failureRun({ message: 'failed' }));
       const [attachment] = await createIdeContext(services).captureTestFailure('run', 'test', 0, 0);
       expect(attachment.text).toMatch(
-        /^Test: adds \(test\)\nSource: unavailable\nRun state: running \(partial\)\n\nTest run: Run/,
+        /^Test: adds \(test\)\nSource: unavailable\nRun state: running \(partial\)\n\nTest run: Run/u,
       );
     });
   });
 
   describe(GlyphIdeContext.prototype.terminal, () => {
-    function terminalInstance(commands: unknown[] | undefined, selection = { start: { y: 4 }, end: { y: 5 } }) {
+    function terminalInstance(
+      commands: unknown[] | undefined,
+      selectionRange?: { start: { y: number }; end: { y: number } },
+    ) {
+      const selection = selectionRange ?? { start: { y: 4 }, end: { y: 5 } };
       return {
         instanceId: 7,
         title: 'Tests',
@@ -1030,7 +1037,7 @@ describe(GlyphIdeContext, () => {
     ])('refuses test output that is unavailable at %s', async uri => {
       const services = ideServices();
       services.runs.push({ id: 'run', name: 'Run', tasks: [testTask()] });
-      const editors = { openEditor: vi.fn() };
+      const editors = { openEditor: vi.fn((_input: { resource: URI; options?: unknown }) => undefined) };
       await expect(createIdeContext(services).openSource(uri, editors as never)).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.NOT_FOUND,
         message: 'Test run unavailable. The captured output is preserved.',
@@ -1047,7 +1054,7 @@ describe(GlyphIdeContext, () => {
     ])('opens test output at %s', async (uri, resource) => {
       const services = ideServices();
       services.runs.push({ id: 'run', name: 'Run', tasks: [testTask()] });
-      const editors = { openEditor: vi.fn() };
+      const editors = { openEditor: vi.fn((_input: { resource: URI; options?: unknown }) => undefined) };
       const context = createIdeContext(services);
       expect(await context.openSource(uri, editors as never)).toBe(true);
       expect(

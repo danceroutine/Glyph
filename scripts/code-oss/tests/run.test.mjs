@@ -8,24 +8,40 @@ const runtimeRoot = join(repositoryRoot, '.code-oss', 'node-runtime');
 const nodeBinary = join(runtimeRoot, 'node_modules', 'node', 'bin', process.platform === 'win32' ? 'node.exe' : 'node');
 const marker = join(sourceRoot, '.glyph-upstream.json');
 
+/**
+ * @param {string[]} argv
+ * @param {{
+ *   missing?: string[],
+ *   statError?: Error,
+ *   spawnResults?: { status: number | null, error?: Error }[],
+ *   removedHooks?: string[][],
+ * }} [options]
+ */
 async function runScript(argv, { missing = [], statError, spawnResults = [], removedHooks = [] } = {}) {
+  /** @type {unknown[][]} */
   const events = [];
   const filesystem = {
     readFile: vi.fn(async () => JSON.stringify({ node: '22.0.0' })),
-    stat: vi.fn(async path => {
-      if (statError) throw statError;
+    stat: vi.fn(async (/** @type {string} */ path) => {
+      if (statError !== undefined) throw statError;
       if (missing.includes(path)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
       return {};
     }),
   };
   const childProcess = {
-    spawnSync: vi.fn((executable, arguments_) => {
-      events.push(['spawn', executable, ...arguments_]);
-      return spawnResults.shift() ?? { status: 0 };
-    }),
+    spawnSync: vi.fn(
+      (
+        /** @type {string} */ executable,
+        /** @type {string[]} */ arguments_,
+        /** @type {{ cwd: string, stdio: string, env: NodeJS.ProcessEnv }} */ _options,
+      ) => {
+        events.push(['spawn', executable, ...arguments_]);
+        return spawnResults.shift() ?? { status: 0 };
+      },
+    ),
   };
   const hooks = {
-    removeLeakedCodeOssHuskyHooks: vi.fn(async root => {
+    removeLeakedCodeOssHuskyHooks: vi.fn(async (/** @type {string} */ root) => {
       events.push(['clean', root]);
       return removedHooks.shift() ?? [];
     }),

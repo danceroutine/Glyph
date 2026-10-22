@@ -5,6 +5,8 @@ import { webToolResultSchema } from '#src/web/WebToolResult.js';
 import { WebToolName } from '#src/web/WebToolName.js';
 import { GlyphToolIcon } from '#code-oss/ui/GlyphTurnProgress/GlyphToolIcon.tsx';
 import { GlyphToolActivityStatus, type GlyphToolActivity } from '#src/desktop/protocol/events/GlyphToolActivity.js';
+import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 const styles = {
   body: css({
@@ -32,8 +34,12 @@ const styles = {
   error: css({ color: tokens.text.error, fontSize: tokens.font.size.detail }),
 };
 
+export function webToolName(tool: GlyphToolActivity): WebToolName | undefined {
+  return isEnumValue(WebToolName, tool.name) ? tool.name : undefined;
+}
+
 export function isWebTool(tool: GlyphToolActivity): boolean {
-  return tool.name === WebToolName.SEARCH || tool.name === WebToolName.FETCH;
+  return webToolName(tool) !== undefined;
 }
 
 export function webActivityResult(tool: GlyphToolActivity) {
@@ -56,8 +62,8 @@ export function GlyphWebActivity({
 }) {
   let input: { query?: string; url?: string } = {};
   try {
-    const parsed = JSON.parse(tool.arguments ?? '{}');
-    if (parsed && typeof parsed === 'object') {
+    const parsed: unknown = JSON.parse(tool.arguments ?? '{}');
+    if (isRecord(parsed)) {
       if (typeof parsed.query === 'string') input.query = parsed.query;
       if (typeof parsed.url === 'string') input.url = parsed.url;
     }
@@ -65,7 +71,7 @@ export function GlyphWebActivity({
     /* Incomplete streamed arguments. */
   }
   const data = webActivityResult(tool);
-  const search = tool.name === WebToolName.SEARCH;
+  const search = webToolName(tool) === WebToolName.SEARCH;
   const running = active && tool.status === GlyphToolActivityStatus.STARTED;
   const failed = data?.kind === 'web_error' || tool.status === GlyphToolActivityStatus.FAILED;
   const interrupted =
@@ -74,7 +80,11 @@ export function GlyphWebActivity({
   const sources =
     data?.kind === 'web_search'
       ? [
-          { title: 'Web search results', url: data.searchUrl, snippet: data.results.length ? '' : 'No results found' },
+          {
+            title: 'Web search results',
+            url: data.searchUrl,
+            snippet: data.results.length > 0 ? '' : 'No results found',
+          },
           ...data.results,
         ]
       : data?.kind === 'web_fetch'
@@ -101,7 +111,7 @@ export function GlyphWebActivity({
                     aria-label={item.title}
                     onClick={event => {
                       event.preventDefault();
-                      if (/^https?:\/\//i.test(item.url)) openLink?.(item.url);
+                      if (/^https?:\/\//iu.test(item.url)) openLink?.(item.url);
                     }}
                   >
                     <Globe size={16} aria-hidden="true" />
@@ -121,12 +131,12 @@ export function GlyphWebActivity({
           )}
           {failed && data?.kind !== 'web_error' && (
             <div class={styles.error} role="status">
-              {tool.summary || 'The web request failed.'}
+              {tool.summary !== undefined && tool.summary !== '' ? tool.summary : 'The web request failed.'}
             </div>
           )}
           {interrupted && <div role="status">Request cancelled</div>}
           {running && <div role="status">Waiting for the result…</div>}
-          {!sources.length && !running && !failed && !interrupted && (
+          {sources.length === 0 && !running && !failed && !interrupted && (
             <div role="status">No details recorded for this call.</div>
           )}
         </div>

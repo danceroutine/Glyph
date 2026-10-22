@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline/promises';
 import type { Interface } from 'node:readline/promises';
 import { sanitizeText as clean } from '#src/terminal/ui/shared/sanitizeText.js';
@@ -45,6 +44,7 @@ import { inlineMarkdownText } from './ui/response/parseInlineMarkdown.ts';
 import { sanitizeText } from './ui/shared/sanitizeText.ts';
 import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import { ChatHistory } from './ui/chat/ChatHistory.presentational.tsx';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 const TERMINAL_HELP = `Commands: ${TERMINAL_COMMANDS.map(command => command.value).join(' ')}
 Type @ at the chat prompt to fuzzy-search and attach project files.
@@ -63,7 +63,7 @@ type AccountSelection =
 export class TerminalUI implements ChatResponseStream, QuestionPresenter, ShellPermissionPresenter {
   static readonly help = TERMINAL_HELP;
 
-  private readonly events = new EventEmitter();
+  private readonly listeners = { SIGINT: new Set<() => void>(), close: new Set<() => void>() };
   private readonly renderer: TerminalInkRenderer | undefined;
   private reader: Interface | undefined;
   private closed = false;
@@ -73,11 +73,11 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter, ShellP
   private shellRefreshTimer: NodeJS.Timeout | undefined;
 
   private readonly forwardInterrupt = (): void => {
-    this.events.emit('SIGINT');
+    this.emit('SIGINT');
   };
 
   private readonly handleInputClosed = (): void => {
-    this.events.emit('close');
+    this.emit('close');
   };
   constructor(
     private readonly input: TerminalInputStream = process.stdin,
@@ -88,8 +88,12 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter, ShellP
   ) {
     if (input.isTTY === true && typeof input.setRawMode === 'function' && output.isTTY === true) {
       this.renderer = new TerminalInkRenderer(input, output, errorOutput);
-      this.renderer.on('SIGINT', () => this.events.emit('SIGINT'));
-      this.renderer.on('close', () => this.events.emit('close'));
+      this.renderer.on('SIGINT', () => {
+        this.emit('SIGINT');
+      });
+      this.renderer.on('close', () => {
+        this.emit('close');
+      });
       this.renderer.setBackgroundShells(shellSessions?.sessions ?? []);
     } else {
       input.once('end', this.handleInputClosed);
@@ -102,15 +106,15 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter, ShellP
   }
 
   on(event: 'SIGINT', listener: () => void): void {
-    this.events.on(event, listener);
+    this.listeners[event].add(listener);
   }
 
   off(event: 'SIGINT', listener: () => void): void {
-    this.events.off(event, listener);
+    this.listeners[event].delete(listener);
   }
 
   onClose(listener: () => void): void {
-    this.events.on('close', listener);
+    this.listeners.close.add(listener);
   }
 
   connectShellSessions(shellSessions: ShellSessionManager): void {
@@ -166,8 +170,8 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter, ShellP
           {roots.map(root => (
             <Text key={root}>{`  ${root}`}</Text>
           ))}
-          {usageDescription ? <Text>{usageDescription}</Text> : null}
-          <Text dimColor>{`Log: ${logPath ? clean(logPath) : 'off'}`}</Text>
+          {usageDescription !== undefined && usageDescription !== '' ? <Text>{usageDescription}</Text> : null}
+          <Text dimColor>{`Log: ${logPath !== undefined && logPath !== '' ? clean(logPath) : 'off'}`}</Text>
           <Text dimColor>{`Full provider tracing: ${traceEnabled ? 'on' : 'off'}`}</Text>
           <Text>{TERMINAL_HELP}</Text>
         </Box>,
@@ -177,7 +181,7 @@ export class TerminalUI implements ChatResponseStream, QuestionPresenter, ShellP
     this.line(`${welcome}
 Project: ${clean(project.name)} (${project.kind})
 ${roots.map(root => `  ${root}`).join('\n')}
-${usageDescription ? `${usageDescription}\n` : ''}Log: ${logPath ? clean(logPath) : 'off'}
+${usageDescription !== undefined && usageDescription !== '' ? `${usageDescription}\n` : ''}Log: ${logPath !== undefined && logPath !== '' ? clean(logPath) : 'off'}
 Full provider tracing: ${traceEnabled ? 'on' : 'off'}
 ${TERMINAL_HELP}`);
   }
@@ -196,7 +200,7 @@ ${TERMINAL_HELP}`);
             </Text>
             {accounts.map((account, index) => (
               <Text key={`${account.provider}:${account.id}`}>
-                {`${index + 1}. ${clean(account.label)}${account.detail ? ` [${clean(account.detail)}]` : ''}${account.connected ? '' : ' (signed out)'}`}
+                {`${index + 1}. ${clean(account.label)}${account.detail !== undefined && account.detail !== '' ? ` [${clean(account.detail)}]` : ''}${account.connected ? '' : ' (signed out)'}`}
               </Text>
             ))}
             <Text>{`a. ${provider.addAccountLabel}`}</Text>
@@ -206,7 +210,7 @@ ${TERMINAL_HELP}`);
         this.line(`\n${provider.accountsHeading}`);
         accounts.forEach((account, index) => {
           this.line(
-            `${index + 1}. ${clean(account.label)}${account.detail ? ` [${clean(account.detail)}]` : ''}${account.connected ? '' : ' (signed out)'}`,
+            `${index + 1}. ${clean(account.label)}${account.detail !== undefined && account.detail !== '' ? ` [${clean(account.detail)}]` : ''}${account.connected ? '' : ' (signed out)'}`,
           );
         });
         this.line(`a. ${provider.addAccountLabel}`);
@@ -217,7 +221,8 @@ ${TERMINAL_HELP}`);
       const choice = answer || onlyAccount;
       if (choice === 'a') return { type: AccountSelectionType.ADD };
       const account = accounts[Number(choice) - 1];
-      if (choice && account && /^\d+$/.test(choice)) return { type: AccountSelectionType.ACCOUNT, account };
+      if (choice !== undefined && choice !== '' && account && /^\d+$/u.test(choice))
+        return { type: AccountSelectionType.ACCOUNT, account };
       this.appendText('Choose an account number or a to add one.', { color: 'yellow' });
     }
   }
@@ -234,13 +239,19 @@ ${TERMINAL_HELP}`);
           ))}
         </Box>,
       );
-    } else models.forEach((model, index) => this.line(`${index + 1}. ${clean(model.name)} (${clean(model.slug)})`));
-    let model = configured ? models.find(candidate => candidate.slug === configured) : undefined;
-    if (configured && !model)
+    } else
+      models.forEach((model, index) => {
+        this.line(`${index + 1}. ${clean(model.name)} (${clean(model.slug)})`);
+      });
+    let model =
+      configured !== undefined && configured !== ''
+        ? models.find(candidate => candidate.slug === configured)
+        : undefined;
+    if (configured !== undefined && configured !== '' && !model)
       this.appendText('CHAT_MODEL is not in this account catalog. Choose an available model.', { color: 'yellow' });
     while (!model) {
       const choice = (await this.ask('Model number: ', signal)).trim();
-      if (/^\d+$/.test(choice)) model = models[Number(choice) - 1];
+      if (/^\d+$/u.test(choice)) model = models[Number(choice) - 1];
     }
     return model;
   }
@@ -341,6 +352,7 @@ ${TERMINAL_HELP}`);
     } else this.errorLine(`\n${clean(message)}\nThis turn was not added to history.\n`);
     this.responseSection = undefined;
   }
+
   showActive(account: ChatAccount, model: Model, provider: ChatBackendPresentation): void {
     if (this.renderer) {
       this.renderer.append(
@@ -349,7 +361,7 @@ ${TERMINAL_HELP}`);
             <Text bold color="cyan">
               {'Active  '}
             </Text>
-            {`${clean(account.label)}${account.detail ? ` [${clean(account.detail)}]` : ''}`}
+            {`${clean(account.label)}${account.detail !== undefined && account.detail !== '' ? ` [${clean(account.detail)}]` : ''}`}
           </Text>
           <Text>
             <Text bold color="cyan">
@@ -362,10 +374,9 @@ ${TERMINAL_HELP}`);
       );
     } else
       this.line(
-        `\nActive  ${clean(account.label)}${account.detail ? ` [${clean(account.detail)}]` : ''}\nModel   ${clean(model.slug)}  ${clean(provider.activeAccessLabel)}\n`,
+        `\nActive  ${clean(account.label)}${account.detail !== undefined && account.detail !== '' ? ` [${clean(account.detail)}]` : ''}\nModel   ${clean(model.slug)}  ${clean(provider.activeAccessLabel)}\n`,
       );
   }
-
   showConversationReset(): void {
     this.appendText('Conversation cleared.');
   }
@@ -381,6 +392,7 @@ ${TERMINAL_HELP}`);
     });
     this.appendText(`Project chats\n${lines.join('\n')}\nUse /chat <ID> to switch.`);
   }
+
   showChatActivated(summary: ChatSessionSummary, transcript: readonly ChatTranscriptTurn[]): void {
     const heading = `Chat ${summary.id.slice(0, 8)}  ${summary.title}  · ${summary.modelSlug}`;
     const turns = transcript
@@ -402,7 +414,6 @@ ${TERMINAL_HELP}`);
     }
     this.line(clean(history));
   }
-
   showChatRenamed(title: string): void {
     this.appendText(`Chat renamed to "${clean(title)}".`);
   }
@@ -427,7 +438,7 @@ ${TERMINAL_HELP}`);
   showTrace(enabled: boolean, path: string | undefined): void {
     this.appendText(
       enabled
-        ? `Full provider tracing is on: ${path ? clean(path) : 'logger destination unavailable'}`
+        ? `Full provider tracing is on: ${path !== undefined && path !== '' ? clean(path) : 'logger destination unavailable'}`
         : 'Full provider tracing is off.',
       { dimColor: true },
     );
@@ -476,14 +487,18 @@ ${TERMINAL_HELP}`);
 
   async present(form: QuestionForm, signal: AbortSignal): Promise<QuestionFormResult> {
     if (this.renderer) {
-      return this.renderer.presentQuestionForm(form, signal, () => this.events.emit('SIGINT'));
+      return this.renderer.presentQuestionForm(form, signal, () => {
+        this.emit('SIGINT');
+      });
     }
-    if (form.title) this.line(`\n${clean(form.title)}`);
+    if (form.title !== undefined && form.title !== '') this.line(`\n${clean(form.title)}`);
     const answers: QuestionAnswer[] = [];
     for (const question of form.questions) {
       for (;;) {
         this.line(`\n${clean(question.prompt)}`);
-        question.options.forEach((option, index) => this.line(`${index + 1}. ${clean(option.label)}`));
+        question.options.forEach((option, index) => {
+          this.line(`${index + 1}. ${clean(option.label)}`);
+        });
         this.line('o. Other');
         const label = question.allowMultiple ? 'Choices (comma-separated): ' : 'Choice: ';
         const choice = (await this.ask(label, signal)).trim();
@@ -520,7 +535,9 @@ ${TERMINAL_HELP}`);
 
   async presentShellPermission(request: ShellPermissionRequest, signal: AbortSignal): Promise<ShellPermissionDecision> {
     if (this.renderer) {
-      return this.renderer.presentShellPermission(request, signal, () => this.events.emit('SIGINT'));
+      return this.renderer.presentShellPermission(request, signal, () => {
+        this.emit('SIGINT');
+      });
     }
     this.line(`\nShell permission required\nDirectory: ${clean(request.workingDirectory)}\n${clean(request.command)}`);
     this.line('1. Allow once in the project-write sandbox');
@@ -550,6 +567,10 @@ ${TERMINAL_HELP}`);
     }
   }
 
+  private emit(event: 'SIGINT' | 'close'): void {
+    for (const listener of Array.from(this.listeners[event])) listener();
+  }
+
   private async ask(label: string, signal: AbortSignal): Promise<string> {
     if (this.closed) throw new Error('Session closed.');
     if (this.renderer) return (await this.renderer.prompt(label, signal)).prompt;
@@ -565,7 +586,7 @@ ${TERMINAL_HELP}`);
       reader.off('SIGINT', this.forwardInterrupt);
       if (this.reader !== reader) return;
       this.reader = undefined;
-      this.events.emit('close');
+      this.emit('close');
     });
     return reader;
   }
@@ -593,7 +614,10 @@ ${TERMINAL_HELP}`);
   }
   private writeToolActivity(activity: ToolActivity): void {
     const prefix = this.responseSection === undefined ? '' : '\n\n';
-    const name = activity.namespace ? `${activity.namespace}.${activity.name}` : activity.name;
+    const name =
+      activity.namespace !== undefined && activity.namespace !== ''
+        ? `${activity.namespace}.${activity.name}`
+        : activity.name;
     if (activity.phase === ToolActivityPhase.STARTED) {
       this.output.write(`${prefix}[${name} …]\n`);
       return;
@@ -617,7 +641,7 @@ function formatToolResult(activity: ToolActivity): { message: string; failed: bo
   try {
     const result: unknown = JSON.parse(activity.output ?? '');
     if (typeof result === 'object' && result !== null && 'error' in result) {
-      return { message: `Error: ${formatToolError((result as { error: unknown }).error)}`, failed: true };
+      return { message: `Error: ${formatToolError(result.error)}`, failed: true };
     }
   } catch {
     // Non-JSON output is still a successful tool result.
@@ -634,8 +658,8 @@ function indent(value: string): string {
 
 function formatToolError(error: unknown): string {
   if (typeof error === 'string') return error;
-  if (!error || typeof error !== 'object' || Array.isArray(error)) return formatToolErrorValue(error);
-  const details = error as Record<string, unknown>;
+  if (!isRecord(error)) return formatToolErrorValue(error);
+  const details = error;
   const code = typeof details.code === 'string' ? details.code : undefined;
   const message = typeof details.message === 'string' ? details.message : undefined;
   const context = Object.entries(details)
@@ -647,7 +671,7 @@ function formatToolError(error: unknown): string {
 
 function formatToolErrorValue(value: unknown): string {
   if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(formatToolErrorValue).join(', ');
+  if (Array.isArray(value)) return value.map(entry => formatToolErrorValue(entry)).join(', ');
   try {
     return JSON.stringify(value) ?? String(value);
   } catch {

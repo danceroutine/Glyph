@@ -65,8 +65,12 @@ describe(ProposeQuestionToolRuntime, () => {
       const [tool] = new ProposeQuestionToolRuntime({ present }).tools;
       const signal = new AbortController().signal;
 
-      expect(() => tool!.validateInput(singleQuestionInput())).not.toThrow();
-      expect(() => tool!.validateInput(JSON.stringify({ questions: [] }))).toThrow();
+      expect(() => {
+        tool!.validateInput(singleQuestionInput());
+      }).not.toThrow();
+      expect(() => {
+        tool!.validateInput(JSON.stringify({ questions: [] }));
+      }).toThrow();
       await expect(tool!.execute(singleQuestionInput(), signal, {})).resolves.toBe(
         JSON.stringify({ answers: { storage: 'files' } }),
       );
@@ -252,8 +256,16 @@ describe(ProposeQuestionToolRuntime, () => {
     });
 
     it('reports presenter failures and preserves non-Error failures', async () => {
-      const failed = new ProposeQuestionToolRuntime(presenter(async () => Promise.reject(new Error('screen failed'))));
-      const unknown = new ProposeQuestionToolRuntime(presenter(async () => Promise.reject('broken')));
+      const failed = new ProposeQuestionToolRuntime(
+        presenter(async () => {
+          throw new Error('screen failed');
+        }),
+      );
+      const unknown = new ProposeQuestionToolRuntime(
+        presenter(async () => {
+          throw 'broken';
+        }),
+      );
 
       await expect(failed.execute(QuestionToolName.PROPOSE_QUESTION, singleQuestionInput())).resolves.toContain(
         'screen failed',

@@ -126,9 +126,15 @@ describe('Web tools', () => {
   });
   it('cancels an in-flight response and distinguishes timeouts', async () => {
     const fetcher: typeof fetch = (_input, options) =>
-      new Promise((_resolve, reject) =>
-        options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true }),
-      );
+      new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener(
+          'abort',
+          () => {
+            reject(options.signal?.reason);
+          },
+          { once: true },
+        );
+      });
     const controller = new AbortController();
     const pending = new WebHttpClient(fetcher).read('https://example.com', controller.signal);
     controller.abort(new Error('User cancelled'));
@@ -203,10 +209,13 @@ describe('Web tools', () => {
     const runtime = new WebToolRuntime(new WebFetchService(new WebHttpClient(network)), provider);
     const tool = runtime.tools.find(tool => tool.name === 'web_search')!;
     const cancellation = signal();
-    const result = JSON.parse(await tool.execute('{"query":"octopus"}', cancellation, {}));
+    const result = JSON.parse(await tool.execute('{"query":"octopus"}', cancellation, {})) as {
+      searchUrl: string;
+      results: { snippet: string }[];
+    };
     expect(provider.search).toHaveBeenCalledWith('octopus', cancellation);
     expect(result.searchUrl).toBe('https://search.example/?q=octopus');
-    expect(result.results[0].snippet).toBe('Provider snippet');
+    expect(result.results[0]!.snippet).toBe('Provider snippet');
     expect(network).not.toHaveBeenCalled();
     expect(tool.description).not.toContain('DuckDuckGo');
   });
@@ -343,7 +352,9 @@ describe(WebHttpClient, () => {
     it('still reports an oversized stream when the stream cannot be cancelled', async () => {
       const reader = {
         read: vi.fn(async () => ({ done: false, value: new Uint8Array(8) })),
-        cancel: vi.fn(async () => Promise.reject(new Error('cannot cancel'))),
+        cancel: vi.fn(async () => {
+          throw new Error('cannot cancel');
+        }),
         releaseLock: vi.fn(),
       };
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue({
@@ -390,13 +401,21 @@ describe(WebToolRuntime, () => {
     );
     const [fetchTool, searchTool] = runtime.tools;
 
-    expect(() => fetchTool!.validateInput('{"url":"https://example.com"}')).not.toThrow();
-    expect(() => fetchTool!.validateInput('{"url":"ftp://example.com"}')).toThrow(
-      'Use an HTTP or HTTPS URL without embedded credentials.',
-    );
-    expect(() => fetchTool!.validateInput('{"url":"https://example.com","extra":1}')).toThrow();
-    expect(() => searchTool!.validateInput('{"query":"octopus"}')).not.toThrow();
-    expect(() => searchTool!.validateInput('{"query":"   "}')).toThrow();
+    expect(() => {
+      fetchTool!.validateInput('{"url":"https://example.com"}');
+    }).not.toThrow();
+    expect(() => {
+      fetchTool!.validateInput('{"url":"ftp://example.com"}');
+    }).toThrow('Use an HTTP or HTTPS URL without embedded credentials.');
+    expect(() => {
+      fetchTool!.validateInput('{"url":"https://example.com","extra":1}');
+    }).toThrow();
+    expect(() => {
+      searchTool!.validateInput('{"query":"octopus"}');
+    }).not.toThrow();
+    expect(() => {
+      searchTool!.validateInput('{"query":"   "}');
+    }).toThrow();
   });
 
   it('includes the failing source in search error results', async () => {

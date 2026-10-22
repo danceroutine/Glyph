@@ -9,9 +9,12 @@ const staging = join(artifactsRoot, 'glyph-desktop-host');
 const deployment = join(artifactsRoot, '.glyph-desktop-host-deploy');
 const archive = join(artifactsRoot, 'glyph-desktop-host.tgz');
 
+/** @param {string} text */
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 
+/** @param {{ status?: string, platform?: string }} [options] */
 async function runScript({ status = '', platform } = {}) {
+  /** @type {[string, string, ...unknown[]][]} */
   const operations = [];
   const sourcePackage = {
     name: 'glyph',
@@ -24,10 +27,12 @@ async function runScript({ status = '', platform } = {}) {
     devDependencies: { vitest: '^5.0.0' },
     scripts: { test: 'vitest' },
   };
+  /** @type {Record<string, string[]>} */
   const tree = {
     [staging]: ['package.json', 'dist', 'socket'],
     [join(staging, 'dist')]: ['b.js', 'a.js'],
   };
+  /** @type {Record<string, string>} */
   const files = {
     [join(staging, 'package.json')]: 'package',
     [join(staging, 'dist', 'a.js')]: 'alpha',
@@ -35,35 +40,47 @@ async function runScript({ status = '', platform } = {}) {
     [archive]: 'archive bytes',
   };
   const filesystem = {
-    readFile: vi.fn(async (path, encoding) => {
+    readFile: vi.fn(async (/** @type {string} */ path, /** @type {string | undefined} */ encoding) => {
       if (path === join(repositoryRoot, 'package.json')) return JSON.stringify(sourcePackage);
       if (path === join(repositoryRoot, 'code-oss', 'upstream.json')) return JSON.stringify({ protocolVersion: 9 });
       expect(encoding).toBeUndefined();
-      return Buffer.from(files[path]);
+      return Buffer.from(files[path] ?? '');
     }),
-    readdir: vi.fn(async path => tree[path]),
-    stat: vi.fn(async path => ({
+    readdir: vi.fn(async (/** @type {string} */ path) => tree[path]),
+    stat: vi.fn(async (/** @type {string} */ path) => ({
       isDirectory: () => path in tree,
       isFile: () => path in files,
       size: files[path]?.length ?? 0,
     })),
-    rm: vi.fn(async (...arguments_) => operations.push(['rm', ...arguments_])),
-    mkdir: vi.fn(async (...arguments_) => operations.push(['mkdir', ...arguments_])),
-    rename: vi.fn(async (...arguments_) => operations.push(['rename', ...arguments_])),
-    cp: vi.fn(async (...arguments_) => operations.push(['cp', ...arguments_])),
-    writeFile: vi.fn(async (...arguments_) => operations.push(['writeFile', ...arguments_])),
+    rm: vi.fn(async (/** @type {[string, ...unknown[]]} */ ...arguments_) => {
+      operations.push(['rm', ...arguments_]);
+    }),
+    mkdir: vi.fn(async (/** @type {[string, ...unknown[]]} */ ...arguments_) => {
+      operations.push(['mkdir', ...arguments_]);
+    }),
+    rename: vi.fn(async (/** @type {[string, ...unknown[]]} */ ...arguments_) => {
+      operations.push(['rename', ...arguments_]);
+    }),
+    cp: vi.fn(async (/** @type {[string, ...unknown[]]} */ ...arguments_) => {
+      operations.push(['cp', ...arguments_]);
+    }),
+    writeFile: vi.fn(async (/** @type {[string, ...unknown[]]} */ ...arguments_) => {
+      operations.push(['writeFile', ...arguments_]);
+    }),
   };
   const childProcess = {
-    execFileSync: vi.fn((command, arguments_, options) => {
-      operations.push(['exec', command, arguments_, options]);
-      if (arguments_[0] === 'rev-parse') return 'abc123\n';
-      if (arguments_[0] === 'status') return status;
-      return undefined;
-    }),
+    execFileSync: vi.fn(
+      (/** @type {string} */ command, /** @type {string[]} */ arguments_, /** @type {unknown} */ options) => {
+        operations.push(['exec', command, arguments_, options]);
+        if (arguments_[0] === 'rev-parse') return 'abc123\n';
+        if (arguments_[0] === 'status') return status;
+        return undefined;
+      },
+    ),
   };
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
-  if (platform) Object.defineProperty(process, 'platform', { value: platform });
+  if (platform !== undefined) Object.defineProperty(process, 'platform', { value: platform });
   onTestFinished(() => {
     Object.defineProperty(process, 'platform', descriptor);
     stdout.mockRestore();
@@ -112,7 +129,9 @@ describe('build-desktop-artifact', () => {
       else expect(options).toEqual({ cwd: repositoryRoot, stdio: 'inherit' });
       expect(kind).toBe('exec');
     }
-    const packageJson = operations.find(([kind, path]) => kind === 'writeFile' && path.endsWith('package.json'))[2];
+    const packageJson = /** @type {string} */ (
+      operations.find(([kind, path]) => kind === 'writeFile' && path.endsWith('package.json'))?.[2]
+    );
     expect(packageJson).toBe(
       `${JSON.stringify(
         {
@@ -134,7 +153,9 @@ describe('build-desktop-artifact', () => {
   it('records the commit, clean state, protocol, platform, and sorted checksums of every staged file', async () => {
     const { operations } = await runScript();
 
-    const manifest = operations.find(([kind, path]) => kind === 'writeFile' && path.endsWith('glyph-artifact.json'))[2];
+    const manifest = /** @type {string} */ (
+      operations.find(([kind, path]) => kind === 'writeFile' && path.endsWith('glyph-artifact.json'))?.[2]
+    );
     expect(manifest.endsWith('}\n')).toBe(true);
     expect(JSON.parse(manifest)).toEqual({
       schemaVersion: 1,
@@ -155,8 +176,10 @@ describe('build-desktop-artifact', () => {
   it('marks artifacts built from a modified checkout as dirty', async () => {
     const { operations } = await runScript({ status: ' M src/cli.ts\n' });
 
-    const manifest = operations.find(([kind, path]) => kind === 'writeFile' && path.endsWith('glyph-artifact.json'))[2];
-    expect(JSON.parse(manifest).dirty).toBe(true);
+    const manifest = /** @type {string} */ (
+      operations.find(([kind, path]) => kind === 'writeFile' && path.endsWith('glyph-artifact.json'))?.[2]
+    );
+    expect(JSON.parse(manifest)).toMatchObject({ dirty: true });
   });
 
   it('copies Windows executables on Windows', async () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { GlyphEditorAdapter } from '#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js';
 import { URI } from '#vs/base/common/uri.js';
 import { Emitter } from '#vs/base/common/event.js';
@@ -31,7 +31,7 @@ function textModel(resource: URI, initial: string, { eol = '\n', byteOrderMark =
     version: 1,
     getVersionId: () => model.version,
     getValue: (_eol?: unknown, preserveBOM?: boolean) =>
-      `${preserveBOM && model.byteOrderMark ? '\uFEFF' : ''}${model.text}`,
+      `${preserveBOM === true && model.byteOrderMark ? '\uFEFF' : ''}${model.text}`,
     getValueLength: () => model.text.length,
     getEOL: () => model.eol,
     getFullModelRange: () => ({
@@ -41,7 +41,9 @@ function textModel(resource: URI, initial: string, { eol = '\n', byteOrderMark =
       endColumn: model.text.length + 1,
     }),
     onDidChangeContent: changes.event,
-    notify: (change: ContentChange) => changes.fire(change),
+    notify: (change: ContentChange) => {
+      changes.fire(change);
+    },
     write: (text: string, detailedReasons: readonly unknown[] = [], isEolChange = false) => {
       model.text = text;
       model.version++;
@@ -76,15 +78,15 @@ function editorServices() {
     const model = find(edit.resource)!;
     const { range, text, eol } = edit.textEdit;
     const empty = range.startLineNumber === range.endLineNumber && range.startColumn === range.endColumn;
-    if (!(empty && !text) && model.text !== text.replace(/\r\n|\r|\n/g, model.eol)) {
-      model.write(text.replace(/\r\n|\r|\n/g, model.eol), [reason]);
+    if (!(empty && !text) && model.text !== text.replaceAll(/\r\n|\r|\n/gu, model.eol)) {
+      model.write(text.replaceAll(/\r\n|\r|\n/gu, model.eol), [reason]);
       dirty.add(model.uri.path);
     }
     if (eol !== undefined) {
       const next = eol === EndOfLineSequence.CRLF ? '\r\n' : '\n';
       if (next !== model.eol) {
         model.eol = next;
-        model.write(model.text.replace(/\r\n|\r|\n/g, next), [], true);
+        model.write(model.text.replaceAll(/\r\n|\r|\n/gu, next), [], true);
       }
     }
   };
@@ -120,7 +122,7 @@ function editorServices() {
         if (!model) {
           const text = disk.get(resource.path);
           if (text === undefined) throw new FileOperationError('Missing file', FileOperationResult.FILE_NOT_FOUND);
-          model = textModel(resource, text.replace(/^\uFEFF/, ''), { byteOrderMark: text.startsWith('\uFEFF') });
+          model = textModel(resource, text.replace(/^\uFEFF/u, ''), { byteOrderMark: text.startsWith('\uFEFF') });
           models.push(model);
         }
         return { object: { textEditorModel: model }, dispose: vi.fn() };
@@ -130,7 +132,7 @@ function editorServices() {
       apply: vi.fn(async (edits: readonly BulkEdit[], options: BulkOptions) => {
         for (const edit of edits)
           if (edit instanceof ResourceTextEdit) writeText(edit, options.reason);
-          else await writeFile(edit as ResourceFileEdit);
+          else await writeFile(edit);
         return { isApplied: true };
       }),
     },
@@ -187,7 +189,9 @@ function createAdapter(services: EditorServices) {
     services.userDataProfileService as never,
     services.instantiationService as never,
   );
-  onTestFinished(() => adapter.dispose());
+  onTestFinished(() => {
+    adapter.dispose();
+  });
   return adapter;
 }
 
@@ -283,7 +287,7 @@ describe(GlyphEditorAdapter, () => {
     services.open('a.ts', 'text');
     const adapter = createAdapter(services);
     await adapter.read('a.ts');
-    const reference = await services.textModelService.createModelReference.mock.results[0].value;
+    const reference = (await services.textModelService.createModelReference.mock.results[0].value) as { dispose: Mock };
     adapter.dispose();
     expect(reference.dispose).toHaveBeenCalledOnce();
   });
@@ -514,7 +518,9 @@ describe(GlyphEditorAdapter, () => {
   describe(GlyphEditorAdapter.prototype.captureContext, () => {
     it('captures a whole file with its source revision', async () => {
       const model = createTextModel('alpha\nbeta', null, undefined, URI.file('/workspace/a.ts'));
-      onTestFinished(() => model.dispose());
+      onTestFinished(() => {
+        model.dispose();
+      });
       const adapter = createAdapter(editorServices());
       const attachment = await adapter.captureContext(model);
       expect(attachment).toMatchObject({
@@ -529,7 +535,9 @@ describe(GlyphEditorAdapter, () => {
 
     it('captures a selected range', async () => {
       const model = createTextModel('alpha\nbeta', null, undefined, URI.file('/workspace/a.ts'));
-      onTestFinished(() => model.dispose());
+      onTestFinished(() => {
+        model.dispose();
+      });
       const adapter = createAdapter(editorServices());
       const range = { start: { line: 1, column: 3 }, end: { line: 2, column: 3 } };
       expect(await adapter.captureContext(model, range)).toMatchObject({ kind: 'selection', text: 'pha\nbe', range });
@@ -546,7 +554,9 @@ describe(GlyphEditorAdapter, () => {
       { start: { line: 1, column: 4 }, end: { line: 1, column: 2 } },
     ])('refuses a range that no longer fits the document: %j', async range => {
       const model = createTextModel('alpha\nbeta', null, undefined, URI.file('/workspace/a.ts'));
-      onTestFinished(() => model.dispose());
+      onTestFinished(() => {
+        model.dispose();
+      });
       const adapter = createAdapter(editorServices());
       await expect(adapter.captureContext(model, range)).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.STALE_DOCUMENT,
@@ -555,7 +565,9 @@ describe(GlyphEditorAdapter, () => {
 
     it('refuses capture in an untrusted workspace', async () => {
       const model = createTextModel('alpha', null, undefined, URI.file('/workspace/a.ts'));
-      onTestFinished(() => model.dispose());
+      onTestFinished(() => {
+        model.dispose();
+      });
       const services = editorServices();
       services.state.trusted = false;
       const adapter = createAdapter(services);
@@ -566,7 +578,9 @@ describe(GlyphEditorAdapter, () => {
 
     it('refuses capture from unsupported resources', async () => {
       const model = createTextModel('alpha', null, undefined, URI.parse('git:/workspace/a.ts'));
-      onTestFinished(() => model.dispose());
+      onTestFinished(() => {
+        model.dispose();
+      });
       const adapter = createAdapter(editorServices());
       await expect(adapter.captureContext(model)).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
@@ -575,7 +589,9 @@ describe(GlyphEditorAdapter, () => {
 
     it('refuses capture when trust is revoked while hashing', async () => {
       const model = createTextModel('alpha', null, undefined, URI.file('/workspace/a.ts'));
-      onTestFinished(() => model.dispose());
+      onTestFinished(() => {
+        model.dispose();
+      });
       const services = editorServices();
       const adapter = createAdapter(services);
       const capture = adapter.captureContext(model);
@@ -585,7 +601,9 @@ describe(GlyphEditorAdapter, () => {
 
     it('refuses capture when tokens are invalidated while hashing', async () => {
       const model = createTextModel('alpha', null, undefined, URI.file('/workspace/a.ts'));
-      onTestFinished(() => model.dispose());
+      onTestFinished(() => {
+        model.dispose();
+      });
       const adapter = createAdapter(editorServices());
       const capture = adapter.captureContext(model);
       adapter.invalidate();
@@ -686,9 +704,9 @@ describe(GlyphEditorAdapter, () => {
       const adapter = createAdapter(services);
       const [first, second] = await Promise.all([adapter.read('a.ts'), adapter.read('a.ts')]);
       expect(first.token).toEqual(second.token);
-      const [one, two] = await Promise.all(
-        services.textModelService.createModelReference.mock.results.map(r => r.value),
-      );
+      const [one, two] = (await Promise.all(
+        services.textModelService.createModelReference.mock.results.map((r): unknown => r.value),
+      )) as { dispose: Mock }[];
       expect(one.dispose).not.toHaveBeenCalled();
       expect(two.dispose).toHaveBeenCalledOnce();
     });
@@ -752,7 +770,7 @@ describe(GlyphEditorAdapter, () => {
       });
       const [[edits]] = services.bulkEditService.apply.mock.calls;
       const contents = await (edits[0] as ResourceFileEdit).options.contents!;
-      expect([...contents.buffer.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+      expect(Array.from(contents.buffer.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
       expect(response).toMatchObject({
         ok: true,
         snapshot: { path: 'new.ts', text: 'fresh', byteOrderMark: true, byteLength: 8 },

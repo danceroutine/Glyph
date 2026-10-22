@@ -15,15 +15,15 @@ import { renderReviewText } from './renderReviewText.ts';
 const FOCUSED_CONTEXT_LINES = 4;
 
 const TerminalReviewColor = {
-  ADDITION: '\x1b[1;32m',
-  ADDITION_BACKGROUND: '\x1b[48;5;22m',
-  DELETION: '\x1b[1;31m',
-  DELETION_BACKGROUND: '\x1b[48;5;52m',
-  DIM: '\x1b[2;90m',
-  ERROR: '\x1b[1;31m',
-  HEADING: '\x1b[1;36m',
-  SELECTED: '\x1b[1;36m',
-  WARNING: '\x1b[33m',
+  ADDITION: '\u001B[1;32m',
+  ADDITION_BACKGROUND: '\u001B[48;5;22m',
+  DELETION: '\u001B[1;31m',
+  DELETION_BACKGROUND: '\u001B[48;5;52m',
+  DIM: '\u001B[2;90m',
+  ERROR: '\u001B[1;31m',
+  HEADING: '\u001B[1;36m',
+  SELECTED: '\u001B[1;36m',
+  WARNING: '\u001B[33m',
 } as const;
 
 export enum ReviewViewMode {
@@ -196,7 +196,7 @@ export function renderEntry(
     lines.push(style(`Encoding: ${before} → ${after}`, TerminalReviewColor.WARNING, colors));
     if (file.base?.text === file.proposed.text) lines.push('Text content unchanged');
   }
-  if ([file.base?.text ?? '', file.proposed.text, path].some(text => text.includes('\u001b'))) {
+  if ([file.base?.text ?? '', file.proposed.text, path].some(text => text.includes('\u001B'))) {
     lines.push(style('␛ = ESC (U+001B)', TerminalReviewColor.DIM, colors));
   }
   if (item.kind === EditReviewItemKind.RENAME) {
@@ -230,7 +230,7 @@ function createFileDiffLines(file: FileEditPlan, selectedItem: EditReviewItem): 
   const base = file.base?.text ?? '';
   const textItems = file.items
     .filter(candidate => candidate.kind === EditReviewItemKind.TEXT && candidate.decision === EditDecisionState.PENDING)
-    .sort((left, right) => left.sourceStart - right.sourceStart);
+    .toSorted((left, right) => left.sourceStart - right.sourceStart);
   const lineNumbers = { old: 1, proposed: 1 };
   const result: DiffDisplayLine[] = [];
   let sourceOffset = 0;
@@ -288,7 +288,7 @@ function toDiffLines(
 }
 
 function exactLines(text: string): ExactTextLine[] {
-  const lines = text.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/g) ?? [];
+  const lines = text.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/gu) ?? [];
   return lines.map(value => {
     const lineEnding = value.endsWith('\r\n') ? '\r\n' : value.endsWith('\r') ? '\r' : value.endsWith('\n') ? '\n' : '';
     return { text: lineEnding ? value.slice(0, -lineEnding.length) : value, lineEnding };
@@ -325,19 +325,19 @@ function renderDiffLine(line: DiffDisplayLine, path: string, lineNumberWidth: nu
       : line.kind === DiffLineKind.DELETION
         ? TerminalReviewColor.DELETION_BACKGROUND
         : undefined;
-  return `${indicator}${marker} ${gutter} ${background && colors ? background : ''}${content}${background && colors ? '\x1b[49m' : ''}`;
+  return `${indicator}${marker} ${gutter} ${background && colors ? background : ''}${content}${background && colors ? '\u001B[49m' : ''}`;
 }
 
 function highlightSourceLine(value: string, path: string, colors: boolean): string {
   const safe = renderReviewText(value);
   const trailingWhitespace = /[ \t]+$/u.exec(safe)?.[0] ?? '';
-  const source = safe.slice(0, safe.length - trailingWhitespace.length).replace(/\t/gu, '→   ');
-  const visibleTrailingWhitespace = [...trailingWhitespace]
+  const source = safe.slice(0, safe.length - trailingWhitespace.length).replaceAll('	', '→   ');
+  const visibleTrailingWhitespace = Array.from(trailingWhitespace)
     .map(character => (character === '\t' ? '→···' : '·'))
     .join('');
   const language = languageForPath(path);
   let highlighted = source;
-  if (colors && language) {
+  if (colors && language !== undefined && language !== '') {
     try {
       highlighted = highlight(source, { language, ignoreIllegals: true, theme: SYNTAX_THEME });
     } catch {
@@ -382,27 +382,27 @@ const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
 };
 
 const SYNTAX_THEME: Theme = {
-  keyword: ansi('\x1b[35m'),
-  built_in: ansi('\x1b[36m'),
-  type: ansi('\x1b[36m'),
-  literal: ansi('\x1b[35m'),
-  number: ansi('\x1b[33m'),
-  regexp: ansi('\x1b[31m'),
-  string: ansi('\x1b[32m'),
-  class: ansi('\x1b[36m'),
-  function: ansi('\x1b[34m'),
-  title: ansi('\x1b[34m'),
-  comment: ansi('\x1b[2;90m', '\x1b[22;39m'),
-  doctag: ansi('\x1b[2;90m', '\x1b[22;39m'),
-  meta: ansi('\x1b[90m'),
-  tag: ansi('\x1b[36m'),
-  name: ansi('\x1b[34m'),
-  attr: ansi('\x1b[33m'),
-  variable: ansi('\x1b[36m'),
-  link: ansi('\x1b[4;34m', '\x1b[24;39m'),
+  keyword: ansi('\u001B[35m'),
+  built_in: ansi('\u001B[36m'),
+  type: ansi('\u001B[36m'),
+  literal: ansi('\u001B[35m'),
+  number: ansi('\u001B[33m'),
+  regexp: ansi('\u001B[31m'),
+  string: ansi('\u001B[32m'),
+  class: ansi('\u001B[36m'),
+  function: ansi('\u001B[34m'),
+  title: ansi('\u001B[34m'),
+  comment: ansi('\u001B[2;90m', '\u001B[22;39m'),
+  doctag: ansi('\u001B[2;90m', '\u001B[22;39m'),
+  meta: ansi('\u001B[90m'),
+  tag: ansi('\u001B[36m'),
+  name: ansi('\u001B[34m'),
+  attr: ansi('\u001B[33m'),
+  variable: ansi('\u001B[36m'),
+  link: ansi('\u001B[4;34m', '\u001B[24;39m'),
 };
 
-function ansi(open: string, close = '\x1b[39m'): (value: string) => string {
+function ansi(open: string, close = '\u001B[39m'): (value: string) => string {
   return value => `${open}${value}${close}`;
 }
 
@@ -423,7 +423,7 @@ export function wrapReviewLines(rendered: RenderedEntry, width: number): Rendere
 }
 
 function style(value: string, color: string, enabled: boolean): string {
-  return enabled ? `${color}${value}\x1b[0m` : value;
+  return enabled ? `${color}${value}\u001B[0m` : value;
 }
 
 export function clamp(value: number, minimum: number, maximum: number): number {

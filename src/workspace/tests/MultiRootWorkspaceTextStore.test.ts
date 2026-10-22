@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 describe(MultiRootWorkspaceTextStore, () => {
-  it.each(['\ud800', '\udc00'])('rejects malformed Unicode workspace qualifiers %j', async name => {
+  it.each(['\uD800', '\uDC00'])('rejects malformed Unicode workspace qualifiers %j', async name => {
     const root = await fixture();
     expect(
       () =>

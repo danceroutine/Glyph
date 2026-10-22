@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { Emitter } from '#vs/base/common/event.js';
 import { URI } from '#vs/base/common/uri.js';
 import { Range } from '#vs/editor/common/core/range.js';
@@ -172,7 +172,8 @@ describe(useGlyphContext, () => {
 });
 
 describe(GlyphDiagnosticHover, () => {
-  const hoverOf = (model: { uri: URI } | null = { uri: URI.file('/repo/a.ts') }) => {
+  const hoverOf = (hoverModel?: { uri: URI } | null) => {
+    const model = hoverModel === undefined ? { uri: URI.file('/repo/a.ts') } : hoverModel;
     const { glyph, service, composer } = glyphOf();
     const markers = {
       getMarker: vi.fn((_uri: URI, decoration: IModelDecoration) =>
@@ -243,7 +244,7 @@ describe(GlyphDiagnosticHover, () => {
     const contextOf = () =>
       ({ fragment: document.createDocumentFragment(), hide: vi.fn() }) as unknown as IEditorHoverRenderContext & {
         fragment: DocumentFragment;
-        hide: ReturnType<typeof vi.fn>;
+        hide: Mock;
       };
 
     it('renders a button that asks the agent to fix the diagnostic', async () => {
@@ -267,7 +268,9 @@ describe(GlyphDiagnosticHover, () => {
         true,
       );
       expect(context.hide).toHaveBeenCalled();
-      await vi.waitFor(() => expect(glyph.send).toHaveBeenCalled());
+      await vi.waitFor(() => {
+        expect(glyph.send).toHaveBeenCalled();
+      });
       expect(glyph.ideContext.captureDiagnostic).toHaveBeenCalledWith({ message: 'bad' });
       expect(openView).toHaveBeenCalled();
       expect(composer.restoreDraft).toHaveBeenCalledWith(
@@ -297,7 +300,9 @@ describe(GlyphDiagnosticHover, () => {
       hover.renderHoverParts(contextOf(), [part]);
       lastButtonAction()();
 
-      await vi.waitFor(() => expect(notifications.error).toHaveBeenCalledWith(failure));
+      await vi.waitFor(() => {
+        expect(notifications.error).toHaveBeenCalledWith(failure);
+      });
     });
   });
 });
@@ -316,7 +321,9 @@ describe(GlyphTerminalSelectionActions, () => {
     });
     domElement.append(screen);
     document.body.append(domElement);
-    onTestFinished(() => domElement.remove());
+    onTestFinished(() => {
+      domElement.remove();
+    });
     const emitters = {
       selection: new Emitter<void>(),
       focus: new Emitter<void>(),
@@ -346,7 +353,15 @@ describe(GlyphTerminalSelectionActions, () => {
         resolveXterm = resolve;
       }),
     };
-    return { terminal, raw, screen, emitters, resolveXterm: (xterm: unknown = { raw }) => resolveXterm(xterm) };
+    return {
+      terminal,
+      raw,
+      screen,
+      emitters,
+      resolveXterm: (xterm?: unknown) => {
+        resolveXterm(xterm === undefined ? { raw } : xterm);
+      },
+    };
   };
   const actionsOf = (instances: unknown[] = []) => {
     const created = new Emitter<ITerminalInstance>();
@@ -397,7 +412,7 @@ describe(GlyphTerminalSelectionActions, () => {
     emitters.focus.fire();
 
     expect(hosts(terminal)).toHaveLength(1);
-    expect(mounts.mountGlyphContextButton.mock.calls.map(call => call[4])).toEqual([undefined, undefined]);
+    expect(mounts.mountGlyphContextButton.mock.calls.map((call): unknown => call[4])).toEqual([undefined, undefined]);
   });
 
   it('removes the button when the terminal loses focus or is disposed', () => {
@@ -468,7 +483,9 @@ describe(GlyphTerminalSelectionActions, () => {
 
     lastButtonAction()();
 
-    await vi.waitFor(() => expect(button.dispose).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(button.dispose).toHaveBeenCalled();
+    });
     expect(glyph.ideContext.terminal).toHaveBeenCalledWith(terminal);
     expect(composer.insertAttachments).toHaveBeenCalledWith([attachmentOf('terminal.txt')]);
     expect(hosts(terminal)).toEqual([]);
@@ -492,7 +509,9 @@ describe(GlyphTerminalSelectionActions, () => {
 
     lastButtonAction()();
 
-    await vi.waitFor(() => expect(notifications.error).toHaveBeenCalledWith(failure));
+    await vi.waitFor(() => {
+      expect(notifications.error).toHaveBeenCalledWith(failure);
+    });
     expect(hosts(terminal)).toHaveLength(1);
   });
 
@@ -508,7 +527,9 @@ describe(GlyphTerminalSelectionActions, () => {
     expect(mounts.mountGlyphContextButton.mock.calls.length).toBeGreaterThanOrEqual(2);
     const observed = mounts.mountGlyphContextButton.mock.calls.length;
     terminal.domElement.style.width = '123px';
-    await vi.waitFor(() => expect(mounts.mountGlyphContextButton.mock.calls.length).toBeGreaterThan(observed));
+    await vi.waitFor(() => {
+      expect(mounts.mountGlyphContextButton.mock.calls.length).toBeGreaterThan(observed);
+    });
   });
 
   it('ignores terminals that are disposed or have no renderer when ready', async () => {

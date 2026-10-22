@@ -51,8 +51,8 @@ export class ChatSessionManager {
     this.requireInitialized();
     return [...this.records.values()]
       .filter(record => !account || (record.accountProvider === account.provider && record.accountId === account.id))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .map(toSummary);
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map(value => toSummary(value));
   }
 
   async create(input: CreateChatSessionInput, conversation: ChatConversation): Promise<ChatSession> {
@@ -113,9 +113,10 @@ export class ChatSessionManager {
 
   rename(identifier: string, title: string): Promise<ChatSessionSummary> {
     this.requireInitialized();
-    const normalized = title.replace(/\s+/gu, ' ').trim();
+    const normalized = title.replaceAll(/\s+/gu, ' ').trim();
     if (!normalized) return Promise.reject(new Error('Chat title cannot be empty.'));
-    if ([...normalized].length > 80) return Promise.reject(new Error('Chat title may contain at most 80 characters.'));
+    if (Array.from(normalized).length > 80)
+      return Promise.reject(new Error('Chat title may contain at most 80 characters.'));
     const record = this.resolve(identifier);
     return this.enqueue(async () => {
       const updated = {
@@ -172,7 +173,7 @@ export class ChatSessionManager {
       if (current.accountProvider !== chat.accountProvider || current.accountId !== chat.accountId)
         throw new PlanError('The plan must belong to the requesting chat.');
       const previous = current.plans?.findLast(plan => plan.id === update.id);
-      if (update.id && (!previous || previous.revision !== update.expectedRevision))
+      if (update.id !== null && update.id !== '' && (!previous || previous.revision !== update.expectedRevision))
         throw new PlanError('The plan has changed. Read its current revision before editing.');
       if ((current.plans?.length ?? 0) >= 100)
         throw new PlanError('This chat has reached its saved plan revision limit.');
@@ -269,8 +270,7 @@ export class ChatSessionManager {
   }
 
   private async saveWith(id: string, record: ChatSessionRecord): Promise<void> {
-    const records = new Map(this.records);
-    records.set(id, record);
+    const records = new Map([...this.records, [id, record]]);
     await this.store.save(record);
     this.records = records;
   }
@@ -305,8 +305,8 @@ export class ChatSessionManager {
 }
 
 function normalizeGeneratedTitle(title: string): string {
-  const normalized = title.replace(/\s+/gu, ' ').trim();
+  const normalized = title.replaceAll(/\s+/gu, ' ').trim();
   const words = normalized.split(' ').filter(Boolean).slice(0, 4);
-  const characters = [...words.join(' ')];
+  const characters = Array.from(words.join(' '));
   return characters.slice(0, 80).join('') || 'New chat';
 }

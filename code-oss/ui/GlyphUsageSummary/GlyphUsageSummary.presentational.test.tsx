@@ -115,7 +115,9 @@ describe(GlyphUsageSummary, () => {
     const workbench = document.createElement('div');
     workbench.className = 'monaco-workbench';
     document.body.append(workbench);
-    onTestFinished(() => workbench.remove());
+    onTestFinished(() => {
+      workbench.remove();
+    });
 
     render(<GlyphUsageSummary usage={undefined} {...usageState(true)} />);
 
@@ -126,7 +128,9 @@ describe(GlyphUsageSummary, () => {
     const stage = document.createElement('div');
     stage.className = 'glyph-story-stage';
     document.body.append(stage);
-    onTestFinished(() => stage.remove());
+    onTestFinished(() => {
+      stage.remove();
+    });
     const state = usageState(false);
     const { rerender } = render(<GlyphUsageSummary usage={undefined} {...state} />, { container: stage });
 

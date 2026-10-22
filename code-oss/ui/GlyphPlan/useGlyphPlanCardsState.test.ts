@@ -74,7 +74,12 @@ describe(useGlyphPlanCardsState, () => {
   it('runs one action at a time and is pending until it settles', async () => {
     const actions = cardActions();
     let finish!: () => void;
-    actions.buildPlan.mockImplementationOnce(() => new Promise<void>(resolve => (finish = resolve)));
+    actions.buildPlan.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        }),
+    );
     const target = plan();
     const { result } = renderHook(useGlyphPlanCardsState, {
       initialProps: { chatId: 'chat', plans: [target], actions: actions as unknown as GlyphWorkbenchViewActions },

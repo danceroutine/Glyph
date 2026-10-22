@@ -2,6 +2,7 @@ import { Button } from '#code-oss/ui/Button/Button.tsx';
 import type { ComponentProps } from 'preact';
 import { fn } from 'storybook/test';
 import { GlyphFollowUpBehavior } from '#src/desktop/workbench/GlyphFollowUpBehavior.js';
+import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { chatFixture, workbenchStateFixture } from '#code-oss/storybook/fixtures/WorkspaceFixtures.ts';
 import { composerFixture, previewActionsFixture } from '#code-oss/storybook/fixtures/ActionFixtures.ts';
@@ -29,7 +30,7 @@ export function InteractiveWorkbench() {
   const steering = useRef<string[]>([]);
 
   useEffect(() => {
-    if (!pending) return;
+    if (!pending) return undefined;
     let length = state.transcript.find(entry => entry.id === pending.id)?.text.length ?? 0;
     const timer = window.setInterval(() => {
       length = Math.min(length + 8, pending.response.length);
@@ -38,19 +39,21 @@ export function InteractiveWorkbench() {
       const next = finished ? steering.current.splice(0) : [];
       setState(current => ({
         ...current,
-        status: finished && !next.length ? GlyphWorkbenchStatus.READY : GlyphWorkbenchStatus.STREAMING,
+        status: finished && next.length === 0 ? GlyphWorkbenchStatus.READY : GlyphWorkbenchStatus.STREAMING,
         transcript: current.transcript.map(entry => (entry.id === pending.id ? { ...entry, text } : entry)),
       }));
       if (finished) {
         window.clearInterval(timer);
         setPending(
-          next.length
+          next.length > 0
             ? { id: pending.id, response: `${pending.response}\n\nContinuing with your guidance: ${next.join('; ')}` }
             : undefined,
         );
       }
     }, 60);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+    };
   }, [pending]);
 
   const send: GlyphWorkbenchViewActions['send'] = async (text, attachments = [], options = {}) => {
@@ -93,9 +96,10 @@ export function InteractiveWorkbench() {
             While responding{' '}
             <select
               value={followUpBehavior}
-              onChange={fn<NonNullable<ComponentProps<'select'>['onChange']>>(event =>
-                setFollowUpBehavior(event.currentTarget.value as GlyphFollowUpBehavior),
-              ).mockName('InteractiveWorkbench.onChange')}
+              onChange={fn<NonNullable<ComponentProps<'select'>['onChange']>>(event => {
+                const { value } = event.currentTarget;
+                if (isEnumValue(GlyphFollowUpBehavior, value)) setFollowUpBehavior(value);
+              }).mockName('InteractiveWorkbench.onChange')}
             >
               <option value={GlyphFollowUpBehavior.QUEUE}>Queue</option>
               <option value={GlyphFollowUpBehavior.SEND_IMMEDIATELY}>Send immediately</option>
@@ -103,9 +107,9 @@ export function InteractiveWorkbench() {
           </label>
           <Button
             type="button"
-            onClick={fn<NonNullable<ComponentProps<'button'>['onClick']>>(() => setMessageSettings(false)).mockName(
-              'InteractiveWorkbench.onClick',
-            )}
+            onClick={fn<NonNullable<ComponentProps<'button'>['onClick']>>(() => {
+              setMessageSettings(false);
+            }).mockName('InteractiveWorkbench.onClick')}
           >
             Done
           </Button>
@@ -117,9 +121,9 @@ export function InteractiveWorkbench() {
           ...previewActionsFixture(),
           composer,
           followUpBehavior,
-          openMessageSettings: fn<NonNullable<GlyphWorkbenchViewActions['openMessageSettings']>>(() =>
-            setMessageSettings(true),
-          ).mockName('InteractiveWorkbench.openMessageSettings'),
+          openMessageSettings: fn<NonNullable<GlyphWorkbenchViewActions['openMessageSettings']>>(() => {
+            setMessageSettings(true);
+          }).mockName('InteractiveWorkbench.openMessageSettings'),
           moveQueuedToNewChat: fn<NonNullable<GlyphWorkbenchViewActions['moveQueuedToNewChat']>>(async id => {
             const message = composer.snapshot.queued.find(value => value.id === id);
             if (!message) return;

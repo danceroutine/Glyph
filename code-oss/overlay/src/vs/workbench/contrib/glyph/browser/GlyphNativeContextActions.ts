@@ -33,15 +33,15 @@ export async function useGlyphContext(
   const composer = glyph.composer;
   const document = composer.snapshot.document;
   const attachments = await capture();
-  if (!attachments.length) return;
+  if (attachments.length === 0) return;
   if (glyph.composer !== composer || composer.snapshot.document !== document)
     throw new Error('The active draft changed during capture. Please try again.');
-  if (prompt)
+  if (prompt !== undefined && prompt !== '')
     composer.restoreDraft({
       parts: [{ type: 'text', text: prompt }],
       from: prompt.length,
       to: prompt.length,
-      options: { ...options, ...(mode ? { mode } : {}) },
+      options: { ...options, ...(mode !== undefined ? { mode } : {}) },
     });
   composer.insertAttachments(attachments);
   const actionDocument = composer.snapshot.document;
@@ -49,7 +49,8 @@ export async function useGlyphContext(
   if (glyph.composer !== composer || composer.snapshot.document !== actionDocument)
     throw new Error('The active draft changed while opening Chat. Review the draft before trying again.');
   composer.focus();
-  if (prompt) await composer.submit((text, captured, options) => glyph.send(text, captured, options));
+  if (prompt !== undefined && prompt !== '')
+    await composer.submit((text, captured, turnOptions) => glyph.send(text, captured, turnOptions));
 }
 
 /** Adds an action to the existing diagnostic hover; the marker remains owned by the editor. */
@@ -64,7 +65,7 @@ export class GlyphDiagnosticHover {
   ) {}
   computeSync(anchor: HoverAnchor, decorations: IModelDecoration[]): MarkerHover[] {
     const model = this.editor.getModel();
-    if (!model || (anchor.type !== HoverAnchorType.Range && !anchor.supportsMarkerHover)) return [];
+    if (!model || (anchor.type !== HoverAnchorType.Range && anchor.supportsMarkerHover !== true)) return [];
     return decorations.flatMap(decoration => {
       const marker = this.markers.getMarker(model.uri, decoration);
       return marker ? [new MarkerHover(this, Range.lift(decoration.range), marker)] : [];
@@ -87,11 +88,19 @@ export class GlyphDiagnosticHover {
               () => this.glyph.ideContext.captureDiagnostic(hoverPart.marker),
               'Fix the attached diagnostic. Check whether it still applies to the current source before making changes.',
               AgentModeID.AGENT,
-            ).catch(error => this.notifications.error(error));
+            ).catch(error => {
+              this.notifications.error(error instanceof Error ? error : String(error));
+            });
           },
           true,
         );
-        return { hoverPart, hoverElement, dispose: () => button.dispose() };
+        return {
+          hoverPart,
+          hoverElement,
+          dispose: () => {
+            button.dispose();
+          },
+        };
       }),
     );
   }
@@ -125,12 +134,21 @@ export class GlyphTerminalSelectionActions extends Disposable {
       };
       const update = () => {
         clear();
-        if (!terminal.selection) dismissedSelection = undefined;
-        if (terminal.selection && terminal.selection === dismissedSelection) return;
+        if (terminal.selection === undefined || terminal.selection === '') dismissedSelection = undefined;
+        if (terminal.selection !== undefined && terminal.selection !== '' && terminal.selection === dismissedSelection)
+          return;
         const xterm = terminal.xterm?.raw;
         const selection = xterm?.getSelectionPosition();
         const screen = terminal.domElement?.querySelector('.xterm-screen');
-        if (!terminal.hasFocus || !selection || !terminal.selection || !screen || !xterm) return;
+        if (
+          !terminal.hasFocus ||
+          !selection ||
+          terminal.selection === undefined ||
+          terminal.selection === '' ||
+          !screen ||
+          !xterm
+        )
+          return;
         const bounds = screen.getBoundingClientRect();
         if (!bounds.width || !bounds.height) return;
         const row = selection.start.y - xterm.buffer.active.viewportY;
@@ -153,7 +171,9 @@ export class GlyphTerminalSelectionActions extends Disposable {
                 dismissedSelection = selected;
                 clear();
               })
-              .catch(error => notifications.error(error));
+              .catch(error => {
+                notifications.error(error instanceof Error ? error : String(error));
+              });
           },
           false,
           keybindings.lookupKeybinding('glyph.attachTerminalSelection')?.getLabel() ?? undefined,
@@ -165,7 +185,11 @@ export class GlyphTerminalSelectionActions extends Disposable {
       store.add(terminal.onDidChangeSelection(update));
       store.add(terminal.onDidFocus(update));
       store.add(terminal.onDidBlur(clear));
-      store.add(terminal.onDisposed(() => store.dispose()));
+      store.add(
+        terminal.onDisposed(() => {
+          store.dispose();
+        }),
+      );
       store.add(toDisposable(clear));
       void terminal.xtermReadyPromise.then(xterm => {
         if (store.isDisposed || !xterm) return;
@@ -173,7 +197,11 @@ export class GlyphTerminalSelectionActions extends Disposable {
         store.add(xterm.raw.onResize(update));
         const observer = new ResizeObserver(update);
         observer.observe(terminal.domElement);
-        store.add(toDisposable(() => observer.disconnect()));
+        store.add(
+          toDisposable(() => {
+            observer.disconnect();
+          }),
+        );
       });
     };
     terminals.instances.forEach(watch);

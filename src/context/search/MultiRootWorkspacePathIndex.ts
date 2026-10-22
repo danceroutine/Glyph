@@ -5,7 +5,7 @@ import {
 } from './WorkspaceContentSearchOptions.ts';
 import type {
   WorkspaceContentCountResult,
-  WorkspaceContentMatchesResult,
+  WorkspaceContentMatch,
   WorkspaceContentSearchResult,
 } from './WorkspaceContentSearchResult.ts';
 import type { WorkspacePathGlobResult } from './WorkspacePathGlobResult.ts';
@@ -54,7 +54,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
           indices: match.indices.map(index => index + prefixLength),
         }));
       })
-      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+      .toSorted((left, right) => right.score - left.score || left.path.localeCompare(right.path))
       .slice(0, limit);
     return {
       generation: options.generation,
@@ -68,7 +68,10 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     pattern: string,
     options: { targetDirectory?: string; limit: number; signal?: AbortSignal },
   ): Promise<WorkspacePathGlobResult> {
-    const target = options.targetDirectory ? this.routePath(options.targetDirectory) : undefined;
+    const target =
+      options.targetDirectory !== undefined && options.targetDirectory !== ''
+        ? this.routePath(options.targetDirectory)
+        : undefined;
     const routedPattern = this.routePattern(pattern);
     const candidates = [...this.indexes].filter(
       ([name]) => (!target || target.name === name) && (!routedPattern || routedPattern.name === name),
@@ -82,7 +85,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
       }
       const result = await index.glob(routedPattern?.pattern ?? pattern, {
         limit: options.limit - files.length,
-        ...(target?.path ? { targetDirectory: target.path } : {}),
+        ...(target?.path !== undefined && target?.path !== '' ? { targetDirectory: target.path } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
       });
       files.push(...result.files.map(path => `${name}/${path}`));
@@ -94,12 +97,13 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
     const { signal, ...serializableOptions } = options;
     const resolved = workspaceContentSearchOptionsSchema.parse(serializableOptions);
-    const path = resolved.path ? this.routePath(resolved.path) : undefined;
-    const fileGlob = resolved.fileGlob ? this.routePattern(resolved.fileGlob) : undefined;
+    const path = resolved.path !== null && resolved.path !== '' ? this.routePath(resolved.path) : undefined;
+    const fileGlob =
+      resolved.fileGlob !== null && resolved.fileGlob !== '' ? this.routePattern(resolved.fileGlob) : undefined;
     const candidates = [...this.indexes].filter(
       ([name]) => (!path || path.name === name) && (!fileGlob || fileGlob.name === name),
     );
-    const selected: unknown[] = [];
+    const selected: ContentEntry[] = [];
     let skip = resolved.offset;
     // Keep room for response metadata as well as root-qualified JSON entries.
     // Fetch sequentially and discard skipped entries instead of retaining offset
@@ -116,7 +120,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
         signal?.throwIfAborted();
         const page = await index.searchContents(pattern, {
           ...resolved,
-          path: path?.path || null,
+          path: (path?.path ?? '') || null,
           fileGlob: fileGlob?.pattern ?? resolved.fileGlob,
           offset,
           limit: Math.min(1000, Math.max(1, skip + resolved.limit - selected.length)),
@@ -185,11 +189,15 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     };
     switch (resolved.outputMode) {
       case 'content':
-        return { outputMode: 'content', matches: selected as WorkspaceContentMatchesResult['matches'], ...metadata };
+        return { outputMode: 'content', matches: selected.filter(entry => isContentMatch(entry)), ...metadata };
       case 'files_with_matches':
-        return { outputMode: 'files_with_matches', files: selected as readonly string[], ...metadata };
+        return {
+          outputMode: 'files_with_matches',
+          files: selected.filter(entry => typeof entry === 'string'),
+          ...metadata,
+        };
       case 'count':
-        return { outputMode: 'count', counts: selected as WorkspaceContentCountResult['counts'], ...metadata };
+        return { outputMode: 'count', counts: selected.filter(entry => isContentCount(entry)), ...metadata };
     }
     throw new Error('Unsupported content-search output mode.');
   }
@@ -203,7 +211,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failures.length > 0)
       throw new AggregateError(
-        failures.map(failure => failure.reason),
+        failures.map((failure): unknown => failure.reason),
         'Could not dispose all workspace indexes.',
       );
   }
@@ -246,7 +254,18 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
   }
 }
 
-function prefixEntries(name: string, result: WorkspaceContentSearchResult): unknown[] {
+type ContentCount = WorkspaceContentCountResult['counts'][number];
+type ContentEntry = WorkspaceContentMatch | ContentCount | string;
+
+function isContentMatch(entry: ContentEntry): entry is WorkspaceContentMatch {
+  return typeof entry !== 'string' && !('count' in entry);
+}
+
+function isContentCount(entry: ContentEntry): entry is ContentCount {
+  return typeof entry !== 'string' && 'count' in entry;
+}
+
+function prefixEntries(name: string, result: WorkspaceContentSearchResult): ContentEntry[] {
   switch (result.outputMode) {
     case 'content':
       return result.matches.map(match => ({ ...match, path: `${name}/${match.path}` }));

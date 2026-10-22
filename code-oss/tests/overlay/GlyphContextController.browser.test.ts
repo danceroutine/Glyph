@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { GlyphContextController } from '#vs/workbench/contrib/glyph/browser/GlyphContextController.js';
 import { URI } from '#vs/base/common/uri.js';
 import { Emitter } from '#vs/base/common/event.js';
@@ -33,7 +33,9 @@ function codeEditor(model: { uri: URI } | null, selections: Selection[] | null =
     getModel: () => model,
     getSelections: () => selections,
     onDidFocusEditorText: focus.event,
-    focus: () => focus.fire(),
+    focus: () => {
+      focus.fire();
+    },
   };
 }
 
@@ -53,13 +55,13 @@ function controllerServices() {
   const folderOf = (uri: URI) =>
     folders.find(folder => uri.path === folder.uri.path || uri.path.startsWith(`${folder.uri.path}/`));
   const contextPath = vi.fn((uri: URI) => {
-    if (uri.scheme === 'untitled') return uri.path.replace(/^\//, '');
+    if (uri.scheme === 'untitled') return uri.path.replace(/^\//u, '');
     const folder = uri.scheme === 'file' ? folderOf(uri) : undefined;
     if (!folder) throw new Error('Outside of the workspace');
     const path = uri.path.slice(folder.uri.path.length + 1);
     return folders.length > 1 ? `${folder.name}/${path}` : path;
   });
-  const composer = { insertAttachments: vi.fn() };
+  const composer = { insertAttachments: vi.fn((_attachments: { side?: string }[]) => undefined) };
   const services = {
     folders,
     models,
@@ -442,7 +444,7 @@ describe(GlyphContextController, () => {
       const services = controllerServices();
       services.stats.set('/workspace/a.ts', {});
       expect(await createController(services).captureFile('file:///workspace/a.ts')).toMatchObject({ path: 'a.ts' });
-      const reference = await services.resolver.createModelReference.mock.results[0].value;
+      const reference = (await services.resolver.createModelReference.mock.results[0].value) as { dispose: Mock };
       expect(reference.dispose).toHaveBeenCalledOnce();
     });
   });

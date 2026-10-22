@@ -45,14 +45,14 @@ describe(GlyphShellCommandCard, () => {
     const card = screen.getByRole('region', { name: 'Shell command' });
     expect(card.dataset.live).toBe('true');
     expect(card.getAttribute('aria-busy')).toBe('false');
-    const header = screen.getByRole('button', { name: /npm test/ });
+    const header = screen.getByRole('button', { name: /npm test/u });
     expect(header.getAttribute('aria-expanded')).toBe('false');
     expect(header.querySelector('.lucide-chevron-right')).toBeTruthy();
     expect(header.textContent).toBe('npm testRunning');
     expect(screen.getByLabelText('Command output').textContent).toBe('two\nthree');
     expect(screen.queryByText('$ npm test')).toBeNull();
     expect(screen.queryByRole('form')).toBeNull();
-    expect(screen.queryByText(/Wake on/)).toBeNull();
+    expect(screen.queryByText(/Wake on/u)).toBeNull();
 
     fireEvent.click(header);
 
@@ -82,7 +82,7 @@ describe(GlyphShellCommandCard, () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /npm test/ }).querySelector('.lucide-chevron-down')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /npm test/u }).querySelector('.lucide-chevron-down')).toBeTruthy();
     expect(screen.getByText('$ npm test')).toBeTruthy();
     expect(screen.getByLabelText('Command output').textContent).toBe('one\ntwo\nthree');
     expect(screen.getByText('Working directory: /repo')).toBeTruthy();
@@ -92,7 +92,7 @@ describe(GlyphShellCommandCard, () => {
   it('omits the working directory when it is unknown', () => {
     render(<GlyphShellCommandCard {...cardState({}, { expanded: true })} />);
 
-    expect(screen.queryByText(/Working directory/)).toBeNull();
+    expect(screen.queryByText(/Working directory/u)).toBeNull();
   });
 
   it('accepts input for a running live shell', () => {
@@ -127,10 +127,10 @@ describe(GlyphShellCommandCard, () => {
     );
 
     expect(screen.getByRole('region', { name: 'Shell command' }).getAttribute('aria-busy')).toBe('true');
-    expect((screen.getByRole('textbox', { name: 'Input to shell' }) as HTMLTextAreaElement).disabled).toBe(true);
-    expect((screen.getByRole('checkbox', { name: 'Append newline' }) as HTMLInputElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Send input' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Close shell' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Input to shell' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'Append newline' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Send input' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Close shell' }).disabled).toBe(true);
   });
 
   it('shows why the last shell action failed', () => {

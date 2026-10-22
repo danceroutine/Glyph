@@ -229,7 +229,9 @@ describe(AgentRuntime, () => {
 
   it('supports Claude-shaped messages while keeping tool execution provider-independent', async () => {
     const adapter = new ClaudeShapedAdapter();
-    const tools = mockTools(vi.fn(async (_name, input) => `contents for ${JSON.parse(input).path as string}`));
+    const tools = mockTools(
+      vi.fn(async (_name, input) => `contents for ${(JSON.parse(input) as { path: string }).path}`),
+    );
     const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, tools);
     let text = '';
 
@@ -312,7 +314,7 @@ describe(AgentRuntime, () => {
     const controller = new AbortController();
     const adapter = new ClaudeShapedAdapter();
     const tools = mockTools(
-      vi.fn(async (_name, _input, signal) => {
+      vi.fn(async (_name, _input, signal?: AbortSignal) => {
         await writeFile(marker, 'I win');
         controller.abort(new Error('cancel after readiness'));
         signal?.throwIfAborted();
@@ -327,7 +329,9 @@ describe(AgentRuntime, () => {
       runtime.send('Run until ready.', {
         signal: controller.signal,
         onText: () => {},
-        onToolActivity: item => activity.push(item),
+        onToolActivity: item => {
+          activity.push(item);
+        },
         onStateCheckpoint: state => {
           checkpoints.push(state);
         },
@@ -358,7 +362,9 @@ describe(AgentRuntime, () => {
           throw new Error('second tool failed');
         }
         firstPending = true;
-        await new Promise(resolve => setImmediate(resolve));
+        await new Promise(resolve => {
+          setImmediate(resolve);
+        });
         firstPending = false;
         return 'first completed';
       }),
@@ -370,7 +376,9 @@ describe(AgentRuntime, () => {
     await runtime.send('Run both.', {
       signal: new AbortController().signal,
       onText: () => {},
-      onToolActivity: item => activity.push(item),
+      onToolActivity: item => {
+        activity.push(item);
+      },
       onStateCheckpoint: state => {
         checkpoints.push(state);
       },
@@ -452,11 +460,15 @@ describe(AgentRuntime, () => {
     const pending = runtime.send('First', { signal: new AbortController().signal, onText: () => {} });
     await entered.promise;
 
-    expect(() => runtime.recordContext([])).toThrow('Cannot record context during a response. Cancel it first.');
-    expect(() => runtime.restoreState(claudeState([]))).toThrow(
-      'Cannot restore history during a response. Cancel it first.',
-    );
-    expect(() => runtime.reset()).toThrow('Cannot reset during a response. Cancel it first.');
+    expect(() => {
+      runtime.recordContext([]);
+    }).toThrow('Cannot record context during a response. Cancel it first.');
+    expect(() => {
+      runtime.restoreState(claudeState([]));
+    }).toThrow('Cannot restore history during a response. Cancel it first.');
+    expect(() => {
+      runtime.reset();
+    }).toThrow('Cannot reset during a response. Cancel it first.');
     await expect(runtime.send('Second', { signal: new AbortController().signal, onText: () => {} })).rejects.toThrow(
       'A response is already in progress.',
     );
@@ -570,7 +582,9 @@ describe(AgentRuntime, () => {
 
     it('reports a generic failure when the model adapter throws a non-error value', async () => {
       const adapter = new ClaudeShapedAdapter();
-      adapter.streamStep = async () => Promise.reject('socket closed');
+      adapter.streamStep = async () => {
+        throw 'socket closed';
+      };
       const runtime = new AgentRuntime(
         adapter,
         { timeoutMs: 10_000 },
@@ -600,7 +614,9 @@ describe(AgentRuntime, () => {
         runtime.send('Hello', {
           signal: new AbortController().signal,
           onText: () => {},
-          onTrace: entry => trace.push(entry),
+          onTrace: entry => {
+            trace.push(entry);
+          },
         }),
       ).rejects.toThrow('Unauthorized');
 
@@ -803,7 +819,7 @@ function mockTools(execute: TestToolHandler, planningNames: readonly string[] = 
 }
 
 describe('provider-neutral steering', () => {
-  const instruction = (queue: ChatSteeringQueue, text: string) =>
+  const instruction = (queue: ChatSteeringQueue, text: string) => {
     queue.add(
       { text, attachments: [] },
       {
@@ -814,6 +830,7 @@ describe('provider-neutral steering', () => {
         attachments: [],
       },
     );
+  };
   it('waits for the running tool and its durable outcome, preserves mode and input order, then continues the same turn', async () => {
     const adapter = new ClaudeShapedAdapter();
     const queue = new ChatSteeringQueue();
@@ -867,7 +884,9 @@ describe('provider-neutral steering', () => {
     expect(messagesFrom(checkpoints[1]!).at(-1)?.content).toEqual([
       { type: 'tool_result', tool_use_id: 'toolu_1', content: 'file' },
     ]);
-    expect(() => instruction(queue, 'Too late')).toThrow('finished');
+    expect(() => {
+      instruction(queue, 'Too late');
+    }).toThrow('finished');
   });
 
   it('continues after a text-only response when steering arrived during that response', async () => {

@@ -179,7 +179,7 @@ export class GlyphEditorAdapter extends Disposable {
     this.assertWorkspaceBinding();
     if (!['file', 'untitled'].includes(resource.scheme))
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
-    return resource.scheme === 'untitled' ? resource.path.replace(/^\//, '') : this.pathFor(resource);
+    return resource.scheme === 'untitled' ? resource.path.replace(/^\//u, '') : this.pathFor(resource);
   }
 
   isCurrentContext(model: ITextModel, attachment: GlyphContextAttachment): boolean {
@@ -272,7 +272,8 @@ export class GlyphEditorAdapter extends Disposable {
     mutation: GlyphFileMutation,
   ): Promise<{ snapshot?: GlyphEditorTextSnapshot; receipt: GlyphMutationReceipt }> {
     const targetPath = mutation.kind === GlyphFileMutationKind.RENAME ? mutation.target : mutation.path;
-    if (!targetPath) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.INVALID_REQUEST);
+    if (targetPath === undefined || targetPath === '')
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.INVALID_REQUEST);
     const known = this.receipts.get(mutation.operationId);
     if (known) {
       if (known.state !== GlyphMutationReceiptState.APPLIED)
@@ -284,7 +285,7 @@ export class GlyphEditorAdapter extends Disposable {
       let snapshot = await this.read(targetPath);
       if (snapshot.contentRevision !== known.afterRevision)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-      if (mutation.save) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
+      if (mutation.save === true) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
       return { snapshot, receipt: known };
     }
     const source = this.resolve(mutation.path);
@@ -319,7 +320,9 @@ export class GlyphEditorAdapter extends Disposable {
         const model = this.modelService.getModel(source);
         if (!model || model.getVersionId() !== before.token.version)
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-        changed = model.onDidChangeContent(() => cancellation.cancel());
+        changed = model.onDidChangeContent(() => {
+          cancellation.cancel();
+        });
       }
       if (mutation.kind !== GlyphFileMutationKind.DELETE && (await this.exists(targetPath)))
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT, {
@@ -411,7 +414,7 @@ export class GlyphEditorAdapter extends Disposable {
         appliedToken: snapshot.token,
       };
       this.receipts.set(mutation.operationId, complete);
-      if (mutation.save) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
+      if (mutation.save === true) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
       return { snapshot, receipt: complete };
     } finally {
       changed?.dispose();
@@ -433,7 +436,7 @@ export class GlyphEditorAdapter extends Disposable {
       if (known.state === GlyphMutationReceiptState.UNKNOWN)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
       let snapshot = await this.read(mutation.path);
-      if (mutation.save) {
+      if (mutation.save === true) {
         if (snapshot.contentRevision !== known.afterRevision)
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
         snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision);
@@ -459,18 +462,21 @@ export class GlyphEditorAdapter extends Disposable {
       if (before.byteOrderMark !== mutation.byteOrderMark) {
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
       }
-      const endings = mutation.text.match(/\r\n|\r|\n/g);
-      const uniformEnding = endings?.length && endings.every(ending => ending === endings[0]) ? endings[0] : undefined;
+      const endings = mutation.text.match(/\r\n|\r|\n/gu);
+      const uniformEnding =
+        endings !== null && endings.length > 0 && endings.every(ending => ending === endings[0])
+          ? endings[0]
+          : undefined;
       const requestedEol =
         uniformEnding === '\n' ? EndOfLineSequence.LF : uniformEnding === '\r\n' ? EndOfLineSequence.CRLF : undefined;
-      const appliedText = mutation.text.replace(
-        /\r\n|\r|\n/g,
+      const appliedText = mutation.text.replaceAll(
+        /\r\n|\r|\n/gu,
         requestedEol === undefined ? model.getEOL() : uniformEnding!,
       );
       // Mixed endings cannot express an EOL-only conversion in a text model.
       if (mutation.text !== before.text && appliedText === before.text)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
-      const replacementText = mutation.text.replace(/\r\n|\r|\n/g, model.getEOL());
+      const replacementText = mutation.text.replaceAll(/\r\n|\r|\n/gu, model.getEOL());
       // Code OSS stores text offsets using the current EOL. Combining text and
       // EOL in one stack element corrupts those offsets on Undo. Use separate
       // version-guarded elements in the same undo group for this case.
@@ -576,7 +582,9 @@ export class GlyphEditorAdapter extends Disposable {
             resource,
             textEdit,
             before.token.version,
-            /[\uD800-\uDFFF]/.test(before.text) ? { label: options.label, needsConfirmation: false } : undefined,
+            /[\u{10000}-\u{10FFFF}\uD800-\uDFFF]/u.test(before.text)
+              ? { label: options.label, needsConfirmation: false }
+              : undefined,
           ),
         ]);
         if (separateEol) {
@@ -637,7 +645,7 @@ export class GlyphEditorAdapter extends Disposable {
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
         }
         let snapshot = await this.snapshot(mutation.path, model);
-        if (mutation.save) snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision);
+        if (mutation.save === true) snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision);
         return { snapshot, receipt };
       } finally {
         changed.dispose();
@@ -709,7 +717,7 @@ export class GlyphEditorAdapter extends Disposable {
     const matches: GlyphWorkingCopySearchMatch[] = [];
     const pattern =
       request.options.patternKind === GlyphWorkingCopyPatternKind.LITERAL
-        ? request.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        ? request.pattern.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&')
         : request.pattern;
     const regex = new RegExp(
       pattern,
@@ -724,9 +732,9 @@ export class GlyphEditorAdapter extends Disposable {
         matches.push({
           path: snapshot.path,
           line: before.length,
-          column: before[before.length - 1].length + 1,
+          column: before.at(-1)!.length + 1,
           endLine: through.length,
-          endColumn: through[through.length - 1].length + 1,
+          endColumn: through.at(-1)!.length + 1,
           lineText: snapshot.text.split('\n')[before.length - 1],
           matchedText: match[0],
         });
@@ -754,6 +762,8 @@ export class GlyphEditorAdapter extends Disposable {
         case FileOperationResult.FILE_NOT_DIRECTORY:
         case FileOperationResult.FILE_TOO_LARGE:
           return GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE;
+        default:
+          break;
       }
     }
     return GlyphDesktopErrorCode.INTERNAL;
@@ -773,9 +783,10 @@ export class GlyphEditorAdapter extends Disposable {
     }
     const rootName = folders.length > 1 ? segments.shift() : undefined;
     const roots = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
-    const folder = rootName
-      ? folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootName)
-      : folders[0];
+    const folder =
+      rootName !== undefined && rootName !== ''
+        ? folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootName)
+        : folders[0];
     if (!folder || folder.uri.scheme !== 'file') {
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     }
@@ -827,7 +838,7 @@ export class GlyphEditorAdapter extends Disposable {
 
   private incarnation(model: ITextModel): string {
     let value = this.incarnations.get(model);
-    if (!value) {
+    if (value === undefined || value === '') {
       value = generateUuid();
       this.incarnations.set(model, value);
     }
@@ -843,11 +854,11 @@ export class GlyphEditorAdapter extends Disposable {
     this.assertWorkspaceBinding();
     const folder = this.workspaceContextService.getWorkspaceFolder(resource);
     if (!folder) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
-    const path = resource.path.slice(folder.uri.path.replace(/\/$/, '').length + 1);
+    const path = resource.path.slice(folder.uri.path.replace(/\/$/u, '').length + 1);
     const roots = this.workspaceContextService
       .getWorkspace()
-      .folders.filter(folder => folder.uri.scheme === 'file')
-      .map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
+      .folders.filter(candidate => candidate.uri.scheme === 'file')
+      .map(candidate => ({ name: candidate.name, uri: candidate.uri.toString() }));
     const routingId = getGlyphWorkspaceRootId({ name: folder.name, uri: folder.uri.toString() }, roots);
     return roots.length > 1 ? `${routingId}/${path}` : path;
   }

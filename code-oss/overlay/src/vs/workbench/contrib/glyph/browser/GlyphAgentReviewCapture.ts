@@ -1,4 +1,5 @@
 import { URI } from '#vs/base/common/uri.js';
+import { isRecord } from '#glyph/protocol/isRecord.js';
 import type { ISCMRepository, ISCMResource } from '#vs/workbench/contrib/scm/common/scm.js';
 import type { GlyphIdeContext } from './GlyphIdeContext.js';
 import { GlyphAgentReviewScope as Scope } from '#glyph/workbench/GlyphAgentReview.js';
@@ -8,10 +9,10 @@ import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphCon
 export function glyphAgentReviewUnavailableReason(repository: ISCMRepository, scope: Scope): string | undefined {
   const provider = repository.provider;
   if (scope === Scope.LAST_COMMIT || scope === Scope.BRANCH) {
-    if (!provider.historyProvider.get()?.historyItemRef.get()?.revision)
+    if ((provider.historyProvider.get()?.historyItemRef.get()?.revision ?? '') === '')
       return 'Git history is unavailable. Create a commit to review.';
   } else {
-    if (scope === Scope.ALL_LOCAL && provider.groups.some(group => group.id === 'merge' && group.resources.length))
+    if (scope === Scope.ALL_LOCAL && provider.groups.some(group => group.id === 'merge' && group.resources.length > 0))
       return 'Resolve merge conflicts before reviewing all local changes.';
     const hasChanges = provider.groups.some(
       group =>
@@ -33,14 +34,15 @@ export async function captureGlyphAgentReview(
   captured?: (uri: URI, before: string, after: string) => void,
 ): Promise<readonly GlyphContextAttachment[]> {
   const unavailableReason = glyphAgentReviewUnavailableReason(repository, scope);
-  if (unavailableReason) throw new Error(unavailableReason);
+  if (unavailableReason !== undefined && unavailableReason !== '') throw new Error(unavailableReason);
   const provider = repository.provider;
   const history = provider.historyProvider.get();
   const head = history?.historyItemRef.get()?.revision;
   let label: string;
   let changes: { uri: URI; originalUri?: URI; modifiedUri?: URI }[];
   if (scope === Scope.LAST_COMMIT || scope === Scope.BRANCH) {
-    if (!history || !head) throw new Error('Git history is unavailable. Create a commit to review.');
+    if (!history || head === undefined || head === '')
+      throw new Error('Git history is unavailable. Create a commit to review.');
     let base: string | undefined;
     if (scope === Scope.LAST_COMMIT) {
       const commit = await history.resolveHistoryItem(head);
@@ -50,9 +52,10 @@ export async function captureGlyphAgentReview(
     } else {
       if (!branch) throw new Error('Choose a base branch before reviewing.');
       const ref = (await history.provideHistoryItemRefs([branch]))?.find(ref => ref.id === branch);
-      if (!ref?.revision) throw new Error('The selected base branch is unavailable. Choose it again.');
+      if (ref?.revision === undefined || ref?.revision === '')
+        throw new Error('The selected base branch is unavailable. Choose it again.');
       base = await history.resolveHistoryItemRefsCommonAncestor([head, ref.revision]);
-      if (!base) throw new Error('The branches have no available common ancestor.');
+      if (base === undefined || base === '') throw new Error('The branches have no available common ancestor.');
       label = `Branch comparison: ${branch} at ${ref.revision}; merge base ${base} → ${head}`;
     }
     const result = await history.provideHistoryItemChanges(head, base);
@@ -76,9 +79,11 @@ export async function captureGlyphAgentReview(
       const resource = (working ?? staged)!;
       let originalUri = staged ? staged.multiDiffEditorOriginalUri : resource.multiDiffEditorOriginalUri;
       // All local changes compare HEAD to working text, not index to working text.
-      if (originalUri?.scheme === 'git' && head) {
-        const query = JSON.parse(originalUri.query) as { ref?: string; submoduleOf?: string };
-        if (query.submoduleOf) throw new Error('Submodule changes require a review in the submodule repository.');
+      if (originalUri?.scheme === 'git' && head !== undefined && head !== '') {
+        const parsed: unknown = JSON.parse(originalUri.query);
+        const query = isRecord(parsed) ? parsed : {};
+        if (typeof query.submoduleOf === 'string' && query.submoduleOf !== '')
+          throw new Error('Submodule changes require a review in the submodule repository.');
         originalUri = originalUri.with({ query: JSON.stringify({ ...query, ref: head }) });
       }
       const modifiedUri =
@@ -100,7 +105,7 @@ export async function captureGlyphAgentReview(
         ? `Staged changes: ${head ?? 'empty tree'} → index`
         : `All local changes: ${head ?? 'empty tree'} → working tree (includes unsaved text for changed files)`;
   }
-  if (!changes.length) throw new Error('There are no changes in the selected review scope.');
+  if (changes.length === 0) throw new Error('There are no changes in the selected review scope.');
   if (changes.length > 32) throw new Error('This review exceeds 32 changed files. Select a smaller scope.');
   const signature = () =>
     scope === Scope.STAGED || scope === Scope.ALL_LOCAL
@@ -117,7 +122,13 @@ export async function captureGlyphAgentReview(
         change.originalUri,
         change.modifiedUri,
         label,
-        ...(captured ? [(before: string, after: string) => captured(change.uri, before, after)] : []),
+        ...(captured
+          ? [
+              (beforeText: string, after: string) => {
+                captured(change.uri, beforeText, after);
+              },
+            ]
+          : []),
       ),
     );
   if (attachments.reduce((bytes, item) => bytes + new TextEncoder().encode(item.text).byteLength, 0) > 2 * 1024 * 1024)

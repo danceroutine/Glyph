@@ -1,7 +1,19 @@
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
+import { GlyphWorkbenchCommandType } from '#glyph/protocol/GlyphWorkbenchCommand.js';
+import { GlyphTranscriptRole } from '#glyph/workbench/GlyphTranscriptEntry.js';
 
+/**
+ * @typedef {import('#glyph/protocol/GlyphWorkbenchCommand.js').GlyphWorkbenchCommand} GlyphWorkbenchCommand
+ * @typedef {import('#glyph/protocol/events/GlyphHostEvent.js').GlyphHostEvent} GlyphHostEvent
+ * @typedef {ReturnType<typeof chat>} ChatSummary
+ * @typedef {{ accounts: unknown[], models: { slug: string, name: string }[], chats: ChatSummary[], runs: unknown[], proposals: unknown[], ownerWindowId: string, readOnly: boolean, sequence: number, selectedAccount?: { provider: string, id: string } }} FixtureState
+ * @typedef {{ state: FixtureState, emit: (event: unknown) => void }} FixtureHost
+ */
+
+/** @type {ReturnType<typeof modules> | undefined} */
 let loaded;
 const approvedPlan = () => ({
   id: 'plan',
@@ -18,7 +30,8 @@ it('stops building after failed navigation without consuming another chat draft'
   const test = await fixture({
     chats: [chat('alpha'), { ...chat('beta'), plans: [plan] }],
     handler: async command => {
-      if (command.type === 'open_chat' && command.chatId === 'beta') throw new Error('Could not open source chat');
+      if (command.type === GlyphWorkbenchCommandType.OPEN_CHAT && command.chatId === 'beta')
+        throw new Error('Could not open source chat');
     },
   });
   try {
@@ -32,93 +45,109 @@ it('stops building after failed navigation without consuming another chat draft'
   }
 });
 
-it.each(['set_chat_mode', 'link_plan'])('keeps the plan target stable while %s is pending', async pendingType => {
-  const plan = approvedPlan();
-  let release;
-  let entered;
-  const gate = new Promise(resolve => {
-    release = resolve;
-  });
-  const started = new Promise(resolve => {
-    entered = resolve;
-  });
-  let hold = true;
-  const test = await fixture({
-    chats: [{ ...chat('alpha'), plans: [plan] }, chat('beta')],
-    handler: async command => {
-      if (hold && command.type === pendingType) {
-        hold = false;
-        entered();
-        await gate;
-      }
-    },
-  });
-  try {
-    test.service.composer.setDraft('Alpha draft');
-    const build = test.service.buildPlan('alpha', plan);
-    await started;
-    await test.service.openChat('beta');
-    test.service.composer.setDraft('Private beta draft');
-    release();
-    await build;
-    const sent = test.request.mock.calls.map(([command]) => command).filter(command => command.type === 'send');
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ chatId: 'alpha' });
-    expect(sent[0].text).toContain('Alpha draft');
-    expect(sent[0].text).toContain('Build this approved plan');
-    expect(test.service.composer.snapshot.draft).toBe('Private beta draft');
-    expect(test.request.mock.calls.map(([command]) => command).filter(command => command.type === 'link_plan')).toEqual(
-      [expect.objectContaining({ chatId: 'alpha', targetChatId: 'alpha', role: 'Builder' })],
-    );
-  } finally {
-    release();
-    test.dispose();
-  }
-});
+it.each([GlyphWorkbenchCommandType.SET_CHAT_MODE, GlyphWorkbenchCommandType.LINK_PLAN])(
+  'keeps the plan target stable while %s is pending',
+  async pendingType => {
+    const plan = approvedPlan();
+    /** @type {() => void} */
+    let release;
+    /** @type {() => void} */
+    let entered;
+    const gate = new Promise(openGate => {
+      release = openGate;
+    });
+    const started = new Promise(markStarted => {
+      entered = markStarted;
+    });
+    let hold = true;
+    const test = await fixture({
+      chats: [{ ...chat('alpha'), plans: [plan] }, chat('beta')],
+      handler: async command => {
+        if (hold && command.type === pendingType) {
+          hold = false;
+          entered();
+          await gate;
+        }
+      },
+    });
+    try {
+      test.service.composer.setDraft('Alpha draft');
+      const building = test.service.buildPlan('alpha', plan);
+      await started;
+      await test.service.openChat('beta');
+      test.service.composer.setDraft('Private beta draft');
+      release();
+      await building;
+      const sent = test.request.mock.calls
+        .map(([command]) => command)
+        .filter(command => command.type === GlyphWorkbenchCommandType.SEND);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ chatId: 'alpha' });
+      expect(sent[0].text).toContain('Alpha draft');
+      expect(sent[0].text).toContain('Build this approved plan');
+      expect(test.service.composer.snapshot.draft).toBe('Private beta draft');
+      expect(
+        test.request.mock.calls
+          .map(([command]) => command)
+          .filter(command => command.type === GlyphWorkbenchCommandType.LINK_PLAN),
+      ).toEqual([expect.objectContaining({ chatId: 'alpha', targetChatId: 'alpha', role: 'Builder' })]);
+    } finally {
+      release();
+      test.dispose();
+    }
+  },
+);
 
-it.each(['create_chat', 'link_plan'])('keeps a new plan chat bound while %s is pending', async pendingType => {
-  const plan = approvedPlan();
-  let release;
-  let entered;
-  const gate = new Promise(resolve => {
-    release = resolve;
-  });
-  const started = new Promise(resolve => {
-    entered = resolve;
-  });
-  let hold = true;
-  const test = await fixture({
-    chats: [{ ...chat('alpha'), plans: [plan] }, chat('beta')],
-    handler: async (command, { state, emit }) => {
-      if (command.type === 'create_chat') {
-        const created = chat('created');
-        state.chats.push(created);
-        emit({ type: 'chat_updated', chat: created, creationId: command.creationId });
-      }
-      if (hold && command.type === pendingType) {
-        hold = false;
-        entered();
-        await gate;
-      }
-    },
-  });
-  try {
-    const build = test.service.buildPlan('alpha', plan, true);
-    await started;
-    await test.service.openChat('beta');
-    test.service.composer.setDraft('Private beta draft');
-    release();
-    await build;
-    const sent = test.request.mock.calls.map(([command]) => command).filter(command => command.type === 'send');
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ chatId: 'created' });
-    expect(sent[0].text).not.toContain('Private beta draft');
-    expect(test.service.composer.snapshot.draft).toBe('Private beta draft');
-  } finally {
-    release();
-    test.dispose();
-  }
-});
+it.each([GlyphWorkbenchCommandType.CREATE_CHAT, GlyphWorkbenchCommandType.LINK_PLAN])(
+  'keeps a new plan chat bound while %s is pending',
+  async pendingType => {
+    const plan = approvedPlan();
+    /** @type {() => void} */
+    let release;
+    /** @type {() => void} */
+    let entered;
+    const gate = new Promise(openGate => {
+      release = openGate;
+    });
+    const started = new Promise(markStarted => {
+      entered = markStarted;
+    });
+    let hold = true;
+    const test = await fixture({
+      chats: [{ ...chat('alpha'), plans: [plan] }, chat('beta')],
+      handler: async (command, { state, emit }) => {
+        if (command.type === GlyphWorkbenchCommandType.CREATE_CHAT) {
+          const created = chat('created');
+          state.chats.push(created);
+          emit({ type: 'chat_updated', chat: created, creationId: command.creationId });
+        }
+        if (hold && command.type === pendingType) {
+          hold = false;
+          entered();
+          await gate;
+        }
+      },
+    });
+    try {
+      const building = test.service.buildPlan('alpha', plan, true);
+      await started;
+      await test.service.openChat('beta');
+      test.service.composer.setDraft('Private beta draft');
+      release();
+      await building;
+      const sent = test.request.mock.calls
+        .map(([command]) => command)
+        .filter(command => command.type === GlyphWorkbenchCommandType.SEND);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ chatId: 'created' });
+      expect(sent[0].text).not.toContain('Private beta draft');
+      expect(test.service.composer.snapshot.draft).toBe('Private beta draft');
+    } finally {
+      release();
+      test.dispose();
+    }
+  },
+);
 
 it('requires a matching creation acknowledgment before building in a new chat', async () => {
   const plan = approvedPlan();
@@ -134,6 +163,7 @@ it('requires a matching creation acknowledgment before building in a new chat', 
   }
 });
 
+/** @returns {Promise<typeof import('#vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.js')>} */
 async function modules() {
   const result = await build({
     entryPoints: ['code-oss/overlay/src/vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.ts'],
@@ -180,7 +210,7 @@ async function modules() {
           });
           builder.onLoad({ filter: /.*/, namespace: 'services' }, args => ({
             contents: args.path.endsWith('GlyphDesktopClient.js')
-              ? 'export class GlyphDesktopClient { constructor() { Object.assign(this, globalThis.__glyphWorkbenchFixture); } dispose() {} }'
+              ? 'export class GlyphDesktopClient { constructor() { Object.assign(this, globalThis.glyphWorkbenchFixture); } dispose() {} }'
               : 'const service = () => {}; export { service as IClipboardService, service as IConfigurationService, service as IEditorService, service as IOpenerService, service as IStorageService, service as IInstantiationService, service as IWorkspaceContextService, service as IWorkspaceTrustManagementService, service as IUserDataProfileService, service as GlyphWorkbenchService }; export const StorageScope = { WORKSPACE: 1 }; export const StorageTarget = { MACHINE: 1 };',
           }));
           builder.onResolve({ filter: /^#glyph\// }, args => ({
@@ -190,13 +220,31 @@ async function modules() {
       },
     ],
   });
-  return await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+  return importBundle(result.outputFiles[0].text, ['NativeGlyphWorkbenchService']);
 }
 
+/**
+ * @param {string} runId
+ * @param {string} status
+ */
+function runState(runId, status) {
+  return { type: 'run_state', run: { chatId: 'alpha', runId, text: '', reasoning: '', tools: [], status } };
+}
+
+/** @param {string} id */
 function chat(id) {
   return { id, title: id, accountProvider: 'fixture', accountId: 'a', modelSlug: 'model', updatedAt: '', turnCount: 1 };
 }
 
+/**
+ * @param {{
+ *   chats?: ChatSummary[],
+ *   accounts?: unknown[],
+ *   handler?: (command: GlyphWorkbenchCommand, host: FixtureHost) => Promise<void>,
+ *   openInGlyph?: boolean,
+ *   attachedState?: boolean,
+ * }} [options]
+ */
 async function fixture({
   chats = [chat('alpha'), chat('beta')],
   accounts = [],
@@ -205,10 +253,14 @@ async function fixture({
   attachedState = true,
 } = {}) {
   const { NativeGlyphWorkbenchService } = await (loaded ??= modules());
+  /** @type {Set<(message: { event: unknown }) => void>} */
   const listeners = new Set();
+  /** @type {Set<(trusted: boolean) => unknown>} */
   const trustListeners = new Set();
+  /** @type {Map<string, unknown>} */
   const storage = new Map();
   let trusted = true;
+  /** @type {FixtureState} */
   const state = {
     accounts,
     models: [],
@@ -219,31 +271,38 @@ async function fixture({
     readOnly: false,
     sequence: 0,
   };
+  /** @param {unknown} event */
   const emit = event => {
     for (const listener of listeners) listener({ event });
   };
-  const request = vi.fn(async command => {
-    if ((command.type === 'attach_workspace' && attachedState) || command.type === 'request_snapshot')
-      emit({ type: 'initial_state', state: { ...state } });
-    await handler(command, { state, emit });
-    if (command.type === 'open_chat')
-      emit({
-        type: 'run_state',
-        run: {
-          chatId: command.chatId,
-          runId: command.chatId,
-          userText: 'Question',
-          text: `${command.chatId} answer`,
-          reasoning: '',
-          tools: [],
-          status: 'completed',
-        },
-      });
-  });
-  globalThis.__glyphWorkbenchFixture = {
+  const request = vi.fn(
+    /** @param {GlyphWorkbenchCommand} command */
+    async command => {
+      if (
+        (command.type === GlyphWorkbenchCommandType.ATTACH_WORKSPACE && attachedState) ||
+        command.type === GlyphWorkbenchCommandType.REQUEST_SNAPSHOT
+      )
+        emit({ type: 'initial_state', state: { ...state } });
+      await handler(command, { state, emit });
+      if (command.type === GlyphWorkbenchCommandType.OPEN_CHAT)
+        emit({
+          type: 'run_state',
+          run: {
+            chatId: command.chatId,
+            runId: command.chatId,
+            userText: 'Question',
+            text: `${command.chatId} answer`,
+            reasoning: '',
+            tools: [],
+            status: 'completed',
+          },
+        });
+    },
+  );
+  globalThis.glyphWorkbenchFixture = {
     request,
     connect: async () => request({ type: 'attach_workspace' }),
-    onDidReceiveEvent: listener => {
+    onDidReceiveEvent: /** @param {(message: { event: unknown }) => void} listener */ listener => {
       listeners.add(listener);
       return { dispose: () => listeners.delete(listener) };
     },
@@ -255,7 +314,9 @@ async function fixture({
     {
       get: key => storage.get(key),
       getObject: (key, _scope, fallback) => storage.get(key) ?? fallback,
-      store: (key, value) => storage.set(key, value),
+      store: (key, value) => {
+        storage.set(key, value);
+      },
     },
     {
       getWorkspace: () => ({
@@ -300,13 +361,13 @@ async function fixture({
     emit,
     request,
     storage,
-    setTrust: value => {
+    setTrust: /** @param {boolean} value */ value => {
       trusted = value;
-      for (const listener of trustListeners) listener();
+      for (const listener of trustListeners) listener(value);
     },
     dispose: () => {
       service.dispose();
-      delete globalThis.__glyphWorkbenchFixture;
+      delete globalThis.glyphWorkbenchFixture;
     },
   };
 }
@@ -330,32 +391,36 @@ describe('NativeGlyphWorkbenchService', () => {
   });
 
   it('sends a queued message after a turn the host started first instead of pausing the queue', async () => {
-    const run = (runId, status) => ({
-      type: 'run_state',
-      run: { chatId: 'alpha', runId, text: '', reasoning: '', tools: [], status },
-    });
     let hostTurnFirst = true;
     const test = await fixture({
       handler: async (command, { emit }) => {
-        if (command.type !== 'send' || !hostTurnFirst) return;
+        if (command.type !== GlyphWorkbenchCommandType.SEND || !hostTurnFirst) return;
         hostTurnFirst = false;
-        emit(run('shell-event:wake', 'streaming'));
+        emit(runState('shell-event:wake', 'streaming'));
         throw new Error('INVALID_REQUEST: This chat already has an active run or history change.');
       },
     });
     try {
-      test.emit(run('turn', 'streaming'));
+      test.emit(runState('turn', 'streaming'));
       test.service.composer.setDraft('A queued follow-up.');
       test.service.composer.enqueueDraft();
-      test.emit(run('turn', 'completed'));
-      await vi.waitFor(() => expect(hostTurnFirst).toBe(false));
-      await vi.waitFor(() => expect(test.service.composer.snapshot.queueSubmitting).toBeUndefined());
+      test.emit(runState('turn', 'completed'));
+      await vi.waitFor(() => {
+        expect(hostTurnFirst).toBe(false);
+      });
+      await vi.waitFor(() => {
+        expect(test.service.composer.snapshot.queueSubmitting).toBeUndefined();
+      });
       expect(test.service.composer.snapshot).toMatchObject({ queuePaused: false, queueError: undefined });
       expect(test.service.composer.snapshot.queued).toHaveLength(1);
-      expect(test.service.state.transcript.filter(entry => entry.role === 'diagnostic')).toEqual([]);
-      test.emit(run('shell-event:wake', 'completed'));
-      await vi.waitFor(() => expect(test.service.composer.snapshot.queued).toEqual([]));
-      expect(test.request.mock.calls.filter(([command]) => command.type === 'send')).toHaveLength(2);
+      expect(test.service.state.transcript.filter(entry => entry.role === GlyphTranscriptRole.DIAGNOSTIC)).toEqual([]);
+      test.emit(runState('shell-event:wake', 'completed'));
+      await vi.waitFor(() => {
+        expect(test.service.composer.snapshot.queued).toEqual([]);
+      });
+      expect(
+        test.request.mock.calls.filter(([command]) => command.type === GlyphWorkbenchCommandType.SEND),
+      ).toHaveLength(2);
     } finally {
       test.dispose();
     }
@@ -364,21 +429,21 @@ describe('NativeGlyphWorkbenchService', () => {
   it('pauses the queue and reports a queued message that fails while the chat is idle', async () => {
     const test = await fixture({
       handler: async command => {
-        if (command.type === 'send') throw new Error('The provider rejected the message.');
+        if (command.type === GlyphWorkbenchCommandType.SEND) throw new Error('The provider rejected the message.');
       },
     });
     try {
       test.service.composer.setDraft('A queued follow-up.');
       test.service.composer.enqueueDraft();
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(test.service.composer.snapshot).toMatchObject({
           queuePaused: true,
           queueError: 'The provider rejected the message.',
           queueSubmitting: undefined,
-        }),
-      );
+        });
+      });
       expect(test.service.composer.snapshot.queued).toHaveLength(1);
-      expect(test.service.state.transcript.filter(entry => entry.role === 'diagnostic')).toEqual([
+      expect(test.service.state.transcript.filter(entry => entry.role === GlyphTranscriptRole.DIAGNOSTIC)).toEqual([
         expect.objectContaining({ text: expect.stringContaining('The provider rejected the message.') }),
       ]);
     } finally {
@@ -392,13 +457,13 @@ it('rehydrates saved conversation history after both trust revocation and restor
   try {
     for (const value of [false, true]) {
       test.setTrust(value);
-      await vi.waitFor(() =>
-        expect(test.service.state.transcript.some(entry => entry.text === 'alpha answer')).toBe(true),
-      );
+      await vi.waitFor(() => {
+        expect(test.service.state.transcript.some(entry => entry.text === 'alpha answer')).toBe(true);
+      });
     }
-    expect(test.request.mock.calls.filter(([command]) => command.type === 'open_chat').length).toBeGreaterThanOrEqual(
-      3,
-    );
+    expect(
+      test.request.mock.calls.filter(([command]) => command.type === GlyphWorkbenchCommandType.OPEN_CHAT).length,
+    ).toBeGreaterThanOrEqual(3);
   } finally {
     test.dispose();
   }
@@ -407,19 +472,21 @@ it('rehydrates saved conversation history after both trust revocation and restor
 it('ignores late navigation completions and retains a separate composer for each chat and the new-chat draft', async () => {
   let release;
   let delay = false;
-  const gate = new Promise(resolve => {
-    release = resolve;
+  const gate = new Promise(openGate => {
+    release = openGate;
   });
   const test = await fixture({
     handler: async command => {
-      if (delay && command.type === 'open_chat' && command.chatId === 'beta') await gate;
+      if (delay && command.type === GlyphWorkbenchCommandType.OPEN_CHAT && command.chatId === 'beta') await gate;
     },
   });
   try {
     test.service.composer.setDraft('alpha draft');
     delay = true;
     const pending = test.service.openChat('beta');
-    await vi.waitFor(() => expect(test.service.state.navigationPending).toBe(true));
+    await vi.waitFor(() => {
+      expect(test.service.state.navigationPending).toBe(true);
+    });
     test.service.newChat();
     test.service.composer.setDraft('new draft');
     release();
@@ -449,14 +516,17 @@ it('restores the draft account catalog before changing models after host replace
     chats: [],
     accounts,
     handler: async (command, { state }) => {
-      if (command.type === 'select_account') {
+      if (command.type === GlyphWorkbenchCommandType.SELECT_ACCOUNT) {
         state.selectedAccount = { provider: command.accountProvider, id: command.accountId };
         state.models = [
           { slug: 'model', name: 'Model' },
           { slug: 'deep', name: 'Deep' },
         ];
       }
-      if (command.type === 'select_model' && !state.models.some(model => model.slug === command.model))
+      if (
+        command.type === GlyphWorkbenchCommandType.SELECT_MODEL &&
+        !state.models.some(model => model.slug === command.model)
+      )
         throw new Error('No catalog on this host');
     },
   });
@@ -482,14 +552,14 @@ it('restores the draft account catalog before changing models after host replace
 it('does not replace the current model choices when an older account discovery finishes late', async () => {
   let release;
   let delay = false;
-  const gate = new Promise(resolve => {
-    release = resolve;
+  const gate = new Promise(openGate => {
+    release = openGate;
   });
   const test = await fixture({
     chats: [],
     accounts,
     handler: async (command, { state }) => {
-      if (command.type !== 'select_account') return;
+      if (command.type !== GlyphWorkbenchCommandType.SELECT_ACCOUNT) return;
       if (delay && command.accountId === 'a') await gate;
       state.models = [{ slug: `${command.accountId}-model`, name: command.accountId }];
     },
@@ -514,8 +584,8 @@ it('selects only the correlated created chat and transfers its composer without 
     chats: [],
     accounts,
     handler: async (command, { state, emit }) => {
-      if (command.type === 'select_account') state.models = [{ slug: 'model', name: 'Model' }];
-      if (command.type === 'create_chat') {
+      if (command.type === GlyphWorkbenchCommandType.SELECT_ACCOUNT) state.models = [{ slug: 'model', name: 'Model' }];
+      if (command.type === GlyphWorkbenchCommandType.CREATE_CHAT) {
         state.chats.push(chat('created'), chat('unrelated'));
         emit({ type: 'chat_updated', chat: chat('created'), creationId: command.creationId });
         emit({ type: 'chat_updated', chat: chat('unrelated') });
@@ -536,20 +606,20 @@ it('selects only the correlated created chat and transfers its composer without 
 
 it('waits for an acknowledged model choice before creating the conversation on send', async () => {
   let release;
-  const gate = new Promise(resolve => {
-    release = resolve;
+  const gate = new Promise(openGate => {
+    release = openGate;
   });
   const test = await fixture({
     chats: [],
     accounts,
     handler: async (command, { state, emit }) => {
-      if (command.type === 'select_account')
+      if (command.type === GlyphWorkbenchCommandType.SELECT_ACCOUNT)
         state.models = [
           { slug: 'model', name: 'Model' },
           { slug: 'deep', name: 'Deep' },
         ];
-      if (command.type === 'select_model') await gate;
-      if (command.type === 'create_chat') {
+      if (command.type === GlyphWorkbenchCommandType.SELECT_MODEL) await gate;
+      if (command.type === GlyphWorkbenchCommandType.CREATE_CHAT) {
         const created = { ...chat('created'), modelSlug: command.model };
         state.chats.push(created);
         emit({ type: 'chat_updated', chat: created, creationId: command.creationId });
@@ -560,14 +630,20 @@ it('waits for an acknowledged model choice before creating the conversation on s
     const selecting = test.service.selectModel('deep');
     expect(test.service.state.catalogPending).toBe(true);
     const sending = test.service.send('Use the selected model');
-    await vi.waitFor(() =>
-      expect(test.request.mock.calls.some(([command]) => command.type === 'select_model')).toBe(true),
+    await vi.waitFor(() => {
+      expect(test.request.mock.calls.some(([command]) => command.type === GlyphWorkbenchCommandType.SELECT_MODEL)).toBe(
+        true,
+      );
+    });
+    expect(test.request.mock.calls.some(([command]) => command.type === GlyphWorkbenchCommandType.CREATE_CHAT)).toBe(
+      false,
     );
-    expect(test.request.mock.calls.some(([command]) => command.type === 'create_chat')).toBe(false);
     release();
     await selecting;
     await sending;
-    expect(test.request.mock.calls.find(([command]) => command.type === 'create_chat')[0].model).toBe('deep');
+    expect(
+      test.request.mock.calls.find(([command]) => command.type === GlyphWorkbenchCommandType.CREATE_CHAT)[0].model,
+    ).toBe('deep');
     expect(test.service.state.catalogPending).toBe(false);
   } finally {
     release();

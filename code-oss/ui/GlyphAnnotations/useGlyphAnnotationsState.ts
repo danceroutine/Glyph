@@ -26,7 +26,7 @@ function sourceRange(source: Element, from: number, to: number): Range | undefin
   let offset = 0,
     started = false;
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const length = (node as Text).data.length;
+    const length = node instanceof Text ? node.data.length : 0;
     if (!started && from <= offset + length) {
       range.setStart(node, Math.max(0, from - offset));
       started = true;
@@ -48,7 +48,7 @@ function position(annotation: GlyphAnnotation, selection = false): PositionedAnn
   const source = findSource(annotation);
   const range = source && sourceRange(source, annotation.from, annotation.to);
   if (!range || range.toString() !== annotation.quote) return undefined;
-  const rect = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0).at(-1);
+  const rect = [...range.getClientRects()].findLast(rect => rect.width > 0 && rect.height > 0);
   if (!rect || rect.bottom < 0 || rect.top > innerHeight) return undefined;
   if (selection) {
     const selectionRect = range.getBoundingClientRect();
@@ -56,7 +56,7 @@ function position(annotation: GlyphAnnotation, selection = false): PositionedAnn
       annotation,
       x: selectionRect.left + selectionRect.width / 2,
       y: Math.max(8, selectionRect.top - 38),
-      ...(annotation.kind === 'proposal' && source ? { minX: source.getBoundingClientRect().left } : {}),
+      ...(annotation.kind === 'proposal' ? { minX: source.getBoundingClientRect().left } : {}),
     };
   }
   // The 30px speech bubble points from its lower-left corner to the last selected line.
@@ -64,7 +64,7 @@ function position(annotation: GlyphAnnotation, selection = false): PositionedAnn
     annotation,
     x: Math.max(0, Math.min(innerWidth - 30, rect.right - 3)),
     y: Math.max(0, rect.bottom - 28),
-    ...(annotation.kind === 'proposal' && source ? { minX: source.getBoundingClientRect().left } : {}),
+    ...(annotation.kind === 'proposal' ? { minX: source.getBoundingClientRect().left } : {}),
   };
 }
 export function useGlyphAnnotationsState({
@@ -83,7 +83,13 @@ export function useGlyphAnnotationsState({
   const editor = useRef<HTMLFormElement>(null);
   const [editorPosition, setEditorPosition] = useState({ x: 8, y: 8 });
   const annotations = snapshot.document.options?.annotations ?? [];
-  useEffect(() => composer.subscribe(() => setSnapshot(composer.snapshot)), [composer]);
+  useEffect(
+    () =>
+      composer.subscribe(() => {
+        setSnapshot(composer.snapshot);
+      }),
+    [composer],
+  );
   useEffect(() => {
     if (snapshot.submitting) {
       setDraft(undefined);
@@ -114,12 +120,12 @@ export function useGlyphAnnotationsState({
           : next,
       );
       setCandidate(value => {
-        const next = value ? position(value.annotation, true) : undefined;
-        return samePosition(value, next) ? value : next;
+        const moved = value ? position(value.annotation, true) : undefined;
+        return samePosition(value, moved) ? value : moved;
       });
       setDraft(value => {
-        const next = value ? (position(value.annotation) ?? value) : undefined;
-        return samePosition(value, next) ? value : next;
+        const moved = value ? (position(value.annotation) ?? value) : undefined;
+        return samePosition(value, moved) ? value : moved;
       });
     };
     update();
@@ -141,9 +147,9 @@ export function useGlyphAnnotationsState({
   useEffect(() => {
     const annotation = snapshot.annotationDraft ?? annotations.find(value => value.id === snapshot.editingAnnotation);
     if (!annotation) {
-      if (draft && annotations.some(value => value.id === draft.annotation.id) === false && draft.annotation.comment)
+      if (draft && !annotations.some(value => value.id === draft.annotation.id) && draft.annotation.comment)
         setDraft(undefined);
-      return;
+      return undefined;
     }
     findSource(annotation)?.scrollIntoView({ block: 'center' });
     let cancelled = false;
@@ -165,15 +171,13 @@ export function useGlyphAnnotationsState({
     const capture = () => {
       if (disabled || draft) return;
       const selection = document.getSelection();
-      if (!selection?.rangeCount || selection.isCollapsed) {
+      if (selection === null || selection.rangeCount === 0 || selection.isCollapsed) {
         setCandidate(undefined);
         return;
       }
       const range = selection.getRangeAt(0);
       const parent =
-        range.startContainer.nodeType === Node.ELEMENT_NODE
-          ? (range.startContainer as Element)
-          : range.startContainer.parentElement;
+        range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
       const source = parent?.closest<HTMLElement>('[data-glyph-source]');
       if (!source || !source.contains(range.endContainer)) {
         setCandidate(undefined);
@@ -185,10 +189,12 @@ export function useGlyphAnnotationsState({
       before.selectNodeContents(source);
       before.setEnd(range.startContainer, range.startOffset);
       const from = before.toString().length;
+      const { kind } = source.dataset;
+      if (kind !== 'chat' && kind !== 'plan' && kind !== 'proposal') return;
       const annotation: GlyphAnnotation = {
         id: crypto.randomUUID(),
         order: Math.max(0, ...annotations.map(value => value.order)) + 1,
-        kind: source.dataset.kind as GlyphAnnotation['kind'],
+        kind,
         sourceId: source.dataset.glyphSource!,
         revision: source.dataset.revision!,
         label: source.dataset.label ?? 'Selected text',
@@ -229,8 +235,12 @@ export function useGlyphAnnotationsState({
         setCandidate(undefined);
       }
     },
-    edit: (id: string) => composer.editAnnotation(id),
-    remove: (id: string) => composer.removeAnnotation(id),
+    edit: (id: string) => {
+      composer.editAnnotation(id);
+    },
+    remove: (id: string) => {
+      composer.removeAnnotation(id);
+    },
     close,
     submit: () => {
       if (draft && comment.trim() && !disabled) {

@@ -62,8 +62,12 @@ describe(TodoToolRuntime, () => {
       replace: false,
     });
 
-    expect(() => tool!.validateInput(input)).not.toThrow();
-    expect(() => tool!.validateInput('{"items":"nope"}')).toThrow();
+    expect(() => {
+      tool!.validateInput(input);
+    }).not.toThrow();
+    expect(() => {
+      tool!.validateInput('{"items":"nope"}');
+    }).toThrow();
     expect(
       JSON.parse(
         await tool!.execute(input, new AbortController().signal, {
@@ -81,7 +85,11 @@ describe(TodoToolRuntime, () => {
     });
 
     it('reports a generic failure message when storage fails with a non-error value', async () => {
-      const runtime = new TodoToolRuntime(vi.fn(async () => Promise.reject('offline')));
+      const runtime = new TodoToolRuntime(
+        vi.fn(async () => {
+          throw 'offline';
+        }),
+      );
       const input = JSON.stringify({
         items: [{ id: 'write', text: 'Write the tests', status: TodoStatus.PENDING }],
         replace: false,

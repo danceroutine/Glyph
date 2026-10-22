@@ -26,7 +26,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
       constructor(factory: unknown) {
         host.constructed(factory);
       }
-      connect(...arguments_: unknown[]) {
+      connect(...arguments_: unknown[]): unknown {
         return host.connect(...arguments_);
       }
       receive(connectionId: string, envelope: unknown) {
@@ -45,13 +45,13 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
       constructor() {
         editors.constructed(this);
       }
-      connect(...arguments_: unknown[]) {
+      connect(...arguments_: unknown[]): unknown {
         return editors.connect(...arguments_);
       }
-      receive(...arguments_: unknown[]) {
+      receive(...arguments_: unknown[]): unknown {
         return editors.receive(...arguments_);
       }
-      disconnect(...arguments_: unknown[]) {
+      disconnect(...arguments_: unknown[]): unknown {
         return editors.disconnect(...arguments_);
       }
     },
@@ -214,8 +214,8 @@ describe('utilityMain', () => {
       identity,
       hostGeneration: 'generation',
     });
-    (host.connect.mock.calls[0]?.[2] as (message: unknown) => void)('host event');
-    (editors.connect.mock.calls[0]?.[2] as (message: unknown) => void)('editor request');
+    (host.connect.mock.calls[0]![2] as (message: unknown) => void)('host event');
+    (editors.connect.mock.calls[0]![2] as (message: unknown) => void)('editor request');
     expect(port.postMessage).toHaveBeenNthCalledWith(2, 'host event');
     expect(port.postMessage).toHaveBeenNthCalledWith(3, 'editor request');
   });
@@ -251,12 +251,12 @@ describe('utilityMain', () => {
         ports: [port],
       });
       port.emit('message', { data: { requestId: 'r' } });
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(port.postMessage).toHaveBeenLastCalledWith({
           type: GlyphTransportMessageType.ERROR,
           message: 'Malformed request',
-        }),
-      );
+        });
+      });
     },
   );
 
@@ -277,7 +277,9 @@ describe('utilityMain', () => {
     const { loaded, host, openai, exit, signal } = startUtilityHost();
     await loaded;
     signal(name);
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(0));
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+    });
     expect(host.dispose).toHaveBeenCalledOnce();
     expect(openai.dispose).toHaveBeenCalledOnce();
     expect(host.dispose.mock.invocationCallOrder[0]).toBeLessThan(openai.dispose.mock.invocationCallOrder[0]!);

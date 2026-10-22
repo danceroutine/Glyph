@@ -286,13 +286,17 @@ describe(ProposalReviewManager, () => {
       const recordContext = vi.fn(async () => {});
       try {
         view.stdin.write('y');
-        await vi.waitFor(() => expect(proposal.files[0]!.items[0]!.decision).toBe(EditDecisionState.ACCEPTED));
-        await new Promise(resolve => setTimeout(resolve, 30));
+        await vi.waitFor(() => {
+          expect(proposal.files[0]!.items[0]!.decision).toBe(EditDecisionState.ACCEPTED);
+        });
+        await new Promise(resolve => {
+          setTimeout(resolve, 30);
+        });
         expect.soft(complete).not.toHaveBeenCalled();
         expect.soft(view.lastFrame()).toContain('Checkpoint unavailable');
         const delivery = await glyph.commitReviewResults({ recordContext }).then(
           () => undefined,
-          error => error,
+          (error: unknown) => error,
         );
         expect.soft(delivery).toBeInstanceOf(Error);
         expect(recordContext).not.toHaveBeenCalled();
@@ -303,8 +307,15 @@ describe(ProposalReviewManager, () => {
           view.unmount();
           view = render(createElement(WiredProposalReview, { request: { ...request, id: 2 } }));
         } else view.stdin.write('r');
-        await vi.waitFor(() => expect(saves.mock.calls.length).toBeGreaterThan(previousSaves), { timeout: 200 });
-        await vi.waitFor(() => expect(complete).toHaveBeenCalledWith({ accepted: 1, rejected: 0 }));
+        await vi.waitFor(
+          () => {
+            expect(saves.mock.calls.length).toBeGreaterThan(previousSaves);
+          },
+          { timeout: 200 },
+        );
+        await vi.waitFor(() => {
+          expect(complete).toHaveBeenCalledWith({ accepted: 1, rejected: 0 });
+        });
         await glyph.commitReviewResults({ recordContext });
         expect(recordContext).toHaveBeenCalledOnce();
         expect(recordContext.mock.calls[0]).toEqual([
@@ -342,7 +353,7 @@ describe(ProposalReviewManager, () => {
       await rejection;
       await fixture.manager.accept(item.id);
       expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
-      expect(fixture.manager.pendingResults.flatMap(result => result.items).map(item => item.decision)).toEqual([
+      expect(fixture.manager.pendingResults.flatMap(result => result.items).map(entry => entry.decision)).toEqual([
         EditDecisionState.ACCEPTED,
       ]);
       expect(leaked.flatMap(result => result.items)).toEqual([]);

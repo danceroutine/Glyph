@@ -53,7 +53,9 @@ describe(WiredGlyphDiagram, () => {
 
     render(<WiredGlyphDiagram source="graph ???" />);
 
-    await waitFor(() => expect(screen.getByText('Diagram source')).toBeTruthy());
+    await waitFor(() => {
+      expect(screen.getByText('Diagram source')).toBeTruthy();
+    });
     expect(screen.getByText('graph ???').tagName).toBe('PRE');
     expect(screen.queryByRole('button')).toBeNull();
   });

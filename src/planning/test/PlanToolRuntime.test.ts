@@ -31,11 +31,13 @@ describe(PlanToolRuntime, () => {
     const runtime = new PlanToolRuntime(vi.fn());
     const [tool] = runtime.tools;
 
-    expect(() => tool!.validateInput(planInput())).not.toThrow();
-    expect(() => tool!.validateInput(planInput({ id: 'plan' }))).toThrow(
-      'An existing plan requires its expected revision.',
-    );
-    expect(() =>
+    expect(() => {
+      tool!.validateInput(planInput());
+    }).not.toThrow();
+    expect(() => {
+      tool!.validateInput(planInput({ id: 'plan' }));
+    }).toThrow('An existing plan requires its expected revision.');
+    expect(() => {
       tool!.validateInput(
         planInput({
           todos: [
@@ -43,8 +45,8 @@ describe(PlanToolRuntime, () => {
             { id: 'one', text: 'Again', completed: true },
           ],
         }),
-      ),
-    ).toThrow('Todo IDs must be unique.');
+      );
+    }).toThrow('Todo IDs must be unique.');
   });
 
   it('saves through its tool on behalf of the owning chat', async () => {
@@ -86,7 +88,11 @@ describe(PlanToolRuntime, () => {
     });
 
     it('reports non-error failures as text', async () => {
-      const runtime = new PlanToolRuntime(vi.fn(async () => Promise.reject('disk full')));
+      const runtime = new PlanToolRuntime(
+        vi.fn(async () => {
+          throw 'disk full';
+        }),
+      );
 
       expect(
         JSON.parse(

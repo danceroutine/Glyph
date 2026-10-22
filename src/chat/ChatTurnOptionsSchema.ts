@@ -30,15 +30,15 @@ export const chatTurnOptionsSchema = z
       .max(32)
       .optional(),
     turnId: z.string().min(1).max(100).optional(),
-    agentReviewId: z.string().uuid().optional(),
+    agentReviewId: z.uuid().optional(),
     mode: z.enum(AgentModeID).optional(),
     annotations: z.array(annotationSchema).max(100).optional(),
   })
   .strict()
   .transform(({ mode, annotations, turnId, attachmentSpans, agentReviewId }) => ({
     ...(attachmentSpans ? { attachmentSpans } : {}),
-    ...(turnId ? { turnId } : {}),
-    ...(agentReviewId ? { agentReviewId } : {}),
-    ...(mode ? { mode } : {}),
+    ...(turnId !== undefined && turnId !== '' ? { turnId } : {}),
+    ...(agentReviewId !== undefined && agentReviewId !== '' ? { agentReviewId } : {}),
+    ...(mode !== undefined ? { mode } : {}),
     ...(annotations ? { annotations } : {}),
   }));

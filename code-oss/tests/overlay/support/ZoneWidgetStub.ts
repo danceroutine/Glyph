@@ -26,15 +26,15 @@ export class ZoneWidgetStub {
     this.shown = { position, heightInLines };
   }
 
-  protected _fillContainer(_container: HTMLElement): void {}
-
-  protected _relayout(heightInLines: number): void {
-    this.relayouts.push(heightInLines);
-  }
-
   dispose(): void {
     this.disposed = true;
     this._disposables.dispose();
     this.container.remove();
+  }
+
+  protected _fillContainer(_container: HTMLElement): void {}
+
+  protected _relayout(heightInLines: number): void {
+    this.relayouts.push(heightInLines);
   }
 }

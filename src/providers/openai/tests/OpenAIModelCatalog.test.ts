@@ -27,7 +27,7 @@ describe(OpenAIModelCatalog, () => {
       const get = vi.fn<HttpClient['get']>(
         () =>
           new Promise(resolve => {
-            release = () =>
+            release = () => {
               resolve({
                 ok: true,
                 status: 200,
@@ -36,6 +36,7 @@ describe(OpenAIModelCatalog, () => {
                   models: [{ slug: 'late', display_name: 'Late', visibility: 'list' }],
                 },
               });
+            };
           }),
       );
       const catalog = new OpenAIModelCatalog(configuration, { get, post: vi.fn() });

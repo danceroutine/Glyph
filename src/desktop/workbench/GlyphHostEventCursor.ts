@@ -30,7 +30,7 @@ export class GlyphHostEventCursor {
   }
 
   get resume(): { readonly resumeHostGeneration: string; readonly resumeAfterSequence: number } | undefined {
-    if (!this.hydrated || !this.generation) return undefined;
+    if (!this.hydrated || this.generation === undefined || this.generation === '') return undefined;
     return { resumeHostGeneration: this.generation, resumeAfterSequence: this.sequence };
   }
 

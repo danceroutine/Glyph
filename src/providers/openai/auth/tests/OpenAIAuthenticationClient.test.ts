@@ -50,7 +50,9 @@ function visit(port: string, path: string, method = 'GET'): Promise<{ status: nu
       response.on('data', chunk => {
         body += chunk;
       });
-      response.once('end', () => resolve({ status: response.statusCode, body }));
+      response.once('end', () => {
+        resolve({ status: response.statusCode, body });
+      });
       response.once('error', reject);
     })
       .once('error', reject)
@@ -190,7 +192,7 @@ describe(OpenAIAuthenticationClient, () => {
           scopes: ['openid', 'plan'],
         },
       });
-      expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/auth\/callback$/);
+      expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/auth\/callback$/u);
       expect(post).toHaveBeenCalledWith(`${configuration.issuer}/api/accounts/oauth/token`, {
         body: {
           grant_type: 'authorization_code',
@@ -328,11 +330,11 @@ describe(OpenAIAuthenticationClient, () => {
 
     it('fails when the local callback has no network address', async () => {
       const actual = await vi.importActual<typeof import('node:http')>('node:http');
-      vi.mocked(createServer).mockImplementationOnce(((handler: Parameters<typeof actual.createServer>[0]) => {
+      vi.mocked(createServer).mockImplementationOnce((handler: Parameters<typeof actual.createServer>[0]) => {
         const server = actual.createServer(handler);
         server.address = () => null;
         return server;
-      }) as unknown as typeof createServer);
+      });
       const authorize = vi.fn();
 
       await expect(
@@ -406,11 +408,11 @@ describe(OpenAIAuthenticationClient, () => {
         state: attempt.state,
         nonce: attempt.nonce,
         code_challenge_method: 'S256',
-        code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+        code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
         prompt: 'consent',
       });
       expect(attempt).toMatchObject({ redirectUri: 'http://127.0.0.1/callback', clientId: 'issued-client' });
-      expect(attempt.verifier).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(attempt.verifier).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     });
   });
 

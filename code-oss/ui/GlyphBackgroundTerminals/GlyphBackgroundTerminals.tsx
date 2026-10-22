@@ -41,9 +41,9 @@ export function GlyphBackgroundTerminals({ shells, disabled, open, stop }: Glyph
   const [error, setError] = useState('');
   const listId = useId();
   const running = shells.filter(shell => shell.running);
-  if (!running.length) return null;
+  if (running.length === 0) return null;
   const act = async (shell: GlyphBackgroundShell, action: typeof open) => {
-    if (disabled || inFlight.current.has(shell.id)) return;
+    if (disabled === true || inFlight.current.has(shell.id)) return;
     inFlight.current.add(shell.id);
     setPending(values => [...values, shell.id]);
     setError('');
@@ -64,7 +64,9 @@ export function GlyphBackgroundTerminals({ shells, disabled, open, stop }: Glyph
         data-drawer-header
         aria-expanded={expanded}
         aria-controls={listId}
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => {
+          setExpanded(!expanded);
+        }}
       >
         <ChevronUp size={16} class={drawer.chevron} data-expanded={expanded || undefined} aria-hidden="true" />
         {running.length} background {running.length === 1 ? 'terminal' : 'terminals'}
@@ -79,7 +81,7 @@ export function GlyphBackgroundTerminals({ shells, disabled, open, stop }: Glyph
                     appearance={ButtonAppearance.GHOST}
                     class={styles.open}
                     title={`Open terminal: ${shell.command}`}
-                    disabled={disabled || pending.includes(shell.id)}
+                    disabled={disabled === true || pending.includes(shell.id)}
                     onClick={() => void act(shell, open)}
                   >
                     <SquareTerminal size={18} aria-hidden="true" />
@@ -89,13 +91,13 @@ export function GlyphBackgroundTerminals({ shells, disabled, open, stop }: Glyph
                     appearance={ButtonAppearance.GHOST}
                     size={ButtonSize.SMALL}
                     class="glyph-shell-stop"
-                    disabled={disabled || pending.includes(shell.id)}
+                    disabled={disabled === true || pending.includes(shell.id)}
                     onClick={() => void act(shell, stop)}
                   >
                     Stop
                   </Button>
                 </div>
-                {shell.wakePattern && (
+                {shell.wakePattern !== undefined && shell.wakePattern !== '' && (
                   <div class={styles.wake}>
                     Wake on: <code>{shell.wakePattern}</code>
                   </div>

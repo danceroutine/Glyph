@@ -94,15 +94,15 @@ describe(GlyphModeSwapCard, () => {
     );
 
     expect(screen.getByRole('region', { name: 'Mode switch' }).getAttribute('aria-busy')).toBe('true');
-    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Deny' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Approve' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deny' }).disabled).toBe(true);
   });
 
   it('cannot be decided once its countdown has run out', () => {
     render(<GlyphModeSwapCard swap={modeSwap()} seconds={0} remaining={0} approve={vi.fn()} deny={vi.fn()} />);
 
-    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Deny' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Approve' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deny' }).disabled).toBe(true);
   });
 
   it('directs the decision to the window that owns the chat', () => {
@@ -111,7 +111,7 @@ describe(GlyphModeSwapCard, () => {
     );
 
     expect(screen.getByText('Respond in the window that owns this chat.')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Approve' }).disabled).toBe(true);
   });
 
   it('shows why the last decision failed', () => {

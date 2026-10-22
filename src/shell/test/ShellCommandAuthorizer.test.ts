@@ -26,7 +26,9 @@ describe(ShellCommandAuthorizer, () => {
   describe(ShellCommandAuthorizer.prototype.authorize, () => {
     it('cancels a queued chat shell command before another chat answers its approval', async () => {
       const events: GlyphHostEvent[] = [];
-      const broker = new DesktopInteractionBroker(event => events.push(event));
+      const broker = new DesktopInteractionBroker(event => {
+        events.push(event);
+      });
       const save = vi.fn<ShellPermissionStore['save']>();
       const authorizer = new ShellCommandAuthorizer('project', store(undefined, save), broker);
       const launch = vi.fn(() => {
@@ -43,7 +45,7 @@ describe(ShellCommandAuthorizer, () => {
         .run({ chatId: 'first', runId: 'first-run' }, () =>
           manager.execute('first command', { signal: firstController.signal, ownerChatId: 'first' }),
         )
-        .catch(error => error);
+        .catch((error: unknown) => error);
       let queuedError: unknown;
       const queued = broker
         .run({ chatId: 'queued', runId: 'queued-run' }, () =>
@@ -481,8 +483,8 @@ describe(FileShellPermissionStore, () => {
   describe('persistence', () => {
     it('round-trips a private policy without granting its permissions to another mutation scope', async () => {
       const directory = await temporaryDirectory();
-      const store = new FileShellPermissionStore(directory);
-      expect(await store.load('project')).toBeUndefined();
+      const reopened = new FileShellPermissionStore(directory);
+      expect(await reopened.load('project')).toBeUndefined();
       const policy = {
         schemaVersion: 2 as const,
         projectContextId: 'project',
@@ -490,10 +492,10 @@ describe(FileShellPermissionStore, () => {
         allowedCommands: [{ command: 'pnpm test', workingDirectory: '/project' }],
       };
 
-      await store.save(policy);
+      await reopened.save(policy);
 
-      await expect(store.load('project')).resolves.toEqual(policy);
-      await expect(store.load('other')).resolves.toBeUndefined();
+      await expect(reopened.load('project')).resolves.toEqual(policy);
+      await expect(reopened.load('other')).resolves.toBeUndefined();
       expect(JSON.parse(await readFile(join(directory, 'shell-permissions.json'), 'utf8'))).toEqual(policy);
       if (process.platform !== 'win32') {
         expect((await stat(directory)).mode & 0o777).toBe(0o700);
@@ -601,5 +603,7 @@ function signal(): AbortSignal {
 }
 
 function flushQueue(): Promise<void> {
-  return new Promise(resolve => setImmediate(resolve));
+  return new Promise(resolve => {
+    setImmediate(resolve);
+  });
 }

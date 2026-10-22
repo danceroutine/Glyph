@@ -37,15 +37,23 @@ it.each([
     </Box>,
   );
   try {
-    await new Promise(resolve => setTimeout(resolve, 30));
+    await new Promise(resolve => {
+      setTimeout(resolve, 30);
+    });
     if (diagnostic) {
       view.stdin.write('y');
-      await vi.waitFor(() => expect(view.lastFrame()).toContain('Error:'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('Error:');
+      });
     }
     view.stdin.write('f');
-    await new Promise(resolve => setTimeout(resolve, 30));
-    view.stdin.write('\u001b[F');
-    await vi.waitFor(() => expect(view.lastFrame()).toContain('FINAL_VISIBLE_LINE'));
+    await new Promise(resolve => {
+      setTimeout(resolve, 30);
+    });
+    view.stdin.write('\u001B[F');
+    await vi.waitFor(() => {
+      expect(view.lastFrame()).toContain('FINAL_VISIBLE_LINE');
+    });
     expect(view.lastFrame()!.split('\n').length).toBeLessThanOrEqual(24);
   } finally {
     view.unmount();

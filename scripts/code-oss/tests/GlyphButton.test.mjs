@@ -1,10 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
 import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
-const requireUpstream = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = requireUpstream('@playwright/test');
-let browser, script;
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let script;
 beforeAll(async () => {
   const result = await build({
     stdin: {

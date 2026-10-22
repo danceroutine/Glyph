@@ -25,7 +25,11 @@ export class GlyphTestFailureMenu extends FloatingClickMenu {
     const node = widget.getDomNode();
     placeholder.getDomNode().replaceWith(node);
     placeholder.dispose();
-    disposable.add(toDisposable(() => node.remove()));
+    disposable.add(
+      toDisposable(() => {
+        node.remove();
+      }),
+    );
     return widget;
   }
 }

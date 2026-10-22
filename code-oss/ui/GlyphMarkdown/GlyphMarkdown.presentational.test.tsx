@@ -142,7 +142,7 @@ describe(GlyphMarkdown, () => {
           { type: 'list_item', raw: '', task: false, loose: false, text: '', tokens: undefined },
           { type: 'space', raw: '' },
         ],
-      } as unknown as Token,
+      },
       {
         type: 'list',
         raw: '',
@@ -153,7 +153,7 @@ describe(GlyphMarkdown, () => {
           { type: 'list_item', raw: '', task: false, loose: false, text: '', tokens: undefined },
           { type: 'space', raw: '' },
         ],
-      } as unknown as Token,
+      },
     ]);
 
     expect([...container.querySelectorAll('ol li')].map(item => item.textContent)).toEqual(['', '']);

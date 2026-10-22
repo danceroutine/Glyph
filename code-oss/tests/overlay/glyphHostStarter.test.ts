@@ -16,11 +16,11 @@ const electronMain = vi.hoisted(() => {
     readonly payloads: unknown[] = [];
     killed = false;
     disposed = false;
+    readonly args: unknown[];
     constructor(...args: unknown[]) {
       this.args = args;
       processes.push(this);
     }
-    readonly args: unknown[];
     start(configuration: unknown): boolean {
       this.configurations.push(configuration);
       return behavior.start;
@@ -38,7 +38,7 @@ const electronMain = vi.hoisted(() => {
       return { dispose: () => this.stderrListeners.delete(listener) };
     }
     exit(): void {
-      for (const listener of [...this.exitListeners]) listener();
+      for (const listener of Array.from(this.exitListeners)) listener();
     }
     writeStderr(data: string): void {
       for (const listener of this.stderrListeners) listener(data);
@@ -133,7 +133,9 @@ function starter({
     logService as never,
     windowsMainService as never,
   );
-  onTestFinished(() => instance.dispose());
+  onTestFinished(() => {
+    instance.dispose();
+  });
   return { instance, stateService, logService, windows, state, lifecycleMainService };
 }
 
@@ -178,15 +180,15 @@ describe(GlyphHostStarter, () => {
     ]);
     const { logService, lifecycleMainService } = starter({ windows });
     const ports = [{ close: vi.fn() }, { close: vi.fn() }];
-    electronMain.behavior.connect = () => ports[electronMain.processes[0]!.payloads.length - 1]!;
+    electronMain.behavior.connect = () => ports[electronMain.processes[0].payloads.length - 1];
 
     await request({ sender: first }, 'first');
     await request({ sender: second }, 'second');
 
     expect(electronMain.processes).toHaveLength(1);
     const [utilityProcess] = electronMain.processes;
-    expect(utilityProcess!.args).toEqual([logService, expect.anything(), lifecycleMainService]);
-    expect(utilityProcess!.configurations).toEqual([
+    expect(utilityProcess.args).toEqual([logService, expect.anything(), lifecycleMainService]);
+    expect(utilityProcess.configurations).toEqual([
       {
         type: 'glyphHost',
         name: 'glyph-host',
@@ -196,7 +198,7 @@ describe(GlyphHostStarter, () => {
         }),
       },
     ]);
-    expect(utilityProcess!.payloads).toEqual([
+    expect(utilityProcess.payloads).toEqual([
       {
         type: GlyphTransportMessageType.CONNECTION,
         connectionId: expect.any(String),
@@ -221,7 +223,7 @@ describe(GlyphHostStarter, () => {
 
     await request({ sender: contents }, 'nonce');
 
-    expect(electronMain.processes[0]!.configurations).toEqual([
+    expect(electronMain.processes[0].configurations).toEqual([
       expect.objectContaining({
         env: expect.objectContaining({
           GLYPH_DESKTOP_HOST_ENTRY: '/app/root/glyph/dist/desktop/host/utilityMain.js',
@@ -237,7 +239,7 @@ describe(GlyphHostStarter, () => {
 
     await request({ sender: contents }, 'nonce');
 
-    expect(electronMain.processes[0]!.payloads).toEqual([
+    expect(electronMain.processes[0].payloads).toEqual([
       expect.objectContaining({
         identity: { profileId: 'default', windowId: '3', workspaceId: 'previous-workspace' },
       }),
@@ -251,7 +253,7 @@ describe(GlyphHostStarter, () => {
 
     await request({ sender: contents }, 'nonce');
 
-    expect(electronMain.processes[0]!.disposed).toBe(true);
+    expect(electronMain.processes[0].disposed).toBe(true);
     expect(contents.send).toHaveBeenCalledWith(responseChannel, {
       nonce: 'nonce',
       error: 'The Glyph utility process did not start.',
@@ -316,9 +318,9 @@ describe(GlyphHostStarter, () => {
     destroyed = true;
     const [original] = electronMain.processes;
 
-    original!.exit();
+    original.exit();
     await request({ sender: live }, 'third');
-    original!.exit();
+    original.exit();
 
     expect(live.send.mock.calls).toEqual([['vscode:glyph:hostExited'], ['vscode:glyph:hostExited']]);
     expect(gone.send).not.toHaveBeenCalled();
@@ -332,7 +334,7 @@ describe(GlyphHostStarter, () => {
     await request({ sender: contents }, 'nonce');
 
     contents.destroy();
-    electronMain.processes[0]!.exit();
+    electronMain.processes[0].exit();
 
     expect(contents.send).not.toHaveBeenCalled();
   });
@@ -342,7 +344,7 @@ describe(GlyphHostStarter, () => {
     const { logService } = starter({ windows: new Map([[contents, { id: 1 }]]) });
     await request({ sender: contents }, 'nonce');
 
-    electronMain.processes[0]!.writeStderr('boom');
+    electronMain.processes[0].writeStderr('boom');
 
     expect(logService.error).toHaveBeenCalledWith('[Glyph host] boom');
   });
@@ -355,8 +357,8 @@ describe(GlyphHostStarter, () => {
     instance.dispose();
     await request({ sender: contents }, 'later');
 
-    expect(electronMain.processes[0]!.killed).toBe(true);
-    expect(electronMain.processes[0]!.disposed).toBe(true);
+    expect(electronMain.processes[0].killed).toBe(true);
+    expect(electronMain.processes[0].disposed).toBe(true);
     expect(electronMain.processes).toHaveLength(1);
     expect(electronMain.listeners.get(requestChannel)?.size).toBe(0);
     expect(electronMain.listeners.get(preserveChannel)?.size).toBe(0);

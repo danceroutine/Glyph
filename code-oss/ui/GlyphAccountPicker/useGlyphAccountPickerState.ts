@@ -16,7 +16,7 @@ export function useGlyphAccountPickerState({ state, actions }: GlyphAccountPicke
   return {
     selectedKey,
     avatar: account?.label.slice(0, 2).toUpperCase() ?? 'G',
-    disabled: !!chat || state.navigationPending || state.readOnly,
+    disabled: !!chat || state.navigationPending === true || state.readOnly,
     unavailableLabel: account ? undefined : chat ? 'Account unavailable' : 'No connected account',
     accounts: state.accounts.map(value => ({
       key: JSON.stringify([value.provider, value.id]),
@@ -25,15 +25,24 @@ export function useGlyphAccountPickerState({ state, actions }: GlyphAccountPicke
     })),
     detail: chat
       ? 'Account for this conversation'
-      : state.catalogPending
+      : state.catalogPending === true
         ? 'Loading models…'
-        : state.navigationError && !state.selectedModel
+        : state.navigationError !== undefined &&
+            state.navigationError !== '' &&
+            (state.selectedModel === undefined || state.selectedModel === '')
           ? 'Models unavailable'
           : account
             ? 'Connected account'
             : 'Choose an account for new chats',
-    loadingModels: !!(!chat && account && state.catalogPending),
-    canRetry: !!(!chat && account && (state.catalogPending || (state.navigationError && !state.selectedModel))),
+    loadingModels: !!(!chat && account && state.catalogPending === true),
+    canRetry: !!(
+      !chat &&
+      account &&
+      (state.catalogPending === true ||
+        (state.navigationError !== undefined &&
+          state.navigationError !== '' &&
+          (state.selectedModel === undefined || state.selectedModel === '')))
+    ),
     selectAccount: (key: string) => {
       const selected = state.accounts.find(value => JSON.stringify([value.provider, value.id]) === key);
       if (selected) void actions.selectAccount(selected.provider, selected.id);

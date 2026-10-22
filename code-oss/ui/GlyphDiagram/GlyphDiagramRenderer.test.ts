@@ -11,12 +11,14 @@ let instances = 0;
 async function freshRenderer(): Promise<typeof import('#code-oss/ui/GlyphDiagram/GlyphDiagramRenderer.ts')> {
   const module = new URL('./GlyphDiagramRenderer.ts', import.meta.url);
   module.searchParams.set('instance', String(++instances));
-  return import(module.href);
+  return import(module.href) as Promise<typeof import('#code-oss/ui/GlyphDiagram/GlyphDiagramRenderer.ts')>;
 }
 
 function latestFrame(): HTMLIFrameElement {
   const frame = [...document.querySelectorAll('iframe')].at(-1)!;
-  onTestFinished(() => frame.remove());
+  onTestFinished(() => {
+    frame.remove();
+  });
   return frame;
 }
 
@@ -48,7 +50,9 @@ describe(renderGlyphDiagram, () => {
     const rendered = renderer.renderGlyphDiagram('graph TD', false);
     const frame = latestFrame();
     reply(frame, { channel: 'glyph-diagram', ready: true });
-    await vi.waitFor(() => expect(crypto.randomUUID).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(crypto.randomUUID).toHaveBeenCalled();
+    });
     reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', svg: '<svg>A & B</svg>' });
 
     await expect(rendered).resolves.toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg>A & B</svg>')}`);
@@ -64,7 +68,9 @@ describe(renderGlyphDiagram, () => {
     const frame = latestFrame();
     const second = renderer.renderGlyphDiagram('graph LR', true);
     reply(frame, { channel: 'glyph-diagram', ready: true });
-    await vi.waitFor(() => expect(ids).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      expect(ids).toHaveBeenCalledTimes(2);
+    });
     reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-2', svg: '<svg>2</svg>' });
     reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', svg: '<svg>1</svg>' });
 
@@ -86,7 +92,9 @@ describe(renderGlyphDiagram, () => {
     reply(frame, null);
     reply(frame, { channel: 'other', ready: true });
     reply(frame, { channel: 'glyph-diagram', ready: true });
-    await vi.waitFor(() => expect(crypto.randomUUID).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(crypto.randomUUID).toHaveBeenCalled();
+    });
     reply(frame, { channel: 'glyph-diagram', id: 'unknown', svg: '<svg>x</svg>' });
     reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', svg: '<svg>ok</svg>' });
 
@@ -101,7 +109,9 @@ describe(renderGlyphDiagram, () => {
     const rendered = renderer.renderGlyphDiagram('nonsense', true);
     const frame = latestFrame();
     reply(frame, { channel: 'glyph-diagram', ready: true });
-    await vi.waitFor(() => expect(crypto.randomUUID).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(crypto.randomUUID).toHaveBeenCalled();
+    });
     reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', error: true });
 
     await expect(rendered).rejects.toMatchObject({
@@ -135,7 +145,9 @@ describe(renderGlyphDiagram, () => {
     const rendered = renderer.renderGlyphDiagram('graph TD', true);
     const frame = latestFrame();
     reply(frame, { channel: 'glyph-diagram', ready: true });
-    await vi.waitFor(() => expect(crypto.randomUUID).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(crypto.randomUUID).toHaveBeenCalled();
+    });
     const outcome = expect(rendered).rejects.toMatchObject({
       name: 'GlyphDiagramError',
       message: 'Diagram rendering timed out.',

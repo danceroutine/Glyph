@@ -61,7 +61,7 @@ export interface FileEditPlan {
      * Each transition is persisted before its workspace mutation. If a crash interrupts a revert, recovery
      * sees `reverting` and marks the file stale rather than guessing whether the revert landed.
      * `kept` and `reverted` are the human's final decisions.
-     * 
+     *
      */
     state: 'applying' | 'applied' | 'reverting' | 'reverted' | 'kept';
     /**
@@ -121,9 +121,9 @@ export interface FileEditPlan {
    */
   currentPath: string;
   /**
-   * The revision (SHA-256 hash of the exact bytes on disk, including any byte order mark) every workspace mutation 
-   * must match (optimistic concurrency), so a decision never overwrites edits the review hasn't observed. `null` means 
-   * the file is expected not to exist (a pending CREATE or an accepted DELETE). Reported back to the agent as the 
+   * The revision (SHA-256 hash of the exact bytes on disk, including any byte order mark) every workspace mutation
+   * must match (optimistic concurrency), so a decision never overwrites edits the review hasn't observed. `null` means
+   * the file is expected not to exist (a pending CREATE or an accepted DELETE). Reported back to the agent as the
    * resulting revision for follow-up edits.
    */
   currentRevision: string | null;

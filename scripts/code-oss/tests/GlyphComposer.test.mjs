@@ -1,11 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, it } from 'vitest';
 import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
 
-const requireUpstream = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = requireUpstream('@playwright/test');
+/** @type {import('@playwright/test').Browser} */
 let browser;
+/** @type {string} */
 let script;
 
 beforeAll(async () => {
@@ -324,7 +324,9 @@ describe('Rich Markdown composer', () => {
       await expect(composer.locator('blockquote button')).toHaveCount(1);
       await expect(composer.locator('strong')).toHaveText('carefully');
       await composer.locator('strong').evaluate(element => {
-        element.closest('[contenteditable]').focus();
+        const editable = element.closest('[contenteditable]');
+        if (!(editable instanceof HTMLElement)) throw new TypeError('The composer must be editable.');
+        editable.focus();
         const text = element.firstChild;
         document.getSelection().collapse(text, text.textContent.length - 1);
         document.dispatchEvent(new Event('selectionchange'));
@@ -558,12 +560,19 @@ it.each(['empty', 'selected'])(
         await composer.pressSequentially('replace this');
         for (let index = 0; index < 'replace this'.length; index++) await composer.press('Shift+ArrowLeft');
         expect(await page.evaluate(() => window.getSelection().toString())).toBe('replace this');
-        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await page.evaluate(
+          () =>
+            new Promise(resolve => {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(resolve);
+              });
+            }),
+        );
       }
       const source = 'const marker = "**keep**";\nconst second = `raw`;';
-      await composer.evaluate((element, source) => {
+      await composer.evaluate((element, sourceText) => {
         const clipboardData = new DataTransfer();
-        clipboardData.setData('text/plain', source);
+        clipboardData.setData('text/plain', sourceText);
         element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
       }, source);
       expect(await composer.locator('pre code').textContent()).toBe(source);
@@ -666,9 +675,9 @@ it.each(['ArrowUp', 'ArrowLeft'])(
         await page.addScriptTag({ content: script });
         const composer = page.getByRole('textbox', { name: 'Message Glyph' });
         const source = preceding + '```ts\nconst answer = 42;\n```';
-        await composer.evaluate((element, source) => {
+        await composer.evaluate((element, sourceText) => {
           const clipboardData = new DataTransfer();
-          clipboardData.setData('text/plain', source);
+          clipboardData.setData('text/plain', sourceText);
           element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
         }, source);
         await composer.focus();
@@ -734,6 +743,7 @@ it('keeps normal arrow navigation and selection inside code blocks', async () =>
     await composer.pressSequentially('ab');
     await composer.press('Shift+Enter');
     await composer.pressSequentially('cd');
+    /** @param {string} key */
     const move = async key => {
       const before = await page.evaluate(() => window.composerTest.snapshot().document.from);
       await composer.press(key);

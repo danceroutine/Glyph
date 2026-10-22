@@ -10,7 +10,7 @@ export function useGlyphCodeBlockState({
   readonly info: string | undefined;
   readonly copyText: ((text: string) => Promise<void>) | undefined;
 }) {
-  const language = info?.trim().split(/\s+/)[0]?.toLowerCase() || 'text';
+  const language = (info?.trim().split(/\s+/u)[0]?.toLowerCase() ?? '') || 'text';
   const nodes = useMemo(() => highlightGlyphCode(source, language), [source, language]);
   const [wrap, setWrap] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -24,9 +24,13 @@ export function useGlyphCodeBlockState({
     };
   }, [source]);
   useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(timer);
+    if (!copied) return undefined;
+    const timer = setTimeout(() => {
+      setCopied(false);
+    }, 2000);
+    return () => {
+      clearTimeout(timer);
+    };
   }, [copied]);
   return {
     source,
@@ -35,7 +39,9 @@ export function useGlyphCodeBlockState({
     wrap,
     copied,
     error,
-    toggleWrap: () => setWrap(value => !value),
+    toggleWrap: () => {
+      setWrap(value => !value);
+    },
     copy: async () => {
       const current = revision.current;
       try {

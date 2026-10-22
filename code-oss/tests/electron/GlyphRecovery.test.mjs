@@ -47,7 +47,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     await expect(glyph.sendButton).toHaveText('Cancel');
     await glyph.crashHost();
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
-    await expect(glyph.diagnostics).toContainText([/host exited.*interrupted/i]);
+    await expect(glyph.diagnostics).toContainText([/host exited.*interrupted/iu]);
     await expect(glyph.assistantEntries.last()).toContainText('An interrupted partial answer.');
     await expect.poll(() => provider.requests[1].closed).toBe(true);
     expect(provider.requests).toHaveLength(2);
@@ -87,7 +87,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     const duplicate = await glyph.duplicateWorkspace();
     const draft = 'Do not run a second agent against these files.';
     await duplicate.composer.fill(draft);
-    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
+    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/iu]);
     await expect(duplicate.sendButton).toBeDisabled();
     await expect(duplicate.composer).toHaveText(draft);
     await expect(duplicate.assistantEntries).toHaveCount(0);
@@ -96,7 +96,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     expect(provider.requests[0].closed).toBe(false);
     await duplicate.reload();
     await duplicate.composer.fill(draft);
-    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
+    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/iu]);
     await expect(duplicate.sendButton).toBeDisabled();
     await expect(duplicate.composer).toHaveText(draft);
     expect(provider.requests).toHaveLength(1);

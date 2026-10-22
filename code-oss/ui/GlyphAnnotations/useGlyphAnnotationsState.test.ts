@@ -28,7 +28,9 @@ describe(useGlyphAnnotationsState, () => {
     const { result } = renderHook(useGlyphAnnotationsState, { initialProps: { composer, disabled: false } });
     expect(result.current.annotations).toEqual([]);
 
-    act(() => composer.setDocument({ parts: [], from: 0, to: 0, options: { annotations: [savedAnnotation()] } }));
+    act(() => {
+      composer.setDocument({ parts: [], from: 0, to: 0, options: { annotations: [savedAnnotation()] } });
+    });
 
     expect(result.current.annotations).toEqual([savedAnnotation()]);
     expect(result.current.editorPosition).toEqual({ x: 8, y: 8 });
@@ -40,9 +42,13 @@ describe(useGlyphAnnotationsState, () => {
     composer.setDocument({ parts: [], from: 0, to: 0, options: { annotations: [savedAnnotation()] } });
     const { result } = renderHook(useGlyphAnnotationsState, { initialProps: { composer, disabled: false } });
 
-    act(() => result.current.edit('note-1'));
+    act(() => {
+      result.current.edit('note-1');
+    });
     expect(composer.snapshot.editingAnnotation).toBe('note-1');
-    act(() => result.current.remove('note-1'));
+    act(() => {
+      result.current.remove('note-1');
+    });
 
     expect(composer.snapshot.document.options?.annotations).toEqual([]);
     expect(composer.snapshot.editingAnnotation).toBeUndefined();
@@ -53,9 +59,15 @@ describe(useGlyphAnnotationsState, () => {
     const save = vi.spyOn(composer, 'saveAnnotation');
     const { result } = renderHook(useGlyphAnnotationsState, { initialProps: { composer, disabled: false } });
 
-    act(() => result.current.open());
-    act(() => result.current.setComment('Orphan comment'));
-    act(() => result.current.submit());
+    act(() => {
+      result.current.open();
+    });
+    act(() => {
+      result.current.setComment('Orphan comment');
+    });
+    act(() => {
+      result.current.submit();
+    });
 
     expect(result.current.draft).toBeUndefined();
     expect(result.current.comment).toBe('Orphan comment');

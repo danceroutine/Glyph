@@ -6,11 +6,9 @@ import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
-import { AgentMode } from '#src/chat/AgentMode.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
-import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
 import { GlyphContextAttachmentKind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
@@ -43,6 +41,8 @@ import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolA
 import { GlyphProposalApplicability } from '#src/desktop/protocol/events/GlyphProposalFileSummary.js';
 import type { GlyphProposalSummary } from '#src/desktop/protocol/events/GlyphProposalSummary.js';
 import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
+import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
+import { questionAnswersSchema } from '#src/interaction/questions/questionAnswersSchema.js';
 
 const TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS = {
   [ToolActivityPhase.STARTED]: GlyphToolActivityStatus.STARTED,
@@ -109,11 +109,15 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       readonly ownerWindowId: string;
     },
   ) {
-    this.unsubscribeAgentReviews = options.agentReviews?.onDidChange(review =>
-      this.publish({ type: GlyphHostEventType.AGENT_REVIEW_CHANGED, review }),
-    );
-    this.unsubscribeWakes = options.shellSessions.onDidWake(wake => this.queueShellWake(wake));
-    this.unsubscribeShells = options.shellSessions.onDidChange(() => this.syncShells());
+    this.unsubscribeAgentReviews = options.agentReviews?.onDidChange(review => {
+      this.publish({ type: GlyphHostEventType.AGENT_REVIEW_CHANGED, review });
+    });
+    this.unsubscribeWakes = options.shellSessions.onDidWake(wake => {
+      this.queueShellWake(wake);
+    });
+    this.unsubscribeShells = options.shellSessions.onDidChange(() => {
+      this.syncShells();
+    });
     this.unsubscribe = options.glyph.proposalReviews?.onDidChange(change => {
       for (const id of change.proposalIds) {
         const proposal = options.glyph.proposalReviews?.retainedReviews.find(review => review.id === id);
@@ -149,7 +153,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   /** Dispatch commands without holding the request acknowledgement open for an entire model turn. */
   handle(command: GlyphRuntimeCommand, context?: { readonly windowId?: string }): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('The workspace runtime has stopped.'));
-    const ownerCommand = !context?.windowId || context.windowId === this.options.ownerWindowId;
+    const ownerCommand =
+      context?.windowId === undefined || context?.windowId === '' || context.windowId === this.options.ownerWindowId;
     if (ownerCommand) this.connected = true;
     const pending = this.dispatch(command);
     this.commands.add(pending);
@@ -206,7 +211,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   finishModeSwap(chatId: string, id: string, status: GlyphModeSwap['status']): void {
     const run = [...this.runs.values()].find(
-      run => run.chatId === chatId && run.modeSwaps?.some(swap => swap.id === id),
+      run => run.chatId === chatId && run.modeSwaps?.some(swap => swap.id === id) === true,
     );
     if (!run) return;
     const updated = { ...run, modeSwaps: run.modeSwaps!.map(swap => (swap.id === id ? { ...swap, status } : swap)) };
@@ -260,7 +265,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       case GlyphWorkbenchCommandType.LIST_CHATS: {
         const account =
-          command.accountProvider && command.accountId
+          command.accountProvider !== undefined &&
+          command.accountProvider !== '' &&
+          command.accountId !== undefined &&
+          command.accountId !== ''
             ? this.account(command.accountProvider, command.accountId)
             : undefined;
         for (const chat of glyph.listChats(account)) this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
@@ -284,7 +292,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         this.publish({
           type: GlyphHostEventType.CHAT_UPDATED,
           chat: session.summary,
-          ...(command.creationId ? { creationId: command.creationId } : {}),
+          ...(command.creationId !== undefined && command.creationId !== '' ? { creationId: command.creationId } : {}),
         });
         return;
       }
@@ -470,7 +478,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         // The broker validated ownership, completeness, and choice IDs synchronously.
         const run = this.runs.get(command.runId)!;
         const request = run.question!;
-        const result = command.answer as QuestionFormResult;
+        const result = questionAnswersSchema.parse(command.answer);
         const response = {
           id: request.id,
           answers: request.questions!.map(question => {
@@ -601,7 +609,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   /** Recheck inference access at use time rather than trusting a previously selected account. */
   private seedHistory(session: ChatSession): void {
-    session.transcript.forEach((turn, index) =>
+    session.transcript.forEach((turn, index) => {
       this.setRun({
         chatId: session.id,
         runId: `${session.id}:history:${index}`,
@@ -611,13 +619,15 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         ...(turn.modeSwaps ? { modeSwaps: turn.modeSwaps } : {}),
         ...(turn.questionResponses ? { questionResponses: turn.questionResponses } : {}),
         ...(turn.checkpoints ? { checkpointTurnId: turn.options?.turnId ?? `${session.id}:history:${index}` } : {}),
-        ...(turn.usage ? { usage: { ...turn.usage, unreportedTurns: turn.usage.incomplete ? 1 : 0 } } : {}),
+        ...(turn.usage ? { usage: { ...turn.usage, unreportedTurns: turn.usage.incomplete === true ? 1 : 0 } } : {}),
         ...(turn.options ? { options: turn.options } : {}),
         ...(turn.attachments
           ? {
               attachments: turn.attachments.map(attachment => ({
                 path: attachment.path,
-                ...(attachment.source?.uri ? { uri: attachment.source.uri } : {}),
+                ...(attachment.source?.uri !== undefined && attachment.source?.uri !== ''
+                  ? { uri: attachment.source.uri }
+                  : {}),
                 text: attachment.text,
                 revision: attachment.revision,
                 ...(attachment.source?.range ? { range: attachment.source.range } : {}),
@@ -637,13 +647,13 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           ...(tool.shell ? { shell: { ...this.redactShell(tool.shell), live: false, running: false } } : {}),
         })),
         status: GlyphRunStatus.COMPLETED,
-      }),
-    );
+      });
+    });
   }
 
   private account(provider: string, id: string): ChatAccount {
     const account = this.options.glyph.accounts.find(value => value.provider === provider && value.id === id);
-    if (!account?.connected || !account.inferenceAccess)
+    if (account?.connected !== true || !account.inferenceAccess)
       throw new Error('Connect an account with inference access first.');
     return account;
   }
@@ -710,7 +720,11 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
             turnId: command.runId,
             attachments: toRequestAttachments(command.attachments),
           },
-          { push: part => this.response(command.runId, part) },
+          {
+            push: part => {
+              this.response(command.runId, part);
+            },
+          },
           signal,
           () => this.runs.get(command.runId)?.questionResponses ?? [],
           () => this.runs.get(command.runId)?.modeSwaps ?? [],
@@ -726,7 +740,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           ? { createdAt: turn.createdAt, ...(turn.checkpoints ? { checkpointTurnId: command.runId } : {}) }
           : {}),
         ...(!signal.aborted && turn?.options?.turnId === command.runId && turn.usage
-          ? { usage: { ...turn.usage, unreportedTurns: turn.usage.incomplete ? 1 : 0 } }
+          ? { usage: { ...turn.usage, unreportedTurns: turn.usage.incomplete === true ? 1 : 0 } }
           : {}),
       });
       this.publishUsage(session);
@@ -753,7 +767,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       const previous = run.tools.find(tool => tool.id === part.activity.callId);
       const parsed = toShellCommandSummary(part.activity);
       const summary = parsed ? this.redactShell(parsed) : undefined;
-      if (summary && part.activity.executionId)
+      if (summary && part.activity.executionId !== undefined && part.activity.executionId !== '')
         this.shellCalls.set(part.activity.executionId, { runId, toolId: part.activity.callId });
       const shell = summary
         ? {
@@ -761,7 +775,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
             ...previous?.shell,
             ...(part.activity.phase === ToolActivityPhase.STARTED ? {} : summary),
             output:
-              (summary.background || (summary.error && !summary.output)) && previous?.shell
+              (summary.background || (summary.error !== undefined && summary.error !== '' && !summary.output)) &&
+              previous?.shell
                 ? previous.shell.output
                 : summary.output,
             live: previous?.shell?.live ?? false,
@@ -775,12 +790,12 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         id: part.activity.callId,
         name: part.activity.name,
         status:
-          shell?.error && part.activity.phase === ToolActivityPhase.COMPLETED
+          shell?.error !== undefined && shell?.error !== '' && part.activity.phase === ToolActivityPhase.COMPLETED
             ? GlyphToolActivityStatus.FAILED
             : TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[part.activity.phase],
         arguments: this.options.glyph.redact(toToolActivityPreview(part.activity.arguments)),
         textOffset: previous?.textOffset ?? run.text.length,
-        ...(part.activity.output
+        ...(part.activity.output !== undefined && part.activity.output !== ''
           ? { summary: this.options.glyph.redact(toToolActivityPreview(part.activity.output)) }
           : {}),
         ...(shell ? { shell } : {}),
@@ -807,7 +822,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       ...summary,
       command: this.options.glyph.redact(summary.command),
       output: this.options.glyph.redact(summary.output),
-      ...(summary.error ? { error: this.options.glyph.redact(summary.error) } : {}),
+      ...(summary.error !== undefined && summary.error !== ''
+        ? { error: this.options.glyph.redact(summary.error) }
+        : {}),
     };
   }
 
@@ -819,13 +836,14 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       const current = sessions.find(value => value.id === previous.id);
       if (
         previous.background &&
-        previous.ownerChatId &&
+        previous.ownerChatId !== undefined &&
+        previous.ownerChatId !== '' &&
         previous.status === ShellSessionStatus.RUNNING &&
         current?.status !== ShellSessionStatus.RUNNING
       ) {
         const final = current ?? previous;
-        const stopped = final.stopRequested || this.stoppingShells.has(previous.id) || !current;
-        const label = `${stopped ? 'Stopped' : final.error ? 'Failed' : final.exitCode === 0 ? 'Finished' : 'Exited'} ${final.command}`;
+        const stopped = final.stopRequested === true || this.stoppingShells.has(previous.id) || !current;
+        const label = `${stopped ? 'Stopped' : final.error !== undefined && final.error !== '' ? 'Failed' : final.exitCode === 0 ? 'Finished' : 'Exited'} ${final.command}`;
         const id = `shell-exit:${previous.executionId ?? previous.id}:${previous.startedAt}`;
         this.pendingShellEvents.set(id, {
           chatId: previous.ownerChatId,
@@ -845,7 +863,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       for (const tool of run.tools) {
         if (!tool.shell) continue;
         const session = sessions.find(value => {
-          const owner = value.executionId ? this.shellCalls.get(value.executionId) : undefined;
+          const owner =
+            value.executionId !== undefined && value.executionId !== ''
+              ? this.shellCalls.get(value.executionId)
+              : undefined;
           return value.ownerChatId === run.chatId && owner?.runId === runId && owner.toolId === tool.id;
         });
         if (!session && !tool.shell.live && !tool.shell.running) continue;
@@ -853,8 +874,12 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         const shell = session
           ? {
               ...previousShell,
-              ...(session.error ? { error: this.options.glyph.redact(session.error) } : {}),
-              ...(session.wakePattern ? { wakePattern: this.options.glyph.redact(session.wakePattern) } : {}),
+              ...(session.error !== undefined && session.error !== ''
+                ? { error: this.options.glyph.redact(session.error) }
+                : {}),
+              ...(session.wakePattern !== undefined && session.wakePattern !== ''
+                ? { wakePattern: this.options.glyph.redact(session.wakePattern) }
+                : {}),
               command: this.options.glyph.redact(session.command),
               workingDirectory: session.workingDirectory,
               sessionId: session.id,
@@ -873,7 +898,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           ...tool,
           shell,
           status:
-            shell.error || (shell.exitCode !== undefined && shell.exitCode !== 0)
+            (shell.error !== undefined && shell.error !== '') || (shell.exitCode !== undefined && shell.exitCode !== 0)
               ? GlyphToolActivityStatus.FAILED
               : tool.status,
         };
@@ -890,7 +915,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   private shellProjection() {
     return this.options.shellSessions.allSessions
-      .filter(shell => shell.background && shell.ownerChatId)
+      .filter(shell => shell.background && shell.ownerChatId !== undefined && shell.ownerChatId !== '')
       .map(shell => ({
         id: shell.id,
         chatId: shell.ownerChatId!,
@@ -905,7 +930,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   }
 
   private queueShellWake(wake: ShellWakeEvent): void {
-    if (!wake.ownerChatId) return;
+    if (wake.ownerChatId === undefined || wake.ownerChatId === '') return;
     this.pendingShellEvents.set(wake.id, {
       chatId: wake.ownerChatId,
       label: this.options.glyph.redact(`Wake condition matched: ${wake.pattern}`),
@@ -1022,12 +1047,12 @@ function toProposal(proposal: EditProposal): GlyphProposalSummary {
             automaticItemId: file.automatic.itemId,
             autoApplied: ['applied', 'reverting'].includes(file.automatic.state),
             beforePreview: (file.automatic.before?.text ?? '')
-              .split(/\r\n|\r|\n/)
+              .split(/\r\n|\r|\n/u)
               .slice(0, 6)
               .join('\n')
               .slice(0, 4000),
             afterPreview: (file.operation === EditOperation.DELETE ? '' : (file.current?.text ?? file.proposed.text))
-              .split(/\r\n|\r|\n/)
+              .split(/\r\n|\r|\n/u)
               .slice(0, 6)
               .join('\n')
               .slice(0, 4000),
@@ -1042,15 +1067,13 @@ function toProposal(proposal: EditProposal): GlyphProposalSummary {
         .filter(item => isReviewItemPending(file, item))
         .reduce((sum, item) => sum + changedLines(item.removedText), 0),
       pendingItemIds: file.items.filter(item => isReviewItemPending(file, item)).map(item => item.id),
-      applicability:
-        Object.values(GlyphProposalApplicability).find(value => value === String(file.applicability).toLowerCase()) ??
-        GlyphProposalApplicability.STALE,
+      applicability: toProposalApplicability(file.applicability),
     })),
   };
 }
 
 function changedLines(text: string): number {
-  return text ? text.replace(/(?:\r\n|\r|\n)$/, '').split(/\r\n|\r|\n/).length : 0;
+  return text ? text.replace(/(?:\r\n|\r|\n)$/u, '').split(/\r\n|\r|\n/u).length : 0;
 }
 
 function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): ContextAttachment[] {
@@ -1069,4 +1092,9 @@ function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): C
     byteOrderMark: false,
     byteLength: Buffer.byteLength(attachment.text),
   }));
+}
+
+function toProposalApplicability(state: string): GlyphProposalApplicability {
+  const normalized = state.toLowerCase();
+  return isEnumValue(GlyphProposalApplicability, normalized) ? normalized : GlyphProposalApplicability.STALE;
 }

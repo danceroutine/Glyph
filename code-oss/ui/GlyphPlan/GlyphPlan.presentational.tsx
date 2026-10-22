@@ -24,12 +24,20 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
           <span>{state.plan.title}</span>
         </div>
         <div class={planStyles.toolbarActions}>
-          {state.modelLabel && (
+          {state.modelLabel !== undefined && state.modelLabel !== '' && (
             <span class={planStyles.model} title="Model for this plan's chat">
               {state.modelLabel}
             </span>
           )}
-          <GlyphPlanBuild disabled={state.disabled} build={state.build} buildNew={state.buildNew} />
+          <GlyphPlanBuild
+            disabled={state.disabled}
+            build={() => {
+              void state.build();
+            }}
+            buildNew={() => {
+              void state.buildNew();
+            }}
+          />
         </div>
       </header>
       <main class={planStyles.main}>
@@ -58,7 +66,9 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
                   class={planStyles.row}
                   aria-label={`Mark ${todo.text} ${todo.completed ? 'pending' : 'completed'}`}
                   disabled={state.disabled}
-                  onClick={() => state.toggleTodo(todo.id)}
+                  onClick={() => {
+                    void state.toggleTodo(todo.id);
+                  }}
                 >
                   {todo.completed ? <CircleCheck size={16} /> : <Circle size={16} />}
                   <span style={{ textDecoration: todo.completed ? 'line-through' : 'none' }}>{todo.text}</span>
@@ -82,7 +92,9 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
                 value={state.todo}
                 maxLength={1000}
                 disabled={state.disabled}
-                onInput={event => state.setTodo(event.currentTarget.value)}
+                onInput={event => {
+                  state.setTodo(event.currentTarget.value);
+                }}
               />
               <Button size={ButtonSize.SMALL} type="submit" disabled={state.disabled || !state.todo.trim()}>
                 Add
@@ -95,7 +107,14 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
             <h3>
               Referenced by {state.agents.length} {state.agents.length === 1 ? 'Agent' : 'Agents'}
             </h3>
-            <Button size={ButtonSize.SMALL} aria-label="New agent" disabled={state.disabled} onClick={state.newAgent}>
+            <Button
+              size={ButtonSize.SMALL}
+              aria-label="New agent"
+              disabled={state.disabled}
+              onClick={() => {
+                void state.newAgent();
+              }}
+            >
               <Plus size={16} />
               New
             </Button>
@@ -106,7 +125,9 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
                 <Button
                   appearance={ButtonAppearance.GHOST}
                   class={`${planStyles.row} ${planStyles.agentRow}`}
-                  onClick={() => state.openChat(agent.chatId)}
+                  onClick={() => {
+                    void state.openChat(agent.chatId);
+                  }}
                 >
                   <MessageSquare size={16} />
                   <span>
@@ -117,7 +138,7 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
             ))}
           </ul>
         </section>
-        {state.error && <p role="alert">{state.error}</p>}
+        {state.error !== undefined && state.error !== '' && <p role="alert">{state.error}</p>}
       </main>
     </div>
   );

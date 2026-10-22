@@ -35,7 +35,12 @@ function fakeLogger() {
 
 function collector(): { parts: ChatResponsePart[]; push: (part: ChatResponsePart) => void } {
   const parts: ChatResponsePart[] = [];
-  return { parts, push: part => parts.push(part) };
+  return {
+    parts,
+    push: part => {
+      parts.push(part);
+    },
+  };
 }
 
 describe(ChatConversation, () => {

@@ -14,11 +14,15 @@ describe(useGlyphUsageState, () => {
   it('toggles open without moving when it has nothing to anchor to', () => {
     const { result } = renderHook(useGlyphUsageState);
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     expect(result.current.open).toBe(true);
     expect(result.current.position).toEqual({ left: 8, top: 8 });
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     expect(result.current.open).toBe(false);
   });
 });

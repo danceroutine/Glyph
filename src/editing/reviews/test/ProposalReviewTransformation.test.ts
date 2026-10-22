@@ -185,7 +185,7 @@ describe(ProposalReviewManager, () => {
       const replace = workspace.replace.bind(workspace);
       let applied = false;
       vi.spyOn(workspace, 'replace').mockImplementation(async (path, revision, text, bom) => {
-        const result = await replace(path, revision, text.replace(/\r\n|\r|\n/g, '\r\n'), bom);
+        const result = await replace(path, revision, text.replaceAll(/\r\n|\r|\n/gu, '\r\n'), bom);
         applied = true;
         return result;
       });
@@ -219,7 +219,7 @@ describe(ProposalReviewManager, () => {
       const { manager, service, workspace } = await fixture('first\r\nmiddle\r\nlast\r\n');
       const replace = workspace.replace.bind(workspace);
       vi.spyOn(workspace, 'replace').mockImplementation((path, revision, text, bom) =>
-        replace(path, revision, text.replace(/\r\n|\r|\n/g, '\r\n'), bom),
+        replace(path, revision, text.replaceAll(/\r\n|\r|\n/gu, '\r\n'), bom),
       );
       const proposal = await proposeLineChanges(service, workspace, [
         { line: 0, expected: 'first', replacement: 'FIRST\nEXTRA' },

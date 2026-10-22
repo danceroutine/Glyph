@@ -63,10 +63,10 @@ describe('TextEditTransformer adversarial behavior', () => {
   describe('UTF-16 and newline coordinates', () => {
     it('maps complete surrogate pairs, combining sequences, and zero-width-joiner emoji by UTF-16 offsets', () => {
       const previous =
-        'start\r\n\ud83e\uddea lab\r\n\ud83d\udc69\u200d\ud83d\udcbb code\r\ne\u0301 accent\r\n\ud834\udd1e music\r\nend\r\n';
+        'start\r\n\uD83E\uDDEA lab\r\n\uD83D\uDC69\u200D\uD83D\uDCBB code\r\ne\u0301 accent\r\n\uD834\uDD1E music\r\nend\r\n';
       const current =
-        'start\r\n\ud83c\udf0d\ud83c\udf0e planets\r\n\ud83e\uddea lab\r\n\ud83d\udc69\u200d\ud83d\udcbb code expanded\r\ne\u0301 accent\r\n\ud834\udd1e music\r\nend\r\n';
-      const targets = ['\ud83e\uddea', 'e\u0301', '\ud834\udd1e'].map(value => {
+        'start\r\n\uD83C\uDF0D\uD83C\uDF0E planets\r\n\uD83E\uDDEA lab\r\n\uD83D\uDC69\u200D\uD83D\uDCBB code expanded\r\ne\u0301 accent\r\n\uD834\uDD1E music\r\nend\r\n';
+      const targets = ['\uD83E\uDDEA', 'e\u0301', '\uD834\uDD1E'].map(value => {
         const sourceStart = previous.indexOf(value);
         return textRange(previous, sourceStart, value);
       });
@@ -167,10 +167,10 @@ describe('TextEditTransformer adversarial behavior', () => {
       const previous = numberedDocument(24);
       const current = previous.replace('human-004', 'four').replace('human-020', 'twenty-expanded');
       const ranges = [1, 8, 12, 17, 23].map(index => rangeForValue(previous, `agent-${pad(index)}`));
-      const reversed = [...ranges].reverse();
+      const reversed = ranges.toReversed();
 
       expect(transformTextEditRanges(previous, current, reversed)).toEqual(
-        [...(transformTextEditRanges(previous, current, ranges) ?? [])].reverse(),
+        (transformTextEditRanges(previous, current, ranges) ?? []).toReversed(),
       );
     });
 
@@ -197,8 +197,8 @@ describe('TextEditTransformer adversarial behavior', () => {
       const current = previous.replace('human-004', 'short').replace('human-013', 'substantially-longer');
       const ranges = [2, 8, 15].map(index => rangeForValue(previous, `agent-${pad(index)}`));
       const result = transformTextEditRanges(previous, current, ranges);
-      const prefix = '\ud83e\uddea\ud83e\uddea shared prefix\r\n';
-      const suffix = '\r\nshared suffix \ud83d\ude80';
+      const prefix = '\uD83E\uDDEA\uD83E\uDDEA shared prefix\r\n';
+      const suffix = '\r\nshared suffix \uD83D\uDE80';
       const shiftedRanges = ranges.map(range => ({
         ...range,
         sourceStart: range.sourceStart + prefix.length,
@@ -259,7 +259,7 @@ describe('TextEditTransformer adversarial behavior', () => {
           ] as const,
       );
       const current = replaceAllAtOnce(previous, replacements);
-      const ranges = targets.map(index => rangeForValue(previous, `agent-${pad(index)}`)).reverse();
+      const ranges = targets.map(index => rangeForValue(previous, `agent-${pad(index)}`)).toReversed();
 
       expect(transformTextEditRanges(previous, current, ranges)).toEqual(exactTransform(previous, current, ranges));
     });
@@ -323,7 +323,7 @@ function replaceAllAtOnce(text: string, replacements: readonly (readonly [string
       if (sourceStart < 0) throw new Error(`Missing replacement value: ${removedText}`);
       return { sourceStart, sourceEnd: sourceStart + removedText.length, insertedText };
     })
-    .sort((left, right) => right.sourceStart - left.sourceStart);
+    .toSorted((left, right) => right.sourceStart - left.sourceStart);
   let result = text;
   for (const replacement of located) {
     result = result.slice(0, replacement.sourceStart) + replacement.insertedText + result.slice(replacement.sourceEnd);

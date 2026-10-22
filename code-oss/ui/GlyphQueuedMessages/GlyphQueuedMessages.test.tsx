@@ -53,7 +53,7 @@ describe(GlyphQueuedMessages, () => {
       'Queued message 2: Second message',
     ]);
     expect(row(0).draggable).toBe(true);
-    expect(row(0).hasAttribute('data-editing')).toBe(false);
+    expect(Object.hasOwn(row(0).dataset, 'editing')).toBe(false);
 
     fireEvent.click(button(1, 'Send queued message immediately'));
     fireEvent.click(button(1, 'Edit queued message'));
@@ -175,13 +175,13 @@ describe(GlyphQueuedMessages, () => {
     render(<GlyphQueuedMessages state={queueState({ disabled: true, queuePaused: true })} />);
 
     expect(button(0, 'Remove queued message').disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Resume queue' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Resume queue' }).disabled).toBe(true);
   });
 
   it('only allows removing the message being edited', () => {
     render(<GlyphQueuedMessages state={queueState({ editingQueuedMessage: 'one' })} />);
 
-    expect(row(0).hasAttribute('data-editing')).toBe(true);
+    expect(Object.hasOwn(row(0).dataset, 'editing')).toBe(true);
     expect(button(0, 'Send queued message immediately')).toBeUndefined();
     expect(button(0, 'Edit queued message')).toBeUndefined();
     expect(button(0, 'Queued message actions')).toBeUndefined();
@@ -208,7 +208,9 @@ describe(GlyphQueuedMessages, () => {
       if (this.getAttribute('aria-label') === 'Queued message actions') return new DOMRect(300, 40, 24, 24);
       return original.call(this);
     });
-    onTestFinished(() => spy.mockRestore());
+    onTestFinished(() => {
+      spy.mockRestore();
+    });
     render(<GlyphQueuedMessages state={queueState()} />);
     const more = button(1, 'Queued message actions');
 
@@ -216,7 +218,7 @@ describe(GlyphQueuedMessages, () => {
 
     const menu = screen.getByRole('menu');
     expect(more.getAttribute('aria-expanded')).toBe('true');
-    expect(row(1).hasAttribute('data-menu-open')).toBe(true);
+    expect(Object.hasOwn(row(1).dataset, 'menuOpen')).toBe(true);
     expect([menu.style.left, menu.style.top]).toEqual([`${324 - 190}px`, '68px']);
     expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
       'Move to New Chat',
@@ -236,7 +238,9 @@ describe(GlyphQueuedMessages, () => {
       if (this.getAttribute('aria-label') === 'Queued message actions') return new DOMRect(0, innerHeight, 24, 24);
       return original.call(this);
     });
-    onTestFinished(() => spy.mockRestore());
+    onTestFinished(() => {
+      spy.mockRestore();
+    });
     render(<GlyphQueuedMessages state={queueState()} />);
 
     fireEvent.click(button(0, 'Queued message actions'));
@@ -271,8 +275,8 @@ describe(GlyphQueuedMessages, () => {
 
     fireEvent.click(button(0, 'Queued message actions'));
 
-    expect((screen.getByRole('menuitem', { name: 'Steer' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('menuitem', { name: 'Move to New Chat' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole<HTMLButtonElement>('menuitem', { name: 'Steer' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('menuitem', { name: 'Move to New Chat' }).disabled).toBe(false);
   });
 
   it('closes the menu on Escape, collapsing or pointing elsewhere', () => {

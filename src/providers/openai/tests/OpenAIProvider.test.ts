@@ -73,7 +73,7 @@ function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolSo
     apiKey: 'test-secret',
     maxRetries: 0,
     fetch: async (_url, init) => {
-      requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      requests.push(JSON.parse(typeof init?.body === 'string' ? init.body : '') as Record<string, unknown>);
       const reply = replies.shift();
       if (!reply) throw new Error('Unexpected extra request.');
       return reply();
@@ -236,7 +236,7 @@ describe(OpenAIProvider, () => {
     const client = new OpenAI({
       apiKey: 'unused',
       fetch: async (_url, init) => {
-        requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        requests.push(JSON.parse(typeof init?.body === 'string' ? init.body : '') as Record<string, unknown>);
         return sse([requests.length === 1 ? toolCompleted : completed]);
       },
     });
@@ -283,9 +283,19 @@ describe(OpenAIProvider, () => {
         failure = error;
       });
       try {
-        await vi.waitFor(() => expect(token).toHaveBeenCalledTimes(2), { timeout: 300 });
+        await vi.waitFor(
+          () => {
+            expect(token).toHaveBeenCalledTimes(2);
+          },
+          { timeout: 300 },
+        );
         if (mode === 'cancel') controller.abort();
-        await vi.waitFor(() => expect(failure).toBeInstanceOf(Error), { timeout: 300 });
+        await vi.waitFor(
+          () => {
+            expect(failure).toBeInstanceOf(Error);
+          },
+          { timeout: 300 },
+        );
         expect(fetch).toHaveBeenCalledOnce();
         expect(provider.exportState().data).toEqual(
           expect.objectContaining({
@@ -328,9 +338,16 @@ describe(OpenAIProvider, () => {
         failure = error;
       });
       try {
-        await vi.waitFor(() => expect(token).toHaveBeenCalledOnce());
+        await vi.waitFor(() => {
+          expect(token).toHaveBeenCalledOnce();
+        });
         if (mode === 'cancel') controller.abort();
-        await vi.waitFor(() => expect(failure).toBeInstanceOf(Error), { timeout: 200 });
+        await vi.waitFor(
+          () => {
+            expect(failure).toBeInstanceOf(Error);
+          },
+          { timeout: 200 },
+        );
         expect(fetch).not.toHaveBeenCalled();
         resolveToken('refreshed');
         await sending;
@@ -409,9 +426,9 @@ describe(OpenAIProvider, () => {
         ...completed.response.output,
         { role: 'user', content: 'restored' },
       ]);
-      expect(() => provider.restoreState({ provider: 'somewhere-else', version: 1, data: { history: [] } })).toThrow(
-        'not compatible',
-      );
+      expect(() => {
+        provider.restoreState({ provider: 'somewhere-else', version: 1, data: { history: [] } });
+      }).toThrow('not compatible');
     });
 
     it('commits idempotent host context before the next model turn and preserves it across restore', async () => {
@@ -689,7 +706,12 @@ describe(OpenAIProvider, () => {
       ]);
       const trace: ProviderTraceEntry[] = [];
 
-      await provider.send('trace me', { ...options(), onTrace: entry => trace.push(entry) });
+      await provider.send('trace me', {
+        ...options(),
+        onTrace: entry => {
+          trace.push(entry);
+        },
+      });
 
       expect(trace.map(entry => entry.kind)).toEqual([
         'turn.started',
@@ -734,7 +756,7 @@ describe(OpenAIProvider, () => {
       };
       const { provider, requests } = harness([() => sse([empty]), () => sse([completed])]);
 
-      await expect(provider.send('empty', options())).rejects.toThrow(/without returning text or a tool call/);
+      await expect(provider.send('empty', options())).rejects.toThrow(/without returning text or a tool call/u);
       await provider.send('retry', options());
 
       expect(requests[1]?.input).toEqual([{ role: 'user', content: 'retry' }]);
@@ -787,7 +809,7 @@ describe(OpenAIProvider, () => {
       const toolOutput = (requests[1]!.input as { type?: string; output?: string }[]).find(
         item => item.type === 'function_call_output',
       );
-      expect(toolOutput?.output ?? '').toMatch(/export const answer = 42/);
+      expect(toolOutput?.output ?? '').toMatch(/export const answer = 42/u);
 
       await provider.send('And again?', options());
       expect(
@@ -882,7 +904,9 @@ describe(OpenAIProvider, () => {
         onText: delta => {
           text += delta;
         },
-        onToolActivity: event => activity.push({ phase: event.phase, name: `${event.namespace}.${event.name}` }),
+        onToolActivity: event => {
+          activity.push({ phase: event.phase, name: `${event.namespace}.${event.name}` });
+        },
       });
 
       expect(result.responseId).toBe('resp_buffered_message');
@@ -897,7 +921,7 @@ describe(OpenAIProvider, () => {
       expect(
         (requests[1]!.input as { type?: string; output?: string }[]).find(item => item.type === 'function_call_output')
           ?.output,
-      ).toMatch(/answer = 42/);
+      ).toMatch(/answer = 42/u);
       expect(activity).toEqual([
         { phase: 'started', name: 'project.read_project_file' },
         { phase: 'completed', name: 'project.read_project_file' },
@@ -944,8 +968,8 @@ describe(OpenAIProvider, () => {
         expect.unreachable('Expected provider.send to reject.');
       } catch (error) {
         const message = describeError(error);
-        expect(message).toMatch(/401/);
-        expect(message).toMatch(/ChatGPT account/);
+        expect(message).toMatch(/401/u);
+        expect(message).toMatch(/ChatGPT account/u);
       }
     });
 
@@ -956,8 +980,13 @@ describe(OpenAIProvider, () => {
       ]);
       const controller = new AbortController();
       await expect(
-        provider.send('cancelled', { signal: controller.signal, onText: () => controller.abort() }),
-      ).rejects.toThrow(/cancelled/);
+        provider.send('cancelled', {
+          signal: controller.signal,
+          onText: () => {
+            controller.abort();
+          },
+        }),
+      ).rejects.toThrow(/cancelled/u);
       await provider.send('retry', options());
       expect(requests[1]?.input).toEqual([{ role: 'user', content: 'retry' }]);
     });
@@ -1186,8 +1215,8 @@ describe(OpenAIProvider, () => {
         options(),
       );
 
-      const content = (requests[0]?.input as Array<{ content: Array<{ text: string }> }>)[0]!.content;
-      expect(JSON.parse(content[0]!.text).files[0]).toEqual({
+      const content = (requests[0]!.input as Array<{ content: Array<{ text: string }> }>)[0]!.content;
+      expect((JSON.parse(content[0]!.text) as { files: unknown[] }).files[0]).toEqual({
         path: 'a.ts',
         revision: 'revision-1',
         byteOrderMark: false,

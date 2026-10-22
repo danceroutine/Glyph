@@ -88,7 +88,9 @@ describe(GlyphRecentChats, () => {
     });
 
     expect(actions.openChat).toHaveBeenCalledWith('chat');
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Recent chats' })).toBeNull());
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Recent chats' })).toBeNull();
+    });
   });
 
   it('closes on Escape, even from the search field', () => {
@@ -129,10 +131,16 @@ describe(GlyphRecentChats, () => {
     const picker = rendered.states.find(options => options.items.length === 0)!;
 
     expect([dropdown.itemKey('x'), dropdown.itemLabel('x'), dropdown.renderItem('x')]).toEqual(['x', 'x', 'x']);
-    expect(dropdown.highlight(0)).toBeUndefined();
-    expect(dropdown.choose('x')).toBeUndefined();
+    expect(() => {
+      dropdown.highlight(0);
+    }).not.toThrow();
+    expect(() => {
+      dropdown.choose('x');
+    }).not.toThrow();
     expect(picker.label('x')).toBe('x');
-    expect(picker.choose('x')).toBeUndefined();
+    expect(() => {
+      picker.choose('x');
+    }).not.toThrow();
   });
 });
 
@@ -168,7 +176,9 @@ describe(GlyphChatMenu, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Chat actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Close All Chat Tabs' }));
 
-    await waitFor(() => expect(closeChat.mock.calls).toEqual([['a'], ['b']]));
+    await waitFor(() => {
+      expect(closeChat.mock.calls).toEqual([['a'], ['b']]);
+    });
   });
 
   it('closes the selected chat or the new chat draft when the window tracks no tabs', async () => {
@@ -176,14 +186,18 @@ describe(GlyphChatMenu, () => {
     render(<GlyphChatMenu state={workbench({ selectedChatId: 'chat' })} actions={headerActions({ closeChat })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Chat actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Close All Chat Tabs' }));
-    await waitFor(() => expect(closeChat).toHaveBeenCalledWith('chat'));
+    await waitFor(() => {
+      expect(closeChat).toHaveBeenCalledWith('chat');
+    });
     cleanup();
 
     render(<GlyphChatMenu state={workbench()} actions={headerActions({ closeChat })} />);
     fireEvent.click(screen.getByRole('button', { name: 'Chat actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Close All Chat Tabs' }));
 
-    await waitFor(() => expect(closeChat).toHaveBeenLastCalledWith(''));
+    await waitFor(() => {
+      expect(closeChat).toHaveBeenLastCalledWith('');
+    });
   });
 
   it('does nothing when the host cannot close chats', async () => {
@@ -213,7 +227,9 @@ describe(GlyphChatMenu, () => {
     fireEvent.keyDown(trigger, { key: 'c' });
     fireEvent.keyDown(trigger, { key: 'Enter' });
 
-    await waitFor(() => expect(closeChat).toHaveBeenCalledWith('a'));
+    await waitFor(() => {
+      expect(closeChat).toHaveBeenCalledWith('a');
+    });
   });
 
   it('chooses actions from the keyboard', () => {

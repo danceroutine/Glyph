@@ -39,7 +39,7 @@ export class DuckDuckGoSearch implements WebSearchProvider {
       if (row.classList.contains('result--ad')) continue;
       const link = row.querySelector('a.result__a');
       const href = link?.getAttribute('href');
-      if (!href) continue;
+      if (href === undefined || href === null || href === '') continue;
       let url: URL;
       try {
         url = new URL(href, page.url);
@@ -51,7 +51,7 @@ export class DuckDuckGoSearch implements WebSearchProvider {
       }
       if (seen.has(url.href)) continue;
       const title = link?.textContent?.trim();
-      if (!title) continue;
+      if (title === undefined || title === '') continue;
       seen.add(url.href);
       results.push({
         title: title.slice(0, 200),
@@ -60,7 +60,7 @@ export class DuckDuckGoSearch implements WebSearchProvider {
       });
       if (results.length === 5) break;
     }
-    if (!results.length && !document.querySelector('.no-results, .result--no-result'))
+    if (results.length === 0 && !document.querySelector('.no-results, .result--no-result'))
       throw new WebRequestError(
         'SEARCH_UNAVAILABLE',
         'DuckDuckGo did not return a recognized results page. Try again later.',

@@ -6,7 +6,7 @@ describe('decisionStyles', () => {
     const names = Object.values(decisionStyles);
 
     expect(Object.keys(decisionStyles)).toEqual(['card', 'header', 'actions', 'detail', 'error']);
-    expect(names.every(name => /^\S+$/.test(name))).toBe(true);
+    expect(names.every(name => /^\S+$/u.test(name))).toBe(true);
     expect(new Set(names).size).toBe(names.length);
   });
 });

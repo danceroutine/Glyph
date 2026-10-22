@@ -33,7 +33,7 @@ export function userMessageFixture(overrides: MessageOverrides = {}): GlyphTrans
   return {
     id: `${checkpointTurnId}:user`,
     role: GlyphTranscriptRole.USER,
-    ...(overrides.steering ? {} : { checkpointTurnId }),
+    ...(overrides.steering === true ? {} : { checkpointTurnId }),
     createdAt: fixtureCreatedAt,
     text: 'How does the Glyph sidebar render?',
     ...structuredClone(overrides),

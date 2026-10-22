@@ -36,7 +36,7 @@ export function transformTextEditRanges(
   if (!ranges.every(range => isValidRange(previousText, range))) return undefined;
   const sourceOrder = ranges
     .map((_range, index) => index)
-    .sort(
+    .toSorted(
       (left, right) =>
         ranges[left]!.sourceStart - ranges[right]!.sourceStart || ranges[left]!.sourceEnd - ranges[right]!.sourceEnd,
     );
@@ -147,12 +147,12 @@ function mapWithUniqueAnchor(
 }
 
 function isUniqueAt(text: string, value: string, expectedIndex: number): boolean {
-  return text.indexOf(value) === expectedIndex && text.indexOf(value, expectedIndex + 1) < 0;
+  return text.indexOf(value) === expectedIndex && !text.includes(value, expectedIndex + 1);
 }
 
 function uniqueIndexOf(text: string, value: string): number | undefined {
   const index = text.indexOf(value);
-  return index >= 0 && text.indexOf(value, index + 1) < 0 ? index : undefined;
+  return index >= 0 && !text.includes(value, index + 1) ? index : undefined;
 }
 
 function findExactInterveningEdits(previousText: string, currentText: string): InterveningEdit[] | undefined {
@@ -191,14 +191,14 @@ function findExactInterveningEdits(previousText: string, currentText: string): I
 function commonPrefixLength(left: string, right: string): number {
   const limit = Math.min(left.length, right.length);
   let offset = 0;
-  while (offset < limit && left.charCodeAt(offset) === right.charCodeAt(offset)) offset++;
+  while (offset < limit && left[offset] === right[offset]) offset++;
   return offset;
 }
 
 function commonSuffixLength(left: string, right: string, prefixLength: number): number {
   const limit = Math.min(left.length, right.length) - prefixLength;
   let offset = 0;
-  while (offset < limit && left.charCodeAt(left.length - offset - 1) === right.charCodeAt(right.length - offset - 1)) {
+  while (offset < limit && left[left.length - offset - 1] === right[right.length - offset - 1]) {
     offset++;
   }
   return offset;

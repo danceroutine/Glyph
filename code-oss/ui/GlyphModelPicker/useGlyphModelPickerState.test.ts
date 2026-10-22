@@ -128,7 +128,9 @@ describe(useGlyphModelPickerState, () => {
       initialProps: { state, actions: actions(selectModel) },
     });
 
-    await act(async () => result.current.selectModel('gpt-5'));
+    await act(async () => {
+      result.current.selectModel('gpt-5');
+    });
 
     expect(selectModel).toHaveBeenCalledWith('gpt-5');
   });

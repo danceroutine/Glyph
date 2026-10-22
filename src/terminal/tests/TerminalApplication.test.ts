@@ -733,7 +733,10 @@ function createHarness({
     glyph as unknown as GlyphService,
     ui as unknown as TerminalUI,
     shutdown.signal,
-    { projectContext: context, ...(configuredModel ? { configuredModel } : {}) },
+    {
+      projectContext: context,
+      ...(configuredModel !== undefined && configuredModel !== '' ? { configuredModel } : {}),
+    },
     reviewer,
     shells,
   );

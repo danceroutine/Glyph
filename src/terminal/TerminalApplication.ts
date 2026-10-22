@@ -242,7 +242,9 @@ export class TerminalApplication {
     account: ChatAccount,
   ): Promise<{ action: Awaited<ReturnType<TerminalUI['nextAction']>> } | { wake: ShellWakeEvent }> {
     const accepts = (event: ShellWakeEvent): boolean =>
-      !event.ownerChatId || this.glyph.listChats(account).some(chat => chat.id === event.ownerChatId);
+      event.ownerChatId === undefined ||
+      event.ownerChatId === '' ||
+      this.glyph.listChats(account).some(chat => chat.id === event.ownerChatId);
     const pending = this.shellSessions?.peekPendingWake(accepts);
     if (pending) return { wake: pending };
     if (!this.shellSessions) {
@@ -275,7 +277,7 @@ export class TerminalApplication {
   private async resumeFromShellWake(wake: ShellWakeEvent, account: ChatAccount): Promise<void> {
     if (this.shutdown.aborted) return;
     const previous = this.conversation;
-    if (wake.ownerChatId && wake.ownerChatId !== this.conversation?.id) {
+    if (wake.ownerChatId !== undefined && wake.ownerChatId !== '' && wake.ownerChatId !== this.conversation?.id) {
       try {
         this.activateChat(this.glyph.openChat(wake.ownerChatId, account));
       } catch (error) {

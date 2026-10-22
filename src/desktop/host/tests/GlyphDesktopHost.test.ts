@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#src/desktop/protocol/GlyphDesktopProtocolVersion.js';
 import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphHostStatus } from '#src/desktop/protocol/events/GlyphHostStatus.js';
@@ -150,7 +150,9 @@ describe(GlyphDesktopHost, () => {
         roots,
         trusted: initiallyTrusted,
       });
-      await vi.waitFor(() => expect(fixture.factory.create).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(fixture.factory.create).toHaveBeenCalledOnce();
+      });
       const second = fixture.receive('owner', owner, 'changed', {
         type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
         roots,
@@ -158,7 +160,7 @@ describe(GlyphDesktopHost, () => {
       });
       release();
       await Promise.all([first, second]);
-      expect(fixture.factory.create.mock.calls.map(([input]) => input.trusted)).toEqual([
+      expect(fixture.factory.create.mock.calls.map(([input]) => (input as { trusted: boolean }).trusted)).toEqual([
         initiallyTrusted,
         !initiallyTrusted,
       ]);
@@ -267,12 +269,11 @@ describe(GlyphDesktopHost, () => {
     vi.useFakeTimers();
     const fixture = new HostFixture();
     let initialize!: (runtime: GlyphDesktopWorkspaceRuntime) => void;
-    fixture.factory.create.mockImplementationOnce(
-      () =>
-        new Promise(resolve => {
-          initialize = resolve;
-        }),
-    );
+    fixture.factory.create.mockImplementationOnce(() => {
+      return new Promise(resolve => {
+        initialize = resolve;
+      });
+    });
     fixture.connect('owner', owner);
     const attaching = fixture.receive('owner', owner, 'attach', {
       type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
@@ -319,7 +320,9 @@ describe(GlyphDesktopHost, () => {
     fixture.connect('replacement', peer);
     const replacement = fixture.receive('replacement', peer, 'attach-replacement', attach);
     try {
-      await vi.waitFor(() => expect(fixture.runtime.dispose).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(fixture.runtime.dispose).toHaveBeenCalledOnce();
+      });
       expect(fixture.factory.create).toHaveBeenCalledOnce();
       expect(fixture.events('replacement')).toEqual([]);
     } finally {
@@ -394,12 +397,11 @@ describe(GlyphDesktopHost, () => {
   it('shares a single initializing runtime when two windows attach concurrently', async () => {
     const fixture = new HostFixture();
     let ready!: (runtime: GlyphDesktopWorkspaceRuntime) => void;
-    fixture.factory.create.mockImplementationOnce(
-      () =>
-        new Promise(resolve => {
-          ready = resolve;
-        }),
-    );
+    fixture.factory.create.mockImplementationOnce(() => {
+      return new Promise(resolve => {
+        ready = resolve;
+      });
+    });
     fixture.connect('owner', owner);
     fixture.connect('peer', peer);
     const command = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
@@ -464,7 +466,7 @@ describe(GlyphDesktopHost, () => {
     });
     await fixture.host.receive('owner', {
       ...request(owner, 'version', { type: GlyphWorkbenchCommandType.LIST_CHATS }),
-      protocolVersion: version as typeof GLYPH_DESKTOP_PROTOCOL_VERSION,
+      protocolVersion: version,
     });
 
     expect(errorCodes(fixture.events('owner'))).toEqual(['UNAUTHORIZED', 'PROTOCOL_MISMATCH']);
@@ -621,21 +623,25 @@ describe(GlyphDesktopHost, () => {
     it('refuses connections once the host has stopped', async () => {
       const fixture = new HostFixture();
       await fixture.host.dispose();
-      expect(() => fixture.connect('owner', owner)).toThrow('The Glyph desktop host has stopped.');
+      expect(() => {
+        fixture.connect('owner', owner);
+      }).toThrow('The Glyph desktop host has stopped.');
     });
 
     it('refuses a connection id that is already registered', () => {
       const fixture = new HostFixture();
       fixture.connect('owner', owner);
-      expect(() => fixture.connect('owner', peer)).toThrow('Connection owner is already registered.');
+      expect(() => {
+        fixture.connect('owner', peer);
+      }).toThrow('Connection owner is already registered.');
     });
 
     it('refuses a second live connection for the same window', () => {
       const fixture = new HostFixture();
       fixture.connect('owner', owner);
-      expect(() => fixture.connect('owner-again', owner)).toThrow(
-        'Window owner already has an active Glyph connection.',
-      );
+      expect(() => {
+        fixture.connect('owner-again', owner);
+      }).toThrow('Window owner already has an active Glyph connection.');
     });
   });
 
@@ -847,12 +853,11 @@ describe(GlyphDesktopHost, () => {
       });
       const fixture = new HostFixture();
       let initialize!: (runtime: GlyphDesktopWorkspaceRuntime) => void;
-      fixture.factory.create.mockImplementationOnce(
-        () =>
-          new Promise(resolve => {
-            initialize = resolve;
-          }),
-      );
+      fixture.factory.create.mockImplementationOnce(() => {
+        return new Promise(resolve => {
+          initialize = resolve;
+        });
+      });
       let finishStop!: () => void;
       fixture.runtime.dispose.mockImplementationOnce(
         () =>
@@ -885,7 +890,9 @@ describe(GlyphDesktopHost, () => {
           },
         },
       ]);
-      await vi.waitFor(() => expect(fixture.runtime.dispose).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(fixture.runtime.dispose).toHaveBeenCalledOnce();
+      });
       finishStop();
       await fixture.host.dispose();
     });
@@ -897,12 +904,11 @@ describe(GlyphDesktopHost, () => {
       });
       const fixture = new HostFixture();
       let fail!: (error: Error) => void;
-      fixture.factory.create.mockImplementationOnce(
-        () =>
-          new Promise((_resolve, reject) => {
-            fail = reject;
-          }),
-      );
+      fixture.factory.create.mockImplementationOnce(() => {
+        return new Promise((_resolve, reject) => {
+          fail = reject;
+        });
+      });
       fixture.connect('owner', owner);
       const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
       const owning = fixture.receive('owner', owner, 'attach-owner', attach);
@@ -940,7 +946,9 @@ describe(GlyphDesktopHost, () => {
         trusted: true,
       });
       const detaching = fixture.receive('owner', owner, 'detach', { type: GlyphWorkbenchCommandType.DETACH });
-      await vi.waitFor(() => expect(fixture.runtime.dispose).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(fixture.runtime.dispose).toHaveBeenCalledOnce();
+      });
       await fixture.host.disconnect('owner');
       await vi.advanceTimersByTimeAsync(30_000);
       finishStop();
@@ -1026,11 +1034,11 @@ describe(GlyphDesktopHost, () => {
 class HostFixture {
   readonly sent = new Map<string, GlyphHostEventEnvelope[]>();
   readonly runtime = new FakeRuntime();
-  readonly factory: GlyphDesktopWorkspaceRuntimeFactory & { create: ReturnType<typeof vi.fn> };
+  readonly factory: GlyphDesktopWorkspaceRuntimeFactory & { create: Mock };
   readonly host: GlyphDesktopHost;
 
   constructor() {
-    const create = vi.fn(async input => {
+    const create = vi.fn(async (input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]) => {
       this.runtime.emit = input.emit;
       return this.runtime;
     });
@@ -1041,7 +1049,9 @@ class HostFixture {
   connect(connectionId: string, identity: GlyphConnectionIdentity): void {
     const events: GlyphHostEventEnvelope[] = [];
     this.sent.set(connectionId, events);
-    this.host.connect(connectionId, identity, event => events.push(event));
+    this.host.connect(connectionId, identity, event => {
+      events.push(event);
+    });
   }
 
   receive(

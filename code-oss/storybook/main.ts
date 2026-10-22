@@ -7,9 +7,9 @@ const config: StorybookConfig = {
   staticDirs: ['../../.artifacts/diagram'],
   stories: ['../ui/**/*.stories.tsx'],
   core: { disableTelemetry: true },
-  async viteFinal(config) {
+  async viteFinal(viteConfig) {
     const { mergeConfig } = await import('vite');
-    return mergeConfig(config, {
+    return mergeConfig(viteConfig, {
       plugins: [preact()],
       optimizeDeps: { include: ['preact', 'preact/hooks', 'preact/jsx-runtime'] },
       // The root package's Node imports target emitted .js files. Preview the

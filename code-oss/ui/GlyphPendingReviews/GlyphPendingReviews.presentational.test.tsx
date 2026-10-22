@@ -131,8 +131,8 @@ describe(GlyphPendingReviews, () => {
 
     expect(screen.getByRole('region', { name: 'Pending reviews' }).getAttribute('aria-busy')).toBe('true');
     for (const name of ['Revert', 'Keep', 'Review', 'Review src/app.ts', 'Revert src/app.ts', 'Keep src/app.ts'])
-      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '1 File' }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByRole<HTMLButtonElement>('button', { name }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '1 File' }).disabled).toBe(false);
   });
 
   it('hides the file list while collapsed', () => {

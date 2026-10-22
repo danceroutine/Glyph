@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
@@ -88,9 +89,9 @@ describe(TerminalEditReviewer, () => {
 
       expect(await readFile(join(root, 'file.ts'), 'utf8')).toBe('const answer: number = 2;\n');
       expect(tty.rawTransitions).toEqual([true, false]);
-      expect(rendered).toContain('\x1b[48;5;52m');
-      expect(rendered).toContain('\x1b[48;5;22m');
-      expect(rendered).toContain('\x1b[35mconst\x1b[39m');
+      expect(rendered).toContain('\u001B[48;5;52m');
+      expect(rendered).toContain('\u001B[48;5;22m');
+      expect(rendered).toContain('\u001B[35mconst\u001B[39m');
       expect(rendered).toContain('Review complete');
       expect(rendered).toContain('1 accepted');
       expect(rendered).toContain('0 rejected');
@@ -158,9 +159,21 @@ describe(TerminalEditReviewer, () => {
 
       const firstReview = reviewer.review(manager, new AbortController().signal);
       await waitUntil(() => rendered.includes('Y keep'));
-      await sendKeys(tty, ['\x1b[B', '\x1b[C', '\x1b[D', 'F', '\x1b[6~', '\x1b[5~', '\x1b[F', '\x1b[H', 'q']);
+      await sendKeys(tty, [
+        '\u001B[B',
+        '\u001B[C',
+        '\u001B[D',
+        'F',
+        '\u001B[6~',
+        '\u001B[5~',
+        '\u001B[F',
+        '\u001B[H',
+        'q',
+      ]);
       await firstReview;
-      expect(manager.active?.files.flatMap(file => file.items).every(item => item.decision === 'PENDING')).toBe(true);
+      expect(
+        manager.active?.files.flatMap(file => file.items).every(item => item.decision === EditDecisionState.PENDING),
+      ).toBe(true);
       expect(rendered).toContain('full file');
       expect(rendered).toContain('far-away-context');
       expect(rendered).toContain('File 1/3  change 1/2');
@@ -226,7 +239,7 @@ describe(TerminalEditReviewer, () => {
       await waitUntil(() => rendered.includes('Error: The file changed'));
       tty.push('Q');
       await review;
-      expect(rendered).toMatch(/Error: The file changed/);
+      expect(rendered).toMatch(/Error: The file changed/u);
       expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('collaborator');
       ui.close();
       expect(tty.rawTransitions.at(-1)).toBe(false);
@@ -257,7 +270,9 @@ function terminalOutput(): PassThrough & { columns?: number; rows?: number; isTT
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt++) {
     if (predicate()) return;
-    await new Promise<void>(resolve => setTimeout(resolve, 5));
+    await new Promise<void>(resolve => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error('Condition was not reached.');
 }
@@ -265,6 +280,8 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 async function sendKeys(tty: VirtualTTY, keys: readonly string[]): Promise<void> {
   for (const key of keys) {
     tty.push(key);
-    await new Promise<void>(resolve => setTimeout(resolve, 50));
+    await new Promise<void>(resolve => {
+      setTimeout(resolve, 50);
+    });
   }
 }

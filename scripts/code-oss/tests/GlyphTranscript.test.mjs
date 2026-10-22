@@ -1,12 +1,16 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 import { buildGlyphDiagram } from '#scripts/code-oss/build-diagram.mjs';
 import { afterAll, beforeAll, describe, it } from 'vitest';
 import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
-const require = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = require('@playwright/test');
-let browser, script, renderer;
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let renderer;
+/** @type {string} */
+let script;
+/** @param {import('@playwright/test').Page} page */
 async function mount(page) {
   await page.route('http://localhost/**', route =>
     route.fulfill({
@@ -63,7 +67,9 @@ describe('Markdown messages and usage controls', () => {
       const expand = page.getByRole('button', { name: 'Expand diagram' });
       await expect(page.getByRole('img', { name: 'Plan diagram' })).toBeVisible();
       await page.evaluate(async () => {
-        document.querySelector('[aria-label="Expand diagram"]').click();
+        const button = document.querySelector('[aria-label="Expand diagram"]');
+        if (!(button instanceof HTMLElement)) throw new TypeError('Expected the expand button.');
+        button.click();
         await new Promise(queueMicrotask);
         if (!document.querySelector('[aria-label="Collapse diagram"]')) throw new Error('Expansion did not commit.');
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
@@ -211,7 +217,7 @@ it('shows a date on hover for both assistant messages in the actual Message Acti
       await expect(message.locator('time')).toHaveCSS('opacity', '0');
       await message.hover();
       await expect(message.locator('time')).toHaveCSS('opacity', '1');
-      await expect(message.locator('time')).toHaveAttribute('datetime', /2026-10-18T14:/);
+      await expect(message.locator('time')).toHaveAttribute('datetime', /2026-10-18T14:/u);
     }
   } finally {
     await page.close();

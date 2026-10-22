@@ -19,6 +19,7 @@ import type { WorkspacePathIndex } from './WorkspacePathIndex.ts';
 import { WorkspacePathIndexError } from './WorkspacePathIndexError.ts';
 import { WorkspacePathIndexFailureReason } from './WorkspacePathIndexFailureReason.ts';
 import type { WorkspacePathIndexState } from './WorkspacePathIndexState.ts';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 const PROTOCOL_VERSION = 1;
 const MAXIMUM_ERROR_OUTPUT = 8_192;
@@ -242,7 +243,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 
   dispose(): Promise<void> {
     if (this.disposed) return Promise.resolve();
-    if (!this.disposing) this.disposing = this.shutdown();
+    this.disposing ??= this.shutdown();
     return this.disposing;
   }
 
@@ -272,7 +273,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     if (this.disposing && method !== PathIndexMethod.SHUTDOWN) {
       return Promise.reject(new Error('The workspace path index is shutting down.'));
     }
-    if (signal?.aborted) return Promise.reject(toAbortError(signal));
+    if (signal?.aborted === true) return Promise.reject(toAbortError(signal));
     const process = this.ensureProcess();
     const id = this.nextRequestId++;
     return new Promise((resolveRequest, rejectRequest) => {
@@ -353,18 +354,22 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   private receiveLine(value: unknown): void {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected a response object.');
-    const response = value as Record<string, unknown>;
-    if (response.version !== PROTOCOL_VERSION || !Number.isSafeInteger(response.id)) {
+    if (!isRecord(value)) throw new Error('Expected a response object.');
+    const response = value;
+    if (
+      response.version !== PROTOCOL_VERSION ||
+      typeof response.id !== 'number' ||
+      !Number.isSafeInteger(response.id)
+    ) {
       throw new Error('Response has an unsupported version or request ID.');
     }
-    const id = response.id as number;
+    const { id } = response;
     const pending = this.pending.get(id);
     if (!pending) return;
     if (response.error !== undefined) {
       this.pending.delete(id);
       pending.removeAbortListener();
-      const error = response.error as Record<string, unknown>;
+      const error = isRecord(response.error) ? response.error : undefined;
       const parsedCode = failureReasonSchema.safeParse(error?.code);
       const code = parsedCode.success ? parsedCode.data : WorkspacePathIndexFailureReason.INTERNAL;
       const message = typeof error?.message === 'string' ? error.message : 'Native path index failed.';
@@ -411,7 +416,9 @@ function withAbortSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promis
       cleanup();
       rejectOperation(toAbortError(signal));
     };
-    const cleanup = (): void => signal.removeEventListener('abort', onAbort);
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', onAbort);
+    };
     signal.addEventListener('abort', onAbort, { once: true });
     operation.then(
       value => {
@@ -420,7 +427,7 @@ function withAbortSignal<T>(operation: Promise<T>, signal?: AbortSignal): Promis
       },
       error => {
         cleanup();
-        rejectOperation(error as Error);
+        rejectOperation(error);
       },
     );
   });

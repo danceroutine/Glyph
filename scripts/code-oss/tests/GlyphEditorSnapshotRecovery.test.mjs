@@ -1,7 +1,27 @@
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
 
+/**
+ * @typedef {{
+ *   EditorWorkspaceTextStore: typeof import('#src/desktop/workspace/EditorWorkspaceTextStore.js').EditorWorkspaceTextStore,
+ *   EditProposalService: typeof import('#src/editing/proposals/EditProposalService.js').EditProposalService,
+ *   JsDiffTextDiffer: typeof import('#src/editing/documents/JsDiffTextDiffer.js').JsDiffTextDiffer,
+ *   ProposalReviewManager: typeof import('#src/editing/reviews/ProposalReviewManager.js').ProposalReviewManager,
+ *   FileOperationError: typeof import('#vs/platform/files/common/files.js').FileOperationError,
+ *   FileOperationResult: typeof import('#vs/platform/files/common/files.js').FileOperationResult,
+ *   TextFileOperationError: typeof import('#vs/workbench/services/textfile/common/textfiles.js').TextFileOperationError,
+ *   TextFileOperationResult: typeof import('#vs/workbench/services/textfile/common/textfiles.js').TextFileOperationResult,
+ *   GlyphEditorAdapter: typeof import('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js').GlyphEditorAdapter,
+ *   URI: typeof import('#vs/base/common/uri.js').URI,
+ *   UriIdentityService: typeof import('#vs/platform/uriIdentity/common/uriIdentityService.js').UriIdentityService,
+ * }} RecoveryModule
+ * @typedef {import('#vs/base/common/uri.js').URI} URI
+ * @typedef {import('#src/editing/proposals/EditProposal.js').EditProposal} EditProposal
+ */
+
+/** @type {RecoveryModule} */
 let api;
 
 beforeAll(async () => {
@@ -72,7 +92,19 @@ beforeAll(async () => {
       },
     ],
   });
-  api = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+  api = await importBundle(result.outputFiles[0].text, [
+    'EditorWorkspaceTextStore',
+    'EditProposalService',
+    'JsDiffTextDiffer',
+    'ProposalReviewManager',
+    'FileOperationError',
+    'FileOperationResult',
+    'TextFileOperationError',
+    'TextFileOperationResult',
+    'GlyphEditorAdapter',
+    'URI',
+    'UriIdentityService',
+  ]);
 });
 
 describe('Editor snapshot recovery', () => {
@@ -85,7 +117,9 @@ describe('Editor snapshot recovery', () => {
     ),
   )('keeps $phase stale and rejectable when the pinned editor rejects a $kind snapshot', async ({ kind, phase }) => {
     const fixture = editorFixture();
+    /** @type {EditProposal[]} */
     let stored = [];
+    /** @type {import('#src/editing/reviews/persistence/ProposalReviewStore.js').ProposalReviewStore} */
     const store = {
       load: async () => structuredClone(stored),
       save: async proposals => {
@@ -177,6 +211,7 @@ describe('Canonical editor snapshot identities', () => {
   it('reads alternate casing from the small dirty model without inspecting the larger disk file', async () => {
     const fixture = editorFixture({ diskSize: 8 * 1024 * 1024 });
     try {
+      /** @param {string} path */
       const read = path => fixture.adapter.handle({ type: 'read_snapshot', operationId: path, path, maxBytes: 4 });
       const original = await read('a.ts');
       const alternate = await read('A.TS');
@@ -294,6 +329,7 @@ describe('Canonical editor snapshot identities', () => {
   });
 });
 
+/** @param {string} kind */
 function editorError(kind) {
   switch (kind) {
     case 'binary':
@@ -318,21 +354,24 @@ function editorError(kind) {
 
 /** Uses the pinned URI identity service so casing follows provider capabilities, not the test OS. */
 function editorFixture({ caseSensitive = false, diskSize = 4 } = {}) {
-  const { URI, Event, UriIdentityService, GlyphEditorAdapter } = api;
+  const { URI, UriIdentityService, GlyphEditorAdapter } = api;
+  /** @type {import('#vs/base/common/event.js').Event<never>} */
+  const none = () => ({ dispose() {} });
   const root = { name: 'workspace', uri: URI.file('/workspace') };
   const stat = vi.fn(async () => ({ size: diskSize }));
   const exists = vi.fn(async () => false);
   const fileService = {
     hasProvider: () => true,
     hasCapability: () => caseSensitive,
-    onDidChangeFileSystemProviderRegistrations: Event.None,
-    onDidChangeFileSystemProviderCapabilities: Event.None,
+    onDidChangeFileSystemProviderRegistrations: none,
+    onDidChangeFileSystemProviderCapabilities: none,
     stat,
     exists,
   };
   const identity = new UriIdentityService(fileService);
   let text = 'tiny';
   let version = 1;
+  /** @type {Set<(event: { detailedReasons: unknown[] }) => void>} */
   const changeListeners = new Set();
   const model = {
     uri: identity.asCanonicalUri(URI.file('/workspace/a.ts')),
@@ -341,18 +380,26 @@ function editorFixture({ caseSensitive = false, diskSize = 4 } = {}) {
     getValueLength: () => text.length,
     getEOL: () => '\n',
     getFullModelRange: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: text.length + 1 }),
-    onDidChangeContent: listener => {
+    onDidChangeContent: (/** @type {(event: { detailedReasons: unknown[] }) => void} */ listener) => {
       changeListeners.add(listener);
       return { dispose: () => changeListeners.delete(listener) };
     },
   };
-  const resolveModel = vi.fn(async () => ({ object: { textEditorModel: model }, dispose() {} }));
-  const apply = vi.fn(async (edits, options) => {
-    text = edits[0].edit.text;
-    version++;
-    for (const listener of changeListeners) listener({ detailedReasons: [options.reason] });
-    return { isApplied: true };
-  });
+  const resolveModel = vi.fn(async (/** @type {URI} */ _resource) => ({
+    object: { textEditorModel: model },
+    dispose() {},
+  }));
+  const apply = vi.fn(
+    async (
+      /** @type {{ resource: URI, edit: { text: string } }[]} */ edits,
+      /** @type {{ reason: unknown }} */ options,
+    ) => {
+      text = edits[0].edit.text;
+      version++;
+      for (const listener of changeListeners) listener({ detailedReasons: [options.reason] });
+      return { isApplied: true };
+    },
+  );
   const adapter = new GlyphEditorAdapter(
     { createModelReference: resolveModel },
     { apply },
@@ -360,16 +407,16 @@ function editorFixture({ caseSensitive = false, diskSize = 4 } = {}) {
       getWorkspace: () => ({ id: 'workspace', folders: [root] }),
       getWorkspaceFolder: () => root,
       isInsideWorkspace: uri => uri.path.startsWith('/workspace/'),
-      onDidChangeWorkspaceFolders: Event.None,
-      onDidChangeWorkspaceName: Event.None,
-      onDidChangeWorkbenchState: Event.None,
+      onDidChangeWorkspaceFolders: none,
+      onDidChangeWorkspaceName: none,
+      onDidChangeWorkbenchState: none,
     },
     { getModel: uri => (uri.toString() === model.uri.toString() ? model : null) },
     { isDirty: () => true },
     { isWorkspaceTrusted: () => true },
     fileService,
     identity,
-    { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: Event.None },
+    { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: none },
   );
   return {
     adapter,

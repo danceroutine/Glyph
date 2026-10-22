@@ -33,7 +33,7 @@ describe(GlyphBackgroundTerminals, () => {
 
     const header = screen.getByRole('button', { name: '1 background terminal' });
     expect(header.getAttribute('aria-expanded')).toBe('false');
-    const list = document.getElementById(header.getAttribute('aria-controls')!)!;
+    const list = document.querySelector(`[id="${header.getAttribute('aria-controls')!}"]`)!;
     const reveal = list.parentElement!.parentElement!;
     expect(reveal.inert).toBe(true);
     expect(reveal.getAttribute('aria-hidden')).toBe('true');
@@ -42,7 +42,7 @@ describe(GlyphBackgroundTerminals, () => {
 
     expect(header.getAttribute('aria-expanded')).toBe('true');
     expect(reveal.inert).toBe(false);
-    expect(reveal.hasAttribute('data-expanded')).toBe(true);
+    expect(Object.hasOwn(reveal.dataset, 'expanded')).toBe(true);
     expect(screen.getByRole('listitem').textContent).toContain('Wake on: ready');
   });
 
@@ -56,14 +56,19 @@ describe(GlyphBackgroundTerminals, () => {
     );
 
     expect(screen.getByRole('button', { name: '2 background terminals' })).toBeTruthy();
-    expect(
-      screen.getAllByRole('listitem', { hidden: true }).every(item => !item.textContent!.includes('Wake on')),
-    ).toBe(true);
+    expect(screen.getAllByRole('listitem', { hidden: true }).every(item => !item.textContent.includes('Wake on'))).toBe(
+      true,
+    );
   });
 
   it('opens and stops terminals one action at a time', async () => {
     let finishOpen!: () => void;
-    const open = vi.fn(() => new Promise<void>(resolve => (finishOpen = resolve)));
+    const open = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finishOpen = resolve;
+        }),
+    );
     const stop = vi.fn(async () => {});
     const target = shell('s1', 'pnpm dev');
     render(<GlyphBackgroundTerminals shells={[target]} open={open} stop={stop} />);
@@ -80,11 +85,15 @@ describe(GlyphBackgroundTerminals, () => {
     expect(stop).not.toHaveBeenCalled();
     expect(openButton.disabled).toBe(true);
     expect(stopButton.disabled).toBe(true);
-    await act(async () => finishOpen());
+    await act(async () => {
+      finishOpen();
+    });
     expect(openButton.disabled).toBe(false);
     fireEvent.click(stopButton);
 
-    await waitFor(() => expect(stop).toHaveBeenCalledExactlyOnceWith(target));
+    await waitFor(() => {
+      expect(stop).toHaveBeenCalledExactlyOnceWith(target);
+    });
   });
 
   it('shows why an action failed until the next attempt', async () => {
@@ -96,10 +105,14 @@ describe(GlyphBackgroundTerminals, () => {
     fireEvent.click(screen.getByRole('button', { name: 'pnpm dev' }));
     expect((await screen.findByRole('alert')).textContent).toBe('Terminal closed');
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Permission denied'));
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toBe('Permission denied');
+    });
     fireEvent.click(screen.getByRole('button', { name: 'pnpm dev' }));
 
-    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
   });
 
   it('disables terminal actions when requested', () => {

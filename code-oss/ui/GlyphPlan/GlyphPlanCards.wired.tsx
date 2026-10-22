@@ -26,7 +26,7 @@ export function WiredGlyphPlanCards({
           buildNew={() => void decision.build(plan, true)}
         />
       ))}
-      {decision.error && <p role="alert">{decision.error}</p>}
+      {decision.error !== undefined && decision.error !== '' && <p role="alert">{decision.error}</p>}
     </>
   );
 }

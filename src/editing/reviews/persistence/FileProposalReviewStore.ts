@@ -10,6 +10,7 @@ import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilitySt
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
 import type { ProposalReviewStore } from './ProposalReviewStore.ts';
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 
 interface ProposalReviewCheckpoint {
   readonly schemaVersion: 3;
@@ -149,7 +150,7 @@ export class FileProposalReviewStore implements ProposalReviewStore {
       try {
         text = await readFile(this.path, 'utf8');
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !this.legacyPath) throw error;
+        if (errorCodeOf(error) !== 'ENOENT' || this.legacyPath === undefined || this.legacyPath === '') throw error;
         text = await readFile(this.legacyPath, 'utf8');
         importingLegacy = true;
       }
@@ -165,7 +166,7 @@ export class FileProposalReviewStore implements ProposalReviewStore {
       if (importingLegacy) await this.save(checkpoint.data.proposals, workspaceIdentity);
       return [...checkpoint.data.proposals];
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      if (errorCodeOf(error) === 'ENOENT') return [];
       throw new EditError(
         EditFailureReason.PERSISTENCE,
         'Could not load the active proposal reviews.',
@@ -195,7 +196,7 @@ export class FileProposalReviewStore implements ProposalReviewStore {
       );
     } finally {
       await unlink(temporary).catch(error => {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        if (errorCodeOf(error) !== 'ENOENT') throw error;
       });
     }
   }
@@ -207,7 +208,7 @@ export class FileProposalReviewStore implements ProposalReviewStore {
     try {
       await unlink(this.path);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      if (errorCodeOf(error) !== 'ENOENT') {
         throw new EditError(
           EditFailureReason.PERSISTENCE,
           'Could not clear the settled proposal reviews.',

@@ -3,7 +3,7 @@ import { AgentModeID } from '#src/chat/AgentMode.js';
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren, HTMLAttributes, Ref, VNode } from 'preact';
 import { ChevronDown } from 'lucide-preact';
-import { Button, IconButton, ButtonAppearance, ButtonVariant, ButtonSize, type ButtonProps } from './Button.tsx';
+import { Button, IconButton, ButtonAppearance, ButtonVariant, ButtonSize, isOn, type ButtonProps } from './Button.tsx';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 
 const styles = {
@@ -56,7 +56,7 @@ export function SplitButtonGroup({
     <div
       {...props}
       {...(groupRef ? { ref: groupRef } : {})}
-      class={`${styles.group} ${fullWidth ? styles.fullWidth : ''}`}
+      class={`${styles.group} ${fullWidth === true ? styles.fullWidth : ''}`}
     >
       {segments}
     </div>
@@ -74,16 +74,18 @@ export function SplitButton({ menuLabel, menu, ...props }: SplitButtonProps) {
   const panel = useRef<HTMLDivElement>(null);
   const id = useId();
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
     panel.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
     const outside = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
+      if (!(event.target instanceof Node && root.current?.contains(event.target) === true)) setOpen(false);
     };
     document.addEventListener('pointerdown', outside);
-    return () => document.removeEventListener('pointerdown', outside);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+    };
   }, [open]);
   useEffect(() => {
-    if (props.disabled || props.loading) setOpen(false);
+    if (isOn(props.disabled) || props.loading === true) setOpen(false);
   }, [props.disabled, props.loading]);
   return (
     <SplitButtonGroup
@@ -107,8 +109,10 @@ export function SplitButton({ menuLabel, menu, ...props }: SplitButtonProps) {
         mode={props.mode ?? AgentModeID.AGENT}
         size={props.size ?? ButtonSize.MEDIUM}
         appearance={props.appearance ?? ButtonAppearance.FILLED}
-        disabled={!!props.disabled || !!props.loading}
-        onClick={() => setOpen(value => !value)}
+        disabled={isOn(props.disabled) || props.loading === true}
+        onClick={() => {
+          setOpen(value => !value);
+        }}
       >
         <ChevronDown size={14} />
       </IconButton>
@@ -120,7 +124,7 @@ export function SplitButton({ menuLabel, menu, ...props }: SplitButtonProps) {
           role="group"
           aria-label={menuLabel}
           onClick={event => {
-            if ((event.target as Element).closest('button:not(:disabled)')) {
+            if (event.target instanceof Element && event.target.closest('button:not(:disabled)') !== null) {
               setOpen(false);
               toggle.current?.focus();
             }

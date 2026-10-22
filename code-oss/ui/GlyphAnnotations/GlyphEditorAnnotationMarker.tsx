@@ -24,7 +24,9 @@ export function GlyphEditorAnnotationMarker({
       class={`glyph-editor-annotation-marker ${marker}`}
       aria-label={`Edit annotation ${order}`}
       title={comment}
-      onMouseDown={event => event.preventDefault()}
+      onMouseDown={event => {
+        event.preventDefault();
+      }}
       onClick={open}
     >
       <MessageCircle size={15} aria-hidden="true" />

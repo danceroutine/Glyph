@@ -38,9 +38,9 @@ const styles = {
 };
 
 function FileIcon({ path }: { readonly path: string }) {
-  const Icon = /\.(?:[cm]?[jt]sx?|py|rs|go|swift|css|html|json|ya?ml|sh)$/i.test(path)
+  const Icon = /\.(?:[cm]?[jt]sx?|py|rs|go|swift|css|html|json|ya?ml|sh)$/iu.test(path)
     ? FileCode
-    : /\.(?:md|txt|log)$/i.test(path)
+    : /\.(?:md|txt|log)$/iu.test(path)
       ? FileText
       : File;
   return <Icon size={16} aria-hidden="true" />;
@@ -91,7 +91,7 @@ export function GlyphContextPicker({
       constrainToAnchor
       renderItem={file => {
         const isFolder = file.kind === GlyphContextCandidateKind.FOLDER;
-        const path = file.path.replace(/\/$/, '');
+        const path = file.path.replace(/\/$/u, '');
         const slash = path.lastIndexOf('/');
         const name = file.name ?? path.slice(slash + 1);
         const directory = isFolder ? file.path : path.slice(0, slash + 1);

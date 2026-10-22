@@ -16,7 +16,7 @@ const transport = vi.hoisted(() => {
     sent: [] as string[],
     acquire: vi.fn<(request: string, response: string) => Promise<unknown>>(),
     exitHost() {
-      for (const listener of [...(listeners.get('vscode:glyph:hostExited') ?? [])]) listener();
+      for (const listener of Array.from(listeners.get('vscode:glyph:hostExited') ?? [])) listener();
     },
   };
 });
@@ -81,16 +81,23 @@ function host({ generation = 'generation', acknowledge = true } = {}) {
     event,
     ...overrides,
   });
-  const emit = (event: unknown, overrides: Record<string, unknown> = {}) => port.receive(envelope(event, overrides));
+  const emit = (event: unknown, overrides: Record<string, unknown> = {}) => {
+    port.receive(envelope(event, overrides));
+  };
   const acknowledgeRequest = (request: PostedRequest) => {
     if (request.command.type === GlyphWorkbenchCommandType.ATTACH_WORKSPACE)
       emit({ type: GlyphHostEventType.INITIAL_STATE, state: {} });
     emit({ type: GlyphHostEventType.COMMAND_RESULT, requestId: request.requestId, ok: true });
   };
-  port.onStart = () => port.receive({ type: GlyphTransportMessageType.READY, identity, hostGeneration: generation });
+  port.onStart = () => {
+    port.receive({ type: GlyphTransportMessageType.READY, identity, hostGeneration: generation });
+  };
   if (acknowledge)
     port.onPost = message => {
-      if ((message as PostedRequest).requestId) queueMicrotask(() => acknowledgeRequest(message as PostedRequest));
+      if ((message as PostedRequest).requestId)
+        queueMicrotask(() => {
+          acknowledgeRequest(message as PostedRequest);
+        });
     };
   transport.acquire.mockImplementation(async () => port);
   return {
@@ -100,12 +107,13 @@ function host({ generation = 'generation', acknowledge = true } = {}) {
     skip: (count: number) => {
       sequence += count;
     },
-    fail: (request: PostedRequest, message: string) =>
+    fail: (request: PostedRequest, message: string) => {
       emit({
         type: GlyphHostEventType.ERROR,
         requestId: request.requestId,
         error: { code: 'INTERNAL', message, retryable: false },
-      }),
+      });
+    },
   };
 }
 
@@ -229,13 +237,17 @@ describe(GlyphDesktopClient, () => {
       fixture.port.onPost = message => {
         const request = message as PostedRequest;
         if (fixture.port.requests.length === 1) return;
-        queueMicrotask(() => fixture.acknowledgeRequest(request));
+        queueMicrotask(() => {
+          fixture.acknowledgeRequest(request);
+        });
       };
       const first = instance.connect(roots, true);
-      await vi.waitFor(() => expect(fixture.port.requests).toHaveLength(1));
+      await vi.waitFor(() => {
+        expect(fixture.port.requests).toHaveLength(1);
+      });
 
       const latest = instance.connect(roots, false);
-      fixture.fail(fixture.port.requests[0]!, 'Recovery was invalidated.');
+      fixture.fail(fixture.port.requests[0], 'Recovery was invalidated.');
       await Promise.all([first, latest]);
 
       expect(latest).toBe(first);
@@ -246,7 +258,11 @@ describe(GlyphDesktopClient, () => {
     it('disconnects when the current attachment fails', async () => {
       const { instance, disconnects } = client();
       const fixture = host({ acknowledge: false });
-      fixture.port.onPost = message => queueMicrotask(() => fixture.fail(message as PostedRequest, 'Denied.'));
+      fixture.port.onPost = message => {
+        queueMicrotask(() => {
+          fixture.fail(message as PostedRequest, 'Denied.');
+        });
+      };
 
       await expect(instance.connect(roots, true)).rejects.toThrow('INTERNAL: Denied.');
 
@@ -269,11 +285,12 @@ describe(GlyphDesktopClient, () => {
     it('rejects an attachment acknowledged by a connection that was retired', async () => {
       const { instance, disconnects } = client();
       const fixture = host({ acknowledge: false });
-      fixture.port.onPost = message =>
+      fixture.port.onPost = message => {
         queueMicrotask(() => {
           fixture.acknowledgeRequest(message as PostedRequest);
           transport.exitHost();
         });
+      };
 
       await expect(instance.connect(roots, true)).rejects.toThrow('The Glyph host connection was superseded.');
 
@@ -286,10 +303,17 @@ describe(GlyphDesktopClient, () => {
       const { instance } = client();
       const port = new FakePort();
       let issue: (port: FakePort) => void = () => {};
-      transport.acquire.mockImplementation(() => new Promise(resolve => (issue = resolve)));
+      transport.acquire.mockImplementation(
+        () =>
+          new Promise(resolve => {
+            issue = resolve;
+          }),
+      );
 
       const connecting = instance.connect(roots, true);
-      await vi.waitFor(() => expect(transport.acquire).toHaveBeenCalled());
+      await vi.waitFor(() => {
+        expect(transport.acquire).toHaveBeenCalled();
+      });
       transport.exitHost();
       issue(port);
 
@@ -322,7 +346,9 @@ describe(GlyphDesktopClient, () => {
       port.onStart = () => {};
 
       const connecting = instance.connect(roots, true);
-      await vi.waitFor(() => expect(transport.acquire).toHaveBeenCalled());
+      await vi.waitFor(() => {
+        expect(transport.acquire).toHaveBeenCalled();
+      });
       await Promise.resolve();
       transport.exitHost();
 
@@ -350,7 +376,9 @@ describe(GlyphDesktopClient, () => {
         port.receive({ type: GlyphTransportMessageType.READY, identity, hostGeneration: 'generation' });
         once(
           () => internals.identity !== undefined,
-          () => transport.exitHost(),
+          () => {
+            transport.exitHost();
+          },
         );
       };
 
@@ -407,8 +435,12 @@ describe(GlyphDesktopClient, () => {
     it('waits for a failing connection before detaching', async () => {
       const { instance } = client();
       const fixture = host({ acknowledge: false });
-      fixture.port.onPost = message => queueMicrotask(() => fixture.fail(message as PostedRequest, 'Denied.'));
-      const connecting = instance.connect(roots, true).catch(error => error);
+      fixture.port.onPost = message => {
+        queueMicrotask(() => {
+          fixture.fail(message as PostedRequest, 'Denied.');
+        });
+      };
+      const connecting = instance.connect(roots, true).catch((error: unknown) => error);
 
       await instance.detachWorkspace();
 
@@ -453,7 +485,11 @@ describe(GlyphDesktopClient, () => {
       const { instance } = client();
       const fixture = host();
       await instance.connect(roots, true);
-      fixture.port.onPost = message => queueMicrotask(() => fixture.fail(message as PostedRequest, 'No chat.'));
+      fixture.port.onPost = message => {
+        queueMicrotask(() => {
+          fixture.fail(message as PostedRequest, 'No chat.');
+        });
+      };
 
       await expect(instance.request(openChat)).rejects.toThrow('INTERNAL: No chat.');
     });
@@ -528,9 +564,9 @@ describe(GlyphDesktopClient, () => {
       port.receive({ type: GlyphTransportMessageType.EDITOR_REQUEST, request });
       port.receive({ type: GlyphTransportMessageType.EDITOR_REQUEST });
 
-      await vi.waitFor(() =>
-        expect(port.posted.at(-1)).toEqual({ type: GlyphTransportMessageType.EDITOR_RESPONSE, response }),
-      );
+      await vi.waitFor(() => {
+        expect(port.posted.at(-1)).toEqual({ type: GlyphTransportMessageType.EDITOR_RESPONSE, response });
+      });
       expect(handler).toHaveBeenCalledTimes(1);
       expect(handler).toHaveBeenCalledWith(request);
     });
@@ -581,7 +617,11 @@ describe(GlyphDesktopClient, () => {
     it('settles commands acknowledged by events it already applied', async () => {
       const { instance, events } = client();
       const fixture = host({ acknowledge: false });
-      fixture.port.onPost = message => queueMicrotask(() => fixture.acknowledgeRequest(message as PostedRequest));
+      fixture.port.onPost = message => {
+        queueMicrotask(() => {
+          fixture.acknowledgeRequest(message as PostedRequest);
+        });
+      };
       await instance.connect(roots, true);
       fixture.port.onPost = () => {};
       const pending = instance.request(openChat);
@@ -653,9 +693,9 @@ describe(GlyphDesktopClient, () => {
       fixture.skip(1);
       fixture.emit({ type: GlyphHostEventType.USAGE });
       fixture.emit({ type: GlyphHostEventType.USAGE });
-      await vi.waitFor(() =>
-        expect(events.map(envelope => envelope.event.type)).toContain(GlyphHostEventType.COMMAND_RESULT),
-      );
+      await vi.waitFor(() => {
+        expect(events.map(envelope => envelope.event.type)).toContain(GlyphHostEventType.COMMAND_RESULT);
+      });
 
       expect(fixture.port.requests.map(request => request.command)).toEqual([
         { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true },
@@ -685,7 +725,9 @@ describe(GlyphDesktopClient, () => {
           fixture.emit({ type: GlyphHostEventType.USAGE }, { sequence: 0 });
         },
       );
-      await vi.waitFor(() => expect(internals.recovering).toBeUndefined());
+      await vi.waitFor(() => {
+        expect(internals.recovering).toBeUndefined();
+      });
 
       expect(settling).toBe(true);
       expect(fixture.port.requests).toHaveLength(2);
@@ -694,11 +736,12 @@ describe(GlyphDesktopClient, () => {
     it('defers recovery while it is attaching', async () => {
       const { instance } = client();
       const fixture = host({ acknowledge: false });
-      fixture.port.onPost = message =>
+      fixture.port.onPost = message => {
         queueMicrotask(() => {
           fixture.emit({ type: GlyphHostEventType.USAGE });
           fixture.acknowledgeRequest(message as PostedRequest);
         });
+      };
 
       await instance.connect(roots, true);
 
@@ -712,7 +755,9 @@ describe(GlyphDesktopClient, () => {
       fixture.port.onPost = message => {
         const request = message as PostedRequest;
         if (request.command?.type === GlyphWorkbenchCommandType.ATTACH_WORKSPACE)
-          queueMicrotask(() => fixture.fail(request, 'Recovery denied.'));
+          queueMicrotask(() => {
+            fixture.fail(request, 'Recovery denied.');
+          });
       };
       const pending = instance.request(openChat);
 
@@ -731,7 +776,7 @@ describe(GlyphDesktopClient, () => {
         if ((message as PostedRequest).command?.type === GlyphWorkbenchCommandType.ATTACH_WORKSPACE)
           throw 'uncloneable';
       };
-      const pending = instance.request(openChat).catch(error => error);
+      const pending = instance.request(openChat).catch((error: unknown) => error);
 
       fixture.emit({ type: GlyphHostEventType.USAGE }, { sequence: 0 });
 

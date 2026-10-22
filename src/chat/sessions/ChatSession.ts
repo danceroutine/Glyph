@@ -192,7 +192,9 @@ export class ChatSession {
               name,
               phase,
               arguments: toToolActivityPreview(part.activity.arguments),
-              ...(part.activity.output ? { output: toToolActivityPreview(part.activity.output) } : {}),
+              ...(part.activity.output !== undefined && part.activity.output !== ''
+                ? { output: toToolActivityPreview(part.activity.output) }
+                : {}),
               textOffset: tools.get(callId)?.textOffset ?? assistantText.length,
               ...(shell ? { shell } : {}),
             });
@@ -232,17 +234,19 @@ export class ChatSession {
         checkpoints: { before, after: this.historySnapshot() },
         ...(questionResponses ? { questionResponses: questionResponses() } : {}),
         ...(modeSwaps ? { modeSwaps: modeSwaps() } : {}),
-        ...(steering?.messages.length ? { steering: steering.messages } : {}),
+        ...(steering !== undefined && steering.messages.length > 0 ? { steering: steering.messages } : {}),
         userText: request.text,
         options: {
           ...(request.attachmentSpans ? { attachmentSpans: request.attachmentSpans } : {}),
-          ...(request.turnId ? { turnId: request.turnId } : {}),
-          ...(request.agentReviewId ? { agentReviewId: request.agentReviewId } : {}),
-          ...(request.mode ? { mode: request.mode } : {}),
+          ...(request.turnId !== undefined && request.turnId !== '' ? { turnId: request.turnId } : {}),
+          ...(request.agentReviewId !== undefined && request.agentReviewId !== ''
+            ? { agentReviewId: request.agentReviewId }
+            : {}),
+          ...(request.mode !== undefined ? { mode: request.mode } : {}),
           ...(request.annotations ? { annotations: request.annotations } : {}),
         },
         attachmentPaths: request.attachments.map(attachment => attachment.path),
-        ...(request.attachments.length ? { attachments: request.attachments } : {}),
+        ...(request.attachments.length > 0 ? { attachments: request.attachments } : {}),
         assistantText,
         reasoningSummary,
         ...(result.usage ? { usage: result.usage } : {}),

@@ -1,14 +1,16 @@
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { hasErrorCode } from '#scripts/support/hasErrorCode.mjs';
 
-const huskyMarker = /^#husky \d/m;
-const generatedCheckoutTarget = /^cd \.code-oss\/src\s*$/m;
+const huskyMarker = /^#husky \d/mu;
+const generatedCheckoutTarget = /^cd \.code-oss\/src\s*$/mu;
 
 /**
  * Removes only hooks that upstream Husky installed for the generated checkout.
  * Existing project or user hooks are intentionally left untouched.
  */
+/** @param {string} repositoryRoot */
 export async function removeLeakedCodeOssHuskyHooks(repositoryRoot) {
   const hooksRoot = resolve(
     repositoryRoot,
@@ -17,10 +19,11 @@ export async function removeLeakedCodeOssHuskyHooks(repositoryRoot) {
       encoding: 'utf8',
     }).trim(),
   );
-  const entries = await readdir(hooksRoot, { withFileTypes: true }).catch(error => {
-    if (error.code === 'ENOENT') return [];
+  const entries = await readdir(hooksRoot, { withFileTypes: true }).catch((/** @type {unknown} */ error) => {
+    if (hasErrorCode(error, 'ENOENT')) return [];
     throw error;
   });
+  /** @type {string[]} */
   const removed = [];
   for (const entry of entries) {
     if (!entry.isFile()) continue;
@@ -30,5 +33,5 @@ export async function removeLeakedCodeOssHuskyHooks(repositoryRoot) {
     await unlink(path);
     removed.push(entry.name);
   }
-  return removed.sort();
+  return removed.toSorted();
 }

@@ -1,16 +1,24 @@
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+
+/** @param {GlyphWorkbench} glyph */
 async function history(glyph) {
   const toggle = glyph.page.getByRole('button', { name: 'Chat history', exact: true });
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
   return glyph.page.getByRole('navigation', { name: 'Saved chats' });
 }
 
+/** @param {GlyphWorkbench} glyph */
 async function closeHistory(glyph) {
   const toggle = glyph.page.getByRole('button', { name: 'Chat history', exact: true });
   if ((await toggle.getAttribute('aria-expanded')) === 'true') await toggle.click();
 }
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} name
+ */
 async function openChat(glyph, name) {
   const list = await history(glyph);
   await glyph.page.getByRole('searchbox', { name: 'Search chats' }).fill(name);
@@ -147,7 +155,7 @@ it.describe('Saved chats and new conversation setup', () => {
     const panel = await glyph.page.locator('.part.auxiliarybar').boundingBox();
     const sashes = await glyph.page.locator('.monaco-sash.vertical').all();
     const candidates = (await Promise.all(sashes.map(sash => sash.boundingBox()))).filter(Boolean);
-    const sash = candidates.sort(
+    const sash = candidates.toSorted(
       (a, b) => Math.abs(a.x + a.width / 2 - panel.x) - Math.abs(b.x + b.width / 2 - panel.x),
     )[0];
     await glyph.page.mouse.move(sash.x + sash.width / 2, sash.y + sash.height / 2);
@@ -273,7 +281,7 @@ it.describe('Account and model selection', () => {
       .selectOption({ label: 'empty@example.invalid' });
     await closeHistory(glyph);
     await expect(glyph.page.getByRole('combobox', { name: 'Model', exact: true })).toBeDisabled();
-    await expect(glyph.page.locator('.glyph-workbench').getByRole('alert')).toContainText(/No.*models.*available/i);
+    await expect(glyph.page.locator('.glyph-workbench').getByRole('alert')).toContainText(/No.*models.*available/iu);
     await expect(glyph.composer).toHaveText('Keep this draft');
     expect(provider.requests).toHaveLength(0);
     await history(glyph);

@@ -78,16 +78,18 @@ function EditorAnnotationsPreview({ annotations }: { readonly annotations: reado
     ? editorAnnotationSource.text.slice(0, state.draft.annotation.from).split('\n').length - 1
     : -1;
   useEffect(() => {
-    if (!annotationHost) return;
-    const observer = new ResizeObserver(() =>
-      setAnnotationHeight(Math.max(128, annotationHost.getBoundingClientRect().height)),
-    );
+    if (!annotationHost) return undefined;
+    const observer = new ResizeObserver(() => {
+      setAnnotationHeight(Math.max(128, annotationHost.getBoundingClientRect().height));
+    });
     observer.observe(annotationHost);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+    };
   }, [annotationHost]);
   const [send] = useState(() => fn().mockName('GlyphEditorAnnotations.send').mockResolvedValue(undefined));
   useEffect(() => {
-    if (!state.candidate) return;
+    if (!state.candidate) return undefined;
     const keydown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') {
         event.preventDefault();
@@ -95,7 +97,9 @@ function EditorAnnotationsPreview({ annotations }: { readonly annotations: reado
       }
     };
     window.addEventListener('keydown', keydown);
-    return () => window.removeEventListener('keydown', keydown);
+    return () => {
+      window.removeEventListener('keydown', keydown);
+    };
   }, [state.candidate, state.open]);
   useEffect(() => {
     // Selection capture is installed by the annotation hook's effects before play begins.
@@ -121,9 +125,9 @@ function EditorAnnotationsPreview({ annotations }: { readonly annotations: reado
                       key={annotation.id}
                       order={annotation.order}
                       comment={annotation.comment}
-                      open={fn<NonNullable<ComponentProps<typeof GlyphEditorAnnotationMarker>['open']>>(() =>
-                        state.edit(annotation.id),
-                      ).mockName('GlyphEditorAnnotations.open')}
+                      open={fn<NonNullable<ComponentProps<typeof GlyphEditorAnnotationMarker>['open']>>(() => {
+                        state.edit(annotation.id);
+                      }).mockName('GlyphEditorAnnotations.open')}
                     />
                   ))}
               </div>

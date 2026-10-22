@@ -1,7 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { DeterministicDesktopRuntimeFactory } from '#src/desktop/host/DeterministicDesktopRuntime.js';
 import { GlyphContextAttachmentKind } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
@@ -40,13 +39,13 @@ vi.mock('#src/shell/NativeShellSandboxLauncher.js', () => ({
     constructor(options: unknown) {
       native.launcher(options);
     }
-    launch(...arguments_: unknown[]) {
+    launch(...arguments_: unknown[]): unknown {
       return native.launch(...arguments_);
     }
   },
 }));
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..', '..');
 const nativeRoot = join(repositoryRoot, 'native', `${process.platform}-${process.arch}`);
 const suffix = process.platform === 'win32' ? '.exe' : '';
 
@@ -54,11 +53,12 @@ function sandboxChild(exit: { code: number | null; signal: string | null; stderr
   const child = Object.assign(new EventEmitter(), {
     stderr: new EventEmitter(),
     stdin: {
-      end: () =>
+      end: () => {
         queueMicrotask(() => {
-          if (exit.stderr) child.stderr.emit('data', Buffer.from(exit.stderr));
+          if (exit.stderr !== undefined && exit.stderr !== '') child.stderr.emit('data', Buffer.from(exit.stderr));
           child.emit('exit', exit.code, exit.signal);
-        }),
+        });
+      },
     },
   });
   return child;
@@ -71,7 +71,9 @@ function passingProbe() {
   native.execFile
     .mockReset()
     .mockImplementation((_file: string, _arguments: string[], callback: (error: Error | null) => void) => {
-      queueMicrotask(() => callback(null));
+      queueMicrotask(() => {
+        callback(null);
+      });
       return { stdin: { end: vi.fn() } };
     });
   native.launch.mockReset().mockImplementation(() => sandboxChild({ code: 0, signal: null }));
@@ -152,7 +154,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
     it('keeps reporting a failed probe without probing again', async () => {
       passingProbe();
       native.execFile.mockImplementation((_file: string, _arguments: string[], callback: (error: Error) => void) => {
-        queueMicrotask(() => callback(new Error('missing context index')));
+        queueMicrotask(() => {
+          callback(new Error('missing context index'));
+        });
         return { stdin: null };
       });
       const factory = new DeterministicDesktopRuntimeFactory();
@@ -180,7 +184,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
       passingProbe();
       native.launch.mockImplementation(() => {
         const child = Object.assign(new EventEmitter(), { stdin: null, stderr: null });
-        queueMicrotask(() => child.emit('error', new Error('spawn EACCES')));
+        queueMicrotask(() => {
+          child.emit('error', new Error('spawn EACCES'));
+        });
         return child;
       });
       await expect(new DeterministicDesktopRuntimeFactory().create({ identity, roots, emit: vi.fn() })).rejects.toThrow(
@@ -192,7 +198,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
       passingProbe();
       native.launch.mockImplementation(() => {
         const child = Object.assign(new EventEmitter(), { stdin: null, stderr: null });
-        queueMicrotask(() => child.emit('exit', 0, null));
+        queueMicrotask(() => {
+          child.emit('exit', 0, null);
+        });
         return child;
       });
       await expect(
@@ -225,7 +233,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
 
     it('creates runtimes that stream a fixed answer word by word at the default pace', async () => {
       const events: GlyphHostEvent[] = [];
-      const runtime = await createRuntime(event => events.push(event));
+      const runtime = await createRuntime(event => {
+        events.push(event);
+      });
       vi.useFakeTimers();
       vi.stubEnv('GLYPH_DESKTOP_TEST_STREAM_DELAY_MS', undefined);
       onTestFinished(() => {
@@ -291,7 +301,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
 
     it.each(['not-a-number', '-1'])('creates runtimes that ignore the stream delay %j', async configured => {
       const events: GlyphHostEvent[] = [];
-      const runtime = await createRuntime(event => events.push(event));
+      const runtime = await createRuntime(event => {
+        events.push(event);
+      });
       vi.useFakeTimers();
       vi.stubEnv('GLYPH_DESKTOP_TEST_STREAM_DELAY_MS', configured);
       onTestFinished(() => {
@@ -312,7 +324,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
 
     it('creates runtimes that report how much attached context they received', async () => {
       const events: GlyphHostEvent[] = [];
-      const runtime = await createRuntime(event => events.push(event));
+      const runtime = await createRuntime(event => {
+        events.push(event);
+      });
       vi.useFakeTimers();
       vi.stubEnv('GLYPH_DESKTOP_TEST_STREAM_DELAY_MS', '0');
       onTestFinished(() => {
@@ -351,7 +365,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
 
     it('creates runtimes that accept a message while its answer is still streaming', async () => {
       const events: GlyphHostEvent[] = [];
-      const runtime = await createRuntime(event => events.push(event));
+      const runtime = await createRuntime(event => {
+        events.push(event);
+      });
       vi.useFakeTimers();
       vi.stubEnv('GLYPH_DESKTOP_TEST_STREAM_DELAY_MS', '10');
       onTestFinished(() => {
@@ -373,7 +389,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
 
     it('creates runtimes that stop streaming with the partial answer when a run is cancelled', async () => {
       const events: GlyphHostEvent[] = [];
-      const runtime = await createRuntime(event => events.push(event));
+      const runtime = await createRuntime(event => {
+        events.push(event);
+      });
       vi.useFakeTimers();
       vi.stubEnv('GLYPH_DESKTOP_TEST_STREAM_DELAY_MS', '10');
       onTestFinished(() => {
@@ -408,7 +426,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
       'creates runtimes that cancel active runs on %s',
       async lifecycle => {
         const events: GlyphHostEvent[] = [];
-        const runtime = await createRuntime(event => events.push(event));
+        const runtime = await createRuntime(event => {
+          events.push(event);
+        });
         vi.useFakeTimers();
         vi.stubEnv('GLYPH_DESKTOP_TEST_STREAM_DELAY_MS', '10');
         onTestFinished(() => {
@@ -433,7 +453,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
 
     it('creates runtimes that ignore commands they do not implement', async () => {
       const events: GlyphHostEvent[] = [];
-      const runtime = await createRuntime(event => events.push(event));
+      const runtime = await createRuntime(event => {
+        events.push(event);
+      });
       await expect(
         runtime.handle(
           { type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: 'native-chat' },

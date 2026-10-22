@@ -108,7 +108,9 @@ const codeEditorOf = (model: ITextModel | null, options: { dom?: boolean } = {})
   margin.setAttribute('aria-hidden', 'true');
   dom.append(margin);
   document.body.append(dom);
-  onTestFinished(() => dom.remove());
+  onTestFinished(() => {
+    dom.remove();
+  });
   const keys = new Map<string, { value: unknown; set: Mock; reset: Mock }>();
   const zones = new Map<string, IViewZone>();
   const content = new Map<string, IContentWidget>();
@@ -206,16 +208,21 @@ const codeEditorOf = (model: ITextModel | null, options: { dom?: boolean } = {})
           layoutZone(id: string): void;
           removeZone(id: string): void;
         }) => void,
-      ) =>
+      ) => {
         callback({
           addZone: zone => {
             const id = `zone-${nextZone++}`;
             zones.set(id, zone);
             return id;
           },
-          layoutZone: id => editor.layoutZone(id),
-          removeZone: id => zones.delete(id),
-        }),
+          layoutZone: (id: string) => {
+            editor.layoutZone(id);
+          },
+          removeZone: id => {
+            zones.delete(id);
+          },
+        });
+      },
     ),
     revealLineInCenter: vi.fn(),
     revealPositionInCenterIfOutsideViewport: vi.fn(),
@@ -468,7 +475,9 @@ describe(GlyphProposalEditor, () => {
       });
 
       const reading = editor.open('c1', 'p1', 'f1');
-      await vi.waitFor(() => expect(releaseRead).toBeDefined());
+      await vi.waitFor(() => {
+        expect(releaseRead).toBeDefined();
+      });
       const opening = editor.open('c1', 'p1', 'f2');
       releaseRead();
       await Promise.all([reading, opening]);
@@ -483,7 +492,9 @@ describe(GlyphProposalEditor, () => {
         return open(input);
       });
       const stale = editor.open('c1', 'p1', 'f1');
-      await vi.waitFor(() => expect(releaseEditor).toBeDefined());
+      await vi.waitFor(() => {
+        expect(releaseEditor).toBeDefined();
+      });
       services.editors.openEditor.mockResolvedValueOnce(undefined);
       const closed = editor.open('c1', 'p1', 'f2');
       releaseEditor();
@@ -506,8 +517,12 @@ describe(GlyphProposalEditor, () => {
 
     it('detaches from an editor that shows another document or closes', async () => {
       for (const close of [
-        (code: FakeCodeEditor) => code.changeModel(null),
-        (code: FakeCodeEditor) => code.dispose(),
+        (code: FakeCodeEditor) => {
+          code.changeModel(null);
+        },
+        (code: FakeCodeEditor) => {
+          code.dispose();
+        },
       ]) {
         const { editor, code, view, keybindingsUpdated } = harnessOf();
         await editor.open('c1', 'p1', 'f1');
@@ -535,7 +550,7 @@ describe(GlyphProposalEditor, () => {
   it('labels the current change and file', async () => {
     const { editor, services, full, hunk } = harnessOf();
     services.keybindings.lookupKeybinding.mockImplementation(command =>
-      command === GlyphReviewCommand.KEEP ? { getLabel: () => '⌘Y' } : undefined,
+      command === (GlyphReviewCommand.KEEP as string) ? { getLabel: () => '⌘Y' } : undefined,
     );
 
     await editor.open('c1', 'p1', 'f1');
@@ -595,12 +610,12 @@ describe(GlyphProposalEditor, () => {
 
     editor.executeCommand(GlyphReviewCommand.ADD_TO_CHAT);
 
-    await vi.waitFor(() =>
+    await vi.waitFor(() => {
       expect(actions.annotate).toHaveBeenCalledWith(
         'c1',
         expect.objectContaining({ sourceId: 'p1:f1:', quote: 'one' }),
-      ),
-    );
+      );
+    });
   });
 
   it('keeps or undoes the current change and rereads the file', async () => {
@@ -814,7 +829,9 @@ describe(GlyphProposalEditor, () => {
     code().layoutZone.mockClear();
 
     (view(true).node.firstElementChild as HTMLElement).style.height = '64px';
-    await vi.waitFor(() => expect([...code().zones.values()][0].heightInPx).toBe(64));
+    await vi.waitFor(() => {
+      expect([...code().zones.values()][0].heightInPx).toBe(64);
+    });
     expect(code().layoutZone).toHaveBeenCalledWith('zone-0');
 
     code().layoutInfo = { width: 500, contentWidth: 400, verticalScrollbarWidth: 10, contentLeft: 60 };
@@ -951,7 +968,9 @@ describe(GlyphProposalEditor, () => {
 
       editor.executeCommand(GlyphReviewCommand.ADD_TO_CHAT);
 
-      await vi.waitFor(() => expect(actions.annotate).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => {
+        expect(actions.annotate).toHaveBeenCalledTimes(1);
+      });
       expect(actions.annotate).toHaveBeenCalledWith(
         'c1',
         expect.objectContaining({ quote: 'three', from: 8, to: 13, comment: '', sourceId: 'p1:f1:i1' }),
@@ -967,14 +986,14 @@ describe(GlyphProposalEditor, () => {
 
       editor.executeCommand(GlyphReviewCommand.ADD_TO_CHAT);
 
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(actions.report).toHaveBeenCalledWith(
           expect.objectContaining({
             code: GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
             message: 'Select a passage shorter than 50,000 characters to annotate.',
           }),
-        ),
-      );
+        );
+      });
       expect(actions.annotate).not.toHaveBeenCalled();
     });
 
@@ -986,9 +1005,9 @@ describe(GlyphProposalEditor, () => {
 
       editor.executeCommand(GlyphReviewCommand.ADD_TO_CHAT);
 
-      await vi.waitFor(() =>
-        expect(actions.annotate).toHaveBeenCalledWith('c1', expect.objectContaining({ label: 'Proposal' })),
-      );
+      await vi.waitFor(() => {
+        expect(actions.annotate).toHaveBeenCalledWith('c1', expect.objectContaining({ label: 'Proposal' }));
+      });
     });
   });
 
@@ -1007,7 +1026,7 @@ describe(GlyphProposalEditor, () => {
   it('offers to add a selection to Chat beside it', async () => {
     const { editor, services, code, buttons, actions } = harnessOf();
     services.keybindings.lookupKeybinding.mockImplementation(command =>
-      command === GlyphReviewCommand.ADD_TO_CHAT ? { getLabel: () => '⌘L' } : undefined,
+      command === (GlyphReviewCommand.ADD_TO_CHAT as string) ? { getLabel: () => '⌘L' } : undefined,
     );
     await editor.open('c1', 'p1', 'f1');
 
@@ -1024,9 +1043,9 @@ describe(GlyphProposalEditor, () => {
       preference: [ContentWidgetPositionPreference.BELOW],
     });
     buttons[1].open();
-    await vi.waitFor(() =>
-      expect(actions.annotate).toHaveBeenCalledWith('c1', expect.objectContaining({ quote: 'th' })),
-    );
+    await vi.waitFor(() => {
+      expect(actions.annotate).toHaveBeenCalledWith('c1', expect.objectContaining({ quote: 'th' }));
+    });
   });
 
   it('withholds the selection button for empty selections, annotations in progress, or submissions', async () => {
@@ -1247,7 +1266,9 @@ describe(GlyphProposalEditor, () => {
       const body = document.createElement('div');
       body.style.height = '300px';
       node.append(body);
-      await vi.waitFor(() => expect(zone.heightInPx).toBe(316));
+      await vi.waitFor(() => {
+        expect(zone.heightInPx).toBe(316);
+      });
       expect(code().layoutZone).toHaveBeenCalledTimes(1);
       code().layoutInfo = { ...code().layoutInfo, contentWidth: 300, contentLeft: 40 };
       code().layout();
@@ -1264,7 +1285,9 @@ describe(GlyphProposalEditor, () => {
       await editor.revealAnnotation(annotationOf(code().model!));
       const inline = code().overlay.get('glyph.annotation.editor')!;
 
-      await vi.waitFor(() => expect(code().layoutOverlayWidget).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(code().layoutOverlayWidget).toHaveBeenCalledTimes(2);
+      });
       expect(code().layoutOverlayWidget).toHaveBeenCalledWith(inline);
       expect([...code().zones.values()].at(-1)!.heightInPx).toBe(128);
       expect(code().layoutZone).not.toHaveBeenCalled();

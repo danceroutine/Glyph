@@ -35,7 +35,9 @@ describe(WiredGlyphPlan, () => {
     expect(screen.getByRole('heading', { name: 'Ship it' })).toBeTruthy();
     fireEvent.click(screen.getByRole('link', { name: 'docs' }));
 
-    await waitFor(() => expect(openLink).toHaveBeenCalledWith('https://example.com'));
+    await waitFor(() => {
+      expect(openLink).toHaveBeenCalledWith('https://example.com');
+    });
   });
 
   it('focuses the todo description when adding a todo', async () => {
@@ -58,6 +60,8 @@ describe(WiredGlyphPlan, () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'New todo' }));
 
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Todo description' })));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Todo description' }));
+    });
   });
 });

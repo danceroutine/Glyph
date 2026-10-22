@@ -46,7 +46,9 @@ describe(OpenAIBackend, () => {
     vi.spyOn(authentication, 'refresh').mockImplementation(
       () =>
         new Promise(resolve => {
-          finish = () => resolve({ ...account.tokens!, accessToken: 'late' });
+          finish = () => {
+            resolve({ ...account.tokens!, accessToken: 'late' });
+          };
         }),
     );
     const session = new OpenAISession(store, authentication, configuration);
@@ -58,7 +60,7 @@ describe(OpenAIBackend, () => {
       configuration,
     );
     await backend.initialize();
-    const pending = session.accessToken(account).catch(error => error);
+    const pending = session.accessToken(account).catch((error: unknown) => error);
     await backend.dispose();
     expect(store.release).toHaveBeenCalledOnce();
     finish();
@@ -117,7 +119,7 @@ describe(OpenAIBackend, () => {
     };
     const session: OpenAISessionService = {
       dispose: vi.fn(async () => {}),
-      signIn: vi.fn(async (_existing, _consent, authorize) => {
+      signIn: vi.fn<OpenAISessionService['signIn']>(async (_existing, _consent, authorize) => {
         await authorize?.({ url: 'https://auth.example.test/authorize' });
         return openAIAccount;
       }),
@@ -304,7 +306,9 @@ describe(OpenAIBackend, () => {
       const reason = new Error('Stopped');
 
       const pending = backend.listModels(account, cancellation.signal);
-      await vi.waitFor(() => expect(session.accessToken).toHaveBeenCalled());
+      await vi.waitFor(() => {
+        expect(session.accessToken).toHaveBeenCalled();
+      });
       cancellation.abort(reason);
 
       await expect(pending).rejects.toBe(reason);

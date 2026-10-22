@@ -21,7 +21,7 @@ const workspaceSchema = z
       )
       .min(1),
   })
-  .passthrough();
+  .loose();
 
 export interface ResolveProjectContextOptions {
   readonly currentDirectory: string;
@@ -30,15 +30,15 @@ export interface ResolveProjectContextOptions {
 }
 
 /** Resolves terminal launch arguments into the context inherited by every chat and project tool. */
-export class ProjectContextResolver {
-  static async resolve(options: ResolveProjectContextOptions): Promise<ProjectContext> {
+export const ProjectContextResolver = {
+  async resolve(options: ResolveProjectContextOptions): Promise<ProjectContext> {
     const authority = options.authority ?? defaultAuthority();
-    return options.workspaceFile
-      ? this.workspace(options.workspaceFile, options.currentDirectory, authority)
-      : this.folder(options.currentDirectory, authority);
-  }
+    return options.workspaceFile !== undefined && options.workspaceFile !== ''
+      ? ProjectContextResolver.workspace(options.workspaceFile, options.currentDirectory, authority)
+      : ProjectContextResolver.folder(options.currentDirectory, authority);
+  },
 
-  static async folder(path: string, authority = defaultAuthority()): Promise<ProjectContext> {
+  async folder(path: string, authority = defaultAuthority()): Promise<ProjectContext> {
     const root = await canonicalDirectory(path);
     const roots = [{ name: basename(root), path: root }];
     return {
@@ -49,9 +49,9 @@ export class ProjectContextResolver {
       authority,
       roots,
     };
-  }
+  },
 
-  static async workspace(
+  async workspace(
     workspaceFile: string,
     currentDirectory: string,
     authority = defaultAuthority(),
@@ -85,8 +85,8 @@ export class ProjectContextResolver {
       roots,
       workspaceFile: manifest,
     };
-  }
-}
+  },
+};
 
 async function resolveFolderLocation(
   folder: z.infer<typeof workspaceSchema>['folders'][number],
@@ -111,7 +111,7 @@ async function canonicalDirectory(path: string): Promise<string> {
 function validateRootNames(roots: readonly ProjectRoot[], workspaceFile: string): void {
   const names = new Set<string>();
   for (const root of roots) {
-    if (!root.name.trim() || /[/\\\u0000-\u001f\u007f]/u.test(root.name)) {
+    if (!root.name.trim() || /[/\\\u0000-\u001F\u007F]/u.test(root.name)) {
       throw new ConfigurationError(`Workspace ${workspaceFile} contains an invalid folder name: ${root.name}`);
     }
     const folded = root.name.normalize('NFC').toLocaleLowerCase('en-US');
@@ -123,5 +123,5 @@ function validateRootNames(roots: readonly ProjectRoot[], workspaceFile: string)
 }
 
 function defaultAuthority(): string {
-  return process.env.SSH_CONNECTION ? `ssh:${hostname()}` : 'local';
+  return process.env.SSH_CONNECTION !== undefined && process.env.SSH_CONNECTION !== '' ? `ssh:${hostname()}` : 'local';
 }

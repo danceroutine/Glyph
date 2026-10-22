@@ -20,12 +20,18 @@ describe(ModeSwitchToolRuntime, () => {
   it('validates requests through its tool', () => {
     const [tool] = new ModeSwitchToolRuntime(vi.fn()).tools;
 
-    expect(() => tool!.validateInput(JSON.stringify({ target: 'plan', description: 'Need a plan' }))).not.toThrow();
-    expect(() => tool!.validateInput(JSON.stringify({ target: 'chaos', description: 'Why not' }))).toThrow();
-    expect(() => tool!.validateInput(JSON.stringify({ target: 'plan', description: '   ' }))).toThrow();
-    expect(() =>
-      tool!.validateInput(JSON.stringify({ target: 'plan', description: 'Need a plan', extra: true })),
-    ).toThrow();
+    expect(() => {
+      tool!.validateInput(JSON.stringify({ target: 'plan', description: 'Need a plan' }));
+    }).not.toThrow();
+    expect(() => {
+      tool!.validateInput(JSON.stringify({ target: 'chaos', description: 'Why not' }));
+    }).toThrow();
+    expect(() => {
+      tool!.validateInput(JSON.stringify({ target: 'plan', description: '   ' }));
+    }).toThrow();
+    expect(() => {
+      tool!.validateInput(JSON.stringify({ target: 'plan', description: 'Need a plan', extra: true }));
+    }).toThrow();
   });
 
   it('switches modes through its tool once approved', async () => {

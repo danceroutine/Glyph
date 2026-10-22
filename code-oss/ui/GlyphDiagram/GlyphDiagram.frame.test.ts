@@ -24,7 +24,9 @@ describe('GlyphDiagram.frame', () => {
     vi.mocked(mermaid.render).mockResolvedValue({ svg: '<svg>dark</svg>' } as never);
 
     request({ channel: 'glyph-diagram', id: 'dark', source: 'graph TD; A-->B', dark: true });
-    await vi.waitFor(() => expect(responses('dark')).toHaveLength(1));
+    await vi.waitFor(() => {
+      expect(responses('dark')).toHaveLength(1);
+    });
 
     expect(posted).toHaveBeenCalledWith({ channel: 'glyph-diagram', id: 'dark', svg: '<svg>dark</svg>' }, '*');
     expect(mermaid.render).toHaveBeenCalledWith('glyph-dark', 'graph TD; A-->B');
@@ -34,7 +36,9 @@ describe('GlyphDiagram.frame', () => {
 
     vi.mocked(mermaid.render).mockResolvedValue({ svg: '<svg>light</svg>' } as never);
     request({ channel: 'glyph-diagram', id: 'light', source: 'graph LR', dark: false });
-    await vi.waitFor(() => expect(responses('light')).toHaveLength(1));
+    await vi.waitFor(() => {
+      expect(responses('light')).toHaveLength(1);
+    });
 
     expect(mermaid.initialize).toHaveBeenLastCalledWith(expect.objectContaining({ theme: 'default' }));
   });
@@ -45,7 +49,9 @@ describe('GlyphDiagram.frame', () => {
     request({ channel: 'glyph-diagram', id: 'huge', source: 'A'.repeat(20001), dark: true });
     request({ channel: 'glyph-diagram', id: 'directive', source: '%%{init: {}}%%\ngraph TD', dark: true });
     request({ channel: 'glyph-diagram', id: 'frontmatter', source: 'graph TD\n---\nconfig: {}', dark: true });
-    await vi.waitFor(() => expect(responses('frontmatter')).toHaveLength(1));
+    await vi.waitFor(() => {
+      expect(responses('frontmatter')).toHaveLength(1);
+    });
 
     for (const id of ['huge', 'directive', 'frontmatter']) {
       expect(posted).toHaveBeenCalledWith({ channel: 'glyph-diagram', id, error: true }, '*');
@@ -57,7 +63,9 @@ describe('GlyphDiagram.frame', () => {
     vi.mocked(mermaid.render).mockRejectedValue(new Error('Parse error'));
 
     request({ channel: 'glyph-diagram', id: 'broken', source: 'graph ???', dark: true });
-    await vi.waitFor(() => expect(responses('broken')).toHaveLength(1));
+    await vi.waitFor(() => {
+      expect(responses('broken')).toHaveLength(1);
+    });
 
     expect(posted).toHaveBeenCalledWith({ channel: 'glyph-diagram', id: 'broken', error: true }, '*');
   });
@@ -72,7 +80,9 @@ describe('GlyphDiagram.frame', () => {
     request({ channel: 'glyph-diagram', id: 7, source: 'graph TD' });
     request({ channel: 'glyph-diagram', id: 'no-source', source: 7 });
     request({ channel: 'glyph-diagram', id: 'valid', source: 'graph TD', dark: true });
-    await vi.waitFor(() => expect(responses('valid')).toHaveLength(1));
+    await vi.waitFor(() => {
+      expect(responses('valid')).toHaveLength(1);
+    });
 
     expect(mermaid.render).toHaveBeenCalledOnce();
     expect(responses('foreign')).toHaveLength(0);

@@ -1,16 +1,27 @@
 import { randomUUID } from 'node:crypto';
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { editToolOutput, parseJson } from './ProviderPayloads.mjs';
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+
 const original = 'Original content\n';
+/** @param {GlyphWorkbench} glyph */
 const drawer = glyph => glyph.page.getByRole('region', { name: 'Pending reviews', exact: true });
+/** @param {string} path */
 const exists = path =>
   access(path).then(
     () => true,
     () => false,
   );
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {string} name
+ * @param {unknown} args
+ */
 async function tool(glyph, provider, name, args) {
   const callId = randomUUID();
   const count = provider.requests.length;
@@ -20,9 +31,14 @@ async function tool(glyph, provider, name, args) {
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
   const output = provider.requests
     .at(-1)
-    .body.input.find(item => item.call_id === callId && item.type === 'function_call_output');
-  return JSON.parse(output.output);
+    ?.body.input.find(item => item.call_id === callId && item.type === 'function_call_output');
+  return editToolOutput.parse(parseJson(output?.output));
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {string} operation
+ */
 async function change(glyph, provider, operation) {
   const base =
     operation === 'CREATE'
@@ -62,7 +78,7 @@ it.describe('Applied structural file changes', () => {
         await expect(icon).toBeVisible();
         await expect
           .poll(() => icon.evaluate(element => getComputedStyle(element, '::before').content))
-          .not.toMatch(/^(none|normal|""|)$/);
+          .not.toMatch(/^(none|normal|""|)$/u);
       }
       if (operation === 'DELETE') {
         expect(await exists(join(glyph.workspace, path))).toBe(false);

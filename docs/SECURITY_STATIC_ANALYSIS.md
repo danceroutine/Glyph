@@ -24,30 +24,30 @@ Use the stable identifiers (`AP-02`, `NET-01`, `FS-03`, `SH-02`, `D4`, `RES-01`,
 
 Distinguish these actors throughout:
 
-| Actor | Authority available | What must not be assumed |
-| --- | --- | --- |
-| Untrusted text author | Repository/page/tool-output text that a model may consume | Direct tool execution, successful prompt injection, renderer script execution |
-| Model/tool caller | Calls admitted by the current host mode and policy | Permission to bypass host checks because instructions request it |
-| Workspace writer | Can modify selected workspace entries | Can modify every parent directory, arbitrary home files or private Glyph state |
-| Registered renderer | Its real window's transport, if faulty or compromised | Another window's identity or a demonstrated route from Markdown to that transport |
-| Same-user local process / state importer | Reads/writes permitted by that OS identity or imported state access | An app privilege escalation merely because it can read the same user's files |
-| Provider/build supplier | The particular response, dependency, action or build input it supplies | A real compromise of that supplier, or applicability of an unverified CVE |
+| Actor                                    | Authority available                                                    | What must not be assumed                                                          |
+| ---------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Untrusted text author                    | Repository/page/tool-output text that a model may consume              | Direct tool execution, successful prompt injection, renderer script execution     |
+| Model/tool caller                        | Calls admitted by the current host mode and policy                     | Permission to bypass host checks because instructions request it                  |
+| Workspace writer                         | Can modify selected workspace entries                                  | Can modify every parent directory, arbitrary home files or private Glyph state    |
+| Registered renderer                      | Its real window's transport, if faulty or compromised                  | Another window's identity or a demonstrated route from Markdown to that transport |
+| Same-user local process / state importer | Reads/writes permitted by that OS identity or imported state access    | An app privilege escalation merely because it can read the same user's files      |
+| Provider/build supplier                  | The particular response, dependency, action or build input it supplies | A real compromise of that supplier, or applicability of an unverified CVE         |
 
 Several cases need an explicit product decision. If unrestricted outbound web requests, same-user state trust, or lifetime interactive authority are intentional, the result is an **accepted, documented residual risk**, not a failed assertion against an imaginary product promise.
 
 ## Suggested first harness work
 
-| Order | Cases | Concrete reason |
-| --- | --- | --- |
-| 1 | NET-01 | Public-web description is not enforced against local/private destinations or redirects. |
-| 2 | AP-02 | A failed logout save skips revocation and can make a retry report misleading success. |
-| 3 | FS-04, SH-01 | Project tools and Linux protected-ancestor mount construction can leave selected installation files writable. |
-| 4 | SH-02 | Linux auxiliary toolchain mounts do not validate the authority of symlink targets. |
-| 5 | FS-02, FS-03, D1 | Root/ancestor identity and actual filesystem use need deterministic barrier cases beyond leaf/model checks. |
-| 6 | NET-02, AP-03, AP-04 | Data can leave through requested URLs/queries and secondary diagnostic sinks. |
-| 7 | RES-01, D4, AP-05 | Per-request limits do not bound parallel searches, stale diagram jobs or accumulated traces. |
-| 8 | D2, D3, D8 | Renderer trust claims, connection failures and retry capacity need independent host-boundary cases. |
-| 9 | AP-01 | Characterize the known plaintext OAuth exposure and define vault/export/logout expectations. |
+| Order | Cases                | Concrete reason                                                                                               |
+| ----- | -------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 1     | NET-01               | Public-web description is not enforced against local/private destinations or redirects.                       |
+| 2     | AP-02                | A failed logout save skips revocation and can make a retry report misleading success.                         |
+| 3     | FS-04, SH-01         | Project tools and Linux protected-ancestor mount construction can leave selected installation files writable. |
+| 4     | SH-02                | Linux auxiliary toolchain mounts do not validate the authority of symlink targets.                            |
+| 5     | FS-02, FS-03, D1     | Root/ancestor identity and actual filesystem use need deterministic barrier cases beyond leaf/model checks.   |
+| 6     | NET-02, AP-03, AP-04 | Data can leave through requested URLs/queries and secondary diagnostic sinks.                                 |
+| 7     | RES-01, D4, AP-05    | Per-request limits do not bound parallel searches, stale diagram jobs or accumulated traces.                  |
+| 8     | D2, D3, D8           | Renderer trust claims, connection failures and retry capacity need independent host-boundary cases.           |
+| 9     | AP-01                | Characterize the known plaintext OAuth exposure and define vault/export/logout expectations.                  |
 
 A mock transport or fake filesystem is sufficient to establish many of these control-flow failures. A policy-plan assertion establishes the policy the application constructs; it does not establish what Seatbelt, Bubblewrap, Electron, an issuer or a kernel actually enforces.
 
@@ -76,20 +76,20 @@ For each subcase, record:
 
 ```yaml
 case_id: NET-01c
-source_revision: "<HEAD plus the reviewed working-tree snapshot>"
-platform_and_adapter: "<for example, web host with injected transport>"
-actor_and_preconditions: "<capabilities actually supplied by this fixture>"
-existing_controls: ["<controls the case must preserve>"]
-fixture: "<synthetic objects, unique canaries, fake services>"
-stimulus_and_barrier: "<one specific transition>"
-expected_oracle: "<observable denial, isolation, bound, or truthful outcome>"
-current_source_expectation: "<why this should fail, pass, or remain uncertain>"
+source_revision: '<HEAD plus the reviewed working-tree snapshot>'
+platform_and_adapter: '<for example, web host with injected transport>'
+actor_and_preconditions: '<capabilities actually supplied by this fixture>'
+existing_controls: ['<controls the case must preserve>']
+fixture: '<synthetic objects, unique canaries, fake services>'
+stimulus_and_barrier: '<one specific transition>'
+expected_oracle: '<observable denial, isolation, bound, or truthful outcome>'
+current_source_expectation: '<why this should fail, pass, or remain uncertain>'
 evidence:
   source_review: reviewed
   model_or_unit: not_run
   disposable_fixture: not_run
   native_or_live_service: not_run
-result: "<leave unrun until the exact assertion is executed>"
+result: '<leave unrun until the exact assertion is executed>'
 ```
 
 Use fake transport/resolver/process/vault/filesystem/broker boundaries, tiny configurable budgets, fake timers and controlled barriers. Never use genuine account tokens, customer data, real protected files or an external exfiltration endpoint. A synthetic canary proves only its exact flow. Keep model-obedience evaluation separate from host enforcement: a scripted model refusing a request cannot prove that the host would reject an unsafe call.
@@ -641,34 +641,34 @@ All runtime evidence cells in this report remain **not run**. Historical coverag
 
 Individual controls can pass while a multi-step information flow remains unsafe. These are hypothetical compositions, not demonstrated attacks:
 
-| Chain | Preconditions and steps | Integration oracle |
-| --- | --- | --- |
-| Allowed read → outbound disclosure | Untrusted source influences a later model call; an allowed file contains a synthetic private value; project read succeeds; NET-02 sends it in a fetch/search parameter. | The chosen egress authorization policy prevents the canary reaching an unapproved recording transport. Shell networking denial is irrelevant to this host path. |
-| Public redirect → internal read → extra retention | NET-01 follows a public-looking redirect to a fixture-only private service; returned data enters model state and AP-03 diagnostics. | Reject before the internal request; no private canary appears in provider input, chat or trace. |
-| Writable install → later trusted consumer | Selected writable install/subtree meets FS-04 or SH-01 prerequisites; an inert source/configuration edit lands; a fake build/import consumer later observes it. | Every tool enforces installation protection or the explicit development override; no real changed artifact is executed. |
-| Toolchain alias → shell output → provider | A preexisting SH-02 alias exposes synthetic private runtime data under a toolchain mount; modeled shell output returns it. | Validate auxiliary mount authority and deny the aliased bytes before tool output; native behavior stays unverified until separately established. |
-| Resource pressure → failed persistence → misleading logout | A fake trace/storage quota fails a credential save; AP-02 logout is retried. | Trace failure does not destroy state; logout preserves enough information to report and retry revocation truthfully. Never fill a real filesystem. |
-| Auto-applied edit → watcher → reversion | APP-02 changes an allowed watched file; a recording consumer sees it before Keep/Revert; the user reverts. | The product makes the pre-review authority explicit and gates sensitive consumer paths before writing. Reversion must not be represented as reversing earlier consumer effects. |
-| Renderer authority → unauthorized native read | A compromised/faulty renderer uses its real IDs but forges roots/trust as in D2; native services would initialize from those claims. | Main-authenticated authority rejects the claims before service setup. No claim of a Markdown-to-renderer compromise is implied. |
+| Chain                                                      | Preconditions and steps                                                                                                                                                 | Integration oracle                                                                                                                                                              |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Allowed read → outbound disclosure                         | Untrusted source influences a later model call; an allowed file contains a synthetic private value; project read succeeds; NET-02 sends it in a fetch/search parameter. | The chosen egress authorization policy prevents the canary reaching an unapproved recording transport. Shell networking denial is irrelevant to this host path.                 |
+| Public redirect → internal read → extra retention          | NET-01 follows a public-looking redirect to a fixture-only private service; returned data enters model state and AP-03 diagnostics.                                     | Reject before the internal request; no private canary appears in provider input, chat or trace.                                                                                 |
+| Writable install → later trusted consumer                  | Selected writable install/subtree meets FS-04 or SH-01 prerequisites; an inert source/configuration edit lands; a fake build/import consumer later observes it.         | Every tool enforces installation protection or the explicit development override; no real changed artifact is executed.                                                         |
+| Toolchain alias → shell output → provider                  | A preexisting SH-02 alias exposes synthetic private runtime data under a toolchain mount; modeled shell output returns it.                                              | Validate auxiliary mount authority and deny the aliased bytes before tool output; native behavior stays unverified until separately established.                                |
+| Resource pressure → failed persistence → misleading logout | A fake trace/storage quota fails a credential save; AP-02 logout is retried.                                                                                            | Trace failure does not destroy state; logout preserves enough information to report and retry revocation truthfully. Never fill a real filesystem.                              |
+| Auto-applied edit → watcher → reversion                    | APP-02 changes an allowed watched file; a recording consumer sees it before Keep/Revert; the user reverts.                                                              | The product makes the pre-review authority explicit and gates sensitive consumer paths before writing. Reversion must not be represented as reversing earlier consumer effects. |
+| Renderer authority → unauthorized native read              | A compromised/faulty renderer uses its real IDs but forges roots/trust as in D2; native services would initialize from those claims.                                    | Main-authenticated authority rejects the claims before service setup. No claim of a Markdown-to-renderer compromise is implied.                                                 |
 
 ## Regression matrix for controls already present
 
 These are essential companions to new negative cases. Their inclusion is not a finding that the defense is missing. Existing test files are starting points; “exists in source” is not a fresh pass result.
 
-| Boundary | Retain these assertions | Relevant source/test starting points |
-| --- | --- | --- |
-| Project reads and search | Traversal, absolute paths, prefix collisions, leaf/ancestor symlinks, swapped regular-file identity, special files, byte budgets, case folding, nonmatching filters, multi-root routing | `src/workspace/tests/FileSystemWorkspaceReadRace.test.ts`; `src/workspace/tests/FileSystemWorkspaceAncestorRecovery.test.ts`; `src/project/tests/ProjectReadBudgets.regression.test.ts`; `src/context/search/tests/`; `native/context-index/src/content_search.rs` tests |
-| Edit admission and recovery | Wrong revision/token, overlapping paths/inodes, create collision, current dirty buffer, trust loss, cancelled/missing receipt, checkpoint failure before and after mutation, no unsafe automatic retry | `src/editing/reviews/test/`; `src/editing/reviews/tests/`; `src/desktop/workspace/`; `scripts/code-oss/tests/GlyphEditorAdapter.test.mjs`; `scripts/code-oss/tests/GlyphEditorSnapshotRecovery.test.mjs` |
-| Mode restrictions | Agent versus Plan, Markdown logical and canonical path checks, exclusive approved mode-switch round, unsupported tool/name/namespace and malformed input | `src/project/tests/PlanModeEdits.test.ts`; `src/tools/test/ToolExecutor.test.ts`; `src/tools/test/ToolRegistry.test.ts`; `src/chat/test/AgentMode.test.ts` |
-| Shell authorization | Directory-scoped grants, root-scope changes, save failure before in-memory policy change, denied/aborted approval, foreign owner, full-access stdin rejection, backend unavailable fail closed | `src/shell/test/`; `src/shell/test/remediation/coverage.json`; `native/shell-sandbox/src/lib.rs` |
-| Terminal presentation | OSC clipboard/title/link controls, CSI/C0/bidi controls, split control sequences, stdout/stderr separation, transcript and native terminal projection | `src/shell/TerminalControlFilter.ts`; `src/terminal/ui/shared/sanitizeText.ts`; shell/terminal test sources. Use a recording renderer, never the real clipboard/terminal for control payloads. |
-| Web response controls | No cookies/account headers; invalid/credential schemes; each redirect; missing/false content lengths; streamed overflow; cancellation/timeout; no HTML script execution; final-URL provenance | `src/web/tests/WebTools.test.ts`; `code-oss/tests/electron/GlyphWeb.test.mjs` |
-| Markdown/diagram isolation | HTML rendered as data, no automatic remote image fetch, unsupported command schemes, strict Mermaid config, iframe sender verification, no privileged SVG insertion | `scripts/code-oss/tests/GlyphTranscript.test.mjs`; `code-oss/ui/GlyphMarkdown/`; `code-oss/ui/GlyphDiagram/`; `scripts/code-oss/build-diagram.mjs` |
-| OAuth | Missing/duplicate/wrong state, callback replay/malformed URL, PKCE binding, issuer/audience/signature/expiry/nonce/subject checks, rejected redirects, refresh rotation save failure, logout/refresh interleaving | `src/providers/openai/auth/tests/`; `src/providers/openai/auth/OpenAIAuthenticationClient.ts`; `src/providers/openai/auth/OpenAISession.ts` |
-| Accounts, chats and profiles | Current credentials resolved per request; account authorization before cached chat reuse; no cross-account receipt/context delivery; ownership and reconnect generation checks | `src/providers/openai/tests/OpenAIBackend.test.ts`; `src/chat/sessions/test/ChatSessionManager.test.ts`; `src/desktop/host/tests/` |
-| Durable tools | Intent saved before tool execution; settled outcome saved before continuation; cancellation preserves actual/unknown side effects; no blind replay after restart | `src/chat/runtime/test/AgentRuntime.test.ts`; `src/chat/sessions/`; `src/tools/test/ToolExecutor.test.ts` |
-| Logging identity | Symlink/hard-link rejection, regular descriptor validation, revalidation after queue wait, whole-record process-local serialization, namespace/alias collisions | `src/observability/tests/FileLogger.test.ts`. This does not prove cross-process or crash-atomic logging. |
-| Artifact provenance | Expected source/dependency pin, clean versus intentionally modified generated tree, authenticated release artifacts/native helpers, explicit CI permissions | `.github/workflows/ci.yml`; `code-oss/upstream.json`; `scripts/code-oss/bootstrap.mjs`; `scripts/build-desktop-artifact.mjs` |
+| Boundary                     | Retain these assertions                                                                                                                                                                                           | Relevant source/test starting points                                                                                                                                                                                                                                     |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Project reads and search     | Traversal, absolute paths, prefix collisions, leaf/ancestor symlinks, swapped regular-file identity, special files, byte budgets, case folding, nonmatching filters, multi-root routing                           | `src/workspace/tests/FileSystemWorkspaceReadRace.test.ts`; `src/workspace/tests/FileSystemWorkspaceAncestorRecovery.test.ts`; `src/project/tests/ProjectReadBudgets.regression.test.ts`; `src/context/search/tests/`; `native/context-index/src/content_search.rs` tests |
+| Edit admission and recovery  | Wrong revision/token, overlapping paths/inodes, create collision, current dirty buffer, trust loss, cancelled/missing receipt, checkpoint failure before and after mutation, no unsafe automatic retry            | `src/editing/reviews/test/`; `src/editing/reviews/tests/`; `src/desktop/workspace/`; `scripts/code-oss/tests/GlyphEditorAdapter.test.mjs`; `scripts/code-oss/tests/GlyphEditorSnapshotRecovery.test.mjs`                                                                 |
+| Mode restrictions            | Agent versus Plan, Markdown logical and canonical path checks, exclusive approved mode-switch round, unsupported tool/name/namespace and malformed input                                                          | `src/project/tests/PlanModeEdits.test.ts`; `src/tools/test/ToolExecutor.test.ts`; `src/tools/test/ToolRegistry.test.ts`; `src/chat/test/AgentMode.test.ts`                                                                                                               |
+| Shell authorization          | Directory-scoped grants, root-scope changes, save failure before in-memory policy change, denied/aborted approval, foreign owner, full-access stdin rejection, backend unavailable fail closed                    | `src/shell/test/`; `src/shell/test/remediation/coverage.json`; `native/shell-sandbox/src/lib.rs`                                                                                                                                                                         |
+| Terminal presentation        | OSC clipboard/title/link controls, CSI/C0/bidi controls, split control sequences, stdout/stderr separation, transcript and native terminal projection                                                             | `src/shell/TerminalControlFilter.ts`; `src/terminal/ui/shared/sanitizeText.ts`; shell/terminal test sources. Use a recording renderer, never the real clipboard/terminal for control payloads.                                                                           |
+| Web response controls        | No cookies/account headers; invalid/credential schemes; each redirect; missing/false content lengths; streamed overflow; cancellation/timeout; no HTML script execution; final-URL provenance                     | `src/web/tests/WebTools.test.ts`; `code-oss/tests/electron/GlyphWeb.test.mjs`                                                                                                                                                                                            |
+| Markdown/diagram isolation   | HTML rendered as data, no automatic remote image fetch, unsupported command schemes, strict Mermaid config, iframe sender verification, no privileged SVG insertion                                               | `scripts/code-oss/tests/GlyphTranscript.test.mjs`; `code-oss/ui/GlyphMarkdown/`; `code-oss/ui/GlyphDiagram/`; `scripts/code-oss/build-diagram.mjs`                                                                                                                       |
+| OAuth                        | Missing/duplicate/wrong state, callback replay/malformed URL, PKCE binding, issuer/audience/signature/expiry/nonce/subject checks, rejected redirects, refresh rotation save failure, logout/refresh interleaving | `src/providers/openai/auth/tests/`; `src/providers/openai/auth/OpenAIAuthenticationClient.ts`; `src/providers/openai/auth/OpenAISession.ts`                                                                                                                              |
+| Accounts, chats and profiles | Current credentials resolved per request; account authorization before cached chat reuse; no cross-account receipt/context delivery; ownership and reconnect generation checks                                    | `src/providers/openai/tests/OpenAIBackend.test.ts`; `src/chat/sessions/test/ChatSessionManager.test.ts`; `src/desktop/host/tests/`                                                                                                                                       |
+| Durable tools                | Intent saved before tool execution; settled outcome saved before continuation; cancellation preserves actual/unknown side effects; no blind replay after restart                                                  | `src/chat/runtime/test/AgentRuntime.test.ts`; `src/chat/sessions/`; `src/tools/test/ToolExecutor.test.ts`                                                                                                                                                                |
+| Logging identity             | Symlink/hard-link rejection, regular descriptor validation, revalidation after queue wait, whole-record process-local serialization, namespace/alias collisions                                                   | `src/observability/tests/FileLogger.test.ts`. This does not prove cross-process or crash-atomic logging.                                                                                                                                                                 |
+| Artifact provenance          | Expected source/dependency pin, clean versus intentionally modified generated tree, authenticated release artifacts/native helpers, explicit CI permissions                                                       | `.github/workflows/ci.yml`; `code-oss/upstream.json`; `scripts/code-oss/bootstrap.mjs`; `scripts/build-desktop-artifact.mjs`                                                                                                                                             |
 
 ## Evidence limits and unresolved deployment questions
 

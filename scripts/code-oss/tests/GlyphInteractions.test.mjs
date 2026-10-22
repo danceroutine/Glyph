@@ -1,11 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
 import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
 
-const requireUpstream = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = requireUpstream('@playwright/test');
+/** @type {import('@playwright/test').Browser} */
 let browser;
+/** @type {string} */
 let script;
 
 beforeAll(async () => {
@@ -63,6 +63,7 @@ it('guards duplicate answers and preserves a failed submission for retry until t
     await form.getByRole('radio', { name: 'Other…' }).check();
     await form.getByRole('textbox', { name: 'Your answer' }).fill('My answer');
     await form.evaluate(element => {
+      if (!(element instanceof HTMLFormElement)) throw new TypeError('Expected a form.');
       element.requestSubmit();
       element.requestSubmit();
     });
@@ -73,7 +74,7 @@ it('guards duplicate answers and preserves a failed submission for retry until t
     await expect(form.getByRole('textbox', { name: 'Your answer' })).toHaveValue('My answer');
     await form.getByRole('button', { name: 'Continue' }).click();
     expect(await page.evaluate(() => window.requests)).toEqual(
-      Array(2).fill([
+      Array.from({ length: 2 }, () => [
         'chat',
         'run',
         'question',
@@ -119,6 +120,7 @@ it('disables duplicate approval decisions, permits retry after failure, and resp
     for (const button of await card.getByRole('button').all()) await expect(button).toBeDisabled();
     await page.evaluate(() => window.update({ readOnly: false }));
     await card.getByRole('button', { name: 'Run', exact: true }).evaluate(element => {
+      if (!(element instanceof HTMLElement)) throw new TypeError('Expected a button.');
       element.click();
       element.click();
     });
@@ -180,11 +182,13 @@ it('preserves multi-question selections and free text when navigating backward b
     await expect(form.locator('header')).toContainText('2 of 2');
     expect((await next.boundingBox()).y).toBe(footerTop);
     await form.getByRole('textbox', { name: 'Your answer' }).fill('Initial details');
-    await next.click(); // The first unanswered question must be visited, not submitted.
+    // The first unanswered question must be visited, not submitted.
+    await next.click();
     await expect(form.locator('header')).toContainText('1 of 2');
     expect(await page.evaluate(() => window.requests)).toHaveLength(0);
     await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBe(0);
-    await form.getByRole('button', { name: 'Next question' }).click(); // Navigation does not require an answer.
+    // Navigation does not require an answer.
+    await form.getByRole('button', { name: 'Next question' }).click();
     await expect(form.locator('header')).toContainText('2 of 2');
     await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
     await form.getByRole('button', { name: 'Previous question' }).click();
@@ -322,7 +326,10 @@ it('spins the model retry arrows while loading and permits another attempt after
     const spinner = loading.locator('svg').locator('..');
     await expect(spinner).toHaveCSS('animation-iteration-count', 'infinite');
     await expect(spinner).toHaveCSS('animation-duration', '0.9s');
-    await loading.evaluate(element => element.click());
+    await loading.evaluate(element => {
+      if (!(element instanceof HTMLElement)) throw new TypeError('Expected a button.');
+      element.click();
+    });
     expect(await page.evaluate(() => window.requests)).toHaveLength(1);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await expect(spinner).toHaveCSS('animation-name', 'none');

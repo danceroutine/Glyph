@@ -20,7 +20,9 @@ afterEach(cleanup);
 const host = () => {
   const container = document.createElement('div');
   document.body.append(container);
-  onTestFinished(() => container.remove());
+  onTestFinished(() => {
+    container.remove();
+  });
   return container;
 };
 
@@ -68,7 +70,7 @@ describe(mountGlyphWorkbench, () => {
 
     expect(screen.getByRole('tab', { name: 'New chat' })).toBeTruthy();
 
-    act(() =>
+    act(() => {
       view.update(
         workbench({
           selectedChatId: 'chat',
@@ -84,15 +86,21 @@ describe(mountGlyphWorkbench, () => {
             },
           ],
         }),
-      ),
-    );
+      );
+    });
     expect(screen.getByRole('tab', { name: 'Refactor parser' })).toBeTruthy();
 
-    act(() => view.dispose());
+    act(() => {
+      view.dispose();
+    });
     expect(container.innerHTML).toBe('');
 
-    act(() => view.update(workbench()));
-    act(() => view.dispose());
+    act(() => {
+      view.update(workbench());
+    });
+    act(() => {
+      view.dispose();
+    });
     expect(container.innerHTML).toBe('');
   });
 });
@@ -112,10 +120,14 @@ describe(mountGlyphReview, () => {
     const view = mountGlyphReview(container, controls);
     expect(screen.getByText('1 of 2')).toBeTruthy();
 
-    act(() => view.update({ ...controls, label: '2 of 2' }));
+    act(() => {
+      view.update({ ...controls, label: '2 of 2' });
+    });
     expect(screen.getByText('2 of 2')).toBeTruthy();
 
-    act(() => view.dispose());
+    act(() => {
+      view.dispose();
+    });
     expect(container.innerHTML).toBe('');
   });
 });
@@ -134,16 +146,18 @@ describe(mountGlyphPlan, () => {
     const view = mountGlyphPlan(container, { plan, disabled: false, agents: [] }, actions);
     expect(screen.getByRole('heading', { name: '0 To-dos' })).toBeTruthy();
 
-    act(() =>
+    act(() => {
       view.update({
         plan: { ...plan, todos: [{ id: 't', text: 'Do it', completed: false }] },
         disabled: false,
         agents: [],
-      }),
-    );
+      });
+    });
     expect(screen.getByRole('heading', { name: '1 To-dos' })).toBeTruthy();
 
-    act(() => view.dispose());
+    act(() => {
+      view.dispose();
+    });
     expect(container.innerHTML).toBe('');
   });
 });
@@ -160,7 +174,9 @@ describe(mountGlyphCommentButton, () => {
     expect(open).toHaveBeenCalledOnce();
     expect(button.querySelector('kbd')?.textContent).toBe('⌘K');
 
-    act(() => view.dispose());
+    act(() => {
+      view.dispose();
+    });
     expect(container.innerHTML).toBe('');
   });
 
@@ -191,7 +207,9 @@ describe(mountGlyphEditorAnnotationMarker, () => {
     expect(marker.getAttribute('title')).toBe('Rename this');
     expect(open).toHaveBeenCalledOnce();
 
-    act(() => view.dispose());
+    act(() => {
+      view.dispose();
+    });
     expect(container.innerHTML).toBe('');
   });
 });
@@ -212,7 +230,9 @@ describe(mountGlyphContextButton, () => {
     expect(button.dataset.variant).toBe('secondary');
     expect(button.dataset.appearance).toBe('outline');
 
-    act(() => view.dispose());
+    act(() => {
+      view.dispose();
+    });
     expect(container.innerHTML).toBe('');
   });
 
@@ -220,7 +240,7 @@ describe(mountGlyphContextButton, () => {
     const container = host();
     mountGlyphContextButton(container, 'Comment', vi.fn(), true, '⌘L');
 
-    const button = screen.getByRole('button', { name: /Comment/ });
+    const button = screen.getByRole('button', { name: /Comment/u });
     expect(button.dataset.variant).toBe('primary');
     expect(button.dataset.appearance).toBe('filled');
     expect(button.querySelector('kbd')?.textContent).toBe('⌘L');
@@ -240,10 +260,14 @@ describe(mountGlyphAgentReview, () => {
     const view = mountGlyphAgentReview(container, controls);
     expect(container.textContent).not.toContain('Review failed');
 
-    act(() => view.update({ ...controls, error: 'Review failed' }));
+    act(() => {
+      view.update({ ...controls, error: 'Review failed' });
+    });
     expect(container.textContent).toContain('Review failed');
 
-    act(() => view.dispose());
+    act(() => {
+      view.dispose();
+    });
     expect(container.innerHTML).toBe('');
   });
 });
@@ -266,7 +290,9 @@ describe(mountGlyphAgentReviewComment, () => {
     expect(fix).toHaveBeenCalledOnce();
     expect(dismiss).toHaveBeenCalledOnce();
 
-    act(() => view.dispose());
+    act(() => {
+      view.dispose();
+    });
     expect(container.innerHTML).toBe('');
   });
 });

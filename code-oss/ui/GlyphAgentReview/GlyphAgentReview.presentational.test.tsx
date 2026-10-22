@@ -212,8 +212,8 @@ describe(GlyphAgentReview, () => {
     const files = [...findings.querySelectorAll('section')];
     expect(files.map(file => file.querySelector('[title]')!.getAttribute('title'))).toEqual(['src/a.ts', 'src/b.ts']);
     expect(files[0]!.querySelector('.icon-src-a\\.ts')).not.toBeNull();
-    expect(within(files[0]!).getAllByRole('button', { name: /^Dismiss/ })).toHaveLength(2);
-    expect(screen.queryByText(/Review .* for issues/)).toBeNull();
+    expect(within(files[0]!).getAllByRole('button', { name: /^Dismiss/u })).toHaveLength(2);
+    expect(screen.queryByText(/Review .* for issues/u)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Leak' }));
     fireEvent.click(within(files[1]!).getByRole('button', { name: 'Fix' }));

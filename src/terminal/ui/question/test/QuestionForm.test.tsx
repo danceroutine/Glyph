@@ -20,7 +20,9 @@ describe(QuestionForm, () => {
   it('renders an entire emoji under the freeform cursor without splitting its UTF-16 surrogate pair', async () => {
     // Ink styles each Text node separately. Exercise real ANSI output even in
     // non-TTY CI, where disabled colors would conceal split surrogate halves.
-    const { default: chalk } = await import(createRequire(import.meta.resolve('ink')).resolve('chalk'));
+    const { default: chalk } = (await import(createRequire(import.meta.resolve('ink')).resolve('chalk'))) as {
+      default: { level: number };
+    };
     const previousLevel = chalk.level;
     chalk.level = 1;
     const view = render(
@@ -39,7 +41,7 @@ describe(QuestionForm, () => {
     );
     try {
       const encoded = Buffer.from(view.lastFrame() ?? '', 'utf8').toString('utf8');
-      expect(encoded).toContain('\u001b[7m😀');
+      expect(encoded).toContain('\u001B[7m😀');
       expect(stripVTControlCharacters(encoded)).toContain('other> 😀 answer');
       expect(encoded).not.toContain('\uFFFD');
     } finally {
@@ -58,7 +60,7 @@ describe(QuestionForm, () => {
           highlightedOption={2}
           selectedOptionIds={[]}
           enteringOther
-          otherText={'cu\u001bstom'}
+          otherText={'cu\u001Bstom'}
           otherCursor={2}
           diagnostic={'Try\u0000 again'}
         />,

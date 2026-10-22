@@ -40,7 +40,9 @@ function request(port: string, path: string): Promise<number | undefined> {
   return new Promise((resolve, reject) => {
     get({ hostname: '127.0.0.1', port, path }, response => {
       response.resume();
-      response.once('end', () => resolve(response.statusCode));
+      response.once('end', () => {
+        resolve(response.statusCode);
+      });
       response.once('error', reject);
     }).once('error', reject);
   });

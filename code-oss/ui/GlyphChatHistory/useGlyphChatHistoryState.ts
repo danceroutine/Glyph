@@ -15,8 +15,8 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
   const [query, setQuery] = useState('');
   const search = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => search.current?.focus(), []);
-  const allChats = [...state.chats]
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
+  const allChats = state.chats
+    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
     .filter(chat => chat.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .map(chat => ({
       id: chat.id,
@@ -52,7 +52,9 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
   ];
   return {
     archivedOpen,
-    toggleArchived: () => setArchivedOpen(!archivedOpen),
+    toggleArchived: () => {
+      setArchivedOpen(!archivedOpen);
+    },
     archived: allChats.filter(chat => chat.archived),
     archive: (id: string, archived: boolean) => void actions.setChatArchived?.(id, archived),
     pin: (id: string, pinned: boolean) => actions.setChatPinned?.(id, pinned),
@@ -60,9 +62,9 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
     setQuery,
     search,
     groups,
-    emptyMessage: chats.length ? undefined : query ? 'No matching chats.' : 'Your conversations will appear here.',
-    newChatDisabled: state.navigationPending || state.readOnly,
-    navigationPending: !!state.navigationPending,
+    emptyMessage: chats.length > 0 ? undefined : query ? 'No matching chats.' : 'Your conversations will appear here.',
+    newChatDisabled: state.navigationPending === true || state.readOnly,
+    navigationPending: state.navigationPending === true,
     newChat: () => {
       actions.newChat();
     },

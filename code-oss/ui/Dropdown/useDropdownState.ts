@@ -30,7 +30,7 @@ export function useDropdownState<T>({
   const search = useRef({ text: '', time: 0 });
   const id = useId();
   const open = isOpen && !disabled;
-  const activeIndex = items.length ? Math.max(0, Math.min(highlighted, items.length - 1)) : -1;
+  const activeIndex = items.length > 0 ? Math.max(0, Math.min(highlighted, items.length - 1)) : -1;
   const close = () => {
     setOpen(false);
     search.current.text = '';
@@ -51,12 +51,14 @@ export function useDropdownState<T>({
     if (disabled) close();
   }, [disabled]);
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
     const outside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !root.current?.contains(event.target)) close();
+      if (event.target instanceof Node && root.current?.contains(event.target) !== true) close();
     };
     document.addEventListener('pointerdown', outside);
-    return () => document.removeEventListener('pointerdown', outside);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+    };
   }, [open]);
   return {
     root,
@@ -66,9 +68,12 @@ export function useDropdownState<T>({
     activeIndex,
     highlight,
     select,
-    toggle: () => (open ? close() : show()),
+    toggle: () => {
+      if (open) close();
+      else show();
+    },
     blur: (target: EventTarget | null) => {
-      if (!(target instanceof Node) || !root.current?.contains(target)) close();
+      if (!(target instanceof Node) || root.current?.contains(target) !== true) close();
     },
     keydown: (event: KeyboardEvent) => {
       if (disabled || event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -91,12 +96,12 @@ export function useDropdownState<T>({
         close();
         trigger.current?.focus();
       } else if (event.key === 'Tab') close();
-      else if (event.key.length === 1 && items.length) {
+      else if (event.key.length === 1 && items.length > 0) {
         event.preventDefault();
         const now = Date.now();
         const text = (now - search.current.time < 600 ? search.current.text : '') + event.key.toLocaleLowerCase();
         search.current = { text, time: now };
-        const prefix = [...text].every(char => char === text[0]) ? text[0]! : text;
+        const prefix = Array.from(text).every(char => char === text[0]) ? text[0]! : text;
         const start = prefix.length === 1 ? activeIndex + 1 : activeIndex;
         const index = items
           .map((_, offset) => (start + offset + items.length) % items.length)

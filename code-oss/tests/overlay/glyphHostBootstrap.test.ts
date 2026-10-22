@@ -19,17 +19,17 @@ describe('glyphHostBootstrap', () => {
   it('loads the configured desktop host entry point', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'glyph-host-bootstrap-'));
     const entry = join(directory, 'utilityMain.mjs');
-    await writeFile(entry, 'globalThis.__glyphHostBootstrapLoaded = true;\n');
+    await writeFile(entry, 'globalThis.glyphHostBootstrapLoaded = true;\n');
     vi.resetModules();
     vi.stubEnv('GLYPH_DESKTOP_HOST_ENTRY', entry);
     onTestFinished(async () => {
       vi.unstubAllEnvs();
-      delete (globalThis as { __glyphHostBootstrapLoaded?: boolean }).__glyphHostBootstrapLoaded;
+      delete (globalThis as { glyphHostBootstrapLoaded?: boolean }).glyphHostBootstrapLoaded;
       await rm(directory, { recursive: true, force: true });
     });
 
     await import('#vs/platform/glyph/node/glyphHostBootstrap.js');
 
-    expect((globalThis as { __glyphHostBootstrapLoaded?: boolean }).__glyphHostBootstrapLoaded).toBe(true);
+    expect((globalThis as { glyphHostBootstrapLoaded?: boolean }).glyphHostBootstrapLoaded).toBe(true);
   });
 });

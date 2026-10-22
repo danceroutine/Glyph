@@ -134,7 +134,9 @@ describe(useGlyphWorkbenchState, () => {
       initialProps: { state: workbench(), actions: workbenchActions() },
     });
 
-    expect(() => result.current.closeTab('a')).not.toThrow();
+    expect(() => {
+      result.current.closeTab('a');
+    }).not.toThrow();
   });
 
   it('exposes the todos, plans and pending proposals of the selected chat', () => {
@@ -249,11 +251,15 @@ describe(useGlyphWorkbenchState, () => {
       initialProps: { state: workbench(), actions: workbenchActions({ reserveHistoryWidth }) },
     });
 
-    act(() => result.current.toggleHistory());
+    act(() => {
+      result.current.toggleHistory();
+    });
     expect(result.current.historyOpen).toBe(true);
     expect(reserveHistoryWidth).toHaveBeenCalledWith(tokens.history.columnWidth);
 
-    act(() => result.current.closeHistory());
+    act(() => {
+      result.current.closeHistory();
+    });
     expect(result.current.historyOpen).toBe(false);
     expect(release).toHaveBeenCalledOnce();
   });
@@ -263,8 +269,12 @@ describe(useGlyphWorkbenchState, () => {
       initialProps: { state: workbench(), actions: workbenchActions() },
     });
 
-    act(() => result.current.toggleHistory());
-    act(() => result.current.toggleHistory());
+    act(() => {
+      result.current.toggleHistory();
+    });
+    act(() => {
+      result.current.toggleHistory();
+    });
 
     expect(result.current.historyOpen).toBe(false);
   });

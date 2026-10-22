@@ -4,7 +4,8 @@ export function describeError(error: unknown): string {
   const apiError = findCause(error, candidate => candidate instanceof OpenAI.APIError);
   if (apiError instanceof OpenAI.APIError) {
     message = `OpenAI HTTP ${apiError.status ?? 'error'}: ${apiError.message}`;
-    if (apiError.requestID) message += `\nRequest ID: ${apiError.requestID}`;
+    if (apiError.requestID !== undefined && apiError.requestID !== null && apiError.requestID !== '')
+      message += `\nRequest ID: ${apiError.requestID}`;
     if (apiError.status === 401)
       message += '\nCheck the selected ChatGPT account and permissions. Use /login if the session was revoked.';
     if (apiError.status === 403)

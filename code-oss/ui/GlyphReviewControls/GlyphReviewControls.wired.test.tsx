@@ -22,11 +22,17 @@ describe(WiredGlyphReviewControls, () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reject with comments' }));
     const input = screen.getByRole('textbox', { name: 'Why should this change be revised?' });
-    await waitFor(() => expect(document.activeElement).toBe(input));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(input);
+    });
     fireEvent.input(input, { target: { value: 'Use a map' } });
     fireEvent.click(screen.getByRole('button', { name: 'Reject with comment' }));
 
-    await waitFor(() => expect(rejectWithComment).toHaveBeenCalledWith('Use a map'));
-    await waitFor(() => expect(screen.queryByRole('form', { name: 'Rejection comment' })).toBeNull());
+    await waitFor(() => {
+      expect(rejectWithComment).toHaveBeenCalledWith('Use a map');
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('form', { name: 'Rejection comment' })).toBeNull();
+    });
   });
 });

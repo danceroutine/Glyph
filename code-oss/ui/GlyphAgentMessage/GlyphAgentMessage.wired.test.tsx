@@ -73,9 +73,9 @@ describe(WiredGlyphAgentMessage, () => {
 
     expect(branchChat).toHaveBeenCalledWith('chat-1', 'turn-1');
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Branch chat' }).disabled).toBe(true);
-    await waitFor(() =>
-      expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Branch chat' }).disabled).toBe(false),
-    );
+    await waitFor(() => {
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Branch chat' }).disabled).toBe(false);
+    });
   });
 
   it('cannot branch read-only, unsaved or hostless conversations', () => {

@@ -17,7 +17,7 @@ import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationO
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 
 describe(EditorWorkspaceTextStore, () => {
-  it.each(['\ud800', '\udc00', 'folder/\ud800.txt', 'folder/\udc00.txt'])(
+  it.each(['\uD800', '\uDC00', 'folder/\uD800.txt', 'folder/\uDC00.txt'])(
     'rejects malformed Unicode path %j before metadata or editor requests',
     async path => {
       const client = new FixtureEditorClient('base');
@@ -173,7 +173,7 @@ describe(EditorWorkspaceTextStore, () => {
     await expect(store.delete('file.ts', 'revision')).rejects.toMatchObject({
       reason: EditFailureReason.STALE,
     });
-    expect(() => store.normalizePath('../outside')).toThrowError(/project-relative/);
+    expect(() => store.normalizePath('../outside')).toThrow(/project-relative/u);
 
     client.missing = true;
     await expect(store.readOptional('missing.ts')).resolves.toBeUndefined();
@@ -198,7 +198,7 @@ describe(EditorWorkspaceTextStore, () => {
   describe(EditorWorkspaceTextStore.prototype.normalizePath, () => {
     it.each(['', '/etc/passwd', 'a\0b', '.'])('rejects %j as a project-relative file path', path => {
       const store = new EditorWorkspaceTextStore('/project', true, editorClient(vi.fn()));
-      expect(() => store.normalizePath(path)).toThrowError(/project-relative/);
+      expect(() => store.normalizePath(path)).toThrow(/project-relative/u);
     });
 
     it('normalizes redundant segments', () => {
@@ -566,12 +566,14 @@ describe(EditorWorkspaceTextStore, () => {
         true,
         editorClient(async request => ({ operationId: operationIdOf(request), ok: true, snapshot: elsewhere })),
       );
-      const error = await store.replace('file.ts', elsewhere.contentRevision, 'after', false).catch(error => error);
+      const error = await store
+        .replace('file.ts', elsewhere.contentRevision, 'after', false)
+        .catch((error: unknown) => error);
       expect(error).toMatchObject({
         reason: EditFailureReason.STALE,
         details: { path: 'file.ts', retry: 'Read the current working copy and submit a new proposal.' },
       });
-      expect(error.details).not.toHaveProperty('currentRevision');
+      expect((error as { details: unknown }).details).not.toHaveProperty('currentRevision');
     });
 
     it('refuses to change the byte-order mark', async () => {
@@ -863,6 +865,6 @@ it('finishes saving a recovered rename through its existing operation ID', async
   await store.rename('source.ts', 'target.ts', snapshot.contentRevision, { operationId: 'rename', save: true });
   expect(saved).toBe(true);
   expect(
-    request.mock.calls.filter(([request]) => request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION),
+    request.mock.calls.filter(([command]) => command.type === GlyphEditorRequestType.APPLY_FILE_MUTATION),
   ).toHaveLength(1);
 });

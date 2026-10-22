@@ -41,11 +41,11 @@ describe(WiredShellPermission, () => {
       const interrupt = vi.fn();
       const view = render(<WiredShellPermission request={{ ...request(complete), interrupt }} />);
       try {
-        await write(view, '\x1b[1;1:3B');
+        await write(view, '\u001B[1;1:3B');
         expect(view.lastFrame()).toContain('› 1. Allow once');
-        view.stdin.write('\x1b[53;1:3u');
-        view.stdin.write('\x1b[13;1:3u');
-        view.stdin.write('\x1b[99;5:3u');
+        view.stdin.write('\u001B[53;1:3u');
+        view.stdin.write('\u001B[13;1:3u');
+        view.stdin.write('\u001B[99;5:3u');
         await tick();
         expect(complete).not.toHaveBeenCalled();
         expect(interrupt).not.toHaveBeenCalled();
@@ -72,10 +72,12 @@ describe(WiredShellPermission, () => {
       try {
         const authorization = authorizer.authorize('echo first', '/project', new AbortController().signal);
         const rejected = expect(authorization).rejects.toThrow('denied permission');
-        await vi.waitFor(() => expect(view).toBeDefined());
-        for (let index = 0; index < 4; index++) await write(view!, '\x1b[B');
+        await vi.waitFor(() => {
+          expect(view).toBeDefined();
+        });
+        for (let index = 0; index < 4; index++) await write(view!, '\u001B[B');
         expect(view!.lastFrame()).toContain('› 5. Allow everything');
-        view!.stdin.write('\x1b[B');
+        view!.stdin.write('\u001B[B');
         view!.stdin.write('\r');
         await rejected;
         expect(save).not.toHaveBeenCalled();
@@ -83,7 +85,9 @@ describe(WiredShellPermission, () => {
 
         const subsequent = authorizer.authorize('echo second', '/project', new AbortController().signal);
         const subsequentDenied = expect(subsequent).rejects.toThrow('denied permission');
-        await vi.waitFor(() => expect(presentShellPermission).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => {
+          expect(presentShellPermission).toHaveBeenCalledTimes(2);
+        });
         await write(view!, '6');
         await subsequentDenied;
         expect(save).not.toHaveBeenCalled();
@@ -97,7 +101,7 @@ describe(WiredShellPermission, () => {
       const view = render(<WiredShellPermission request={request(complete)} />);
       try {
         await tick();
-        for (let index = 0; index < 5; index++) view.stdin.write('\x1b[B');
+        for (let index = 0; index < 5; index++) view.stdin.write('\u001B[B');
         view.stdin.write('\r');
         await tick();
         expect(complete).toHaveBeenCalledExactlyOnceWith(ShellPermissionDecision.DENY);
@@ -118,7 +122,7 @@ describe(WiredShellPermission, () => {
           else view.stdin.write(submit === 'Enter' ? '\r' : '6');
           view.stdin.write('5');
           view.stdin.write('\r');
-          view.stdin.write('\x03');
+          view.stdin.write('\u0003');
           await tick();
           expect(complete).toHaveBeenCalledExactlyOnceWith(
             submit === 'Enter' ? ShellPermissionDecision.ALLOW_ONCE : ShellPermissionDecision.DENY,
@@ -136,10 +140,10 @@ describe(WiredShellPermission, () => {
       const view = render(<WiredShellPermission request={{ ...request(complete), interrupt }} />);
       try {
         await tick();
-        view.stdin.write('\x03');
+        view.stdin.write('\u0003');
         view.stdin.write('5');
         view.stdin.write('\r');
-        view.stdin.write('\x03');
+        view.stdin.write('\u0003');
         await tick();
         expect(interrupt).toHaveBeenCalledOnce();
         expect(complete).not.toHaveBeenCalled();
@@ -155,7 +159,7 @@ describe(WiredShellPermission, () => {
         const nextComplete = vi.fn();
         const view = render(<WiredShellPermission request={request(complete)} />);
         try {
-          for (let index = 0; index < 4; index++) await write(view, '\x1b[B');
+          for (let index = 0; index < 4; index++) await write(view, '\u001B[B');
           expect(view.lastFrame()).toContain('› 5. Allow everything');
           if (settled) await write(view, '\r');
           view.rerender(<WiredShellPermission request={{ ...request(nextComplete), id: 2 }} />);
@@ -185,11 +189,13 @@ describe(WiredShellPermission, () => {
         </Box>,
       );
       try {
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('› 1. Allow once'));
-        for (let n = 0; n < 10; n++) await write(view, '\u001b[6~');
+        await vi.waitFor(() => {
+          expect(view.lastFrame()).toContain('› 1. Allow once');
+        });
+        for (let n = 0; n < 10; n++) await write(view, '\u001B[6~');
         expect(view.lastFrame()).toContain('echo harmless-29');
         expect(view.lastFrame()).toContain('› 1. Allow once');
-        for (let n = 0; n < 10; n++) await write(view, '\u001b[5~');
+        for (let n = 0; n < 10; n++) await write(view, '\u001B[5~');
         expect(view.lastFrame()).toContain('echo harmless-0');
         expect(view.lastFrame()).not.toContain('echo harmless-29');
         expect(complete).not.toHaveBeenCalled();
@@ -207,13 +213,13 @@ describe(WiredShellPermission, () => {
       expect(view.lastFrame()).toContain('/project');
       expect(view.lastFrame()).toContain('echo danger');
       expect(view.lastFrame()).toContain('› 1. Allow once');
-      await write(view, '\x1b[A');
-      await write(view, '\x1b[B');
-      await write(view, '\x1b[B');
-      await write(view, '\x1b[B');
-      await write(view, '\x1b[B');
-      await write(view, '\x1b[B');
-      await write(view, '\x1b[B');
+      await write(view, '\u001B[A');
+      await write(view, '\u001B[B');
+      await write(view, '\u001B[B');
+      await write(view, '\u001B[B');
+      await write(view, '\u001B[B');
+      await write(view, '\u001B[B');
+      await write(view, '\u001B[B');
       await write(view, '\r');
 
       expect(complete).toHaveBeenCalledWith(ShellPermissionDecision.DENY);
@@ -242,7 +248,7 @@ describe(WiredShellPermission, () => {
       const interrupt = vi.fn();
       const inactive = render(<WiredShellPermission request={{ ...request(complete), interrupt }} active={false} />);
       await write(inactive, '2');
-      await write(inactive, '\x03');
+      await write(inactive, '\u0003');
       expect(complete).not.toHaveBeenCalled();
       expect(interrupt).not.toHaveBeenCalled();
       inactive.unmount();
@@ -261,7 +267,7 @@ describe(WiredShellPermission, () => {
 function request(complete: TerminalShellPermissionRequest['complete']): TerminalShellPermissionRequest {
   return {
     id: 1,
-    permission: { command: 'echo\u001b danger', workingDirectory: '/project' },
+    permission: { command: 'echo\u001B danger', workingDirectory: '/project' },
     complete,
     interrupt: vi.fn(),
   };
@@ -273,10 +279,14 @@ async function write(view: ReturnType<typeof render>, input: string): Promise<vo
 }
 
 async function tick(): Promise<void> {
-  await new Promise<void>(resolve => setImmediate(resolve));
+  await new Promise<void>(resolve => {
+    setImmediate(resolve);
+  });
 }
 
 async function writeEscape(view: ReturnType<typeof render>): Promise<void> {
-  view.stdin.write('\x1b');
-  await new Promise<void>(resolve => setTimeout(resolve, 75));
+  view.stdin.write('\u001B');
+  await new Promise<void>(resolve => {
+    setTimeout(resolve, 75);
+  });
 }

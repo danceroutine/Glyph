@@ -51,7 +51,10 @@ const styles = {
 export function GlyphAgentReview(controls: GlyphAgentReviewControls) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const disabled = controls.busy || !!controls.unavailableReason || !!controls.reviewing;
+  const disabled =
+    controls.busy ||
+    (controls.unavailableReason !== undefined && controls.unavailableReason !== '') ||
+    controls.reviewing === true;
   useEffect(() => {
     if (disabled) setOpen(false);
   }, [disabled]);
@@ -62,7 +65,7 @@ export function GlyphAgentReview(controls: GlyphAgentReviewControls) {
   };
   return (
     <div class={styles.root}>
-      {controls.completed ? (
+      {controls.completed === true ? (
         <div class={styles.completedActions}>
           <Button
             class={styles.reviewAgain}
@@ -74,7 +77,7 @@ export function GlyphAgentReview(controls: GlyphAgentReviewControls) {
           </Button>
           <Button
             variant={ButtonVariant.PRIMARY}
-            disabled={controls.busy || !controls.findings?.length}
+            disabled={controls.busy || (controls.findings?.length ?? 0) === 0}
             onClick={controls.fixAll}
           >
             Fix All Issues
@@ -84,18 +87,19 @@ export function GlyphAgentReview(controls: GlyphAgentReviewControls) {
         <SplitButtonGroup
           fullWidth
           onBlur={event => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false);
+            if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)))
+              setOpen(false);
           }}
         >
           <Button
             variant={ButtonVariant.PRIMARY}
-            class={controls.reviewing ? styles.running : undefined}
-            loading={controls.busy && !controls.reviewing}
-            disabled={!controls.reviewing && disabled}
-            title={controls.reviewing ? 'Stop Review' : controls.unavailableReason}
-            onClick={controls.reviewing ? controls.stop : controls.review}
+            class={controls.reviewing === true ? styles.running : undefined}
+            loading={controls.busy && controls.reviewing !== true}
+            disabled={controls.reviewing !== true && disabled}
+            title={controls.reviewing === true ? 'Stop Review' : controls.unavailableReason}
+            onClick={controls.reviewing === true ? controls.stop : controls.review}
             leadingIcon={
-              controls.reviewing ? (
+              controls.reviewing === true ? (
                 <>
                   <LoaderCircle class={`glyph-review-spin ${styles.spinner}`} size={16} />
                   <CircleStop class="glyph-review-stop" size={16} />
@@ -105,7 +109,7 @@ export function GlyphAgentReview(controls: GlyphAgentReviewControls) {
               )
             }
           >
-            {controls.reviewing ? 'Reviewing' : 'Find Issues'}
+            {controls.reviewing === true ? 'Reviewing' : 'Find Issues'}
           </Button>
           <IconButton
             variant={ButtonVariant.PRIMARY}
@@ -158,20 +162,22 @@ export function GlyphAgentReview(controls: GlyphAgentReviewControls) {
           )}
         </SplitButtonGroup>
       )}
-      {!controls.completed && (
+      {controls.completed !== true && (
         <p class={styles.description}>
-          {controls.reviewing
+          {controls.reviewing === true
             ? 'Reviewing your changes…'
             : controls.scope === GlyphAgentReviewScope.BRANCH
-              ? `Review committed changes since the common ancestor with ${controls.branch.replace(/^refs\/(heads|remotes)\//, '') || 'the selected branch'}.`
+              ? `Review committed changes since the common ancestor with ${controls.branch.replace(/^refs\/(heads|remotes)\//u, '') || 'the selected branch'}.`
               : `Review ${glyphAgentReviewLabels[controls.scope].toLowerCase()} for issues.`}
         </p>
       )}
-      {controls.findings?.length || controls.completed ? (
+      {(controls.findings?.length ?? 0) || controls.completed === true ? (
         <div class={styles.findings} aria-label="Review findings">
           <p>
-            {controls.findings?.length ? `Found ${controls.findings.length} Potential Issues` : 'No issues found'}
-            {controls.resultScope ? ` (${controls.resultScope})` : ''}
+            {controls.findings !== undefined && controls.findings.length > 0
+              ? `Found ${controls.findings.length} Potential Issues`
+              : 'No issues found'}
+            {controls.resultScope !== undefined && controls.resultScope !== '' ? ` (${controls.resultScope})` : ''}
           </p>
           <GlyphFileIcons.Provider value={controls.fileIconClasses}>
             {[...new Set(controls.findings?.map(finding => finding.path))].map(path => (
@@ -212,9 +218,9 @@ export function GlyphAgentReview(controls: GlyphAgentReviewControls) {
           </GlyphFileIcons.Provider>
         </div>
       ) : null}
-      {!controls.reviewing && controls.unavailableReason ? (
+      {controls.reviewing !== true && controls.unavailableReason !== undefined && controls.unavailableReason !== '' ? (
         <p role="status">{controls.unavailableReason}</p>
-      ) : controls.error ? (
+      ) : controls.error !== undefined && controls.error !== '' ? (
         <p role="alert">{controls.error}</p>
       ) : null}
     </div>

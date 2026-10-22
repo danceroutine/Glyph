@@ -30,7 +30,8 @@ describe(transformTextEditRanges, () => {
   });
 
   it('treats a character diff with missing entries as reporting no further changes', () => {
-    const changes: ChangeObject<string>[] = new Array(1);
+    const changes: ChangeObject<string>[] = [];
+    changes.length = 1;
     vi.mocked(diffChars).mockReturnValueOnce(changes);
 
     const transformed = transformTextEditRanges('cc', 'ccc', [range(0, 0, '')]);

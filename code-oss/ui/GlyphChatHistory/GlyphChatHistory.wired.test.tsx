@@ -75,7 +75,7 @@ describe(WiredGlyphChatHistory, () => {
     expect(screen.queryByRole('region', { name: 'Yesterday' })).toBeNull();
     const running = screen.getByRole('button', { name: 'Running chat' });
     expect(running.getAttribute('aria-current')).toBe('true');
-    expect(running.parentElement!.hasAttribute('data-selected')).toBe(true);
+    expect(Object.hasOwn(running.parentElement!.dataset, 'selected')).toBe(true);
     expect(within(running).getByLabelText('Running').textContent).toBe('◌');
     expect(screen.getByRole('button', { name: 'Pinned chat' }).textContent).toBe('○Pinned chat');
   });
@@ -122,7 +122,7 @@ describe(WiredGlyphChatHistory, () => {
 
     const archived = screen.getByRole('region', { name: 'Archived chats' });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    expect(within(archived).queryByRole('button', { name: /^Pin/, hidden: true })).toBeNull();
+    expect(within(archived).queryByRole('button', { name: /^Pin/u, hidden: true })).toBeNull();
     const restore = within(archived).getByRole('button', { name: 'Unarchive Old chat', hidden: true });
     expect(restore.title).toBe('Unarchive chat');
     fireEvent.click(restore);
@@ -186,10 +186,8 @@ describe(WiredGlyphChatHistory, () => {
     );
 
     expect(screen.getByRole('navigation', { name: 'Saved chats' }).getAttribute('aria-busy')).toBe('true');
-    expect((screen.getByRole('button', { name: 'Alpha' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: '＋ New chat' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Archive Alpha', hidden: true }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Alpha' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '＋ New chat' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Archive Alpha', hidden: true }).disabled).toBe(true);
   });
 });

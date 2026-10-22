@@ -80,7 +80,7 @@ it.describe('Queued message menu', () => {
     await queue.getByRole('listitem').hover();
     await queue.getByRole('button', { name: 'Queued message actions', exact: true }).click();
     await queue.getByRole('menuitem', { name: 'New Message Settings', exact: true }).click();
-    await expect(glyph.page.getByRole('treeitem', { name: /Glyph › Chat Follow Up Behavior/ })).toBeVisible();
+    await expect(glyph.page.getByRole('treeitem', { name: /Glyph › Chat Follow Up Behavior/u })).toBeVisible();
     await glyph.page.getByRole('button', { name: 'Close Modal Editor (Escape)', exact: true }).click();
     await queue.getByRole('listitem').hover();
     await queue.getByRole('button', { name: 'Queued message actions', exact: true }).click();

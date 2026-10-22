@@ -1,18 +1,17 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { playwright } from '@vitest/browser-playwright';
 import type { Plugin } from 'vite';
 import { configDefaults, defineConfig } from 'vitest/config';
 
-const root = fileURLToPath(new URL('.', import.meta.url));
-const typescript = (path: string) => path.replace(/\.js$/, '.ts');
+const root = import.meta.dirname;
+const typescript = (path: string) => path.replace(/\.js$/u, '.ts');
 
 const codeOssAliases: Plugin = {
   name: 'glyph-code-oss-aliases',
   enforce: 'pre',
   resolveId(id, importer) {
-    if (id === './ui/mountGlyphWorkbench.js' && importer?.includes('/code-oss/overlay/'))
+    if (id === './ui/mountGlyphWorkbench.js' && importer?.includes('/code-oss/overlay/') === true)
       return resolve(root, 'code-oss/ui/mountGlyphWorkbench.tsx');
     if (id.startsWith('#glyph/protocol/')) return resolve(root, 'src/desktop/protocol', typescript(id.slice(16)));
     if (id.startsWith('#glyph/workbench/')) return resolve(root, 'src/desktop/workbench', typescript(id.slice(17)));

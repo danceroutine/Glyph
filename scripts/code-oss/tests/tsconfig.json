@@ -1,0 +1,27 @@
+{
+  "extends": "../../../code-oss/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../../..",
+    "allowJs": true,
+    "checkJs": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"],
+    "paths": {
+      "#vs/*": ["../../../code-oss/overlay/src/vs/*", "../../../.code-oss/src/src/vs/*"],
+      "#glyph/*": [
+        "../../../code-oss/overlay/src/vs/platform/glyph/common/*",
+        "../../../.code-oss/src/src/vs/platform/glyph/common/*"
+      ],
+      "electron": ["../../../.code-oss/src/.build/typings/electron.d.ts"],
+      "electron/*": ["../../../.code-oss/src/.build/typings/electron.d.ts"],
+      "@playwright/test": ["../../../.code-oss/src/node_modules/@playwright/test/index.d.ts"]
+    }
+  },
+  "include": [
+    "./**/*.mjs",
+    "./**/*.d.ts",
+    "../../../.code-oss/src/src/typings/**/*.d.ts",
+    "../../../.code-oss/src/src/vs/monaco.d.ts",
+    "../../../.code-oss/src/src/vs/workbench/contrib/debug/common/debugProtocol.d.ts"
+  ]
+}

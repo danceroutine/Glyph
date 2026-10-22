@@ -5,7 +5,17 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const modules = join(repositoryRoot, 'node_modules');
 
+/** @typedef {{ files: Record<string, string>, entries: Record<string, string>, unexported: string[] }} PackageTree */
+
+/**
+ * @param {{ files?: Record<string, string>, entries?: Record<string, string> }} [overrides]
+ * @returns {PackageTree}
+ */
 function packageTree(overrides = {}) {
+  /**
+   * @param {string} name
+   * @param {Record<string, string>} [dependencies]
+   */
   const manifest = (name, dependencies) => JSON.stringify({ name, ...(dependencies && { dependencies }) });
   return {
     files: {
@@ -46,19 +56,21 @@ function packageTree(overrides = {}) {
   };
 }
 
+/** @param {PackageTree} tree */
 async function runBuild(tree) {
   const filesystem = {
-    readFile: vi.fn(async path => {
+    readFile: vi.fn(async (/** @type {string} */ path) => {
       if (tree.files[path] === undefined) throw Object.assign(new Error(`missing ${path}`), { code: 'ENOENT' });
       return tree.files[path];
     }),
   };
+  /** @type {string[]} */
   const requireRoots = [];
   const module = {
-    createRequire: vi.fn(from => {
+    createRequire: vi.fn((/** @type {string} */ from) => {
       requireRoots.push(from);
       return {
-        resolve: specifier => {
+        resolve: (/** @type {string} */ specifier) => {
           if (specifier.endsWith('/package.json')) {
             const path = join(modules, specifier);
             if (tree.files[path] !== undefined && !tree.unexported.includes(specifier)) return path;
@@ -69,7 +81,7 @@ async function runBuild(tree) {
       };
     }),
   };
-  const esbuild = { build: vi.fn(async () => {}) };
+  const esbuild = { build: vi.fn(async (/** @type {import('esbuild').BuildOptions} */ _options) => {}) };
   const diagram = { buildGlyphDiagram: vi.fn(async () => {}) };
   onTestFinished(() => {
     vi.doUnmock('node:fs/promises');

@@ -26,6 +26,7 @@ import { WorkspaceAccessPolicy } from './policy/WorkspaceAccessPolicy.ts';
 import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import { WorkspaceReadLimitError } from './WorkspaceReadLimitError.ts';
 import { assertWellFormedWorkspacePath } from './assertWellFormedWorkspacePath.ts';
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 
 const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
@@ -82,7 +83,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         const key = canonical.split(sep).join('/');
         return this.caseSensitive ? key : key.toLocaleLowerCase('en-US');
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || cursor === this.root) {
+        if (errorCodeOf(error) !== 'ENOENT' || cursor === this.root) {
           throw classifyPathError(error, path);
         }
         missing.unshift(basename(cursor));
@@ -98,8 +99,10 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   ): Promise<{ files: string[]; truncated: boolean }> {
     const root = await realpath(this.root);
     const normalizedTarget = targetDirectory === undefined ? undefined : this.normalizePath(targetDirectory);
-    if (normalizedTarget) await this.assertNoSymlinkSegments(normalizedTarget, false);
-    const searchRoot = normalizedTarget ? resolve(root, normalizedTarget) : root;
+    if (normalizedTarget !== undefined && normalizedTarget !== '')
+      await this.assertNoSymlinkSegments(normalizedTarget, false);
+    const searchRoot =
+      normalizedTarget !== undefined && normalizedTarget !== '' ? resolve(root, normalizedTarget) : root;
     const searchRootInfo = await lstat(searchRoot);
     if (!searchRootInfo.isDirectory()) {
       throw new EditError(EditFailureReason.UNSUPPORTED, 'The target directory is not a directory.', {
@@ -149,7 +152,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     try {
       handle = await open(resolvedFile, flags);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      if (errorCodeOf(error) === 'ELOOP') {
         throw new EditError(
           EditFailureReason.UNSUPPORTED,
           'Symbolic links are not supported.',
@@ -190,7 +193,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       this.normalizePath(relative(resolvedRoot, resolvedPath));
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      if (errorCodeOf(error) === 'ENOENT') return false;
       throw classifyPathError(error, path);
     }
   }
@@ -202,7 +205,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     } catch (error) {
       // A live editor may own a new, unsaved file. Ancestor and exclusion checks
       // still run before a missing path is allowed through to the editor.
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (errorCodeOf(error) !== 'ENOENT') throw error;
     }
   }
 
@@ -210,7 +213,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     try {
       return await this.read(path, options);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      if (errorCodeOf(error) === 'ENOENT') return undefined;
       throw classifyPathError(error, path);
     }
   }
@@ -229,10 +232,9 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         await handle.close();
       }
       await chmod(absolute, mode);
-      return this.read(path);
     } catch (error) {
       await rollbackDirectories(created);
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      if (errorCodeOf(error) === 'EEXIST') {
         throw new EditError(
           EditFailureReason.STALE,
           'The create target now exists.',
@@ -242,6 +244,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       }
       throw classifyPathError(error, path);
     }
+    return this.read(path);
   }
 
   async replace(
@@ -267,7 +270,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       throw classifyPathError(error, path);
     } finally {
       await unlink(temporary).catch(error => {
-        if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        if (!['ENOENT', 'ENOTDIR'].includes(errorCodeOf(error) ?? '')) throw error;
       });
     }
     return this.read(path);
@@ -291,10 +294,9 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       // silently overwrite a collaborator-created target on POSIX.
       await link(resolve(this.root, source), resolve(this.root, target));
       await unlink(resolve(this.root, source));
-      return this.read(target);
     } catch (error) {
       await rollbackDirectories(created);
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      if (errorCodeOf(error) === 'EEXIST') {
         throw new EditError(
           EditFailureReason.STALE,
           'The rename target now exists.',
@@ -304,6 +306,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       }
       throw classifyPathError(error, target);
     }
+    return this.read(target);
   }
 
   async delete(input: string, expectedRevision: string): Promise<void> {
@@ -321,17 +324,17 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     try {
       await this.assertNoSymlinkSegments(path, false);
       const absolute = resolve(this.root, path);
-      const link = await lstat(absolute);
-      if (link.isSymbolicLink())
+      const linkStat = await lstat(absolute);
+      if (linkStat.isSymbolicLink())
         throw new EditError(EditFailureReason.UNSUPPORTED, 'Symbolic links are not supported.', { path });
-      if (!link.isFile())
+      if (!linkStat.isFile())
         throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
       const resolvedRoot = await realpath(this.root);
       const resolvedFile = await realpath(absolute);
       assertInsideRoot(resolvedRoot, resolvedFile, path);
       // Check the filesystem's spelling too: aliases must not bypass the policy.
       this.normalizePath(relative(resolvedRoot, resolvedFile));
-      return { path, resolvedFile, identity: `${link.dev}:${link.ino}` };
+      return { path, resolvedFile, identity: `${linkStat.dev}:${linkStat.ino}` };
     } catch (error) {
       // An ancestor can change after its earlier inspection. Preserve that as
       // an unsupported resource, never as proof of an absent child or a delete.
@@ -379,21 +382,22 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           throw new EditError(EditFailureReason.UNSUPPORTED, 'A parent path is not a directory.');
         break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (errorCodeOf(error) !== 'ENOENT') {
           throw classifyPathError(error, relative(this.root, directory));
         }
         missing.push(cursor);
         cursor = dirname(cursor);
       }
     }
-    for (const path of missing.reverse()) {
+    const created = missing.toReversed();
+    for (const path of created) {
       try {
         await mkdir(path);
       } catch (error) {
         throw classifyPathError(error, relative(this.root, path));
       }
     }
-    return missing;
+    return created;
   }
 
   private async assertNoSymlinkSegments(path: string, allowMissing: boolean): Promise<void> {
@@ -412,7 +416,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           throw new EditError(EditFailureReason.UNSUPPORTED, 'A parent path is not a directory.', { path });
         }
       } catch (error) {
-        if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        if (allowMissing && errorCodeOf(error) === 'ENOENT') return;
         throw classifyPathError(error, path);
       }
     }
@@ -507,11 +511,11 @@ function assertSupportedText(text: string, path: string): void {
 }
 
 async function rollbackDirectories(paths: string[]): Promise<void> {
-  for (const path of [...paths].reverse()) {
+  for (const path of paths.toReversed()) {
     try {
       await rmdir(path);
     } catch (error) {
-      if (!['ENOENT', 'ENOTDIR', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      if (!['ENOENT', 'ENOTDIR', 'ENOTEMPTY'].includes(errorCodeOf(error) ?? '')) throw error;
     }
   }
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { Emitter } from '#vs/base/common/event.js';
 import { URI } from '#vs/base/common/uri.js';
 import { BrowserViewCommandId } from '#vs/platform/browserView/common/browserView.js';
@@ -51,7 +51,7 @@ const glyphServiceOf = () => {
   return {
     ...(Object.fromEntries(methods.map(method => [method, vi.fn(async () => method)])) as Record<
       (typeof methods)[number],
-      ReturnType<typeof vi.fn>
+      Mock
     >),
     state: { chats: [], selectedChatId: undefined, transcript: [] } as unknown as GlyphWorkbenchState,
     composer: { id: 'composer' },
@@ -100,7 +100,7 @@ const paneOf = () => {
     glyph: glyphServiceOf(),
   };
   const pane = new GlyphViewPane(
-    { id: GlyphViewPane.ID, title: 'Chat' } as never,
+    { id: GlyphViewPane.ID, title: 'Chat' },
     services.dialogs as never,
     services.files as never,
     services.commands as never,
@@ -258,7 +258,6 @@ describe(GlyphViewPane, () => {
       ['viewPlan', ['chat-1', { id: 'plan-1' }]],
       ['selectMode', ['plan']],
       ['buildPlan', ['chat-1', { id: 'plan-1' }, true]],
-      ['cancel', []],
       ['writeShellInput', ['chat-1', 'session-1', 'ls', true]],
       ['openShell', ['chat-1', 'session-1']],
       ['stopShell', ['chat-1', 'session-1']],
@@ -266,17 +265,24 @@ describe(GlyphViewPane, () => {
       ['decideApproval', ['chat-1', 'run-1', 'approval-1', 'approve']],
       ['reviewProposalFile', ['chat-1', 'proposal-1', 'file-1']],
       ['decideProposalItems', ['chat-1', [{ proposalId: 'proposal-1', itemId: 'item-1' }], true]],
-      ['newChat', []],
       ['closeChat', ['chat-1']],
       ['setChatArchived', ['chat-1', true]],
-      ['setChatPinned', ['chat-1', true]],
       ['openChat', ['chat-1']],
       ['selectAccount', ['openai', 'account-1']],
       ['selectModel', ['gpt']],
     ];
+    const notifications: [keyof typeof services.glyph & keyof GlyphWorkbenchViewActions, unknown[]][] = [
+      ['cancel', []],
+      ['newChat', []],
+      ['setChatPinned', ['chat-1', true]],
+    ];
 
     for (const [method, args] of calls) {
       await expect((actions[method] as (...args: unknown[]) => unknown)(...args)).resolves.toBe(method);
+      expect(services.glyph[method]).toHaveBeenCalledWith(...args);
+    }
+    for (const [method, args] of notifications) {
+      (actions[method] as (...args: unknown[]) => unknown)(...args);
       expect(services.glyph[method]).toHaveBeenCalledWith(...args);
     }
     await actions.reconnectWorkspace!();
@@ -352,8 +358,8 @@ describe(GlyphViewPane, () => {
 
     await menu.browser.run();
     await expect(menu.settings.run()).resolves.toBeUndefined();
-    menu.maximize.run();
-    menu.hide.run();
+    await menu.maximize.run();
+    await menu.hide.run();
 
     expect(services.commands.executeCommand).toHaveBeenCalledWith(BrowserViewCommandId.Open);
     expect(services.preferences.openSettings).toHaveBeenCalledWith({ query: 'glyph' });

@@ -55,6 +55,8 @@ export function Response({ sections, pendingFrame, toolFrame, messageWidth, foot
               />
             );
           }
+          default:
+            return null;
         }
       })}
       {footer}

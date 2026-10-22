@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { URI } from '#vs/base/common/uri.js';
 import { EditorType } from '#vs/editor/common/editorCommon.js';
 import { EditorOption } from '#vs/editor/common/config/editorOptions.js';
@@ -54,7 +54,7 @@ const diffOf = () => {
 };
 
 const reviewEditorOf = () => {
-  const models = new Map<string, { uri: URI; text: string; language: unknown; dispose: ReturnType<typeof vi.fn> }>();
+  const models = new Map<string, { uri: URI; text: string; language: unknown; dispose: Mock }>();
   let provider: { provideTextContent(uri: URI): Promise<unknown> } | undefined;
   const services = {
     models: {
@@ -102,7 +102,7 @@ describe(GlyphAgentReviewEditor, () => {
     const { editor, services, opened, provide } = reviewEditorOf();
     opened(diffOf().diff);
     await editor.open(fileOf(), findingOf(), [], vi.fn(), vi.fn());
-    const { original, modified } = services.editors.openEditor.mock.calls[0][0] as unknown as {
+    const { original, modified } = services.editors.openEditor.mock.calls[0][0] as {
       original: { resource: URI };
       modified: { resource: URI };
     };
@@ -115,8 +115,8 @@ describe(GlyphAgentReviewEditor, () => {
       expect.any(Object),
     );
     expect(original.resource.scheme).toBe('glyph-agent-review');
-    expect(original.resource.path).toMatch(/^\/[^/]+\/before\/a\.ts$/);
-    expect(modified.resource.path).toMatch(/^\/[^/]+\/after\/a\.ts$/);
+    expect(original.resource.path).toMatch(/^\/[^/]+\/before\/a\.ts$/u);
+    expect(modified.resource.path).toMatch(/^\/[^/]+\/after\/a\.ts$/u);
     expect(before).toEqual(expect.objectContaining({ text: 'old', language: 'language:/repo/src/a.ts' }));
     expect(after).toEqual(expect.objectContaining({ text: 'new' }));
     expect(await provide(original.resource)).toBe(before);
@@ -128,8 +128,8 @@ describe(GlyphAgentReviewEditor, () => {
     const { editor, services, models, opened, provide } = reviewEditorOf();
     opened(diffOf().diff);
     await editor.open(fileOf(), findingOf(), [], vi.fn(), vi.fn());
-    const { original } = services.editors.openEditor.mock.calls[0][0] as unknown as { original: { resource: URI } };
-    const model = (await provide(original.resource)) as { dispose: ReturnType<typeof vi.fn> };
+    const { original } = services.editors.openEditor.mock.calls[0][0] as { original: { resource: URI } };
+    const model = (await provide(original.resource)) as { dispose: Mock };
 
     editor.dispose();
 
@@ -174,7 +174,12 @@ describe(GlyphAgentReviewEditor, () => {
       });
       expect(modified.revealLineInCenter).toHaveBeenCalledWith(3);
       expect(original.revealLineInCenter).not.toHaveBeenCalled();
-      const [container, finding, fixed, dismissed] = mounts.mountGlyphAgentReviewComment.mock.calls[1];
+      const [container, finding, fixed, dismissed] = mounts.mountGlyphAgentReviewComment.mock.calls[1] as [
+        unknown,
+        unknown,
+        () => void,
+        () => void,
+      ];
       expect(container).toBe(ZoneWidgetStub.instances[1].container);
       expect(finding).toBe(findings[1]);
       fixed();
@@ -258,19 +263,31 @@ describe(GlyphAgentReviewEditor, () => {
         const body = document.createElement('div');
         body.style.height = '300px';
         container.append(body);
-        return { dispose: () => body.remove() };
+        return {
+          dispose: () => {
+            body.remove();
+          },
+        };
       });
 
       await editor.open(fileOf(), findingOf(), [findingOf()], vi.fn(), vi.fn());
       const [widget] = ZoneWidgetStub.instances;
-      await vi.waitFor(() => expect(widget.relayouts).toEqual([15]));
+      await vi.waitFor(() => {
+        expect(widget.relayouts).toEqual([15]);
+      });
       const body = widget.container.firstElementChild as HTMLElement;
       body.style.height = '900px';
-      await vi.waitFor(() => expect(widget.relayouts).toEqual([15, 25]));
+      await vi.waitFor(() => {
+        expect(widget.relayouts).toEqual([15, 25]);
+      });
       body.style.height = '10px';
-      await vi.waitFor(() => expect(widget.relayouts).toEqual([15, 25, 5]));
+      await vi.waitFor(() => {
+        expect(widget.relayouts).toEqual([15, 25, 5]);
+      });
       body.remove();
-      await vi.waitFor(() => expect(widget.relayouts).toEqual([15, 25, 5, 8]));
+      await vi.waitFor(() => {
+        expect(widget.relayouts).toEqual([15, 25, 5, 8]);
+      });
     });
 
     it('leaves empty comments at their initial size', async () => {

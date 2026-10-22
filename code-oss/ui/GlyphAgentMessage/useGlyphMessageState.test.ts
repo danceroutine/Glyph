@@ -123,19 +123,34 @@ describe(useGlyphMessageState, () => {
 
   it('runs one history action at a time', async () => {
     let finish!: () => void;
-    const branch = vi.fn(() => new Promise<void>(resolve => (finish = resolve)));
+    const branch = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        }),
+    );
     const restore = vi.fn(async () => {});
     const { result } = renderHook(useGlyphMessageState, {
       initialProps: { entries: [transcriptEntry({ checkpointTurnId: 'turn-1' })], branch, restore },
     });
 
-    act(() => result.current.entries[0]!.branch!());
+    act(() => {
+      result.current.entries[0]!.branch!();
+    });
     expect(result.current.entries[0]!.historyPending).toBe(true);
-    act(() => result.current.entries[0]!.restore!());
+    act(() => {
+      result.current.entries[0]!.restore!();
+    });
     expect(restore).not.toHaveBeenCalled();
-    act(() => finish());
-    await waitFor(() => expect(result.current.entries[0]!.historyPending).toBe(false));
-    act(() => result.current.entries[0]!.restore!());
+    act(() => {
+      finish();
+    });
+    await waitFor(() => {
+      expect(result.current.entries[0]!.historyPending).toBe(false);
+    });
+    act(() => {
+      result.current.entries[0]!.restore!();
+    });
 
     expect(branch).toHaveBeenCalledWith('turn-1');
     expect(restore).toHaveBeenCalledWith('turn-1');
@@ -150,12 +165,20 @@ describe(useGlyphMessageState, () => {
       },
     });
 
-    act(() => result.current.entries[0]!.branch!());
-    await waitFor(() => expect(result.current.entries[0]!.attachmentError).toBe('Branch failed'));
+    act(() => {
+      result.current.entries[0]!.branch!();
+    });
+    await waitFor(() => {
+      expect(result.current.entries[0]!.attachmentError).toBe('Branch failed');
+    });
     expect(result.current.entries[1]!.attachmentError).toBeUndefined();
-    act(() => result.current.entries[0]!.branch!());
+    act(() => {
+      result.current.entries[0]!.branch!();
+    });
 
-    await waitFor(() => expect(result.current.entries[0]!.attachmentError).toBe('Offline'));
+    await waitFor(() => {
+      expect(result.current.entries[0]!.attachmentError).toBe('Offline');
+    });
   });
 
   it('opens attachments and reports failures', async () => {
@@ -169,20 +192,34 @@ describe(useGlyphMessageState, () => {
       initialProps: { entries: [transcriptEntry()], context: contextActions(openAttachment) },
     });
 
-    act(() => result.current.entries[0]!.openAttachment(attachment));
-    await waitFor(() => expect(result.current.entries[0]!.attachmentError).toBe('Missing file'));
-    act(() => result.current.entries[0]!.openAttachment(attachment));
-    await waitFor(() => expect(result.current.entries[0]!.attachmentError).toBe('Denied'));
-    act(() => result.current.entries[0]!.openAttachment(attachment));
+    act(() => {
+      result.current.entries[0]!.openAttachment(attachment);
+    });
+    await waitFor(() => {
+      expect(result.current.entries[0]!.attachmentError).toBe('Missing file');
+    });
+    act(() => {
+      result.current.entries[0]!.openAttachment(attachment);
+    });
+    await waitFor(() => {
+      expect(result.current.entries[0]!.attachmentError).toBe('Denied');
+    });
+    act(() => {
+      result.current.entries[0]!.openAttachment(attachment);
+    });
 
-    await waitFor(() => expect(result.current.entries[0]!.attachmentError).toBeUndefined());
+    await waitFor(() => {
+      expect(result.current.entries[0]!.attachmentError).toBeUndefined();
+    });
     expect(openAttachment).toHaveBeenCalledWith(attachment);
   });
 
   it('ignores attachments without a context to open them', async () => {
     const { result } = renderHook(useGlyphMessageState, { initialProps: { entries: [transcriptEntry()] } });
 
-    await act(async () => result.current.entries[0]!.openAttachment({ path: 'a.ts', text: 'a', revision: 'r' }));
+    await act(async () => {
+      result.current.entries[0]!.openAttachment({ path: 'a.ts', text: 'a', revision: 'r' });
+    });
 
     expect(result.current.entries[0]!.attachmentError).toBeUndefined();
   });
@@ -193,22 +230,32 @@ describe(useGlyphMessageState, () => {
       initialProps: { entries: [transcriptEntry({ text: 'Copy me' })], copyText },
     });
 
-    act(() => result.current.entries[0]!.copy());
+    act(() => {
+      result.current.entries[0]!.copy();
+    });
     expect(copyText).toHaveBeenCalledWith('Copy me');
     expect(result.current.entries[0]!.copyText).toBe(copyText);
-    act(() => result.current.entries[0]!.copy());
+    act(() => {
+      result.current.entries[0]!.copy();
+    });
 
-    await waitFor(() => expect(result.current.entries[0]!.attachmentError).toBe('Error: No clipboard'));
+    await waitFor(() => {
+      expect(result.current.entries[0]!.attachmentError).toBe('Error: No clipboard');
+    });
   });
 
   it('copies message text through the system clipboard by default', () => {
     const write = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
-    onTestFinished(() => write.mockRestore());
+    onTestFinished(() => {
+      write.mockRestore();
+    });
     const { result } = renderHook(useGlyphMessageState, {
       initialProps: { entries: [transcriptEntry({ text: 'System copy' })] },
     });
 
-    act(() => result.current.entries[0]!.copy());
+    act(() => {
+      result.current.entries[0]!.copy();
+    });
 
     expect(write).toHaveBeenCalledWith('System copy');
   });
@@ -217,23 +264,35 @@ describe(useGlyphMessageState, () => {
     const openLink = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Blocked'));
     const { result } = renderHook(useGlyphMessageState, { initialProps: { entries: [transcriptEntry()], openLink } });
 
-    act(() => result.current.entries[0]!.openLink('https://example.com'));
-    act(() => result.current.entries[0]!.openLink('src/a.ts'));
+    act(() => {
+      result.current.entries[0]!.openLink('https://example.com');
+    });
+    act(() => {
+      result.current.entries[0]!.openLink('src/a.ts');
+    });
 
     expect(openLink.mock.calls).toEqual([['https://example.com'], ['src/a.ts']]);
-    await waitFor(() => expect(result.current.entries[0]!.attachmentError).toBe('Error: Blocked'));
+    await waitFor(() => {
+      expect(result.current.entries[0]!.attachmentError).toBe('Error: Blocked');
+    });
   });
 
   it('opens web links in a new window and other links as files', () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
-    onTestFinished(() => open.mockRestore());
+    onTestFinished(() => {
+      open.mockRestore();
+    });
     const openAttachment = vi.fn(async () => {});
     const { result } = renderHook(useGlyphMessageState, {
       initialProps: { entries: [transcriptEntry()], context: contextActions(openAttachment) },
     });
 
-    act(() => result.current.entries[0]!.openLink('HTTPS://example.com/page'));
-    act(() => result.current.entries[0]!.openLink('docs/guide.md'));
+    act(() => {
+      result.current.entries[0]!.openLink('HTTPS://example.com/page');
+    });
+    act(() => {
+      result.current.entries[0]!.openLink('docs/guide.md');
+    });
 
     expect(open).toHaveBeenCalledWith('HTTPS://example.com/page', '_blank', 'noopener,noreferrer');
     expect(openAttachment).toHaveBeenCalledWith({ path: 'docs/guide.md' });
@@ -242,7 +301,9 @@ describe(useGlyphMessageState, () => {
   it('ignores file links without a context to open them', async () => {
     const { result } = renderHook(useGlyphMessageState, { initialProps: { entries: [transcriptEntry()] } });
 
-    await act(async () => result.current.entries[0]!.openLink('docs/guide.md'));
+    await act(async () => {
+      result.current.entries[0]!.openLink('docs/guide.md');
+    });
 
     expect(result.current.entries[0]!.attachmentError).toBeUndefined();
   });

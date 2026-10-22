@@ -106,10 +106,14 @@ describe(TerminalApplication, () => {
         });
       let stopping: Promise<void> | undefined;
       try {
-        await vi.waitFor(() => expect(owner.recordContext).toHaveBeenCalledOnce());
+        await vi.waitFor(() => {
+          expect(owner.recordContext).toHaveBeenCalledOnce();
+        });
         if (cancellation === 'application shutdown') shutdown.abort();
         else application.active!.abort();
-        await new Promise<void>(resolve => setImmediate(resolve));
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
         expect(completed).toBe(true);
         expect(application.active).toBeUndefined();
         expect(delivery).toHaveBeenCalledOnce();
@@ -118,7 +122,9 @@ describe(TerminalApplication, () => {
         expect(owner.send).not.toHaveBeenCalled();
         expect(acknowledge).not.toHaveBeenCalled();
         stopping = service.dispose();
-        await new Promise<void>(resolve => setImmediate(resolve));
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
         expect(backend.dispose).not.toHaveBeenCalled();
         release();
         await stopping;
@@ -150,7 +156,7 @@ describe(TerminalApplication, () => {
     const queue = [wake];
     const shell = {
       takePendingWake: () => queue.shift(),
-      peekPendingWake: (accepts: (event: ShellWakeEvent) => boolean) => queue.find(accepts),
+      peekPendingWake: (accepts: (event: ShellWakeEvent) => boolean) => queue.find(value => accepts(value)),
       onDidWake: () => () => {},
     } as unknown as ShellSessionManager;
     const glyph = {
@@ -273,7 +279,13 @@ describe(TerminalApplication, () => {
       const nextAction = vi.fn(
         (_signal: AbortSignal) =>
           new Promise((_, reject) => {
-            _signal.addEventListener('abort', () => reject(_signal.reason), { once: true });
+            _signal.addEventListener(
+              'abort',
+              () => {
+                reject(_signal.reason);
+              },
+              { once: true },
+            );
             setImmediate(() => listener?.(wake));
           }),
       );

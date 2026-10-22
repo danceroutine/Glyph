@@ -1,6 +1,7 @@
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { writeFile } from 'node:fs/promises';
+import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 const bundle = await build({
   entryPoints: [fileURLToPath(new URL('../../ui/design-system/codeOssTheme.ts', import.meta.url))],
@@ -9,15 +10,19 @@ const bundle = await build({
   platform: 'node',
   format: 'esm',
 });
-const { previewThemeStyles } = await import(
-  `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
-);
+/** @type {{ previewThemeStyles: (theme: string) => Record<string, string> }} */
+const { previewThemeStyles } = await importBundle(bundle.outputFiles[0].text, ['previewThemeStyles']);
+/**
+ * @param {import('@playwright/test').Page} page
+ * @param {string} theme
+ */
 async function expectPreviewPalette(page, theme) {
   const mismatches = await page.evaluate(preview => {
     const native = getComputedStyle(document.querySelector('.glyph-workbench'));
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 1;
     const context = canvas.getContext('2d');
+    /** @param {string} color */
     const rgba = color => {
       context.clearRect(0, 0, 1, 1);
       context.fillStyle = color;
@@ -81,6 +86,6 @@ it.describe('Explicit theme selection', () => {
       'background-color',
       'rgb(255, 255, 255)',
     );
-    await expect(glyph.page.locator('.monaco-workbench')).toHaveClass(/\bvs\b/);
+    await expect(glyph.page.locator('.monaco-workbench')).toHaveClass(/\bvs\b/u);
   });
 });

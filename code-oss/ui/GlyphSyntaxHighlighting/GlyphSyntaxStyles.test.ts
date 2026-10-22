@@ -3,6 +3,6 @@ import { glyphSyntaxStyles } from '#code-oss/ui/GlyphSyntaxHighlighting/GlyphSyn
 
 describe('glyphSyntaxStyles', () => {
   it('is a class name for styling highlighted code', () => {
-    expect(glyphSyntaxStyles).toMatch(/^\S+$/);
+    expect(glyphSyntaxStyles).toMatch(/^\S+$/u);
   });
 });

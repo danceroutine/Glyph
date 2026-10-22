@@ -38,7 +38,9 @@ export function useGlyphPlanState({
     adding,
     input,
     setTodo,
-    add: () => setAdding(true),
+    add: () => {
+      setAdding(true);
+    },
     saveTodo: () =>
       perform(async () => {
         if (!todo.trim()) return;
@@ -58,7 +60,7 @@ export function useGlyphPlanState({
       ),
     build: () => perform(() => actions.build()),
     buildNew: () => perform(() => actions.build(true)),
-    newAgent: () => perform(actions.newAgent),
+    newAgent: () => perform(() => actions.newAgent()),
     openChat: (id: string) => perform(() => actions.openChat(id)),
     openLink: (href: string) => {
       void perform(() => actions.openLink(href));

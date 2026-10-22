@@ -148,8 +148,12 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.questions[0]!.selectOption('red', true));
-    act(() => result.current.questions[0]!.selectOption('blue', true));
+    act(() => {
+      result.current.questions[0]!.selectOption('red', true);
+    });
+    act(() => {
+      result.current.questions[0]!.selectOption('blue', true);
+    });
 
     expect(result.current.questions[0]?.selectedOptionIds).toEqual(['blue']);
     expect(result.current.valid).toBe(true);
@@ -171,12 +175,20 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.questions[1]!.selectOption('git', true));
-    act(() => result.current.questions[1]!.selectOption('npm', true));
-    act(() => result.current.questions[1]!.selectOption('npm', true));
+    act(() => {
+      result.current.questions[1]!.selectOption('git', true);
+    });
+    act(() => {
+      result.current.questions[1]!.selectOption('npm', true);
+    });
+    act(() => {
+      result.current.questions[1]!.selectOption('npm', true);
+    });
     expect(result.current.questions[1]?.selectedOptionIds).toEqual(['git', 'npm']);
 
-    act(() => result.current.questions[1]!.selectOption('git', false));
+    act(() => {
+      result.current.questions[1]!.selectOption('git', false);
+    });
     expect(result.current.questions[1]?.selectedOptionIds).toEqual(['npm']);
   });
 
@@ -193,7 +205,9 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.questions[1]!.selectOption('git', false));
+    act(() => {
+      result.current.questions[1]!.selectOption('git', false);
+    });
 
     expect(result.current.questions[1]?.selectedOptionIds).toEqual([]);
   });
@@ -211,14 +225,20 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.questions[0]!.enterOther());
+    act(() => {
+      result.current.questions[0]!.enterOther();
+    });
     expect(result.current.questions[0]?.other).toBe(true);
     expect(result.current.valid).toBe(false);
 
-    act(() => result.current.questions[0]!.updateOther('  '));
+    act(() => {
+      result.current.questions[0]!.updateOther('  ');
+    });
     expect(result.current.valid).toBe(false);
 
-    act(() => result.current.questions[0]!.updateOther('Green'));
+    act(() => {
+      result.current.questions[0]!.updateOther('Green');
+    });
     expect(result.current.questions[0]?.otherText).toBe('Green');
     expect(result.current.valid).toBe(true);
   });
@@ -236,14 +256,22 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.back());
+    act(() => {
+      result.current.back();
+    });
     expect(result.current.questionNumber).toBe(1);
 
-    act(() => result.current.next());
-    act(() => result.current.next());
+    act(() => {
+      result.current.next();
+    });
+    act(() => {
+      result.current.next();
+    });
     expect(result.current.questionNumber).toBe(2);
 
-    act(() => result.current.questions[0]!.activate());
+    act(() => {
+      result.current.questions[0]!.activate();
+    });
     expect(result.current.questionNumber).toBe(1);
   });
 
@@ -260,11 +288,17 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.continueForm());
+    act(() => {
+      result.current.continueForm();
+    });
     expect(result.current.questionNumber).toBe(1);
 
-    act(() => result.current.questions[0]!.selectOption('red', true));
-    act(() => result.current.continueForm());
+    act(() => {
+      result.current.questions[0]!.selectOption('red', true);
+    });
+    act(() => {
+      result.current.continueForm();
+    });
     expect(result.current.questionNumber).toBe(2);
   });
 
@@ -282,9 +316,15 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.next());
-    act(() => result.current.questions[1]!.selectOption('git', true));
-    act(() => result.current.continueForm());
+    act(() => {
+      result.current.next();
+    });
+    act(() => {
+      result.current.questions[1]!.selectOption('git', true);
+    });
+    act(() => {
+      result.current.continueForm();
+    });
 
     expect(result.current.questionNumber).toBe(1);
     expect(actions.answerQuestion).not.toHaveBeenCalled();
@@ -306,9 +346,13 @@ describe(useGlyphQuestionCardState, () => {
         onDraftChange: vi.fn(),
       },
     });
-    act(() => result.current.next());
+    act(() => {
+      result.current.next();
+    });
 
-    await act(async () => result.current.continueForm());
+    await act(async () => {
+      result.current.continueForm();
+    });
 
     expect(actions.answerQuestion).toHaveBeenCalledWith('chat', 'run', 'request', {
       answers: [
@@ -318,9 +362,15 @@ describe(useGlyphQuestionCardState, () => {
     });
     expect(result.current.pending).toBe(true);
 
-    act(() => result.current.questions[1]!.selectOption('npm', true));
-    act(() => result.current.back());
-    await act(async () => result.current.continueForm());
+    act(() => {
+      result.current.questions[1]!.selectOption('npm', true);
+    });
+    act(() => {
+      result.current.back();
+    });
+    await act(async () => {
+      result.current.continueForm();
+    });
 
     expect(result.current.questions[1]?.selectedOptionIds).toEqual(['git']);
     expect(result.current.questionNumber).toBe(2);
@@ -342,9 +392,15 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.questions[0]!.selectOption('blue', true));
-    act(() => result.current.next());
-    act(() => result.current.continueForm());
+    act(() => {
+      result.current.questions[0]!.selectOption('blue', true);
+    });
+    act(() => {
+      result.current.next();
+    });
+    act(() => {
+      result.current.continueForm();
+    });
 
     expect(result.current.disabled).toBe(true);
     expect(onDraftChange).not.toHaveBeenCalled();
@@ -366,7 +422,9 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.cancel());
+    act(() => {
+      result.current.cancel();
+    });
 
     expect(actions.cancel).toHaveBeenCalledOnce();
   });
@@ -384,7 +442,9 @@ describe(useGlyphQuestionCardState, () => {
       },
     });
 
-    act(() => result.current.trackScroll());
+    act(() => {
+      result.current.trackScroll();
+    });
 
     expect(result.current.questionNumber).toBe(1);
   });

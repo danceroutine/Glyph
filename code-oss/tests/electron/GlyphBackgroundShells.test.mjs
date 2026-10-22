@@ -1,27 +1,44 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { contextEventMessage, parseJson, shellToolOutput } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+
 const firstTerminal = isolatedLaunch('expects the first terminal of a fresh window');
+/**
+ * @param {string} name
+ * @param {unknown} args
+ */
 const tool = (name, args) => ScriptedProvider.tool(name, args, { namespace: 'shell', callId: randomUUID() });
+/** @param {GlyphWorkbench} glyph */
 const card = glyph => glyph.page.getByRole('region', { name: 'Shell command', exact: true }).first();
+/** @param {GlyphWorkbench} glyph */
 const drawer = glyph => glyph.page.getByRole('region', { name: 'Background terminals', exact: true });
+/** @param {GlyphWorkbench} glyph */
 const finished = glyph => expect(glyph.sendButton).toHaveText('Send (Enter)');
+/** @param {ScriptedProvider} provider */
 const contexts = provider =>
   provider.requests.flatMap(request =>
-    request.body.input
-      .filter(item => typeof item.content === 'string')
-      .flatMap(item => {
-        try {
-          const parsed = JSON.parse(item.content);
-          return parsed.schema === 'glyph.context-event.v1' ? [{ ...parsed.event, role: item.role }] : [];
-        } catch {
-          return [];
-        }
-      }),
+    request.body.input.flatMap(item => {
+      if (typeof item.content !== 'string') return [];
+      try {
+        const parsed = contextEventMessage.safeParse(parseJson(item.content));
+        return parsed.success && parsed.data.schema === 'glyph.context-event.v1'
+          ? [{ ...parsed.data.event, role: item.role }]
+          : [];
+      } catch {
+        return [];
+      }
+    }),
   );
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {string} command
+ */
 async function start(glyph, provider, command, wake = 'READY') {
   const call = tool('execute_shell', {
     command,
@@ -43,8 +60,12 @@ async function start(glyph, provider, command, wake = 'READY') {
   const output = provider.requests[1].body.input.find(
     item => item.type === 'function_call_output' && item.call_id === call.call_id,
   );
-  return JSON.parse(output.output).terminal_id;
+  return shellToolOutput.parse(parseJson(output?.output)).terminal_id;
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} text
+ */
 async function input(glyph, text) {
   await card(glyph).getByRole('textbox', { name: 'Input to shell' }).fill(text);
   await card(glyph).getByRole('button', { name: 'Send input', exact: true }).click();
@@ -70,10 +91,10 @@ it.describe('Background shell wakes and native terminal drawer', () => {
         await drawer(glyph).getByRole('button', { name: '1 background terminal', exact: true }).click();
         await expect(drawer(glyph)).toContainText('Wake on: READY');
         await drawer(glyph)
-          .getByRole('button', { name: /printf/ })
+          .getByRole('button', { name: /printf/u })
           .click();
         await expect(glyph.page.locator('.terminal-wrapper')).toBeVisible();
-        const terminalInput = glyph.page.getByRole('textbox', { name: /^Terminal 1,/ });
+        const terminalInput = glyph.page.getByRole('textbox', { name: /^Terminal 1,/u });
         await expect(terminalInput).toBeFocused();
         await terminalInput.pressSequentially('READ ONLY INPUT');
         await terminalInput.press('Enter');
@@ -93,7 +114,7 @@ it.describe('Background shell wakes and native terminal drawer', () => {
         await expect(glyph.diagnostics).toContainText('Stopped trap');
         await expect(glyph.assistantEntries.last()).toContainText('The terminal was stopped');
         expect(contexts(provider).some(event => event.type === 'shell_wake')).toBe(false);
-        expect(contexts(provider).find(event => event.type === 'shell_exit')?.payload.outputTail).toContain(
+        expect(contexts(provider).find(event => event.type === 'shell_exit')?.payload?.outputTail).toContain(
           'READY after stop',
         );
         expect(provider.requests).toHaveLength(3);

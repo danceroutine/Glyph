@@ -12,7 +12,7 @@ export class WebFetchService implements WebPageFetcher {
     let content = page.text;
     if (['text/html', 'application/xhtml+xml'].includes(page.contentType)) {
       const { document } = parseHTML(page.text);
-      title = document.querySelector('title')?.textContent?.trim() || page.url;
+      title = (document.querySelector('title')?.textContent?.trim() ?? '') || page.url;
       for (const node of document.querySelectorAll(
         'title,script,style,noscript,template,nav,header,footer,form,[hidden],[aria-hidden="true"]',
       ))
@@ -26,11 +26,11 @@ export class WebFetchService implements WebPageFetcher {
       }
       // Preserve paragraph, heading, table-row, and code-block boundaries in plain text.
       for (const node of root.querySelectorAll('p,div,section,li,h1,h2,h3,h4,h5,h6,pre,tr,br'))
-        node.appendChild(document.createTextNode('\n'));
+        node.append(document.createTextNode('\n'));
       content = Array.from(root.childNodes, node => node.textContent ?? '')
         .join('')
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\n\s*\n/g, '\n\n')
+        .replaceAll(/[ \t]+/gu, ' ')
+        .replaceAll(/\n\s*\n/gu, '\n\n')
         .trim();
     }
     signal.throwIfAborted();

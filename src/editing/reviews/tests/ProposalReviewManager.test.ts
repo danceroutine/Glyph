@@ -124,7 +124,7 @@ describe(ProposalReviewManager, () => {
     expect((await workspace.read('file.txt')).text).toBe('base');
   });
 
-  it.each(['\ud800', '\udc00'])(
+  it.each(['\uD800', '\uDC00'])(
     'retains a persisted malformed filename %j as a stale and rejectable review',
     async path => {
       const { service, workspace } = await fixture('');
@@ -159,13 +159,13 @@ describe(ProposalReviewManager, () => {
     { label: 'accepts distinct case-sensitive filenames together', first: 'foo.ts', second: 'Foo.ts', alias: false },
     {
       label: 'accepts distinct Unicode spellings together without NFC folding',
-      first: 'caf\u00e9.txt',
+      first: 'caf\u00E9.txt',
       second: 'cafe\u0301.txt',
       alias: false,
     },
     {
       label: 'rejects real filesystem aliases during compilation and batch acceptance before any write',
-      first: 'caf\u00e9.txt',
+      first: 'caf\u00E9.txt',
       second: 'cafe\u0301.txt',
       alias: true,
     },
@@ -1167,11 +1167,13 @@ describe(ProposalReviewManager, () => {
     it('notifies a listener until it unsubscribes', async () => {
       const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' });
       const changes: ProposalReviewChange[] = [];
-      const unsubscribe = manager.onDidChange(change => changes.push(change));
+      const unsubscribe = manager.onDidChange(change => {
+        changes.push(change);
+      });
       const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
 
       await manager.stage(proposal);
-      expect(unsubscribe()).toBe(true);
+      unsubscribe();
       await manager.rejectAll();
 
       expect(changes).toEqual([

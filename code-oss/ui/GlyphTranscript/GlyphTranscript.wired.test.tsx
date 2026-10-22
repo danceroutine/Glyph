@@ -110,13 +110,17 @@ describe(WiredGlyphTranscript, () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Restore checkpoint' }));
-    await waitFor(() => expect(restoreCheckpoint).toHaveBeenCalledWith('chat', 'turn-1'));
-    await waitFor(() =>
-      expect((screen.getByRole('button', { name: 'Branch chat' }) as HTMLButtonElement).disabled).toBe(false),
-    );
+    await waitFor(() => {
+      expect(restoreCheckpoint).toHaveBeenCalledWith('chat', 'turn-1');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Branch chat' }).disabled).toBe(false);
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Branch chat' }));
 
-    await waitFor(() => expect(branchChat).toHaveBeenCalledWith('chat', 'turn-2'));
+    await waitFor(() => {
+      expect(branchChat).toHaveBeenCalledWith('chat', 'turn-2');
+    });
   });
 
   it.each([
@@ -150,9 +154,11 @@ describe(WiredGlyphTranscript, () => {
     );
 
     expect(screen.getAllByRole('region', { name: 'File change src/new.ts' })).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: /new\.ts/ }));
+    fireEvent.click(screen.getByRole('button', { name: /new\.ts/u }));
 
-    await waitFor(() => expect(reviewProposalFile).toHaveBeenCalledWith('chat', 'proposal-1', 'file'));
+    await waitFor(() => {
+      expect(reviewProposalFile).toHaveBeenCalledWith('chat', 'proposal-1', 'file');
+    });
   });
 
   it('shows no file changes for replies without matching tool results', () => {
@@ -164,7 +170,7 @@ describe(WiredGlyphTranscript, () => {
       />,
     );
 
-    expect(screen.queryByRole('region', { name: /File change/ })).toBeNull();
+    expect(screen.queryByRole('region', { name: /File change/u })).toBeNull();
   });
 
   it('does not review file changes without a chat or a host that reviews them', () => {
@@ -176,11 +182,11 @@ describe(WiredGlyphTranscript, () => {
         entries={[assistantReply('proposal-1')]}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: /new\.ts/ }));
+    fireEvent.click(screen.getByRole('button', { name: /new\.ts/u }));
     cleanup();
 
     render(<WiredGlyphTranscript chatId="chat" proposals={[proposal()]} entries={[assistantReply('proposal-1')]} />);
-    fireEvent.click(screen.getByRole('button', { name: /new\.ts/ }));
+    fireEvent.click(screen.getByRole('button', { name: /new\.ts/u }));
     cleanup();
 
     render(
@@ -191,7 +197,7 @@ describe(WiredGlyphTranscript, () => {
         entries={[assistantReply('proposal-1')]}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: /new\.ts/ }));
+    fireEvent.click(screen.getByRole('button', { name: /new\.ts/u }));
 
     expect(reviewProposalFile).not.toHaveBeenCalled();
   });

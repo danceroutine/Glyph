@@ -91,7 +91,9 @@ describe(useGlyphChatHistoryState, () => {
     expect(result.current.archived.map(value => value.id)).toEqual(['archived']);
     expect(result.current.groups.flatMap(group => group.chats).map(value => value.id)).toEqual(['live']);
     expect(result.current.archivedOpen).toBe(false);
-    act(() => result.current.toggleArchived());
+    act(() => {
+      result.current.toggleArchived();
+    });
     expect(result.current.archivedOpen).toBe(true);
   });
 
@@ -139,9 +141,13 @@ describe(useGlyphChatHistoryState, () => {
       },
     });
 
-    act(() => result.current.setQuery('  parser '));
+    act(() => {
+      result.current.setQuery('  parser ');
+    });
     expect(result.current.groups.flatMap(group => group.chats).map(value => value.id)).toEqual(['a']);
-    act(() => result.current.setQuery('nothing'));
+    act(() => {
+      result.current.setQuery('nothing');
+    });
 
     expect(result.current.emptyMessage).toBe('No matching chats.');
   });

@@ -14,9 +14,7 @@ describe(sourceImportPath, () => {
     expect(sourceImportPath('#src/chat/AgentMode.ts', join(root, 'src/desktop/host/Fixture.ts'))).toBe(
       '../../chat/AgentMode.js',
     );
-    expect(sourceImportPath('#src/desktop/host/View.tsx', join(root, 'src/desktop/host/Fixture.ts'))).toBe(
-      './View.js',
-    );
+    expect(sourceImportPath('#src/desktop/host/View.tsx', join(root, 'src/desktop/host/Fixture.ts'))).toBe('./View.js');
   });
 
   it.each(['#src/', '#src/chat/../outside.ts', '#src/chat\\AgentMode.ts'])('rejects the invalid alias %s', alias => {

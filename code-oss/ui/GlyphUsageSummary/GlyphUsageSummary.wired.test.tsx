@@ -8,10 +8,12 @@ const placeElements = (trigger: DOMRect, popup: DOMRect) => {
   const original = Element.prototype.getBoundingClientRect;
   const spy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
     if (this.getAttribute('role') === 'dialog') return popup;
-    if (this.getAttribute('aria-label')?.endsWith('token usage')) return trigger;
+    if (this.getAttribute('aria-label')?.endsWith('token usage') === true) return trigger;
     return original.call(this);
   });
-  onTestFinished(() => spy.mockRestore());
+  onTestFinished(() => {
+    spy.mockRestore();
+  });
 };
 
 describe(WiredGlyphUsageSummary, () => {
@@ -72,7 +74,9 @@ describe(WiredGlyphUsageSummary, () => {
   it('closes on Escape without letting it reach other handlers and refocuses its trigger', () => {
     const outer = vi.fn();
     document.addEventListener('keydown', outer);
-    onTestFinished(() => document.removeEventListener('keydown', outer));
+    onTestFinished(() => {
+      document.removeEventListener('keydown', outer);
+    });
     render(<WiredGlyphUsageSummary usage={undefined} />);
     const trigger = screen.getByRole('button', { name: 'Conversation token usage' });
     fireEvent.click(trigger);

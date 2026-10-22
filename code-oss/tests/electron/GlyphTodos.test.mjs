@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { parseJson } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
 
 const items = [
   { id: 'inspect', text: 'Inspect the current implementation', status: 'completed' },
@@ -9,10 +12,18 @@ const items = [
 ];
 const reloadsWindow = isolatedLaunch('reloads the window');
 const restartsHost = isolatedLaunch('restarts the host and reloads the window');
+/** @param {GlyphWorkbench} glyph */
 const card = glyph => glyph.page.getByRole('region', { name: 'To-dos', exact: true });
-const update = (items, replace = false, callId = randomUUID()) =>
-  ScriptedProvider.tool('update_todos', { items, replace }, { namespace: 'todo', callId });
+/** @param {unknown[]} todoItems */
+const update = (todoItems, replace = false, callId = randomUUID()) =>
+  ScriptedProvider.tool('update_todos', { items: todoItems, replace }, { namespace: 'todo', callId });
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {unknown[]} next
+ * @param {{ replace?: boolean, hold?: boolean, prompt?: string }} [options]
+ */
 async function runUpdate(
   glyph,
   provider,
@@ -27,16 +38,21 @@ async function runUpdate(
   if (!hold) await expect(glyph.sendButton).toHaveText('Send (Enter)');
   const outputs = provider.requests
     .at(-1)
-    .body.input.filter(value => value.type === 'function_call_output' && value.call_id === callId);
+    ?.body.input.filter(value => value.type === 'function_call_output' && value.call_id === callId);
   expect(outputs).toHaveLength(1);
-  return JSON.parse(outputs[0].output);
+  return parseJson(outputs?.[0]?.output);
 }
 
+/** @param {GlyphWorkbench} glyph */
 async function expand(glyph) {
   const toggle = card(glyph).getByRole('button');
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
 }
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} name
+ */
 async function openChat(glyph, name) {
   const toggle = glyph.page.getByRole('button', { name: 'Chat history', exact: true });
   await toggle.click();

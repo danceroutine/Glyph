@@ -95,11 +95,19 @@ export class GlyphAgentReviewEditor extends Disposable {
         new GlyphReviewCommentWidget(
           editorFor(issue),
           issue,
-          () => fix(issue),
-          () => dismiss(issue),
+          () => {
+            fix(issue);
+          },
+          () => {
+            dismiss(issue);
+          },
         ),
       );
-      comment.add(toDisposable(() => this.issueComments.delete(issue.id)));
+      comment.add(
+        toDisposable(() => {
+          this.issueComments.delete(issue.id);
+        }),
+      );
     }
     editorFor(finding).revealLineInCenter(finding.line);
   }
@@ -133,6 +141,10 @@ class GlyphReviewCommentWidget extends ZoneWidget {
       this._relayout(Math.ceil(height / this.editor.getOption(EditorOption.lineHeight)));
     });
     if (container.firstElementChild) observer.observe(container.firstElementChild);
-    this._disposables.add(toDisposable(() => observer.disconnect()));
+    this._disposables.add(
+      toDisposable(() => {
+        observer.disconnect();
+      }),
+    );
   }
 }

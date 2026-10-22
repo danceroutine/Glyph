@@ -40,7 +40,7 @@ const finding = {
 const report = `<glyph_review>\n${JSON.stringify(finding)}\n{"complete":true}\n</glyph_review>\nOne issue.`;
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
-  for (const dispose of cleanup.splice(0).reverse()) await dispose();
+  for (const dispose of cleanup.splice(0).toReversed()) await dispose();
 });
 function memoryStore(initial: readonly AgentReview[] = []): AgentReviewStore {
   const records = new Map(initial.map(review => [review.id, structuredClone(review)]));
@@ -79,7 +79,9 @@ it('retains original-side findings beyond the modified EOF and persists both rev
     },
     model,
   );
-  await vi.waitFor(() => expect(first.reviews[0]?.status).toBe(Status.COMPLETED));
+  await vi.waitFor(() => {
+    expect(first.reviews[0]?.status).toBe(Status.COMPLETED);
+  });
   expect(first.reviews[0]?.findings).toMatchObject(findings);
   await first.dispose();
   const second = await fixture(vi.fn<AgentReviewExecutor['run']>(), new SqliteAgentReviewStore(path));
@@ -101,7 +103,9 @@ it.each([
     },
     model,
   );
-  await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.FAILED));
+  await vi.waitFor(() => {
+    expect(service.reviews[0]?.status).toBe(Status.FAILED);
+  });
   expect(service.reviews[0]?.findings).toEqual([]);
 });
 it('keeps reports without a side compatible with fully deleted files', async () => {
@@ -116,7 +120,9 @@ it('keeps reports without a side compatible with fully deleted files', async () 
     },
     model,
   );
-  await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.COMPLETED));
+  await vi.waitFor(() => {
+    expect(service.reviews[0]?.status).toBe(Status.COMPLETED);
+  });
   expect(service.reviews[0]?.findings).toMatchObject([{ line: 4, side: 'original' }]);
 });
 
@@ -134,13 +140,17 @@ it('streams validated findings, checkpoints before publishing, and deduplicates 
   const request = input();
   await service.start(request, model);
   await service.start(request, model);
-  await vi.waitFor(() => expect(service.reviews[0]?.findings).toHaveLength(1));
+  await vi.waitFor(() => {
+    expect(service.reviews[0]?.findings).toHaveLength(1);
+  });
   expect((await store.load())[0]?.findings).toEqual(service.reviews[0]?.findings);
   expect(service.reviews[0]?.status).toBe(Status.RUNNING);
   expect(run).toHaveBeenCalledTimes(1);
   await expect(service.start(input(), model)).rejects.toThrow('already running');
   release();
-  await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.COMPLETED));
+  await vi.waitFor(() => {
+    expect(service.reviews[0]?.status).toBe(Status.COMPLETED);
+  });
   expect(service.reviews[0]?.summary).toBe('One issue.');
 });
 it('persists captures, findings and dismissals across a new service and SQLite connection', async () => {
@@ -151,7 +161,9 @@ it('persists captures, findings and dismissals across a new service and SQLite c
     emit(report);
   }, new SqliteAgentReviewStore(path));
   await first.start(input(), model);
-  await vi.waitFor(() => expect(first.reviews[0]?.status).toBe(Status.COMPLETED));
+  await vi.waitFor(() => {
+    expect(first.reviews[0]?.status).toBe(Status.COMPLETED);
+  });
   const review = first.reviews[0]!;
   await first.dismiss(review.id, review.findings[0]!.id);
   await first.dispose();
@@ -194,11 +206,15 @@ it('cancels the exact review and ignores late completion', async () => {
   });
   const request = input();
   await service.start(request, model);
-  await vi.waitFor(() => expect(service.reviews[0]?.findings).toHaveLength(1));
+  await vi.waitFor(() => {
+    expect(service.reviews[0]?.findings).toHaveLength(1);
+  });
   await service.cancel(request.id);
   expect(signal.aborted).toBe(true);
   finish();
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise(resolve => {
+    setTimeout(resolve, 0);
+  });
   expect(service.reviews[0]?.status).toBe(Status.CANCELLED);
 });
 it.each([
@@ -210,14 +226,18 @@ it.each([
     emit(text);
   });
   await service.start(input(), model);
-  await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.FAILED));
+  await vi.waitFor(() => {
+    expect(service.reviews[0]?.status).toBe(Status.FAILED);
+  });
 });
 it('accepts an explicitly complete clean review', async () => {
   const service = await fixture(async (_, emit) => {
     emit('<glyph_review>\n{"complete":true}\n</glyph_review>');
   });
   await service.start(input(), model);
-  await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.COMPLETED));
+  await vi.waitFor(() => {
+    expect(service.reviews[0]?.status).toBe(Status.COMPLETED);
+  });
   expect(service.reviews[0]?.findings).toEqual([]);
 });
 it('does not start inference when the initial checkpoint fails', async () => {
@@ -251,15 +271,19 @@ describe(AgentReviewService, () => {
       const service = await fixture(async (_, emit) => {
         emit('<glyph_review>\n{"complete":true}\n</glyph_review>');
       });
-      const listener = vi.fn();
+      const listener = vi.fn((_review: { status: Status }) => undefined);
       const unsubscribe = service.onDidChange(listener);
       await service.start(input(), model);
-      await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.COMPLETED));
+      await vi.waitFor(() => {
+        expect(service.reviews[0]?.status).toBe(Status.COMPLETED);
+      });
 
       expect(listener.mock.calls.map(([review]) => review.status)).toEqual([Status.RUNNING, Status.COMPLETED]);
-      expect(unsubscribe()).toBe(true);
+      unsubscribe();
       await service.start(input(), model);
-      await vi.waitFor(() => expect(service.reviews[1]?.status).toBe(Status.COMPLETED));
+      await vi.waitFor(() => {
+        expect(service.reviews[1]?.status).toBe(Status.COMPLETED);
+      });
       expect(listener).toHaveBeenCalledTimes(2);
     });
   });
@@ -292,15 +316,21 @@ describe(AgentReviewService, () => {
       });
       await service.start(input(), model);
 
-      await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.FAILED));
+      await vi.waitFor(() => {
+        expect(service.reviews[0]?.status).toBe(Status.FAILED);
+      });
       expect(service.reviews[0]?.error).toBe('Review output exceeded its limit.');
     });
 
     it('records non-error executor failures as text', async () => {
-      const service = await fixture(async () => Promise.reject('provider offline'));
+      const service = await fixture(async () => {
+        throw 'provider offline';
+      });
       await service.start(input(), model);
 
-      await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.FAILED));
+      await vi.waitFor(() => {
+        expect(service.reviews[0]?.status).toBe(Status.FAILED);
+      });
       expect(service.reviews[0]?.error).toBe('provider offline');
     });
 
@@ -318,15 +348,23 @@ describe(AgentReviewService, () => {
       const service = await fixture(async (_, emit, cancellation) => {
         signal = cancellation;
         emit(`<glyph_review>\n${JSON.stringify(finding)}\n`);
-        await new Promise<void>((_resolve, reject) =>
-          cancellation.addEventListener('abort', () => reject(cancellation.reason), { once: true }),
-        );
+        await new Promise<void>((_resolve, reject) => {
+          cancellation.addEventListener(
+            'abort',
+            () => {
+              reject(cancellation.reason);
+            },
+            { once: true },
+          );
+        });
       }, store);
       const listener = vi.fn();
       service.onDidChange(listener);
       await service.start(input(), model);
 
-      await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.FAILED));
+      await vi.waitFor(() => {
+        expect(service.reviews[0]?.status).toBe(Status.FAILED);
+      });
       expect(signal.aborted).toBe(true);
       expect(service.reviews[0]?.error).toBe(
         'Review results could not be saved. Check available storage before retrying.',
@@ -344,7 +382,9 @@ describe(AgentReviewService, () => {
       }, store);
       await service.start(request, model);
 
-      await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.CANCELLED));
+      await vi.waitFor(() => {
+        expect(service.reviews[0]?.status).toBe(Status.CANCELLED);
+      });
       await service.dispose();
       expect(service.reviews[0]?.findings).toEqual([]);
       expect((await store.load())[0]?.findings).toEqual([]);
@@ -353,9 +393,15 @@ describe(AgentReviewService, () => {
     it('keeps a cancelled status when the executor fails after cancellation', async () => {
       const service = await fixture(
         async (_, _emit, cancellation) =>
-          new Promise<void>((_resolve, reject) =>
-            cancellation.addEventListener('abort', () => reject(new Error('aborted run')), { once: true }),
-          ),
+          new Promise<void>((_resolve, reject) => {
+            cancellation.addEventListener(
+              'abort',
+              () => {
+                reject(new Error('aborted run'));
+              },
+              { once: true },
+            );
+          }),
       );
       const request = input();
       await service.start(request, model);
@@ -374,7 +420,9 @@ describe(AgentReviewService, () => {
       });
       const request = input();
       await service.start(request, model);
-      await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.COMPLETED));
+      await vi.waitFor(() => {
+        expect(service.reviews[0]?.status).toBe(Status.COMPLETED);
+      });
       const before = service.reviews[0];
 
       await service.cancel(request.id);
@@ -396,7 +444,9 @@ describe(AgentReviewService, () => {
       });
       const request = input();
       await service.start(request, model);
-      await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.COMPLETED));
+      await vi.waitFor(() => {
+        expect(service.reviews[0]?.status).toBe(Status.COMPLETED);
+      });
 
       await expect(service.dismiss(request.id, 'not-a-finding')).rejects.toThrow('The review finding is unavailable.');
     });
@@ -409,7 +459,9 @@ describe(AgentReviewService, () => {
       }, store);
       const request = input();
       await service.start(request, model);
-      await vi.waitFor(() => expect(service.reviews[0]?.status).toBe(Status.COMPLETED));
+      await vi.waitFor(() => {
+        expect(service.reviews[0]?.status).toBe(Status.COMPLETED);
+      });
       const findingId = service.reviews[0]!.findings[0]!.id;
       await service.dismiss(request.id, findingId);
       const saves = save.mock.calls.length;
@@ -429,16 +481,24 @@ describe(AgentReviewService, () => {
       const service = new AgentReviewService(store, {
         run: async (_, _emit, cancellation) => {
           signal = cancellation;
-          await new Promise<void>((_resolve, reject) =>
-            cancellation.addEventListener('abort', () => reject(cancellation.reason), { once: true }),
-          );
+          await new Promise<void>((_resolve, reject) => {
+            cancellation.addEventListener(
+              'abort',
+              () => {
+                reject(cancellation.reason);
+              },
+              { once: true },
+            );
+          });
         },
       });
       await service.initialize();
       const listener = vi.fn();
       service.onDidChange(listener);
       await service.start(input(), model);
-      await vi.waitFor(() => expect(signal).toBeDefined());
+      await vi.waitFor(() => {
+        expect(signal).toBeDefined();
+      });
 
       await service.dispose();
 
@@ -463,7 +523,9 @@ describe(AgentReviewService, () => {
       await service.initialize();
       const request = input();
       await service.start(request, model);
-      await vi.waitFor(() => expect(finish).toBeDefined());
+      await vi.waitFor(() => {
+        expect(finish).toBeDefined();
+      });
       await service.cancel(request.id);
 
       const disposed = service.dispose();

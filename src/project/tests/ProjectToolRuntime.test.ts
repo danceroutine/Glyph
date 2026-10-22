@@ -82,7 +82,11 @@ describe(ProjectToolRuntime, () => {
       const logger = recordingLogger();
       const runtime = new ProjectToolRuntime(
         {} as ProjectAccess,
-        { proposePatch: vi.fn(async () => Promise.reject('compiler crashed')) } as unknown as EditProposalService,
+        {
+          proposePatch: vi.fn(async () => {
+            throw 'compiler crashed';
+          }),
+        } as unknown as EditProposalService,
         {} as ProposalReviewManager,
         logger,
       );
@@ -165,10 +169,14 @@ describe(ProjectToolRuntime, () => {
         {} as EditProposalService,
         {} as ProposalReviewManager,
       );
-      const patch = runtime.tools.find(tool => tool.name === ProjectToolName.PROPOSE_PATCH)!;
+      const patch = runtime.tools.find(tool => tool.name === (ProjectToolName.PROPOSE_PATCH as string))!;
 
-      expect(() => patch.validateInput(' \n ')).toThrow('Expected a nonempty patch.');
-      expect(() => patch.validateInput('*** Begin Patch')).not.toThrow();
+      expect(() => {
+        patch.validateInput(' \n ');
+      }).toThrow('Expected a nonempty patch.');
+      expect(() => {
+        patch.validateInput('*** Begin Patch');
+      }).not.toThrow();
     });
 
     it('requires structured edits that match the proposal schema', () => {
@@ -177,11 +185,17 @@ describe(ProjectToolRuntime, () => {
         {} as EditProposalService,
         {} as ProposalReviewManager,
       );
-      const edits = runtime.tools.find(tool => tool.name === ProjectToolName.PROPOSE_EDITS)!;
+      const edits = runtime.tools.find(tool => tool.name === (ProjectToolName.PROPOSE_EDITS as string))!;
 
-      expect(() => edits.validateInput('{"files":[]}')).not.toThrow();
-      expect(() => edits.validateInput('{"files":"file.txt"}')).toThrow();
-      expect(() => edits.validateInput('not json')).toThrow(SyntaxError);
+      expect(() => {
+        edits.validateInput('{"files":[]}');
+      }).not.toThrow();
+      expect(() => {
+        edits.validateInput('{"files":"file.txt"}');
+      }).toThrow();
+      expect(() => {
+        edits.validateInput('not json');
+      }).toThrow(SyntaxError);
     });
 
     it.each([ProjectToolName.PROPOSE_PATCH, ProjectToolName.PROPOSE_EDITS])(
@@ -193,7 +207,7 @@ describe(ProjectToolRuntime, () => {
           {} as ProposalReviewManager,
         );
         const execute = vi.spyOn(runtime, 'execute').mockResolvedValue('{"status":"ok"}');
-        const tool = runtime.tools.find(candidate => candidate.name === name)!;
+        const tool = runtime.tools.find(candidate => candidate.name === (name as string))!;
         const signal = new AbortController().signal;
         const context = { executionId: 'execution-1' };
 

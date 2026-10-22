@@ -1,12 +1,11 @@
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve, win32 } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve, win32 } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 import { ShutdownSignal } from '#src/terminal/ShutdownSignal.js';
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const repositoryRoot = resolve(import.meta.dirname, '..', '..');
 
 describe('glyph command line', () => {
   it('prints usage help without starting a terminal session', async () => {
@@ -48,7 +47,7 @@ describe('glyph command line', () => {
     const [workspace] = cli.instances('FileSystemWorkspaceTextStore');
     const [accessPolicy] = cli.instances('WorkspaceAccessPolicy');
     expect(workspace?.args).toEqual([root, { excludedPaths, accessPolicy }]);
-    const cacheName = createHash('sha256').update(`${context.id}\0${'Repository'}\0${root}`).digest('hex');
+    const cacheName = createHash('sha256').update(`${context.id}\0Repository\0${root}`).digest('hex');
     const [pathIndex] = cli.instances('RustWorkspacePathIndex');
     expect(pathIndex?.args).toEqual([
       {
@@ -212,9 +211,9 @@ describe('glyph command line', () => {
     expect(options.excludedPaths).toContain('logs/trace.log');
     expect(options.excludedPaths.some(path => path.includes('glyph') && path.includes('state'))).toBe(false);
     const [pathIndex] = cli.instances('RustWorkspacePathIndex');
-    expect((pathIndex?.args[0] as { binaryPath: string }).binaryPath).toMatch(/glyph-context-index\.exe$/);
+    expect((pathIndex!.args[0] as { binaryPath: string }).binaryPath).toMatch(/glyph-context-index\.exe$/u);
     const [launcher] = cli.instances('NativeShellSandboxLauncher');
-    expect((launcher?.args[0] as { binaryPath: string }).binaryPath).toMatch(/glyph-shell-sandbox\.exe$/);
+    expect((launcher!.args[0] as { binaryPath: string }).binaryPath).toMatch(/glyph-shell-sandbox\.exe$/u);
   });
 
   it('exits with the status returned by an unsuccessful terminal session', async () => {
@@ -244,7 +243,9 @@ describe('glyph command line', () => {
     cli.run.mockImplementation(async () => {
       const [application] = cli.instances('TerminalApplication');
       const shutdown = application?.args[2] as AbortSignal;
-      cli.closeListeners.forEach(listener => listener());
+      cli.closeListeners.forEach(listener => {
+        listener();
+      });
       expect(shutdown.aborted).toBe(true);
       expect(cli.active.signal.aborted).toBe(true);
       cli.shutdownOptions()?.shutdown(ShutdownSignal.SIGINT);
@@ -294,8 +295,8 @@ describe('glyph command line', () => {
     cli.run.mockImplementation(async () => {
       const [application] = cli.instances('TerminalApplication');
       const [reviewer] = cli.instances('TerminalEditReviewer');
-      (reviewer?.args[1] as () => void)();
-      expect((application?.args[2] as AbortSignal).aborted).toBe(true);
+      (reviewer!.args[1] as () => void)();
+      expect((application!.args[2] as AbortSignal).aborted).toBe(true);
       return 0;
     });
 
@@ -446,10 +447,12 @@ function prepareCli({
   }));
 
   let finish!: () => void;
-  const finished = new Promise<void>(resolve => {
-    finish = resolve;
+  const finished = new Promise<void>(resolveFinished => {
+    finish = resolveFinished;
   });
-  const removeShutdownHandlers = vi.fn(() => finish());
+  const removeShutdownHandlers = vi.fn(() => {
+    finish();
+  });
   let installed: ShutdownOptions | undefined;
   mock('#src/terminal/installShutdownHandlers.js', () => ({
     installShutdownHandlers: (options: ShutdownOptions) => {
@@ -459,8 +462,8 @@ function prepareCli({
   }));
 
   let report!: (message: string) => void;
-  const reported = new Promise<string>(resolve => {
-    report = resolve;
+  const reported = new Promise<string>(resolveReported => {
+    report = resolveReported;
   });
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   vi.spyOn(process.stderr, 'write').mockImplementation(chunk => {

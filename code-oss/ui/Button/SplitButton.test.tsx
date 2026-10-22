@@ -225,13 +225,13 @@ describe(SplitButton, () => {
       </SplitButton>,
     );
     expect(screen.queryByRole('group', { name: 'Options' })).toBeNull();
-    expect((screen.getByRole('button', { name: 'Options' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Options' }).disabled).toBe(true);
 
     rerender(
       <SplitButton menuLabel="Options" menu={<button>Option</button>} loading>
         Run
       </SplitButton>,
     );
-    expect((screen.getByRole('button', { name: 'Options' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Options' }).disabled).toBe(true);
   });
 });

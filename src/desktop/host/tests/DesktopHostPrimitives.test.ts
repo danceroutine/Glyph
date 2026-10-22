@@ -35,7 +35,7 @@ describe(WorkspaceOwnershipRegistry, () => {
       expect(registry.acquire(first, workspaceRoots(aliases[0]!)).readOnly).toBe(false);
       expect(() =>
         registry.acquire({ ...second, workspaceId: 'alias-workspace' }, workspaceRoots(aliases[1]!)),
-      ).toThrow(/overlap/i);
+      ).toThrow(/overlap/iu);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -53,7 +53,7 @@ describe(WorkspaceOwnershipRegistry, () => {
       registry.acquire({ profileId: 'other', windowId: 'three', workspaceId: 'other' }, [
         { name: 'nested', uri: 'file:///project/src', canonicalPath: '/project/src' },
       ]),
-    ).toThrowError(/overlap/);
+    ).toThrow(/overlap/u);
     expect(registry.release(second)).toBe(false);
     expect(registry.release(first)).toBe(true);
   });
@@ -196,7 +196,7 @@ describe(RequestDeduplicator, () => {
   });
 
   it('rejects invalid capacities', () => {
-    expect(() => new RequestDeduplicator(0)).toThrowError(/positive/);
+    expect(() => new RequestDeduplicator(0)).toThrow(/positive/u);
   });
 });
 
@@ -205,14 +205,16 @@ describe(ChatOperationSerializer, () => {
     const serializer = new ChatOperationSerializer();
     const order: string[] = [];
     let release!: () => void;
-    const gate = new Promise<void>(resolve => (release = resolve));
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
     const firstOperation = serializer.run('chat', 'one', async () => {
       order.push('first:start');
       await gate;
       order.push('first:end');
     });
     const secondOperation = serializer.run('chat', 'one', async () => order.push('second'));
-    await expect(serializer.run('chat', 'two', async () => {})).rejects.toThrowError(/window one/);
+    await expect(serializer.run('chat', 'two', async () => {})).rejects.toThrow(/window one/u);
     release();
     await Promise.all([firstOperation, secondOperation]);
     expect(order).toEqual(['first:start', 'first:end', 'second']);

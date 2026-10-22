@@ -77,13 +77,21 @@ export class GlyphAgentReviewPane extends ViewPane {
     );
 
     this.reviewEditor = this._register(instantiationService.createInstance(GlyphAgentReviewEditor));
-    this._register(glyphService.onDidChangeState(() => this.update()));
+    this._register(
+      glyphService.onDidChangeState(() => {
+        this.update();
+      }),
+    );
     this._register(
       configurationService.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('glyph.review')) this.refresh();
       }),
     );
-    this._register(scm.onDidAddRepository(repository => this.watchRepository(repository)));
+    this._register(
+      scm.onDidAddRepository(repository => {
+        this.watchRepository(repository);
+      }),
+    );
     this._register(
       scm.onDidRemoveRepository(repository => {
         this.repositories.deleteAndDispose(repository);
@@ -100,8 +108,16 @@ export class GlyphAgentReviewPane extends ViewPane {
     if (repository.provider.providerId !== 'git') return;
     const store = new DisposableStore();
     this.repositories.set(repository, store);
-    store.add(repository.provider.onDidChangeResources(() => this.refresh()));
-    store.add(repository.provider.onDidChangeResourceGroups(() => this.refresh()));
+    store.add(
+      repository.provider.onDidChangeResources(() => {
+        this.refresh();
+      }),
+    );
+    store.add(
+      repository.provider.onDidChangeResourceGroups(() => {
+        this.refresh();
+      }),
+    );
     store.add(
       autorun(reader => {
         repository.provider.historyProvider.read(reader)?.historyItemRef.read(reader);
@@ -123,11 +139,12 @@ export class GlyphAgentReviewPane extends ViewPane {
   private controls(): GlyphAgentReviewControls {
     const repositories = [...this.scm.repositories].filter(repository => repository.provider.providerId === 'git');
     const reasons = repositories.map(repository => glyphAgentReviewUnavailableReason(repository, this.scope));
-    const unavailableReason = !repositories.length
-      ? 'Open a Git repository to review changes.'
-      : reasons.every(reason => reason !== undefined)
-        ? reasons[0]
-        : undefined;
+    const unavailableReason =
+      repositories.length === 0
+        ? 'Open a Git repository to review changes.'
+        : reasons.every(reason => reason !== undefined)
+          ? reasons[0]
+          : undefined;
     return {
       scope: this.scope,
       branch: this.branch,
@@ -153,12 +170,14 @@ export class GlyphAgentReviewPane extends ViewPane {
       fixFinding: id => {
         void this.perform(() => this.fixFindings([id]));
       },
-      dismissFinding: id => this.dismissFinding(id),
+      dismissFinding: id => {
+        this.dismissFinding(id);
+      },
       error: this.error ?? this.reviewState?.error,
       unavailableReason,
       chooseScope: scope => {
         void this.perform(async () => {
-          if (scope === Scope.BRANCH && !(await this.chooseBranch())) return;
+          if (scope === Scope.BRANCH && ((await this.chooseBranch()) ?? '') === '') return;
           await this.configurationService.updateValue('glyph.review.scope', scope, ConfigurationTarget.USER);
         });
       },
@@ -196,9 +215,9 @@ export class GlyphAgentReviewPane extends ViewPane {
     const repositories = [...this.scm.repositories].filter(
       repository =>
         repository.provider.providerId === 'git' &&
-        (!forReview || !glyphAgentReviewUnavailableReason(repository, this.scope)),
+        (!forReview || (glyphAgentReviewUnavailableReason(repository, this.scope) ?? '') === ''),
     );
-    if (!repositories.length) throw new Error('Open a Git repository to review changes.');
+    if (repositories.length === 0) throw new Error('Open a Git repository to review changes.');
     if (repositories.length === 1) return repositories[0];
     return (
       await this.quick.pick(
@@ -213,10 +232,10 @@ export class GlyphAgentReviewPane extends ViewPane {
   }
   private async chooseBranch(repository?: ISCMRepository): Promise<string | undefined> {
     repository ??= await this.repository();
-    if (!repository) return;
+    if (!repository) return undefined;
     const refs = await repository.provider.historyProvider.get()?.provideHistoryItemRefs();
     const branches = refs?.filter(ref => ref.id.startsWith('refs/heads/') || ref.id.startsWith('refs/remotes/'));
-    if (!branches?.length) throw new Error('Git branch information is unavailable.');
+    if (branches === undefined || branches.length === 0) throw new Error('Git branch information is unavailable.');
     const selected = await this.quick.pick(
       branches.map(ref => ({ label: ref.name, description: ref.id, ref })),
       {
@@ -225,7 +244,7 @@ export class GlyphAgentReviewPane extends ViewPane {
         matchOnDescription: true,
       },
     );
-    if (!selected) return;
+    if (!selected) return undefined;
     await this.configurationService.updateValue(
       'glyph.review.baseBranch',
       selected.ref.id,
@@ -261,7 +280,7 @@ export class GlyphAgentReviewPane extends ViewPane {
       branch,
       label:
         scope === Scope.BRANCH
-          ? `Compare against ${branch.replace(/^refs\/(heads|remotes)\//, '')}`
+          ? `Compare against ${branch.replace(/^refs\/(heads|remotes)\//u, '')}`
           : { lastCommit: 'Last commit', staged: 'Staged changes', allLocal: 'All local changes' }[scope],
       files: captured.map(attachment => {
         const file = files.get(attachment.uri);
@@ -299,14 +318,16 @@ export class GlyphAgentReviewPane extends ViewPane {
       issue => {
         void this.perform(() => this.fixFindings([issue.id]));
       },
-      issue => this.dismissFinding(issue.id),
+      issue => {
+        this.dismissFinding(issue.id);
+      },
     );
   }
   private async fixFindings(ids: readonly string[]): Promise<void> {
     const review = this.reviewState;
     if (!review) return;
     const findings = this.visibleFindings.filter(finding => ids.includes(finding.id));
-    if (!findings.length) return;
+    if (findings.length === 0) return;
     const paths = new Set(findings.map(finding => finding.path));
     const attachments: GlyphContextAttachment[] = review.files
       .filter(file => paths.has(file.path))
@@ -321,7 +342,7 @@ export class GlyphAgentReviewPane extends ViewPane {
       this.glyphService,
       this.views,
       async () => attachments,
-      `${findings.length === 1 ? 'Fix this agent review issue' : 'Fix all of these agent review issues'}.\n\n${findings.map(finding => `${finding.path}:${finding.line} (${finding.side ?? (review.files.find(file => file.path === finding.path)?.after ? 'modified' : 'original')}) — ${finding.title}\n${finding.body}`).join('\n\n')}\n\nCheck each issue against the current source before changing files; the attached revisions are the reviewed snapshots.`,
+      `${findings.length === 1 ? 'Fix this agent review issue' : 'Fix all of these agent review issues'}.\n\n${findings.map(finding => `${finding.path}:${finding.line} (${finding.side ?? ((review.files.find(file => file.path === finding.path)?.after ?? '') !== '' ? 'modified' : 'original')}) — ${finding.title}\n${finding.body}`).join('\n\n')}\n\nCheck each issue against the current source before changing files; the attached revisions are the reviewed snapshots.`,
       AgentModeID.AGENT,
     );
   }

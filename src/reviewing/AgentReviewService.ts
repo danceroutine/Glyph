@@ -25,7 +25,9 @@ export class AgentReviewService {
   }
   onDidChange(listener: (review: AgentReview) => void): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
   async initialize(): Promise<void> {
     for (const review of await this.store.load()) {
@@ -146,7 +148,7 @@ export class AgentReviewService {
         if (current.status !== Status.RUNNING) return;
         signal.throwIfAborted();
         const result = parseAgentReviewFindings(text, files);
-        const summary = text.replace(/<glyph_review>[\s\S]*?(?:<\/glyph_review>|$)/g, '').trim();
+        const summary = text.replaceAll(/<glyph_review>[\s\S]*?(?:<\/glyph_review>|$)/gu, '').trim();
         await this.commit({
           ...current,
           findings: result.findings,
@@ -177,7 +179,9 @@ export class AgentReviewService {
           error: 'Review results could not be saved. Check available storage before retrying.',
         };
         this.records.set(review.id, failed);
-        this.listeners.forEach(listener => listener(failed));
+        this.listeners.forEach(listener => {
+          listener(failed);
+        });
       }
     }
   }
@@ -190,7 +194,9 @@ export class AgentReviewService {
     const next = { ...review, updatedAt: new Date().toISOString() };
     await this.store.save(next);
     this.records.set(next.id, next);
-    this.listeners.forEach(listener => listener(next));
+    this.listeners.forEach(listener => {
+      listener(next);
+    });
   }
   private serial<T>(action: () => Promise<T>): Promise<T> {
     const result = this.queue.then(action, action);

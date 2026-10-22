@@ -88,56 +88,56 @@ describe(TerminalUI, () => {
       {
         name: 'Option+Left',
         before: '',
-        shortcut: '\u001b[1;3D',
+        shortcut: '\u001B[1;3D',
         insertion: 'X',
         expected: 'alpha Xbeta',
       },
       {
         name: 'Option+Right',
         before: '\u0001',
-        shortcut: '\u001b[1;3C',
+        shortcut: '\u001B[1;3C',
         insertion: 'X',
         expected: 'alphaX beta',
       },
       {
         name: 'Option+Backspace',
         before: '',
-        shortcut: '\u001b\u007f',
+        shortcut: '\u001B\u007F',
         insertion: 'X',
         expected: 'alpha X',
       },
       {
         name: 'Option+Delete',
         before: '\u0001',
-        shortcut: '\u001b[3;3~',
+        shortcut: '\u001B[3;3~',
         insertion: 'X',
         expected: 'X beta',
       },
       {
         name: 'Cmd+Left',
         before: '',
-        shortcut: '\u001b[1;9D',
+        shortcut: '\u001B[1;9D',
         insertion: 'X',
         expected: 'Xalpha beta',
       },
       {
         name: 'Cmd+Right',
         before: '\u0001',
-        shortcut: '\u001b[1;9C',
+        shortcut: '\u001B[1;9C',
         insertion: 'X',
         expected: 'alpha betaX',
       },
       {
         name: 'Cmd+Backspace',
         before: '',
-        shortcut: '\u001b[127;9u',
+        shortcut: '\u001B[127;9u',
         insertion: 'X',
         expected: 'X',
       },
       {
         name: 'Cmd+Delete',
         before: '\u0001',
-        shortcut: '\u001b[3;9~',
+        shortcut: '\u001B[3;9~',
         insertion: 'X',
         expected: 'X',
       },
@@ -150,10 +150,14 @@ describe(TerminalUI, () => {
       await type(terminal, 'alpha beta');
       if (before) {
         terminal.push(before);
-        await new Promise<void>(resolve => setImmediate(resolve));
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
       }
       terminal.push(shortcut);
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
       await type(terminal, insertion);
       terminal.push('\r');
 
@@ -167,10 +171,14 @@ describe(TerminalUI, () => {
       const action = ui.nextAction(new AbortController().signal);
 
       await waitUntil(() => terminal.isRaw);
-      terminal.push('\u001b[120;1:3u');
-      await new Promise<void>(resolve => setImmediate(resolve));
-      terminal.push('\u000c');
-      await new Promise<void>(resolve => setImmediate(resolve));
+      terminal.push('\u001B[120;1:3u');
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+      terminal.push('\u000C');
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
       await type(terminal, 'ok');
       terminal.push('\r');
 
@@ -227,12 +235,18 @@ describe(TerminalUI, () => {
       await waitUntil(() => output.value.includes('src/App.tsx'));
       terminal.push('\r');
       await waitUntil(() => output.value.includes('@App.tsx'));
-      terminal.push('\x1b[D');
-      await new Promise<void>(resolve => setImmediate(resolve));
-      terminal.push('\x7f');
-      await new Promise<void>(resolve => setImmediate(resolve));
-      terminal.push('\x05');
-      await new Promise<void>(resolve => setImmediate(resolve));
+      terminal.push('\u001B[D');
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+      terminal.push('\u007F');
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+      terminal.push('\u0005');
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
       terminal.push('\r');
 
       await expect(action).resolves.toEqual({
@@ -315,10 +329,10 @@ describe(TerminalUI, () => {
             arguments: '',
             output: JSON.stringify({
               error: {
-                code: '\u001b[35mEXCLUDED\u001b[0m',
+                code: '\u001B[35mEXCLUDED\u001B[0m',
                 message: 'Denied\u0007',
-                path: '.env\u001b[35msecret\u001b[0m',
-                details: ['one\u202etwo'],
+                path: '.env\u001B[35msecret\u001B[0m',
+                details: ['one\u202Etwo'],
               },
             }),
           },
@@ -597,7 +611,7 @@ describe(TerminalUI, () => {
 
   describe(TerminalUI.clean, () => {
     it('removes terminal control sequences from untrusted text', () => {
-      expect(TerminalUI.clean('\u001b[31mred\u001b[0m')).toBe('red');
+      expect(TerminalUI.clean('\u001B[31mred\u001B[0m')).toBe('red');
     });
   });
 
@@ -605,11 +619,15 @@ describe(TerminalUI, () => {
     it('stops notifying an interrupt listener after it is removed', async () => {
       const input = new PassThrough();
       const ui = new TerminalUI(input, new MemoryOutput(true), new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
       const removed = vi.fn();
       ui.on('SIGINT', removed);
       ui.off('SIGINT', removed);
-      const interrupted = new Promise<void>(resolve => ui.on('SIGINT', resolve));
+      const interrupted = new Promise<void>(resolve => {
+        ui.on('SIGINT', resolve);
+      });
       void ui.confirmInferenceAccess('Enable?', new AbortController().signal);
 
       input.write('\u0003');
@@ -633,7 +651,9 @@ describe(TerminalUI, () => {
     it('announces closure when redirected input ends', () => {
       const input = new PassThrough();
       const ui = new TerminalUI(input, new MemoryOutput(false), new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
       const listener = vi.fn();
       ui.onClose(listener);
 
@@ -667,7 +687,9 @@ describe(TerminalUI, () => {
     it('ignores the closure of a prompt reader that is no longer active', () => {
       const input = new PassThrough();
       const ui = new TerminalUI(input, new MemoryOutput(false), new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
       const listener = vi.fn();
       ui.onClose(listener);
       void ui.confirmInferenceAccess('Enable?', new AbortController().signal);
@@ -775,7 +797,9 @@ describe(TerminalUI, () => {
     it('prints the command help', () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.showHelp();
 
@@ -787,7 +811,9 @@ describe(TerminalUI, () => {
     it('describes the provider, project roots, log, and tracing in redirected output', () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.showWelcome(projectContext(), '/state/trace.log', true, presentation());
 
@@ -799,7 +825,9 @@ describe(TerminalUI, () => {
     it('falls back to a generic greeting with logging and tracing off in redirected output', () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.showWelcome(projectContext(), undefined, false);
 
@@ -964,7 +992,9 @@ describe(TerminalUI, () => {
       vi.mocked(spawn).mockReturnValueOnce(child as unknown as ChildProcess);
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       await ui.authorize({ url: 'https://auth.example/login', title: 'Sign in', message: 'Continue in the browser.' });
       child.emit('error', new Error('launcher missing'));
@@ -981,7 +1011,9 @@ describe(TerminalUI, () => {
       const child = Object.assign(new EventEmitter(), { unref: vi.fn() });
       vi.mocked(spawn).mockReturnValueOnce(child as unknown as ChildProcess);
       const ui = new TerminalUI(new PassThrough(), new MemoryOutput(false), new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       await ui.authorize({ url: 'https://auth.example/login', title: 'Sign in', message: 'Continue.' });
 
@@ -1038,7 +1070,9 @@ describe(TerminalUI, () => {
     it('does nothing in redirected IO', () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.preservePromptDraft();
 
@@ -1051,7 +1085,9 @@ describe(TerminalUI, () => {
       const output = new MemoryOutput(false);
       const errorOutput = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, errorOutput);
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.push({ type: ChatResponsePartType.TEXT, value: 'Before.' });
       ui.push({ type: ChatResponsePartType.DIAGNOSTIC, severity: DiagnosticSeverity.ERROR, message: 'Trace failed.' });
@@ -1064,7 +1100,9 @@ describe(TerminalUI, () => {
     it('separates tool activity from preceding text and reports started and silent tools', () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.push({ type: ChatResponsePartType.TEXT, value: 'Reading.' });
       ui.push({
@@ -1093,7 +1131,9 @@ describe(TerminalUI, () => {
     ])('describes a failed tool reporting $name', ({ error, expected }) => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.push({
         type: ChatResponsePartType.TOOL,
@@ -1116,7 +1156,9 @@ describe(TerminalUI, () => {
       });
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.push({
         type: ChatResponsePartType.TOOL,
@@ -1133,7 +1175,9 @@ describe(TerminalUI, () => {
     it('prints the duration and token usage in redirected output', () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.showTurnCompleted(1_500, usage());
 
@@ -1155,7 +1199,9 @@ describe(TerminalUI, () => {
     it('reports the failure on the error stream in redirected output', () => {
       const errorOutput = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), new MemoryOutput(false), errorOutput);
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.showTurnFailed('Provider failed.');
 
@@ -1177,7 +1223,9 @@ describe(TerminalUI, () => {
     it('prints the active account and model in redirected output', () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.showActive(chatAccount({ detail: 'Team' }), { slug: 'model-a', name: 'Model A' }, presentation());
       ui.showActive(chatAccount(), { slug: 'model-a', name: 'Model A' }, presentation());
@@ -1204,7 +1252,9 @@ describe(TerminalUI, () => {
     it('prints conversation, command, usage, trace, logout, and error notices in redirected output', () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       ui.showConversationReset();
       ui.showUnknownCommand();
@@ -1214,7 +1264,7 @@ describe(TerminalUI, () => {
       ui.showTrace(false, '/state/trace.log');
       ui.showLogout(true);
       ui.showLogout(false);
-      ui.showError('\u001b[31mBroken\u001b[0m');
+      ui.showError('\u001B[31mBroken\u001B[0m');
 
       expect(output.value).toBe(
         [
@@ -1246,7 +1296,9 @@ describe(TerminalUI, () => {
     it('does nothing when no reviews are active', async () => {
       const output = new MemoryOutput(false);
       const ui = new TerminalUI(new PassThrough(), output, new MemoryOutput(false));
-      onTestFinished(() => ui.close());
+      onTestFinished(() => {
+        ui.close();
+      });
 
       await ui.reviewProposals(
         { activeReviews: [] } as unknown as ProposalReviewManager,
@@ -1453,7 +1505,9 @@ function scriptedTerminal(answers: readonly string[]) {
   const output = new ScriptedOutput(input, answers);
   const errorOutput = new MemoryOutput(false);
   const ui = new TerminalUI(input, output, errorOutput);
-  onTestFinished(() => ui.close());
+  onTestFinished(() => {
+    ui.close();
+  });
   return { ui, output, errorOutput };
 }
 
@@ -1599,7 +1653,10 @@ class ScriptedOutput extends MemoryOutput {
     if (!text.endsWith('\n')) {
       this.prompts.push(text);
       const answer = this.answers.shift();
-      if (answer !== undefined) setImmediate(() => this.input.write(`${answer}\n`));
+      if (answer !== undefined)
+        setImmediate(() => {
+          this.input.write(`${answer}\n`);
+        });
     }
     super._write(chunk, encoding, callback);
   }
@@ -1647,7 +1704,9 @@ function fileSearch(search: WorkspacePathIndex['search']): WorkspacePathIndex {
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt++) {
     if (predicate()) return;
-    await new Promise<void>(resolve => setTimeout(resolve, 5));
+    await new Promise<void>(resolve => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error('Condition was not reached.');
 }
@@ -1655,7 +1714,9 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 async function type(terminal: VirtualTTY, value: string): Promise<void> {
   for (const character of value) {
     terminal.push(character);
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await new Promise<void>(resolve => {
+      setImmediate(resolve);
+    });
   }
 }
 

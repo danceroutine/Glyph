@@ -1,11 +1,24 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { hasErrorCode } from '#scripts/support/hasErrorCode.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
+import { parseJson, shellToolOutput } from './ProviderPayloads.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+/** @typedef {ReturnType<typeof ScriptedProvider.tool>} ToolCall */
+
 const restartsHost = isolatedLaunch('restarts the host and reloads the window');
+/**
+ * @param {string} name
+ * @param {unknown} input
+ */
 const tool = (name, input) => ScriptedProvider.tool(name, input, { namespace: 'shell', callId: randomUUID() });
+/**
+ * @param {string} command
+ * @param {Record<string, unknown>} [options]
+ */
 const execute = (command, options = {}) =>
   tool('execute_shell', {
     command,
@@ -16,18 +29,36 @@ const execute = (command, options = {}) =>
     timeout_ms: 5000,
     ...options,
   });
+/**
+ * @param {string} id
+ * @param {string} input
+ */
 const write = (id, input, appendNewline = true) =>
   tool('write_shell_input', { terminal_id: id, input, append_newline: appendNewline, wake_on: null });
+/** @param {string} id */
 const close = id => tool('close_shell', { terminal_id: id });
 const list = () => tool('list_shells', {});
+/** @param {GlyphWorkbench} glyph */
 const cards = glyph => glyph.page.getByRole('region', { name: 'Shell command', exact: true });
+/** @param {GlyphWorkbench} glyph */
 const finished = glyph => expect(glyph.sendButton).toHaveText('Send (Enter)');
+/**
+ * @param {ScriptedProvider} provider
+ * @param {ToolCall} call
+ */
 const result = (provider, call) =>
-  JSON.parse(
-    provider.requests
-      .at(-1)
-      .body.input.find(item => item.type === 'function_call_output' && item.call_id === call.call_id).output,
+  shellToolOutput.parse(
+    parseJson(
+      provider.requests
+        .at(-1)
+        ?.body.input.find(item => item.type === 'function_call_output' && item.call_id === call.call_id)?.output,
+    ),
   );
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {ToolCall} call
+ */
 async function runTool(glyph, provider, call, notifiesExit = false) {
   const count = provider.requests.length;
   provider.enqueue({ output: [call] }, { chunks: ['Shell step complete.'] });
@@ -37,6 +68,11 @@ async function runTool(glyph, provider, call, notifiesExit = false) {
   await finished(glyph);
   return result(provider, call);
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {ToolCall} call
+ */
 async function runCommand(glyph, provider, call, notifiesExit = false) {
   provider.enqueue({ output: [call] });
   await glyph.send('Run the requested command.');
@@ -49,15 +85,23 @@ async function runCommand(glyph, provider, call, notifiesExit = false) {
   await finished(glyph);
   return result(provider, call);
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ */
 async function startInteractive(glyph, provider) {
   const call = execute('printf "READY\\n"; read line; printf "GOT:%s\\n" "$line"; sleep 60', { background: true });
   const output = await runCommand(glyph, provider, call);
   await expect(cards(glyph).first().getByLabel('Command output')).toContainText('READY');
   return output.terminal_id;
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} path
+ */
 async function file(glyph, path) {
-  return readFile(join(glyph.workspace, path), 'utf8').catch(error => {
-    if (error.code === 'ENOENT') return null;
+  return readFile(join(glyph.workspace, path), 'utf8').catch((/** @type {unknown} */ error) => {
+    if (hasErrorCode(error, 'ENOENT')) return null;
     throw error;
   });
 }
@@ -110,7 +154,7 @@ it.describe('Shell execution, input, close, and listing', () => {
     await approval.getByRole('button', { name: 'Skip', exact: true }).click();
     await finished(glyph);
     expect(await file(glyph, 'denied.txt')).toBeNull();
-    expect(result(provider, call).error.message).toMatch(/denied/i);
+    expect(result(provider, call).error.message).toMatch(/denied/iu);
     await expect(cards(glyph).first()).toContainText('Failed');
   });
 
@@ -134,7 +178,7 @@ it.describe('Shell execution, input, close, and listing', () => {
       provider,
       execute('printf "READY\\n"; sleep 60; printf bad > timeout.txt', { timeout_ms: 500 }),
     );
-    expect(output.error.message).toMatch(/timeout|timed out/i);
+    expect(output.error.message).toMatch(/timeout|timed out/iu);
     expect(await file(glyph, 'timeout.txt')).toBeNull();
     const call = execute('printf "CANCEL READY\\n"; sleep 60; printf bad > cancelled.txt', { timeout_ms: 60000 });
     provider.enqueue({ output: [call] });
@@ -182,7 +226,7 @@ it.describe('Shell execution, input, close, and listing', () => {
     glyph,
     provider,
   }) => {
-    expect((await runTool(glyph, provider, write('unknown', 'printf bad'))).error.message).toMatch(/unknown/i);
+    expect((await runTool(glyph, provider, write('unknown', 'printf bad'))).error.message).toMatch(/unknown/iu);
     const { terminal_id: id } = await runCommand(
       glyph,
       provider,
@@ -191,7 +235,7 @@ it.describe('Shell execution, input, close, and listing', () => {
     );
     await expect(cards(glyph).nth(1)).toContainText('Exit 0');
     expect((await runTool(glyph, provider, write(id, 'printf bad > input-bypass.txt'))).error.message).toMatch(
-      /only allowed while.*running/i,
+      /only allowed while.*running/iu,
     );
     expect(await file(glyph, 'input-bypass.txt')).toBeNull();
     await runTool(glyph, provider, close(id));
@@ -200,7 +244,7 @@ it.describe('Shell execution, input, close, and listing', () => {
   it('refuses to write input to a shell owned by another chat', async ({ glyph, provider }) => {
     const id = await startInteractive(glyph, provider);
     await glyph.page.getByRole('button', { name: 'New chat', exact: true }).click();
-    expect((await runTool(glyph, provider, write(id, 'stolen'))).error.message).toMatch(/unknown/i);
+    expect((await runTool(glyph, provider, write(id, 'stolen'))).error.message).toMatch(/unknown/iu);
     expect((await runTool(glyph, provider, list())).terminals).toEqual([]);
     await expect(glyph.page.locator('.glyph-shell-command[data-live="true"]')).toHaveCount(0);
   });
@@ -223,7 +267,7 @@ it.describe('Shell execution, input, close, and listing', () => {
           process.kill(pid, 0);
           return true;
         } catch (error) {
-          if (error.code === 'ESRCH') return false;
+          if (hasErrorCode(error, 'ESRCH')) return false;
           throw error;
         }
       })
@@ -237,16 +281,16 @@ it.describe('Shell execution, input, close, and listing', () => {
     provider,
   }) => {
     const id = await startInteractive(glyph, provider);
-    expect((await runTool(glyph, provider, close('unknown'))).error.message).toMatch(/unknown/i);
+    expect((await runTool(glyph, provider, close('unknown'))).error.message).toMatch(/unknown/iu);
     expect((await runTool(glyph, provider, list())).terminals.map(value => value.terminal_id)).toEqual([id]);
     await runTool(glyph, provider, close(id), true);
-    expect((await runTool(glyph, provider, close(id))).error.message).toMatch(/unknown/i);
+    expect((await runTool(glyph, provider, close(id))).error.message).toMatch(/unknown/iu);
   });
 
   it('refuses to close a shell owned by another chat', async ({ glyph, provider }) => {
     const id = await startInteractive(glyph, provider);
     await glyph.page.getByRole('button', { name: 'New chat', exact: true }).click();
-    expect((await runTool(glyph, provider, close(id))).error.message).toMatch(/unknown/i);
+    expect((await runTool(glyph, provider, close(id))).error.message).toMatch(/unknown/iu);
     expect((await runTool(glyph, provider, list())).terminals).toEqual([]);
   });
 

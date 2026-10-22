@@ -61,7 +61,7 @@ describe(GlyphPlan, () => {
     const state = planState();
     render(<GlyphPlan {...state} markdown={null} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^Build\s*⌘↵$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Build\s*⌘↵$/u }));
     fireEvent.click(screen.getByRole('button', { name: 'Build options' }));
     fireEvent.click(screen.getByRole('button', { name: 'Build in new chat' }));
 
@@ -129,15 +129,15 @@ describe(GlyphPlan, () => {
   it('cannot submit a blank todo', () => {
     render(<GlyphPlan {...planState({ adding: true, todo: '  ' })} markdown={null} />);
 
-    expect((screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Add' }).disabled).toBe(true);
   });
 
   it('disables editing while unavailable', () => {
     render(<GlyphPlan {...planState({ adding: true, todo: 'Third', disabled: true })} markdown={null} />);
 
     for (const name of ['New todo', 'Mark First completed', 'Add', 'New agent'])
-      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('textbox', { name: 'Todo description' }) as HTMLInputElement).disabled).toBe(true);
+      expect(screen.getByRole<HTMLButtonElement>('button', { name }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLInputElement>('textbox', { name: 'Todo description' }).disabled).toBe(true);
   });
 
   it('lists the agents referencing the plan and opens their chats', () => {

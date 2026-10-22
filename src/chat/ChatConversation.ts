@@ -69,14 +69,21 @@ export class ChatConversation {
     const trace: ProviderTraceEntry[] = [];
     const startedAt = performance.now();
     let result: TurnResult | undefined;
+    let failed = false;
     let failure: unknown;
 
     try {
       result = await this.provider.send(request, {
         signal,
-        onText: value => response.push({ type: ChatResponsePartType.TEXT, value }),
-        onReasoningSummary: value => response.push({ type: ChatResponsePartType.REASONING_SUMMARY, value }),
-        onToolActivity: activity => response.push({ type: ChatResponsePartType.TOOL, activity }),
+        onText: value => {
+          response.push({ type: ChatResponsePartType.TEXT, value });
+        },
+        onReasoningSummary: value => {
+          response.push({ type: ChatResponsePartType.REASONING_SUMMARY, value });
+        },
+        onToolActivity: activity => {
+          response.push({ type: ChatResponsePartType.TOOL, activity });
+        },
         onTrace: entry => {
           if (this.traceEnabled) trace.push(entry);
         },
@@ -85,6 +92,7 @@ export class ChatConversation {
         ...(options.toolContext ? { toolContext: options.toolContext } : {}),
       });
     } catch (error) {
+      failed = true;
       failure = error;
     }
 
@@ -100,7 +108,7 @@ export class ChatConversation {
       }
     }
 
-    if (failure !== undefined) throw failure;
+    if (failed) throw failure;
     if (!result) throw new ProviderError('Provider completed without a result.');
     this.recordUsage(result);
     return {

@@ -21,7 +21,6 @@ import { OpenAIBackend } from '#src/providers/openai/OpenAIBackend.js';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
 import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
-import { fileURLToPath } from 'node:url';
 import OpenAI from 'openai';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { ChatConversation } from '#src/chat/ChatConversation.js';
@@ -933,7 +932,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           captured.modeSwitches[0]!(
             AgentModeID.AGENT,
             'Build the plan',
-            { chat, ...(mode ? { mode } : {}) },
+            { chat, ...(mode !== undefined ? { mode } : {}) },
             new AbortController().signal,
           ),
         );
@@ -1037,7 +1036,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(conversationProvider).toBe(provider);
       vi.spyOn(GlyphService.prototype, 'redact').mockReturnValue('[redacted]');
       expect(redact('secret')).toBe('[redacted]');
-      expect(recordUsage({} as Parameters<typeof recordUsage>[0])).toBeUndefined();
+      expect(() => {
+        recordUsage({} as Parameters<typeof recordUsage>[0]);
+      }).not.toThrow();
     });
 
     it('stops shells when the application service fails to initialize', async () => {
@@ -1088,7 +1089,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
 });
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..', '..');
 const factoryIdentity: GlyphConnectionIdentity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
 
 async function factoryFixture(options: { readonly transport?: typeof fetch } = {}) {
@@ -1159,7 +1160,7 @@ function fileMutation(
 ): Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.APPLY_FILE_MUTATION }> {
   return {
     type: GlyphEditorRequestType.APPLY_FILE_MUTATION,
-    mutation: { ...mutation, operationId: 'file', undoGroupId: 'file' } as GlyphFileMutation,
+    mutation: { ...mutation, operationId: 'file', undoGroupId: 'file' },
   };
 }
 

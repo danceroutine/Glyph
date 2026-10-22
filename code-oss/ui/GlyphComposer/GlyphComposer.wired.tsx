@@ -19,7 +19,14 @@ export function WiredGlyphComposer({ modelControl, todos, reviews, terminals, ..
       todos={todos}
       reviews={reviews}
       terminals={terminals}
-      modeControl={<WiredGlyphModePicker mode={state.mode} change={state.setMode} />}
+      modeControl={
+        <WiredGlyphModePicker
+          mode={state.mode}
+          change={mode => {
+            void state.setMode(mode);
+          }}
+        />
+      }
     />
   );
 }

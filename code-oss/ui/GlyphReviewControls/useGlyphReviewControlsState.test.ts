@@ -82,7 +82,14 @@ describe(useGlyphReviewControlsState, () => {
 
   it('disables actions and ignores more while one is pending', async () => {
     let finish!: () => void;
-    const controls = reviewControls({ keep: vi.fn(() => new Promise<void>(resolve => (finish = resolve))) });
+    const controls = reviewControls({
+      keep: vi.fn(
+        () =>
+          new Promise<void>(resolve => {
+            finish = resolve;
+          }),
+      ),
+    });
     const { result } = renderHook(useGlyphReviewControlsState, { initialProps: controls });
 
     let first!: Promise<void>;
@@ -131,14 +138,18 @@ describe(useGlyphReviewControlsState, () => {
       initialProps: reviewControls({ rejectWithComment }),
     });
 
-    act(() => result.current.openComment());
+    act(() => {
+      result.current.openComment();
+    });
     expect(result.current.commentOpen).toBe(true);
     expect(result.current.disabled).toBe(true);
     expect(result.current.keepDisabled).toBe(true);
     expect(result.current.keepAllDisabled).toBe(true);
     expect(result.current.navigationDisabled).toBe(true);
 
-    act(() => result.current.setComment(' Use a map '));
+    act(() => {
+      result.current.setComment(' Use a map ');
+    });
     expect(result.current.commentDisabled).toBe(false);
 
     await act(() => result.current.submitComment());
@@ -153,8 +164,12 @@ describe(useGlyphReviewControlsState, () => {
     const { result } = renderHook(useGlyphReviewControlsState, {
       initialProps: reviewControls({ rejectWithComment }),
     });
-    act(() => result.current.openComment());
-    act(() => result.current.setComment('   '));
+    act(() => {
+      result.current.openComment();
+    });
+    act(() => {
+      result.current.setComment('   ');
+    });
 
     await act(() => result.current.submitComment());
 
@@ -170,10 +185,18 @@ describe(useGlyphReviewControlsState, () => {
       initialProps: reviewControls({ disabled: true, rejectWithComment }),
     });
 
-    act(() => unsupported.result.current.openComment());
-    act(() => disabled.result.current.openComment());
-    act(() => unsupported.result.current.setComment('Text'));
-    act(() => disabled.result.current.setComment('Text'));
+    act(() => {
+      unsupported.result.current.openComment();
+    });
+    act(() => {
+      disabled.result.current.openComment();
+    });
+    act(() => {
+      unsupported.result.current.setComment('Text');
+    });
+    act(() => {
+      disabled.result.current.setComment('Text');
+    });
     await act(() => unsupported.result.current.submitComment());
     await act(() => disabled.result.current.submitComment());
 
@@ -185,22 +208,39 @@ describe(useGlyphReviewControlsState, () => {
 
   it('cancels a comment unless it is being submitted', async () => {
     let finish!: () => void;
-    const rejectWithComment = vi.fn(() => new Promise<void>(resolve => (finish = resolve)));
+    const rejectWithComment = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        }),
+    );
     const { result } = renderHook(useGlyphReviewControlsState, {
       initialProps: reviewControls({ rejectWithComment }),
     });
-    act(() => result.current.openComment());
-    act(() => result.current.cancelComment());
+    act(() => {
+      result.current.openComment();
+    });
+    act(() => {
+      result.current.cancelComment();
+    });
     expect(result.current.commentOpen).toBe(false);
 
-    act(() => result.current.openComment());
-    act(() => result.current.setComment('Revise'));
+    act(() => {
+      result.current.openComment();
+    });
+    act(() => {
+      result.current.setComment('Revise');
+    });
     let submission!: Promise<void>;
     act(() => {
       submission = result.current.submitComment();
     });
-    act(() => result.current.openComment());
-    act(() => result.current.cancelComment());
+    act(() => {
+      result.current.openComment();
+    });
+    act(() => {
+      result.current.cancelComment();
+    });
     expect(result.current.commentOpen).toBe(true);
 
     await act(async () => {
@@ -220,8 +260,12 @@ describe(useGlyphReviewControlsState, () => {
     });
     const { result, rerender } = renderHook(useGlyphReviewControlsState, { initialProps: controls });
     await act(() => result.current.keep());
-    act(() => result.current.openComment());
-    act(() => result.current.setComment('Draft'));
+    act(() => {
+      result.current.openComment();
+    });
+    act(() => {
+      result.current.setComment('Draft');
+    });
 
     rerender({ ...controls, itemId: 'two' });
 
@@ -238,7 +282,9 @@ describe(useGlyphReviewControlsState, () => {
 
     expect(registry.registerCommands).toHaveBeenCalledOnce();
 
-    act(() => unmount());
+    act(() => {
+      unmount();
+    });
 
     expect(registry.dispose).toHaveBeenCalledOnce();
   });
@@ -268,7 +314,9 @@ describe(useGlyphReviewControlsState, () => {
       GlyphReviewCommand.PREVIOUS_CHANGE,
       GlyphReviewCommand.ADD_TO_CHAT,
     ])
-      await act(async () => registry.handler!(command));
+      await act(async () => {
+        registry.handler!(command);
+      });
 
     for (const action of [
       controls.keep,
@@ -283,7 +331,9 @@ describe(useGlyphReviewControlsState, () => {
     ])
       expect(action).toHaveBeenCalledOnce();
 
-    act(() => registry.handler!(GlyphReviewCommand.COMMENT));
+    act(() => {
+      registry.handler!(GlyphReviewCommand.COMMENT);
+    });
     expect(result.current.commentOpen).toBe(true);
   });
 
@@ -308,8 +358,12 @@ describe(useGlyphReviewControlsState, () => {
     renderHook(useGlyphReviewControlsState, { initialProps: bare });
 
     for (const command of Object.values(GlyphReviewCommand)) {
-      await act(async () => registry.handler!(command));
-      await act(async () => unavailable.handler!(command));
+      await act(async () => {
+        registry.handler!(command);
+      });
+      await act(async () => {
+        unavailable.handler!(command);
+      });
     }
 
     for (const action of [
@@ -335,19 +389,36 @@ describe(useGlyphReviewControlsState, () => {
     const controls = reviewControls({
       registerCommands: registry.registerCommands,
       rejectWithComment: vi.fn(async () => {}),
-      undo: vi.fn(() => new Promise<void>(resolve => (finish = resolve))),
+      undo: vi.fn(
+        () =>
+          new Promise<void>(resolve => {
+            finish = resolve;
+          }),
+      ),
     });
     const { result } = renderHook(useGlyphReviewControlsState, { initialProps: controls });
 
-    act(() => registry.handler!(GlyphReviewCommand.UNDO));
-    await act(async () => registry.handler!(GlyphReviewCommand.KEEP));
+    act(() => {
+      registry.handler!(GlyphReviewCommand.UNDO);
+    });
+    await act(async () => {
+      registry.handler!(GlyphReviewCommand.KEEP);
+    });
     expect(controls.keep).not.toHaveBeenCalled();
-    act(() => result.current.openComment());
+    act(() => {
+      result.current.openComment();
+    });
     expect(result.current.commentOpen).toBe(false);
 
-    await act(async () => finish());
-    act(() => result.current.openComment());
-    await act(async () => registry.handler!(GlyphReviewCommand.KEEP));
+    await act(async () => {
+      finish();
+    });
+    act(() => {
+      result.current.openComment();
+    });
+    await act(async () => {
+      registry.handler!(GlyphReviewCommand.KEEP);
+    });
 
     expect(controls.keep).not.toHaveBeenCalled();
   });

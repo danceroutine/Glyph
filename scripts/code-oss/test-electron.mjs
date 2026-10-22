@@ -39,4 +39,7 @@ child.on('error', error => {
 child.on('exit', code => {
   process.exitCode = code ?? 1;
 });
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
+for (const signal of /** @type {const} */ (['SIGINT', 'SIGTERM']))
+  process.on(signal, () => {
+    child.kill(signal);
+  });

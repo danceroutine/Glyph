@@ -23,16 +23,18 @@ describe(assertShellRuntimePathIsolation, () => {
     await mkdir(outside);
     await symlink(project, join(outside, 'project-alias'));
 
-    expect(() => assertShellRuntimePathIsolation([project], join(project, '.glyph'), join(outside, 'trace'))).toThrow(
-      'GLYPH_CONFIG_DIR',
-    );
-    expect(() => assertShellRuntimePathIsolation([project], outside, join(project, 'trace.log'))).toThrow(
-      'CHAT_TRACE_FILE',
-    );
-    expect(() =>
-      assertShellRuntimePathIsolation([project], outside, join(outside, 'project-alias', 'trace.log')),
-    ).toThrow('CHAT_TRACE_FILE');
-    expect(() => assertShellRuntimePathIsolation([project], outside, join(outside, 'trace.log'))).not.toThrow();
+    expect(() => {
+      assertShellRuntimePathIsolation([project], join(project, '.glyph'), join(outside, 'trace'));
+    }).toThrow('GLYPH_CONFIG_DIR');
+    expect(() => {
+      assertShellRuntimePathIsolation([project], outside, join(project, 'trace.log'));
+    }).toThrow('CHAT_TRACE_FILE');
+    expect(() => {
+      assertShellRuntimePathIsolation([project], outside, join(outside, 'project-alias', 'trace.log'));
+    }).toThrow('CHAT_TRACE_FILE');
+    expect(() => {
+      assertShellRuntimePathIsolation([project], outside, join(outside, 'trace.log'));
+    }).not.toThrow();
     expect(pathsOverlap(project, join(project, 'nested'))).toBe(true);
   });
 });

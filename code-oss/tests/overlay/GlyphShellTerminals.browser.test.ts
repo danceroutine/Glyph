@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { Emitter } from '#vs/base/common/event.js';
 import { TerminalExitReason, type ITerminalChildProcess } from '#vs/platform/terminal/common/terminal.js';
 import type { ITerminalService } from '#vs/workbench/contrib/terminal/browser/terminal.js';
@@ -19,8 +19,8 @@ interface FakeInstance {
   exitReason: TerminalExitReason | undefined;
   process: ITerminalChildProcess;
   onDisposed: Emitter<FakeInstance>['event'];
-  focusWhenReady: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
+  focusWhenReady: Mock;
+  dispose: Mock;
   close(reason: TerminalExitReason): void;
 }
 
@@ -65,7 +65,9 @@ describe(GlyphShellTerminals, () => {
     it('reveals a read-only terminal that mirrors the shell', async () => {
       const { service, instances, terminals } = terminalsOf();
       const viewers = new GlyphShellTerminals(vi.fn(), terminals);
-      onTestFinished(() => viewers.dispose());
+      onTestFinished(() => {
+        viewers.dispose();
+      });
 
       await viewers.open(shellOf({ command: `echo ${'x'.repeat(100)}` }));
 
@@ -86,7 +88,9 @@ describe(GlyphShellTerminals, () => {
     it('reuses the terminal of a shell that is already open', async () => {
       const { service, terminals } = terminalsOf();
       const viewers = new GlyphShellTerminals(vi.fn(), terminals);
-      onTestFinished(() => viewers.dispose());
+      onTestFinished(() => {
+        viewers.dispose();
+      });
 
       await viewers.open(shellOf());
       await viewers.open(shellOf());
@@ -99,7 +103,9 @@ describe(GlyphShellTerminals, () => {
       const { service, instances, terminals } = terminalsOf();
       const stop = vi.fn();
       const viewers = new GlyphShellTerminals(stop, terminals);
-      onTestFinished(() => viewers.dispose());
+      onTestFinished(() => {
+        viewers.dispose();
+      });
 
       await viewers.open(shellOf());
       instances[0].close(TerminalExitReason.Shutdown);
@@ -114,7 +120,9 @@ describe(GlyphShellTerminals, () => {
     it('forgets terminals that could not be created', async () => {
       const { service, terminals } = terminalsOf();
       const viewers = new GlyphShellTerminals(vi.fn(), terminals);
-      onTestFinished(() => viewers.dispose());
+      onTestFinished(() => {
+        viewers.dispose();
+      });
       const create = service.createTerminal.getMockImplementation()!;
       service.createTerminal.mockImplementationOnce(async () => {
         throw new Error('no terminal');
@@ -132,7 +140,9 @@ describe(GlyphShellTerminals, () => {
     it('streams appended output and reports how the shell finished', async () => {
       const { instances, terminals } = terminalsOf();
       const viewers = new GlyphShellTerminals(vi.fn(), terminals);
-      onTestFinished(() => viewers.dispose());
+      onTestFinished(() => {
+        viewers.dispose();
+      });
       await viewers.open(shellOf());
       const process = instances[0].process;
       const data = output(process);
@@ -153,7 +163,7 @@ describe(GlyphShellTerminals, () => {
         'one\r\n',
         'two\r\n',
         '',
-        '\x1b[2J\x1b[Hreset',
+        '\u001B[2J\u001B[Hreset',
         '',
         '\r\n[Exited (0)]\r\n',
         '',
@@ -163,7 +173,9 @@ describe(GlyphShellTerminals, () => {
     it('reports failed and exited shells without an exit code', async () => {
       const { instances, terminals } = terminalsOf();
       const viewers = new GlyphShellTerminals(vi.fn(), terminals);
-      onTestFinished(() => viewers.dispose());
+      onTestFinished(() => {
+        viewers.dispose();
+      });
       await viewers.open(shellOf());
       const process = instances[0].process;
       const data = output(process);
@@ -185,7 +197,9 @@ describe(GlyphShellTerminals, () => {
     it('announces once that a shell has disappeared', async () => {
       const { instances, terminals } = terminalsOf();
       const viewers = new GlyphShellTerminals(vi.fn(), terminals);
-      onTestFinished(() => viewers.dispose());
+      onTestFinished(() => {
+        viewers.dispose();
+      });
       await viewers.open(shellOf());
       const process = instances[0].process;
       const data = output(process);
@@ -200,7 +214,9 @@ describe(GlyphShellTerminals, () => {
     it('starts silently for a shell that disappeared before its terminal started', async () => {
       const { instances, terminals } = terminalsOf();
       const viewers = new GlyphShellTerminals(vi.fn(), terminals);
-      onTestFinished(() => viewers.dispose());
+      onTestFinished(() => {
+        viewers.dispose();
+      });
       await viewers.open(shellOf());
       const process = instances[0].process;
       const data = output(process);
@@ -225,14 +241,18 @@ describe(GlyphShellTerminals, () => {
       viewers.dispose();
 
       await expect(failing).rejects.toThrow('no terminal');
-      await vi.waitFor(() => expect(instances[0].dispose).toHaveBeenCalled());
+      await vi.waitFor(() => {
+        expect(instances[0].dispose).toHaveBeenCalled();
+      });
     });
   });
 
   it('ignores input and exposes the shell working directory', async () => {
     const { instances, terminals } = terminalsOf();
     const viewers = new GlyphShellTerminals(vi.fn(), terminals);
-    onTestFinished(() => viewers.dispose());
+    onTestFinished(() => {
+      viewers.dispose();
+    });
     await viewers.open(shellOf());
     const process = instances[0].process;
     const data = output(process);
@@ -240,7 +260,7 @@ describe(GlyphShellTerminals, () => {
     process.input('ls\r');
     process.sendSignal('SIGINT');
     process.resize(10, 10);
-    process.clearBuffer();
+    await process.clearBuffer();
     process.acknowledgeDataEvent(1);
     await process.processBinary('x');
     await process.setUnicodeVersion('11');

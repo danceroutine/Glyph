@@ -25,6 +25,8 @@ export function useGlyphTodoCardState({ items }: GlyphTodoCardStateOptions) {
     listId,
     summary: `${completed} of ${items.length} To-dos completed`,
     items: items.map(item => ({ ...item, ...TODO_STATUS_DISPLAY[item.status] })),
-    toggle: () => setExpanded(value => !value),
+    toggle: () => {
+      setExpanded(value => !value);
+    },
   };
 }

@@ -8,7 +8,7 @@ import type { GlyphPromptDocument } from '#src/desktop/workbench/GlyphPromptDocu
 import { GlyphPromptEditor } from '#code-oss/ui/GlyphPromptEditor/GlyphPromptEditor.ts';
 import { promptSchema, serializePrompt } from '#code-oss/ui/GlyphPromptEditor/GlyphPromptMarkdown.ts';
 
-const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+const mod = /Mac|iPhone|iPad/u.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
 
 const attachment = (overrides: Partial<GlyphContextAttachment> = {}): GlyphContextAttachment => ({
   kind: GlyphContextAttachmentKind.FILE,
@@ -29,12 +29,12 @@ const promptCallbacks = (overrides: Partial<ConstructorParameters<typeof GlyphPr
 });
 
 const mountEditor = (
-  prompt: GlyphPromptDocument = { parts: [], from: 0, to: 0 },
+  prompt?: GlyphPromptDocument,
   callbacks: ConstructorParameters<typeof GlyphPromptEditor>[2] = promptCallbacks(),
 ) => {
   const container = document.createElement('div');
   document.body.append(container);
-  const editor = new GlyphPromptEditor(container, prompt, callbacks);
+  const editor = new GlyphPromptEditor(container, prompt ?? { parts: [], from: 0, to: 0 }, callbacks);
   onTestFinished(() => {
     editor.destroy();
     container.remove();
@@ -48,7 +48,7 @@ const type = (editor: GlyphPromptEditor, text: string) => {
     const handled = editor.view.someProp('handleTextInput', handler =>
       handler(editor.view, from, to, character, () => editor.view.state.tr.insertText(character, from, to)),
     );
-    if (!handled) editor.view.dispatch(editor.view.state.tr.insertText(character, from, to));
+    if (handled !== true) editor.view.dispatch(editor.view.state.tr.insertText(character, from, to));
   }
 };
 
@@ -63,12 +63,15 @@ const markdown = (editor: GlyphPromptEditor) =>
     .parts.map(part => (part.type === 'text' ? part.text : `[${part.attachment.path}]`))
     .join('');
 
-const select = (editor: GlyphPromptEditor, from: number, to = from) =>
+const select = (editor: GlyphPromptEditor, from: number, to = from) => {
   editor.view.dispatch(editor.view.state.tr.setSelection(TextSelection.create(editor.view.state.doc, from, to)));
+};
 
 const blocks = (editor: GlyphPromptEditor) => {
   const names: string[] = [];
-  editor.view.state.doc.forEach(node => names.push(node.type.name));
+  editor.view.state.doc.forEach(node => {
+    names.push(node.type.name);
+  });
   return names;
 };
 
@@ -76,12 +79,12 @@ describe(GlyphPromptEditor, () => {
   it('renders an accessible multiline prompt', () => {
     const { editor, container } = mountEditor({ parts: [{ type: 'text', text: 'Hello' }], from: 5, to: 5 });
 
-    const textbox = container.querySelector('[role="textbox"]')!;
+    const textbox = container.querySelector<HTMLElement>('[role="textbox"]')!;
     expect(textbox).toBe(editor.view.dom);
     expect(textbox.getAttribute('aria-label')).toBe('Message Glyph');
     expect(textbox.getAttribute('aria-multiline')).toBe('true');
     expect(textbox.getAttribute('aria-autocomplete')).toBe('list');
-    expect(textbox.getAttribute('data-placeholder')).toBe('Plan, build, @ for context');
+    expect(textbox.dataset.placeholder).toBe('Plan, build, @ for context');
     expect(textbox.textContent).toBe('Hello');
   });
 
@@ -155,19 +158,21 @@ describe(GlyphPromptEditor, () => {
   });
 
   it('marks unavailable attachments and keeps their reason in the title', async () => {
-    const describe = vi.fn(async () => 'Edited since capture');
+    const describeAttachment = vi.fn(async () => 'Edited since capture');
     const { editor } = mountEditor(
       {
         parts: [{ type: 'attachment', attachment: attachment({ unavailable: 'Outside the workspace' }) }],
         from: 1,
         to: 1,
       },
-      promptCallbacks({ describe }),
+      promptCallbacks({ describe: describeAttachment }),
     );
     const badge = editor.view.dom.querySelector('button')!;
 
     badge.parentElement!.dispatchEvent(new MouseEvent('mouseenter'));
-    await vi.waitFor(() => expect(describe).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(describeAttachment).toHaveBeenCalled();
+    });
     await Promise.resolve();
 
     expect(badge.textContent).toContain('app.ts (unavailable)');
@@ -175,34 +180,45 @@ describe(GlyphPromptEditor, () => {
   });
 
   it('describes the current status of an attachment on hover or focus', async () => {
-    const describe = vi.fn().mockResolvedValueOnce('Edited since capture').mockResolvedValueOnce(undefined);
+    const describeAttachment = vi.fn().mockResolvedValueOnce('Edited since capture').mockResolvedValueOnce(undefined);
     const { editor } = mountEditor(
       { parts: [{ type: 'attachment', attachment: attachment() }], from: 1, to: 1 },
-      promptCallbacks({ describe }),
+      promptCallbacks({ describe: describeAttachment }),
     );
     const badge = editor.view.dom.querySelector('button')!;
 
     badge.parentElement!.dispatchEvent(new MouseEvent('mouseenter'));
-    await vi.waitFor(() => expect(badge.title).toBe('src/app.ts\nEdited since capture'));
+    await vi.waitFor(() => {
+      expect(badge.title).toBe('src/app.ts\nEdited since capture');
+    });
 
     badge.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
-    await vi.waitFor(() => expect(badge.title).toBe('src/app.ts'));
+    await vi.waitFor(() => {
+      expect(badge.title).toBe('src/app.ts');
+    });
   });
 
   it('ignores status descriptions that fail, arrive after removal or are unavailable', async () => {
     let finish!: (status: string) => void;
-    const describe = vi
+    const describeAttachment = vi
       .fn()
       .mockRejectedValueOnce(new Error('offline'))
-      .mockImplementationOnce(() => new Promise<string>(resolve => (finish = resolve)));
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>(resolve => {
+            finish = resolve;
+          }),
+      );
     const { editor } = mountEditor(
       { parts: [{ type: 'attachment', attachment: attachment() }], from: 1, to: 1 },
-      promptCallbacks({ describe }),
+      promptCallbacks({ describe: describeAttachment }),
     );
     const host = editor.view.dom.querySelector('button')!.parentElement!;
 
     host.dispatchEvent(new MouseEvent('mouseenter'));
-    await vi.waitFor(() => expect(describe).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(describeAttachment).toHaveBeenCalledOnce();
+    });
     host.dispatchEvent(new MouseEvent('mouseenter'));
     editor.update({ parts: [{ type: 'text', text: 'gone' }], from: 4, to: 4 });
     finish('late');
@@ -238,7 +254,7 @@ describe(GlyphPromptEditor, () => {
   it('lets the host handle keys first and contains handled keys', () => {
     const keydown = vi.fn((event: KeyboardEvent) => event.key === 'ArrowDown');
     const { editor, container } = mountEditor(undefined, promptCallbacks({ keydown }));
-    const outer = vi.fn();
+    const outer = vi.fn((_event: Event) => undefined);
     container.addEventListener('keydown', outer);
 
     const handled = press(editor, 'ArrowDown');
@@ -657,11 +673,15 @@ describe(GlyphPromptEditor, () => {
   it('removes the prompt and stops containing keys once destroyed', () => {
     const container = document.createElement('div');
     document.body.append(container);
-    onTestFinished(() => container.remove());
+    onTestFinished(() => {
+      container.remove();
+    });
     const editor = new GlyphPromptEditor(container, { parts: [], from: 0, to: 0 }, promptCallbacks());
     const dom = editor.view.dom;
     const stopped = vi.spyOn(KeyboardEvent.prototype, 'stopPropagation');
-    onTestFinished(() => stopped.mockRestore());
+    onTestFinished(() => {
+      stopped.mockRestore();
+    });
 
     editor.destroy();
     const event = new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true });

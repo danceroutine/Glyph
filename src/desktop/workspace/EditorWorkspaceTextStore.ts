@@ -121,7 +121,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       byteOrderMark,
       operationId: options.operationId ?? randomUUID(),
       undoGroupId: options.undoGroupId ?? options.operationId ?? randomUUID(),
-      ...(options.save ? { save: true } : {}),
+      ...(options.save === true ? { save: true } : {}),
     });
     return this.remember(requireSnapshot(response, path));
   }
@@ -133,7 +133,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     options: WorkspaceMutationOptions = {},
   ): Promise<WorkspaceTextSnapshot> {
     const recovered = await this.recoverFileMutation(source, expectedRevision, options.operationId, target);
-    if (recovered && !options.save) return this.read(target);
+    if (recovered && options.save !== true) return this.read(target);
     // A rename receipt proves the move, not a subsequent save. Replay its ID
     // through the renderer to finish saving without reading the removed source.
     const expectedToken = recovered
@@ -147,7 +147,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       expectedToken,
       operationId: options.operationId ?? randomUUID(),
       undoGroupId: options.undoGroupId ?? options.operationId ?? randomUUID(),
-      ...(options.save ? { save: true } : {}),
+      ...(options.save === true ? { save: true } : {}),
     });
     return this.remember(requireSnapshot(response, target));
   }
@@ -161,7 +161,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       expectedToken: await this.fileToken(path, expectedRevision),
       operationId: options.operationId ?? randomUUID(),
       undoGroupId: options.undoGroupId ?? options.operationId ?? randomUUID(),
-      ...(options.save ? { save: true } : {}),
+      ...(options.save === true ? { save: true } : {}),
     });
   }
 
@@ -189,7 +189,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     }
     const operationId = options.operationId ?? randomUUID();
     const knownReceipt = this.receipts.get(operationId);
-    if (knownReceipt?.afterRevision && !options.save) {
+    if (knownReceipt?.afterRevision !== undefined && knownReceipt?.afterRevision !== '' && options.save !== true) {
       const current = await this.read(path);
       if (current.revision === knownReceipt.afterRevision) return current;
       throw new EditError(EditFailureReason.INCONSISTENT, 'The mutation receipt no longer matches the working copy.', {
@@ -206,7 +206,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
         text,
         byteOrderMark,
         undoGroupId: options.undoGroupId ?? operationId,
-        ...(options.save ? { save: true } : {}),
+        ...(options.save === true ? { save: true } : {}),
       },
     });
     if (!response.ok) throw responseError(response, path);
@@ -216,7 +216,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       });
     }
     this.receipts.set(operationId, response.receipt);
-    if (options.save && response.snapshot.dirty)
+    if (options.save === true && response.snapshot.dirty)
       throw new EditError(EditFailureReason.INCONSISTENT, 'The editor applied the change but did not save it.', {
         path,
       });
@@ -235,7 +235,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
     operationId?: string,
     target?: string,
   ): Promise<boolean> {
-    if (!operationId) return false;
+    if (operationId === undefined || operationId === '') return false;
     const response = await this.client.request({ type: GlyphEditorRequestType.INSPECT_MUTATION_RECEIPT, operationId });
     if (!response.ok) throw responseError(response, source);
     const receipt = response.receipt;
@@ -246,7 +246,8 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       (await this.exists(source))
     )
       throw stale(source);
-    if (target && (await this.read(target)).revision !== receipt.afterRevision) throw stale(target);
+    if (target !== undefined && target !== '' && (await this.read(target)).revision !== receipt.afterRevision)
+      throw stale(target);
     return true;
   }
 
@@ -266,7 +267,7 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
       });
     this.receipts.set(mutation.operationId, response.receipt);
     this.capabilities.clear();
-    if (mutation.save && response.snapshot?.dirty)
+    if (mutation.save === true && response.snapshot?.dirty === true)
       throw new EditError(EditFailureReason.INCONSISTENT, 'The editor applied the file change but did not save it.', {
         path: mutation.path,
       });
@@ -337,7 +338,7 @@ function malformedPath(path: string): EditError {
 function stale(path: string, currentRevision?: string): EditError {
   return new EditError(EditFailureReason.STALE, 'The editor document changed after the proposal was staged.', {
     path,
-    ...(currentRevision ? { currentRevision } : {}),
+    ...(currentRevision !== undefined && currentRevision !== '' ? { currentRevision } : {}),
     retry: 'Read the current working copy and submit a new proposal.',
   });
 }

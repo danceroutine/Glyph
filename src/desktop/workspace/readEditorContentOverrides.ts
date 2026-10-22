@@ -4,6 +4,7 @@ import type { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePa
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphEditorResponse } from '#src/desktop/protocol/editor/GlyphEditorResponse.js';
 import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
+import { createNullPrototypeRecord } from '#src/shared/mappers/createNullPrototypeRecord.js';
 
 /** Transfer only catalog-approved, physically validated live text; never fall back after a failed snapshot. */
 export async function readEditorContentOverrides(
@@ -22,7 +23,7 @@ export async function readEditorContentOverrides(
     .filter(path => path.startsWith(rootPrefix))
     .map(path => path.slice(rootPrefix.length));
   const allowed = await index.filterPaths(paths, signal);
-  const overrides: Record<string, string> = Object.create(null);
+  const overrides = createNullPrototypeRecord<string>();
   let bytes = 0;
   for (const path of allowed) {
     signal?.throwIfAborted();

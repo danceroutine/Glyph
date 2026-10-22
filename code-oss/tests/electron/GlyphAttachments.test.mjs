@@ -1,12 +1,20 @@
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { contextFiles } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+/** @typedef {import('./ScriptedProvider.mjs').ScriptedProvider} ScriptedProvider */
 
 const restartsHost = isolatedLaunch('restarts the host and reloads the window');
 const reloadsWindow = isolatedLaunch('reloads the window');
 const stubsDialog = isolatedLaunch('replaces the native file dialog in the main process');
 const opensWindow = isolatedLaunch('opens a second window');
 const leavesUnsentDraft = isolatedLaunch('leaves an unsent draft that closing chats keeps');
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} path
+ */
 async function openFile(glyph, path) {
   await glyph.page.keyboard.press('ControlOrMeta+p');
   await glyph.page.locator('.quick-input-widget input').fill(path);
@@ -15,6 +23,10 @@ async function openFile(glyph, path) {
   await expect(glyph.page.locator('.quick-input-widget')).not.toBeVisible();
   await expect(glyph.page.locator('.editor-instance .monaco-editor').first()).toBeVisible();
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {number} line
+ */
 async function selectLine(glyph, line) {
   await glyph.page.keyboard.press('Control+g');
   await glyph.page.locator('.quick-input-widget input').fill(`:${line}:1`);
@@ -22,29 +34,35 @@ async function selectLine(glyph, line) {
   await expect(glyph.page.locator('.quick-input-widget')).not.toBeVisible();
   await glyph.page.keyboard.press('Shift+End');
 }
+/** @param {GlyphWorkbench} glyph */
 async function attachSelection(glyph) {
   await glyph.page.keyboard.press('ControlOrMeta+l');
   await expect(glyph.composer.getByRole('button').last()).toBeVisible();
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} query
+ */
 async function chooseFile(glyph, query) {
   await glyph.composer.pressSequentially(` @${query}`);
   await expect(glyph.page.getByRole('option', { name: query, exact: true })).toBeVisible();
   await glyph.composer.press('Enter');
   await expect(glyph.page.getByRole('listbox', { name: 'Files and folders to attach' })).not.toBeVisible();
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ */
 async function send(glyph, provider) {
   const count = provider.requests.length;
   provider.enqueue({ chunks: ['Captured context received.'] });
   await glyph.sendButton.click();
   await expect.poll(() => provider.requests.length).toBe(count + 1);
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
-  const user = provider.requests
-    .at(-1)
-    .body.input.filter(item => item.role === 'user')
-    .at(-1);
+  const user = provider.requests.at(-1)?.body.input.findLast(item => item.role === 'user');
   return {
-    prompt: typeof user.content === 'string' ? user.content : user.content[1].text,
-    files: typeof user.content === 'string' ? [] : JSON.parse(user.content[0].text).files,
+    prompt: typeof user?.content === 'string' ? user.content : user?.content?.[1]?.text,
+    files: typeof user?.content === 'string' ? [] : contextFiles(user),
   };
 }
 
@@ -132,7 +150,7 @@ it.describe('Explicit editor and file attachments', () => {
     await glyph.page.keyboard.press('ControlOrMeta+a');
     await glyph.page.keyboard.insertText('UNSAVED café 🌱\nexact buffer');
     await glyph.command('Focus Glyph');
-    await expect(glyph.page.getByRole('button', { name: /^Attach active file/ })).toHaveCount(0);
+    await expect(glyph.page.getByRole('button', { name: /^Attach active file/u })).toHaveCount(0);
     await expect(glyph.page.getByText('No active text editor', { exact: true })).toHaveCount(0);
     await glyph.composer.fill('before  after');
     for (let n = 0; n < 6; n++) await glyph.composer.press('ArrowLeft');
@@ -147,7 +165,7 @@ it.describe('Explicit editor and file attachments', () => {
     await expect(glyph.page.locator('.tab.dirty')).toHaveCount(1);
     await openFile(glyph, join(glyph.workspace, 'beta.txt'));
     await glyph.command('Focus Glyph');
-    await expect(glyph.page.getByRole('button', { name: /^Attach active file/ })).toHaveCount(0);
+    await expect(glyph.page.getByRole('button', { name: /^Attach active file/u })).toHaveCount(0);
     await expect(glyph.composer.getByRole('button', { name: 'Preview alpha.txt' })).toBeVisible();
     const sent = await send(glyph, provider);
     expect(sent.prompt).toBe('before @alpha.txt after');
@@ -294,8 +312,8 @@ it.describe('Explicit editor and file attachments', () => {
     }
     const compared = await send(glyph, provider);
     expect(compared.files.map(file => file.source.side)).toEqual(['original', 'modified']);
-    expect(compared.files.map(file => file.text).sort()).toEqual(
-      ['OUTSIDE BEFORE\n  café 🌱\nOUTSIDE AFTER\n', 'Other tab is never implicit.\n'].sort(),
+    expect(compared.files.map(file => file.text).toSorted()).toEqual(
+      ['OUTSIDE BEFORE\n  café 🌱\nOUTSIDE AFTER\n', 'Other tab is never implicit.\n'].toSorted(),
     );
   });
 
@@ -339,7 +357,7 @@ it.describe('Explicit editor and file attachments', () => {
       await openFile(duplicate, join(glyph.workspace, 'alpha.txt'));
       await selectLine(duplicate, 2);
       await attachSelection(duplicate);
-      await expect(duplicate.diagnostics).toContainText([/owned by window/]);
+      await expect(duplicate.diagnostics).toContainText([/owned by window/u]);
       await expect(duplicate.sendButton).toBeDisabled();
       await expect(duplicate.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)' })).toBeVisible();
       await duplicate.command('View: Toggle Secondary Side Bar Visibility');

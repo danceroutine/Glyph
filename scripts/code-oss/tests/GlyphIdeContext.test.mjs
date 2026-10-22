@@ -1,8 +1,25 @@
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { beforeAll, expect, it, vi } from 'vitest';
+import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
 
-let GlyphIdeContext, URI, Range, Emitter;
+/**
+ * @typedef {{
+ *   GlyphIdeContext: typeof import('#vs/workbench/contrib/glyph/browser/GlyphIdeContext.js').GlyphIdeContext,
+ *   URI: typeof import('#vs/base/common/uri.js').URI,
+ *   Range: typeof import('#vs/editor/common/core/range.js').Range,
+ *   Emitter: typeof import('#vs/base/common/event.js').Emitter,
+ * }} IdeContextModule
+ */
+
+/** @type {IdeContextModule['Emitter']} */
+let Emitter;
+/** @type {IdeContextModule['GlyphIdeContext']} */
+let GlyphIdeContext;
+/** @type {IdeContextModule['Range']} */
+let Range;
+/** @type {IdeContextModule['URI']} */
+let URI;
 beforeAll(async () => {
   const built = await build({
     stdin: {
@@ -36,8 +53,8 @@ beforeAll(async () => {
           });
           builder.onLoad({ filter: /.*/, namespace: 'service' }, args => ({
             contents: args.path.endsWith('/goToSymbol.js')
-              ? `export const getDefinitionsAtPosition = (...args) => globalThis.__glyphIdeQueries.definition(...args);
-           export const getReferencesAtPosition = (...args) => globalThis.__glyphIdeQueries.reference(...args);`
+              ? `export const getDefinitionsAtPosition = (...args) => globalThis.glyphIdeQueries.definition(...args);
+           export const getReferencesAtPosition = (...args) => globalThis.glyphIdeQueries.reference(...args);`
               : `const service = () => {}; export { service as ILanguageFeaturesService, service as ITextModelService, service as IQuickInputService, service as ISCMService, service as ITerminalService, service as ITestResultService, service as IWorkspaceTrustManagementService };`,
           }));
           builder.onResolve({ filter: /^#glyph\// }, args => ({
@@ -47,11 +64,24 @@ beforeAll(async () => {
       },
     ],
   });
-  ({ GlyphIdeContext, URI, Range, Emitter } = await import(
-    `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`
-  ));
+  /** @type {IdeContextModule} */
+  const api = await importBundle(built.outputFiles[0].text, ['GlyphIdeContext', 'URI', 'Range', 'Emitter']);
+  ({ GlyphIdeContext, URI, Range, Emitter } = api);
 });
 
+/**
+ * @param {{
+ *   choices?: (string | ((items: { label: string }[]) => unknown))[],
+ *   marker?: unknown,
+ *   definitions?: boolean,
+ *   references?: boolean,
+ *   terminal?: unknown,
+ *   repositories?: unknown[],
+ *   runs?: { id: string }[],
+ *   text?: string,
+ *   language?: string,
+ * }} [options]
+ */
 function fixture({
   choices = [],
   marker,
@@ -77,8 +107,8 @@ function fixture({
     getValue: () => text,
     getValueLength: () => text.length,
     getOffsetAt: () => 0,
-    getPositionAt: offset => ({ lineNumber: 1, column: offset + 1 }),
-    validateRange: range => range,
+    getPositionAt: (/** @type {number} */ offset) => ({ lineNumber: 1, column: offset + 1 }),
+    validateRange: (/** @type {unknown} */ range) => range,
     onDidChangeContent: change.event,
   };
   const capture = vi.fn(async () => ({
@@ -94,19 +124,19 @@ function fixture({
   }));
   const adapter = {
     captureContext: capture,
-    contextPath: uri => {
-      if (!uri.path.startsWith('/workspace/')) throw Error('Outside workspace');
-      return uri.path.slice(11);
+    contextPath: (/** @type {import('#vs/base/common/uri.js').URI} */ target) => {
+      if (!target.path.startsWith('/workspace/')) throw new Error('Outside workspace');
+      return target.path.slice(11);
     },
   };
   const quick = {
-    pick: vi.fn(async items => {
+    pick: vi.fn(async (/** @type {{ label: string }[]} */ items) => {
       const choice = choices.shift();
       return typeof choice === 'function' ? choice(items) : items.find(item => item.label === choice);
     }),
   };
   const trust = { isWorkspaceTrusted: () => true };
-  const markers = { read: () => (marker ? [marker] : []) };
+  const markers = { read: () => (marker === undefined ? [] : [marker]) };
   const resolver = { createModelReference: vi.fn(async () => ({ object: { textEditorModel: model }, dispose() {} })) };
   const terminals = {
     activeInstance: terminal,
@@ -121,11 +151,11 @@ function fixture({
     {
       definitionProvider: {
         has: () => definitions,
-        ordered: () => [{ provideDefinition: (...args) => globalThis.__glyphIdeQueries.definition(...args) }],
+        ordered: () => [{ provideDefinition: (...args) => globalThis.glyphIdeQueries.definition(...args) }],
       },
       referenceProvider: {
         has: () => references,
-        ordered: () => [{ provideReferences: (...args) => globalThis.__glyphIdeQueries.reference(...args) }],
+        ordered: () => [{ provideReferences: (...args) => globalThis.glyphIdeQueries.reference(...args) }],
       },
     },
     resolver,
@@ -136,7 +166,7 @@ function fixture({
     trust,
   );
   const editor = { getModel: () => model, getSelection: () => new Range(1, 1, 1, 6) };
-  globalThis.__glyphIdeQueries = { definition: vi.fn(async () => []), reference: vi.fn(async () => []) };
+  globalThis.glyphIdeQueries = { definition: vi.fn(async () => []), reference: vi.fn(async () => []) };
   return {
     service,
     editor,
@@ -148,7 +178,7 @@ function fixture({
     uri,
     model,
     terminals,
-    edit: value => {
+    edit: (/** @type {string} */ value) => {
       text = value;
       version++;
       change.fire({});
@@ -191,14 +221,16 @@ it('preserves stale diagnostic provenance and labels providers without a revisio
 it('discards a delayed language response after a source edit, preserving the selected snapshot', async () => {
   const f = fixture({ choices: ['Related symbols'], definitions: true });
   let resolveQuery;
-  globalThis.__glyphIdeQueries.definition = vi.fn(
+  globalThis.glyphIdeQueries.definition = vi.fn(
     () =>
-      new Promise(resolve => {
-        resolveQuery = resolve;
+      new Promise(settle => {
+        resolveQuery = settle;
       }),
   );
   const pending = f.service.select(f.editor);
-  await vi.waitFor(() => expect(resolveQuery).toBeTypeOf('function'));
+  await vi.waitFor(() => {
+    expect(resolveQuery).toBeTypeOf('function');
+  });
   f.edit('replacement');
   const captures = await pending;
   expect(captures).toHaveLength(1);
@@ -212,7 +244,7 @@ it('marks timeouts as partial and remains bounded even if a language provider ig
   vi.useFakeTimers();
   try {
     const f = fixture({ choices: ['Related symbols'], definitions: true });
-    globalThis.__glyphIdeQueries.definition = () => new Promise(() => {});
+    globalThis.glyphIdeQueries.definition = () => new Promise(() => {});
     const pending = f.service.select(f.editor);
     await vi.advanceTimersByTimeAsync(5100);
     const captures = await pending;
@@ -225,7 +257,7 @@ it('marks timeouts as partial and remains bounded even if a language provider ig
 
 it('omits out-of-workspace definitions before resolving their contents', async () => {
   const f = fixture({ choices: ['Related symbols'], definitions: true });
-  globalThis.__glyphIdeQueries.definition = async () => [
+  globalThis.glyphIdeQueries.definition = async () => [
     { uri: URI.file('/private/secret.txt'), range: new Range(1, 1, 1, 6) },
   ];
   const captures = await f.service.select(f.editor);
@@ -264,7 +296,7 @@ it('does not allocate an oversized test output or capture a different run', asyn
 
 it('reports failed language queries as unavailable instead of calling them successful empty results', async () => {
   const f = fixture({ choices: ['Related symbols'], definitions: true, references: true });
-  globalThis.__glyphIdeQueries.definition = async () => {
+  globalThis.glyphIdeQueries.definition = async () => {
     throw new Error('Provider stopped');
   };
   const [capture] = await f.service.select(f.editor);
@@ -305,7 +337,7 @@ it('preserves the exact test-output resource and selected range for source navig
   f.model.uri = URI.parse('vscode-test-data://results/run/message/0/0/TestFailureMessage?provider%00test');
   f.model.getValueInRange = () => 'selected failure message';
   const capture = await f.service.captureTestSelection(f.model, new Range(2, 1, 2, 8));
-  const editors = { openEditor: vi.fn() };
+  const editors = { openEditor: vi.fn((/** @type {{ resource: { toString(): string } }} */ _input) => undefined) };
   await f.service.openSource(URI.parse(capture.uri), editors, capture.range);
   expect(capture.text).toContain('selected failure message');
   expect(editors.openEditor.mock.calls[0][0].resource.toString()).toBe(f.model.uri.toString());

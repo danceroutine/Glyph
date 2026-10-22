@@ -136,10 +136,14 @@ describe(useGlyphPendingReviewsState, () => {
       initialProps: { chatId: 'chat', readOnly: false, actions: reviewActions(), proposals: [proposal()] },
     });
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     expect(result.current.expanded).toBe(false);
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     expect(result.current.expanded).toBe(true);
   });
 
@@ -227,7 +231,12 @@ describe(useGlyphPendingReviewsState, () => {
   it('runs one operation at a time and is busy until it settles', async () => {
     const actions = reviewActions();
     let finish!: () => void;
-    actions.decideProposalItems.mockImplementationOnce(() => new Promise<void>(resolve => (finish = resolve)));
+    actions.decideProposalItems.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        }),
+    );
     const { result } = renderHook(useGlyphPendingReviewsState, {
       initialProps: { chatId: 'chat', readOnly: false, actions, proposals: [proposal()] },
     });

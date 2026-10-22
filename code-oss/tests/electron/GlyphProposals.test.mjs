@@ -2,15 +2,28 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
+import { contextEventMessage, editToolOutput, parseJson } from './ProviderPayloads.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
 
 const original = 'one\nunchanged\nthree\n';
 const changed = 'ONE\nunchanged\nTHREE\n';
 const reloadsWindow = isolatedLaunch('reloads the window');
+/** @param {GlyphWorkbench} glyph */
 const pending = glyph => glyph.page.getByRole('region', { name: 'Pending reviews', exact: true });
+/** @param {GlyphWorkbench} glyph */
 const fileControls = glyph => glyph.page.getByRole('region', { name: 'File review controls', exact: true }).last();
+/** @param {GlyphWorkbench} glyph */
 const controls = glyph => glyph.page.getByRole('region', { name: 'Edit review controls', exact: true }).first();
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {string} name
+ * @param {unknown} args
+ * @param {'json' | 'text'} [inputKind]
+ */
 async function tool(glyph, provider, name, args, inputKind = 'json') {
   const callId = randomUUID();
   const count = provider.requests.length;
@@ -23,18 +36,32 @@ async function tool(glyph, provider, name, args, inputKind = 'json') {
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
   const output = provider.requests
     .at(-1)
-    .body.input.find(
+    ?.body.input.find(
       item =>
         item.call_id === callId && (item.type === 'function_call_output' || item.type === 'custom_tool_call_output'),
     );
-  return JSON.parse(output.output);
+  return editToolOutput.parse(parseJson(output?.output));
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ */
 async function read(glyph, provider, path = 'review.txt') {
   return tool(glyph, provider, 'read_project_file', { path, start_line: null, end_line: null });
 }
+/**
+ * @param {string} path
+ * @param {string | null | undefined} revision
+ * @param {string | null} content
+ * @param {unknown[]} [edits]
+ */
 function structured(path, revision, content, edits = []) {
   return { operation: 'UPDATE', path, new_path: null, base_revision: revision, content, byte_order_mark: null, edits };
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ */
 async function stage(glyph, provider, content = changed, path = 'review.txt') {
   const base = await read(glyph, provider, path);
   const result = await tool(glyph, provider, 'propose_edits', { files: [structured(path, base.revision, content)] });
@@ -42,6 +69,7 @@ async function stage(glyph, provider, content = changed, path = 'review.txt') {
   await expect(pending(glyph)).toBeVisible();
   return result;
 }
+/** @param {GlyphWorkbench} glyph */
 async function openFile(glyph, path = 'review.txt') {
   await glyph.page.keyboard.press('ControlOrMeta+p');
   await glyph.page.locator('.quick-input-widget input').fill(join(glyph.workspace, path));
@@ -49,10 +77,15 @@ async function openFile(glyph, path = 'review.txt') {
   await glyph.page.keyboard.press('Enter');
   await expect(glyph.page.locator('.editor-instance .monaco-editor:not(.gutter):visible').first()).toBeVisible();
 }
+/** @param {GlyphWorkbench} glyph */
 async function save(glyph, path = 'review.txt') {
   await openFile(glyph, path);
   await glyph.page.keyboard.press('ControlOrMeta+s');
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} text
+ */
 async function setText(glyph, text) {
   await openFile(glyph);
   await glyph.page.keyboard.press('ControlOrMeta+a');
@@ -160,15 +193,15 @@ it.describe('Text proposal review', () => {
     const receipts = provider.requests
       .at(-1)
       .body.input.filter(item => item.role === 'developer')
-      .map(item => {
+      .flatMap(item => {
         try {
-          return JSON.parse(item.content);
+          const value = contextEventMessage.safeParse(parseJson(typeof item.content === 'string' ? item.content : ''));
+          return value.success && value.data.event.type === 'edit_review_result' ? [value.data.event] : [];
         } catch {
-          return null;
+          return [];
         }
-      })
-      .filter(item => item?.event?.type === 'edit_review_result');
-    expect(receipts.flatMap(item => item.event.payload.items.map(item => item.decision)).sort()).toEqual([
+      });
+    expect(receipts.flatMap(event => (event.payload?.items ?? []).map(entry => entry.decision)).toSorted()).toEqual([
       'ACCEPTED',
       'REJECTED',
     ]);
@@ -227,8 +260,10 @@ it.describe('Text proposal review', () => {
       .body.input.filter(item => item.role === 'developer')
       .flatMap(item => {
         try {
-          const value = JSON.parse(item.content);
-          return value?.event?.type === 'edit_review_result' ? value.event.payload.items : [];
+          const value = contextEventMessage.safeParse(parseJson(typeof item.content === 'string' ? item.content : ''));
+          return value.success && value.data.event.type === 'edit_review_result'
+            ? (value.data.event.payload?.items ?? [])
+            : [];
         } catch {
           return [];
         }

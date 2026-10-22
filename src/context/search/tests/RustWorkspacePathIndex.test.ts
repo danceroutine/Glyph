@@ -27,7 +27,7 @@ describe(RustWorkspacePathIndex, () => {
       const index = new RustWorkspacePathIndex({ binaryPath: '/fixture', root: '/project', cachePath: '/cache' }, () =>
         starts++ === 0 ? old : next,
       );
-      const initial = index.initialize().catch(error => error);
+      const initial = index.initialize().catch((error: unknown) => error);
       old.stdout.write('{"version":');
       old.emit('exit', 1, null);
       await initial;
@@ -45,7 +45,7 @@ describe(RustWorkspacePathIndex, () => {
         { binaryPath: '/fixture', root: '/project', cachePath: '/cache' },
         () => worker,
       );
-      const pending = index.initialize().catch(error => error);
+      const pending = index.initialize().catch((error: unknown) => error);
       try {
         expect(() => worker.stdin.emit('error', new Error('EPIPE'))).not.toThrow();
         expect(await pending).toMatchObject({ message: 'EPIPE' });
@@ -350,19 +350,21 @@ describe(RustWorkspacePathIndex, () => {
         offset: 0,
         signal: controller.signal,
       });
-      await vi.waitFor(() => expect(worker.requests.some(request => request.method === 'contentSearch')).toBe(true));
+      await vi.waitFor(() => {
+        expect(worker.requests.some(request => request.method === 'contentSearch')).toBe(true);
+      });
 
       controller.abort(new Error('stop now'));
 
       await expect(pending).rejects.toThrow('stop now');
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(worker.requests).toContainEqual({
           version: 1,
           id: 3,
           method: 'cancel',
           params: { requestId: 2 },
-        }),
-      );
+        });
+      });
       await search.dispose();
     });
   });
@@ -555,7 +557,9 @@ describe(RustWorkspacePathIndex, () => {
       await index.initialize();
       const controller = new AbortController();
       const pending = index.searchContents('needle', { signal: controller.signal });
-      await vi.waitFor(() => expect(worker.requests.map(request => request.method)).toContain('contentSearch'));
+      await vi.waitFor(() => {
+        expect(worker.requests.map(request => request.method)).toContain('contentSearch');
+      });
 
       const disposal = index.dispose();
       controller.abort(new Error('closing'));
@@ -576,7 +580,9 @@ describe(RustWorkspacePathIndex, () => {
       await index.initialize();
       const controller = new AbortController();
       const pending = index.searchContents('needle', { signal: controller.signal });
-      await vi.waitFor(() => expect(worker.requests.map(request => request.method)).toContain('contentSearch'));
+      await vi.waitFor(() => {
+        expect(worker.requests.map(request => request.method)).toContain('contentSearch');
+      });
 
       controller.abort(new Error('stop'));
 
@@ -660,9 +666,12 @@ describe(RustWorkspacePathIndex, () => {
       const parse = JSON.parse;
       const spy = vi.spyOn(JSON, 'parse').mockImplementation((text: string, reviver?: Parameters<JSON['parse']>[1]) => {
         if (text === 'poison') throw 'parser exploded';
-        return parse(text, reviver);
+        const parsed: unknown = parse(text, reviver);
+        return parsed;
       });
-      onTestFinished(() => spy.mockRestore());
+      onTestFinished(() => {
+        spy.mockRestore();
+      });
 
       const pending = index.initialize();
       worker.stdout.write('poison\n');
@@ -766,7 +775,9 @@ describe(RustWorkspacePathIndex, () => {
       await initialized;
       const controller = new AbortController();
       const search = index.search('app', { generation: 1, signal: controller.signal });
-      await vi.waitFor(() => expect(worker.writes).toBe(2));
+      await vi.waitFor(() => {
+        expect(worker.writes).toBe(2);
+      });
 
       controller.abort(new Error('abandoned'));
       await expect(search).rejects.toThrow('abandoned');
@@ -850,7 +861,9 @@ class FakeWorker extends EventEmitter {
             result instanceof NativeFailure
               ? { version: 1, id: request.id, error: { code: result.code, message: result.message } }
               : { version: 1, id: request.id, result };
-          queueMicrotask(() => this.stdout.write(`${JSON.stringify(response)}\n`));
+          queueMicrotask(() => {
+            this.stdout.write(`${JSON.stringify(response)}\n`);
+          });
         }
         callback();
       },

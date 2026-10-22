@@ -100,7 +100,7 @@ export class GlyphComposerState {
     this.setDocument({ parts: draft ? [{ type: 'text', text: draft }] : [], from: draft.length, to: draft.length });
   }
   restoreDraft(document: GlyphPromptDocument): void {
-    if (this.value.document.parts.length) this.documents = [...this.documents, this.value.document];
+    if (this.value.document.parts.length > 0) this.documents = [...this.documents, this.value.document];
     this.setDocument(document);
     this.update({ unsent: this.documents.map(value => toGlyphPromptText(value.parts)) });
   }
@@ -192,8 +192,8 @@ export class GlyphComposerState {
       draft: toGlyphPromptText(document.parts),
       unsent: this.documents.map(value => toGlyphPromptText(value.parts)),
       queued: this.value.queued.map(message => {
-        const document = transform(message.document);
-        return { ...message, document, text: toGlyphPromptText(document.parts) };
+        const transformed = transform(message.document);
+        return { ...message, document: transformed, text: toGlyphPromptText(transformed.parts) };
       }),
     });
   }
@@ -202,7 +202,7 @@ export class GlyphComposerState {
     if (!document) return;
     const previous = this.value.document;
     this.documents = this.documents.flatMap((value, position) =>
-      position !== index ? [value] : previous.parts.length ? [previous] : [],
+      position !== index ? [value] : previous.parts.length > 0 ? [previous] : [],
     );
     this.setDocument(document);
     this.update({ unsent: this.documents.map(value => toGlyphPromptText(value.parts)) });
@@ -226,13 +226,18 @@ export class GlyphComposerState {
   }
   editQueued(id: string): void {
     const message = this.value.queued.find(value => value.id === id);
-    if (!message || this.value.queueSubmitting || this.value.editingQueuedMessage) return;
+    if (
+      !message ||
+      (this.value.queueSubmitting !== undefined && this.value.queueSubmitting !== '') ||
+      (this.value.editingQueuedMessage !== undefined && this.value.editingQueuedMessage !== '')
+    )
+      return;
     this.update({ editingQueuedMessage: id });
     this.restoreDraft(structuredClone(message.document));
     this.focus();
   }
   cancelQueueEdit(): void {
-    if (!this.value.editingQueuedMessage) return;
+    if (this.value.editingQueuedMessage === undefined || this.value.editingQueuedMessage === '') return;
     this.update({
       draft: '',
       document: {
@@ -263,7 +268,7 @@ export class GlyphComposerState {
     });
   }
   moveQueued(id: string, target: number): void {
-    if (this.value.queueSubmitting) return;
+    if (this.value.queueSubmitting !== undefined && this.value.queueSubmitting !== '') return;
     const queued = [...this.value.queued];
     const from = queued.findIndex(value => value.id === id);
     if (from < 0) return;
@@ -272,14 +277,19 @@ export class GlyphComposerState {
     this.update({ queued });
   }
   pauseQueue(): void {
-    if (this.value.queued.length) this.update({ queuePaused: true });
+    if (this.value.queued.length > 0) this.update({ queuePaused: true });
   }
   resumeQueue(): void {
     this.update({ queuePaused: false, queueError: undefined });
   }
   async sendQueued(id: string, send: SendMessage): Promise<void> {
     const message = this.value.queued.find(value => value.id === id);
-    if (!message || this.value.queueSubmitting || this.value.editingQueuedMessage) return;
+    if (
+      !message ||
+      (this.value.queueSubmitting !== undefined && this.value.queueSubmitting !== '') ||
+      (this.value.editingQueuedMessage !== undefined && this.value.editingQueuedMessage !== '')
+    )
+      return;
     this.update({ queueSubmitting: id, queueError: undefined });
     try {
       await sendDocument(message.document, send);
@@ -304,7 +314,7 @@ export class GlyphComposerState {
     try {
       await sendDocument(document, send);
     } catch (error) {
-      if (this.value.document.parts.length) this.documents = [...this.documents, document];
+      if (this.value.document.parts.length > 0) this.documents = [...this.documents, document];
       else this.setDocument(document);
       this.update({
         unsent: this.documents.map(value => toGlyphPromptText(value.parts)),
@@ -330,5 +340,5 @@ async function sendDocument(document: GlyphPromptDocument, send: SendMessage): P
     offset += toGlyphPromptText([part]).length;
     return part.type === 'attachment' ? [{ from, to: offset }] : [];
   });
-  await send(draft, attachments, { ...document.options, ...(attachmentSpans.length ? { attachmentSpans } : {}) });
+  await send(draft, attachments, { ...document.options, ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}) });
 }

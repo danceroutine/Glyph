@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
-import { EventEmitter } from 'node:events';
 import { stripVTControlCharacters } from 'node:util';
 import { TerminalControlFilter } from './TerminalControlFilter.ts';
 import type { ShellCommandAuthorizer } from './ShellCommandAuthorizer.ts';
@@ -52,7 +51,8 @@ interface PendingShellInput {
 
 /** Owns authorized shell processes, output observation, wake events, and deterministic cleanup. */
 export class ShellSessionManager implements ShellSessionRegistry {
-  private readonly events = new EventEmitter();
+  private readonly changeListeners = new Set<() => void>();
+  private readonly wakeListeners = new Set<(event: ShellWakeEvent) => void>();
   private readonly terminals = new Map<string, ManagedShellSession>();
   private readonly closing = new Set<string>();
   private readonly pendingWakes: ShellWakeEvent[] = [];
@@ -89,13 +89,17 @@ export class ShellSessionManager implements ShellSessionRegistry {
   }
 
   onDidChange(listener: () => void): () => void {
-    this.events.on('change', listener);
-    return () => this.events.off('change', listener);
+    this.changeListeners.add(listener);
+    return () => {
+      this.changeListeners.delete(listener);
+    };
   }
 
   onDidWake(listener: (event: ShellWakeEvent) => void): () => void {
-    this.events.on('wake', listener);
-    return () => this.events.off('wake', listener);
+    this.wakeListeners.add(listener);
+    return () => {
+      this.wakeListeners.delete(listener);
+    };
   }
 
   /** Select without consuming so another account's wake survives until durable delivery. */
@@ -114,7 +118,10 @@ export class ShellSessionManager implements ShellSessionRegistry {
     options.signal.throwIfAborted();
     this.assertAvailable();
     const ownerChatId = options.ownerChatId ?? this.ownerChatId;
-    const existing = options.terminalId ? this.requireTerminal(options.terminalId, ownerChatId) : undefined;
+    const existing =
+      options.terminalId !== undefined && options.terminalId !== ''
+        ? this.requireTerminal(options.terminalId, ownerChatId)
+        : undefined;
     if (!existing && this.terminals.size >= this.maxSessions) {
       throw new Error(`At most ${this.maxSessions} shell terminals may be active.`);
     }
@@ -151,7 +158,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
       }
       throw error;
     }
-    if (options.background) {
+    if (options.background === true) {
       void completion.catch(() => {
         // The terminal snapshot reports process failure; no caller is awaiting a background command.
       });
@@ -210,7 +217,8 @@ export class ShellSessionManager implements ShellSessionRegistry {
     this.terminals.clear();
     this.changed();
     await Promise.all(terminals.map(terminal => terminal.terminate()));
-    this.events.removeAllListeners();
+    this.changeListeners.clear();
+    this.wakeListeners.clear();
   }
 
   private createTerminal(workingDirectory: string, background: boolean, ownerChatId?: string): ManagedShellSession {
@@ -219,20 +227,22 @@ export class ShellSessionManager implements ShellSessionRegistry {
       id,
       workingDirectory,
       background,
-      ...(ownerChatId ? { ownerChatId } : {}),
+      ...(ownerChatId !== undefined && ownerChatId !== '' ? { ownerChatId } : {}),
       startedAt: this.now().toISOString(),
       processLauncher: this.processLauncher,
-      changed: () => this.changed(),
+      changed: () => {
+        this.changed();
+      },
       wake: wake => {
         const event: ShellWakeEvent = {
           id: this.createId(),
           terminalId: id,
-          ...(ownerChatId ? { ownerChatId } : {}),
+          ...(ownerChatId !== undefined && ownerChatId !== '' ? { ownerChatId } : {}),
           ...wake,
           matchedAt: this.now().toISOString(),
         };
         this.pendingWakes.push(event);
-        this.events.emit('wake', event);
+        for (const listener of Array.from(this.wakeListeners)) listener(event);
       },
     });
     this.terminals.set(id, terminal);
@@ -249,7 +259,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
   }
 
   private changed(): void {
-    this.events.emit('change');
+    for (const listener of Array.from(this.changeListeners)) listener();
   }
 
   private assertAvailable(): void {
@@ -293,8 +303,10 @@ class ManagedShellSession {
   get snapshot(): ShellSessionSnapshot {
     return {
       id: this.options.id,
-      ...(this.executionId ? { executionId: this.executionId } : {}),
-      ...(this.options.ownerChatId ? { ownerChatId: this.options.ownerChatId } : {}),
+      ...(this.executionId !== undefined && this.executionId !== '' ? { executionId: this.executionId } : {}),
+      ...(this.options.ownerChatId !== undefined && this.options.ownerChatId !== ''
+        ? { ownerChatId: this.options.ownerChatId }
+        : {}),
       workingDirectory: this.options.workingDirectory,
       command: this.command,
       status: this.status,
@@ -361,8 +373,12 @@ class ManagedShellSession {
     // consume unrelated stdout. New commands start with fresh parser state.
     const stdout = new TerminalControlFilter();
     const stderr = new TerminalControlFilter();
-    child.stdout!.on('data', value => this.appendOutput(String(value), stdout.push(String(value))));
-    child.stderr!.on('data', value => this.appendOutput(String(value), stderr.push(String(value))));
+    child.stdout!.on('data', value => {
+      this.appendOutput(String(value), stdout.push(String(value)));
+    });
+    child.stderr!.on('data', value => {
+      this.appendOutput(String(value), stderr.push(String(value)));
+    });
     this.options.changed();
     const completion = new Promise<{ output: string; exitCode: number }>((resolve, reject) => {
       this.active = { output: '', sandboxProfile: authorization.sandboxProfile, resolve, reject };
@@ -376,7 +392,9 @@ class ManagedShellSession {
         this.options.changed();
       });
     });
-    child.once('exit', () => this.cleanProcessGroup(child));
+    child.once('exit', () => {
+      this.cleanProcessGroup(child);
+    });
     this.processExited = new Promise(resolve => {
       child.once('close', (code, signal) => {
         if (this.child !== child) {
@@ -442,7 +460,7 @@ class ManagedShellSession {
         // Explicit teardown disarms it; another command must never inherit it.
         if (this.commandGeneration !== commandGeneration || this.wakePattern !== previousPattern) return;
         this.wakeScanTail = previousScanTail;
-        if (previousMatched && previousPattern) this.matchWake(previousPattern);
+        if (previousMatched && previousPattern !== undefined && previousPattern !== '') this.matchWake(previousPattern);
         this.options.changed();
       };
       const abort = (): void => {
@@ -453,7 +471,9 @@ class ManagedShellSession {
         // Bytes already submitted cannot be retracted. Keep this write busy
         // until its callback or pipe closure settles the physical operation.
       };
-      const closed = (): void => finish(new Error('The shell input pipe closed before accepting the input.'));
+      const closed = (): void => {
+        finish(new Error('The shell input pipe closed before accepting the input.'));
+      };
       const finish = (error?: Error | null): void => {
         if (finished) return;
         finished = true;
@@ -465,11 +485,13 @@ class ManagedShellSession {
         child.removeListener('close', closed);
         if (error) {
           restorePrevious();
-          return reject(error);
+          reject(error);
+          return;
         }
         if (cancelled) return;
         if (this.child !== child || this.active !== active) {
-          return reject(new Error('The shell command ended before accepting the input.'));
+          reject(new Error('The shell command ended before accepting the input.'));
+          return;
         }
         // Exactly one subscription owns output arriving during the write. Its
         // replacement commits with accepted bytes; failed/cancelled writes
@@ -486,8 +508,8 @@ class ManagedShellSession {
       this.pendingInput = {
         fail: finish,
         observe: output => {
-          if (!pattern || cancelled) return false;
-          if (previousPattern && !previousMatched) {
+          if (pattern === undefined || pattern === '' || cancelled) return false;
+          if (previousPattern !== undefined && previousPattern !== '' && !previousMatched) {
             const candidate = `${previousScanTail}${output}`;
             previousMatched = candidate.includes(previousPattern);
             previousScanTail = tail(candidate, Math.max(0, previousPattern.length - 1));
@@ -547,13 +569,13 @@ class ManagedShellSession {
   private appendOutput(value: string, clean: string): void {
     if (this.active) this.active.output = tail(`${this.active.output}${value}`, COMMAND_OUTPUT_LIMIT);
     this.outputTail = tail(`${this.outputTail}${value}`, OUTPUT_TAIL_LIMIT);
-    if (!this.pendingInput?.observe(clean)) this.matchWake(clean);
+    if (this.pendingInput?.observe(clean) !== true) this.matchWake(clean);
     this.options.changed();
   }
 
   private matchWake(value: string): void {
     const pattern = this.wakePattern;
-    if (!pattern) return;
+    if (pattern === undefined || pattern === '') return;
     const candidate = `${this.wakeScanTail}${value}`;
     if (candidate.includes(pattern)) {
       this.wakePattern = undefined;
@@ -582,7 +604,7 @@ function processGroupMayExist(child: ChildProcess): boolean {
     return true;
   } catch (error) {
     // Permission or other errors are not evidence that descendants have exited.
-    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    return errorCodeOf(error) !== 'ESRCH';
   }
 }
 
@@ -615,7 +637,9 @@ async function waitForCommand(
   const combined = AbortSignal.any([signal, timeout]);
   if (combined.aborted) throw combined.reason;
   return new Promise((resolve, reject) => {
-    const abort = (): void => reject(combined.reason);
+    const abort = (): void => {
+      reject(combined.reason);
+    };
     combined.addEventListener('abort', abort, { once: true });
     void completion.then(
       result => {
@@ -631,3 +655,4 @@ async function waitForCommand(
 }
 import type { ShellExecutionAuthorization } from './ShellExecutionAuthorization.ts';
 import type { ShellProcessLauncher } from './ShellProcessLauncher.ts';
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';

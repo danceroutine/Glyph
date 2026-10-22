@@ -46,7 +46,7 @@ describe(WiredGlyphApprovalCard, () => {
     );
 
     expect(screen.getByRole('region').querySelector('pre')!.textContent).toBe('Fetch example.com');
-    expect(screen.queryByText(/Working directory/)).toBeNull();
+    expect(screen.queryByText(/Working directory/u)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Always Run' })).toBeNull();
     expect(screen.queryByText('Approve in the window that owns this chat.')).toBeNull();
   });
@@ -69,7 +69,7 @@ describe(WiredGlyphApprovalCard, () => {
     expect(screen.getByRole('button', { name: 'Submitting…' })).toBeTruthy();
     expect(screen.getByRole('region').getAttribute('aria-busy')).toBe('true');
     for (const name of ['Skip', 'Always Run', 'Submitting…']) {
-      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByRole<HTMLButtonElement>('button', { name }).disabled).toBe(true);
     }
   });
 
@@ -86,7 +86,9 @@ describe(WiredGlyphApprovalCard, () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
 
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Gone'));
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toBe('Gone');
+    });
   });
 
   it('defers to the window that owns the chat', () => {
@@ -102,7 +104,7 @@ describe(WiredGlyphApprovalCard, () => {
 
     expect(screen.getByText('Approve in the window that owns this chat.')).toBeTruthy();
     for (const name of ['Skip', 'Always Run', 'Run']) {
-      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByRole<HTMLButtonElement>('button', { name }).disabled).toBe(true);
     }
   });
 });

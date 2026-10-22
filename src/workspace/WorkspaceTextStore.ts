@@ -149,7 +149,7 @@ export interface WorkspaceTextStore {
   /**
    * Deletes a file only if it still has `expectedRevision`. A delete was approved for the content the human
    * reviewed, and deleting different content would discard edits nobody saw.
-   * 
+   *
    * TODO: Revisit this and decide whether we should allow deleting files that have been modified since the expected revision. Otherwise agents swarming in tandem could block one another from deleting files
    */
   delete(path: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void>;

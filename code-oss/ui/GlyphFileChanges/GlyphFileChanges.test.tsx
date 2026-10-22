@@ -43,7 +43,7 @@ describe(GlyphFileChanges, () => {
     const review = vi.fn();
     render(<GlyphFileChanges files={[file({ id: 'created', operation: 'CREATE' })]} review={review} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /app\.ts/ }));
+    fireEvent.click(screen.getByRole('button', { name: /app\.ts/u }));
 
     expect(review).toHaveBeenCalledWith('created');
   });
@@ -64,7 +64,7 @@ describe(GlyphFileChanges, () => {
       />,
     );
 
-    const header = screen.getByRole('button', { name: /app\.ts/ });
+    const header = screen.getByRole('button', { name: /app\.ts/u });
     expect(header.getAttribute('title')).toBe('src/deep/app.ts');
     expect(header.textContent).toContain('+2');
     expect(header.textContent).toContain('−1');
@@ -97,7 +97,7 @@ describe(GlyphFileChanges, () => {
       />,
     );
 
-    const header = screen.getByRole('button', { name: /script\.py/ });
+    const header = screen.getByRole('button', { name: /script\.py/u });
     expect(screen.getByLabelText('Renamed')).toBeTruthy();
     expect(header.textContent).not.toContain('+');
     expect(header.textContent).not.toContain('−');

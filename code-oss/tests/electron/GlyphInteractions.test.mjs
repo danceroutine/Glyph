@@ -1,7 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { hasErrorCode } from '#scripts/support/hasErrorCode.mjs';
+import { parseJson } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
 
 const restartsHost = isolatedLaunch('restarts the host and reloads the window');
 const persistsGrant = isolatedLaunch('persists a command grant and restarts the host');
@@ -30,18 +34,26 @@ const shell = (workingDirectory = null, callId = 'shell') =>
     },
     { namespace: 'shell', callId },
   );
+/** @param {GlyphWorkbench} glyph */
 const form = glyph => glyph.page.getByRole('form', { name: 'Questions' });
+/** @param {GlyphWorkbench} glyph */
 const approval = glyph => glyph.page.getByRole('region', { name: 'Command approval' });
+/** @param {GlyphWorkbench} glyph */
 const proof = (glyph, path = 'approval-proof.txt') =>
-  readFile(join(glyph.workspace, path), 'utf8').catch(error => {
-    if (error.code === 'ENOENT') return null;
+  readFile(join(glyph.workspace, path), 'utf8').catch((/** @type {unknown} */ error) => {
+    if (hasErrorCode(error, 'ENOENT')) return null;
     throw error;
   });
+/**
+ * @param {ScriptedProvider} provider
+ * @param {string} callId
+ */
 const outputs = (provider, callId) =>
   provider.requests
     .at(-1)
     .body.input.filter(item => item.type === 'function_call_output' && item.call_id === callId)
-    .map(item => JSON.parse(item.output));
+    .map(item => parseJson(item.output));
+/** @param {GlyphWorkbench} glyph */
 const finished = glyph => expect(glyph.sendButton).toHaveText('Send (Enter)');
 
 it.describe('Questions and command approvals', () => {
@@ -128,7 +140,7 @@ it.describe('Questions and command approvals', () => {
     await finished(glyph);
     expect(await proof(glyph)).toBeNull();
     expect(outputs(provider, 'shell')).toHaveLength(1);
-    expect(JSON.stringify(outputs(provider, 'shell'))).toMatch(/denied/i);
+    expect(JSON.stringify(outputs(provider, 'shell'))).toMatch(/denied/iu);
     await expect(glyph.assistantEntries.last()).toContainText('The command was declined.');
   });
 
@@ -191,6 +203,7 @@ it.describe('Questions and command approvals', () => {
       provider.enqueue({ chunks: ['All three answers received.'] });
       // Two same-tick submissions exercise the guard before the DOM disables.
       await form(glyph).evaluate(element => {
+        if (!(element instanceof HTMLFormElement)) throw new TypeError('Questions must render as a form.');
         element.requestSubmit();
         element.requestSubmit();
       });

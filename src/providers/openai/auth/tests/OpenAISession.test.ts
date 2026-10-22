@@ -54,11 +54,13 @@ describe(OpenAISession, () => {
     vi.spyOn(authentication, 'refresh').mockImplementation(
       () =>
         new Promise(resolve => {
-          finish = () => resolve({ ...saved.tokens!, accessToken: 'late', refreshToken: 'late-refresh' });
+          finish = () => {
+            resolve({ ...saved.tokens!, accessToken: 'late', refreshToken: 'late-refresh' });
+          };
         }),
     );
     const session = new OpenAISession(accounts.borrowStore(), authentication, configuration);
-    const pending = session.accessToken(saved).catch(error => error);
+    const pending = session.accessToken(saved).catch((error: unknown) => error);
     await accounts.dispose();
     finish();
     expect(await pending).toBeInstanceOf(AuthenticationError);
@@ -83,8 +85,10 @@ describe(OpenAISession, () => {
     const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
     vi.spyOn(authentication, 'refresh').mockResolvedValue({ ...saved.tokens!, accessToken: 'rotated' });
     const session = new OpenAISession(accounts.borrowStore(), authentication, configuration);
-    const pending = session.accessToken(saved).catch(error => error);
-    await vi.waitFor(() => expect(savedStore.save).toHaveBeenCalledOnce());
+    const pending = session.accessToken(saved).catch((error: unknown) => error);
+    await vi.waitFor(() => {
+      expect(savedStore.save).toHaveBeenCalledOnce();
+    });
     const disposing = accounts.dispose();
     await Promise.resolve();
     expect(savedStore.release).not.toHaveBeenCalled();
@@ -107,20 +111,21 @@ describe(OpenAISession, () => {
       const refresh = vi.spyOn(authentication, 'refresh').mockImplementation(
         () =>
           new Promise(resolve => {
-            finish = () =>
+            finish = () => {
               resolve({
                 ...saved.tokens!,
                 accessToken: 'rotated',
                 refreshToken: 'rotated-refresh',
                 expiresAt: Number.MAX_SAFE_INTEGER,
               });
+            };
           }),
       );
       const first = new OpenAISession(accounts.borrowStore(), authentication, configuration);
       const second = new OpenAISession(accounts.borrowStore(), authentication, configuration);
       const requests = [
-        first.accessToken(saved).catch(error => error),
-        second.accessToken(saved).catch(error => error),
+        first.accessToken(saved).catch((error: unknown) => error),
+        second.accessToken(saved).catch((error: unknown) => error),
       ];
       const disposed = disposedWorkspace === 'initiator' ? first : second;
       await disposed.dispose();
@@ -150,8 +155,10 @@ describe(OpenAISession, () => {
     const authentication = new OpenAIAuthenticationClient(configuration, { get: vi.fn(), post: vi.fn() });
     vi.spyOn(authentication, 'refresh').mockResolvedValue({ ...saved.tokens!, accessToken: 'rotated' });
     const session = new OpenAISession(savedStore, authentication, configuration);
-    const pending = session.accessToken(saved).catch(error => error);
-    await vi.waitFor(() => expect(savedStore.save).toHaveBeenCalledOnce());
+    const pending = session.accessToken(saved).catch((error: unknown) => error);
+    await vi.waitFor(() => {
+      expect(savedStore.save).toHaveBeenCalledOnce();
+    });
     let disposed = false;
     const disposing = session.dispose().then(() => {
       disposed = true;
@@ -173,12 +180,14 @@ describe(OpenAISession, () => {
     vi.spyOn(authentication, 'refresh').mockImplementation(
       () =>
         new Promise(resolve => {
-          finish = () => resolve(tokens);
+          finish = () => {
+            resolve(tokens);
+          };
         }),
     );
     vi.spyOn(authentication, 'revoke').mockResolvedValue(true);
     const session = new OpenAISession(savedStore, authentication, configuration);
-    const pending = session.accessToken(saved).catch(error => error);
+    const pending = session.accessToken(saved).catch((error: unknown) => error);
     await session.logout(saved);
     finish();
     expect(await pending).toBeInstanceOf(AuthenticationError);
@@ -317,7 +326,7 @@ describe(OpenAISession, () => {
         configuration,
       );
 
-      await expect(session.accessToken(saved)).rejects.toThrow(/expired or was revoked/);
+      await expect(session.accessToken(saved)).rejects.toThrow(/expired or was revoked/u);
       expect(saved.tokens).toBeUndefined();
       expect(savedStore.save).toHaveBeenCalledOnce();
     });
@@ -462,7 +471,9 @@ describe(OpenAISession, () => {
       const pendingAccount = savedStore.state.accounts[1]!;
 
       const pending = session.accessToken(pendingAccount);
-      await vi.waitFor(() => expect(savedStore.save).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(savedStore.save).toHaveBeenCalledTimes(2);
+      });
       delete pendingAccount.tokens;
       finish();
 
@@ -491,7 +502,9 @@ describe(OpenAISession, () => {
       const pendingAccount = savedStore.state.accounts[1]!;
 
       const pending = session.accessToken(pendingAccount);
-      await vi.waitFor(() => expect(savedStore.save).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(savedStore.save).toHaveBeenCalledTimes(2);
+      });
       savedStore.state.accounts.pop();
       finish();
 

@@ -56,8 +56,12 @@ function harness({
     providerState,
     transcript,
   };
-  const checkpoint = vi.fn(async (state: ChatProviderState, turn?: ChatTranscriptTurn) => {
-    record = { ...record, providerState: state, transcript: turn ? [...record.transcript, turn] : record.transcript };
+  const checkpoint = vi.fn(async (state: ChatProviderState, checkpointTurn?: ChatTranscriptTurn) => {
+    record = {
+      ...record,
+      providerState: state,
+      transcript: checkpointTurn ? [...record.transcript, checkpointTurn] : record.transcript,
+    };
   });
   const session = new ChatSession(
     () => record,
@@ -138,7 +142,15 @@ describe(ChatSession, () => {
       });
       const parts: ChatResponsePart[] = [];
 
-      await session.send('hello', { push: part => parts.push(part) }, new AbortController().signal);
+      await session.send(
+        'hello',
+        {
+          push: part => {
+            parts.push(part);
+          },
+        },
+        new AbortController().signal,
+      );
 
       expect(parts.map(part => part.type)).toEqual([
         ChatResponsePartType.TEXT,

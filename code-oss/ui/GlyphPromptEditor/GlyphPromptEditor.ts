@@ -1,5 +1,11 @@
 import { glyphPromptHighlighting } from './GlyphPromptHighlighting.ts';
-import { promptSchema as schema, parsePrompt, serializePrompt, promptSelection } from './GlyphPromptMarkdown.ts';
+import {
+  promptSchema as schema,
+  parsePrompt,
+  serializePrompt,
+  promptSelection,
+  attachmentOf,
+} from './GlyphPromptMarkdown.ts';
 import {
   inputRules,
   wrappingInputRule,
@@ -55,7 +61,7 @@ export class GlyphPromptEditor {
   private readonly newline = chainCommands(
     (state, dispatch) => {
       const { $from, empty } = state.selection;
-      const match = /^```([\w-]*)$/.exec($from.parent.textContent);
+      const match = /^```([\w-]*)$/u.exec($from.parent.textContent);
       if (!empty || $from.parent.type !== schema.nodes.paragraph || !match) return false;
       dispatch?.(
         state.tr
@@ -88,9 +94,9 @@ export class GlyphPromptEditor {
         attachment: node => {
           const dom = window.document.createElement('span');
           dom.contentEditable = 'false';
-          const attachment: GlyphContextAttachment = node.attrs.attachment;
+          const attachment = attachmentOf(node);
           const range = attachment.range ? ` (${attachment.range.start.line}-${attachment.range.end.line})` : '';
-          const title = `${attachment.path}${range}${attachment.unavailable ? `\n${attachment.unavailable}` : ''}`;
+          const title = `${attachment.path}${range}${attachment.unavailable !== undefined && attachment.unavailable !== '' ? `\n${attachment.unavailable}` : ''}`;
           let disposed = false;
           const describe = () => {
             void callbacks
@@ -98,7 +104,12 @@ export class GlyphPromptEditor {
               .then(status => {
                 const button = dom.querySelector('button');
                 if (!disposed && button)
-                  button.title = status && !attachment.unavailable ? `${title}\n${status}` : title;
+                  button.title =
+                    status !== undefined &&
+                    status !== '' &&
+                    (attachment.unavailable === undefined || attachment.unavailable === '')
+                      ? `${title}\n${status}`
+                      : title;
               })
               .catch(() => {});
           };
@@ -106,10 +117,12 @@ export class GlyphPromptEditor {
           dom.addEventListener('focusin', describe);
           render(
             h(GlyphContextBadge, {
-              label: `${attachment.path.split('/').at(-1)}${range}${attachment.unavailable ? ' (unavailable)' : ''}`,
+              label: `${attachment.path.split('/').at(-1)}${range}${attachment.unavailable !== undefined && attachment.unavailable !== '' ? ' (unavailable)' : ''}`,
               title,
               actionLabel: ['file', 'selection', 'folder'].includes(attachment.kind) ? 'Preview' : 'Open',
-              onClick: () => callbacks.preview(attachment),
+              onClick: () => {
+                callbacks.preview(attachment);
+              },
             }),
             dom,
           );
@@ -129,7 +142,7 @@ export class GlyphPromptEditor {
         // Clipboard HTML cannot forge trusted context badges.
         const text = event.clipboardData?.getData('text/plain');
         if (text === undefined) return false;
-        if (view.state.selection.$from.parent.type.spec.code || !/[\n*`_>#[\]]/.test(text)) {
+        if (view.state.selection.$from.parent.type.spec.code === true || !/[\n*`_>#[\]]/u.test(text)) {
           view.dispatch(view.state.tr.insertText(text));
           return true;
         }
@@ -154,7 +167,7 @@ export class GlyphPromptEditor {
     if (this.lastDocument && JSON.stringify(document.parts) === JSON.stringify(this.lastDocument.parts)) return;
     const { doc, from, to } = parsePrompt(document);
     if (!this.view.state.doc.eq(doc)) {
-      if (!document.parts.length) this.view.updateState(this.state(document));
+      if (document.parts.length === 0) this.view.updateState(this.state(document));
       else {
         const transaction = this.view.state.tr.replaceWith(0, this.view.state.doc.content.size, doc.content);
         transaction.setSelection(promptSelection(transaction.doc, from, to));
@@ -178,9 +191,9 @@ export class GlyphPromptEditor {
   updateQuery(): void {
     const { selection } = this.view.state;
     const before = selection.empty
-      ? selection.$from.parent.textBetween(0, selection.$from.parentOffset, '', '\ufffc')
+      ? selection.$from.parent.textBetween(0, selection.$from.parentOffset, '', '\uFFFC')
       : '';
-    const match = /(?:^|\s)@([^\s@\ufffc]*)$/.exec(before);
+    const match = /(?:^|\s)@([^\s@\uFFFC]*)$/u.exec(before);
     this.callbacks.query(
       match ? { text: match[1]!, from: selection.from - match[1]!.length - 1, to: selection.from } : undefined,
     );
@@ -230,17 +243,17 @@ export class GlyphPromptEditor {
         glyphPromptHighlighting(),
         inputRules({
           rules: [
-            wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote!),
-            wrappingInputRule(/^\s*([-+*])\s$/, schema.nodes.bullet_list!, { tight: true }),
+            wrappingInputRule(/^\s*>\s$/u, schema.nodes.blockquote!),
+            wrappingInputRule(/^\s*([-+*])\s$/u, schema.nodes.bullet_list!, { tight: true }),
             wrappingInputRule(
-              /^(\d+)\.\s$/,
+              /^(\d+)\.\s$/u,
               schema.nodes.ordered_list!,
               match => ({ order: +match[1]!, tight: true }),
               (match, node) => node.childCount + node.attrs.order === +match[1]!,
             ),
-            textblockTypeInputRule(/^(#{1,6})\s$/, schema.nodes.heading!, match => ({ level: match[1]!.length })),
-            textblockTypeInputRule(/^```([\w-]*)\s$/, schema.nodes.code_block!, match => ({ params: match[1] })),
-            new InputRule(/\[([^\]]+)\]\(([^()\s]+)\)$/, (state, match, start, end) => {
+            textblockTypeInputRule(/^(#{1,6})\s$/u, schema.nodes.heading!, match => ({ level: match[1]!.length })),
+            textblockTypeInputRule(/^```([\w-]*)\s$/u, schema.nodes.code_block!, match => ({ params: match[1] })),
+            new InputRule(/\[([^\]]+)\]\(([^()\s]+)\)$/u, (state, match, start, end) => {
               const transaction = state.tr.replaceWith(
                 start,
                 end,
@@ -251,11 +264,11 @@ export class GlyphPromptEditor {
             }),
             ...(
               [
-                ['strong', /\*\*([^*]+)\*\*$/],
-                ['strong', /__([^_]+)__$/],
-                ['em', /(?:^|\s)_([^_]+)_$/],
-                ['em', /(?:^|\s)\*([^*]+)\*$/],
-                ['code', /`([^`]+)`$/],
+                ['strong', /\*\*([^*]+)\*\*$/u],
+                ['strong', /__([^_]+)__$/u],
+                ['em', /(?:^|\s)_([^_]+)_$/u],
+                ['em', /(?:^|\s)\*([^*]+)\*$/u],
+                ['code', /`([^`]+)`$/u],
               ] as const
             ).map(
               ([mark, pattern]) =>
@@ -294,7 +307,7 @@ export class GlyphPromptEditor {
             dispatch?.(state.tr.delete(state.selection.from, state.selection.from + 1));
             return true;
           },
-          ...(this.callbacks.nativeKeybindings
+          ...(this.callbacks.nativeKeybindings === true
             ? {}
             : {
                 'Mod-Enter': () => {
@@ -310,7 +323,7 @@ export class GlyphPromptEditor {
             return true;
           }),
           'Shift-Tab': liftListItem(schema.nodes.list_item!),
-          ...(this.callbacks.nativeKeybindings
+          ...(this.callbacks.nativeKeybindings === true
             ? {}
             : {
                 Enter: () => {
@@ -318,7 +331,7 @@ export class GlyphPromptEditor {
                   return true;
                 },
               }),
-          ...(this.callbacks.nativeKeybindings ? {} : { 'Shift-Enter': this.newline }),
+          ...(this.callbacks.nativeKeybindings === true ? {} : { 'Shift-Enter': this.newline }),
         }),
         keymap(baseKeymap),
       ],

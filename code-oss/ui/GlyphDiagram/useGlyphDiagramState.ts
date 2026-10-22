@@ -23,7 +23,7 @@ export function useGlyphDiagramState({ source }: { readonly source: string }) {
     };
   }, [source]);
   useLayoutEffect(() => {
-    if (!expanded) return;
+    if (!expanded) return undefined;
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -32,8 +32,19 @@ export function useGlyphDiagramState({ source }: { readonly source: string }) {
       }
     };
     window.addEventListener('keydown', escape);
-    return () => window.removeEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('keydown', escape);
+    };
   }, [expanded]);
-  return { root, diagram, error, source, expanded, toggle: () => setExpanded(value => !value) };
+  return {
+    root,
+    diagram,
+    error,
+    source,
+    expanded,
+    toggle: () => {
+      setExpanded(value => !value);
+    },
+  };
 }
 export type GlyphDiagramState = ReturnType<typeof useGlyphDiagramState>;

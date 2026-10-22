@@ -135,7 +135,7 @@ describe(captureGlyphAgentReview, () => {
   it('reviews the last commit against its first parent', async () => {
     const { ide, captureDiff } = ideOf();
     const history = historyOf('head');
-    const captured = vi.fn();
+    const captured = vi.fn<NonNullable<Parameters<typeof captureGlyphAgentReview>[4]>>();
 
     const attachments = await captureGlyphAgentReview(ide, repositoryOf(history), Scope.LAST_COMMIT, '', captured);
 
@@ -318,7 +318,10 @@ describe(captureGlyphAgentReview, () => {
     );
     const calls = captureDiff.mock.calls
       .slice(0, 3)
-      .map(([, original, modified]) => [original && JSON.parse(original.query || '{}'), modified?.toString()]);
+      .map(([, original, modified]) => [
+        original && (JSON.parse(original.query || '{}') as unknown),
+        modified?.toString(),
+      ]);
     expect(calls).toEqual([
       [{ path: '/repo/a.ts', ref: 'head' }, URI.file('/repo/a.ts').toString()],
       [{ path: '/repo/gone.ts', ref: 'head' }, undefined],
@@ -501,7 +504,7 @@ describe(captureGlyphAgentReview, () => {
     async scope => {
       const groups: FakeGroup[] = [{ id: 'workingTree', resources: [] }];
       const captureDiff = vi.fn(async (uri: URI) => {
-        groups[0]!.resources.push({ sourceUri: URI.file('/repo/.vscode/settings.json') });
+        groups[0].resources.push({ sourceUri: URI.file('/repo/.vscode/settings.json') });
         return { uri: uri.toString(), path: uri.path, text: '', contentRevision: 'r' };
       });
 

@@ -47,7 +47,7 @@ describe(GlyphBuiltinChat, () => {
     });
     const chat = { setForceHidden: vi.fn() };
 
-    new GlyphBuiltinChat(chat as never);
+    expect(new GlyphBuiltinChat(chat as never)).toBeInstanceOf(GlyphBuiltinChat);
 
     expect(chat.setForceHidden).toHaveBeenCalledWith(true);
     expect(containers().get('workbench.panel.chat')).toBeUndefined();
@@ -57,7 +57,7 @@ describe(GlyphBuiltinChat, () => {
   it('only hides built-in chat when its views are absent', () => {
     const chat = { setForceHidden: vi.fn() };
 
-    new GlyphBuiltinChat(chat as never);
+    expect(new GlyphBuiltinChat(chat as never)).toBeInstanceOf(GlyphBuiltinChat);
 
     expect(chat.setForceHidden).toHaveBeenCalledWith(true);
     expect(containers().get('workbench.panel.chat')).toBeUndefined();

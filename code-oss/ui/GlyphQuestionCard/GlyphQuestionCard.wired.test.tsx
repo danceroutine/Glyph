@@ -33,24 +33,24 @@ describe(WiredGlyphQuestionCard, () => {
       />,
     );
 
-    fireEvent.click(screen.getAllByRole('radio', { name: /Yes/ })[0]!);
+    fireEvent.click(screen.getAllByRole('radio', { name: /Yes/u })[0]!);
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     expect(screen.getByRole('button', { name: 'Back' })).toBeTruthy();
 
-    fireEvent.click(screen.getAllByRole('radio', { name: /Yes/ })[1]!);
+    fireEvent.click(screen.getAllByRole('radio', { name: /Yes/u })[1]!);
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.input(screen.getByRole('textbox', { name: 'Your answer' }), { target: { value: 'Because' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(answerQuestion).toHaveBeenCalledWith('chat', 'run', 'request', {
         answers: [
           { questionId: 'a', type: QuestionAnswerType.SELECTION, optionIds: ['yes'] },
           { questionId: 'b', type: QuestionAnswerType.SELECTION, optionIds: ['yes'] },
           { questionId: 'c', type: QuestionAnswerType.OTHER, text: 'Because' },
         ],
-      }),
-    );
+      });
+    });
     expect(onDraftChange).toHaveBeenCalledTimes(3);
   });
 

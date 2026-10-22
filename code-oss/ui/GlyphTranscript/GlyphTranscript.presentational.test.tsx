@@ -48,7 +48,7 @@ describe(GlyphTranscriptMessage, () => {
     expect(source.dataset.label).toBe('You');
     expect(source.dataset.revision).toBe('11');
     expect(source.textContent).toBe('Hello there');
-    expect(source.parentElement!.hasAttribute('data-steering')).toBe(false);
+    expect(Object.hasOwn(source.parentElement!.dataset, 'steering')).toBe(false);
     expect(row.querySelector('strong')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Restore checkpoint' })).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -78,7 +78,7 @@ describe(GlyphTranscriptMessage, () => {
   it('cannot restore while history is changing', () => {
     render(<GlyphTranscriptMessage entry={messageEntry({ restore: vi.fn(), historyPending: true })} content={null} />);
 
-    expect((screen.getByRole('button', { name: 'Restore checkpoint' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Restore checkpoint' }).disabled).toBe(true);
   });
 
   it('labels diagnostic messages and never offers restoring them', () => {

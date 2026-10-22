@@ -12,14 +12,14 @@ afterEach(async () => {
   await Promise.all(temporaryPaths.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
-describe(ProjectContextResolver, () => {
+describe('ProjectContextResolver', () => {
   it.each(['local', 'ssh:this-host'])(
     'rejects remote folder URIs rather than reusing their local pathname under %s',
     async authority => {
       const root = await fixture();
       const manifest = join(root, 'remote.code-workspace');
       await writeFile(manifest, JSON.stringify({ folders: [{ uri: `vscode-remote://ssh-remote+other-host${root}` }] }));
-      await expect(ProjectContextResolver.workspace(manifest, root, authority)).rejects.toThrow(/unsupported.*URI/i);
+      await expect(ProjectContextResolver.workspace(manifest, root, authority)).rejects.toThrow(/unsupported.*URI/iu);
     },
   );
   it('uses the opened folder itself as the inherited chat context', async () => {

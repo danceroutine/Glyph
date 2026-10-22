@@ -1,7 +1,7 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import { Lexer } from 'marked';
-import type { Tokens } from 'marked';
+import type { Tokens, Token } from 'marked';
 import { decodeHTMLStrict } from 'entities';
 import stringWidth from 'string-width';
 import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
@@ -35,9 +35,31 @@ type InlineToken =
   | Tokens.Strong
   | Tokens.Text;
 
+const blockTokenTypes = new Set([
+  'blockquote',
+  'code',
+  'def',
+  'heading',
+  'hr',
+  'html',
+  'list',
+  'paragraph',
+  'space',
+  'table',
+]);
+const inlineTokenTypes = new Set(['br', 'codespan', 'del', 'em', 'escape', 'html', 'image', 'link', 'strong', 'text']);
+
+function isBlockToken(token: Token): token is BlockToken {
+  return blockTokenTypes.has(token.type);
+}
+
+function isInlineToken(token: Token): token is InlineToken {
+  return inlineTokenTypes.has(token.type);
+}
+
 /** Renders the Markdown block and inline structures supported by terminal chat. */
 export function Markdown({ value }: MarkdownProps): ReactElement {
-  return <MarkdownBlocks tokens={Lexer.lex(value) as BlockToken[]} />;
+  return <MarkdownBlocks tokens={Lexer.lex(value).filter(child => isBlockToken(child))} />;
 }
 
 function MarkdownBlocks({ tokens }: { tokens: readonly BlockToken[] }): ReactElement {
@@ -52,13 +74,13 @@ function renderBlock(token: BlockToken, key: number): ReactNode {
     case 'heading':
       return (
         <Text key={key} bold color="cyan">
-          <InlineTokens tokens={token.tokens as InlineToken[]} />
+          <InlineTokens tokens={token.tokens.filter(child => isInlineToken(child))} />
         </Text>
       );
     case 'paragraph':
       return (
         <Text key={key} color="white">
-          <InlineTokens tokens={token.tokens as InlineToken[]} />
+          <InlineTokens tokens={token.tokens.filter(child => isInlineToken(child))} />
         </Text>
       );
     case 'list': {
@@ -66,11 +88,15 @@ function renderBlock(token: BlockToken, key: number): ReactNode {
       return (
         <Box key={key} flexDirection="column">
           {token.items.map((item, index) => {
-            const marker = item.task ? `[${item.checked ? 'x' : ' '}]` : token.ordered ? `${start + index}.` : '-';
+            const marker = item.task
+              ? `[${item.checked === true ? 'x' : ' '}]`
+              : token.ordered
+                ? `${start + index}.`
+                : '-';
             return (
               <Text key={index} color="white">
                 {`${marker} `}
-                <InlineTokens tokens={Lexer.lexInline(item.text) as InlineToken[]} />
+                <InlineTokens tokens={Lexer.lexInline(item.text).filter(child => isInlineToken(child))} />
               </Text>
             );
           })}
@@ -89,7 +115,7 @@ function renderBlock(token: BlockToken, key: number): ReactNode {
           borderTop={false}
           paddingLeft={1}
         >
-          <MarkdownBlocks tokens={token.tokens as BlockToken[]} />
+          <MarkdownBlocks tokens={token.tokens.filter(child => isBlockToken(child))} />
         </Box>
       );
     case 'code':
@@ -107,7 +133,7 @@ function renderBlock(token: BlockToken, key: number): ReactNode {
         </Text>
       );
     case 'html':
-      return <Text key={key}>{sanitizeText(token.text.replace(/<[^>]*>/gu, ''))}</Text>;
+      return <Text key={key}>{sanitizeText(token.text.replaceAll(/<[^>]*>/gu, ''))}</Text>;
   }
 }
 
@@ -126,25 +152,28 @@ function renderInline(token: InlineToken, key: number, decodeEntities: boolean):
     case 'strong':
       return (
         <Text key={key} bold>
-          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities} />
+          <InlineTokens tokens={token.tokens.filter(child => isInlineToken(child))} decodeEntities={decodeEntities} />
         </Text>
       );
     case 'em':
       return (
         <Text key={key} italic>
-          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities} />
+          <InlineTokens tokens={token.tokens.filter(child => isInlineToken(child))} decodeEntities={decodeEntities} />
         </Text>
       );
     case 'del':
       return (
         <Text key={key} strikethrough>
-          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities} />
+          <InlineTokens tokens={token.tokens.filter(child => isInlineToken(child))} decodeEntities={decodeEntities} />
         </Text>
       );
     case 'link':
       return (
         <Text key={key} underline>
-          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities && !token.autolink} />
+          <InlineTokens
+            tokens={token.tokens.filter(child => isInlineToken(child))}
+            decodeEntities={decodeEntities && token.autolink !== true}
+          />
         </Text>
       );
     case 'codespan':
@@ -156,7 +185,7 @@ function renderInline(token: InlineToken, key: number, decodeEntities: boolean):
     case 'image':
       return (
         <Text key={key} dimColor>
-          <InlineTokens tokens={token.tokens as InlineToken[]} decodeEntities={decodeEntities} />
+          <InlineTokens tokens={token.tokens.filter(child => isInlineToken(child))} decodeEntities={decodeEntities} />
         </Text>
       );
     case 'br':
@@ -167,7 +196,7 @@ function renderInline(token: InlineToken, key: number, decodeEntities: boolean):
       return sanitizeText(token.text);
     case 'text':
       // Marked decodes numeric references already; raw text avoids decoding twice.
-      return sanitizeText(decodeEntities && !token.escaped ? decodeHTMLStrict(token.raw) : token.text);
+      return sanitizeText(decodeEntities && token.escaped !== true ? decodeHTMLStrict(token.raw) : token.text);
   }
 }
 

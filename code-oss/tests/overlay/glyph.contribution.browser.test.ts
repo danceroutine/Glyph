@@ -81,9 +81,10 @@ function workbench({ selected = [] as URI[], attach = async () => {} } = {}) {
         return services.get(service);
       },
     };
-    const result = CommandsRegistry.getCommand(id)!.handler(accessor as never, ...args);
+    const handler: (accessor: never, ...values: unknown[]) => unknown = CommandsRegistry.getCommand(id)!.handler;
+    const result = handler(accessor as never, ...args);
     valid = false;
-    return result;
+    return Promise.resolve(result);
   };
   return { glyph, views, notifications, explorer, run };
 }
@@ -111,7 +112,11 @@ describe('glyph.contribution', () => {
   it('offers explorer resources to current and new Glyph chats', () => {
     const items = MenuRegistry.getMenuItems(MenuId.ExplorerContext).filter(item => item.group === '7_glyph');
 
-    expect(items.map(item => ('command' in item ? item.command.id : undefined)).sort()).toEqual([
+    expect(
+      items
+        .map(item => ('command' in item ? item.command.id : undefined))
+        .toSorted((left = '', right = '') => (left === right ? 0 : left < right ? -1 : 1)),
+    ).toEqual([
       'glyph.addExplorerDirectoryToChat',
       'glyph.addExplorerDirectoryToNewChat',
       'glyph.addExplorerFileToChat',
@@ -206,18 +211,18 @@ describe('glyph.contribution', () => {
     expect(glyph.composer.focus).toHaveBeenCalled();
   });
 
-  it('forwards composer commands to the composer', () => {
+  it('forwards composer commands to the composer', async () => {
     const { glyph, run } = workbench();
 
-    for (const id of Object.values(GlyphComposerCommand)) run(id);
+    for (const id of Object.values(GlyphComposerCommand)) await run(id);
 
     expect(glyph.composer.executeCommand.mock.calls).toEqual(Object.values(GlyphComposerCommand).map(id => [id]));
   });
 
-  it('forwards review commands to the review editor', () => {
+  it('forwards review commands to the review editor', async () => {
     const { glyph, run } = workbench();
 
-    for (const id of Object.values(GlyphReviewCommand)) run(id);
+    for (const id of Object.values(GlyphReviewCommand)) await run(id);
 
     expect(glyph.executeReviewCommand.mock.calls).toEqual(Object.values(GlyphReviewCommand).map(id => [id]));
   });

@@ -34,14 +34,20 @@ describe(WiredGlyphPlanCards, () => {
     const card = screen.getByRole('article', { name: 'Plan: Two' });
 
     fireEvent.click(card.querySelector('button')!);
-    await waitFor(() => expect(viewPlan).toHaveBeenCalledWith('chat', second));
+    await waitFor(() => {
+      expect(viewPlan).toHaveBeenCalledWith('chat', second);
+    });
 
-    fireEvent.click(screen.getAllByRole('button', { name: /^Build\s*⌘↵$/ })[1]!);
-    await waitFor(() => expect(buildPlan).toHaveBeenCalledWith('chat', second, false));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Build\s*⌘↵$/u })[1]!);
+    await waitFor(() => {
+      expect(buildPlan).toHaveBeenCalledWith('chat', second, false);
+    });
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Build options' })[0]!);
     fireEvent.click(screen.getByRole('button', { name: 'Build in new chat' }));
-    await waitFor(() => expect(buildPlan).toHaveBeenCalledWith('chat', first, true));
+    await waitFor(() => {
+      expect(buildPlan).toHaveBeenCalledWith('chat', first, true);
+    });
   });
 
   it('disables building while a plan action is pending or the chat is unavailable', async () => {
@@ -54,10 +60,12 @@ describe(WiredGlyphPlanCards, () => {
         disabled={false}
       />,
     );
-    const build = screen.getByRole('button', { name: /^Build\s*⌘↵$/ }) as HTMLButtonElement;
+    const build = screen.getByRole('button', { name: /^Build\s*⌘↵$/u }) as HTMLButtonElement;
 
     fireEvent.click(build);
-    await waitFor(() => expect(build.disabled).toBe(true));
+    await waitFor(() => {
+      expect(build.disabled).toBe(true);
+    });
 
     rerender(
       <WiredGlyphPlanCards
@@ -67,7 +75,7 @@ describe(WiredGlyphPlanCards, () => {
         disabled
       />,
     );
-    expect((screen.getByRole('button', { name: /^Build\s*⌘↵$/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Build\s*⌘↵$/u }).disabled).toBe(true);
   });
 
   it('shows why the last plan action failed', async () => {

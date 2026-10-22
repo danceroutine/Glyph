@@ -12,7 +12,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
       await expect(
         glyph.page.getByRole('tablist', { name: 'Open chats' }).getByRole('tab', { name: 'Native integration' }),
       ).toBeVisible();
-      await expect(glyph.page.getByRole('tab', { name: /^Chat(?:\s|$)/ })).toHaveCount(0);
+      await expect(glyph.page.getByRole('tab', { name: /^Chat(?:\s|$)/u })).toHaveCount(0);
       await expect(glyph.page.locator('[id="workbench.panel.chat"]')).toHaveCount(0);
     };
     await expectOnlyGlyph();
@@ -27,7 +27,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await expect(glyph.composer).toBeEditable();
     await expect(glyph.composer).toHaveAttribute('aria-multiline', 'true');
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
-    await expect(glyph.page.getByRole('button', { name: /^Attach active file/ })).toHaveCount(0);
+    await expect(glyph.page.getByRole('button', { name: /^Attach active file/u })).toHaveCount(0);
   });
 
   it('sends a message to the packaged utility host and renders its complete response exactly once', async ({
@@ -172,7 +172,7 @@ it.describe('Glyph in the native Code OSS workbench', () => {
     await glyph.waitForResponse();
     const duplicate = await glyph.duplicateWorkspace();
     await duplicate.composer.fill('Try to use the same files from the duplicated workspace.');
-    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
+    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/iu]);
     await expect(duplicate.sendButton).toBeDisabled();
     await expect(duplicate.assistantEntries).toHaveCount(0);
     await glyph.send('The original workspace remains usable.');
@@ -184,7 +184,7 @@ it.describe('An untrusted workspace', () => {
   it.use({ trustedWorkspace: false });
   it('prevents sending project context until the workspace is trusted', async ({ glyph }) => {
     await glyph.send('Do not expose this untrusted project.');
-    await expect(glyph.diagnostics).toContainText([/Workspace trust is required/]);
+    await expect(glyph.diagnostics).toContainText([/Workspace trust is required/u]);
     await expect(glyph.assistantEntries).not.toContainText(['The packaged Glyph host is connected']);
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
   });

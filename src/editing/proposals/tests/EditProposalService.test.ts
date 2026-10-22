@@ -34,13 +34,13 @@ afterEach(async () => {
 
 describe(EditProposalService, () => {
   describe('proposal preflight', () => {
-    it.each(['\ud800', '\udc00'].flatMap(path => ['structured', 'patch'].map(format => ({ path, format }))))(
+    it.each(['\uD800', '\uDC00'].flatMap(path => ['structured', 'patch'].map(format => ({ path, format }))))(
       'rejects malformed Unicode filenames %j in $format proposals before their encoded aliases can be staged',
       async ({ path, format }) => {
         const { service, workspace } = await fixture('base');
         const exists = vi.spyOn(workspace, 'exists');
-        expect(Buffer.from(path)).toEqual(Buffer.from('\ufffd'));
-        const paths = [path, '\ufffd'];
+        expect(Buffer.from(path)).toEqual(Buffer.from('\uFFFD'));
+        const paths = [path, '\uFFFD'];
         const proposal =
           format === 'structured'
             ? service.proposeStructured({ files: paths.map(value => structuredCreate(value)) })
@@ -58,7 +58,7 @@ describe(EditProposalService, () => {
 
     it('preserves emoji and distinct well-formed Unicode spellings in prospective filenames', async () => {
       const { service } = await fixture('base', {}, { caseSensitive: true });
-      const paths = ['🧪.txt', 'é.txt', 'e\u0301.txt', '\ufffd.txt'];
+      const paths = ['🧪.txt', 'é.txt', 'e\u0301.txt', '\uFFFD.txt'];
       const proposal = await service.proposeStructured({ files: paths.map(path => structuredCreate(path)) });
       expect(proposal.files.map(file => file.targetPath)).toEqual(paths);
     });
@@ -532,8 +532,8 @@ describe(EditProposalService, () => {
     [EditOperation.CREATE, EditOperation.UPDATE].flatMap(operation =>
       [
         { label: 'NUL', content: 'invalid\0text' },
-        { label: 'an unpaired high surrogate', content: '\ud800' },
-        { label: 'an unpaired low surrogate', content: '\udc00' },
+        { label: 'an unpaired high surrogate', content: '\uD800' },
+        { label: 'an unpaired low surrogate', content: '\uDC00' },
       ].map(value => ({ operation, ...value })),
     ),
   )('rejects $label while compiling $operation before staging a review', async ({ operation, content }) => {
@@ -559,7 +559,7 @@ describe(EditProposalService, () => {
   it.each([
     { base: '', content: '', bom: true, marker: 'Encoding: UTF-8 → UTF-8 with BOM' },
     { base: '\uFEFFbody', content: 'body', bom: false, marker: 'Encoding: UTF-8 with BOM → UTF-8' },
-    { base: 'body', content: '\u001b[31mbody\u001b[0m', bom: false, marker: '␛[31mbody␛[0m' },
+    { base: 'body', content: '\u001B[31mbody\u001B[0m', bom: false, marker: '␛[31mbody␛[0m' },
     { base: 'body', content: '\uFEFFbody', bom: false, marker: '⟨U+FEFF⟩body' },
   ])('makes byte-level changes visible in a compiled review: $marker', async ({ base, content, bom, marker }) => {
     const { service, workspace } = await fixture(base);
@@ -580,7 +580,7 @@ describe(EditProposalService, () => {
     const file = proposal.files[0]!;
     const rendered = renderEntry(file, file.items[0]!, ReviewViewMode.FULL_FILE, false).lines.join('\n');
     expect(rendered).toContain(marker);
-    expect(rendered).not.toContain('\u001b');
+    expect(rendered).not.toContain('\u001B');
     if (snapshot.text === content) expect(rendered).toContain('Text content unchanged');
     expect(file.proposed.text).toBe(content);
   });
@@ -1544,7 +1544,9 @@ describe(EditProposalService, () => {
       const base = await workspace.read('file.txt');
       let now = 0;
       const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
-      onTestFinished(() => clock.mockRestore());
+      onTestFinished(() => {
+        clock.mockRestore();
+      });
       const differ = new JsDiffTextDiffer();
       const service = new EditProposalService(
         workspace,

@@ -15,7 +15,7 @@ it('keeps Glyph styled through native theme changes and a window reload', async 
     await glyph.page.locator('.quick-input-list .monaco-list-row').filter({ hasText: theme }).first().click();
     await expect(input).not.toBeVisible();
     await expect(glyph.page.locator('.monaco-workbench')).toHaveClass(
-      theme === 'Dark Modern' ? /\bvs-dark\b/ : /\bvs\b/,
+      theme === 'Dark Modern' ? /\bvs-dark\b/u : /\bvs\b/u,
     );
     backgrounds.push(await surface.evaluate(element => getComputedStyle(element).backgroundColor));
   }

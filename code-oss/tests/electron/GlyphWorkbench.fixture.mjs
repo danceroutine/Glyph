@@ -4,20 +4,45 @@ import { expect, test as base } from './playwright.mjs';
 import { GlyphSession, sentinel } from './GlyphSession.mjs';
 
 const sharingEnabled = process.env.GLYPH_ELECTRON_SHARED_LAUNCH !== '0';
+/** @param {number} start */
 const since = start => String(Math.round(performance.now() - start));
+/** @param {unknown} error */
 const summary = error =>
-  error.message
-    .replace(/\u001b\[\d+m/g, '')
+  (error instanceof Error ? error.message : String(error))
+    .replaceAll(/\u001B\[\d+m/gu, '')
     .split('\n')
-    .filter(line => /\S/.test(line) && !line.includes('Call log'))
+    .filter(line => /\S/u.test(line) && !line.includes('Call log'))
     .slice(0, 3)
     .join(' ')
     .slice(0, 300);
 
+/** @param {string} reason */
 export const isolatedLaunch = reason => ({ annotation: { type: 'isolated launch', description: reason } });
 
-/** Each test owns a fresh profile, workspace, extensions directory, and Electron process unless it opts into `sharedLaunch`. */
-export const test = base.extend({
+/**
+ * @typedef {import('@playwright/test')} Playwright
+ * @typedef {ConstructorParameters<typeof GlyphSession>[0]} GlyphLaunchOptions
+ * @typedef {GlyphLaunchOptions & {
+ *   sharedLaunch: boolean,
+ *   session: GlyphSession,
+ *   provider: GlyphSession['provider'],
+ *   glyph: import('./GlyphWorkbench.mjs').GlyphWorkbench,
+ * }} GlyphTestFixtures
+ * @typedef {{ workerLaunch: { session?: GlyphSession | undefined } }} GlyphWorkerFixtures
+ */
+
+/**
+ * Each test owns a fresh profile, workspace, extensions directory, and Electron process unless it opts into `sharedLaunch`.
+ * @type {import('@playwright/test').Fixtures<
+ *   GlyphTestFixtures,
+ *   GlyphWorkerFixtures,
+ *   import('@playwright/test').PlaywrightTestArgs &
+ *     import('@playwright/test').PlaywrightTestOptions,
+ *   import('@playwright/test').PlaywrightWorkerArgs &
+ *     import('@playwright/test').PlaywrightWorkerOptions
+ * >}
+ */
+const fixtures = {
   sharedLaunch: [false, { option: true }],
   trustedWorkspace: [true, { option: true }],
   productionRuntime: [false, { option: true }],
@@ -30,6 +55,7 @@ export const test = base.extend({
   extensionDevelopmentPath: [undefined, { option: true }],
   workerLaunch: [
     async ({}, use, workerInfo) => {
+      /** @type {GlyphWorkerFixtures['workerLaunch']} */
       const slot = {};
       await use(slot);
       await slot.session?.close(workerInfo.parallelIndex);
@@ -76,7 +102,7 @@ export const test = base.extend({
         previous.key === JSON.stringify(options)
           ? await previous.reset().catch(error => `reset failed: ${summary(error)}`)
           : 'different launch options';
-      if (reason) {
+      if (reason !== undefined && reason !== '') {
         launch = `fresh (${reason})`;
         await previous.abandon(testInfo);
       } else {
@@ -103,11 +129,16 @@ export const test = base.extend({
     testInfo.annotations.push({ type: 'glyph body ms', description: since(body) });
     const ended = performance.now();
     let discard = shared ? undefined : 'isolated';
-    if (!discard && (testInfo.status !== testInfo.expectedStatus || testInfo.errors.length)) discard = 'test failed';
+    if (
+      (discard === undefined || discard === '') &&
+      (testInfo.status !== testInfo.expectedStatus || testInfo.errors.length > 0)
+    )
+      discard = 'test failed';
     discard ??= await session.disruption().catch(error => `unhealthy: ${summary(error)}`);
-    if (shared && discard) testInfo.annotations.push({ type: 'glyph launch discarded', description: discard });
-    if (!discard) workerLaunch.session = session;
-    await session.finish(testInfo, !discard);
+    if (shared && discard !== undefined && discard !== '')
+      testInfo.annotations.push({ type: 'glyph launch discarded', description: discard });
+    if (discard === undefined || discard === '') workerLaunch.session = session;
+    await session.finish(testInfo, discard === undefined || discard === '');
     testInfo.annotations.push({ type: 'glyph teardown ms', description: since(ended) });
   },
   provider: async ({ session }, use) => {
@@ -116,9 +147,13 @@ export const test = base.extend({
     session.provider.assertConsumed();
   },
   glyph: async ({ session }, use) => {
-    await use(session.glyph);
+    const { glyph } = session;
+    if (glyph === undefined) throw new Error('The Glyph session has not begun.');
+    await use(glyph);
     expect(await readFile(join(session.workspace, 'example.txt'), 'utf8')).toBe(sentinel);
   },
-});
+};
+
+export const test = base.extend(fixtures);
 
 export { expect };

@@ -114,14 +114,16 @@ export class ProposalReviewManager {
 
   onDidChange(listener: (change: ProposalReviewChange) => void): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   async initialize({ reconcileWorkspace = true }: { reconcileWorkspace?: boolean } = {}): Promise<void> {
     const stored = await this.store.load(this.workspaceIdentity);
-    this.durableResults = structuredClone(stored.flatMap(pendingReviewResults));
+    this.durableResults = structuredClone(stored.flatMap(value => pendingReviewResults(value)));
     this.reviews = stored.filter(review => !isSettled(review));
-    this.completedReviews = stored.filter(isSettled);
+    this.completedReviews = stored.filter(value => isSettled(value));
     for (const review of this.completedReviews) this.rememberSettledDecisions(review);
     // Persisted history is safe to display without workspace authority. Do not
     // read files or finish interrupted mutations until the host grants trust.
@@ -129,7 +131,7 @@ export class ProposalReviewManager {
     if (this.reviews.length === 0) return;
     for (const review of this.reviews) {
       for (const file of review.files) {
-        if (file.items.some(item => item.appliedText) && !file.applyingItemId) {
+        if (file.items.some(item => item.appliedText) && (file.applyingItemId === null || file.applyingItemId === '')) {
           if (file.items.some(item => item.appliedText?.state === 'reverting'))
             file.applicability = EditApplicabilityState.STALE;
           continue;
@@ -243,7 +245,8 @@ export class ProposalReviewManager {
       const reviews = this.requireReviews();
       await this.preflightAll(
         reviews.filter(
-          review => !review.files.some(file => file.automatic || file.items.some(item => item.appliedText)),
+          review =>
+            !review.files.some(file => file.automatic !== undefined || file.items.some(item => item.appliedText)),
         ),
       );
       for (const review of reviews) {
@@ -270,14 +273,14 @@ export class ProposalReviewManager {
       // applied decisions before choosing which items remain rejectable.
       for (const review of reviews) {
         for (const file of review.files) {
-          if (!file.applyingItemId) continue;
+          if (file.applyingItemId === null || file.applyingItemId === '') continue;
           await this.reconcile(review, file);
           await this.persist();
         }
       }
-      for (const review of [...reviews].reverse()) {
-        for (const file of [...review.files].reverse()) {
-          for (const item of [...file.items].reverse()) {
+      for (const review of reviews.toReversed()) {
+        for (const file of review.files.toReversed()) {
+          for (const item of file.items.toReversed()) {
             if (item.appliedText && isReviewItemPending(file, item))
               await this.settleText(review, file, item, EditDecisionState.REJECTED);
             else if (file.automatic?.itemId === item.id) await this.settleStructural(review, item.id, false);
@@ -451,9 +454,10 @@ export class ProposalReviewManager {
 
   private decide(itemId: string, decision: EditDecisionState, reviewId?: string, comment?: string): Promise<void> {
     return this.enqueue(async () => {
-      const appliedReview = reviewId
-        ? this.get(reviewId)
-        : this.reviews.find(review => review.files.some(file => file.items.some(item => item.id === itemId)));
+      const appliedReview =
+        reviewId !== undefined && reviewId !== ''
+          ? this.get(reviewId)
+          : this.reviews.find(review => review.files.some(file => file.items.some(item => item.id === itemId)));
       const appliedFile = appliedReview?.files.find(file => file.items.some(item => item.id === itemId));
       const appliedItem = appliedFile?.items.find(item => item.id === itemId);
       if (appliedReview && appliedFile && appliedItem?.appliedText) {
@@ -465,7 +469,7 @@ export class ProposalReviewManager {
         return;
       }
       const settled = this.settledDecisions.get(itemId);
-      if (settled && reviewId && settled.reviewId !== reviewId) {
+      if (settled && reviewId !== undefined && reviewId !== '' && settled.reviewId !== reviewId) {
         throw new EditError(EditFailureReason.INCONSISTENT, 'Unknown review item.', {
           source: reviewId,
           hunkId: itemId,
@@ -477,7 +481,8 @@ export class ProposalReviewManager {
           hunkId: itemId,
         });
       }
-      const review = reviewId ? this.requireReviewId(reviewId) : this.findReviewForItem(itemId);
+      const review =
+        reviewId !== undefined && reviewId !== '' ? this.requireReviewId(reviewId) : this.findReviewForItem(itemId);
       const file = review.files.find(candidate => candidate.items.some(item => item.id === itemId));
       if (!file) throw new EditError(EditFailureReason.INCONSISTENT, 'Unknown review item.', { hunkId: itemId });
       await this.applyDecision(review, file, itemId, decision, comment);
@@ -502,7 +507,7 @@ export class ProposalReviewManager {
         EditFailureReason.INCONSISTENT,
         'Review comments must contain between 1 and 4000 characters.',
       );
-    if (file.applyingItemId) {
+    if (file.applyingItemId !== null && file.applyingItemId !== '') {
       await this.reconcile(review, file);
       await this.persist();
     }
@@ -589,7 +594,7 @@ export class ProposalReviewManager {
     comment?: string,
   ): Promise<void> {
     const item = file.items.find(candidate => candidate.id === itemId)!;
-    if (file.applyingItemId) {
+    if (file.applyingItemId !== null && file.applyingItemId !== '') {
       await this.reconcile(review, file);
       await this.persist();
     }
@@ -660,20 +665,21 @@ export class ProposalReviewManager {
           break;
         }
         case EditReviewItemKind.DELETE:
-          if (!file.currentRevision) throw this.stale(file);
+          if (file.currentRevision === null || file.currentRevision === '') throw this.stale(file);
           await this.workspace.delete(file.currentPath, file.currentRevision, mutation);
           file.currentRevision = null;
           file.current = null;
           break;
         case EditReviewItemKind.RENAME: {
-          if (!file.currentRevision) throw this.stale(file);
+          if (file.currentRevision === null || file.currentRevision === '') throw this.stale(file);
           const result = await this.workspace.rename(file.currentPath, file.targetPath, file.currentRevision, mutation);
           file.currentPath = result.path;
           updateBaseline(file, result);
           break;
         }
         case EditReviewItemKind.TEXT: {
-          if (!file.base || !file.current || !file.currentRevision) throw this.stale(file);
+          if (!file.base || !file.current || file.currentRevision === null || file.currentRevision === '')
+            throw this.stale(file);
           const textChange = planTextAcceptance(file, item);
           if (!textChange) throw this.stale(file, file.currentRevision);
           // Keep the public receipt pending until the workspace confirms the
@@ -769,7 +775,7 @@ export class ProposalReviewManager {
 
   private async preflight(proposal: EditProposal): Promise<void> {
     for (const file of proposal.files) {
-      if (file.applyingItemId) {
+      if (file.applyingItemId !== null && file.applyingItemId !== '') {
         await this.reconcile(proposal, file);
         await this.persist();
       }
@@ -868,7 +874,7 @@ export class ProposalReviewManager {
   private async reconcile(review: EditProposal, file: FileEditPlan): Promise<void> {
     // With no write in flight and the file expected to be absent, the only question is whether the path is
     // still free. Reading content here would spend the read budget on a file the plan never relied on.
-    if (file.currentRevision === null && !file.applyingItemId) {
+    if (file.currentRevision === null && (file.applyingItemId === null || file.applyingItemId === '')) {
       if (!(await this.synchronizeNewFile(file))) file.applicability = EditApplicabilityState.STALE;
       return;
     }
@@ -891,7 +897,10 @@ export class ProposalReviewManager {
     // An interrupted write may have landed. Check for that before treating the difference as outside edits.
     // Otherwise our own change would look foreign and mark the file stale, or a landed acceptance would stay
     // pending and be applied a second time.
-    const applying = file.applyingItemId ? file.items.find(item => item.id === file.applyingItemId) : undefined;
+    const applying =
+      file.applyingItemId !== null && file.applyingItemId !== ''
+        ? file.items.find(item => item.id === file.applyingItemId)
+        : undefined;
     if (applying) {
       const recovered = await this.reconcileApplying(review, file, applying, current);
       if (recovered) return;
@@ -1028,7 +1037,10 @@ export class ProposalReviewManager {
    * Returns false whenever the pending hunks cannot be placed with certainty. The caller then marks the file
    * stale, because applying a hunk at a guessed offset would silently corrupt the user's file.
    */
-  private synchronizePlanAgainstLiveSnapshot(file: FileEditPlan, current: FileEditPlan['current'] | undefined): boolean {
+  private synchronizePlanAgainstLiveSnapshot(
+    file: FileEditPlan,
+    current: FileEditPlan['current'] | undefined,
+  ): boolean {
     // The plan expects no file here, so any file that now exists was put there outside the review.
     // Creating over it would destroy that content.
     if (file.currentRevision === null) {
@@ -1053,18 +1065,18 @@ export class ProposalReviewManager {
         if (!rebasePendingTextItems(file, file.base.text, file.current.text)) return false;
         updateBaseline(file, file.current);
       }
-      if (current.revision !== file.currentRevision) {
-        // Someone edited the file since the plan last saw it. Only content-level hunks can move with those
-        // edits. A delete was approved for the exact content the human reviewed, so carrying it over different
-        // content would discard edits nobody reviewed. Any outside edit that overlaps a pending hunk also fails
-        // here rather than being merged by guesswork.
-        if (!canRebase(file) || !rebasePendingTextItems(file, file.current.text, current.text)) return false;
-        updateBaseline(file, current);
-      } else {
-        // Same bytes, but `proposed` must still be recomputed from only the hunks that remain pending, and the
-        // fresh read may carry newer metadata such as permissions or the editor's canonical identity.
-        updateBaseline(file, current);
-      }
+      // Someone edited the file since the plan last saw it. Only content-level hunks can move with those
+      // edits. A delete was approved for the exact content the human reviewed, so carrying it over different
+      // content would discard edits nobody reviewed. Any outside edit that overlaps a pending hunk also fails
+      // here rather than being merged by guesswork.
+      if (
+        current.revision !== file.currentRevision &&
+        (!canRebase(file) || !rebasePendingTextItems(file, file.current.text, current.text))
+      )
+        return false;
+      // Even with the same bytes, `proposed` must still be recomputed from only the hunks that remain pending, and
+      // the fresh read may carry newer metadata such as permissions or the editor's canonical identity.
+      updateBaseline(file, current);
       // The plan now matches the disk exactly, so whatever write was in flight is resolved and decisions are
       // safe to apply again.
       file.applicability = EditApplicabilityState.READY;
@@ -1093,7 +1105,7 @@ export class ProposalReviewManager {
   private async saveCheckpoint(proposals = [...this.reviews, ...this.completedReviews]): Promise<void> {
     const checkpoint = structuredClone(proposals);
     await this.store.save(checkpoint, this.workspaceIdentity);
-    this.durableResults = checkpoint.flatMap(pendingReviewResults);
+    this.durableResults = checkpoint.flatMap(value => pendingReviewResults(value));
   }
 
   private rememberSettledDecisions(review: EditProposal): void {
@@ -1125,7 +1137,7 @@ export class ProposalReviewManager {
     return new EditError(EditFailureReason.STALE, 'The file changed outside this proposal review.', {
       fileId: file.id,
       path: file.currentPath,
-      ...(currentRevision ? { currentRevision } : {}),
+      ...(currentRevision !== undefined && currentRevision !== '' ? { currentRevision } : {}),
       retry:
         file.automatic || file.items.some(item => item.appliedText)
           ? 'Keep this change or revert newer overlapping changes first.'
@@ -1205,10 +1217,12 @@ function reviewResults(review: EditProposal): EditReviewResult[] {
             itemId: item.id,
             fileId: file.id,
             kind: item.kind,
-            decision: item.decision as Exclude<EditDecisionState, EditDecisionState.PENDING>,
+            decision: item.decision === EditDecisionState.PENDING ? EditDecisionState.ACCEPTED : item.decision,
             affectedPaths: [...new Set([file.sourcePath, file.targetPath, file.currentPath])],
             resultingRevision: file.currentRevision,
-            ...(item.rejectionComment ? { rejectionComment: item.rejectionComment } : {}),
+            ...(item.rejectionComment !== undefined && item.rejectionComment !== ''
+              ? { rejectionComment: item.rejectionComment }
+              : {}),
           },
         ],
       })),
@@ -1424,7 +1438,7 @@ function composePendingText(file: FileEditPlan, baseText: string): string {
   let text = baseText;
   const pending = file.items
     .filter(item => item.kind === EditReviewItemKind.TEXT && item.decision === EditDecisionState.PENDING)
-    .sort((left, right) => right.sourceStart - left.sourceStart);
+    .toSorted((left, right) => right.sourceStart - left.sourceStart);
   for (const item of pending) text = applyTextItem(text, item);
   return text;
 }

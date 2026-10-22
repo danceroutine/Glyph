@@ -9,6 +9,16 @@ import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspace
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { ProjectAccess } from '#src/project/ProjectAccess.js';
 
+type ProjectOutput = {
+  nextStartLine: number;
+  endLine: number;
+  truncated: boolean;
+  lines: { number: number; content: string }[];
+  matches: unknown[];
+  files: string[];
+  error: { message: string };
+};
+
 async function fixture(): Promise<{ access: ProjectAccess; root: string }> {
   const root = await mkdtemp(join(tmpdir(), 'glyph-project-'));
   await mkdir(join(root, 'src'));
@@ -42,9 +52,9 @@ describe(ProjectAccess, () => {
       JSON.stringify({ path: 'escaped.txt', start_line: null, end_line: null }),
     );
     expect(Buffer.byteLength(result)).toBeLessThanOrEqual(512 * 1024);
-    const page = JSON.parse(result);
+    const page = JSON.parse(result) as ProjectOutput;
     expect(page.nextStartLine).toBeGreaterThan(1);
-    expect(page.lines[0].content).toBe('😀\t"\\');
+    expect(page.lines[0]!.content).toBe('😀\t"\\');
   });
 
   it('bounds serialized line metadata and numbered content and exposes the next unread line', async () => {
@@ -63,11 +73,11 @@ describe(ProjectAccess, () => {
       access.execute('read_project_file', JSON.stringify({ path: 'many-lines.txt', start_line, end_line: null }));
     const result = await read(1);
     expect(Buffer.byteLength(result)).toBeLessThanOrEqual(512 * 1024);
-    const page = JSON.parse(result);
+    const page = JSON.parse(result) as ProjectOutput;
     expect(page.truncated).toBe(true);
     expect(page.nextStartLine).toBe(page.endLine + 1);
-    const next = JSON.parse(await read(page.nextStartLine));
-    expect(next.lines[0].number).toBe(page.nextStartLine);
+    const next = JSON.parse(await read(page.nextStartLine)) as ProjectOutput;
+    expect(next.lines[0]!.number).toBe(page.nextStartLine);
     expect(next.endLine).toBeGreaterThan(page.endLine);
   });
 
@@ -76,8 +86,16 @@ describe(ProjectAccess, () => {
     const glob = vi.fn(
       (_pattern: string, options: { signal?: AbortSignal }) =>
         new Promise<{ files: string[]; truncated: boolean }>((resolve, reject) => {
-          release = () => resolve({ files: [], truncated: false });
-          options.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+          release = () => {
+            resolve({ files: [], truncated: false });
+          };
+          options.signal?.addEventListener(
+            'abort',
+            () => {
+              reject(options.signal?.reason);
+            },
+            { once: true },
+          );
         }),
     );
     const access = new ProjectAccess('/fixture', {}, undefined, { glob });
@@ -96,7 +114,12 @@ describe(ProjectAccess, () => {
     const cancelled = new Error('Listing cancelled');
     controller.abort(cancelled);
     try {
-      await vi.waitFor(() => expect(outcome).toBe(cancelled), { timeout: 100 });
+      await vi.waitFor(
+        () => {
+          expect(outcome).toBe(cancelled);
+        },
+        { timeout: 100 },
+      );
       expect(glob.mock.calls[0]?.[1].signal).toBe(controller.signal);
     } finally {
       release();
@@ -158,7 +181,7 @@ describe(ProjectAccess, () => {
 
       const result = JSON.parse(
         await access.execute('list_project_files', JSON.stringify({ glob_pattern: '*.ts', target_directory: 'src' })),
-      );
+      ) as ProjectOutput;
 
       expect(result).toEqual({ files: ['src/app.ts'], truncated: false });
       expect(glob).toHaveBeenCalledWith('*.ts', { targetDirectory: 'src', limit: 37 });
@@ -213,7 +236,7 @@ describe(ProjectAccess, () => {
           }),
           controller.signal,
         ),
-      );
+      ) as ProjectOutput;
 
       const definition = access.tools.find(candidate => candidate.name === 'search_project_contents');
       expect(definition?.parameters).toMatchObject({
@@ -297,7 +320,7 @@ describe(ProjectAccess, () => {
       expect(result.endLine).toBe(3);
       expect(result.totalLines).toBe(4);
       expect(result.truncated).toBe(true);
-      expect(result.revision).toMatch(/^[a-f0-9]{64}$/);
+      expect(result.revision).toMatch(/^[a-f0-9]{64}$/u);
       expect(result.byteOrderMark).toBe(false);
       expect(result.lines).toEqual([
         { number: 2, content: 'two', lineEnding: '\n' },
@@ -432,7 +455,7 @@ describe(ProjectAccess, () => {
     it('reports an unknown tool as a project access failure', async () => {
       const access = new ProjectAccess(tmpdir());
 
-      const result = JSON.parse(await access.execute('unknown_tool', '{}'));
+      const result = JSON.parse(await access.execute('unknown_tool', '{}')) as ProjectOutput;
 
       expect(result).toEqual({
         error: { code: 'PROJECT_ACCESS_FAILED', message: 'Unknown project tool: unknown_tool' },
@@ -441,12 +464,14 @@ describe(ProjectAccess, () => {
 
     it('reports a failure that is not an error object generically', async () => {
       const access = new ProjectAccess(tmpdir(), {}, undefined, {
-        glob: async () => Promise.reject('index crashed'),
+        glob: async () => {
+          throw 'index crashed';
+        },
       });
 
       const result = JSON.parse(
         await access.execute('list_project_files', JSON.stringify({ glob_pattern: '*', target_directory: null })),
-      );
+      ) as ProjectOutput;
 
       expect(result).toEqual({ error: { code: 'PROJECT_ACCESS_FAILED', message: 'Project tool failed.' } });
     });
@@ -494,7 +519,7 @@ describe(ProjectAccess, () => {
             offset: 0,
           }),
         ),
-      );
+      ) as ProjectOutput;
 
       expect(result).toEqual({
         error: { code: 'PROJECT_ACCESS_FAILED', message: 'Native project content search is unavailable.' },
@@ -534,7 +559,7 @@ describe(ProjectAccess, () => {
             offset: 0,
           }),
         ),
-      );
+      ) as ProjectOutput;
 
       expect(result.files).toEqual(['src/app.ts']);
       expect(searchContents).toHaveBeenCalledWith('needle', expect.objectContaining({ path: null }));
@@ -558,7 +583,7 @@ describe(ProjectAccess, () => {
           'read_project_file',
           JSON.stringify({ path: 'large.txt', start_line: null, end_line: null }),
         ),
-      );
+      ) as ProjectOutput;
 
       expect(result).toEqual({
         error: { code: 'PROJECT_ACCESS_FAILED', message: 'File exceeds the 10-byte read limit.' },
@@ -570,7 +595,7 @@ describe(ProjectAccess, () => {
 
       const result = JSON.parse(
         await access.execute('read_project_file', JSON.stringify({ path: 'src/app.ts', start_line: 3, end_line: 2 })),
-      );
+      ) as ProjectOutput;
 
       expect(result.error.message).toBe('end_line must be greater than or equal to start_line.');
     });
@@ -594,7 +619,7 @@ describe(ProjectAccess, () => {
           'read_project_file',
           JSON.stringify({ path: 'long-line.txt', start_line: null, end_line: null }),
         ),
-      );
+      ) as ProjectOutput;
 
       expect(result.error.message).toBe('This line exceeds the 512 KiB serialized read limit.');
     });
@@ -607,7 +632,7 @@ describe(ProjectAccess, () => {
           'read_project_file',
           JSON.stringify({ path: 'src/app.ts', start_line: 10, end_line: null }),
         ),
-      );
+      ) as ProjectOutput;
 
       expect(result).toMatchObject({
         startLine: 10,
@@ -628,7 +653,7 @@ describe(ProjectAccess, () => {
           'read_project_file',
           JSON.stringify({ path: 'src/endings.txt', start_line: null, end_line: null }),
         ),
-      );
+      ) as ProjectOutput;
 
       expect(result.lines).toEqual([
         { number: 1, content: 'one', lineEnding: '\r\n' },
@@ -704,8 +729,12 @@ describe(ProjectAccess, () => {
       const tool = access.tools.find(candidate => candidate.name === name)!;
       const signal = new AbortController().signal;
 
-      expect(() => tool.validateInput(JSON.stringify(valid))).not.toThrow();
-      expect(() => tool.validateInput(JSON.stringify(invalid))).toThrow();
+      expect(() => {
+        tool.validateInput(JSON.stringify(valid));
+      }).not.toThrow();
+      expect(() => {
+        tool.validateInput(JSON.stringify(invalid));
+      }).toThrow();
       await expect(tool.execute(JSON.stringify(valid), signal, {})).resolves.toBe('{"ok":true}');
       expect(execute).toHaveBeenCalledWith(name, JSON.stringify(valid), signal);
     });

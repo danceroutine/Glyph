@@ -38,7 +38,7 @@ describe(OpenAIProviderFactory, () => {
         apiKey: 'unused',
         maxRetries: 0,
         fetch: async (_url, init) => {
-          requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          requests.push(JSON.parse(typeof init?.body === 'string' ? init.body : '') as Record<string, unknown>);
           return completedStream();
         },
       });
@@ -52,7 +52,7 @@ describe(OpenAIProviderFactory, () => {
       expect(provider.model).toBe('model-a');
       expect(token).toHaveBeenCalledOnce();
       expect(requests[0]).toMatchObject({ model: 'model-a', tools: [] });
-      expect(String(requests[0]?.instructions)).toMatch(/^# Identity\n\nBe concise\.\n\n# Instructions/);
+      expect(String(requests[0]?.instructions)).toMatch(/^# Identity\n\nBe concise\.\n\n# Instructions/u);
     });
 
     it('defaults to project tools for its root and restores saved state', () => {

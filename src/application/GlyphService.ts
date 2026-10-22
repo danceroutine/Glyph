@@ -135,6 +135,7 @@ export class GlyphService {
         throw new AggregateError(
           [error, ...cleanupFailures],
           'Glyph initialization failed and resource cleanup was incomplete.',
+          { cause: error },
         );
       }
       throw error;
@@ -189,7 +190,8 @@ export class GlyphService {
   ): Promise<void> {
     const { signal, currentChatOnly = false } = options;
     signal?.throwIfAborted();
-    if (currentChatOnly && !conversation.id) throw new Error('Chat-scoped review delivery requires a chat id.');
+    if (currentChatOnly && (conversation.id === undefined || conversation.id === ''))
+      throw new Error('Chat-scoped review delivery requires a chat id.');
     const delivery = this.deliverReviewResults(conversation, currentChatOnly, signal);
     this.reviewDeliveries.add(delivery);
     const settled = () => {
@@ -198,7 +200,9 @@ export class GlyphService {
     void delivery.then(settled, settled);
     if (!signal) return delivery;
     return new Promise<void>((resolve, reject) => {
-      const abort = () => reject(signal.reason);
+      const abort = () => {
+        reject(signal.reason);
+      };
       signal.addEventListener('abort', abort, { once: true });
       if (signal.aborted) abort();
       void delivery.then(
@@ -326,16 +330,21 @@ export class GlyphService {
       provider,
       this.logger,
       value => this.backend.redact(value),
-      result => this.recordUsage(result),
+      result => {
+        this.recordUsage(result);
+      },
       this.traceEnabled,
     );
   }
 
   private recordUsage(result: TurnResult): void {
     if (!result.usage) return;
-    for (const key of Object.keys(this.aggregateUsage) as (keyof Usage)[]) {
-      this.aggregateUsage[key] += result.usage[key];
-    }
+    const { usage } = result;
+    this.aggregateUsage.inputTokens += usage.inputTokens;
+    this.aggregateUsage.cachedInputTokens += usage.cachedInputTokens;
+    this.aggregateUsage.outputTokens += usage.outputTokens;
+    this.aggregateUsage.reasoningTokens += usage.reasoningTokens;
+    this.aggregateUsage.totalTokens += usage.totalTokens;
   }
 
   private requireChatSessions(): ChatSessionManager {

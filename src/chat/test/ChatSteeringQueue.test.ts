@@ -27,12 +27,12 @@ describe(ChatSteeringQueue, () => {
       const queue = new ChatSteeringQueue();
 
       expect(queue.take(true)).toEqual([]);
-      expect(() =>
+      expect(() => {
         queue.add(
           { text: 'Too late.', attachments: [] },
           { id: 'late', text: 'Too late.', createdAt: '2026-01-01T00:00:00.000Z', options: {}, attachments: [] },
-        ),
-      ).toThrow('This response has finished. Send the instruction as a new message.');
+        );
+      }).toThrow('This response has finished. Send the instruction as a new message.');
     });
 
     it('keeps accepting instructions when the final boundary still had pending input', () => {
@@ -60,12 +60,12 @@ describe(ChatSteeringQueue, () => {
       const queue = new ChatSteeringQueue();
       queue.close();
 
-      expect(() =>
+      expect(() => {
         queue.add(
           { text: 'Closed.', attachments: [] },
           { id: 'closed', text: 'Closed.', createdAt: '2026-01-01T00:00:00.000Z', options: {}, attachments: [] },
-        ),
-      ).toThrow('This response has finished.');
+        );
+      }).toThrow('This response has finished.');
     });
   });
 });

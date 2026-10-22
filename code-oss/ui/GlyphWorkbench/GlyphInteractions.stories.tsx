@@ -10,7 +10,7 @@ import {
 import { runFixture } from '#code-oss/storybook/fixtures/ToolFixtures.ts';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
 import { useState } from 'preact/hooks';
-import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.js';
+import { questionAnswersSchema } from '#src/interaction/questions/questionAnswersSchema.js';
 import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
 import type { Meta, StoryObj } from '@storybook/preact-vite';
 import { WiredGlyphWorkbench } from './GlyphWorkbench.wired.tsx';
@@ -85,19 +85,19 @@ function QuestionnairePreview({ consecutive = false }: { readonly consecutive?: 
         ...previewActionsFixture(),
         answerQuestion: fn<NonNullable<GlyphWorkbenchViewActions['answerQuestion']>>(
           async (_chat, _run, _id, value) => {
-            const result = value as QuestionFormResult;
+            const result = questionAnswersSchema.parse(value);
             setResponses([
               ...responses,
               {
                 id: request.id,
-                answers: request.questions.map(question => {
-                  const answer = result.answers.find(answer => answer.questionId === question.id)!;
+                answers: request.questions.map(asked => {
+                  const answer = result.answers.find(answer => answer.questionId === asked.id)!;
                   return {
-                    question: question.prompt,
+                    question: asked.prompt,
                     answer:
                       answer.type === QuestionAnswerType.OTHER
                         ? answer.text
-                        : question.options
+                        : asked.options
                             .filter(option => answer.optionIds.includes(option.id))
                             .map(option => option.label)
                             .join(', '),

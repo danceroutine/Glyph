@@ -2,6 +2,7 @@ import type { Node } from 'prosemirror-model';
 import { Plugin } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import { highlightGlyphCode } from '#code-oss/ui/GlyphSyntaxHighlighting/GlyphSyntaxHighlighting.ts';
+import { attrString } from './GlyphPromptMarkdown.ts';
 
 type TokenNode = NonNullable<ReturnType<typeof highlightGlyphCode>>[number];
 interface TokenRange {
@@ -17,7 +18,7 @@ export function glyphPromptHighlighting(): Plugin<DecorationSet> {
   const decorate = (doc: Node): DecorationSet => {
     const decorations: Decoration[] = [];
     doc.descendants((node, position) => {
-      if (node.type.name !== 'code_block') return;
+      if (node.type.name !== 'code_block') return undefined;
       let ranges = cache.get(node);
       if (!ranges) {
         const result: TokenRange[] = [];
@@ -28,13 +29,13 @@ export function glyphPromptHighlighting(): Plugin<DecorationSet> {
         // Bound synchronous work while typing. Atomic context badges stay undecorated.
         const nodes =
           textOnly && node.content.size <= 20_000
-            ? highlightGlyphCode(node.textContent, node.attrs.params, true)
+            ? highlightGlyphCode(node.textContent, attrString(node, 'params'), true)
             : undefined;
         let offset = 0;
         const visit = (tokens: readonly TokenNode[], inherited: readonly string[]) => {
           for (const token of tokens) {
             if (token.type === 'text') {
-              if (token.value.length && inherited.length)
+              if (token.value.length > 0 && inherited.length > 0)
                 result.push({ from: offset, to: offset + token.value.length, classes: inherited.join(' ') });
               offset += token.value.length;
             } else if (token.type === 'element') {

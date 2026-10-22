@@ -71,17 +71,23 @@ function renderComposer(options: GlyphComposerStateOptions) {
   const view = render(<Harness {...options} />);
   return {
     result,
-    rerender: (next: GlyphComposerStateOptions) => view.rerender(<Harness {...next} />),
+    rerender: (next: GlyphComposerStateOptions) => {
+      view.rerender(<Harness {...next} />);
+    },
     unmount: view.unmount,
   };
 }
 
 function typeDraft(composer: ComposerModel, text: string) {
-  act(() => composer.setDocument({ parts: [{ type: 'text', text }], from: text.length, to: text.length }));
+  act(() => {
+    composer.setDocument({ parts: [{ type: 'text', text }], from: text.length, to: text.length });
+  });
 }
 
 function attach(composer: ComposerModel, attachment: GlyphContextAttachment) {
-  act(() => composer.insertAttachments([attachment]));
+  act(() => {
+    composer.insertAttachments([attachment]);
+  });
 }
 
 function prompt() {
@@ -99,8 +105,11 @@ function picker() {
 async function openPicker(actions: GlyphWorkbenchViewActions, text: string, candidates: GlyphContextCandidate[]) {
   vi.mocked(actions.context.searchFiles).mockResolvedValue(candidates);
   typeDraft(actions.composer, text);
-  if (candidates.length) await screen.findAllByRole('option', {}, patience);
-  else await waitFor(() => expect(screen.getByRole('status').textContent).toBe('No matching files'), patience);
+  if (candidates.length > 0) await screen.findAllByRole('option', {}, patience);
+  else
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toBe('No matching files');
+    }, patience);
 }
 
 describe(useGlyphComposerState, () => {
@@ -224,7 +233,9 @@ describe(useGlyphComposerState, () => {
     const { result } = renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
     const [queued] = actions.composer.snapshot.queued;
 
-    act(() => result.current.editQueued(queued!.id));
+    act(() => {
+      result.current.editQueued(queued!.id);
+    });
     expect(screen.getByText('Editing queued message')).toBeTruthy();
     expect(sendButton().getAttribute('aria-label')).toBe('Save queued message');
     typeDraft(actions.composer, '');
@@ -241,7 +252,9 @@ describe(useGlyphComposerState, () => {
     typeDraft(actions.composer, 'Original');
     actions.composer.enqueueDraft();
     const { result } = renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
-    act(() => result.current.editQueued(actions.composer.snapshot.queued[0]!.id));
+    act(() => {
+      result.current.editQueued(actions.composer.snapshot.queued[0]!.id);
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel queue edit' }));
 
@@ -255,16 +268,24 @@ describe(useGlyphComposerState, () => {
     const { rerender } = renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
     typeDraft(actions.composer, 'Go left');
 
-    await act(async () => actions.composer.executeCommand(GlyphComposerCommand.STEER));
+    await act(async () => {
+      actions.composer.executeCommand(GlyphComposerCommand.STEER);
+    });
     expect(steer).not.toHaveBeenCalled();
     rerender({ status: GlyphWorkbenchStatus.STREAMING, actions, disabled: true });
-    await act(async () => actions.composer.executeCommand(GlyphComposerCommand.STEER));
+    await act(async () => {
+      actions.composer.executeCommand(GlyphComposerCommand.STEER);
+    });
     expect(steer).not.toHaveBeenCalled();
     rerender({ status: GlyphWorkbenchStatus.STREAMING, actions: composerActions({ composer: actions.composer }) });
-    await act(async () => actions.composer.executeCommand(GlyphComposerCommand.STEER));
+    await act(async () => {
+      actions.composer.executeCommand(GlyphComposerCommand.STEER);
+    });
     expect(steer).not.toHaveBeenCalled();
     rerender({ status: GlyphWorkbenchStatus.STREAMING, actions });
-    await act(async () => actions.composer.executeCommand(GlyphComposerCommand.STEER));
+    await act(async () => {
+      actions.composer.executeCommand(GlyphComposerCommand.STEER);
+    });
 
     expect(steer).toHaveBeenCalledWith('Go left', [], {});
   });
@@ -274,7 +295,7 @@ describe(useGlyphComposerState, () => {
     const actions = composerActions({ steer });
     renderComposer({ status: GlyphWorkbenchStatus.STREAMING, actions });
     typeDraft(actions.composer, 'Go right');
-    const modifier = /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+    const modifier = /Mac|iP(hone|[oa]d)/u.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
 
     await act(async () => {
       fireEvent.keyDown(prompt(), { key: 'Enter', ...modifier });
@@ -287,7 +308,9 @@ describe(useGlyphComposerState, () => {
     const actions = composerActions();
     const { result } = renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
 
-    act(() => result.current.updateDraft('Replaced'));
+    act(() => {
+      result.current.updateDraft('Replaced');
+    });
 
     expect(actions.composer.snapshot.draft).toBe('Replaced');
     expect(prompt().textContent).toBe('Replaced');
@@ -298,10 +321,16 @@ describe(useGlyphComposerState, () => {
     renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
     typeDraft(actions.composer, 'Line');
 
-    act(() => actions.composer.executeCommand(GlyphComposerCommand.INSERT_NEWLINE));
+    act(() => {
+      actions.composer.executeCommand(GlyphComposerCommand.INSERT_NEWLINE);
+    });
     expect(actions.composer.snapshot.draft).toBe('Line\n\n');
-    act(() => actions.composer.executeCommand('glyph.unknown' as GlyphComposerCommand));
-    await act(async () => actions.composer.executeCommand(GlyphComposerCommand.SEND));
+    act(() => {
+      actions.composer.executeCommand('glyph.unknown' as GlyphComposerCommand);
+    });
+    await act(async () => {
+      actions.composer.executeCommand(GlyphComposerCommand.SEND);
+    });
 
     expect(actions.send).toHaveBeenCalledWith('Line\n\n', [], {});
   });
@@ -338,9 +367,13 @@ describe(useGlyphComposerState, () => {
     expect(actions.send).not.toHaveBeenCalled();
     expect(prompt().getAttribute('contenteditable')).toBe('false');
     expect(attachButton.disabled).toBe(true);
-    await act(async () => selection.resolve([]));
+    await act(async () => {
+      selection.resolve([]);
+    });
 
-    await waitFor(() => expect(attachButton.disabled).toBe(false), patience);
+    await waitFor(() => {
+      expect(attachButton.disabled).toBe(false);
+    }, patience);
     expect(prompt().getAttribute('contenteditable')).toBe('true');
   });
 
@@ -366,7 +399,9 @@ describe(useGlyphComposerState, () => {
       fireEvent.keyDown(prompt(), { key: 'Enter' });
     });
 
-    await waitFor(() => expect(picker()).toBeNull(), patience);
+    await waitFor(() => {
+      expect(picker()).toBeNull();
+    }, patience);
     expect(actions.context.captureFile).toHaveBeenCalledWith('file:///workspace/src/b.ts');
     expect(within(prompt()).getByRole('button', { name: 'Preview src/a.ts' })).toBeTruthy();
     expect(actions.composer.snapshot.document.parts).toEqual([
@@ -386,7 +421,9 @@ describe(useGlyphComposerState, () => {
       fireEvent.click(screen.getByRole('option', { name: 'src/a.ts' }));
     });
 
-    await waitFor(() => expect(picker()).toBeNull(), patience);
+    await waitFor(() => {
+      expect(picker()).toBeNull();
+    }, patience);
     expect(actions.context.captureFile).toHaveBeenCalledWith('file:///workspace/src/a.ts');
   });
 
@@ -448,7 +485,9 @@ describe(useGlyphComposerState, () => {
     expect((await screen.findByRole('alert', {}, patience)).textContent).toBe('Index unavailable');
     typeDraft(actions.composer, '@b');
 
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Timed out'), patience);
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toBe('Timed out');
+    }, patience);
   });
 
   it('discards searches for text that has since changed', async () => {
@@ -463,9 +502,13 @@ describe(useGlyphComposerState, () => {
 
     typeDraft(actions.composer, '@skipped');
     typeDraft(actions.composer, '@one');
-    await waitFor(() => expect(actions.context.searchFiles).toHaveBeenCalledWith('one'), patience);
+    await waitFor(() => {
+      expect(actions.context.searchFiles).toHaveBeenCalledWith('one');
+    }, patience);
     typeDraft(actions.composer, '@two');
-    await waitFor(() => expect(actions.context.searchFiles).toHaveBeenCalledWith('two'), patience);
+    await waitFor(() => {
+      expect(actions.context.searchFiles).toHaveBeenCalledWith('two');
+    }, patience);
     typeDraft(actions.composer, '@final');
     await act(async () => {
       first.resolve([{ uri: 'file:///workspace/stale.ts', path: 'stale.ts' }]);
@@ -494,7 +537,9 @@ describe(useGlyphComposerState, () => {
       fireEvent.keyDown(prompt(), { key: 'Enter' });
     });
 
-    await waitFor(() => expect(captureFolder).toHaveBeenCalledWith('file:///workspace/src'), patience);
+    await waitFor(() => {
+      expect(captureFolder).toHaveBeenCalledWith('file:///workspace/src');
+    }, patience);
   });
 
   it('explains when folders cannot be attached', async () => {
@@ -521,8 +566,12 @@ describe(useGlyphComposerState, () => {
     act(() => {
       fireEvent.keyDown(prompt(), { key: 'Enter' });
     });
-    act(() => actions.composer.setDraft('Changed'));
-    await act(async () => capture.resolve(fileAttachment()));
+    act(() => {
+      actions.composer.setDraft('Changed');
+    });
+    await act(async () => {
+      capture.resolve(fileAttachment());
+    });
 
     expect((await screen.findByRole('alert', {}, patience)).textContent).toBe(
       'The prompt changed during capture. Choose the file again.',
@@ -549,7 +598,9 @@ describe(useGlyphComposerState, () => {
     });
 
     unmount();
-    await act(async () => capture.resolve(fileAttachment()));
+    await act(async () => {
+      capture.resolve(fileAttachment());
+    });
 
     expect(actions.composer.snapshot.document.parts).toEqual([{ type: 'text', text: '@a' }]);
   });
@@ -565,7 +616,9 @@ describe(useGlyphComposerState, () => {
     });
 
     rerender({ status: GlyphWorkbenchStatus.READY, actions: { ...actions, composer: new ComposerModel() } });
-    await act(async () => capture.reject(new Error('Too late')));
+    await act(async () => {
+      capture.reject(new Error('Too late'));
+    });
 
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -601,8 +654,12 @@ describe(useGlyphComposerState, () => {
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'Attach file' }));
     });
-    act(() => actions.composer.setDraft('Changed'));
-    await act(async () => selection.resolve([fileAttachment()]));
+    act(() => {
+      actions.composer.setDraft('Changed');
+    });
+    await act(async () => {
+      selection.resolve([fileAttachment()]);
+    });
 
     expect((await screen.findByRole('alert', {}, patience)).textContent).toBe(
       'The prompt changed during capture. Choose the files again.',
@@ -619,7 +676,9 @@ describe(useGlyphComposerState, () => {
     });
 
     unmount();
-    await act(async () => selection.resolve([fileAttachment()]));
+    await act(async () => {
+      selection.resolve([fileAttachment()]);
+    });
 
     expect(actions.composer.snapshot.document.parts).toEqual([]);
   });
@@ -771,7 +830,9 @@ describe(useGlyphComposerState, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh capture' }));
 
     unmount();
-    await act(async () => refresh.resolve(fileAttachment({ text: 'late' })));
+    await act(async () => {
+      refresh.resolve(fileAttachment({ text: 'late' }));
+    });
 
     expect(replace).toHaveBeenCalledWith('attachment-1', fileAttachment({ text: 'late' }));
   });
@@ -792,7 +853,9 @@ describe(useGlyphComposerState, () => {
 
     renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
 
-    await waitFor(() => expect(actions.send).toHaveBeenCalledWith('Queued', [], expect.any(Object)), patience);
+    await waitFor(() => {
+      expect(actions.send).toHaveBeenCalledWith('Queued', [], expect.any(Object));
+    }, patience);
   });
 
   it('leaves queued messages to hosts that manage the queue or while paused', () => {
@@ -824,17 +887,27 @@ describe(useGlyphComposerState, () => {
     const ids = actions.composer.snapshot.queued.map(message => message.id);
     const { result } = renderComposer({ status: GlyphWorkbenchStatus.STREAMING, actions });
 
-    act(() => result.current.moveQueued(ids[3]!, 0));
+    act(() => {
+      result.current.moveQueued(ids[3]!, 0);
+    });
     expect(actions.composer.snapshot.queued.map(message => message.text)).toEqual([
       'Fourth',
       'First',
       'Second',
       'Third',
     ]);
-    act(() => result.current.removeQueued(ids[3]!));
-    await act(async () => result.current.sendQueued(ids[0]!));
-    await act(async () => result.current.steerQueued(ids[1]!));
-    act(() => result.current.moveQueuedToNewChat(ids[2]!));
+    act(() => {
+      result.current.removeQueued(ids[3]!);
+    });
+    await act(async () => {
+      result.current.sendQueued(ids[0]!);
+    });
+    await act(async () => {
+      result.current.steerQueued(ids[1]!);
+    });
+    act(() => {
+      result.current.moveQueuedToNewChat(ids[2]!);
+    });
     act(() => result.current.openMessageSettings());
     act(() => {
       actions.composer.pauseQueue();
@@ -872,7 +945,9 @@ describe(useGlyphComposerState, () => {
       result.current.steerQueued(queued!.id);
     });
     rerender({ status: GlyphWorkbenchStatus.STREAMING, actions });
-    act(() => result.current.steerQueued(queued!.id));
+    act(() => {
+      result.current.steerQueued(queued!.id);
+    });
 
     expect(sendQueued).not.toHaveBeenCalled();
   });
@@ -963,9 +1038,13 @@ describe(useGlyphComposerState, () => {
     actions.composer.focus();
     renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
     expect(document.activeElement).toBe(prompt());
-    act(() => prompt().blur());
+    act(() => {
+      prompt().blur();
+    });
 
-    act(() => actions.composer.focus());
+    act(() => {
+      actions.composer.focus();
+    });
 
     expect(document.activeElement).toBe(prompt());
   });

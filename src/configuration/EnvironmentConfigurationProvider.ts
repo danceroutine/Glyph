@@ -14,12 +14,12 @@ const environmentConfigurationSchema = z
       .string()
       .trim()
       .optional()
-      .transform(value => value || join(homedir(), '.config', 'glyph')),
+      .transform(value => (value ?? '') || join(homedir(), '.config', 'glyph')),
     CHAT_MODEL: z
       .string()
       .trim()
       .optional()
-      .transform(value => value || undefined),
+      .transform(value => (value ?? '') || undefined),
     CHAT_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
     CHAT_INSTRUCTIONS: z.string().default('You are a helpful assistant. Be clear and concise.'),
     CONTEXT_MAX_FILES: z.coerce.number().int().positive().default(32),
@@ -43,7 +43,7 @@ const environmentConfigurationSchema = z
       .string()
       .trim()
       .optional()
-      .transform(value => value || undefined),
+      .transform(value => (value ?? '') || undefined),
     EDIT_MAX_RAW_PROPOSAL_BYTES: z.coerce
       .number()
       .int()
@@ -99,7 +99,10 @@ const environmentConfigurationSchema = z
         requestTimeoutMs: 30_000,
       },
       traceEnabled: values.CHAT_TRACE,
-      traceFile: values.CHAT_TRACE_FILE ? resolve(values.CHAT_TRACE_FILE) : join(stateDirectory, 'glyph-trace.log'),
+      traceFile:
+        values.CHAT_TRACE_FILE !== undefined && values.CHAT_TRACE_FILE !== ''
+          ? resolve(values.CHAT_TRACE_FILE)
+          : join(stateDirectory, 'glyph-trace.log'),
     } satisfies ConfigurationProvider;
   });
 

@@ -6,6 +6,7 @@ import type { ComponentChildren } from 'preact';
 import type { GlyphTranscriptState } from './useGlyphTranscriptState.ts';
 import { GlyphTurnProgress } from '#code-oss/ui/GlyphTurnProgress/GlyphTurnProgress.presentational.tsx';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
+import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 
 const styles = {
   root: css({ flex: 1, minHeight: 0, overflowY: 'auto', padding: tokens.space.lg }),
@@ -57,16 +58,20 @@ export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessag
       {entry.questionResponses?.map(response => (
         <GlyphQuestionResponses key={response.id} response={response} />
       ))}
-      {entry.role === 'diagnostic' && <strong>{entry.label}</strong>}
+      {entry.role === GlyphTranscriptRole.DIAGNOSTIC && <strong>{entry.label}</strong>}
       {entry.progress && <GlyphTurnProgress progress={entry.progress} openLink={entry.openLink} />}
       <div
-        data-steering={entry.steering || undefined}
-        class={entry.role === 'user' ? `${styles.bubble} ${entry.steering ? styles.steering : ''}` : styles.answer}
+        data-steering={entry.steering === true || undefined}
+        class={
+          entry.role === GlyphTranscriptRole.USER
+            ? `${styles.bubble} ${entry.steering === true ? styles.steering : ''}`
+            : styles.answer
+        }
       >
         <div data-glyph-source={entry.id} data-kind="chat" data-label={entry.label} data-revision={entry.text.length}>
           {content}
         </div>
-        {entry.role === 'user' && entry.restore && (
+        {entry.role === GlyphTranscriptRole.USER && entry.restore && (
           <IconButton
             size={ButtonSize.SMALL}
             class={`glyph-restore ${styles.restore}`}
@@ -81,7 +86,9 @@ export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessag
         )}
       </div>
       {entry.options?.annotations && <GlyphAnnotationPill annotations={entry.options.annotations} />}
-      {entry.attachmentError && <p role="alert">{entry.attachmentError}</p>}
+      {entry.attachmentError !== undefined && entry.attachmentError !== '' && (
+        <p role="alert">{entry.attachmentError}</p>
+      )}
     </div>
   );
 }

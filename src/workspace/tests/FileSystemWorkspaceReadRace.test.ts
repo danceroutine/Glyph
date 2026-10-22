@@ -136,7 +136,7 @@ function readFixture(bytes = Buffer.from('body')) {
     }),
   };
   filesystem.lstat.mockResolvedValue(info);
-  filesystem.realpath.mockImplementation(async path => path);
+  filesystem.realpath.mockImplementation(async (path: string) => path);
   filesystem.readFile.mockResolvedValue(bytes);
   filesystem.open.mockResolvedValue(handle);
   return { store: new FileSystemWorkspaceTextStore('/fixture'), handle, info };

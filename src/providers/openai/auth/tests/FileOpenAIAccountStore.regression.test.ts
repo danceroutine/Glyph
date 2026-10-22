@@ -22,7 +22,7 @@ describe(FileOpenAIAccountStore, () => {
     });
     let renames = 0;
     vi.mocked(writeFile).mockImplementation(async (path, contents) => {
-      files.set(String(path), String(contents));
+      files.set(path as string, contents as string);
     });
     vi.mocked(rename).mockImplementation(async (from, to) => {
       if (++renames === 1) {
@@ -56,9 +56,9 @@ describe(FileOpenAIAccountStore, () => {
     await Promise.resolve();
     release();
     await Promise.all([first, second]);
-    const persisted = JSON.parse(files.get('/memory-only/accounts.json')!);
-    expect(
-      persisted.accounts.map((account: { tokens: { accessToken: string } }) => account.tokens.accessToken),
-    ).toEqual(['a-new', 'b-new']);
+    const persisted = JSON.parse(files.get('/memory-only/accounts.json')!) as {
+      accounts: { tokens: { accessToken: string } }[];
+    };
+    expect(persisted.accounts.map(account => account.tokens.accessToken)).toEqual(['a-new', 'b-new']);
   });
 });

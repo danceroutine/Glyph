@@ -2,12 +2,20 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { contextFiles } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+/** @typedef {import('./ScriptedProvider.mjs').ScriptedProvider} ScriptedProvider */
 
 const reloadsWindow = isolatedLaunch('reloads the window');
 const createsRepository = isolatedLaunch('creates a Git repository and reloads the window');
 const slowsSymbols = isolatedLaunch('switches the fixture extension to slow symbol results');
 const firstTerminal = isolatedLaunch('expects the first terminal of a fresh window');
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} path
+ */
 async function openFile(glyph, path) {
   await glyph.page.keyboard.press('ControlOrMeta+p');
   await glyph.page.locator('.quick-input-widget input').fill(path);
@@ -15,25 +23,34 @@ async function openFile(glyph, path) {
   await expect(glyph.page.locator('.quick-input-widget')).not.toBeVisible();
   await expect(glyph.page.locator('.editor-instance .monaco-editor').first()).toBeVisible();
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} label
+ */
 async function choose(glyph, label) {
   await glyph.page.locator('.quick-input-widget input').fill(label);
   await glyph.page.locator('.quick-input-widget .monaco-list-row').filter({ hasText: label }).first().click();
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} kind
+ */
 async function capture(glyph, kind) {
   await glyph.command('Glyph: Attach IDE Context');
   await choose(glyph, kind);
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ */
 async function send(glyph, provider) {
   const previous = provider.requests.length;
   provider.enqueue({ chunks: ['Context received.'] });
   await glyph.sendButton.click();
   await expect.poll(() => provider.requests.length).toBe(previous + 1);
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
-  const user = provider.requests
-    .at(-1)
-    .body.input.filter(item => item.role === 'user')
-    .at(-1);
-  return JSON.parse(user.content[0].text).files;
+  const user = provider.requests.at(-1)?.body.input.findLast(item => item.role === 'user');
+  return contextFiles(user);
 }
 
 it.describe('Native IDE context captures', () => {
@@ -68,7 +85,7 @@ it.describe('Native IDE context captures', () => {
       await glyph.open();
       const badge = glyph.composer.getByRole('button', { name: 'Open invalid.json' });
       await badge.hover();
-      await expect(badge).toHaveAttribute('title', /Source changed; this capture is stale/);
+      await expect(badge).toHaveAttribute('title', /Source changed; this capture is stale/u);
       await glyph.composer.pressSequentially('Explain this problem');
       const files = await send(glyph, provider);
       expect(files[0].source).toMatchObject({
@@ -110,7 +127,7 @@ it.describe('Native IDE context captures', () => {
     await openFile(glyph, join(glyph.workspace, 'caller.ts'));
     await glyph.page.keyboard.press('ControlOrMeta+a');
     await capture(glyph, 'Related symbols');
-    await expect(glyph.composer.getByRole('button', { name: /Open/ }).first()).toBeVisible({ timeout: 30000 });
+    await expect(glyph.composer.getByRole('button', { name: /Open/u }).first()).toBeVisible({ timeout: 30000 });
     await glyph.composer.pressSequentially('Explain these symbols');
     const files = await send(glyph, provider);
     expect(files.some(file => file.path === 'definition.ts' && file.text.includes('definition:'))).toBe(true);
@@ -123,7 +140,7 @@ it.describe('Native IDE context captures', () => {
     await glyph.page.keyboard.insertText('const freshSymbol = 42;\nfreshSymbol;\n');
     await glyph.page.keyboard.press('ControlOrMeta+a');
     await capture(glyph, 'Related symbols');
-    await expect(glyph.composer.getByRole('button', { name: /Open/ }).first()).toBeVisible();
+    await expect(glyph.composer.getByRole('button', { name: /Open/u }).first()).toBeVisible();
     await glyph.composer.pressSequentially('Explain the new symbols');
     const refreshed = await send(glyph, provider);
     expect(refreshed[0].text).toContain('freshSymbol');
@@ -135,6 +152,7 @@ it.describe('Native IDE context captures', () => {
     'captures staged and unstaged changes against explicit bases without reading unrelated history',
     createsRepository,
     async ({ glyph, provider }) => {
+      /** @param {string[]} args */
       const git = (...args) =>
         execFileSync('git', args, { cwd: glyph.workspace, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' } });
       git('init');
@@ -190,7 +208,7 @@ it.describe('Native IDE context captures', () => {
       await glyph.page.locator('.editor-instance .monaco-editor').first().click();
       await glyph.page.keyboard.press('ControlOrMeta+a');
       await glyph.page.keyboard.insertText('replacement = 456;');
-      await expect(glyph.composer.getByRole('button', { name: /Open/ }).first()).toBeVisible();
+      await expect(glyph.composer.getByRole('button', { name: /Open/u }).first()).toBeVisible();
       await glyph.composer.pressSequentially('Explain stale context');
       const files = await send(glyph, provider);
       expect(files).toHaveLength(1);
@@ -207,20 +225,20 @@ it.describe('Native IDE context captures', () => {
       await glyph.command('Glyph Fixture: Produce Test Output');
       await capture(glyph, 'Test output');
       await choose(glyph, 'Deterministic output run');
-      await expect(glyph.composer.getByRole('button', { name: /Open Test output/ })).toBeVisible();
+      await expect(glyph.composer.getByRole('button', { name: /Open Test output/u })).toBeVisible();
       await glyph.composer.pressSequentially('Explain the test output');
       const files = await send(glyph, provider);
       expect(files[0]).toMatchObject({ source: { kind: 'test' } });
       expect(files[0].text).toContain('FIRST TEST OUTPUT');
       expect(files[0].text).toContain('Run ID:');
       expect(files[0].text).toContain('Controller: glyph-fixture-tests');
-      await glyph.userEntries.getByRole('button', { name: /Open Test output/ }).click();
+      await glyph.userEntries.getByRole('button', { name: /Open Test output/u }).click();
       await glyph.page.keyboard.press('Control+g');
       await glyph.page.locator('.quick-input-widget input').fill(':2:1');
       await glyph.page.keyboard.press('Enter');
       await glyph.page.keyboard.press('Shift+End');
       await glyph.page.keyboard.press('ControlOrMeta+l');
-      await expect(glyph.composer.getByRole('button', { name: /Open Test output/ })).toBeVisible();
+      await expect(glyph.composer.getByRole('button', { name: /Open Test output/u })).toBeVisible();
       await glyph.composer.pressSequentially('Explain this selected line');
       const selected = await send(glyph, provider);
       expect(selected[0].text).toContain('Selected test output:\nselected evidence');
@@ -239,20 +257,20 @@ it.describe('Native IDE context captures', () => {
     firstTerminal,
     async ({ glyph, provider }) => {
       await glyph.command('Terminal: Create New Terminal');
-      const input = glyph.page.getByRole('textbox', { name: /^Terminal 1,/ });
+      const input = glyph.page.getByRole('textbox', { name: /^Terminal 1,/u });
       await expect(input).toBeFocused();
       await input.pressSequentially("printf 'TERMINAL_CAPTURE_SENTINEL\\n'");
       await input.press('Enter');
       await glyph.command('Terminal: Select All');
       await capture(glyph, 'Terminal selection');
-      await expect(glyph.composer.getByRole('button', { name: /Open Terminal/ })).toBeVisible();
+      await expect(glyph.composer.getByRole('button', { name: /Open Terminal/u })).toBeVisible();
       await glyph.composer.pressSequentially('Explain terminal output');
       const files = await send(glyph, provider);
       expect(files[0].source.kind).toBe('terminal');
       expect(files[0].text).toContain('TERMINAL_CAPTURE_SENTINEL');
       expect(files[0].text).toContain('Command: unavailable:');
       await glyph.reload();
-      await glyph.userEntries.getByRole('button', { name: /Open Terminal/ }).click();
+      await glyph.userEntries.getByRole('button', { name: /Open Terminal/u }).click();
       await expect(
         glyph.page.getByText('Terminal closed. The captured output is preserved.', { exact: false }).first(),
       ).toBeVisible();

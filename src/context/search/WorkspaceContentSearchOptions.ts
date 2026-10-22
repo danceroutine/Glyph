@@ -8,7 +8,7 @@ export const workspaceContentSearchOptionsSchema = z
     fileType: z
       .string()
       .max(64)
-      .regex(/^[A-Za-z0-9_-]+$/)
+      .regex(/^[A-Za-z0-9_-]+$/u)
       .nullable()
       .default(null),
     outputMode: z.enum(['content', 'files_with_matches', 'count']).default('content'),

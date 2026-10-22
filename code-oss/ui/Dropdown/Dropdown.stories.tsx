@@ -33,7 +33,9 @@ function DropdownExample({
       <div
         ref={state.root}
         style={{ position: 'relative', width: 180 }}
-        onBlur={event => state.blur(event.relatedTarget)}
+        onBlur={event => {
+          state.blur(event.relatedTarget);
+        }}
       >
         <Button
           buttonRef={state.trigger}

@@ -18,7 +18,7 @@ describe(BackgroundShells, () => {
         {
           id: 'terminal-running',
           workingDirectory: '/project',
-          command: 'pnpm\u001b dev',
+          command: 'pnpm\u001B dev',
           status: ShellSessionStatus.RUNNING,
           background: true,
           outputTail: 'old\nready\n',

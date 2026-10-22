@@ -26,7 +26,7 @@ export class ShellWorkingDirectoryResolver {
     if (this.context.kind === ProjectContextKind.FOLDER) {
       return { root: this.context.roots[0]!.path, relativePath: input ?? '.' };
     }
-    if (!input) throw new Error('A workspace shell command must select a root directory.');
+    if (input === undefined || input === '') throw new Error('A workspace shell command must select a root directory.');
     const [rootName, ...parts] = input.split('/');
     const root = this.context.roots.find(candidate => candidate.name === rootName);
     if (!root) throw new Error(`Workspace shell directory must begin with a root name: ${rootName}.`);

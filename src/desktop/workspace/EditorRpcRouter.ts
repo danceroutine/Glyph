@@ -57,11 +57,12 @@ export class EditorRpcRouter {
         cleanup();
         reject(error);
       };
-      const abort = () => fail(new Error('The editor operation was cancelled.'));
-      const timeout = setTimeout(
-        () => fail(new Error('The editor operation timed out; its outcome must be inspected before retrying.')),
-        30_000,
-      );
+      const abort = () => {
+        fail(new Error('The editor operation was cancelled.'));
+      };
+      const timeout = setTimeout(() => {
+        fail(new Error('The editor operation timed out; its outcome must be inspected before retrying.'));
+      }, 30_000);
       this.pending.set(operationId, {
         connectionId: port.connectionId,
         resolve: response => {

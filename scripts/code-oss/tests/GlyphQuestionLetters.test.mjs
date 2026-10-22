@@ -1,9 +1,7 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { it } from 'vitest';
 import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
-const require = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = require('@playwright/test');
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
 
 it('uses letter controls for choices and Other while retaining radio keyboard and free-text behavior', async () => {
   const result = await build({

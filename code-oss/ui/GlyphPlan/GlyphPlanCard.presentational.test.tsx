@@ -33,7 +33,7 @@ describe(GlyphPlanCard, () => {
     expect(screen.getByText('Everything needed to ship.')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'View Plan' }));
-    fireEvent.click(screen.getByRole('button', { name: /^Build\s*⌘↵$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Build\s*⌘↵$/u }));
     fireEvent.click(screen.getByRole('button', { name: 'Build options' }));
     fireEvent.click(screen.getByRole('button', { name: 'Build in new chat' }));
 
@@ -53,7 +53,7 @@ describe(GlyphPlanCard, () => {
       />,
     );
 
-    expect((screen.getByRole('button', { name: 'View Plan' }) as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByRole('button', { name: /^Build\s*⌘↵$/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'View Plan' }).disabled).toBe(false);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Build\s*⌘↵$/u }).disabled).toBe(true);
   });
 });

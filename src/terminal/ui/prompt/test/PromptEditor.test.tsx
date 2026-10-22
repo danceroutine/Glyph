@@ -14,7 +14,7 @@ describe(PromptEditor, () => {
           label="you> "
           acceptsSubmission
           pendingChanges={0}
-          text={'hello\u001b[31m @src/App.tsx'}
+          text={'hello\u001B[31m @src/App.tsx'}
           cursor={5}
           attachments={['src/App.tsx']}
           matches={[
@@ -23,7 +23,7 @@ describe(PromptEditor, () => {
           ]}
           commandMatches={[]}
           selectedMatch={0}
-          searchError={'bad\u001b[31m'}
+          searchError={'bad\u001B[31m'}
         />,
       );
 

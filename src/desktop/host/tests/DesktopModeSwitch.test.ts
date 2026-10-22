@@ -13,7 +13,9 @@ const request = {
 function fixture(autoApprove = false) {
   vi.useFakeTimers();
   const events: GlyphHostEvent[] = [];
-  const broker = new DesktopInteractionBroker(event => events.push(event));
+  const broker = new DesktopInteractionBroker(event => {
+    events.push(event);
+  });
   const controller = new AbortController();
   const apply = vi.fn(async () => {});
   const settle = vi.fn();
@@ -52,15 +54,21 @@ describe('Desktop mode switch approvals', () => {
     await expect(result).resolves.toBe(autoApprove);
     expect(f.apply).toHaveBeenCalledTimes(autoApprove ? 1 : 0);
     expect(f.settle).toHaveBeenCalledExactlyOnceWith(expect.any(String), autoApprove ? 'approved' : 'denied');
-    expect(() => f.answer(GlyphApprovalDecision.ALLOW_ONCE)).toThrow('no longer pending');
+    expect(() => {
+      f.answer(GlyphApprovalDecision.ALLOW_ONCE);
+    }).toThrow('no longer pending');
   });
   it.each([GlyphApprovalDecision.ALLOW_ONCE, GlyphApprovalDecision.DENY])(
     'honors a manual %s once, ahead of the timer',
     async decision => {
       const f = fixture(decision === GlyphApprovalDecision.DENY);
       const result = f.start();
-      expect(() => f.answer(GlyphApprovalDecision.ALLOW_ONCE, 'another-chat')).toThrow('no longer pending');
-      expect(() => f.answer(GlyphApprovalDecision.ALWAYS_ALLOW)).toThrow();
+      expect(() => {
+        f.answer(GlyphApprovalDecision.ALLOW_ONCE, 'another-chat');
+      }).toThrow('no longer pending');
+      expect(() => {
+        f.answer(GlyphApprovalDecision.ALWAYS_ALLOW);
+      }).toThrow();
       f.answer(decision);
       await expect(result).resolves.toBe(decision === GlyphApprovalDecision.ALLOW_ONCE);
       await vi.advanceTimersByTimeAsync(10000);

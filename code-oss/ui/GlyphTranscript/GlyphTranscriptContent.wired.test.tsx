@@ -43,7 +43,9 @@ const contentEntry = (parts: readonly ContentPart[], overrides: Record<string, u
 
 const predictablePlaceholders = () => {
   const spy = vi.spyOn(crypto, 'getRandomValues').mockImplementation(array => array);
-  onTestFinished(() => spy.mockRestore());
+  onTestFinished(() => {
+    spy.mockRestore();
+  });
 };
 
 describe(WiredGlyphTranscriptContent, () => {
@@ -99,9 +101,11 @@ describe(WiredGlyphTranscriptContent, () => {
     render(<WiredGlyphTranscriptContent entry={entry} />);
 
     expect(screen.getByLabelText('ts code').textContent).toContain('@src/app.ts and @src/b.ts (2-4)');
-    fireEvent.click(screen.getByRole('button', { name: /copy/i }));
+    fireEvent.click(screen.getByRole('button', { name: /copy/iu }));
 
-    await waitFor(() => expect(entry.copyText).toHaveBeenCalledWith('@src/app.ts and @src/b.ts (2-4)'));
+    await waitFor(() => {
+      expect(entry.copyText).toHaveBeenCalledWith('@src/app.ts and @src/b.ts (2-4)');
+    });
   });
 
   it('labels attachments inside diagrams by name', async () => {

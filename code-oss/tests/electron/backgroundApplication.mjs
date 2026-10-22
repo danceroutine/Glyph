@@ -2,17 +2,23 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 
 const sourceRoot = fileURLToPath(new URL('../../../.code-oss/src', import.meta.url));
 const artifactsRoot = fileURLToPath(new URL('../../../.artifacts/code-oss-integration', import.meta.url));
 
+const productSchema = z.object({ nameLong: z.string(), nameShort: z.string() });
+
+function readProduct() {
+  return productSchema.parse(JSON.parse(readFileSync(join(sourceRoot, 'product.json'), 'utf8')));
+}
+
 function bundleName() {
-  return `${JSON.parse(readFileSync(join(sourceRoot, 'product.json'), 'utf8')).nameLong}.app`;
+  return `${readProduct().nameLong}.app`;
 }
 
 export function backgroundExecutablePath() {
-  const product = JSON.parse(readFileSync(join(sourceRoot, 'product.json'), 'utf8'));
-  return join(artifactsRoot, bundleName(), 'Contents', 'MacOS', product.nameShort);
+  return join(artifactsRoot, bundleName(), 'Contents', 'MacOS', readProduct().nameShort);
 }
 
 export default function prepareBackgroundApplication() {

@@ -57,10 +57,14 @@ describe(useDropdownState, () => {
     });
     const trigger = document.createElement('button');
     document.body.append(trigger);
-    onTestFinished(() => trigger.remove());
+    onTestFinished(() => {
+      trigger.remove();
+    });
     result.current.trigger.current = trigger;
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
     expect(result.current.open).toBe(true);
     expect(result.current.activeIndex).toBe(2);
@@ -72,8 +76,12 @@ describe(useDropdownState, () => {
       initialProps: { items: ['Alpha'], selectedIndex: 0, label: item => item, choose: vi.fn() },
     });
 
-    act(() => result.current.toggle());
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
+    act(() => {
+      result.current.toggle();
+    });
 
     expect(result.current.open).toBe(false);
   });
@@ -83,9 +91,13 @@ describe(useDropdownState, () => {
     const { result } = renderHook(useDropdownState<string>, {
       initialProps: { items: ['Alpha', 'Beta'], selectedIndex: 0, label: item => item, choose },
     });
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
-    act(() => result.current.select('Beta'));
+    act(() => {
+      result.current.select('Beta');
+    });
 
     expect(choose).toHaveBeenCalledWith('Beta');
     expect(result.current.open).toBe(false);
@@ -97,10 +109,16 @@ describe(useDropdownState, () => {
       initialProps: { items: ['Alpha'], selectedIndex: 0, label: item => item, choose, disabled: true },
     });
 
-    act(() => result.current.toggle());
-    act(() => result.current.select('Alpha'));
+    act(() => {
+      result.current.toggle();
+    });
+    act(() => {
+      result.current.select('Alpha');
+    });
     const event = key({ key: 'ArrowDown' });
-    act(() => result.current.keydown(event));
+    act(() => {
+      result.current.keydown(event);
+    });
 
     expect(result.current.open).toBe(false);
     expect(choose).not.toHaveBeenCalled();
@@ -116,7 +134,9 @@ describe(useDropdownState, () => {
       disabled: false,
     };
     const { result, rerender } = renderHook(useDropdownState<string>, { initialProps: props });
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
     rerender({ ...props, disabled: true });
     rerender({ ...props, disabled: false });
@@ -129,11 +149,16 @@ describe(useDropdownState, () => {
       initialProps: { items: ['Alpha'], selectedIndex: 0, label: item => item, choose: vi.fn() },
     });
     const root = document.createElement('div');
-    const inside = root.appendChild(document.createElement('span'));
+    const inside = document.createElement('span');
+    root.append(inside);
     document.body.append(root);
-    onTestFinished(() => root.remove());
+    onTestFinished(() => {
+      root.remove();
+    });
     result.current.root.current = root;
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
     act(() => {
       inside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
@@ -151,18 +176,31 @@ describe(useDropdownState, () => {
       initialProps: { items: ['Alpha'], selectedIndex: 0, label: item => item, choose: vi.fn() },
     });
     const root = document.createElement('div');
-    const inside = root.appendChild(document.createElement('button'));
+    const inside = document.createElement('button');
+    root.append(inside);
     document.body.append(root);
-    onTestFinished(() => root.remove());
+    onTestFinished(() => {
+      root.remove();
+    });
     result.current.root.current = root;
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
-    act(() => result.current.blur(inside));
+    act(() => {
+      result.current.blur(inside);
+    });
     expect(result.current.open).toBe(true);
-    act(() => result.current.blur(document.body));
+    act(() => {
+      result.current.blur(document.body);
+    });
     expect(result.current.open).toBe(false);
-    act(() => result.current.toggle());
-    act(() => result.current.blur(null));
+    act(() => {
+      result.current.toggle();
+    });
+    act(() => {
+      result.current.blur(null);
+    });
     expect(result.current.open).toBe(false);
   });
 
@@ -172,7 +210,9 @@ describe(useDropdownState, () => {
     });
 
     for (const init of [{ isComposing: true }, { altKey: true }, { ctrlKey: true }, { metaKey: true }]) {
-      act(() => result.current.keydown(key({ key: 'ArrowDown', ...init })));
+      act(() => {
+        result.current.keydown(key({ key: 'ArrowDown', ...init }));
+      });
     }
 
     expect(result.current.open).toBe(false);
@@ -184,14 +224,20 @@ describe(useDropdownState, () => {
     });
 
     const open = key({ key: 'ArrowDown' });
-    act(() => result.current.keydown(open));
+    act(() => {
+      result.current.keydown(open);
+    });
     expect(open.defaultPrevented).toBe(true);
     expect(result.current.open).toBe(true);
     expect(result.current.activeIndex).toBe(0);
 
-    act(() => result.current.keydown(key({ key: 'ArrowDown' })));
+    act(() => {
+      result.current.keydown(key({ key: 'ArrowDown' }));
+    });
     expect(result.current.activeIndex).toBe(1);
-    act(() => result.current.keydown(key({ key: 'End' })));
+    act(() => {
+      result.current.keydown(key({ key: 'End' }));
+    });
     expect(result.current.activeIndex).toBe(2);
   });
 
@@ -201,7 +247,9 @@ describe(useDropdownState, () => {
     });
 
     const home = key({ key: 'Home' });
-    act(() => result.current.keydown(home));
+    act(() => {
+      result.current.keydown(home);
+    });
 
     expect(result.current.open).toBe(false);
     expect(home.defaultPrevented).toBe(false);
@@ -214,10 +262,16 @@ describe(useDropdownState, () => {
     });
 
     const closedEnter = key({ key: 'Enter' });
-    act(() => result.current.keydown(closedEnter));
+    act(() => {
+      result.current.keydown(closedEnter);
+    });
     expect(closedEnter.defaultPrevented).toBe(false);
-    act(() => result.current.toggle());
-    act(() => result.current.keydown(key({ key: ' ' })));
+    act(() => {
+      result.current.toggle();
+    });
+    act(() => {
+      result.current.keydown(key({ key: ' ' }));
+    });
 
     expect(choose).toHaveBeenCalledWith('Beta');
     expect(result.current.open).toBe(false);
@@ -228,10 +282,14 @@ describe(useDropdownState, () => {
     const { result } = renderHook(useDropdownState<string>, {
       initialProps: { items: [], selectedIndex: -1, label: item => item, choose },
     });
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
     const enter = key({ key: 'Enter' });
-    act(() => result.current.keydown(enter));
+    act(() => {
+      result.current.keydown(enter);
+    });
 
     expect(enter.defaultPrevented).toBe(true);
     expect(choose).not.toHaveBeenCalled();
@@ -243,13 +301,19 @@ describe(useDropdownState, () => {
     });
     const trigger = document.createElement('button');
     document.body.append(trigger);
-    onTestFinished(() => trigger.remove());
+    onTestFinished(() => {
+      trigger.remove();
+    });
     result.current.trigger.current = trigger;
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     trigger.blur();
 
     const escape = key({ key: 'Escape' });
-    act(() => result.current.keydown(escape));
+    act(() => {
+      result.current.keydown(escape);
+    });
 
     expect(escape.defaultPrevented).toBe(true);
     expect(result.current.open).toBe(false);
@@ -262,7 +326,9 @@ describe(useDropdownState, () => {
     });
 
     const escape = key({ key: 'Escape' });
-    act(() => result.current.keydown(escape));
+    act(() => {
+      result.current.keydown(escape);
+    });
 
     expect(escape.defaultPrevented).toBe(false);
   });
@@ -271,9 +337,13 @@ describe(useDropdownState, () => {
     const { result } = renderHook(useDropdownState<string>, {
       initialProps: { items: ['Alpha'], selectedIndex: 0, label: item => item, choose: vi.fn() },
     });
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
-    act(() => result.current.keydown(key({ key: 'Tab' })));
+    act(() => {
+      result.current.keydown(key({ key: 'Tab' }));
+    });
 
     expect(result.current.open).toBe(false);
   });
@@ -284,7 +354,9 @@ describe(useDropdownState, () => {
     });
 
     const typed = key({ key: 'a' });
-    act(() => result.current.keydown(typed));
+    act(() => {
+      result.current.keydown(typed);
+    });
 
     expect(typed.defaultPrevented).toBe(false);
     expect(result.current.open).toBe(false);
@@ -292,7 +364,9 @@ describe(useDropdownState, () => {
 
   it('opens and finds items by typing the start of their labels', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
-    onTestFinished(() => now.mockRestore());
+    onTestFinished(() => {
+      now.mockRestore();
+    });
     const { result } = renderHook(useDropdownState<string>, {
       initialProps: {
         items: ['Apple', 'Banana', 'Blueberry', 'Cherry'],
@@ -302,17 +376,23 @@ describe(useDropdownState, () => {
       },
     });
 
-    act(() => result.current.keydown(key({ key: 'B' })));
+    act(() => {
+      result.current.keydown(key({ key: 'B' }));
+    });
     expect(result.current.open).toBe(true);
     expect(result.current.activeIndex).toBe(1);
 
-    act(() => result.current.keydown(key({ key: 'l' })));
+    act(() => {
+      result.current.keydown(key({ key: 'l' }));
+    });
     expect(result.current.activeIndex).toBe(2);
   });
 
   it('cycles through items sharing a repeated first letter', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
-    onTestFinished(() => now.mockRestore());
+    onTestFinished(() => {
+      now.mockRestore();
+    });
     const { result } = renderHook(useDropdownState<string>, {
       initialProps: {
         items: ['Apple', 'Banana', 'Blueberry', 'Cherry'],
@@ -322,15 +402,21 @@ describe(useDropdownState, () => {
       },
     });
 
-    act(() => result.current.keydown(key({ key: 'b' })));
-    act(() => result.current.keydown(key({ key: 'b' })));
+    act(() => {
+      result.current.keydown(key({ key: 'b' }));
+    });
+    act(() => {
+      result.current.keydown(key({ key: 'b' }));
+    });
 
     expect(result.current.activeIndex).toBe(2);
   });
 
   it('starts a new search after a pause in typing', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
-    onTestFinished(() => now.mockRestore());
+    onTestFinished(() => {
+      now.mockRestore();
+    });
     const { result } = renderHook(useDropdownState<string>, {
       initialProps: {
         items: ['Apple', 'Banana', 'Cherry'],
@@ -340,9 +426,13 @@ describe(useDropdownState, () => {
       },
     });
 
-    act(() => result.current.keydown(key({ key: 'b' })));
+    act(() => {
+      result.current.keydown(key({ key: 'b' }));
+    });
     now.mockReturnValue(5000);
-    act(() => result.current.keydown(key({ key: 'c' })));
+    act(() => {
+      result.current.keydown(key({ key: 'c' }));
+    });
 
     expect(result.current.activeIndex).toBe(2);
   });
@@ -351,9 +441,13 @@ describe(useDropdownState, () => {
     const { result } = renderHook(useDropdownState<string>, {
       initialProps: { items: ['Apple', 'Banana'], selectedIndex: 1, label: item => item, choose: vi.fn() },
     });
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
 
-    act(() => result.current.keydown(key({ key: 'z' })));
+    act(() => {
+      result.current.keydown(key({ key: 'z' }));
+    });
 
     expect(result.current.open).toBe(true);
     expect(result.current.activeIndex).toBe(1);

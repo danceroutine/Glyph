@@ -19,15 +19,18 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
+/** @param {string} text */
 function fixture(text, filename = 'Example.stories.ts') {
   const directory = mkdtempSync(join(tmpdir(), 'glyph-order-'));
   directories.push(directory);
+  /** @type {{ jsPlugins: string[], plugins: string[], categories: Record<string, string>, rules: Record<string, unknown> }} */
   const config = JSON.parse(readFileSync(join(root, '.oxlintrc.json'), 'utf8'));
   config.jsPlugins = config.jsPlugins.map(plugin =>
     plugin.startsWith('.') ? join(root, plugin) : fileURLToPath(import.meta.resolve(plugin)),
   );
   config.plugins = [];
   config.categories = { correctness: 'off' };
+  config.rules = Object.fromEntries(Object.entries(config.rules).filter(([name]) => name.includes('/')));
   const configPath = join(directory, '.oxlintrc.json');
   const file = join(directory, filename);
   writeFileSync(configPath, JSON.stringify(config));
@@ -83,7 +86,7 @@ it('loads Perfectionist in Oxlint and groups methods while preserving fields and
   ];
   const positions = names.map(name => fixed.text.indexOf(`\n  ${name}`));
   expect(positions.every(position => position >= 0)).toBe(true);
-  expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  expect(positions).toEqual(positions.toSorted((a, b) => a - b));
   expect(lint(true).text).toBe(fixed.text);
 });
 

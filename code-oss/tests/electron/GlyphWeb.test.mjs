@@ -1,12 +1,26 @@
+import { parseJson, webToolOutput } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+
 const reloadsWindow = isolatedLaunch('reloads the window');
+/** @param {string} text */
 const pageHtml = text =>
   `<html><head><title>Octopus source</title></head><body><main><h1>Octopus source</h1><p>${text}</p></main></body></html>`;
+/** @param {string} url */
 const searchHtml = url =>
   `<html><body><div class="result"><a class="result__a" href="${url}">Giant Pacific octopus</a><a class="result__snippet">Search excerpt about the largest octopus.</a></div></body></html>`;
+/**
+ * @param {string} name
+ * @param {unknown} input
+ */
 const call = (name, input, callId = name) => ScriptedProvider.tool(name, input, { namespace: 'web', callId });
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {unknown[]} output
+ */
 async function run(glyph, provider, output, text = 'Web research complete.', renderedText = text) {
   const index = provider.requests.length;
   provider.enqueue({ output }, { chunks: [text] });
@@ -15,7 +29,7 @@ async function run(glyph, provider, output, text = 'Web research complete.', ren
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
   return provider.requests[index + 1].body.input
     .filter(item => item.type === 'function_call_output')
-    .map(item => JSON.parse(item.output));
+    .map(item => webToolOutput.parse(parseJson(item.output)));
 }
 
 it.describe('Web fetch and search', () => {
@@ -90,17 +104,18 @@ it.describe('Web fetch and search', () => {
   });
 
   it('cancels a slow fetch without continuing from a late response', async ({ glyph, provider }) => {
-    let late;
+    /** @type {import('node:http').ServerResponse[]} */
+    const late = [];
     provider.webRoutes.set('/web/slow', (_request, response) => {
-      late = response;
+      late.push(response);
     });
     provider.enqueue({ output: [call('web_fetch', { url: provider.url + '/web/slow' })] });
     await glyph.send('Fetch the slow page.');
-    await expect.poll(() => !!late).toBe(true);
+    await expect.poll(() => late.length > 0).toBe(true);
     await expect(glyph.page.locator('[data-tool-id] summary').filter({ hasText: 'Fetching page' })).toBeVisible();
     await glyph.page.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
-    late.end(pageHtml('Late response must not continue the turn.'));
+    late[0]?.end(pageHtml('Late response must not continue the turn.'));
     expect(provider.requests).toHaveLength(1);
     await glyph.page.locator('[data-tool-id] summary').filter({ hasText: 'Interrupted' }).click();
     await expect(glyph.page.getByText('Request cancelled', { exact: true })).toBeVisible();

@@ -278,7 +278,11 @@ describe(GlyphService, () => {
       const conversation = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
       const result = await conversation.send(
         'question',
-        { push: part => parts.push(part) },
+        {
+          push: part => {
+            parts.push(part);
+          },
+        },
         new AbortController().signal,
       );
       conversation.reset();
@@ -310,7 +314,11 @@ describe(GlyphService, () => {
 
       const result = await conversation.send(
         'question',
-        { push: part => parts.push(part) },
+        {
+          push: part => {
+            parts.push(part);
+          },
+        },
         new AbortController().signal,
       );
 

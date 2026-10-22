@@ -9,6 +9,7 @@ import {
 import { WiredGlyphTranscriptContent } from './GlyphTranscriptContent.wired.tsx';
 import { GlyphTranscript, GlyphTranscriptMessage } from './GlyphTranscript.presentational.tsx';
 import { useGlyphTranscriptState, type GlyphTranscriptStateOptions } from './useGlyphTranscriptState.ts';
+import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 
 export interface WiredGlyphTranscriptProps extends GlyphTranscriptStateOptions {
   readonly proposals?: readonly GlyphProposalSummary[];
@@ -33,30 +34,35 @@ export function WiredGlyphTranscript({
     context: actions?.context,
     openLink: actions?.openLink,
     copyText: actions?.copyText,
-    branch: !readOnly && chatId && actions?.branchChat ? turnId => actions.branchChat!(chatId, turnId) : undefined,
+    branch:
+      !readOnly && chatId !== undefined && chatId !== '' && actions?.branchChat
+        ? turnId => actions.branchChat!(chatId, turnId)
+        : undefined,
     restore:
-      !readOnly && chatId && actions?.restoreCheckpoint
+      !readOnly && chatId !== undefined && chatId !== '' && actions?.restoreCheckpoint
         ? turnId => actions.restoreCheckpoint!(chatId, turnId)
         : undefined,
   });
   return (
     <GlyphTranscript transcript={state.transcript} plans={plans}>
       {state.entries.map(entry =>
-        entry.role === 'assistant' ? (
+        entry.role === GlyphTranscriptRole.ASSISTANT ? (
           <GlyphAgentMessageWithState
             key={entry.id}
             entry={entry}
             changes={proposals
               .filter(
                 proposal =>
-                  proposal.chatId === chatId && entry.progress?.tools.some(tool => tool.summary?.includes(proposal.id)),
+                  proposal.chatId === chatId &&
+                  entry.progress?.tools.some(tool => tool.summary?.includes(proposal.id) === true) === true,
               )
               .map(proposal => (
                 <GlyphFileChanges
                   key={proposal.id}
                   files={proposal.files}
                   review={fileId => {
-                    if (chatId) void actions?.reviewProposalFile?.(chatId, proposal.id, fileId);
+                    if (chatId !== undefined && chatId !== '')
+                      void actions?.reviewProposalFile?.(chatId, proposal.id, fileId);
                   }}
                 />
               ))}

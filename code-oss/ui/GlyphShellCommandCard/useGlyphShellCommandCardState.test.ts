@@ -77,10 +77,14 @@ describe(useGlyphShellCommandCardState, () => {
       initialProps: { activity: shellActivity(), chatId: 'chat', readOnly: false, actions: shellActions() },
     });
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     expect(result.current.expanded).toBe(true);
 
-    act(() => result.current.toggle());
+    act(() => {
+      result.current.toggle();
+    });
     expect(result.current.expanded).toBe(false);
   });
 
@@ -89,10 +93,16 @@ describe(useGlyphShellCommandCardState, () => {
     const { result } = renderHook(useGlyphShellCommandCardState, {
       initialProps: { activity: shellActivity(), chatId: 'chat', readOnly: false, actions },
     });
-    act(() => result.current.changeInput('yes'));
-    act(() => result.current.changeAppendNewline(false));
+    act(() => {
+      result.current.changeInput('yes');
+    });
+    act(() => {
+      result.current.changeAppendNewline(false);
+    });
 
-    await act(async () => result.current.sendInput());
+    await act(async () => {
+      result.current.sendInput();
+    });
 
     expect(actions.writeShellInput).toHaveBeenCalledWith('chat', 'session', 'yes', false);
     expect(result.current.input).toBe('');
@@ -120,10 +130,14 @@ describe(useGlyphShellCommandCardState, () => {
       initialProps: { activity: shellActivity(), chatId: 'chat', readOnly: false, actions: shellActions() },
     });
 
-    act(() => result.current.changeAppendNewline(false));
+    act(() => {
+      result.current.changeAppendNewline(false);
+    });
     expect(result.current.canSend).toBe(false);
 
-    act(() => result.current.changeInput('y'));
+    act(() => {
+      result.current.changeInput('y');
+    });
     expect(result.current.canSend).toBe(true);
   });
 
@@ -136,8 +150,12 @@ describe(useGlyphShellCommandCardState, () => {
       initialProps: { activity: detachedShellActivity(), chatId: 'chat', readOnly: false, actions },
     });
 
-    await act(async () => stopped.result.current.sendInput());
-    await act(async () => detached.result.current.sendInput());
+    await act(async () => {
+      stopped.result.current.sendInput();
+    });
+    await act(async () => {
+      detached.result.current.sendInput();
+    });
 
     expect(actions.writeShellInput).not.toHaveBeenCalled();
   });
@@ -147,9 +165,13 @@ describe(useGlyphShellCommandCardState, () => {
     const { result } = renderHook(useGlyphShellCommandCardState, {
       initialProps: { activity: shellActivity(), chatId: 'chat', readOnly: false, actions },
     });
-    act(() => result.current.changeInput('draft'));
+    act(() => {
+      result.current.changeInput('draft');
+    });
 
-    await act(async () => result.current.close());
+    await act(async () => {
+      result.current.close();
+    });
 
     expect(actions.stopShell).toHaveBeenCalledWith('chat', 'session');
     expect(result.current.input).toBe('draft');
@@ -161,7 +183,9 @@ describe(useGlyphShellCommandCardState, () => {
       initialProps: { activity: detachedShellActivity(), chatId: 'chat', readOnly: false, actions },
     });
 
-    await act(async () => result.current.close());
+    await act(async () => {
+      result.current.close();
+    });
 
     expect(actions.stopShell).not.toHaveBeenCalled();
   });
@@ -175,8 +199,12 @@ describe(useGlyphShellCommandCardState, () => {
       initialProps: { activity: shellActivity({ live: false }), chatId: 'chat', readOnly: false, actions },
     });
 
-    await act(async () => readOnly.result.current.close());
-    await act(async () => ended.result.current.close());
+    await act(async () => {
+      readOnly.result.current.close();
+    });
+    await act(async () => {
+      ended.result.current.close();
+    });
 
     expect(readOnly.result.current.disabled).toBe(true);
     expect(actions.stopShell).not.toHaveBeenCalled();
@@ -185,20 +213,31 @@ describe(useGlyphShellCommandCardState, () => {
   it('runs one shell action at a time', async () => {
     const actions = shellActions();
     let finish!: () => void;
-    actions.stopShell.mockImplementationOnce(() => new Promise<void>(resolve => (finish = resolve)));
+    actions.stopShell.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        }),
+    );
     const { result } = renderHook(useGlyphShellCommandCardState, {
       initialProps: { activity: shellActivity(), chatId: 'chat', readOnly: false, actions },
     });
 
-    act(() => result.current.close());
+    act(() => {
+      result.current.close();
+    });
     expect(result.current.pending).toBe(true);
     expect(result.current.disabled).toBe(true);
     expect(result.current.canSend).toBe(false);
 
-    await act(async () => result.current.sendInput());
+    await act(async () => {
+      result.current.sendInput();
+    });
     expect(actions.writeShellInput).not.toHaveBeenCalled();
 
-    await act(async () => finish());
+    await act(async () => {
+      finish();
+    });
     expect(result.current.pending).toBe(false);
   });
 
@@ -209,13 +248,19 @@ describe(useGlyphShellCommandCardState, () => {
       initialProps: { activity: shellActivity(), chatId: 'chat', readOnly: false, actions },
     });
 
-    await act(async () => result.current.close());
+    await act(async () => {
+      result.current.close();
+    });
     expect(result.current.error).toBe('Gone');
 
-    await act(async () => result.current.close());
+    await act(async () => {
+      result.current.close();
+    });
     expect(result.current.error).toBe('Refused');
 
-    await act(async () => result.current.close());
+    await act(async () => {
+      result.current.close();
+    });
     expect(result.current.error).toBeUndefined();
   });
 });

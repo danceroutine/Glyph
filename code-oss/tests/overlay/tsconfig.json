@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "./**/*.ts",
+    "../../overlay/src/**/*.ts",
+    "../../../.code-oss/src/src/typings/**/*.d.ts",
+    "../../../.code-oss/src/src/vs/monaco.d.ts",
+    "../../../.code-oss/src/src/vs/workbench/contrib/debug/common/debugProtocol.d.ts"
+  ]
+}

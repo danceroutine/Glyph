@@ -39,7 +39,7 @@ export class TextDocument {
         }
         return { start, end, replacement: edit.replacement_text };
       })
-      .sort((left, right) => left.start - right.start || left.end - right.end);
+      .toSorted((left, right) => left.start - right.start || left.end - right.end);
 
     for (let index = 1; index < resolved.length; index++) {
       const previous = resolved[index - 1]!;
@@ -77,9 +77,7 @@ export class TextDocument {
       throw new EditError(EditFailureReason.INCONSISTENT, 'Edit position is outside Base.', { path: this.path });
     }
     const offset = range.start + character;
-    const before = this.text.charCodeAt(offset - 1);
-    const after = this.text.charCodeAt(offset);
-    if (before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) {
+    if (offset > 0 && (this.text.codePointAt(offset - 1) ?? 0) > 0xffff) {
       throw new EditError(EditFailureReason.INCONSISTENT, 'Edit boundary splits a UTF-16 surrogate pair.', {
         path: this.path,
       });

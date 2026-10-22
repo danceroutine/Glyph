@@ -51,7 +51,7 @@ async function actualFileSystem() {
 }
 
 describe(FileSystemWorkspaceTextStore, () => {
-  it.each(['\ud800', '\udc00', 'folder/\ud800.txt', 'folder/\udc00.txt'])(
+  it.each(['\uD800', '\uDC00', 'folder/\uD800.txt', 'folder/\uDC00.txt'])(
     'rejects malformed Unicode path %j before resolving a filesystem key',
     async path => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-malformed-path-'));
@@ -120,7 +120,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     });
     expect(read.mock.calls.some(([path]) => path === 'target.txt')).toBe(false);
   });
-  it.each(['invalid\0text', '\ud800', '\udc00'])(
+  it.each(['invalid\0text', '\uD800', '\uDC00'])(
     'rejects unsupported text %j in creates and replacements without modifying the filesystem',
     async text => {
       const root = await mkdtemp(join(tmpdir(), 'workspace-nul-mutation-'));
@@ -189,7 +189,7 @@ describe(FileSystemWorkspaceTextStore, () => {
       expect(snapshot.text).toBe('a\r\nb\nc\r\t  ');
       expect(snapshot.byteOrderMark).toBe(true);
       expect(snapshot.byteLength).toBe(bytes.length);
-      expect(snapshot.revision).toMatch(/^[a-f0-9]{64}$/);
+      expect(snapshot.revision).toMatch(/^[a-f0-9]{64}$/u);
     });
 
     it('rejects invalid UTF-8, NUL content, and paths outside the workspace', async () => {
@@ -367,8 +367,17 @@ describe(FileSystemWorkspaceTextStore, () => {
       const root = await workspaceRoot('wl-');
       await writeFile(join(root, 'file.ts'), 'file');
       const server = createServer();
-      await new Promise<void>(resolve => server.listen(join(root, 's'), resolve));
-      onTestFinished(() => new Promise<void>(resolve => server.close(() => resolve())));
+      await new Promise<void>(resolve => {
+        server.listen(join(root, 's'), resolve);
+      });
+      onTestFinished(
+        () =>
+          new Promise<void>(resolve => {
+            server.close(() => {
+              resolve();
+            });
+          }),
+      );
       const store = new FileSystemWorkspaceTextStore(root);
 
       await expect(store.list(10)).resolves.toEqual({ files: ['file.ts'], truncated: false });

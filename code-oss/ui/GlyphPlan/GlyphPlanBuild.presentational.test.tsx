@@ -10,7 +10,7 @@ describe(GlyphPlanBuild, () => {
     const buildNew = vi.fn();
     render(<GlyphPlanBuild build={build} buildNew={buildNew} disabled={false} />);
 
-    const primary = screen.getByRole('button', { name: /^Build\s*⌘↵$/ });
+    const primary = screen.getByRole('button', { name: /^Build\s*⌘↵$/u });
     expect(primary.querySelector('kbd')?.textContent).toBe('⌘↵');
     fireEvent.click(primary);
     fireEvent.click(screen.getByRole('button', { name: 'Build options' }));
@@ -23,7 +23,7 @@ describe(GlyphPlanBuild, () => {
   it('cannot build while disabled', () => {
     render(<GlyphPlanBuild build={vi.fn()} buildNew={vi.fn()} disabled />);
 
-    expect((screen.getByRole('button', { name: /^Build\s*⌘↵$/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Build options' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Build\s*⌘↵$/u }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Build options' }).disabled).toBe(true);
   });
 });

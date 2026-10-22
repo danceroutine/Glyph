@@ -19,7 +19,9 @@ describe(useGlyphApprovalCardState, () => {
       const { result, unmount } = renderHook(useGlyphApprovalCardState, {
         initialProps: { request, chatId: 'chat-1', runId: 'run-1', actions: { decideApproval }, disabled: false },
       });
-      await act(async () => result.current[choice]());
+      await act(async () => {
+        result.current[choice]();
+      });
       expect(decideApproval).toHaveBeenLastCalledWith('chat-1', 'run-1', 'approval-1', decision);
       expect(result.current.pending).toBe(true);
       unmount();
@@ -38,7 +40,9 @@ describe(useGlyphApprovalCardState, () => {
       },
     });
 
-    await act(async () => result.current.run());
+    await act(async () => {
+      result.current.run();
+    });
 
     expect(decideApproval).not.toHaveBeenCalled();
     expect(result.current.disabled).toBe(true);
@@ -57,7 +61,9 @@ describe(useGlyphApprovalCardState, () => {
       },
     });
 
-    await act(async () => result.current.run());
+    await act(async () => {
+      result.current.run();
+    });
 
     expect(result.current.error).toBe('Approval expired');
     expect(result.current.pending).toBe(false);

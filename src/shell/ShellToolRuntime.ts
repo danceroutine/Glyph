@@ -7,6 +7,7 @@ import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import type { ShellSessionManager } from './ShellSessionManager.ts';
 import { ShellToolName } from './ShellToolName.ts';
 import { ShellToolNamespace } from './ShellToolNamespace.ts';
+import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 
 const executeArgumentsSchema = z
   .object({
@@ -104,8 +105,9 @@ export class ShellToolRuntime implements ToolSource {
   ): Promise<string> {
     try {
       const ownerChatId = context?.chat?.id;
-      if (!ownerChatId) throw new Error('Shell tools require an owning chat execution context.');
-      switch (name) {
+      if (ownerChatId === undefined || ownerChatId === '')
+        throw new Error('Shell tools require an owning chat execution context.');
+      switch (isEnumValue(ShellToolName, name) ? name : undefined) {
         case ShellToolName.EXECUTE: {
           const {
             command,
@@ -116,7 +118,9 @@ export class ShellToolRuntime implements ToolSource {
             timeout_ms: timeoutMs,
           } = executeArgumentsSchema.parse(JSON.parse(input));
           const result = await this.sessions.execute(command, {
-            ...(context?.executionId ? { executionId: context.executionId } : {}),
+            ...(context?.executionId !== undefined && context?.executionId !== ''
+              ? { executionId: context.executionId }
+              : {}),
             ...(terminalId === null ? {} : { terminalId }),
             ...(workingDirectory === null ? {} : { workingDirectory }),
             background,
@@ -154,7 +158,9 @@ export class ShellToolRuntime implements ToolSource {
           return JSON.stringify({
             terminals: this.sessions.sessionsFor(ownerChatId).map(session => ({
               terminal_id: session.id,
-              ...(session.ownerChatId ? { owner_chat_id: session.ownerChatId } : {}),
+              ...(session.ownerChatId !== undefined && session.ownerChatId !== ''
+                ? { owner_chat_id: session.ownerChatId }
+                : {}),
               working_directory: session.workingDirectory,
               command: session.command,
               status: session.status,
@@ -182,7 +188,9 @@ export class ShellToolRuntime implements ToolSource {
 function serializeCommandResult(result: Awaited<ReturnType<ShellSessionManager['execute']>>): Record<string, unknown> {
   const serialized: Record<string, unknown> = {
     terminal_id: result.terminalId,
-    ...(result.workingDirectory ? { working_directory: result.workingDirectory } : {}),
+    ...(result.workingDirectory !== undefined && result.workingDirectory !== ''
+      ? { working_directory: result.workingDirectory }
+      : {}),
     status: result.status,
     output: result.output,
     ...(result.exitCode === undefined ? {} : { exit_code: result.exitCode }),

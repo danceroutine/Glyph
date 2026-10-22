@@ -87,7 +87,9 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
             appearance={ButtonAppearance.GHOST}
             type="button"
             disabled={state.disabled}
-            onClick={state.undo}
+            onClick={() => {
+              void state.undo();
+            }}
           >
             {state.undoLabel}
           </Button>
@@ -96,7 +98,9 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
             appearance={ButtonAppearance.GHOST}
             type="button"
             disabled={state.keepDisabled}
-            onClick={state.keep}
+            onClick={() => {
+              void state.keep();
+            }}
           >
             {state.keepLabel}
           </Button>
@@ -105,7 +109,9 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
 
             type="button"
             disabled={state.disabled}
-            onClick={state.review}
+            onClick={() => {
+              void state.review();
+            }}
           >
             Review
           </Button>
@@ -129,7 +135,9 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
                     title={file.path}
                     aria-label={`Review ${file.path}`}
                     disabled={state.disabled}
-                    onClick={file.review}
+                    onClick={() => {
+                      void file.review();
+                    }}
                   >
                     <GlyphFileIcon path={file.path} />
                     <span
@@ -148,14 +156,20 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
                       appearance={ButtonAppearance.GHOST}
 
                       type="button"
-                      aria-label={`${'Revert'} ${file.path}`}
+                      aria-label={`Revert ${file.path}`}
                       title={'Revert file change'}
                       disabled={state.disabled}
-                      onClick={file.undo}
+                      onClick={() => {
+                        void file.undo();
+                      }}
                     >
-                      {file.autoApplied ? <Undo2 size={18} aria-hidden="true" /> : <X size={20} aria-hidden="true" />}
+                      {file.autoApplied === true ? (
+                        <Undo2 size={18} aria-hidden="true" />
+                      ) : (
+                        <X size={20} aria-hidden="true" />
+                      )}
                     </IconButton>
-                    {!file.autoApplied && (
+                    {file.autoApplied !== true && (
                       <IconButton
                         size={ButtonSize.SMALL}
                         appearance={ButtonAppearance.GHOST}
@@ -164,14 +178,16 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
                         aria-label={`Keep ${file.path}`}
                         title="Apply proposed changes"
                         disabled={state.disabled || !file.canKeep}
-                        onClick={file.keep}
+                        onClick={() => {
+                          void file.keep();
+                        }}
                       >
                         <Check size={18} aria-hidden="true" />
                       </IconButton>
                     )}
                   </span>
                 </div>
-                {file.status && (
+                {file.status !== undefined && file.status !== '' && (
                   <div role="status" class={styles.error}>
                     {file.status}
                   </div>
@@ -181,7 +197,7 @@ export function GlyphPendingReviews(state: GlyphPendingReviewsState) {
           </ul>
         </div>
       </div>
-      {state.error && (
+      {state.error !== undefined && state.error !== '' && (
         <div class={styles.error} role="alert">
           {state.error}
         </div>

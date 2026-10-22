@@ -10,6 +10,7 @@ import { buildGlyphUi } from './build-ui.mjs';
 import { resolveOverlayImports } from './resolve-overlay-imports.mjs';
 import { sourceAliasTransformer } from '#scripts/imports/source-alias-transformer.mjs';
 import ts from 'typescript';
+import { z } from 'zod';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const sourceRoot = join(repositoryRoot, '.code-oss', 'src');
@@ -44,6 +45,10 @@ await copyProtocol(
   join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'common', 'workbench'),
 );
 
+/**
+ * @param {string} source
+ * @param {string} target
+ */
 async function copyProtocol(source, target) {
   await mkdir(target, { recursive: true });
   for (const entry of await readdir(source, { withFileTypes: true })) {
@@ -64,6 +69,10 @@ async function copyProtocol(source, target) {
   }
 }
 
+/**
+ * @param {string} source
+ * @param {string} target
+ */
 async function resolveOverlayTree(source, target) {
   for (const entry of await readdir(source, { withFileTypes: true })) {
     const input = join(source, entry.name);
@@ -216,7 +225,7 @@ await insertOnce(
 );
 
 const productPath = join(sourceRoot, 'product.json');
-const product = JSON.parse(await readFile(productPath, 'utf8'));
+const product = z.record(z.string(), z.unknown()).parse(JSON.parse(await readFile(productPath, 'utf8')));
 Object.assign(product, {
   nameShort: 'Glyph',
   nameLong: 'Glyph',
@@ -239,6 +248,11 @@ Object.assign(product, {
 });
 await writeFile(productPath, `${JSON.stringify(product, null, '\t')}\n`);
 
+/**
+ * @param {string} path
+ * @param {string} insertion
+ * @param {string} anchor
+ */
 async function insertOnce(path, insertion, anchor) {
   // Anchors deliberately fail closed when the pinned upstream layout changes;
   // silently inserting near the wrong code would be harder to review and debug.

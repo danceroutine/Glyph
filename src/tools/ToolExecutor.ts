@@ -65,7 +65,7 @@ export class ToolExecutor {
             false,
           ),
         };
-      if (tool.requiresExclusiveRound && options.roundCallCount !== 1)
+      if (tool.requiresExclusiveRound === true && options.roundCallCount !== 1)
         return {
           phase: ToolActivityPhase.FAILED,
           output: failure(

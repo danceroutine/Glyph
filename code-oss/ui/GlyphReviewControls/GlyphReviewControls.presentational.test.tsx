@@ -188,7 +188,9 @@ describe(GlyphReviewControls, () => {
     );
 
     const suffix = container.querySelector<HTMLElement>('[data-keep-all-suffix]')!;
-    await waitFor(() => expect(suffix.hidden).toBe(true));
+    await waitFor(() => {
+      expect(suffix.hidden).toBe(true);
+    });
     expect(container.querySelectorAll('[data-keep-all-suffix]')).toHaveLength(1);
   });
 
@@ -199,7 +201,9 @@ describe(GlyphReviewControls, () => {
       </div>,
     );
 
-    await waitFor(() => expect(container.querySelector<HTMLElement>('[data-keep-all-suffix]')!.hidden).toBe(false));
+    await waitFor(() => {
+      expect(container.querySelector<HTMLElement>('[data-keep-all-suffix]')!.hidden).toBe(false);
+    });
   });
 
   it('measures file controls without a keep all action', () => {
@@ -253,9 +257,9 @@ describe(GlyphReviewControls, () => {
   it('locks the comment while it is being submitted', () => {
     render(<GlyphReviewControls {...controlsState({ commentOpen: true, commentPending: true })} />);
 
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Reject with comment' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole<HTMLTextAreaElement>('textbox').disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Cancel' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Reject with comment' }).disabled).toBe(true);
   });
 
   it('shows why the last action failed', () => {

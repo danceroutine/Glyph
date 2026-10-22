@@ -20,6 +20,7 @@ import { getWorkspaceKey, WorkspaceOwnershipRegistry } from './WorkspaceOwnershi
 
 import type { GlyphDesktopWorkspaceRuntime, GlyphRuntimeCommand } from './GlyphDesktopWorkspaceRuntime.ts';
 import type { GlyphDesktopWorkspaceRuntimeFactory } from './GlyphDesktopWorkspaceRuntimeFactory.ts';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 interface Connection {
   readonly identity: GlyphConnectionIdentity;
@@ -94,8 +95,9 @@ export class GlyphDesktopHost {
     this.connections.set(connectionId, connection);
   }
 
-  async receive(connectionId: string, request: GlyphRequestEnvelope): Promise<void> {
+  async receive(connectionId: string, request: unknown): Promise<void> {
     const connection = this.requireConnection(connectionId);
+    if (!isRequestEnvelope(request)) throw new Error('Invalid request envelope.');
     const result = await connection.requests.run(request.requestId, () => this.execute(connection, request));
     for (const event of result) this.send(connection, event);
   }
@@ -136,7 +138,7 @@ export class GlyphDesktopHost {
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failures.length > 0) {
       throw new AggregateError(
-        failures.map(failure => failure.reason),
+        failures.map((failure): unknown => failure.reason),
         'One or more desktop workspace runtimes failed to stop.',
       );
     }
@@ -144,7 +146,7 @@ export class GlyphDesktopHost {
 
   private async execute(connection: Connection, request: GlyphRequestEnvelope): Promise<readonly GlyphHostEvent[]> {
     const authorityError = this.validateAuthority(connection, request);
-    if (authorityError) {
+    if (authorityError !== undefined && authorityError !== '') {
       return [
         toErrorGlyphHostEvent({
           requestId: request.requestId,
@@ -249,7 +251,9 @@ export class GlyphDesktopHost {
             identity: connection.identity,
             roots: command.roots,
             trusted: command.trusted,
-            emit: event => this.broadcast(key, event),
+            emit: event => {
+              this.broadcast(key, event);
+            },
           })
           .then(runtime => {
             const created = { runtime, ownerWindowId: ownership.ownerWindowId };
@@ -260,7 +264,9 @@ export class GlyphDesktopHost {
             this.ownership.release(connection.identity);
             throw error;
           })
-          .finally(() => this.runtimeCreations.delete(key));
+          .finally(() => {
+            this.runtimeCreations.delete(key);
+          });
         this.runtimeCreations.set(key, creating);
       }
       record = await creating;
@@ -335,7 +341,9 @@ export class GlyphDesktopHost {
     await record.runtime.handle(command, {
       windowId: connection.identity.windowId,
       signal: controller.signal,
-      emit: event => this.broadcast(getWorkspaceKey(connection.identity), event),
+      emit: event => {
+        this.broadcast(getWorkspaceKey(connection.identity), event);
+      },
     });
     return [toCommandResultGlyphHostEvent(requestId)];
   }
@@ -464,4 +472,16 @@ function toErrorGlyphHostEvent({
 
 function isMutationCommand(command: GlyphRuntimeCommand): boolean {
   return ![GlyphWorkbenchCommandType.LIST_CHATS, GlyphWorkbenchCommandType.OPEN_CHAT].includes(command.type);
+}
+
+function isRequestEnvelope(value: unknown): value is GlyphRequestEnvelope {
+  return (
+    isRecord(value) &&
+    typeof value.requestId === 'string' &&
+    typeof value.profileId === 'string' &&
+    typeof value.windowId === 'string' &&
+    typeof value.workspaceId === 'string' &&
+    isRecord(value.command) &&
+    typeof value.command.type === 'string'
+  );
 }

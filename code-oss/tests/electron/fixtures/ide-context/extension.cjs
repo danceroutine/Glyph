@@ -1,6 +1,7 @@
 // Deterministic language/test providers at the extension-host boundary. Glyph's
 // workbench adapters, editor models, attachment UI, host and persistence stay real.
 const vscode = require('vscode');
+/** @param {import('vscode').ExtensionContext} context */
 exports.activate = context => {
   let slow = false;
   context.subscriptions.push(
@@ -11,7 +12,10 @@ exports.activate = context => {
   context.subscriptions.push(
     vscode.languages.registerDefinitionProvider('glyph-fixture', {
       async provideDefinition(document) {
-        if (slow) await new Promise(resolve => setTimeout(resolve, 1500));
+        if (slow)
+          await new Promise(resolve => {
+            setTimeout(resolve, 1500);
+          });
         return new vscode.Location(document.uri, new vscode.Range(0, 0, 0, 5));
       },
     }),
@@ -20,7 +24,9 @@ exports.activate = context => {
   context.subscriptions.push(
     controller,
     vscode.commands.registerCommand('glyphFixture.testOutput', () => {
-      const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'slow.glyph');
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (folder === undefined) throw new Error('The fixture requires an open workspace folder.');
+      const uri = vscode.Uri.joinPath(folder.uri, 'slow.glyph');
       const test = controller.createTestItem('capture-case', 'Capture case', uri);
       test.range = new vscode.Range(0, 0, 0, 5);
       controller.items.add(test);

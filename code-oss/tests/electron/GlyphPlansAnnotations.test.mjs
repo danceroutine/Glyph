@@ -1,7 +1,10 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
+import { editToolOutput, parseJson } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
 const reloadsWindow = isolatedLaunch('reloads the window');
 const plan = {
   id: null,
@@ -12,6 +15,10 @@ const plan = {
     '# Queue messages\n\nKeep exact ordering and preserve failed messages.\n\n## Flow\n\n```mermaid\nflowchart LR\nComposer --> Queue\nQueue --> Send\n```\n\n## Changes\n\n- Add a queue.\n- Preserve drafts.',
   todos: [{ id: 'queue', text: 'Add queue state', completed: false }],
 };
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ */
 async function createPlan(glyph, provider) {
   await glyph.page.getByRole('combobox', { name: 'Conversation mode' }).click();
   await glyph.page.getByRole('option', { name: 'Plan', exact: true }).click();
@@ -23,6 +30,11 @@ async function createPlan(glyph, provider) {
   await expect(glyph.page.getByRole('article', { name: 'Plan: Queue messages' })).toBeVisible();
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {import('@playwright/test').Locator} source
+ * @param {string} comment
+ */
 async function annotate(glyph, source, comment) {
   await source.dblclick({ position: { x: 10, y: 10 } });
   await expect(glyph.page.getByRole('button', { name: 'Comment on selection', exact: true })).toBeVisible();
@@ -110,8 +122,8 @@ it.describe('Plans and passage annotations', () => {
       expect(JSON.stringify(provider.requests.at(-1).body.input)).toContain('TOOL_MODE_DENIED');
       const read = provider.requests
         .at(-1)
-        .body.input.find(item => item.type === 'function_call_output' && item.call_id === 'read');
-      expect(JSON.parse(read.output).revision).toBeTruthy();
+        ?.body.input.find(item => item.type === 'function_call_output' && item.call_id === 'read');
+      expect(editToolOutput.parse(parseJson(read?.output)).revision).toBeTruthy();
       await expect(access(join(glyph.workspace, 'must-not-exist'))).rejects.toThrow();
       await createPlan(glyph, provider);
       await glyph.page.getByRole('button', { name: 'View Plan', exact: true }).click();

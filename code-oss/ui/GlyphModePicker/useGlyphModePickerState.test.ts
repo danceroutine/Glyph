@@ -23,7 +23,9 @@ describe(useGlyphModePickerState, () => {
     });
     const agent = AgentMode.all.find(mode => mode.id === AgentModeID.AGENT)!;
 
-    act(() => result.current.select(agent));
+    act(() => {
+      result.current.select(agent);
+    });
 
     expect(change).toHaveBeenCalledWith(AgentModeID.AGENT);
   });
@@ -34,7 +36,9 @@ describe(useGlyphModePickerState, () => {
       initialProps: { mode: AgentModeID.AGENT, change },
     });
 
-    act(() => result.current.keydown(new KeyboardEvent('keydown', { key: 'p' })));
+    act(() => {
+      result.current.keydown(new KeyboardEvent('keydown', { key: 'p' }));
+    });
 
     expect(result.current.open).toBe(true);
     expect(result.current.activeIndex).toBe(AgentMode.all.findIndex(mode => mode.id === AgentModeID.PLAN));

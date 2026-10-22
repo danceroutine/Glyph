@@ -1,4 +1,9 @@
-import { GlyphWebActivity, isWebTool, webActivityResult } from '#code-oss/ui/GlyphWebActivity/GlyphWebActivity.tsx';
+import {
+  GlyphWebActivity,
+  isWebTool,
+  webToolName,
+  webActivityResult,
+} from '#code-oss/ui/GlyphWebActivity/GlyphWebActivity.tsx';
 import { WebToolName } from '#src/web/WebToolName.js';
 import { GlyphToolDisclosure } from './GlyphToolDisclosure.tsx';
 import { GlyphToolIcon } from './GlyphToolIcon.tsx';
@@ -71,7 +76,9 @@ function ToolRow({ tool, active }: { readonly tool: GlyphToolActivity; readonly 
     <li aria-busy={running} data-tool-id={tool.id}>
       <GlyphToolDisclosure label={label} icon={<GlyphToolIcon />} running={running}>
         <pre class={styles.body}>
-          {[tool.arguments && format(tool.arguments), tool.summary && format(tool.summary)]
+          {[tool.arguments, tool.summary]
+            .filter((value): value is string => value !== undefined && value !== '')
+            .map(value => format(value))
             .filter(Boolean)
             .join('\n\n') || (running ? 'Waiting for the result…' : 'No details recorded for this call.')}
         </pre>
@@ -117,12 +124,12 @@ function ToolGroup({
     <GlyphToolDisclosure
       class={`glyph-tool-group ${styles.group}`}
       prefix={running ? 'Exploring' : 'Explored'}
-      icon={<GlyphToolIcon web={tools.every(isWebTool)} />}
+      icon={<GlyphToolIcon web={tools.every(value => isWebTool(value))} />}
       running={running}
       label={
         [
-          [tools.filter(tool => tool.name === WebToolName.SEARCH).length, 'search', 'searches'],
-          [tools.filter(tool => tool.name === WebToolName.FETCH).length, 'fetch', 'fetches'],
+          [tools.filter(tool => webToolName(tool) === WebToolName.SEARCH).length, 'search', 'searches'],
+          [tools.filter(tool => webToolName(tool) === WebToolName.FETCH).length, 'fetch', 'fetches'],
           [tools.filter(tool => !isWebTool(tool)).length, 'tool', 'tools'],
         ]
           .filter(([count]) => Number(count) > 0)

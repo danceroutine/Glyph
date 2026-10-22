@@ -6,6 +6,8 @@ import { ConcurrentInstanceError } from '#src/errors/ConcurrentInstanceError.js'
 import { PersistenceError } from '#src/errors/PersistenceError.js';
 import type { OpenAIAccountStore } from './OpenAIAccountStore.ts';
 import type { OpenAISavedState } from './OpenAISavedState.ts';
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 export class FileOpenAIAccountStore implements OpenAIAccountStore {
   private saving: Promise<void> = Promise.resolve();
@@ -39,7 +41,7 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
     } catch (error) {
       lock?.close();
       if (error instanceof ConcurrentInstanceError) throw error;
-      if ((error as { code?: string }).code === 'SQLITE_BUSY')
+      if (errorCodeOf(error) === 'SQLITE_BUSY')
         throw new ConcurrentInstanceError('Another Glyph instance owns this account store.', { cause: error });
       throw new PersistenceError('Could not acquire the ChatGPT account lock.', { cause: error });
     }
@@ -53,7 +55,7 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
       }
       Object.assign(this.state, raw);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (errorCodeOf(error) === 'ENOENT') {
         await this.save();
         return;
       }
@@ -83,12 +85,12 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
     try {
       pid = Number(await readFile(join(path, 'pid'), 'utf8'));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (errorCodeOf(error) === 'ENOENT') {
         // Distinguish no legacy lock from an incomplete, unverifiable one.
         try {
           await lstat(path);
         } catch (missing) {
-          if ((missing as NodeJS.ErrnoException).code === 'ENOENT') return;
+          if (errorCodeOf(missing) === 'ENOENT') return;
           throw missing;
         }
       }
@@ -99,7 +101,7 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
     try {
       process.kill(pid, 0);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+      if (errorCodeOf(error) === 'ESRCH') {
         await rm(path, { recursive: true, force: true });
         return;
       }
@@ -122,26 +124,30 @@ export class FileOpenAIAccountStore implements OpenAIAccountStore {
 }
 
 function isOpenAISavedState(raw: unknown): raw is OpenAISavedState {
-  if (!raw || typeof raw !== 'object') return false;
-  const state = raw as Partial<OpenAISavedState>;
+  if (!isRecord(raw)) return false;
+  const { version, hostId, accounts } = raw;
+  if (version !== 1 || typeof hostId !== 'string' || !hostId.startsWith('urn:uuid:') || !Array.isArray(accounts))
+    return false;
+  const entries: unknown[] = accounts;
+  return entries.every(
+    account =>
+      isRecord(account) &&
+      typeof account.clientId === 'string' &&
+      account.clientId !== 'dynamic_agent_client' &&
+      typeof account.subject === 'string' &&
+      typeof account.email === 'string' &&
+      (account.tokens === undefined || account.tokens === null || isSavedTokens(account.tokens)),
+  );
+}
+
+function isSavedTokens(tokens: unknown): boolean {
+  if (!isRecord(tokens) || !Array.isArray(tokens.scopes)) return false;
+  const scopes: unknown[] = tokens.scopes;
   return (
-    state.version === 1 &&
-    typeof state.hostId === 'string' &&
-    state.hostId.startsWith('urn:uuid:') &&
-    Array.isArray(state.accounts) &&
-    state.accounts.every(
-      account =>
-        typeof account.clientId === 'string' &&
-        account.clientId !== 'dynamic_agent_client' &&
-        typeof account.subject === 'string' &&
-        typeof account.email === 'string' &&
-        (!account.tokens ||
-          (typeof account.tokens.accessToken === 'string' &&
-            typeof account.tokens.refreshToken === 'string' &&
-            typeof account.tokens.idToken === 'string' &&
-            Number.isFinite(account.tokens.expiresAt) &&
-            Array.isArray(account.tokens.scopes) &&
-            account.tokens.scopes.every((scope: unknown) => typeof scope === 'string'))),
-    )
+    typeof tokens.accessToken === 'string' &&
+    typeof tokens.refreshToken === 'string' &&
+    typeof tokens.idToken === 'string' &&
+    Number.isFinite(tokens.expiresAt) &&
+    scopes.every(scope => typeof scope === 'string')
   );
 }

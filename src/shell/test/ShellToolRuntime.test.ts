@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 import { ShellToolName } from '#src/shell/ShellToolName.js';
@@ -20,7 +21,7 @@ describe(ShellToolRuntime, () => {
         [ShellToolNamespace.SHELL, ShellToolName.CLOSE],
         [ShellToolNamespace.SHELL, ShellToolName.LIST],
       ]);
-      expect(runtime.tools.every(definition => definition.inputKind === 'JSON')).toBe(true);
+      expect(runtime.tools.every(definition => definition.inputKind === ToolInputKind.JSON)).toBe(true);
     });
   });
 
@@ -315,10 +316,14 @@ describe(ShellToolRuntime, () => {
       [ShellToolName.CLOSE, JSON.stringify({ terminal_id: 'terminal' }), { terminal_id: 'terminal', status: 'closed' }],
       [ShellToolName.LIST, '{}', { terminals: [{ terminal_id: 'terminal' }] }],
     ])('validates and executes %s through its tool definition', async (name, input, expected) => {
-      const tool = new ShellToolRuntime(sessions()).tools.find(definition => definition.name === name)!;
+      const tool = new ShellToolRuntime(sessions()).tools.find(definition => definition.name === (name as string))!;
 
-      expect(() => tool.validateInput(input)).not.toThrow();
-      expect(() => tool.validateInput('{"unexpected":true}')).toThrow();
+      expect(() => {
+        tool.validateInput(input);
+      }).not.toThrow();
+      expect(() => {
+        tool.validateInput('{"unexpected":true}');
+      }).toThrow();
       expect(JSON.parse(await tool.execute(input, new AbortController().signal, context))).toEqual(expected);
     });
   });
@@ -331,8 +336,8 @@ function sessions() {
     writeInput: vi.fn(),
     close: vi.fn(async () => {}),
   } as unknown as ShellSessionManager & {
-    execute: ReturnType<typeof vi.fn>;
-    writeInput: ReturnType<typeof vi.fn>;
-    close: ReturnType<typeof vi.fn>;
+    execute: Mock;
+    writeInput: Mock;
+    close: Mock;
   };
 }

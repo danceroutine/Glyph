@@ -7,15 +7,22 @@ import { fileURLToPath } from 'node:url';
 import { _electron, expect } from './playwright.mjs';
 import { GlyphWorkbench } from './GlyphWorkbench.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+import { z } from 'zod';
 
 const sourceRoot = fileURLToPath(new URL('../../../.code-oss/src', import.meta.url));
 const coverageDirectory = process.env.GLYPH_COVERAGE_DIR;
 export const sentinel = 'Untouched integration fixture.\n';
 
+/** @param {number} parallelIndex */
 function coverageFile(parallelIndex) {
-  return join(coverageDirectory, `electron-${parallelIndex}.json`);
+  return join(coverageDirectory ?? '', `electron-${parallelIndex}.json`);
 }
 
+/**
+ * @param {string} directory
+ * @param {Map<string, string>} files
+ * @param {Set<string>} directories
+ */
 async function prune(directory, files, directories) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
@@ -24,6 +31,10 @@ async function prune(directory, files, directories) {
   }
 }
 
+/**
+ * @param {string} root
+ * @param {Record<string, string>} contents
+ */
 async function restoreTree(root, contents) {
   const files = new Map(Object.entries(contents).map(([path, text]) => [join(root, path), text]));
   const directories = new Set([root]);
@@ -38,15 +49,54 @@ async function restoreTree(root, contents) {
   }
 }
 
+/**
+ * @typedef {object} GlyphLaunchOptions
+ * @property {boolean} trustedWorkspace
+ * @property {boolean} productionRuntime
+ * @property {boolean} scriptedProvider
+ * @property {ConstructorParameters<typeof ScriptedProvider>[0]} scriptedAccounts
+ * @property {Record<string, string>} workspaceFiles
+ * @property {Record<string, unknown>} userSettings
+ * @property {{ key: string, command: string, when?: string }[]} userKeybindings
+ * @property {{ name: string, files: Record<string, string> }[]} additionalRoots
+ * @property {string | undefined} extensionDevelopmentPath
+ */
+
+/** @typedef {Awaited<ReturnType<GlyphSession['snapshot']>>} GlyphSnapshot */
+
 /** One Code OSS process and sandbox. Consecutive tests with identical launch options may reuse it after a reset. */
 export class GlyphSession {
+  /** @type {string[]} */
   logs = [];
   logStart = 0;
   navigations = 0;
   host = '';
   tracing = false;
   coverage = false;
+  sandbox = '';
+  workspace = '';
+  workspaceTarget = '';
+  userData = '';
+  /** @type {string[]} */
+  rootPaths = [];
+  /** @type {Record<string, string | undefined>} */
+  userFiles = {};
+  /** @type {Set<string>} */
+  sandboxEntries = new Set();
+  /** @type {ScriptedProvider | undefined} */
+  provider;
+  /** @type {import('@playwright/test').ElectronApplication | undefined} */
+  application;
+  /** @type {import('@playwright/test').Page | undefined} */
+  page;
+  /** @type {GlyphWorkbench | undefined} */
+  glyph;
+  /** @type {Promise<void> | undefined} */
+  noticeHandler;
+  /** @type {GlyphSnapshot | undefined} */
+  baseline;
 
+  /** @param {GlyphLaunchOptions} options */
   constructor(options) {
     this.options = options;
     this.key = JSON.stringify(options);
@@ -59,12 +109,11 @@ export class GlyphSession {
     this.sandbox = await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'glyph-e2e-'));
     this.workspace = join(this.sandbox, 'workspace');
     this.rootPaths = [this.workspace, ...options.additionalRoots.map(root => join(this.sandbox, root.name))];
-    this.workspaceTarget = options.additionalRoots.length
-      ? join(this.sandbox, 'fixture.code-workspace')
-      : this.workspace;
+    this.workspaceTarget =
+      options.additionalRoots.length > 0 ? join(this.sandbox, 'fixture.code-workspace') : this.workspace;
     this.userData = join(this.sandbox, 'user-data');
     await this.restoreFiles();
-    if (options.additionalRoots.length)
+    if (options.additionalRoots.length > 0)
       await writeFile(this.workspaceTarget, JSON.stringify({ folders: this.rootPaths.map(path => ({ path })) }));
     this.userFiles = {
       'settings.json': JSON.stringify({
@@ -83,7 +132,9 @@ export class GlyphSession {
     };
     await mkdir(join(this.userData, 'User'), { recursive: true });
     for (const [name, text] of Object.entries(this.userFiles)) await writeFile(join(this.userData, 'User', name), text);
-    const product = JSON.parse(await readFile(join(sourceRoot, 'product.json'), 'utf8'));
+    const product = z
+      .object({ nameShort: z.string(), applicationName: z.string() })
+      .parse(JSON.parse(await readFile(join(sourceRoot, 'product.json'), 'utf8')));
     const executablePath =
       process.platform === 'darwin'
         ? backgroundExecutablePath()
@@ -92,6 +143,7 @@ export class GlyphSession {
             '.build/electron',
             process.platform === 'win32' ? `${product.nameShort}.exe` : product.applicationName,
           );
+    /** @type {NodeJS.ProcessEnv} */
     const env = {
       ...process.env,
       NODE_ENV: 'development',
@@ -140,7 +192,8 @@ export class GlyphSession {
         { mode: 0o600 },
       );
     } else if (!options.productionRuntime) env.GLYPH_DESKTOP_TEST_RUNTIME = 'deterministic';
-    if (coverageDirectory) env.NODE_V8_COVERAGE = join(this.sandbox, 'coverage');
+    if (coverageDirectory !== undefined && coverageDirectory !== '')
+      env.NODE_V8_COVERAGE = join(this.sandbox, 'coverage');
     this.application = await _electron.launch({
       executablePath,
       cwd: sourceRoot,
@@ -155,7 +208,7 @@ export class GlyphSession {
         '--disable-telemetry',
         '--disable-experiments',
         '--disable-updates',
-        ...(options.extensionDevelopmentPath
+        ...(options.extensionDevelopmentPath !== undefined && options.extensionDevelopmentPath !== ''
           ? [`--extensionDevelopmentPath=${options.extensionDevelopmentPath}`]
           : ['--disable-extensions']),
         ...(options.trustedWorkspace ? ['--disable-workspace-trust'] : []),
@@ -170,19 +223,25 @@ export class GlyphSession {
     });
     if (process.platform === 'darwin')
       await this.application.evaluate(({ app, BrowserWindow }) => {
-        const conceal = window => {
+        for (const window of BrowserWindow.getAllWindows()) {
           window.setOpacity(0);
           window.setIgnoreMouseEvents(true);
-        };
-        for (const window of BrowserWindow.getAllWindows()) conceal(window);
-        app.on('browser-window-created', (_event, window) => conceal(window));
+        }
+        app.on('browser-window-created', (_event, window) => {
+          window.setOpacity(0);
+          window.setIgnoreMouseEvents(true);
+        });
       });
-    this.application.process().stdout?.on('data', value => this.logs.push(String(value)));
-    this.application.process().stderr?.on('data', value => this.logs.push(String(value)));
+    this.application.process().stdout?.on('data', value => {
+      this.logs.push(String(value));
+    });
+    this.application.process().stderr?.on('data', value => {
+      this.logs.push(String(value));
+    });
     await this.application.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
     this.tracing = true;
     this.page = await this.application.firstWindow();
-    if (coverageDirectory) {
+    if (coverageDirectory !== undefined && coverageDirectory !== '') {
       await this.page.coverage.startJSCoverage({ resetOnNavigation: false });
       this.coverage = true;
     }
@@ -198,6 +257,7 @@ export class GlyphSession {
   }
 
   async readUserFiles() {
+    /** @type {Record<string, string | undefined>} */
     const files = {};
     for (const name of Object.keys(this.userFiles))
       files[name] = await readFile(join(this.userData, 'User', name), 'utf8').catch(() => undefined);
@@ -228,35 +288,38 @@ export class GlyphSession {
     return this.application.evaluate(({ app }) =>
       app
         .getAppMetrics()
-        .filter(metric => metric.type === 'Utility' && metric.name?.startsWith('glyphHost-'))
+        .filter(metric => metric.type === 'Utility' && metric.name?.startsWith('glyphHost-') === true)
         .map(metric => metric.pid)
         .join(),
     );
   }
 
+  /** @param {GlyphWorkbench} glyph */
   async snapshot(glyph) {
     const { page } = this;
     const layout = await page.evaluate(() => {
-      const box = selector => {
-        const rect = document.querySelector(selector)?.getBoundingClientRect();
-        return rect?.width && rect.height ? [rect.x, rect.y, rect.width, rect.height].map(Math.round) : 'hidden';
-      };
+      const [sidebar, auxiliarybar, panel, editor] = ['sidebar', 'auxiliarybar', 'panel', 'editor'].map(part => {
+        const rect = document.querySelector(`.part.${part}`)?.getBoundingClientRect();
+        return rect !== undefined && rect.width > 0 && rect.height > 0
+          ? [rect.x, rect.y, rect.width, rect.height].map(value => Math.round(value))
+          : 'hidden';
+      });
       return {
         window: `${innerWidth}x${innerHeight}`,
-        theme: [...document.querySelector('.monaco-workbench').classList]
-          .filter(name => /^(vs|vs-dark|hc-black|hc-light)$/.test(name))
+        theme: [...(document.querySelector('.monaco-workbench')?.classList ?? [])]
+          .filter(name => /^(vs|vs-dark|hc-black|hc-light)$/u.test(name))
           .join(),
-        sidebar: box('.part.sidebar'),
-        auxiliarybar: box('.part.auxiliarybar'),
-        panel: box('.part.panel'),
-        editor: box('.part.editor'),
+        sidebar,
+        auxiliarybar,
+        panel,
+        editor,
       };
     });
     return {
       ...layout,
       windows: this.application.windows().length,
       editors: await page.locator('.part.editor .tab').count(),
-      modalEditors: await page.getByRole('button', { name: /^Close Modal Editor/ }).count(),
+      modalEditors: await page.getByRole('button', { name: /^Close Modal Editor/u }).count(),
       chats: await page.getByRole('tablist', { name: 'Open chats' }).getByRole('tab').count(),
       entries: await page.locator('.glyph-transcript .glyph-entry').count(),
       composer: await glyph.composer.innerText({ timeout: 2_000 }),
@@ -266,7 +329,7 @@ export class GlyphSession {
       model: await page.getByRole('combobox', { name: 'Model' }).innerText({ timeout: 2_000 }),
       surfaces: await page
         .getByRole('region', {
-          name: /^(Queued messages|Pending reviews|Background terminals|Unsent messages|Command approval|Attachment preview)$/,
+          name: /^(Queued messages|Pending reviews|Background terminals|Unsent messages|Command approval|Attachment preview)$/u,
         })
         .count(),
       history: await page.getByRole('complementary', { name: 'Chat history' }).count(),
@@ -274,13 +337,18 @@ export class GlyphSession {
     };
   }
 
+  /** @param {GlyphSnapshot} current */
   differences(current) {
-    return Object.keys(this.baseline).filter(key => {
-      const [expected, actual] = [this.baseline[key], current[key]];
-      if (Array.isArray(expected) && Array.isArray(actual))
-        return expected.some((value, index) => Math.abs(value - actual[index]) > 2);
-      return expected !== actual;
-    });
+    if (this.baseline === undefined) return [];
+    const actualValues = new Map(Object.entries(current));
+    return Object.entries(this.baseline)
+      .filter(([key, expected]) => {
+        const actual = actualValues.get(key);
+        if (Array.isArray(expected) && Array.isArray(actual))
+          return expected.some((value, index) => Math.abs(value - actual[index]) > 2);
+        return expected !== actual;
+      })
+      .map(([key]) => key);
   }
 
   async disruption() {
@@ -305,7 +373,7 @@ export class GlyphSession {
     if ((await glyph.sendButton.innerText({ timeout: 5_000 })) !== this.baseline.send)
       return 'a response is still running';
     await page.keyboard.press('Escape');
-    const closeModal = page.getByRole('button', { name: /^Close Modal Editor/ });
+    const closeModal = page.getByRole('button', { name: /^Close Modal Editor/u });
     for (let attempt = 0; attempt < 5 && (await closeModal.count()); attempt++) await closeModal.first().click();
     for (let attempt = 0; attempt < 20; attempt++) {
       const dirty = page.locator('.part.editor .tab.dirty');
@@ -319,7 +387,7 @@ export class GlyphSession {
     await glyph.open();
     const pending = page.getByRole('region', { name: 'Pending reviews', exact: true });
     if (await pending.count()) {
-      await pending.getByRole('button', { name: /^Keep( All)?$/ }).click({ timeout: 5_000 });
+      await pending.getByRole('button', { name: /^Keep( All)?$/u }).click({ timeout: 5_000 });
       await expect(pending).toHaveCount(0, { timeout: 5_000 });
     }
     await this.stopBackgroundShells(glyph);
@@ -344,13 +412,16 @@ export class GlyphSession {
       await expect.poll(async () => this.differences(await this.snapshot(glyph)), { timeout: 10_000 }).toEqual([]);
     } catch {
       const current = await this.snapshot(glyph);
+      const expectedValues = new Map(Object.entries(this.baseline ?? {}));
+      const actualValues = new Map(Object.entries(current));
       return `workbench differs in ${this.differences(current)
-        .map(key => `${key} (${this.baseline[key]} -> ${current[key]})`)
+        .map(key => `${key} (${String(expectedValues.get(key))} -> ${String(actualValues.get(key))})`)
         .join(', ')}`;
     }
     return undefined;
   }
 
+  /** @param {GlyphWorkbench} glyph */
   async stopBackgroundShells(glyph) {
     const { page } = this;
     const tabs = page.getByRole('tablist', { name: 'Open chats' }).getByRole('tab');
@@ -364,7 +435,7 @@ export class GlyphSession {
       await expect(glyph.composer).toBeVisible();
       for (let attempt = 0; attempt < 10 && (await drawer.count()); attempt++) {
         const stopped = await replies.count();
-        const toggle = drawer.getByRole('button', { name: /background terminals?$/ });
+        const toggle = drawer.getByRole('button', { name: /background terminals?$/u });
         if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
         await drawer.getByRole('button', { name: 'Stop', exact: true }).first().click();
         await expect(replies).toHaveCount(stopped + 1, { timeout: 10_000 });
@@ -375,7 +446,7 @@ export class GlyphSession {
   }
 
   async begin() {
-    if (coverageDirectory && !this.coverage) {
+    if (coverageDirectory !== undefined && coverageDirectory !== '' && !this.coverage) {
       await this.page.coverage.startJSCoverage({ resetOnNavigation: false });
       this.coverage = true;
     }
@@ -384,6 +455,10 @@ export class GlyphSession {
     this.glyph = this.workbench();
   }
 
+  /**
+   * @param {import('@playwright/test').TestInfo} testInfo
+   * @param {boolean} keep
+   */
   async finish(testInfo, keep) {
     if (this.glyph) this.noticeHandler = this.glyph.extensionNoticeHandler;
     const page = this.page && !this.page.isClosed() ? this.page : undefined;
@@ -437,13 +512,14 @@ export class GlyphSession {
       });
     }
     await testInfo.attach('Electron log', { path: testInfo.outputPath('electron.log'), contentType: 'text/plain' });
-    if (this.sandbox) {
+    if (this.sandbox !== undefined && this.sandbox !== '') {
       await cp(join(this.sandbox, 'logs'), testInfo.outputPath('logs'), { recursive: true }).catch(() => {});
       await cp(join(this.sandbox, 'crashes'), testInfo.outputPath('crashes'), { recursive: true }).catch(() => {});
       if (!keep) await rm(this.sandbox, { recursive: true, force: true });
     }
   }
 
+  /** @param {number} parallelIndex */
   async shutdown(parallelIndex) {
     if (this.application) {
       if (this.coverage && !this.page.isClosed()) {
@@ -458,13 +534,19 @@ export class GlyphSession {
       await this.application.close().catch(() => this.application.process().kill());
     }
     await this.provider?.close();
-    if (coverageDirectory && this.sandbox)
+    if (
+      coverageDirectory !== undefined &&
+      coverageDirectory !== '' &&
+      this.sandbox !== undefined &&
+      this.sandbox !== ''
+    )
       await accumulateProcessCoverage(
         coverageFile(parallelIndex),
         await readProcessCoverage(join(this.sandbox, 'coverage')),
       );
   }
 
+  /** @param {import('@playwright/test').TestInfo} testInfo */
   async abandon(testInfo) {
     if (this.tracing) {
       this.tracing = false;
@@ -482,8 +564,9 @@ export class GlyphSession {
     await this.close(testInfo.parallelIndex);
   }
 
+  /** @param {number} parallelIndex */
   async close(parallelIndex) {
     await this.shutdown(parallelIndex);
-    if (this.sandbox) await rm(this.sandbox, { recursive: true, force: true });
+    if (this.sandbox !== undefined && this.sandbox !== '') await rm(this.sandbox, { recursive: true, force: true });
   }
 }

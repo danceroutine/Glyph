@@ -44,7 +44,7 @@ async function build(cwd, ...arguments_) {
   const loaded = import('#scripts/build.mjs');
   const error = await loaded.then(
     () => undefined,
-    failure => failure,
+    (/** @type {unknown} */ failure) => failure,
   );
   const output = stderr.mock.calls.map(([text]) => String(text)).join('');
   return { error, exitCode: process.exitCode, stderr: output };
@@ -68,7 +68,7 @@ describe('build', () => {
     const result = await build(root);
 
     expect(result).toEqual({ error: undefined, exitCode: undefined, stderr: '' });
-    expect((await readdir(join(root, 'dist'))).sort()).toEqual(['index.js', 'index.js.map']);
+    expect((await readdir(join(root, 'dist'))).toSorted()).toEqual(['index.js', 'index.js.map']);
     expect(await readFile(join(root, 'dist', 'index.js'), 'utf8')).toContain('export const value = 1;');
   });
 
@@ -92,7 +92,7 @@ describe('build', () => {
 
     expect(result.exitCode, result.stderr).toBeUndefined();
     expect(await readFile(join(root, 'dist', 'index.js'), 'utf8')).toMatch(
-      /^export \{ describeError \} from "(?:\.\.\/)+.*harness-chat\/src\/describeError\.js";$/m,
+      /^export \{ describeError \} from "(?:\.\.\/)+.*harness-chat\/src\/describeError\.js";$/mu,
     );
   });
 

@@ -4,12 +4,16 @@ import { join } from 'node:path';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+
 it.use({ scriptedProvider: true });
+/** @param {GlyphWorkbench} glyph */
 async function prepare(
   glyph,
   before = 'const count = 1;\nconsole.log(count);\n',
   after = 'const count = 0;\nconsole.log(10 / count);\n',
 ) {
+  /** @param {string[]} args */
   const git = (...args) => execFileSync('git', args, { cwd: glyph.workspace });
   git('init', '-b', 'main');
   git('config', 'user.email', 'fixture@example.invalid');
@@ -152,14 +156,14 @@ it('shows streamed findings, opens native diff comments, dismisses one and fixes
   expect(input).toContain('10 / count');
   await expect(glyph.userEntries).toHaveCount(1);
   await expect(glyph.userEntries).toContainText('Fix this agent review issue');
-  await expect(glyph.page.getByRole('button', { name: /thumbs/i })).toHaveCount(0);
+  await expect(glyph.page.getByRole('button', { name: /thumbs/iu })).toHaveCount(0);
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
   await expect(glyph.page.getByRole('button', { name: 'Review Again', exact: true })).toBeInViewport();
   const icon = glyph.page.locator('[aria-label="Review findings"] .file-icon');
   await expect(icon).toBeVisible();
   await expect
     .poll(() => icon.evaluate(element => getComputedStyle(element, '::before').content))
-    .not.toMatch(/^(none|normal|""|)$/);
+    .not.toMatch(/^(none|normal|""|)$/u);
 });
 it('cancels the actual in-flight review from its hover stop action', async ({ glyph, provider }) => {
   await prepare(glyph);

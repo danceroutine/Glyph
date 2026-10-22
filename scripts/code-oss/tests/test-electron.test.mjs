@@ -5,25 +5,32 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 
+/**
+ * @param {string[]} argv
+ * @param {{ playwright?: string | null, missing?: string[] }} [options]
+ */
 async function runScript(argv, { playwright = '/upstream/@playwright/test/cli.js', missing = [] } = {}) {
   const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+  /** @type {Map<string, () => void>} */
   const signals = new Map();
   const module = {
-    createRequire: vi.fn(() => ({
+    createRequire: vi.fn((/** @type {URL} */ _from) => ({
       resolve: vi.fn(() => {
-        if (!playwright) throw new Error('not found');
+        if (playwright === null) throw new Error('not found');
         return playwright;
       }),
     })),
   };
   const filesystem = {
-    access: vi.fn(async url => {
+    access: vi.fn(async (/** @type {URL} */ url) => {
       if (missing.some(file => url.href.endsWith(file))) throw new Error('missing');
     }),
   };
   const childProcess = { spawn: vi.fn(() => child) };
   const on = vi.spyOn(process, 'on').mockImplementation((signal, handler) => {
-    signals.set(signal, handler);
+    signals.set(String(signal), () => {
+      handler(String(signal));
+    });
     return process;
   });
   const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -53,7 +60,7 @@ describe('test-electron', () => {
     await expect(run.loaded).rejects.toThrow(
       'Code OSS Playwright is missing. Run pnpm code-oss:bootstrap and pnpm code-oss:install first.',
     );
-    expect(run.module.createRequire.mock.calls[0][0].href).toMatch(/\/\.code-oss\/src\/package\.json$/);
+    expect(run.module.createRequire.mock.calls[0][0].href).toMatch(/\/\.code-oss\/src\/package\.json$/u);
   });
 
   it('requires the compiled workbench and packaged desktop host before running tests', async () => {
@@ -108,7 +115,7 @@ describe('test-electron', () => {
     const run = await runScript(['--list']);
     await run.loaded;
 
-    expect(run.childProcess.spawn.mock.calls[0][0]).toMatch(/node_modules\/node\/bin\/node\.exe$/);
+    expect(run.childProcess.spawn.mock.calls[0][0]).toMatch(/node_modules\/node\/bin\/node\.exe$/u);
   });
 
   it('reports a runner that fails to start', async () => {
@@ -138,7 +145,7 @@ describe('test-electron', () => {
     const run = await runScript(['--list']);
     await run.loaded;
 
-    run.signals.get(signal)();
+    run.signals.get(signal)?.();
 
     expect(run.child.kill).toHaveBeenCalledWith(signal);
   });

@@ -199,7 +199,9 @@ describe(Dropdown, () => {
 
   it('escapes pane clipping in the top layer above its anchor', () => {
     const hide = vi.spyOn(HTMLElement.prototype, 'hidePopover');
-    onTestFinished(() => hide.mockRestore());
+    onTestFinished(() => {
+      hide.mockRestore();
+    });
     const { unmount } = render(
       <Anchor top={500}>
         <Dropdown {...fruitProps({ topLayer: true })} />

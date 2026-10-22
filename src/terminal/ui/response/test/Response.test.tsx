@@ -196,10 +196,10 @@ describe(ToolActivity, () => {
       arguments: '',
       output: JSON.stringify({
         error: {
-          code: '\u001b[35mEXCLUDED\u001b[0m',
+          code: '\u001B[35mEXCLUDED\u001B[0m',
           message: 'Denied\u0007',
-          path: '.env\u001b[35msecret\u001b[0m',
-          details: ['one\u202etwo'],
+          path: '.env\u001B[35msecret\u001B[0m',
+          details: ['one\u202Etwo'],
         },
       }),
     };
@@ -240,7 +240,7 @@ describe(ToolActivity, () => {
             namespace: 'project',
             name: 'read',
             callId: 'call',
-            arguments: 'first\nsecond\u001b[31m',
+            arguments: 'first\nsecond\u001B[31m',
           }}
         />,
       );
@@ -318,7 +318,7 @@ describe(ToolActivity, () => {
             phase: ToolActivityPhase.COMPLETED,
             name: 'write',
             callId: 'call',
-            arguments: 'first\nsecond\u001b[31m',
+            arguments: 'first\nsecond\u001B[31m',
             output: '{"error":"failed"}',
           }}
         />,

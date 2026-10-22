@@ -138,7 +138,9 @@ describe(ShellSessionManager, () => {
       const { manager } = await fixture();
       manager.setOwnerChat('chat-one');
       const wakes: unknown[] = [];
-      const stopWake = manager.onDidWake(event => wakes.push(event));
+      const stopWake = manager.onDidWake(event => {
+        wakes.push(event);
+      });
 
       const background = await manager.execute('printf rea; sleep 0.02; printf dy', {
         background: true,
@@ -189,7 +191,7 @@ describe(ShellSessionManager, () => {
       await waitUntil(
         () =>
           manager.sessions[0]?.status === ShellSessionStatus.IDLE &&
-          manager.sessions[0]?.outputTail.includes('got:answer') === true,
+          manager.sessions[0]?.outputTail.includes('got:answer'),
       );
 
       expect(manager.takePendingWake()).toMatchObject({ pattern: 'got:answer' });
@@ -472,7 +474,9 @@ describe(ShellSessionManager, () => {
       const { manager, launch } = fakeShell([child]);
 
       const pending = manager.execute('mystery', { signal: new AbortController().signal });
-      await vi.waitFor(() => expect(launch).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(launch).toHaveBeenCalledOnce();
+      });
       child.stdout!.emit('data', 'partial');
       child.emit('close', null, null);
 
@@ -484,7 +488,9 @@ describe(ShellSessionManager, () => {
       const { manager, launch } = fakeShell([child]);
 
       const pending = manager.execute('missing-binary', { signal: new AbortController().signal });
-      await vi.waitFor(() => expect(launch).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(launch).toHaveBeenCalledOnce();
+      });
       child.emit('error', new Error('spawn ENOENT'));
       child.emit('close', -2, null);
 
@@ -496,11 +502,15 @@ describe(ShellSessionManager, () => {
       const child = fakeChild();
       const controller = new AbortController();
       const reason = new Error('Cancelled during launch');
-      const { manager } = fakeShell([child], () => controller.abort(reason));
+      const { manager } = fakeShell([child], () => {
+        controller.abort(reason);
+      });
 
       const pending = manager.execute('slow start', { signal: controller.signal });
       const outcome = pending.catch((error: unknown) => error);
-      await vi.waitFor(() => expect(manager.allSessions).toHaveLength(1));
+      await vi.waitFor(() => {
+        expect(manager.allSessions).toHaveLength(1);
+      });
       child.emit('close', null, 'SIGTERM');
 
       expect(await outcome).toBe(reason);
@@ -597,7 +607,9 @@ describe(ShellSessionManager, () => {
     it('writes input without a trailing newline when requested', async () => {
       const child = fakeChild();
       const written: string[] = [];
-      child.stdin!.on('data', chunk => written.push(String(chunk)));
+      child.stdin!.on('data', chunk => {
+        written.push(String(chunk));
+      });
       const { manager } = fakeShell([child]);
       const { terminalId } = await manager.execute('read value', {
         background: true,
@@ -699,7 +711,9 @@ describe(ShellSessionManager, () => {
         ownerChatId: 'chat',
         signal: signal as unknown as AbortSignal,
       });
-      await vi.waitFor(() => expect(complete).toBeDefined());
+      await vi.waitFor(() => {
+        expect(complete).toBeDefined();
+      });
       signal.dispatchEvent(new Event('abort'));
 
       await expect(pending).rejects.toThrow('Shell input cancelled.');
@@ -724,7 +738,9 @@ describe(ShellSessionManager, () => {
         signal: new AbortController().signal,
       });
       const pending = manager.writeInput({ terminalId, input: 'x', appendNewline: true, ownerChatId: 'chat' });
-      await vi.waitFor(() => expect(complete).toBeDefined());
+      await vi.waitFor(() => {
+        expect(complete).toBeDefined();
+      });
       manager.onDidChange(() => {
         if (manager.sessionsFor('chat')[0]?.status !== ShellSessionStatus.IDLE) return;
         const accept = complete;
@@ -762,7 +778,9 @@ describe(ShellSessionManager, () => {
         wakeOn: 'ready',
         ownerChatId: 'chat',
       });
-      await vi.waitFor(() => expect(complete).toBeDefined());
+      await vi.waitFor(() => {
+        expect(complete).toBeDefined();
+      });
 
       child.stdout!.emit('data', 'ready');
       child.stdout!.emit('data', 'ready again');
@@ -785,7 +803,9 @@ describe(ShellSessionManager, () => {
       const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
         throw Object.assign(new Error('Not supported'), { code: 'EINVAL' });
       });
-      onTestFinished(() => kill.mockRestore());
+      onTestFinished(() => {
+        kill.mockRestore();
+      });
       const childKill = vi.spyOn(child, 'kill').mockReturnValue(true);
       const { manager } = fakeShell([child]);
       const { terminalId } = await manager.execute('serve', {
@@ -819,7 +839,9 @@ describe(ShellSessionManager, () => {
       const child = fakeChild();
       Object.assign(child, { pid: 4242, exitCode: null, signalCode: null });
       const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
-      onTestFinished(() => kill.mockRestore());
+      onTestFinished(() => {
+        kill.mockRestore();
+      });
       const { manager } = fakeShell([child]);
       const { terminalId } = await manager.execute('serve', {
         background: true,
@@ -904,7 +926,9 @@ function launcher(root: string): NativeShellSandboxLauncher {
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt++) {
     if (predicate()) return;
-    await new Promise<void>(resolve => setTimeout(resolve, 5));
+    await new Promise<void>(resolve => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error('Timed out waiting for shell state.');
 }
