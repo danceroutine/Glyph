@@ -49,7 +49,7 @@ describe(ShellSessionManager, () => {
           wakeOn: 'ready',
           signal: new AbortController().signal,
         });
-        await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+        await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
         await manager.execute('printf dy', {
           terminalId: first.terminalId,
           signal: new AbortController().signal,
@@ -87,7 +87,7 @@ describe(ShellSessionManager, () => {
         ).rejects.toThrow('busy');
         expect.soft(manager.sessions[0]?.wakePattern).toBe('ready');
         await manager.writeInput({ terminalId: running.terminalId, input: 'continue', appendNewline: true });
-        await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+        await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
         expect(wake).toHaveBeenCalledWith(expect.objectContaining({ pattern: 'ready' }));
       } finally {
         stop();
@@ -147,7 +147,7 @@ describe(ShellSessionManager, () => {
         wakeOn: 'ready',
         signal: new AbortController().signal,
       });
-      await waitUntil(() => wakes.length === 1 && manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+      await expect.poll(() => wakes.length === 1 && manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
 
       expect(manager.takePendingWake('missing')).toBeUndefined();
       expect(manager.takePendingWake()).toMatchObject({
@@ -188,11 +188,13 @@ describe(ShellSessionManager, () => {
         appendNewline: true,
         wakeOn: 'got:answer',
       });
-      await waitUntil(
-        () =>
-          manager.sessions[0]?.status === ShellSessionStatus.IDLE &&
-          manager.sessions[0]?.outputTail.includes('got:answer'),
-      );
+      await expect
+        .poll(
+          () =>
+            manager.sessions[0]?.status === ShellSessionStatus.IDLE &&
+            manager.sessions[0]?.outputTail.includes('got:answer'),
+        )
+        .toBe(true);
 
       expect(manager.takePendingWake()).toMatchObject({ pattern: 'got:answer' });
       expect(manager.sessions[0]?.outputTail).toContain('got:answer');
@@ -247,7 +249,7 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+      await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
 
       await expect(
         manager.execute('sleep 1', {
@@ -311,7 +313,7 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => authorize.mock.calls.length === 1);
+      await expect.poll(() => authorize.mock.calls.length === 1).toBe(true);
       await manager.dispose();
       pendingAuthorization.resolve({ sandboxProfile: ShellSandboxProfile.FULL_ACCESS });
 
@@ -325,14 +327,14 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+      await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
       const pendingAuthorization = deferredAuthorization();
       authorize.mockImplementationOnce(() => pendingAuthorization.promise);
       const pending = manager.execute('printf forbidden', {
         terminalId: first.terminalId,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => authorize.mock.calls.length === 2);
+      await expect.poll(() => authorize.mock.calls.length === 2).toBe(true);
       await manager.close(first.terminalId);
       pendingAuthorization.resolve({ sandboxProfile: ShellSandboxProfile.FULL_ACCESS });
 
@@ -387,7 +389,7 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => authorize.mock.calls.length === 2);
+      await expect.poll(() => authorize.mock.calls.length === 2).toBe(true);
       firstAuthorization.resolve({ sandboxProfile: ShellSandboxProfile.FULL_ACCESS });
       secondAuthorization.resolve({ sandboxProfile: ShellSandboxProfile.FULL_ACCESS });
 
@@ -426,11 +428,11 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+      await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
       const processId = Number(/\d+/u.exec(manager.sessions[0]?.outputTail ?? '')?.[0]);
 
       expect(Number.isInteger(processId)).toBe(true);
-      await waitUntil(() => !processExists(processId));
+      await expect.poll(() => !processExists(processId)).toBe(true);
     });
   });
 
@@ -921,16 +923,6 @@ function launcher(root: string): NativeShellSandboxLauncher {
     workspaceRoots: [root],
     stateDirectory: join(root, 'state'),
   });
-}
-
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (predicate()) return;
-    await new Promise<void>(resolve => {
-      setTimeout(resolve, 5);
-    });
-  }
-  throw new Error('Timed out waiting for shell state.');
 }
 
 function processExists(processId: number): boolean {

@@ -23,8 +23,9 @@ export function useGlyphUsageState() {
   useEffect(() => {
     if (!open) return undefined;
     const outside = (event: PointerEvent) => {
-      const target = event.target instanceof Node ? event.target : null;
-      if (trigger.current?.contains(target) !== true && popup.current?.contains(target) !== true) setOpen(false);
+      const path = event.composedPath();
+      if (!path.some(target => target === trigger.current) && !path.some(target => target === popup.current))
+        setOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {

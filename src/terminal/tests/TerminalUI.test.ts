@@ -26,6 +26,7 @@ import { TerminalUI } from '#src/terminal/TerminalUI.js';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
+import { normalize } from '#src/shared/tests/normalize.ts';
 
 vi.mock('node:child_process', async importOriginal => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
@@ -71,7 +72,7 @@ describe(TerminalUI, () => {
       const ui = new TerminalUI(terminal, output, new MemoryOutput(false));
       const action = ui.nextAction(new AbortController().signal);
 
-      await waitUntil(() => terminal.isRaw);
+      await expect.poll(() => terminal.isRaw).toBe(true);
       await type(terminal, 'this is a deliberately long prompt that wraps');
       terminal.push('\r');
 
@@ -146,7 +147,7 @@ describe(TerminalUI, () => {
       const ui = new TerminalUI(terminal, new MemoryOutput(true), new MemoryOutput(false));
       const action = ui.nextAction(new AbortController().signal);
 
-      await waitUntil(() => terminal.isRaw);
+      await expect.poll(() => terminal.isRaw).toBe(true);
       await type(terminal, 'alpha beta');
       if (before) {
         terminal.push(before);
@@ -170,7 +171,7 @@ describe(TerminalUI, () => {
       const ui = new TerminalUI(terminal, new MemoryOutput(true), new MemoryOutput(false));
       const action = ui.nextAction(new AbortController().signal);
 
-      await waitUntil(() => terminal.isRaw);
+      await expect.poll(() => terminal.isRaw).toBe(true);
       terminal.push('\u001B[120;1:3u');
       await new Promise<void>(resolve => {
         setImmediate(resolve);
@@ -202,11 +203,13 @@ describe(TerminalUI, () => {
       const ui = new TerminalUI(terminal, output, new MemoryOutput(false), files);
       const action = ui.nextAction(new AbortController().signal);
 
-      await waitUntil(() => terminal.isRaw);
+      await expect.poll(() => terminal.isRaw).toBe(true);
       await type(terminal, '@app');
-      await waitUntil(() => queries.includes('app') && output.value.includes('examples/todo-app/src/App.tsx'));
+      await expect
+        .poll(() => queries.includes('app') && normalize(output.value).includes('examples/todo-app/src/App.tsx'))
+        .toBe(true);
       terminal.push('\r');
-      await waitUntil(() => output.value.includes('@App.tsx'));
+      await expect.poll(() => output.value.includes('@App.tsx')).toBe(true);
       await type(terminal, 'what does this file do?');
       terminal.push('\r');
 
@@ -230,11 +233,11 @@ describe(TerminalUI, () => {
       const ui = new TerminalUI(terminal, output, new MemoryOutput(false), files);
       const action = ui.nextAction(new AbortController().signal);
 
-      await waitUntil(() => terminal.isRaw);
+      await expect.poll(() => terminal.isRaw).toBe(true);
       await type(terminal, '@app');
-      await waitUntil(() => output.value.includes('src/App.tsx'));
+      await expect.poll(() => output.value.includes('src/App.tsx')).toBe(true);
       terminal.push('\r');
-      await waitUntil(() => output.value.includes('@App.tsx'));
+      await expect.poll(() => output.value.includes('@App.tsx')).toBe(true);
       terminal.push('\u001B[D');
       await new Promise<void>(resolve => {
         setImmediate(resolve);
@@ -370,11 +373,11 @@ describe(TerminalUI, () => {
 
       ui.beginAssistantResponse();
       ui.push({ type: ChatResponsePartType.REASONING_SUMMARY, value: 'Considering the change.\nChecking context.' });
-      await waitUntil(() => stripVTControlCharacters(output.value).includes('Considering the change.'));
+      await expect.poll(() => normalize(output.value).includes('Considering the change.')).toBe(true);
       ui.push({ type: ChatResponsePartType.TEXT, value: 'Done.' });
-      await waitUntil(() => stripVTControlCharacters(output.value).includes('Done.'));
+      await expect.poll(() => normalize(output.value).includes('Done.')).toBe(true);
       ui.showTurnCompleted(1_000, null);
-      await waitUntil(() => stripVTControlCharacters(output.value).includes('[1.0s | usage unavailable]'));
+      await expect.poll(() => normalize(output.value).includes('[1.0s | usage unavailable]')).toBe(true);
 
       const rendered = stripVTControlCharacters(output.value);
       expect(rendered).toContain('thinking> Considering the change.\nChecking context.');
@@ -397,21 +400,21 @@ describe(TerminalUI, () => {
         new AbortController().signal,
       );
 
-      await waitUntil(() => output.value.includes('Choice:'));
+      await expect.poll(() => output.value.includes('Choice:')).toBe(true);
       input.write('3\n');
-      await waitUntil(() => occurrences(output.value, 'Choose one of the listed options') === 1);
+      await expect.poll(() => occurrences(output.value, 'Choose one of the listed options') === 1).toBe(true);
       input.write('2\n');
-      await waitUntil(() => output.value.includes('Choices (comma-separated):'));
+      await expect.poll(() => output.value.includes('Choices (comma-separated):')).toBe(true);
       input.write('1,3\n');
-      await waitUntil(() => occurrences(output.value, 'Choose one of the listed options') === 2);
+      await expect.poll(() => occurrences(output.value, 'Choose one of the listed options') === 2).toBe(true);
       input.write('1,2,1\n');
-      await waitUntil(() => occurrences(output.value, 'Choice:') >= 3);
+      await expect.poll(() => occurrences(output.value, 'Choice:') >= 3).toBe(true);
       input.write('o\n');
-      await waitUntil(() => output.value.includes('Other:'));
+      await expect.poll(() => output.value.includes('Other:')).toBe(true);
       input.write('\n');
-      await waitUntil(() => occurrences(output.value, 'Choose one of the listed options') === 3);
+      await expect.poll(() => occurrences(output.value, 'Choose one of the listed options') === 3).toBe(true);
       input.write('o\n');
-      await waitUntil(() => occurrences(output.value, 'Other:') === 2);
+      await expect.poll(() => occurrences(output.value, 'Other:') === 2).toBe(true);
       input.write('Custom answer\n');
 
       await expect(result).resolves.toEqual({
@@ -434,7 +437,7 @@ describe(TerminalUI, () => {
       ui.beginAssistantResponse();
       const result = ui.present({ questions: [question('single', false)] }, new AbortController().signal);
 
-      await waitUntil(() => stripVTControlCharacters(output.value).includes('Choose for single'));
+      await expect.poll(() => stripVTControlCharacters(output.value).includes('Choose for single')).toBe(true);
       terminal.push('\r');
 
       await expect(result).resolves.toEqual({
@@ -454,9 +457,9 @@ describe(TerminalUI, () => {
         new AbortController().signal,
       );
 
-      await waitUntil(() => output.value.includes('Choice [1-6]'));
+      await expect.poll(() => output.value.includes('Choice [1-6]')).toBe(true);
       input.write('invalid\n');
-      await waitUntil(() => output.value.includes('Choose a number from 1 through 6'));
+      await expect.poll(() => output.value.includes('Choose a number from 1 through 6')).toBe(true);
       input.write('5\n');
 
       await expect(result).resolves.toBe(ShellPermissionDecision.ALLOW_EVERYTHING);
@@ -474,7 +477,7 @@ describe(TerminalUI, () => {
         new AbortController().signal,
       );
 
-      await waitUntil(() => stripVTControlCharacters(output.value).includes('Shell permission required'));
+      await expect.poll(() => stripVTControlCharacters(output.value).includes('Shell permission required')).toBe(true);
       terminal.push('1');
 
       await expect(result).resolves.toBe(ShellPermissionDecision.ALLOW_ONCE);
@@ -521,7 +524,7 @@ describe(TerminalUI, () => {
         matchedAt: '2026-10-07T00:00:00.000Z',
       });
 
-      await waitUntil(() => stripVTControlCharacters(output.value).includes('Background terminals (1)'));
+      await expect.poll(() => stripVTControlCharacters(output.value).includes('Background terminals (1)')).toBe(true);
       expect(stripVTControlCharacters(output.value)).toContain('matched "ready"');
       ui.close();
       expect(stop).toHaveBeenCalledOnce();
@@ -593,7 +596,9 @@ describe(TerminalUI, () => {
       ]);
       ui.showChatActivated(chatSummary('new-chat', 'New chat', 0), []);
 
-      await waitUntil(() => stripVTControlCharacters(output.value).includes('Chat new-chat  New chat  · model'));
+      await expect
+        .poll(() => stripVTControlCharacters(output.value).includes('Chat new-chat  New chat  · model'))
+        .toBe(true);
       const renderer = (ui as unknown as { renderer: { entries: unknown[] } }).renderer;
       expect(renderer.entries).toHaveLength(1);
       ui.close();
@@ -1699,16 +1704,6 @@ function fileSearch(search: WorkspacePathIndex['search']): WorkspacePathIndex {
     }),
     dispose: async () => {},
   };
-}
-
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (predicate()) return;
-    await new Promise<void>(resolve => {
-      setTimeout(resolve, 5);
-    });
-  }
-  throw new Error('Condition was not reached.');
 }
 
 async function type(terminal: VirtualTTY, value: string): Promise<void> {

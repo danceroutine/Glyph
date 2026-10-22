@@ -5,6 +5,7 @@ import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexE
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 import { TERMINAL_COMMANDS } from '#src/terminal/TerminalCommand.js';
 import { WiredPromptEditor } from '#src/terminal/ui/prompt/PromptEditor.wired.js';
+import { normalize } from '#src/shared/tests/normalize.js';
 const cursorPosition = vi.hoisted(() => vi.fn());
 vi.mock('ink', async () => ({
   ...(await vi.importActual<typeof import('ink')>('ink')),
@@ -211,7 +212,7 @@ describe(WiredPromptEditor, () => {
       await write(view, 'hello');
       await write(view, '\u001B[200~ world\nagain\u001B[201~');
       view.stdin.write('\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(complete).toHaveBeenCalledWith({ prompt: 'hello world again', attachmentPaths: [] });
       view.unmount();
@@ -227,7 +228,7 @@ describe(WiredPromptEditor, () => {
       await tick();
 
       expect(view.lastFrame()).toContain('Agent responding · draft only');
-      expect(view.lastFrame()).toContain('you> follow-up');
+      expect(normalize(view.lastFrame()!)).toContain('you> follow-up');
       view.unmount();
     });
 
@@ -255,10 +256,10 @@ describe(WiredPromptEditor, () => {
       expect(view.lastFrame()).not.toContain('/help');
       await write(view, '\u001B[B');
       await write(view, '\t');
-      expect(view.lastFrame()).toContain('you> /trace on');
+      expect(normalize(view.lastFrame()!)).toContain('you> /trace on');
       expect(view.lastFrame()).not.toContain('Enable full provider tracing');
       view.stdin.write('\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(complete).toHaveBeenCalledWith({ prompt: '/trace on', attachmentPaths: [] });
       view.unmount();
@@ -276,7 +277,7 @@ describe(WiredPromptEditor, () => {
       await write(view, '/rev');
       expect(view.lastFrame()).toContain('Resume pending edit review');
       view.stdin.write('\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(complete).toHaveBeenCalledWith({ prompt: '/review', attachmentPaths: [] });
       view.unmount();
@@ -320,20 +321,20 @@ describe(WiredPromptEditor, () => {
       );
 
       view.stdin.write('@app');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('src/second.ts'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('src/second.ts')).toBe(true);
       view.stdin.write('\u001B[B');
       view.stdin.write('\u001B[B');
       view.stdin.write('\u001B[A');
       await tick();
       view.stdin.write('\t');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('@first.ts'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('@first.ts')).toBe(true);
       expect(view.lastFrame()).not.toContain('src/first.ts');
       await write(view, '\u001B[D');
       expect(view.lastFrame()).toContain('@src/first.ts');
       await write(view, '\u001B[C');
       expect(view.lastFrame()).not.toContain('@src/first.ts');
       view.stdin.write('\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(search).toHaveBeenCalled();
       expect(view.lastFrame()).not.toContain('unsafe');
@@ -360,13 +361,13 @@ describe(WiredPromptEditor, () => {
       );
 
       await write(view, 'x@src/App.tsx @app');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('src/App.tsx'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('src/App.tsx')).toBe(true);
       await write(view, '\t');
       await write(view, '@app');
-      await waitUntil(() => search.mock.calls.length >= 2);
+      await expect.poll(() => search.mock.calls.length >= 2).toBe(true);
       await write(view, '\t');
       view.stdin.write('\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect((complete.mock.calls[0]?.[0] as { attachmentPaths: string[] } | undefined)?.attachmentPaths).toEqual([
         'src/App.tsx',
@@ -390,9 +391,9 @@ describe(WiredPromptEditor, () => {
 
       await writeEscape(view);
       await write(view, '@app');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('src/App.tsx'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('src/App.tsx')).toBe(true);
       await writeEscape(view);
-      await waitUntil(() => !(view.lastFrame() ?? '').includes('src/App.tsx'));
+      await expect.poll(() => !(view.lastFrame() ?? '').includes('src/App.tsx')).toBe(true);
 
       expect(view.lastFrame()).toContain('@app');
       view.unmount();
@@ -424,7 +425,7 @@ describe(WiredPromptEditor, () => {
         await write(view, input);
       }
       view.stdin.write('\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(complete).toHaveBeenCalledWith({ prompt: 'zb', attachmentPaths: [] });
       view.unmount();
@@ -445,7 +446,7 @@ describe(WiredPromptEditor, () => {
       await write(view, 'x');
       await write(view, '\u0004');
       view.stdin.write('\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(complete).toHaveBeenCalledWith({ prompt: '😀x', attachmentPaths: [] });
       view.unmount();
@@ -467,7 +468,7 @@ describe(WiredPromptEditor, () => {
         />,
       );
       ordinary.stdin.write('@app');
-      await waitUntil(() => (ordinary.lastFrame() ?? '').includes('File search: File search failed.'));
+      await expect.poll(() => (ordinary.lastFrame() ?? '').includes('File search: File search failed.')).toBe(true);
       ordinary.unmount();
 
       const errorFailure = render(
@@ -485,7 +486,7 @@ describe(WiredPromptEditor, () => {
         />,
       );
       errorFailure.stdin.write('@app');
-      await waitUntil(() => (errorFailure.lastFrame() ?? '').includes('File search: broken'));
+      await expect.poll(() => (errorFailure.lastFrame() ?? '').includes('File search: broken')).toBe(true);
       errorFailure.unmount();
 
       for (const error of [
@@ -523,7 +524,7 @@ describe(WiredPromptEditor, () => {
       );
 
       view.stdin.write('\u0003');
-      await waitUntil(() => interrupt.mock.calls.length === 1);
+      await expect.poll(() => interrupt.mock.calls.length === 1).toBe(true);
 
       expect(interrupt).toHaveBeenCalledOnce();
       view.unmount();
@@ -595,14 +596,6 @@ function fileSearch(search: WorkspacePathIndex['search']): WorkspacePathIndex {
     }),
     dispose: async () => {},
   };
-}
-
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (predicate()) return;
-    await tick();
-  }
-  throw new Error('Condition was not reached.');
 }
 
 async function tick(): Promise<void> {

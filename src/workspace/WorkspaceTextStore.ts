@@ -105,7 +105,7 @@ export interface WorkspaceTextStore {
     path: string,
     text: string,
     byteOrderMark: boolean,
-    // TODO we probably should make this an enum so it's not just magic numbers everywhere.
+    // Follow-up: replace the numeric mode with a domain enum.
     mode?: number,
     options?: WorkspaceMutationOptions,
   ): Promise<WorkspaceTextSnapshot>;

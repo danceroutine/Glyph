@@ -2,20 +2,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/pr
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphPlan } from '#src/desktop/tests/fixtures/aGlyphPlan.ts';
 import { WiredGlyphPlanCards } from '#code-oss/ui/GlyphPlan/GlyphPlanCards.wired.tsx';
 
 afterEach(cleanup);
 
-const plan = (overrides: Partial<GlyphPlan> = {}): GlyphPlan => ({
-  id: 'plan',
-  revision: 1,
-  title: 'Ship it',
-  summary: 'Summary',
-  markdown: '',
-  todos: [],
-  agents: [],
-  ...overrides,
-});
+const plan = (overrides: Partial<GlyphPlan> = {}) => aGlyphPlan({ title: 'Ship it', summary: 'Summary', ...overrides });
 
 describe(WiredGlyphPlanCards, () => {
   it('views and builds each plan of the chat through the host', async () => {

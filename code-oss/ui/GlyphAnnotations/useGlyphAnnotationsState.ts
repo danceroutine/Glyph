@@ -26,7 +26,7 @@ function sourceRange(source: Element, from: number, to: number): Range | undefin
   let offset = 0,
     started = false;
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const length = node instanceof Text ? node.data.length : 0;
+    const length = node.textContent!.length;
     if (!started && from <= offset + length) {
       range.setStart(node, Math.max(0, from - offset));
       started = true;

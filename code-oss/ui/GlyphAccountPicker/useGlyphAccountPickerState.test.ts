@@ -1,27 +1,12 @@
 import { cleanup, renderHook } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenchState.ts';
 import { useGlyphAccountPickerState } from '#code-oss/ui/GlyphAccountPicker/useGlyphAccountPickerState.ts';
 
 afterEach(cleanup);
 
-function workbenchState(overrides: Partial<GlyphWorkbenchState> = {}): GlyphWorkbenchState {
-  return {
-    status: GlyphWorkbenchStatus.READY,
-    transcript: [],
-    usage: {},
-    accounts: [],
-    models: [],
-    chats: [],
-    runs: [],
-    proposals: [],
-    ownerWindowId: 'window-1',
-    readOnly: false,
-    sequence: 0,
-    ...overrides,
-  };
-}
+const workbenchState = aGlyphWorkbenchState;
 
 function accountActions(selectAccount = vi.fn(async () => {})) {
   return { selectAccount } as Partial<GlyphWorkbenchViewActions> as GlyphWorkbenchViewActions;

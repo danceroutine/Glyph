@@ -235,10 +235,10 @@ function isPrintableInput(input: string, control: boolean, meta: boolean): boole
 
 function previousCharacterOffset(text: string, offset: number): number {
   if (offset <= 0) return 0;
-  return offset > 1 && (text.codePointAt(offset - 2) ?? 0) > 0xffff ? offset - 2 : offset - 1;
+  return offset > 1 && text.codePointAt(offset - 2)! > 0xffff ? offset - 2 : offset - 1;
 }
 
 function nextCharacterOffset(text: string, offset: number): number {
   if (offset >= text.length) return text.length;
-  return (text.codePointAt(offset) ?? 0) > 0xffff ? offset + 2 : offset + 1;
+  return text.codePointAt(offset)! > 0xffff ? offset + 2 : offset + 1;
 }

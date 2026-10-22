@@ -226,18 +226,13 @@ export class GlyphComposerState {
   }
   editQueued(id: string): void {
     const message = this.value.queued.find(value => value.id === id);
-    if (
-      !message ||
-      (this.value.queueSubmitting !== undefined && this.value.queueSubmitting !== '') ||
-      (this.value.editingQueuedMessage !== undefined && this.value.editingQueuedMessage !== '')
-    )
-      return;
+    if (!message || this.value.queueSubmitting !== undefined || this.value.editingQueuedMessage !== undefined) return;
     this.update({ editingQueuedMessage: id });
     this.restoreDraft(structuredClone(message.document));
     this.focus();
   }
   cancelQueueEdit(): void {
-    if (this.value.editingQueuedMessage === undefined || this.value.editingQueuedMessage === '') return;
+    if (this.value.editingQueuedMessage === undefined) return;
     this.update({
       draft: '',
       document: {
@@ -268,7 +263,7 @@ export class GlyphComposerState {
     });
   }
   moveQueued(id: string, target: number): void {
-    if (this.value.queueSubmitting !== undefined && this.value.queueSubmitting !== '') return;
+    if (this.value.queueSubmitting !== undefined) return;
     const queued = [...this.value.queued];
     const from = queued.findIndex(value => value.id === id);
     if (from < 0) return;
@@ -284,12 +279,7 @@ export class GlyphComposerState {
   }
   async sendQueued(id: string, send: SendMessage): Promise<void> {
     const message = this.value.queued.find(value => value.id === id);
-    if (
-      !message ||
-      (this.value.queueSubmitting !== undefined && this.value.queueSubmitting !== '') ||
-      (this.value.editingQueuedMessage !== undefined && this.value.editingQueuedMessage !== '')
-    )
-      return;
+    if (!message || this.value.queueSubmitting !== undefined || this.value.editingQueuedMessage !== undefined) return;
     this.update({ queueSubmitting: id, queueError: undefined });
     try {
       await sendDocument(message.document, send);

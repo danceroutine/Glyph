@@ -19,7 +19,7 @@ import { IExplorerService } from '#vs/workbench/contrib/files/browser/files.js';
 import { useGlyphContext } from '#vs/workbench/contrib/glyph/browser/GlyphNativeContextActions.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
 import { IViewsService } from '#vs/workbench/services/views/common/viewsService.js';
-import '#vs/workbench/contrib/glyph/electron-browser/glyph.contribution.js';
+import { registerGlyphAgentReviewView } from '#vs/workbench/contrib/glyph/electron-browser/glyph.contribution.js';
 
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphAgentReviewPane.js', () => ({
   GlyphAgentReviewPane: class {
@@ -90,6 +90,15 @@ function workbench({ selected = [] as URI[], attach = async () => {} } = {}) {
 }
 
 describe('glyph.contribution', () => {
+  it('registers the agent review view when the SCM container is available', () => {
+    const container = { id: 'scm' };
+    const views = { registerViews: vi.fn() };
+
+    registerGlyphAgentReviewView({ get: vi.fn(() => container) } as never, views as never);
+
+    expect(views.registerViews).toHaveBeenCalledWith([expect.objectContaining({ id: 'glyph.agentReview' })], container);
+  });
+
   it('registers the Glyph view and its settings', () => {
     const containers = Registry.as<IViewContainersRegistry>(Extensions.ViewContainersRegistry);
     const views = Registry.as<IViewsRegistry>(Extensions.ViewsRegistry);

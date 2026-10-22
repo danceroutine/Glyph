@@ -5,19 +5,14 @@ import {
   type GlyphContextAttachment,
 } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { GlyphPromptDocument } from '#src/desktop/workbench/GlyphPromptDocument.js';
+import { aGlyphContextAttachment } from '#src/desktop/tests/fixtures/aGlyphContextAttachment.ts';
 import { GlyphPromptEditor } from '#code-oss/ui/GlyphPromptEditor/GlyphPromptEditor.ts';
 import { promptSchema, serializePrompt } from '#code-oss/ui/GlyphPromptEditor/GlyphPromptMarkdown.ts';
 
 const mod = /Mac|iPhone|iPad/u.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
 
-const attachment = (overrides: Partial<GlyphContextAttachment> = {}): GlyphContextAttachment => ({
-  kind: GlyphContextAttachmentKind.FILE,
-  uri: 'file:///repo/src/app.ts',
-  path: 'src/app.ts',
-  text: 'const a = 1;',
-  contentRevision: '1',
-  ...overrides,
-});
+const attachment = (overrides: Partial<GlyphContextAttachment> = {}) =>
+  aGlyphContextAttachment({ contentRevision: '1', ...overrides });
 
 const promptCallbacks = (overrides: Partial<ConstructorParameters<typeof GlyphPromptEditor>[2]> = {}) => ({
   change: vi.fn(),

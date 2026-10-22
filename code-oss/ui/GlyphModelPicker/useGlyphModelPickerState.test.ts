@@ -1,35 +1,12 @@
 import { act, renderHook } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
-import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
-import type { GlyphChatSummary } from '#src/desktop/protocol/events/GlyphChatSummary.js';
+import { aGlyphChatSummary } from '#src/desktop/tests/fixtures/aGlyphChatSummary.ts';
+import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenchState.ts';
 import { useGlyphModelPickerState } from '#code-oss/ui/GlyphModelPicker/useGlyphModelPickerState.ts';
 
-const workbench = (overrides: Partial<GlyphWorkbenchState> = {}): GlyphWorkbenchState => ({
-  status: GlyphWorkbenchStatus.READY,
-  transcript: [],
-  usage: {},
-  accounts: [],
-  models: [],
-  chats: [],
-  runs: [],
-  proposals: [],
-  ownerWindowId: 'window',
-  readOnly: false,
-  sequence: 0,
-  ...overrides,
-});
-
-const chat = (overrides: Partial<GlyphChatSummary> = {}): GlyphChatSummary => ({
-  id: 'chat',
-  title: 'Chat',
-  accountProvider: 'openai',
-  accountId: 'account',
-  modelSlug: 'gpt-5',
-  updatedAt: '2026-01-01T00:00:00.000Z',
-  turnCount: 1,
-  ...overrides,
-});
+const workbench = aGlyphWorkbenchState;
+const chat = aGlyphChatSummary;
 
 const actions = (selectModel = vi.fn(async (_model: string) => {})) =>
   ({ selectModel }) as unknown as GlyphWorkbenchViewActions;

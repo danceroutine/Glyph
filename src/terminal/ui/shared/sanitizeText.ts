@@ -6,6 +6,8 @@ export function sanitizeText(value: string): string {
     .replaceAll(/[\u0000-\u0008\u000B-\u001F\u007F]/gu, '')
     .replaceAll(
       /[\u202A-\u202E\u2066-\u2069]/gu,
+      // Can't exactly have codePointAt return undefined....
+      /* v8 ignore next -- @preserve */
       character => `\\u${(character.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`,
     );
 }

@@ -160,7 +160,8 @@ export function Dropdown<T>({
     window.addEventListener('resize', measure);
     // Scrolling an ancestor may change which side of the anchor has room.
     const scroll = (event: Event) => {
-      if (!(event.target instanceof Node && element.contains(event.target))) measure();
+      const update = event.composedPath().includes(element) ? positionPreview : measure;
+      update();
     };
     document.addEventListener('scroll', scroll, true);
     return () => {

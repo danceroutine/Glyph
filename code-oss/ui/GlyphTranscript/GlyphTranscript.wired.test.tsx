@@ -2,12 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/pr
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
-import {
-  GlyphProposalApplicability,
-  type GlyphProposalFileSummary,
-} from '#src/desktop/protocol/events/GlyphProposalFileSummary.js';
+import type { GlyphProposalFileSummary } from '#src/desktop/protocol/events/GlyphProposalFileSummary.js';
 import type { GlyphProposalSummary } from '#src/desktop/protocol/events/GlyphProposalSummary.js';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
+import { aGlyphProposalFileSummary } from '#src/desktop/tests/fixtures/aGlyphProposalFileSummary.ts';
+import { aGlyphProposalSummary } from '#src/desktop/tests/fixtures/aGlyphProposalSummary.ts';
 import type { GlyphMessageActions } from '#code-oss/ui/GlyphAgentMessage/GlyphAgentMessage.wired.tsx';
 import { WiredGlyphTranscript } from '#code-oss/ui/GlyphTranscript/GlyphTranscript.wired.tsx';
 
@@ -20,22 +19,11 @@ const messageActions = (overrides: Partial<GlyphMessageActions> = {}): GlyphMess
   ...overrides,
 });
 
-const createdFile = (): GlyphProposalFileSummary => ({
-  id: 'file',
-  path: 'src/new.ts',
-  proposedUri: 'glyph://proposal/file',
-  pendingItemIds: ['item'],
-  operation: 'CREATE',
-  applicability: GlyphProposalApplicability.READY,
-});
+const createdFile = (): GlyphProposalFileSummary =>
+  aGlyphProposalFileSummary({ path: 'src/new.ts', operation: 'CREATE' });
 
-const proposal = (overrides: Partial<GlyphProposalSummary> = {}): GlyphProposalSummary => ({
-  id: 'proposal-1',
-  chatId: 'chat',
-  createdAt: '2026-01-01T00:00:00.000Z',
-  files: [createdFile()],
-  ...overrides,
-});
+const proposal = (overrides: Partial<GlyphProposalSummary> = {}) =>
+  aGlyphProposalSummary({ id: 'proposal-1', files: [createdFile()], ...overrides });
 
 const assistantReply = (summary?: string): GlyphTranscriptEntry => ({
   id: 'reply',

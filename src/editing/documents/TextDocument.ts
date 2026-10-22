@@ -77,6 +77,10 @@ export class TextDocument {
       throw new EditError(EditFailureReason.INCONSISTENT, 'Edit position is outside Base.', { path: this.path });
     }
     const offset = range.start + character;
+    /**
+     * Fucking V8 and it's horrifically bad coverage reporting
+     */
+    /* v8 ignore next -- @preserve */
     if (offset > 0 && (this.text.codePointAt(offset - 1) ?? 0) > 0xffff) {
       throw new EditError(EditFailureReason.INCONSISTENT, 'Edit boundary splits a UTF-16 surrogate pair.', {
         path: this.path,

@@ -2,21 +2,22 @@ import { act, renderHook } from '@testing-library/preact';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import type { GlyphPlanViewState } from '#src/desktop/workbench/GlyphPlanView.js';
+import { aGlyphPlan } from '#src/desktop/tests/fixtures/aGlyphPlan.ts';
 import { useGlyphPlanState } from '#code-oss/ui/GlyphPlan/useGlyphPlanState.ts';
 
-const plan = (overrides: Partial<GlyphPlan> = {}): GlyphPlan => ({
-  id: 'plan',
-  revision: 2,
-  title: 'Ship it',
-  summary: 'Summary',
-  markdown: '# Ship it',
-  todos: [
-    { id: 'a', text: 'First', completed: false },
-    { id: 'b', text: 'Second', completed: true },
-  ],
-  agents: [],
-  ...overrides,
-});
+const plan = (overrides: Partial<GlyphPlan> = {}): GlyphPlan =>
+  aGlyphPlan({
+    revision: 2,
+    title: 'Ship it',
+    summary: 'Summary',
+    markdown: '# Ship it',
+    todos: [
+      { id: 'a', text: 'First', completed: false },
+      { id: 'b', text: 'Second', completed: true },
+    ],
+    agents: [],
+    ...overrides,
+  });
 
 const viewState = (overrides: Partial<GlyphPlanViewState> = {}): GlyphPlanViewState => ({
   plan: plan(),

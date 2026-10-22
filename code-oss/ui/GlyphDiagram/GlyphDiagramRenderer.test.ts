@@ -95,6 +95,7 @@ describe(renderGlyphDiagram, () => {
     await vi.waitFor(() => {
       expect(crypto.randomUUID).toHaveBeenCalled();
     });
+    reply(frame, { channel: 'glyph-diagram', id: 7, svg: '<svg>x</svg>' });
     reply(frame, { channel: 'glyph-diagram', id: 'unknown', svg: '<svg>x</svg>' });
     reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', svg: '<svg>ok</svg>' });
 

@@ -234,8 +234,8 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
       disabled !== true &&
       first &&
       !state.queuePaused &&
-      (state.queueSubmitting === undefined || state.queueSubmitting === '') &&
-      (state.editingQueuedMessage === undefined || state.editingQueuedMessage === '')
+      state.queueSubmitting === undefined &&
+      state.editingQueuedMessage === undefined
     )
       void model.sendQueued(first.id, (text, attachments, options) => actions.send(text, attachments, options));
   }, [active, disabled, state.queued, state.queuePaused, state.queueSubmitting, state.editingQueuedMessage, model]);
@@ -356,11 +356,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
         if (preview) await actions.context.openAttachment(preview);
       }),
     activate: () => {
-      if (
-        active &&
-        (state.editingQueuedMessage === undefined || state.editingQueuedMessage === '') &&
-        !state.draft.trim()
-      ) {
+      if (active && state.editingQueuedMessage === undefined && !state.draft.trim()) {
         model.pauseQueue();
         actions.cancel();
       } else void submit();

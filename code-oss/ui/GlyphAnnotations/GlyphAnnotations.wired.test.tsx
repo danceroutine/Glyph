@@ -199,6 +199,15 @@ describe(WiredGlyphAnnotations, () => {
     expect(screen.queryByRole('button', { name: 'Comment on selection' })).toBeNull();
   });
 
+  it('ignores selections from sources with an unknown kind', () => {
+    const source = mountSource('Hello world', { kind: 'unknown' });
+    render(<WiredGlyphAnnotations composer={composerWith()} disabled={false} />);
+
+    selectText(source.firstChild!, 0, 5);
+
+    expect(screen.queryByRole('button', { name: 'Comment on selection' })).toBeNull();
+  });
+
   it('labels whole-element selections from unlabeled proposal sources', () => {
     const source = mountSource('Proposed text', { kind: 'proposal', label: null });
     const composer = composerWith([savedAnnotation({ id: 'old', order: 4, sourceId: 'elsewhere' })]);

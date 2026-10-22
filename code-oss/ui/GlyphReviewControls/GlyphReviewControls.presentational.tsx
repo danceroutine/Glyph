@@ -48,8 +48,9 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
     if (!node || state.fileLabel === undefined || state.fileLabel === '') return undefined;
     const measure = () => {
       // Measure the full labels on one row, independent of the current compact state.
-      const copy = node.cloneNode(true);
-      if (!(copy instanceof HTMLElement)) return;
+      const copy = document.createElement(node.localName);
+      copy.className = node.className;
+      copy.innerHTML = node.innerHTML;
       Object.assign(copy.style, { position: 'fixed', visibility: 'hidden', width: 'max-content', flexWrap: 'nowrap' });
       copy.querySelector<HTMLElement>('[data-keep-all-suffix]')?.removeAttribute('hidden');
       node.parentElement!.append(copy);

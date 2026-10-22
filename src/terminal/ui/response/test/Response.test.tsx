@@ -8,182 +8,181 @@ import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import { Response } from '#src/terminal/ui/response/Response.presentational.js';
 import { WiredResponse } from '#src/terminal/ui/response/Response.wired.js';
 import { ToolActivity } from '#src/terminal/ui/response/ToolActivity.presentational.js';
+import { normalize } from '#src/shared/tests/normalize.js';
 
 describe(Response, () => {
-  describe('rendering', () => {
-    it('renders every response section and a footer', () => {
-      const view = render(
-        <Response
-          messageWidth={64}
-          sections={[
-            { type: ChatResponsePartType.TEXT, value: 'answer' },
-            { type: ChatResponsePartType.REASONING_SUMMARY, value: 'thought' },
-            { type: ChatResponsePartType.DIAGNOSTIC, severity: DiagnosticSeverity.ERROR, message: 'failed' },
-            {
-              type: ChatResponsePartType.TOOL,
-              activity: {
-                phase: ToolActivityPhase.COMPLETED,
-                name: 'read',
-                callId: 'call',
-                arguments: '{}',
-                output: '{}',
-              },
+  it('renders every response section and a footer', () => {
+    const view = render(
+      <Response
+        messageWidth={64}
+        sections={[
+          { type: ChatResponsePartType.TEXT, value: 'answer' },
+          { type: ChatResponsePartType.REASONING_SUMMARY, value: 'thought' },
+          { type: ChatResponsePartType.DIAGNOSTIC, severity: DiagnosticSeverity.ERROR, message: 'failed' },
+          {
+            type: ChatResponsePartType.TOOL,
+            activity: {
+              phase: ToolActivityPhase.COMPLETED,
+              name: 'read',
+              callId: 'call',
+              arguments: '{}',
+              output: '{}',
             },
-          ]}
-          footer={<Text>footer</Text>}
-        />,
-      );
+          },
+          // @ts-expect-error - unexpected type
+          { type: 'unexpected', value: 'unexpected' },
+        ]}
+        footer={<Text>footer</Text>}
+      />,
+    );
 
-      expect(readableLines(view.lastFrame())).toEqual(['answer', 'thinking> thought', 'failed', 'read  ✓', 'footer']);
-      expect(view.lastFrame()).toContain('╭');
-      view.unmount();
-    });
+    expect(readableLines(view.lastFrame())).toEqual(['answer', 'thinking> thought', 'failed', 'read  ✓', 'footer']);
+    expect(view.lastFrame()).toContain('╭');
+    view.unmount();
   });
 });
 
 describe(WiredResponse, () => {
-  describe('rendering', () => {
-    it('shows a transient thinking indicator before the first response event', () => {
-      const view = render(<WiredResponse parts={[]} />);
+  it('shows a transient thinking indicator before the first response event', () => {
+    const view = render(<WiredResponse parts={[]} />);
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '').trimStart()).toMatch(/^thinking> [●·] [●·] [●·]$/u);
-      view.rerender(<WiredResponse parts={[{ type: ChatResponsePartType.TEXT, value: 'ready' }]} />);
-      expect(readableLines(view.lastFrame())).toEqual(['ready']);
-      view.unmount();
-    });
+    expect(stripVTControlCharacters(view.lastFrame() ?? '').trimStart()).toMatch(/^thinking> [●·] [●·] [●·]$/u);
+    view.rerender(<WiredResponse parts={[{ type: ChatResponsePartType.TEXT, value: 'ready' }]} />);
+    expect(readableLines(view.lastFrame())).toEqual(['ready']);
+    view.unmount();
+  });
 
-    it('does not show the thinking indicator for a completed empty response', () => {
-      const view = render(<WiredResponse parts={[]} footer={<Text>complete</Text>} />);
+  it('does not show the thinking indicator for a completed empty response', () => {
+    const view = render(<WiredResponse parts={[]} footer={<Text>complete</Text>} />);
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '').trimStart()).toBe('complete');
-      view.unmount();
-    });
+    expect(stripVTControlCharacters(view.lastFrame() ?? '').trimStart()).toBe('complete');
+    view.unmount();
+  });
 
-    it('combines only adjacent text and reasoning fragments', () => {
-      const view = render(
-        <WiredResponse
-          parts={[
-            { type: ChatResponsePartType.TEXT, value: 'one' },
-            { type: ChatResponsePartType.TEXT, value: ' two' },
-            { type: ChatResponsePartType.REASONING_SUMMARY, value: 'three' },
-            { type: ChatResponsePartType.REASONING_SUMMARY, value: ' four' },
-            { type: ChatResponsePartType.TEXT, value: 'five' },
-          ]}
-        />,
-      );
+  it('combines only adjacent text and reasoning fragments', () => {
+    const view = render(
+      <WiredResponse
+        parts={[
+          { type: ChatResponsePartType.TEXT, value: 'one' },
+          { type: ChatResponsePartType.TEXT, value: ' two' },
+          { type: ChatResponsePartType.REASONING_SUMMARY, value: 'three' },
+          { type: ChatResponsePartType.REASONING_SUMMARY, value: ' four' },
+          { type: ChatResponsePartType.TEXT, value: 'five' },
+        ]}
+      />,
+    );
 
-      expect(readableLines(view.lastFrame())).toEqual(['one two', 'thinking> three four', 'five']);
-      view.unmount();
-    });
+    expect(readableLines(view.lastFrame())).toEqual(['one two', 'thinking> three four', 'five']);
+    view.unmount();
+  });
 
-    it('collapses reasoning when the response is committed', () => {
-      const parts = [
-        { type: ChatResponsePartType.REASONING_SUMMARY, value: 'Planning' },
-        { type: ChatResponsePartType.TEXT, value: 'Finished' },
-      ] as const;
-      const view = render(<WiredResponse parts={parts} />);
+  it('collapses reasoning when the response is committed', () => {
+    const parts = [
+      { type: ChatResponsePartType.REASONING_SUMMARY, value: 'Planning' },
+      { type: ChatResponsePartType.TEXT, value: 'Finished' },
+    ] as const;
+    const view = render(<WiredResponse parts={parts} />);
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '')).toContain('thinking> Planning');
-      view.rerender(<WiredResponse parts={parts} footer={<Text>complete</Text>} />);
+    expect(stripVTControlCharacters(view.lastFrame() ?? '')).toContain('thinking> Planning');
+    view.rerender(<WiredResponse parts={parts} footer={<Text>complete</Text>} />);
 
-      const committed = stripVTControlCharacters(view.lastFrame() ?? '');
-      expect(committed).not.toContain('thinking>');
-      expect(committed).toContain('Finished');
-      view.unmount();
-    });
+    const committed = stripVTControlCharacters(view.lastFrame() ?? '');
+    expect(committed).not.toContain('thinking>');
+    expect(committed).toContain('Finished');
+    view.unmount();
+  });
 
-    it('renders strong emphasis in muted reasoning summaries without markdown delimiters', () => {
-      const view = render(
-        <WiredResponse
-          parts={[
-            {
-              type: ChatResponsePartType.REASONING_SUMMARY,
-              value: '**Planning discontinuous text edits** with __care__',
+  it('renders strong emphasis in muted reasoning summaries without markdown delimiters', () => {
+    const view = render(
+      <WiredResponse
+        parts={[
+          {
+            type: ChatResponsePartType.REASONING_SUMMARY,
+            value: '**Planning discontinuous text edits** with __care__',
+          },
+        ]}
+      />,
+    );
+
+    expect(stripVTControlCharacters(view.lastFrame() ?? '').trimStart()).toBe(
+      'thinking> Planning discontinuous text edits with care',
+    );
+    view.unmount();
+  });
+
+  it('renders inline Markdown in assistant bubbles without leaking delimiters', () => {
+    const view = render(
+      <WiredResponse
+        parts={[
+          {
+            type: ChatResponsePartType.TEXT,
+            value: 'You selected:\n\n- **Favorite color:** Red\n- **Preferred pet:** Dog',
+          },
+        ]}
+      />,
+    );
+
+    const frame = view.lastFrame() ?? '';
+    const readable = stripVTControlCharacters(frame);
+    expect(readable).toContain('- Favorite color: Red');
+    expect(readable).toContain('- Preferred pet: Dog');
+    expect(readable).not.toContain('**');
+    view.unmount();
+  });
+
+  it('coalesces tool lifecycle events into one successful tag', () => {
+    const view = render(
+      <WiredResponse
+        parts={[
+          {
+            type: ChatResponsePartType.TOOL,
+            activity: {
+              phase: ToolActivityPhase.STARTED,
+              namespace: 'project',
+              name: 'read',
+              callId: 'call',
+              arguments: 'secret input',
             },
-          ]}
-        />,
-      );
-
-      expect(stripVTControlCharacters(view.lastFrame() ?? '').trimStart()).toBe(
-        'thinking> Planning discontinuous text edits with care',
-      );
-      view.unmount();
-    });
-
-    it('renders inline Markdown in assistant bubbles without leaking delimiters', () => {
-      const view = render(
-        <WiredResponse
-          parts={[
-            {
-              type: ChatResponsePartType.TEXT,
-              value: 'You selected:\n\n- **Favorite color:** Red\n- **Preferred pet:** Dog',
+          },
+          {
+            type: ChatResponsePartType.TOOL,
+            activity: {
+              phase: ToolActivityPhase.COMPLETED,
+              namespace: 'project',
+              name: 'read',
+              callId: 'call',
+              arguments: 'secret input',
+              output: 'large successful result',
             },
-          ]}
-        />,
-      );
+          },
+        ]}
+      />,
+    );
 
-      const frame = view.lastFrame() ?? '';
-      const readable = stripVTControlCharacters(frame);
-      expect(readable).toContain('- Favorite color: Red');
-      expect(readable).toContain('- Preferred pet: Dog');
-      expect(readable).not.toContain('**');
-      view.unmount();
-    });
+    expect(stripVTControlCharacters(view.lastFrame() ?? '').trim()).toBe('project.read  ✓');
+    view.unmount();
+  });
 
-    it('coalesces tool lifecycle events into one successful tag', () => {
-      const view = render(
-        <WiredResponse
-          parts={[
-            {
-              type: ChatResponsePartType.TOOL,
-              activity: {
-                phase: ToolActivityPhase.STARTED,
-                namespace: 'project',
-                name: 'read',
-                callId: 'call',
-                arguments: 'secret input',
-              },
+  it('animates a running tool through the wired response state', () => {
+    const view = render(
+      <WiredResponse
+        parts={[
+          {
+            type: ChatResponsePartType.TOOL,
+            activity: {
+              phase: ToolActivityPhase.STARTED,
+              namespace: 'project',
+              name: 'read',
+              callId: 'running-call',
+              arguments: '{}',
             },
-            {
-              type: ChatResponsePartType.TOOL,
-              activity: {
-                phase: ToolActivityPhase.COMPLETED,
-                namespace: 'project',
-                name: 'read',
-                callId: 'call',
-                arguments: 'secret input',
-                output: 'large successful result',
-              },
-            },
-          ]}
-        />,
-      );
+          },
+        ]}
+      />,
+    );
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '').trim()).toBe('project.read  ✓');
-      view.unmount();
-    });
-
-    it('animates a running tool through the wired response state', () => {
-      const view = render(
-        <WiredResponse
-          parts={[
-            {
-              type: ChatResponsePartType.TOOL,
-              activity: {
-                phase: ToolActivityPhase.STARTED,
-                namespace: 'project',
-                name: 'read',
-                callId: 'running-call',
-                arguments: '{}',
-              },
-            },
-          ]}
-        />,
-      );
-
-      expect(stripVTControlCharacters(view.lastFrame() ?? '').trim()).toMatch(/^project\.read  .$/u);
-      view.unmount();
-    });
+    expect(stripVTControlCharacters(view.lastFrame() ?? '').trim()).toMatch(/^project\.read  .$/u);
+    view.unmount();
   });
 });
 
@@ -230,159 +229,157 @@ describe(ToolActivity, () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  describe('rendering', () => {
-    it('renders a started namespaced tool as a spinner tag without its arguments', () => {
-      const view = render(
-        <ToolActivity
-          frame={3}
-          activity={{
-            phase: ToolActivityPhase.STARTED,
-            namespace: 'project',
-            name: 'read',
-            callId: 'call',
-            arguments: 'first\nsecond\u001B[31m',
-          }}
-        />,
-      );
+  it('renders a started namespaced tool as a spinner tag without its arguments', () => {
+    const view = render(
+      <ToolActivity
+        frame={3}
+        activity={{
+          phase: ToolActivityPhase.STARTED,
+          namespace: 'project',
+          name: 'read',
+          callId: 'call',
+          arguments: 'first\nsecond\u001B[31m',
+        }}
+      />,
+    );
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '')).toBe(' project.read  ⠸');
-      view.unmount();
-    });
+    expect(normalize(view.lastFrame()!)).toStrictEqual(' project.read  ⠸');
+    view.unmount();
+  });
 
-    it('omits empty started-tool arguments', () => {
-      const view = render(
-        <ToolActivity
-          activity={{
-            phase: ToolActivityPhase.STARTED,
-            name: 'read',
-            callId: 'call',
-            arguments: '',
-          }}
-        />,
-      );
+  it('omits empty started-tool arguments', () => {
+    const view = render(
+      <ToolActivity
+        activity={{
+          phase: ToolActivityPhase.STARTED,
+          name: 'read',
+          callId: 'call',
+          arguments: '',
+        }}
+      />,
+    );
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '')).toBe(' read  ⠋');
-      view.unmount();
-    });
+    expect(normalize(view.lastFrame()!)).toStrictEqual(' read  ⠋');
+    view.unmount();
+  });
 
-    it('falls back to the first spinner frame for an out-of-range animation frame', () => {
-      const view = render(
-        <ToolActivity
-          frame={-1}
-          activity={{
-            phase: ToolActivityPhase.STARTED,
-            name: 'read',
-            callId: 'call',
-            arguments: '',
-          }}
-        />,
-      );
+  it('falls back to the first spinner frame for an out-of-range animation frame', () => {
+    const view = render(
+      <ToolActivity
+        frame={-1}
+        activity={{
+          phase: ToolActivityPhase.STARTED,
+          name: 'read',
+          callId: 'call',
+          arguments: '',
+        }}
+      />,
+    );
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '')).toBe(' read  ⠋');
-      view.unmount();
-    });
+    expect(normalize(view.lastFrame()!)).toStrictEqual(' read  ⠋');
+    view.unmount();
+  });
 
-    it.each([
-      ['non-JSON output', 'plain', ' read  ✓'],
-      ['successful JSON output', '{}', ' read  ✓'],
-      ['a string error', '{"error":"failed"}', ' read  ×\n  Error: failed'],
-      ['a null error', '{"error":null}', ' read  ×\n  Error: null'],
-      ['an array error', '{"error":["one",2]}', ' read  ×\n  Error: one, 2'],
-      ['an error code and message', '{"error":{"code":"BAD","message":"failed"}}', ' read  ×\n  Error: BAD: failed'],
-      [
-        'error context',
-        '{"error":{"path":"src/App.tsx"}}',
-        ' read  ×\n  Error: {"path":"src/App.tsx"} (path=src/App.tsx)',
-      ],
-    ])('renders %s', (_case, output, expected) => {
-      const view = render(
-        <ToolActivity
-          activity={{
-            phase: ToolActivityPhase.COMPLETED,
-            name: 'read',
-            callId: 'call',
-            arguments: '',
-            output,
-          }}
-        />,
-      );
+  it.each([
+    ['non-JSON output', 'plain', ' read  ✓'],
+    ['successful JSON output', '{}', ' read  ✓'],
+    ['a string error', '{"error":"failed"}', ' read  ×\n  Error: failed'],
+    ['a null error', '{"error":null}', ' read  ×\n  Error: null'],
+    ['an array error', '{"error":["one",2]}', ' read  ×\n  Error: one, 2'],
+    ['an error code and message', '{"error":{"code":"BAD","message":"failed"}}', ' read  ×\n  Error: BAD: failed'],
+    [
+      'error context',
+      '{"error":{"path":"src/App.tsx"}}',
+      ' read  ×\n  Error: {"path":"src/App.tsx"} (path=src/App.tsx)',
+    ],
+  ])('renders %s', (_case, output, expected) => {
+    const view = render(
+      <ToolActivity
+        activity={{
+          phase: ToolActivityPhase.COMPLETED,
+          name: 'read',
+          callId: 'call',
+          arguments: '',
+          output,
+        }}
+      />,
+    );
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '')).toBe(expected);
-      view.unmount();
-    });
+    expect(normalize(view.lastFrame()!)).toStrictEqual(expected);
+    view.unmount();
+  });
 
-    it('reveals sanitized tool arguments when the call fails', () => {
-      const view = render(
-        <ToolActivity
-          activity={{
-            phase: ToolActivityPhase.COMPLETED,
-            name: 'write',
-            callId: 'call',
-            arguments: 'first\nsecond\u001B[31m',
-            output: '{"error":"failed"}',
-          }}
-        />,
-      );
+  it('reveals sanitized tool arguments when the call fails', () => {
+    const view = render(
+      <ToolActivity
+        activity={{
+          phase: ToolActivityPhase.COMPLETED,
+          name: 'write',
+          callId: 'call',
+          arguments: 'first\nsecond\u001B[31m',
+          output: '{"error":"failed"}',
+        }}
+      />,
+    );
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '')).toBe(' write  ×\n  first\n  second\n  Error: failed');
-      view.unmount();
-    });
+    expect(normalize(view.lastFrame()!)).toStrictEqual(' write  ×\n  first\n  second\n  Error: failed');
+    view.unmount();
+  });
 
-    it('handles a completed tool without output', () => {
-      const view = render(
-        <ToolActivity
-          activity={{
-            phase: ToolActivityPhase.COMPLETED,
-            name: 'read',
-            callId: 'call',
-            arguments: '',
-          }}
-        />,
-      );
+  it('handles a completed tool without output', () => {
+    const view = render(
+      <ToolActivity
+        activity={{
+          phase: ToolActivityPhase.COMPLETED,
+          name: 'read',
+          callId: 'call',
+          arguments: '',
+        }}
+      />,
+    );
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '')).toBe(' read  ✓');
-      view.unmount();
-    });
+    expect(normalize(view.lastFrame()!)).toBe(' read  ✓');
+    view.unmount();
+  });
 
-    it('falls back to string coercion when parsed error details cannot be serialized', () => {
-      vi.spyOn(JSON, 'parse').mockReturnValue({ error: undefined });
-      const view = render(
-        <ToolActivity
-          activity={{
-            phase: ToolActivityPhase.COMPLETED,
-            name: 'read',
-            callId: 'call',
-            arguments: '',
-            output: '{}',
-          }}
-        />,
-      );
+  it('falls back to string coercion when parsed error details cannot be serialized', () => {
+    vi.spyOn(JSON, 'parse').mockReturnValue({ error: undefined });
+    const view = render(
+      <ToolActivity
+        activity={{
+          phase: ToolActivityPhase.COMPLETED,
+          name: 'read',
+          callId: 'call',
+          arguments: '',
+          output: '{}',
+        }}
+      />,
+    );
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '')).toBe(' read  ×\n  Error: undefined');
-      view.unmount();
-    });
+    expect(normalize(view.lastFrame()!)).toBe(' read  ×\n  Error: undefined');
+    view.unmount();
+  });
 
-    it('survives circular parsed error details', () => {
-      const circular: { self?: unknown } = {};
-      circular.self = circular;
-      vi.spyOn(JSON, 'parse').mockReturnValue({ error: circular });
-      const view = render(
-        <ToolActivity
-          activity={{
-            phase: ToolActivityPhase.COMPLETED,
-            name: 'read',
-            callId: 'call',
-            arguments: '',
-            output: '{}',
-          }}
-        />,
-      );
+  it('survives circular parsed error details', () => {
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+    vi.spyOn(JSON, 'parse').mockReturnValue({ error: circular });
+    const view = render(
+      <ToolActivity
+        activity={{
+          phase: ToolActivityPhase.COMPLETED,
+          name: 'read',
+          callId: 'call',
+          arguments: '',
+          output: '{}',
+        }}
+      />,
+    );
 
-      expect(stripVTControlCharacters(view.lastFrame() ?? '')).toBe(
-        ' read  ×\n  Error: Unprintable error details (self=Unprintable error details)',
-      );
-      view.unmount();
-    });
+    expect(normalize(view.lastFrame()!)).toBe(
+      ' read  ×\n  Error: Unprintable error details (self=Unprintable error details)',
+    );
+    view.unmount();
   });
 });
 

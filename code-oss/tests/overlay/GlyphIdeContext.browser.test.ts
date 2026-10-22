@@ -417,6 +417,20 @@ describe(GlyphIdeContext, () => {
       expect(provideDefinition).toHaveBeenCalledTimes(20);
     });
 
+    it('queries each non-keyword identifier only once', async () => {
+      const services = ideServices();
+      const text = 'const alpha = alpha';
+      const model = services.model(URI.file('/workspace/a.ts'), text);
+      services.languages.definitionProvider.has.mockReturnValue(true);
+      const provideDefinition = vi.fn(async () => []);
+      services.languages.definitionProvider.ordered.mockReturnValue([{ provideDefinition }]);
+      services.choices.push('Related symbols');
+
+      await createIdeContext(services).select(editorOf(model, new Range(1, 1, 1, text.length + 1)));
+
+      expect(provideDefinition).toHaveBeenCalledTimes(2);
+    });
+
     it('marks the lookup stale when the source changed before it began', async () => {
       const services = ideServices();
       const model = services.model(URI.file('/workspace/a.ts'), 'alpha');
@@ -671,6 +685,30 @@ describe(GlyphIdeContext, () => {
       expect(attachment.text).toContain('--- sub\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-Subproject commit 1\n');
     });
 
+    it('rebuilds primitive Git query metadata for an unstaged change', async () => {
+      const services = ideServices();
+      const base = URI.from({ scheme: 'git', path: '/workspace/a.ts', query: 'null' });
+      services.model(base.with({ query: JSON.stringify({ ref: '' }) }), 'index\n');
+      services.model(URI.file('/workspace/a.ts'), 'working\n');
+      services.scm.repositories.push(
+        repository(
+          [
+            {
+              sourceUri: URI.file('/workspace/a.ts'),
+              multiDiffEditorOriginalUri: base,
+              multiDiffEditorModifiedUri: URI.file('/workspace/a.ts'),
+            },
+          ],
+          { group: 'workingTree' },
+        ),
+      );
+      services.choices.push('Unstaged changes', items => items[0]);
+
+      const [attachment] = await createIdeContext(services).select(undefined);
+
+      expect(attachment.text).toContain('Git diff: index → working tree');
+    });
+
     it('returns nothing when no change is chosen', async () => {
       const services = ideServices();
       services.scm.repositories.push(repository([{ sourceUri: URI.file('/workspace/a.ts') }]));
@@ -888,6 +926,16 @@ describe(GlyphIdeContext, () => {
       expect(attachment.text).toMatch(
         /^Test: adds \(test\)\nSource: file:\/\/\/workspace\/a\.test\.ts\nRun state: running \(partial\)\n\nExpected: unavailable\nActual: unavailable\n\n/u,
       );
+    });
+
+    it('describes a running failure whose present expectation is unavailable', async () => {
+      const services = ideServices();
+      failureModel(services);
+      services.runs.push(failureRun({ message: 'failed', expected: undefined, actual: undefined }));
+
+      const [attachment] = await createIdeContext(services).captureTestFailure('run', 'test', 0, 0);
+
+      expect(attachment.text).toContain('Expected: unavailable\nActual: unavailable');
     });
 
     it('describes a failure without a source or actual output', async () => {

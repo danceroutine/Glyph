@@ -2,18 +2,10 @@ import { act, renderHook } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphPlan } from '#src/desktop/tests/fixtures/aGlyphPlan.ts';
 import { useGlyphPlanCardsState } from '#code-oss/ui/GlyphPlan/useGlyphPlanCardsState.ts';
 
-const plan = (overrides: Partial<GlyphPlan> = {}): GlyphPlan => ({
-  id: 'plan',
-  revision: 1,
-  title: 'Ship it',
-  summary: 'Summary',
-  markdown: '',
-  todos: [],
-  agents: [],
-  ...overrides,
-});
+const plan = (overrides: Partial<GlyphPlan> = {}) => aGlyphPlan({ title: 'Ship it', summary: 'Summary', ...overrides });
 
 const cardActions = () => ({
   viewPlan: vi.fn(async (_chatId: string, _plan: GlyphPlan) => {}),

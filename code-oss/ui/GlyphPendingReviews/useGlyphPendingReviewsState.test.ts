@@ -5,25 +5,15 @@ import {
   type GlyphProposalFileSummary,
 } from '#src/desktop/protocol/events/GlyphProposalFileSummary.js';
 import type { GlyphProposalSummary } from '#src/desktop/protocol/events/GlyphProposalSummary.js';
+import { aGlyphProposalFileSummary } from '#src/desktop/tests/fixtures/aGlyphProposalFileSummary.ts';
+import { aGlyphProposalSummary } from '#src/desktop/tests/fixtures/aGlyphProposalSummary.ts';
 import { useGlyphPendingReviewsState } from '#code-oss/ui/GlyphPendingReviews/useGlyphPendingReviewsState.ts';
 
-const proposalFile = (overrides: Partial<GlyphProposalFileSummary> = {}): GlyphProposalFileSummary => ({
-  id: 'file',
-  path: 'src/app.ts',
-  proposedUri: 'glyph://proposal/file',
-  pendingItemIds: ['item'],
-  textOnly: true,
-  applicability: GlyphProposalApplicability.READY,
-  ...overrides,
-});
+const proposalFile = (overrides: Partial<GlyphProposalFileSummary> = {}) =>
+  aGlyphProposalFileSummary({ textOnly: true, ...overrides });
 
-const proposal = (overrides: Partial<GlyphProposalSummary> = {}): GlyphProposalSummary => ({
-  id: 'proposal',
-  chatId: 'chat',
-  createdAt: '2026-01-01T00:00:00.000Z',
-  files: [proposalFile()],
-  ...overrides,
-});
+const proposal = (overrides: Partial<GlyphProposalSummary> = {}) =>
+  aGlyphProposalSummary({ files: [proposalFile()], ...overrides });
 
 const reviewActions = () => ({
   reviewProposalFile: vi.fn(async (_chatId: string, _proposalId: string, _fileId: string) => {}),

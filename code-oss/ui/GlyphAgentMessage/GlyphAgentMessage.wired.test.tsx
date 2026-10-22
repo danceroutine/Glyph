@@ -5,6 +5,7 @@ import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.
 import { GlyphRunStatus, type GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
+import { aGlyphRunProjection } from '#src/desktop/tests/fixtures/aGlyphRunProjection.ts';
 import {
   GlyphAgentMessageWithState,
   WiredGlyphAgentMessage,
@@ -29,16 +30,13 @@ function messageActions(overrides: Partial<GlyphMessageActions> = {}): GlyphMess
 }
 
 function pendingRun(overrides: Partial<GlyphRunProjection> = {}): GlyphRunProjection {
-  return {
+  return aGlyphRunProjection({
     chatId: 'chat-1',
     runId: 'run-1',
     status: GlyphRunStatus.WAITING_FOR_APPROVAL,
-    text: '',
-    reasoning: '',
-    tools: [],
     approval: { id: 'approval-1', title: 'Run tests', detail: 'pnpm test', sandboxed: true },
     ...overrides,
-  };
+  });
 }
 
 describe(WiredGlyphAgentMessage, () => {

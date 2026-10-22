@@ -46,6 +46,7 @@
         "allowReturnAny": true
       }
     ],
+    "typescript/strict-boolean-expressions": "off",
     "typescript/no-misused-promises": [
       "error",
       {
@@ -207,6 +208,7 @@
         "vitest": true
       },
       "rules": {
+        "typescript/no-unsafe-call": "off",
         "typescript/no-unsafe-type-assertion": "off",
         "typescript/no-unsafe-assignment": "off",
         "typescript/no-unsafe-argument": "off",

@@ -2,33 +2,18 @@ import { createRef } from 'preact';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
-import type { GlyphChatSummary } from '#src/desktop/protocol/events/GlyphChatSummary.js';
-import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphChatSummary } from '#src/desktop/tests/fixtures/aGlyphChatSummary.ts';
+import { aGlyphRunProjection } from '#src/desktop/tests/fixtures/aGlyphRunProjection.ts';
+import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenchState.ts';
 import { WiredGlyphChatHistory } from '#code-oss/ui/GlyphChatHistory/GlyphChatHistory.wired.tsx';
 
 afterEach(cleanup);
 
-function workbenchState(overrides: Partial<GlyphWorkbenchState> = {}): GlyphWorkbenchState {
-  return {
-    status: GlyphWorkbenchStatus.READY,
-    transcript: [],
-    usage: {},
-    accounts: [],
-    models: [],
-    chats: [],
-    runs: [],
-    proposals: [],
-    ownerWindowId: 'window-1',
-    readOnly: false,
-    sequence: 0,
-    ...overrides,
-  };
-}
+const workbenchState = aGlyphWorkbenchState;
 
-function chat(id: string, title: string, updatedAt = '2026-01-01T00:00:00Z'): GlyphChatSummary {
-  return { id, title, updatedAt, accountProvider: 'openai', accountId: 'a1', modelSlug: 'gpt', turnCount: 1 };
-}
+const chat = (id: string, title: string, updatedAt = '2026-01-01T00:00:00Z') =>
+  aGlyphChatSummary({ id, title, updatedAt, accountId: 'a1', modelSlug: 'gpt' });
 
 function historyActions() {
   return {
@@ -51,9 +36,7 @@ describe(WiredGlyphChatHistory, () => {
           selectedChatId: 'running',
           pinnedChatIds: ['pinned'],
           chats: [chat('running', 'Running chat', '2026-01-02T00:00:00Z'), chat('pinned', 'Pinned chat')],
-          runs: [
-            { chatId: 'running', runId: 'r', status: GlyphRunStatus.STREAMING, text: '', reasoning: '', tools: [] },
-          ],
+          runs: [aGlyphRunProjection({ chatId: 'running', runId: 'r', status: GlyphRunStatus.STREAMING })],
         })}
         actions={actions}
         close={close}

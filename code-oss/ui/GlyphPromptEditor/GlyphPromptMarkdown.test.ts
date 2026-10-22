@@ -1,25 +1,19 @@
 import { DOMSerializer } from 'prosemirror-model';
 import { EditorState, TextSelection } from 'prosemirror-state';
 import { describe, expect, it } from 'vitest';
+import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import { aGlyphContextAttachment } from '#src/desktop/tests/fixtures/aGlyphContextAttachment.ts';
 import {
-  GlyphContextAttachmentKind,
-  type GlyphContextAttachment,
-} from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
-import {
+  attachmentOf,
+  attrString,
   parsePrompt,
   promptSchema,
   promptSelection,
   serializePrompt,
 } from '#code-oss/ui/GlyphPromptEditor/GlyphPromptMarkdown.ts';
 
-const attachment = (overrides: Partial<GlyphContextAttachment> = {}): GlyphContextAttachment => ({
-  kind: GlyphContextAttachmentKind.FILE,
-  uri: 'file:///repo/src/app.ts',
-  path: 'src/app.ts',
-  text: 'const a = 1;',
-  contentRevision: '1',
-  ...overrides,
-});
+const attachment = (overrides: Partial<GlyphContextAttachment> = {}) =>
+  aGlyphContextAttachment({ contentRevision: '1', ...overrides });
 
 const roundTrip = (document: Parameters<typeof parsePrompt>[0]) => {
   const { doc, from, to } = parsePrompt(document);
@@ -207,6 +201,13 @@ describe('promptSchema', () => {
 
     expect(html(doc)).toBe(
       '<p><span>Diagram</span><span>https://example.com/b.png</span><span class="glyph-prompt-link">docs</span><span data-glyph-attachment="true">src/app.ts</span></p>',
+    );
+  });
+
+  it('normalizes non-string attributes and rejects malformed attachments', () => {
+    expect(attrString({ attrs: { alt: 7 } } as never, 'alt')).toBe('');
+    expect(() => attachmentOf({ attrs: { attachment: null } } as never)).toThrow(
+      'Prompt attachment nodes require an attachment.',
     );
   });
 });

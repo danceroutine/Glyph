@@ -5,7 +5,7 @@ import { WiredTerminalRoot } from '#src/terminal/ui/shell/TerminalRoot.wired.js'
 import type { TerminalRendererSnapshot } from '#src/terminal/ui/shell/TerminalRendererSnapshot.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
-
+import { normalize } from '#src/shared/tests/normalize.js';
 vi.mock('ink', async () => ({
   ...(await vi.importActual<typeof import('ink')>('ink')),
   useWindowSize: () => ({ columns: 100, rows: 24 }),
@@ -97,7 +97,7 @@ describe(WiredTerminalRoot, () => {
       });
       view.stdin.write('VISIBLE DRAFT');
       await vi.waitFor(() => {
-        expect(view.lastFrame()).toContain('you> VISIBLE DRAFT');
+        expect(normalize(view.lastFrame()!)).toContain('you> VISIBLE DRAFT');
       });
       expect(view.lastFrame()!.split('\n').length).toBeLessThanOrEqual(24);
       expect(view.lastFrame()).toContain('Background terminals (16)');
@@ -127,7 +127,7 @@ describe(WiredTerminalRoot, () => {
       expect(view.lastFrame()!.split('\n').length).toBeLessThanOrEqual(24);
       view.stdin.write('\u0001');
       await vi.waitFor(() => {
-        expect(view.lastFrame()).toContain('you> START');
+        expect(normalize(view.lastFrame()!)).toContain('you> START');
       });
       view.stdin.write('\u0005');
       await vi.waitFor(() => {

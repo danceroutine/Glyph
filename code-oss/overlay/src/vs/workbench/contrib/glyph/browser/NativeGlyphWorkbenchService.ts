@@ -706,11 +706,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       throw new Error('Wait for the current chat transition.');
     const source = this.composer;
     const message = source.snapshot.queued.find(value => value.id === id);
-    if (
-      !message ||
-      (source.snapshot.queueSubmitting !== undefined && source.snapshot.queueSubmitting !== '') ||
-      (source.snapshot.editingQueuedMessage !== undefined && source.snapshot.editingQueuedMessage !== '')
-    )
+    if (!message || source.snapshot.queueSubmitting !== undefined || source.snapshot.editingQueuedMessage !== undefined)
       return;
     this.newChat();
     this.composer.restoreDraft(structuredClone(message.document));

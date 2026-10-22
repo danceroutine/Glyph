@@ -20,7 +20,8 @@ import { getWorkspaceKey, WorkspaceOwnershipRegistry } from './WorkspaceOwnershi
 
 import type { GlyphDesktopWorkspaceRuntime, GlyphRuntimeCommand } from './GlyphDesktopWorkspaceRuntime.ts';
 import type { GlyphDesktopWorkspaceRuntimeFactory } from './GlyphDesktopWorkspaceRuntimeFactory.ts';
-import { isRecord } from '#src/shared/validators/isRecord.js';
+import { isGlyphRequestEnvelope } from '#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.js';
+import { isMutationCommand } from '#src/desktop/host/typeguards/isMutationCommand.js';
 
 interface Connection {
   readonly identity: GlyphConnectionIdentity;
@@ -36,7 +37,6 @@ interface Connection {
   attachmentQueue: Promise<void>;
   pendingAttachments: number;
 }
-
 interface WorkspaceRuntimeRecord {
   readonly runtime: GlyphDesktopWorkspaceRuntime;
   readonly ownerWindowId: string;
@@ -97,7 +97,7 @@ export class GlyphDesktopHost {
 
   async receive(connectionId: string, request: unknown): Promise<void> {
     const connection = this.requireConnection(connectionId);
-    if (!isRequestEnvelope(request)) throw new Error('Invalid request envelope.');
+    if (!isGlyphRequestEnvelope(request)) throw new Error('Invalid request envelope.');
     const result = await connection.requests.run(request.requestId, () => this.execute(connection, request));
     for (const event of result) this.send(connection, event);
   }
@@ -468,20 +468,4 @@ function toErrorGlyphHostEvent({
   readonly code?: GlyphDesktopErrorCode;
 }): GlyphErrorHostEvent {
   return { type: GlyphHostEventType.ERROR, requestId, error: { code, message, retryable } };
-}
-
-function isMutationCommand(command: GlyphRuntimeCommand): boolean {
-  return ![GlyphWorkbenchCommandType.LIST_CHATS, GlyphWorkbenchCommandType.OPEN_CHAT].includes(command.type);
-}
-
-function isRequestEnvelope(value: unknown): value is GlyphRequestEnvelope {
-  return (
-    isRecord(value) &&
-    typeof value.requestId === 'string' &&
-    typeof value.profileId === 'string' &&
-    typeof value.windowId === 'string' &&
-    typeof value.workspaceId === 'string' &&
-    isRecord(value.command) &&
-    typeof value.command.type === 'string'
-  );
 }

@@ -369,9 +369,13 @@ registerWorkbenchContribution2(
   GlyphTerminalSelectionActions,
   WorkbenchPhase.AfterRestored,
 );
-const scmContainer = containers.get(SCM_VIEWLET_ID);
-if (scmContainer)
-  views.registerViews(
+export function registerGlyphAgentReviewView(
+  viewContainers: IViewContainersRegistry,
+  viewRegistry: IViewsRegistry,
+): void {
+  const scmContainer = viewContainers.get(SCM_VIEWLET_ID);
+  if (!scmContainer) return;
+  viewRegistry.registerViews(
     [
       {
         id: GlyphAgentReviewPane.ID,
@@ -388,6 +392,8 @@ if (scmContainer)
     ],
     scmContainer,
   );
+}
+registerGlyphAgentReviewView(containers, views);
 
 registerAction2(
   class extends AsyncAction2 {

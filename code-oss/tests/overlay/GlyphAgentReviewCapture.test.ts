@@ -329,6 +329,27 @@ describe(captureGlyphAgentReview, () => {
     ]);
   });
 
+  it('rebuilds primitive Git query metadata when capturing local changes', async () => {
+    const { ide, captureDiff } = ideOf();
+    const original = URI.file('/repo/a.ts').with({ scheme: 'git', query: 'null' });
+    const repository = repositoryOf(historyOf('head'), [
+      {
+        id: 'workingTree',
+        resources: [
+          {
+            sourceUri: URI.file('/repo/a.ts'),
+            multiDiffEditorOriginalUri: original,
+            multiDiffEditorModifiedUri: URI.file('/repo/a.ts'),
+          },
+        ],
+      },
+    ]);
+
+    await captureGlyphAgentReview(ide, repository, Scope.ALL_LOCAL, '');
+
+    expect(JSON.parse(captureDiff.mock.calls[0][1]!.query)).toEqual({ ref: 'head' });
+  });
+
   it('describes all local changes before the first commit', async () => {
     const { ide } = ideOf();
     const repository = repositoryOf(undefined, [

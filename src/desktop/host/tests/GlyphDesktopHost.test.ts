@@ -1,4 +1,7 @@
-import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
+import { describe, expect, beforeEach, it, onTestFinished, vi, type Mock } from 'vitest';
+vi.mock('#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.ts', () => ({
+  isGlyphRequestEnvelope: vi.fn(),
+}));
 import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#src/desktop/protocol/GlyphDesktopProtocolVersion.js';
 import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { GlyphHostStatus } from '#src/desktop/protocol/events/GlyphHostStatus.js';
@@ -18,12 +21,29 @@ import type { GlyphDesktopWorkspaceRuntimeFactory } from '#src/desktop/host/Glyp
 import { GlyphHostEventCursor, GlyphHostEventDisposition } from '#src/desktop/workbench/GlyphHostEventCursor.js';
 import { GlyphWorkbenchProjection } from '#src/desktop/workbench/GlyphWorkbenchProjection.js';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import { isGlyphRequestEnvelope } from '#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.ts';
 
 const owner = { profileId: 'profile', windowId: 'owner', workspaceId: 'workspace' } as const;
 const peer = { ...owner, windowId: 'peer' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(GlyphDesktopHost, () => {
+  beforeEach(() => {
+    vi.mocked(isGlyphRequestEnvelope).mockReturnValue(true);
+  });
+
+  describe(GlyphDesktopHost.prototype.receive, () => {
+    it('rejects invalid request envelopes', async () => {
+      vi.mocked(isGlyphRequestEnvelope).mockReturnValue(false);
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      // @ts-expect-error - invalid request envelope
+      await expect(fixture.receive('owner', owner, 'invalid', { type: 'invalid' })).rejects.toThrow(
+        'Invalid request envelope.',
+      );
+    });
+  });
+
   it('rejects new commands as soon as host shutdown starts, before runtime disposal finishes', async () => {
     const fixture = new HostFixture();
     fixture.connect('owner', owner);

@@ -304,6 +304,22 @@ describe(GlyphDiagnosticHover, () => {
         expect(notifications.error).toHaveBeenCalledWith(failure);
       });
     });
+
+    it('reports non-Error failures to fix the diagnostic', async () => {
+      const { hover, glyph, notifications } = hoverOf();
+      glyph.ideContext.captureDiagnostic.mockRejectedValueOnce('capture failed');
+      buttonOf();
+      const [part] = hover.computeSync(new HoverRangeAnchor(0, new Range(1, 1, 1, 5), undefined, undefined), [
+        decorationOf('marker'),
+      ]);
+
+      hover.renderHoverParts(contextOf(), [part]);
+      lastButtonAction()();
+
+      await vi.waitFor(() => {
+        expect(notifications.error).toHaveBeenCalledWith('capture failed');
+      });
+    });
   });
 });
 
@@ -513,6 +529,20 @@ describe(GlyphTerminalSelectionActions, () => {
       expect(notifications.error).toHaveBeenCalledWith(failure);
     });
     expect(hosts(terminal)).toHaveLength(1);
+  });
+
+  it('reports non-Error failures to add the selection', async () => {
+    const { terminal, emitters } = terminalOf();
+    const { glyph, notifications } = actionsOf([terminal]);
+    glyph.ideContext.terminal.mockRejectedValueOnce('read failed');
+    buttonOf();
+    emitters.selection.fire();
+
+    lastButtonAction()();
+
+    await vi.waitFor(() => {
+      expect(notifications.error).toHaveBeenCalledWith('read failed');
+    });
   });
 
   it('follows scrolling, resizing and layout once the terminal is ready', async () => {

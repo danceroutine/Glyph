@@ -1,68 +1,36 @@
 import { act, renderHook } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
-import type { GlyphChatSummary } from '#src/desktop/protocol/events/GlyphChatSummary.js';
 import { GlyphProposalApplicability } from '#src/desktop/protocol/events/GlyphProposalFileSummary.js';
-import type { GlyphProposalSummary } from '#src/desktop/protocol/events/GlyphProposalSummary.js';
-import { GlyphRunStatus, type GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
-import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
+import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphChatSummary } from '#src/desktop/tests/fixtures/aGlyphChatSummary.ts';
+import { aGlyphProposalSummary } from '#src/desktop/tests/fixtures/aGlyphProposalSummary.ts';
+import { aGlyphRunProjection } from '#src/desktop/tests/fixtures/aGlyphRunProjection.ts';
+import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenchState.ts';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
 import { tokens } from '#code-oss/ui/design-system/index.ts';
 import { useGlyphWorkbenchState } from '#code-oss/ui/GlyphWorkbench/useGlyphWorkbenchState.ts';
 
-const workbench = (overrides: Partial<GlyphWorkbenchState> = {}): GlyphWorkbenchState => ({
-  status: GlyphWorkbenchStatus.READY,
-  transcript: [],
-  usage: {},
-  accounts: [],
-  models: [],
-  chats: [],
-  runs: [],
-  proposals: [],
-  ownerWindowId: 'window',
-  readOnly: false,
-  sequence: 0,
-  ...overrides,
-});
-
-const chat = (overrides: Partial<GlyphChatSummary> = {}): GlyphChatSummary => ({
-  id: 'chat',
-  title: 'Refactor',
-  accountProvider: 'openai',
-  accountId: 'account',
-  modelSlug: 'gpt-5',
-  updatedAt: '2026-01-01T00:00:00.000Z',
-  turnCount: 1,
-  ...overrides,
-});
-
-const run = (overrides: Partial<GlyphRunProjection> = {}): GlyphRunProjection => ({
-  chatId: 'chat',
-  runId: 'run',
-  status: GlyphRunStatus.COMPLETED,
-  text: '',
-  reasoning: '',
-  tools: [],
-  ...overrides,
-});
+const workbench = aGlyphWorkbenchState;
+const chat = (overrides: Parameters<typeof aGlyphChatSummary>[0] = {}) =>
+  aGlyphChatSummary({ title: 'Refactor', ...overrides });
+const run = aGlyphRunProjection;
 
 const question = (id: string) => ({ id, title: 'Question', prompt: 'Why?' });
 
-const proposal = (overrides: Partial<GlyphProposalSummary> = {}): GlyphProposalSummary => ({
-  id: 'proposal',
-  chatId: 'chat',
-  createdAt: '2026-01-01T00:00:00.000Z',
-  files: [
-    {
-      id: 'file',
-      path: 'a.ts',
-      proposedUri: 'glyph://a',
-      pendingItemIds: ['item'],
-      applicability: GlyphProposalApplicability.READY,
-    },
-  ],
-  ...overrides,
-});
+const proposal = (overrides: Parameters<typeof aGlyphProposalSummary>[0] = {}) =>
+  aGlyphProposalSummary({
+    files: [
+      {
+        id: 'file',
+        path: 'a.ts',
+        proposedUri: 'glyph://a',
+        pendingItemIds: ['item'],
+        applicability: GlyphProposalApplicability.READY,
+      },
+    ],
+    ...overrides,
+  });
 
 const workbenchActions = (overrides: Partial<GlyphWorkbenchViewActions> = {}) =>
   ({

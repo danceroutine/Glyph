@@ -1349,6 +1349,20 @@ describe(GlyphEditorAdapter, () => {
       expect(model.eol).toBe('\r\n');
     });
 
+    it('applies an EOL-only conversion to line feeds', async () => {
+      const services = editorServices();
+      const model = services.open('a.ts', 'line\r\n');
+      const adapter = createAdapter(services);
+      const before = await adapter.read('a.ts');
+
+      expect(await applyText(adapter, textMutation(before, 'line\n'))).toMatchObject({
+        ok: true,
+        snapshot: { text: 'line\n' },
+        receipt: { state: GlyphMutationReceiptState.APPLIED },
+      });
+      expect(model.eol).toBe('\n');
+    });
+
     it('applies text and EOL changes as separately guarded steps in one undo group', async () => {
       const services = editorServices();
       services.open('a.ts', 'line\n');

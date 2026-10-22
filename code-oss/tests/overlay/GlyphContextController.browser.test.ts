@@ -523,6 +523,16 @@ describe(GlyphContextController, () => {
       });
     });
 
+    it('refuses disk folders outside the workspace', async () => {
+      const services = controllerServices();
+      services.workspace.getWorkspaceFolder.mockReturnValue(undefined);
+
+      await expect(createController(services).captureFolder('file:///elsewhere')).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
+        message: 'Only workspace folders can be attached.',
+      });
+    });
+
     it.each([
       ['a file', { isDirectory: false }],
       ['a symbolic link', { isDirectory: true, isSymbolicLink: true }],
@@ -581,6 +591,19 @@ describe(GlyphContextController, () => {
         services.folders.splice(0, 1, { name: 'other', uri: URI.file('/workspace/src') });
         return { results: [] };
       });
+      await expect(createController(services).captureFolder('file:///workspace/src')).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.STALE_DOCUMENT,
+      });
+    });
+
+    it('refuses a capture whose workspace folder disappeared meanwhile', async () => {
+      const services = controllerServices();
+      services.stats.set('/workspace/src', { isDirectory: true });
+      services.search.fileSearch.mockImplementation(async () => {
+        services.folders.splice(0);
+        return { results: [] };
+      });
+
       await expect(createController(services).captureFolder('file:///workspace/src')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.STALE_DOCUMENT,
       });

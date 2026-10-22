@@ -222,7 +222,8 @@ export class GlyphProposalEditor extends Disposable {
   }
   async refresh(): Promise<void> {
     const current = this.current;
-    if (current !== undefined && (this.file()?.pendingItemIds.length ?? 0) > 0)
+    const file = this.file();
+    if (current !== undefined && file !== undefined && file.pendingItemIds.length > 0)
       await this.actions.read(current.chatId, current.proposalId, current.fileId);
     else this.refreshControls();
   }
@@ -484,7 +485,7 @@ export class GlyphProposalEditor extends Disposable {
     const file = this.file();
     const files = this.files();
     const index = files.findIndex(f => f.proposalId === this.current?.proposalId && f.file.id === this.current?.fileId);
-    const disabled = state.readOnly || (file?.pendingItemIds.length ?? 0) === 0;
+    const disabled = state.readOnly || file === undefined || file.pendingItemIds.length === 0;
     const navigateFile = async (amount: number) => {
       const target = files.at(
         index < 0 ? (amount > 0 ? 0 : files.length - 1) : (index + amount + files.length) % files.length,
@@ -526,7 +527,7 @@ export class GlyphProposalEditor extends Disposable {
           }
         : {}),
       label:
-        (file?.pendingItemIds.length ?? 0) === 0
+        file === undefined || file.pendingItemIds.length === 0
           ? 'Review complete'
           : `${this.index + 1} of ${this.preview?.items.length ?? 0}`,
       disabled,
@@ -676,7 +677,8 @@ export class GlyphProposalEditor extends Disposable {
   private refreshControls(): void {
     this.controls[0]?.update(this.properties(true));
     this.controls[1]?.update(this.properties(false));
-    if (this.hunk && this.editor && (this.file()?.pendingItemIds.length ?? 0) === 0) {
+    const file = this.file();
+    if (this.hunk && this.editor && file !== undefined && file.pendingItemIds.length === 0) {
       this.hunk.widget.getDomNode().style.display = 'none';
       this.hunk.zone.heightInPx = 0;
       this.editor.changeViewZones(accessor => {

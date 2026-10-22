@@ -4,6 +4,7 @@ import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { WiredProposalReview } from '#src/terminal/ui/proposal/ProposalReview.wired.js';
 import { createProposalReviewFixture } from './ProposalReviewFixture.ts';
+import { normalize } from '#src/shared/tests/normalize.js';
 
 describe(WiredProposalReview, () => {
   describe('interaction', () => {
@@ -139,7 +140,7 @@ describe(WiredProposalReview, () => {
         expect(fixture.accept).not.toHaveBeenCalled();
         await tick();
         view.stdin.write('y');
-        await waitUntil(() => fixture.accept.mock.calls.length === 1);
+        await expect.poll(() => fixture.accept.mock.calls.length === 1).toBe(true);
         expect(fixture.accept).toHaveBeenCalledWith('proposal', 'second');
       } finally {
         view.unmount();
@@ -261,9 +262,9 @@ describe(WiredProposalReview, () => {
       const request = { id: 1, manager: fixture.manager, complete, interrupt: vi.fn() };
       const view = render(<WiredProposalReview request={request} />);
 
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
       expect(complete).toHaveBeenCalledWith({ accepted: 0, rejected: 1 });
-      expect(view.lastFrame()).toBe('Review complete — 0 accepted, 1 rejected');
+      expect(normalize(view.lastFrame()!)).toBe('Review complete — 0 accepted, 1 rejected');
       view.rerender(<WiredProposalReview request={{ ...request }} />);
       await tick();
       expect(complete).toHaveBeenCalledOnce();
@@ -279,7 +280,7 @@ describe(WiredProposalReview, () => {
         />,
       );
       acceptedView.stdin.write('y');
-      await waitUntil(() => accepted.accept.mock.calls.length === 1);
+      await expect.poll(() => accepted.accept.mock.calls.length === 1).toBe(true);
       acceptedView.unmount();
 
       const rejected = createProposalReviewFixture();
@@ -287,7 +288,7 @@ describe(WiredProposalReview, () => {
         <WiredProposalReview request={{ id: 2, manager: rejected.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
       );
       rejectedView.stdin.write('N');
-      await waitUntil(() => rejected.reject.mock.calls.length === 1);
+      await expect.poll(() => rejected.reject.mock.calls.length === 1).toBe(true);
       rejectedView.unmount();
 
       expect(accepted.accept).toHaveBeenCalledWith('proposal', 'item');
@@ -305,7 +306,7 @@ describe(WiredProposalReview, () => {
       );
 
       view.stdin.write('y');
-      await waitUntil(() => complete.mock.calls.length > 0);
+      await expect.poll(() => complete.mock.calls.length > 0).toBe(true);
 
       expect(complete).toHaveBeenCalledWith({ accepted: 1, rejected: 0 });
       view.unmount();
@@ -319,7 +320,7 @@ describe(WiredProposalReview, () => {
       );
 
       view.stdin.write('y');
-      await waitUntil(() => fixture.accept.mock.calls.length === 1);
+      await expect.poll(() => fixture.accept.mock.calls.length === 1).toBe(true);
       await tick();
 
       expect(view.lastFrame()).toContain('File 1/1');
@@ -340,7 +341,7 @@ describe(WiredProposalReview, () => {
 
       expect(view.lastFrame()).toContain('change 1/2');
       view.stdin.write('y');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('change 2/2'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('change 2/2')).toBe(true);
 
       expect(view.lastFrame()).not.toContain('change 1/1');
       const additionalProposal: EditProposal = {
@@ -360,9 +361,9 @@ describe(WiredProposalReview, () => {
       view.rerender(
         <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
       );
-      await waitUntil(() => (view.lastFrame() ?? '').includes('File 1/2  change 2/2'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('File 1/2  change 2/2')).toBe(true);
       view.stdin.write('\u001B[C');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('File 2/2  change 1/1'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('File 2/2  change 1/1')).toBe(true);
       view.unmount();
     });
 
@@ -375,7 +376,7 @@ describe(WiredProposalReview, () => {
         />,
       );
       errorView.stdin.write('y');
-      await waitUntil(() => (errorView.lastFrame() ?? '').includes('Error: stale'));
+      await expect.poll(() => (errorView.lastFrame() ?? '').includes('Error: stale')).toBe(true);
       errorView.unmount();
 
       const valueFixture = createProposalReviewFixture();
@@ -386,7 +387,7 @@ describe(WiredProposalReview, () => {
         />,
       );
       valueView.stdin.write('n');
-      await waitUntil(() => (valueView.lastFrame() ?? '').includes('Error: failed'));
+      await expect.poll(() => (valueView.lastFrame() ?? '').includes('Error: failed')).toBe(true);
       valueView.unmount();
     });
 
@@ -400,7 +401,7 @@ describe(WiredProposalReview, () => {
         />,
       );
       interruptedView.stdin.write('\u0003');
-      await waitUntil(() => interrupt.mock.calls.length === 1);
+      await expect.poll(() => interrupt.mock.calls.length === 1).toBe(true);
       interruptedView.unmount();
 
       for (const key of ['\u001B', 'q']) {
@@ -415,7 +416,7 @@ describe(WiredProposalReview, () => {
           await new Promise<void>(resolve => {
             setTimeout(resolve, 75);
           });
-        await waitUntil(() => complete.mock.calls.length === 1);
+        await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
         view.unmount();
       }
 
@@ -442,9 +443,9 @@ describe(WiredProposalReview, () => {
         await tick();
       }
       view.stdin.write('f');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('full file'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('full file')).toBe(true);
       view.stdin.write('F');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('focused diff'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('focused diff')).toBe(true);
       view.stdin.write('x');
       await tick();
 
@@ -479,7 +480,7 @@ describe(WiredProposalReview, () => {
         <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,
       );
       view.stdin.write('y');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('saving…'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('saving…')).toBe(true);
       view.stdin.write('n');
       await tick();
       finish();
@@ -490,14 +491,6 @@ describe(WiredProposalReview, () => {
     });
   });
 });
-
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (predicate()) return;
-    await tick();
-  }
-  throw new Error('Condition was not reached.');
-}
 
 async function tick(): Promise<void> {
   await new Promise<void>(resolve => {
@@ -522,7 +515,7 @@ it('keeps an already-applied hunk through the existing review controls', async (
     expect(view.lastFrame()).toContain('Y keep  N revert');
     expect(complete).not.toHaveBeenCalled();
     view.stdin.write('y');
-    await waitUntil(() => complete.mock.calls.length > 0);
+    await expect.poll(() => complete.mock.calls.length > 0).toBe(true);
     expect(fixture.accept).toHaveBeenCalledExactlyOnceWith(fixture.proposal.id, item.id);
     expect(complete).toHaveBeenCalledExactlyOnceWith({ accepted: 1, rejected: 0 });
   } finally {

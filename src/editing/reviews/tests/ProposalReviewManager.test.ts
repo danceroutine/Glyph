@@ -25,6 +25,10 @@ import type { Logger } from '#src/observability/Logger.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
+import { reviewResults__TESTING_ONLY as reviewResults } from '#src/editing/reviews/ProposalReviewManager.js';
+import { anEditProposal } from '#src/editing/proposals/tests/fixtures/anEditProposal.ts';
+import { aFileEditPlan } from '#src/editing/proposals/tests/fixtures/aFileEditPlan.ts';
+import { anEditReviewItem } from '#src/editing/reviews/tests/fixtures/anEditReviewItem.ts';
 
 const directories: string[] = [];
 const configuration: EditingConfiguration = {
@@ -41,6 +45,34 @@ const configuration: EditingConfiguration = {
 };
 
 afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
+
+describe(reviewResults, () => {
+  it('reports an automatically kept item as accepted before its explicit decision changes', () => {
+    const proposal = anEditProposal({
+      id: 'proposal',
+      schemaVersion: 1 as const,
+      source: 'structured' as const,
+      createdAt: new Date().toISOString(),
+      files: [
+        aFileEditPlan({
+          id: 'file',
+          automatic: { itemId: 'item', state: 'kept', before: null, appliedRevision: null },
+          items: [anEditReviewItem({ id: 'item', decision: EditDecisionState.PENDING })],
+        }),
+      ],
+    });
+    expect(reviewResults(proposal)).toEqual([
+      expect.objectContaining({
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            decision: 'ACCEPTED',
+            itemId: 'item',
+          }),
+        ]),
+      }),
+    ]);
+  });
+});
 
 describe(ProposalReviewManager, () => {
   it.each([EditOperation.CREATE, EditOperation.DELETE, EditOperation.RENAME])(

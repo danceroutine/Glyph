@@ -70,6 +70,11 @@ export class FetchHttpClient implements HttpClient {
   }
 }
 
+function encodeBody(body: unknown, encoding: HttpBodyEncoding.JSON, headers: Headers): string;
+function encodeBody(body: unknown, encoding: HttpBodyEncoding.FORM, headers: Headers): URLSearchParams;
+function encodeBody(body: unknown, encoding: HttpBodyEncoding.TEXT, headers: Headers): string;
+function encodeBody(body: unknown, encoding: undefined, headers: Headers): string;
+function encodeBody(body: unknown, encoding: HttpBodyEncoding | undefined, headers: Headers): BodyInit | undefined;
 function encodeBody(body: unknown, encoding: HttpBodyEncoding | undefined, headers: Headers): BodyInit | undefined {
   if (body === undefined) return undefined;
   switch (encoding) {
@@ -105,6 +110,7 @@ async function decodeBody(response: Response, responseBody: HttpResponseBody): P
   }
 }
 
+export { encodeBody as encodeBody__TESTING_ONLY, decodeBody as decodeBody__TESTING_ONLY };
 function isStringRecord(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every(entry => typeof entry === 'string');
 }

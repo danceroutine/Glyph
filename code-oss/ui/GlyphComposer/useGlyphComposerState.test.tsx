@@ -12,6 +12,7 @@ import { GlyphComposerState as ComposerModel } from '#src/desktop/workbench/Glyp
 import { GlyphFollowUpBehavior } from '#src/desktop/workbench/GlyphFollowUpBehavior.js';
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphContextAttachment } from '#src/desktop/tests/fixtures/aGlyphContextAttachment.ts';
 import { GlyphComposer } from '#code-oss/ui/GlyphComposer/GlyphComposer.presentational.tsx';
 import {
   useGlyphComposerState,
@@ -41,15 +42,13 @@ function composerActions(overrides: Partial<GlyphWorkbenchViewActions> = {}): Gl
 }
 
 function fileAttachment(overrides: Partial<GlyphContextAttachment> = {}): GlyphContextAttachment {
-  return {
+  return aGlyphContextAttachment({
     id: 'attachment-1',
-    kind: GlyphContextAttachmentKind.FILE,
     uri: 'file:///workspace/src/a.ts',
     path: 'src/a.ts',
-    text: 'const a = 1;',
     contentRevision: '0123456789abcdef',
     ...overrides,
-  };
+  });
 }
 
 function deferred<T>() {

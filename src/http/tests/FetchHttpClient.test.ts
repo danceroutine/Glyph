@@ -4,6 +4,10 @@ import type { Logger } from '#src/observability/Logger.js';
 import { FetchHttpClient } from '#src/http/FetchHttpClient.js';
 import { HttpBodyEncoding } from '#src/http/HttpBodyEncoding.js';
 import { HttpResponseBody } from '#src/http/HttpResponseBody.js';
+import {
+  encodeBody__TESTING_ONLY as encodeBody,
+  decodeBody__TESTING_ONLY as decodeBody,
+} from '#src/http/FetchHttpClient.js';
 
 function logger() {
   const debug = vi.fn<(message: string, data?: unknown) => void>();
@@ -20,6 +24,72 @@ function logger() {
   } satisfies Logger;
   return { value, debug, error };
 }
+
+describe(encodeBody, () => {
+  it('formats form bodies', () => {
+    const headers = new Headers();
+    const body = encodeBody({ name: 'John' }, HttpBodyEncoding.FORM, headers);
+    expect(headers.get('Content-Type')).toBe('application/x-www-form-urlencoded');
+    expect(body?.get('name')).toStrictEqual('John');
+  });
+
+  it('formats JSON bodies', () => {
+    const headers = new Headers();
+    const body = JSON.parse(encodeBody({ name: 'John' }, HttpBodyEncoding.JSON, headers)) as { name: string };
+    expect(headers.get('Content-Type')).toBe('application/json');
+    expect(body.name).toStrictEqual('John');
+  });
+
+  it('formats text bodies', () => {
+    const headers = new Headers();
+    const body = encodeBody('Hello, world!', HttpBodyEncoding.TEXT, headers);
+    expect(body).toStrictEqual('Hello, world!');
+  });
+
+  it('formats undefined bodies', () => {
+    const headers = new Headers();
+    const body = encodeBody(undefined, HttpBodyEncoding.TEXT, headers);
+    expect(body).toBeUndefined();
+  });
+
+  it('formats null bodies', () => {
+    const headers = new Headers();
+    const body = encodeBody(null, HttpBodyEncoding.TEXT, headers);
+    expect(body).toStrictEqual('null');
+  });
+  it('throws on non-primitive bodies', () => {
+    expect(() => encodeBody(new Date(), undefined, new Headers())).toThrow(
+      'Text request bodies must be primitive values.',
+    );
+  });
+  it('throws on non-string record bodies', () => {
+    expect(() =>
+      encodeBody({ name: 'John', value: new Proxy({}, { get: () => 'value' }) }, HttpBodyEncoding.FORM, new Headers()),
+    ).toThrow('Form bodies must map field names to string values.');
+  });
+});
+
+describe(decodeBody, () => {
+  it('decodes JSON bodies', async () => {
+    const response = new Response('{"name":"John"}');
+    await expect(decodeBody(response, HttpResponseBody.JSON)).resolves.toEqual({ name: 'John' });
+  });
+
+  it('decodes text bodies', async () => {
+    const response = new Response('Hello, world!');
+    await expect(decodeBody(response, HttpResponseBody.TEXT)).resolves.toStrictEqual('Hello, world!');
+  });
+
+  it('decodes undefined bodies', async () => {
+    const response = new Response('undefined');
+    await expect(decodeBody(response, HttpResponseBody.TEXT)).resolves.toStrictEqual('undefined');
+  });
+
+  it('decodes null bodies', async () => {
+    const response = new Response('null');
+    await expect(decodeBody(response, HttpResponseBody.TEXT)).resolves.toStrictEqual('null');
+  });
+});
 
 describe(FetchHttpClient, () => {
   describe(FetchHttpClient.prototype.post, () => {

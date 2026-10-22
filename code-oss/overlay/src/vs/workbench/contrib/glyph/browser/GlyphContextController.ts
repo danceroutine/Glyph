@@ -200,19 +200,24 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   async captureFolder(value: string): Promise<GlyphContextAttachment> {
     this.assertTrusted();
     const uri = URI.parse(value);
-    const path = this.adapter.contextPath(uri) || (this.workspace.getWorkspaceFolder(uri)?.name ?? '') || '.';
     if (uri.scheme !== 'file')
       throw new GlyphContextError(
         GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
         'Only workspace folders can be attached.',
       );
+    const workspaceFolder = this.workspace.getWorkspaceFolder(uri);
+    if (!workspaceFolder)
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
+        'Only workspace folders can be attached.',
+      );
+    const path = this.adapter.contextPath(uri) || workspaceFolder.name || '.';
     const stat = await this.files.stat(uri);
     if (!stat.isDirectory || stat.isSymbolicLink)
       throw new GlyphContextError(
         GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
         'Choose a workspace folder, not a symbolic link.',
       );
-    const workspaceFolder = this.workspace.getWorkspaceFolder(uri)!;
     let ancestor = dirname(uri);
     while (ancestor.path.length >= workspaceFolder.uri.path.length && ancestor.toString() !== uri.toString()) {
       if ((await this.files.stat(ancestor)).isSymbolicLink)
@@ -244,7 +249,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     const contentRevision = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
     this.assertTrusted();
-    if ((this.adapter.contextPath(uri) || (this.workspace.getWorkspaceFolder(uri)?.name ?? '') || '.') !== path)
+    const currentWorkspaceFolder = this.workspace.getWorkspaceFolder(uri);
+    if (!currentWorkspaceFolder || (this.adapter.contextPath(uri) || currentWorkspaceFolder.name || '.') !== path)
       throw new GlyphContextError(GlyphDesktopErrorCode.STALE_DOCUMENT, 'The workspace changed during capture.');
     return { id: generateUuid(), kind: GlyphContextAttachmentKind.FOLDER, uri: value, path, text, contentRevision };
   }

@@ -97,7 +97,7 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
         default:
           throw new Error(`Unknown project tool: ${name}`);
       }
-      // TODO: circle back and determine whether ProposalService should be the authority for this...
+      // Follow-up: decide whether ProposalService should own this mode check.
       await this.proposals.assertModeAllows(proposal, AgentMode.resolve(context?.mode ?? AgentMode.default.id));
       const stagedProposal = context?.chat
         ? {

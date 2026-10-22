@@ -12,8 +12,8 @@ const marker = join(sourceRoot, '.glyph-upstream.json');
  * @param {string[]} argv
  * @param {{
  *   missing?: string[],
- *   statError?: Error,
- *   spawnResults?: { status: number | null, error?: Error }[],
+ *   statError?: unknown,
+ *   spawnResults?: { status?: number | null, error?: unknown }[],
  *   removedHooks?: string[][],
  * }} [options]
  */
@@ -211,5 +211,12 @@ describe('run', () => {
 
     expect(run.exitCode).toBe(1);
     expect(run.stderr).toHaveBeenCalledWith('denied');
+  });
+
+  it('stringifies a non-Error failure', async () => {
+    const run = await runScript(['launch'], { statError: 'inspection failed' });
+
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toHaveBeenCalledWith('inspection failed');
   });
 });

@@ -1,27 +1,12 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenchState.ts';
 import { WiredGlyphAccountPicker } from '#code-oss/ui/GlyphAccountPicker/GlyphAccountPicker.wired.tsx';
 
 afterEach(cleanup);
 
-function workbenchState(overrides: Partial<GlyphWorkbenchState> = {}): GlyphWorkbenchState {
-  return {
-    status: GlyphWorkbenchStatus.READY,
-    transcript: [],
-    usage: {},
-    accounts: [],
-    models: [],
-    chats: [],
-    runs: [],
-    proposals: [],
-    ownerWindowId: 'window-1',
-    readOnly: false,
-    sequence: 0,
-    ...overrides,
-  };
-}
+const workbenchState = aGlyphWorkbenchState;
 
 describe(WiredGlyphAccountPicker, () => {
   it('lists accounts and switches to the chosen one', () => {

@@ -1,8 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DropdownProps } from '#code-oss/ui/Dropdown/Dropdown.tsx';
-import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphChatSummary } from '#src/desktop/tests/fixtures/aGlyphChatSummary.ts';
+import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenchState.ts';
 import { GlyphChatMenu, GlyphRecentChats } from '#code-oss/ui/GlyphWorkbench/GlyphChatHeaderControls.tsx';
 
 type DropdownStateOptions = Parameters<
@@ -38,30 +39,11 @@ vi.mock('#code-oss/ui/Dropdown/useDropdownState.ts', async importOriginal => {
 
 afterEach(cleanup);
 
-const workbench = (overrides: Partial<GlyphWorkbenchState> = {}): GlyphWorkbenchState => ({
-  status: GlyphWorkbenchStatus.READY,
-  transcript: [],
-  usage: {},
-  accounts: [],
-  models: [],
-  chats: [
-    {
-      id: 'chat',
-      title: 'Refactor parser',
-      accountProvider: 'openai',
-      accountId: 'account',
-      modelSlug: 'gpt-5',
-      updatedAt: new Date().toISOString(),
-      turnCount: 1,
-    },
-  ],
-  runs: [],
-  proposals: [],
-  ownerWindowId: 'window',
-  readOnly: false,
-  sequence: 0,
-  ...overrides,
-});
+const workbench = (overrides: Parameters<typeof aGlyphWorkbenchState>[0] = {}) =>
+  aGlyphWorkbenchState({
+    chats: [aGlyphChatSummary({ title: 'Refactor parser', updatedAt: new Date().toISOString() })],
+    ...overrides,
+  });
 
 const headerActions = (overrides: Partial<GlyphWorkbenchViewActions> = {}) =>
   ({

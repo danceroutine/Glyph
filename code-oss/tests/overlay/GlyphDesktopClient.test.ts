@@ -583,6 +583,18 @@ describe(GlyphDesktopClient, () => {
       await expect(pending).rejects.toThrow('Malformed request.');
     });
 
+    it('rejects pending commands with a default error when a transport error has no message', async () => {
+      const { instance } = client();
+      const { port } = host();
+      await instance.connect(roots, true);
+      port.onPost = () => {};
+
+      const pending = instance.request(openChat);
+      port.receive({ type: GlyphTransportMessageType.ERROR, message: 7 });
+
+      await expect(pending).rejects.toThrow();
+    });
+
     it('ignores late ready messages, malformed envelopes and events for other identities', async () => {
       const { instance, events } = client();
       const fixture = host();

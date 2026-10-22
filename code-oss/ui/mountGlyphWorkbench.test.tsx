@@ -2,8 +2,8 @@ import { act, cleanup, fireEvent, screen } from '@testing-library/preact';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { GlyphAgentReviewScope } from '#src/desktop/workbench/GlyphAgentReview.js';
 import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
-import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenchState.ts';
 import {
   mountGlyphAgentReview,
   mountGlyphAgentReviewComment,
@@ -26,20 +26,7 @@ const host = () => {
   return container;
 };
 
-const workbench = (overrides: Partial<GlyphWorkbenchState> = {}): GlyphWorkbenchState => ({
-  status: GlyphWorkbenchStatus.READY,
-  transcript: [],
-  usage: {},
-  accounts: [],
-  models: [],
-  chats: [],
-  runs: [],
-  proposals: [],
-  ownerWindowId: 'window',
-  readOnly: false,
-  sequence: 0,
-  ...overrides,
-});
+const workbench = aGlyphWorkbenchState;
 
 const workbenchActions = (overrides: Partial<GlyphWorkbenchViewActions> = {}): GlyphWorkbenchViewActions =>
   ({

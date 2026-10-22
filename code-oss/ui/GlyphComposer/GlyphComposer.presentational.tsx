@@ -250,20 +250,18 @@ export function GlyphComposer(state: GlyphComposerProps) {
             >
               <Paperclip size={18} aria-hidden="true" />
             </IconButton>
-            {state.active &&
-              (state.editingQueuedMessage === undefined || state.editingQueuedMessage === '') &&
-              state.draft.trim() && (
-                <IconButton
-                  type="button"
-                  shape={IconButtonShape.CIRCLE}
-                  title="Cancel"
-                  aria-label="Cancel"
-                  disabled={state.disabled}
-                  onClick={state.cancel}
-                >
-                  <Square size={13} style={{ width: 13, height: 13 }} aria-hidden="true" />
-                </IconButton>
-              )}
+            {state.active && state.editingQueuedMessage === undefined && state.draft.trim() && (
+              <IconButton
+                type="button"
+                shape={IconButtonShape.CIRCLE}
+                title="Cancel"
+                aria-label="Cancel"
+                disabled={state.disabled}
+                onClick={state.cancel}
+              >
+                <Square size={13} style={{ width: 13, height: 13 }} aria-hidden="true" />
+              </IconButton>
+            )}
             <IconButton
               variant={ButtonVariant.PRIMARY}
               mode={state.mode}
@@ -274,16 +272,12 @@ export function GlyphComposer(state: GlyphComposerProps) {
 
               type="button"
               disabled={
-                state.disabled ||
-                state.submitting ||
-                (state.editingQueuedMessage !== undefined && state.editingQueuedMessage !== '' && !state.draft.trim())
+                state.disabled || state.submitting || (state.editingQueuedMessage !== undefined && !state.draft.trim())
               }
               onClick={state.activate}
               title={state.saveQueueLabel ?? (state.active ? 'Cancel' : state.sendLabel)}
             >
-              {state.active &&
-              (state.editingQueuedMessage === undefined || state.editingQueuedMessage === '') &&
-              !state.draft.trim() ? (
+              {state.active && state.editingQueuedMessage === undefined && !state.draft.trim() ? (
                 <Square size={13} style={{ width: 13, height: 13 }} fill="currentColor" aria-hidden="true" />
               ) : (
                 <ArrowUp size={18} aria-hidden="true" />

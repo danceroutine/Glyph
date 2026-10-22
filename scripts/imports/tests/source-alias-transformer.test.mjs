@@ -3,7 +3,10 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
-import { sourceAliasTransformer } from '#scripts/imports/source-alias-transformer.mjs';
+import {
+  sourceAliasDeclarationTransformer,
+  sourceAliasTransformer,
+} from '#scripts/imports/source-alias-transformer.mjs';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 const file = join(root, 'src/desktop/host/Fixture.ts');
@@ -46,6 +49,33 @@ describe(sourceAliasTransformer, () => {
       expect(output).toContain('from "../../application/GlyphService.js"');
       expect(output).toContain('import("../protocol/GlyphDesktopError.js")');
       expect(output).not.toContain('#src/');
+    } finally {
+      transformed.dispose();
+    }
+  });
+
+  it('transforms both declaration source files and declaration bundles', () => {
+    const source = ts.createSourceFile(
+      file.replace('.ts', '.d.ts'),
+      "export * from '#src/desktop/protocol/GlyphDesktopError.js';",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    let transformedSource;
+    let transformedBundle;
+    /** @type {ts.TransformerFactory<ts.SourceFile>} */
+    const exerciseDeclarationTransformer = context => sourceFile => {
+      const transformer = sourceAliasDeclarationTransformer(context);
+      transformedSource = transformer.transformSourceFile(sourceFile);
+      transformedBundle = transformer.transformBundle(ts.factory.createBundle([sourceFile]));
+      return sourceFile;
+    };
+
+    const transformed = ts.transform(source, [exerciseDeclarationTransformer]);
+    try {
+      const printer = ts.createPrinter();
+      expect(printer.printFile(transformedSource)).toContain('from "../protocol/GlyphDesktopError.js"');
+      expect(printer.printBundle(transformedBundle)).toContain('from "../protocol/GlyphDesktopError.js"');
     } finally {
       transformed.dispose();
     }

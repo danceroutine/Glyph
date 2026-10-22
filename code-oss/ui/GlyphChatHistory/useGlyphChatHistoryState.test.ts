@@ -1,37 +1,21 @@
 import { act, cleanup, renderHook } from '@testing-library/preact';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { GlyphRunStatus, type GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
-import type { GlyphChatSummary } from '#src/desktop/protocol/events/GlyphChatSummary.js';
-import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
+import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphChatSummary } from '#src/desktop/tests/fixtures/aGlyphChatSummary.ts';
+import { aGlyphRunProjection } from '#src/desktop/tests/fixtures/aGlyphRunProjection.ts';
+import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenchState.ts';
 import { useGlyphChatHistoryState } from '#code-oss/ui/GlyphChatHistory/useGlyphChatHistoryState.ts';
 
 afterEach(cleanup);
 
-function workbenchState(overrides: Partial<GlyphWorkbenchState> = {}): GlyphWorkbenchState {
-  return {
-    status: GlyphWorkbenchStatus.READY,
-    transcript: [],
-    usage: {},
-    accounts: [],
-    models: [],
-    chats: [],
-    runs: [],
-    proposals: [],
-    ownerWindowId: 'window-1',
-    readOnly: false,
-    sequence: 0,
-    ...overrides,
-  };
-}
+const workbenchState = aGlyphWorkbenchState;
 
-function chat(id: string, title: string, updatedAt: string): GlyphChatSummary {
-  return { id, title, updatedAt, accountProvider: 'openai', accountId: 'a1', modelSlug: 'gpt', turnCount: 1 };
-}
+const chat = (id: string, title: string, updatedAt: string) =>
+  aGlyphChatSummary({ id, title, updatedAt, accountId: 'a1', modelSlug: 'gpt' });
 
-function run(chatId: string, status: GlyphRunStatus): GlyphRunProjection {
-  return { chatId, runId: `${chatId}-${status}`, status, text: '', reasoning: '', tools: [] };
-}
+const run = (chatId: string, status: GlyphRunStatus) =>
+  aGlyphRunProjection({ chatId, runId: `${chatId}-${status}`, status });
 
 function historyActions(overrides: Partial<GlyphWorkbenchViewActions> = {}) {
   return {

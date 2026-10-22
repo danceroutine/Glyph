@@ -1,51 +1,22 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { GlyphChatSummary } from '#src/desktop/protocol/events/GlyphChatSummary.js';
 import { GlyphProposalApplicability } from '#src/desktop/protocol/events/GlyphProposalFileSummary.js';
-import { GlyphRunStatus, type GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
-import { GlyphWorkbenchStatus, type GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
+import { aGlyphChatSummary } from '#src/desktop/tests/fixtures/aGlyphChatSummary.ts';
+import { aGlyphRunProjection } from '#src/desktop/tests/fixtures/aGlyphRunProjection.ts';
+import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenchState.ts';
 import { WiredGlyphWorkbench } from '#code-oss/ui/GlyphWorkbench/GlyphWorkbench.wired.tsx';
 
 afterEach(cleanup);
 
-const workbench = (overrides: Partial<GlyphWorkbenchState> = {}): GlyphWorkbenchState => ({
-  status: GlyphWorkbenchStatus.READY,
-  transcript: [],
-  usage: {},
-  accounts: [],
-  models: [{ slug: 'gpt-5', name: 'GPT-5' }],
-  chats: [],
-  runs: [],
-  proposals: [],
-  ownerWindowId: 'window',
-  readOnly: false,
-  sequence: 0,
-  ...overrides,
-});
-
-const chat = (overrides: Partial<GlyphChatSummary> = {}): GlyphChatSummary => ({
-  id: 'chat',
-  title: 'Refactor parser',
-  accountProvider: 'openai',
-  accountId: 'account',
-  modelSlug: 'gpt-5',
-  updatedAt: new Date().toISOString(),
-  turnCount: 1,
-  ...overrides,
-});
-
-const run = (overrides: Partial<GlyphRunProjection> = {}): GlyphRunProjection => ({
-  chatId: 'chat',
-  runId: 'run',
-  status: GlyphRunStatus.COMPLETED,
-  text: '',
-  reasoning: '',
-  tools: [],
-  ...overrides,
-});
+const workbench = (overrides: Parameters<typeof aGlyphWorkbenchState>[0] = {}) =>
+  aGlyphWorkbenchState({ models: [{ slug: 'gpt-5', name: 'GPT-5' }], ...overrides });
+const chat = (overrides: Parameters<typeof aGlyphChatSummary>[0] = {}) =>
+  aGlyphChatSummary({ title: 'Refactor parser', updatedAt: new Date().toISOString(), ...overrides });
+const run = aGlyphRunProjection;
 
 const workbenchActions = (overrides: Partial<GlyphWorkbenchViewActions> = {}): GlyphWorkbenchViewActions =>
   ({

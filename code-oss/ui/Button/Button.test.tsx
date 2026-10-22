@@ -9,12 +9,20 @@ import {
   ButtonVariant,
   IconButton,
   IconButtonShape,
+  isOn,
 } from '#code-oss/ui/Button/Button.tsx';
 import { tokens } from '#code-oss/ui/design-system/index.ts';
 
 afterEach(cleanup);
 
+const signal = <T,>(value: T) => ({ value, peek: () => value, subscribe: () => () => {} });
+
 describe(Button, () => {
+  it('reads boolean signal values', () => {
+    expect(isOn(signal(true))).toBe(true);
+    expect(isOn(signal(false))).toBe(false);
+  });
+
   it('renders a medium filled secondary button by default', () => {
     render(<Button>Save</Button>);
 
@@ -73,6 +81,12 @@ describe(Button, () => {
     expect(screen.getByTestId('leading')).toBeTruthy();
     expect(screen.getByTestId('trailing')).toBeTruthy();
     expect(button.querySelector('kbd')?.textContent).toBe('⌘K');
+  });
+
+  it('reads a class name from a signal', () => {
+    render(<Button class={signal('signalled')}>Save</Button>);
+
+    expect(screen.getByRole('button', { name: 'Save' }).classList).toContain('signalled');
   });
 
   it('becomes busy and unavailable while loading', () => {

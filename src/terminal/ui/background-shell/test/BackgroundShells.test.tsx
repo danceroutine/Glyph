@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from 'node:util';
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
@@ -5,53 +6,51 @@ import { BackgroundShells } from '#src/terminal/ui/background-shell/BackgroundSh
 import { WiredBackgroundShells } from '#src/terminal/ui/background-shell/BackgroundShells.wired.js';
 
 describe(BackgroundShells, () => {
-  describe('rendering', () => {
-    it('renders nothing without background sessions', () => {
-      const view = render(<BackgroundShells sessions={[]} />);
+  it('renders nothing without background sessions', () => {
+    const view = render(<BackgroundShells sessions={[]} />);
 
-      expect(view.lastFrame()).toBe('');
-      view.unmount();
-    });
+    expect(view.lastFrame()).toBe('');
+    view.unmount();
+  });
 
-    it('renders running, idle, wake, sanitized, and recent-output state', () => {
-      const sessions = [
-        {
-          id: 'terminal-running',
-          workingDirectory: '/project',
-          command: 'pnpm\u001B dev',
-          status: ShellSessionStatus.RUNNING,
-          background: true,
-          outputTail: 'old\nready\n',
-          startedAt: '2026-10-07T00:00:00.000Z',
-          wakePattern: 'ready',
-        },
-        {
-          id: 'terminal-idle',
-          workingDirectory: '/project',
-          command: '',
-          status: ShellSessionStatus.IDLE,
-          background: true,
-          outputTail: '',
-          startedAt: '2026-10-07T00:00:00.000Z',
-        },
-        {
-          id: 'terminal-failed',
-          workingDirectory: '/project',
-          command: 'pnpm test',
-          status: ShellSessionStatus.IDLE,
-          background: true,
-          outputTail: 'failed',
-          startedAt: '2026-10-07T00:00:00.000Z',
-          exitCode: 1,
-        },
-      ];
-      const view = render(<WiredBackgroundShells sessions={sessions} />);
+  it('renders running, idle, wake, sanitized, and recent-output state', () => {
+    const sessions = [
+      {
+        id: 'terminal-running',
+        workingDirectory: '/project',
+        command: 'pnpm\u001B dev',
+        status: ShellSessionStatus.RUNNING,
+        background: true,
+        outputTail: 'old\nready\n',
+        startedAt: '2026-10-07T00:00:00.000Z',
+        wakePattern: 'ready',
+      },
+      {
+        id: 'terminal-idle',
+        workingDirectory: '/project',
+        command: '',
+        status: ShellSessionStatus.IDLE,
+        background: true,
+        outputTail: '',
+        startedAt: '2026-10-07T00:00:00.000Z',
+      },
+      {
+        id: 'terminal-failed',
+        workingDirectory: '/project',
+        command: 'pnpm test',
+        status: ShellSessionStatus.IDLE,
+        background: true,
+        outputTail: 'failed',
+        startedAt: '2026-10-07T00:00:00.000Z',
+        exitCode: 1,
+      },
+    ];
+    const view = render(<WiredBackgroundShells sessions={sessions} />);
 
-      expect(view.lastFrame()).toContain('Background terminals (3)');
-      expect(view.lastFrame()).toContain('● terminal  pnpm dev  wake: ready  · ready');
-      expect(view.lastFrame()).toContain('○ terminal  ready');
-      expect(view.lastFrame()).toContain('× terminal  pnpm test  · failed');
-      view.unmount();
-    });
+    expect(stripVTControlCharacters(view.lastFrame()!)).toContain('Background terminals (3)');
+    expect(stripVTControlCharacters(view.lastFrame()!)).toContain('● terminal  pnpm dev  wake: ready  · ready');
+    expect(stripVTControlCharacters(view.lastFrame()!)).toContain('○ terminal  ready');
+    expect(stripVTControlCharacters(view.lastFrame()!)).toContain('× terminal  pnpm test  · failed');
+    view.unmount();
   });
 });

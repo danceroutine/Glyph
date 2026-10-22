@@ -910,7 +910,7 @@ export class ProposalReviewManager {
     if (this.synchronizePlanAgainstLiveSnapshot(file, current)) return;
     // The pending hunks no longer fit the file. Fail closed: the human can still inspect and reject, but
     // nothing will be written on outdated assumptions.
-    // TODO Not sure we actually have provided a recovery path for the human yet
+    // Follow-up: provide an explicit human recovery path for this stale state.
     file.applicability = EditApplicabilityState.STALE;
     file.applyingItemId = null;
   }
@@ -1228,6 +1228,8 @@ function reviewResults(review: EditProposal): EditReviewResult[] {
       })),
   );
 }
+
+export { reviewResults as reviewResults__TESTING_ONLY };
 
 function pendingReviewResults(review: EditProposal): EditReviewResult[] {
   const acknowledged = new Set(review.acknowledgedResultIds ?? []);

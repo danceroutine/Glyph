@@ -201,4 +201,13 @@ describe(GlyphMarkdown, () => {
 
     expect(container.querySelector('strong')?.textContent).toBe('fallback');
   });
+
+  it('ignores malformed and unrecognized tokens without stringifying them', () => {
+    const { container } = renderMarkdown([
+      { type: 'strong', raw: '**x**', text: 7, tokens: undefined } as unknown as Token,
+      { type: 'extension', raw: 'custom', text: 'fallback' },
+    ]);
+
+    expect(container.firstElementChild?.textContent).toBe('fallback');
+  });
 });

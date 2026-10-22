@@ -26,6 +26,8 @@ import type { ShellPermissionRequest } from '#src/shell/ShellPermissionRequest.j
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
 import type { TerminalShellPermissionRequest } from '#src/terminal/ui/shell-permission/ShellPermissionRequest.js';
 
+type RendererPromptRequest = PromptRequest & { pendingChanges: number };
+
 /**
  * Owns the single interactive Ink tree for the terminal host. All prompt,
  * streaming-response, and review rendering passes through this object so raw
@@ -36,7 +38,7 @@ export class TerminalInkRenderer {
   private readonly instance: Instance;
   private readonly entries: TranscriptEntry[] = [];
   private responseParts: ChatResponsePart[] | undefined;
-  private promptRequest: PromptRequest | undefined;
+  private promptRequest: RendererPromptRequest | undefined;
   private questionRequest: QuestionFormRequest | undefined;
   private shellPermissionRequest: TerminalShellPermissionRequest | undefined;
   private reviewRequest: ProposalReviewRequest | undefined;
@@ -55,6 +57,9 @@ export class TerminalInkRenderer {
 
   private readonly handleInputClosed = (): void => {
     this.emit('close');
+  };
+  readonly requestInterrupt = (): void => {
+    this.emit('SIGINT');
   };
 
   constructor(
@@ -300,10 +305,6 @@ export class TerminalInkRenderer {
     this.refresh();
   }
 
-  requestInterrupt(): void {
-    this.emit('SIGINT');
-  }
-
   preservePromptDraft(): void {
     const request = this.promptRequest;
     if (request?.acceptsSubmission !== true) return;
@@ -311,7 +312,7 @@ export class TerminalInkRenderer {
       id: request.id,
       label: request.label,
       acceptsSubmission: false,
-      ...(request.pendingChanges === undefined ? {} : { pendingChanges: request.pendingChanges }),
+      pendingChanges: request.pendingChanges,
       ...(request.files ? { files: request.files } : {}),
     };
     this.refresh();
@@ -368,9 +369,7 @@ export class TerminalInkRenderer {
       ...(this.shellPermissionRequest ? { shellPermission: this.shellPermissionRequest } : {}),
       backgroundShells: this.backgroundShells,
       review: this.reviewRequest,
-      interrupt: () => {
-        this.requestInterrupt();
-      },
+      interrupt: this.requestInterrupt,
     };
   }
 }

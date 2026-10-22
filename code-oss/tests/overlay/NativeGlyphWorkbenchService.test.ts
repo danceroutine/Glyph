@@ -23,6 +23,10 @@ import { GlyphProposalEditor } from '#vs/workbench/contrib/glyph/browser/GlyphPr
 import { GlyphProposalReviewError } from '#vs/workbench/contrib/glyph/browser/GlyphProposalReviewError.js';
 import { GlyphShellTerminals } from '#vs/workbench/contrib/glyph/browser/GlyphShellTerminals.js';
 import { NativeGlyphWorkbenchService } from '#vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.js';
+import { aGlyphChatSummary } from '#src/desktop/tests/fixtures/aGlyphChatSummary.ts';
+import { aGlyphContextAttachment } from '#src/desktop/tests/fixtures/aGlyphContextAttachment.ts';
+import { aGlyphPlan } from '#src/desktop/tests/fixtures/aGlyphPlan.ts';
+import { aGlyphRunProjection } from '#src/desktop/tests/fixtures/aGlyphRunProjection.ts';
 
 type Command = GlyphWorkbenchCommand & Record<string, unknown>;
 type Handler = (command: Command, host: FakeHost) => unknown;
@@ -41,6 +45,7 @@ interface FakeHost {
   readonly request: Mock;
   readonly detachWorkspace: Mock;
   readonly dispose: Mock;
+  readonly handleEditorRequest: unknown;
 }
 
 const doubles = vi.hoisted(() => ({ hosts: [] as unknown[] }));
@@ -183,7 +188,7 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphPlanEditor.js', () => ({
 }));
 
 function chat(id: string, extra: Partial<GlyphChatSummary> = {}): GlyphChatSummary {
-  return {
+  return aGlyphChatSummary({
     id,
     title: id,
     accountProvider: 'provider',
@@ -192,7 +197,7 @@ function chat(id: string, extra: Partial<GlyphChatSummary> = {}): GlyphChatSumma
     updatedAt: '',
     turnCount: 0,
     ...extra,
-  };
+  });
 }
 
 function run(
@@ -201,34 +206,29 @@ function run(
   status = GlyphRunStatus.COMPLETED,
   extra: Partial<GlyphRunProjection> = {},
 ): GlyphRunProjection {
-  return { chatId, runId, status, text: `${runId} answer`, reasoning: '', tools: [], ...extra };
+  return aGlyphRunProjection({ chatId, runId, status, text: `${runId} answer`, ...extra });
 }
 
 function attachment(extra: Partial<GlyphContextAttachment> = {}): GlyphContextAttachment {
-  return {
-    kind: 'file',
+  return aGlyphContextAttachment({
     uri: 'file:///project/a.ts',
     path: 'a.ts',
     text: 'source',
     contentRevision: 'revision',
     ...extra,
-  } as GlyphContextAttachment;
+  });
 }
 
 function plan(extra: Partial<GlyphPlan> = {}): GlyphPlan {
-  return {
-    id: 'plan',
-    revision: 1,
+  return aGlyphPlan({
     title: 'Approved work',
-    summary: '',
     markdown: 'Change source',
     todos: [
       { id: 'done', text: 'Done step', completed: true },
       { id: 'next', text: 'Next step', completed: false },
     ],
-    agents: [],
     ...extra,
-  };
+  });
 }
 
 const account = { provider: 'provider', id: 'account', label: 'Account', connected: true, inferenceAccess: true };
@@ -398,6 +398,17 @@ async function flush(): Promise<void> {
 }
 
 describe(NativeGlyphWorkbenchService, () => {
+  it('wires editor and composer context callbacks into the desktop adapters', async () => {
+    const { service, host, editor, context } = await workbench();
+    const request = { requestId: 'read', type: 'read' };
+
+    await (host.handleEditorRequest as (value: unknown) => Promise<unknown>)(request);
+
+    expect(editor.handle).toHaveBeenCalledWith(request);
+    expect((context.composer as unknown as () => unknown)()).toBe(service.composer);
+    expect(service.ideContext).toBe((context as unknown as { ide: unknown }).ide);
+  });
+
   describe('host events', () => {
     it('forwards proposal previews to the review editor without changing state', async () => {
       const { service, host, proposals } = await workbench();
@@ -1332,13 +1343,16 @@ describe(NativeGlyphWorkbenchService, () => {
     });
 
     it('creates a chat for a new chat draft', async () => {
-      const { service, commands } = await workbench({ saved: { 'glyph.selectedChat': '' }, accounts: [account] });
+      const { service, commands } = await workbench({
+        saved: { 'glyph.selectedChat': '', 'glyph.openChatTabs': ['', 'alpha'] },
+        accounts: [account],
+      });
       service.composer.setDraft('Draft');
 
       await service.send('Hello');
 
       expect(service.state.selectedChatId).toBe('created-1');
-      expect(service.state.openChatIds).toEqual(['created-1']);
+      expect(service.state.openChatIds).toEqual(['created-1', 'alpha']);
       expect(service.composer.snapshot.draft).toBe('Draft');
       expect(commands().slice(-2)).toEqual([
         expect.objectContaining({ type: GlyphWorkbenchCommandType.CREATE_CHAT, model: 'model' }),

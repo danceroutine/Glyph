@@ -207,13 +207,16 @@ describe(GlyphViewPane, () => {
     const target = document.createElement('textarea');
     const handled = new KeyboardEvent('keydown', { key: 'Enter' });
     const ignored = new KeyboardEvent('keydown', { key: 'a' });
+    const invalid = new KeyboardEvent('keydown', { key: 'Escape' });
     Object.defineProperty(handled, 'target', { value: target });
+    Object.defineProperty(ignored, 'target', { value: target });
     const stop = vi.spyOn(handled, 'stopPropagation');
     const stopIgnored = vi.spyOn(ignored, 'stopPropagation');
     services.keybindings.dispatchEvent.mockReturnValueOnce(true);
 
     expect(actions.composerKeybindings!.dispatch(handled)).toBe(true);
     expect(actions.composerKeybindings!.dispatch(ignored)).toBe(false);
+    expect(actions.composerKeybindings!.dispatch(invalid)).toBe(false);
     expect(services.keybindings.dispatchEvent).toHaveBeenCalledWith(
       expect.objectContaining({ browserEvent: handled }),
       target,
