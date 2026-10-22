@@ -40,7 +40,11 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/coverage/select-electron-tests.mjs --base "$PR_BASE_SHA" --output .artifacts/electron-selection.json
       - name: Native tests and 100% coverage
+        id: native
         run: pnpm test:native
+      - name: Native coverage diagnostics
+        if: always() && steps.native.outcome != 'skipped'
+        run: cargo llvm-cov report --show-missing-lines
       - run: pnpm exec playwright install --with-deps chromium
       - name: Prepare Code OSS dependencies and generated types
         run: pnpm test:prepare
@@ -76,4 +80,5 @@ jobs:
             .artifacts/code-oss-integration/results/
             coverage/vitest/coverage-summary.json
             coverage/merged/coverage-summary.json
+            coverage/native/html/
           retention-days: 7
