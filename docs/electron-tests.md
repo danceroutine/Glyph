@@ -75,6 +75,11 @@ test its own launch.
 
 ## Run
 
+`pnpm test` runs the local coverage gate without Electron. `pnpm test:all`
+includes this full integration suite. PR CI selects suites by feature ownership;
+see [test selection](test-selection.md) for the rules, conservative fallbacks,
+and commands to inspect or reproduce a decision.
+
 After bootstrapping and installing Code OSS:
 
 ```sh
@@ -235,8 +240,8 @@ directories are already excluded through the repository's `.artifacts/` rule.
 Playwright replaces the previous run's report, so copy evidence elsewhere before
 starting another run if it must be retained.
 
-Tests run serially and do not retry automatically. A timing or startup failure
-therefore remains visible instead of disappearing behind a successful retry.
+Tests run with the worker count in `playwright.config.mjs` (two workers in CI)
+and one retry. First-attempt failures and retries remain in the reports.
 The fixture response delay is set to 80 ms per chunk so streaming and cancellation
 can be observed through the UI. Tests wait on visible conditions rather than
 using fixed sleeps.

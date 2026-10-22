@@ -21,6 +21,7 @@ const planState = (overrides: Partial<GlyphPlanState> = {}): GlyphPlanState => (
   },
   agents: [],
   disabled: false,
+  building: false,
   error: undefined,
   todo: '',
   adding: false,

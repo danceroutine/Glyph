@@ -1,6 +1,7 @@
 packages:
   - examples/*
 allowBuilds:
+  better-sqlite3: true
   esbuild: true
 patchedDependencies:
   storybook@10.6.1: patches/storybook@10.6.1.patch

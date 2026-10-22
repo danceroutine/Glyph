@@ -26,6 +26,36 @@ function historyActions() {
 }
 
 describe(WiredGlyphChatHistory, () => {
+  it('labels a saved conversation that has no messages yet', () => {
+    render(
+      <WiredGlyphChatHistory
+        state={workbenchState({ chats: [{ ...chat('empty', 'Empty chat'), turnCount: 0 }] })}
+        actions={historyActions()}
+      />,
+    );
+    expect(screen.getByRole('img', { name: 'No messages yet' })).toBeTruthy();
+  });
+  it.each([
+    GlyphRunStatus.WAITING_FOR_QUESTION,
+    GlyphRunStatus.CANCELLED,
+    GlyphRunStatus.INTERRUPTED,
+    GlyphRunStatus.FAILED,
+  ])('renders the history status %s', status => {
+    render(
+      <WiredGlyphChatHistory
+        state={workbenchState({
+          chats: [chat('status', 'Status chat')],
+          runs: [aGlyphRunProjection({ chatId: 'status', status })],
+          newChatDraft: { text: 'Unsent', createdAt: new Date().toISOString() },
+        })}
+        actions={historyActions()}
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: 'Status chat' }).querySelector('[data-activity]')?.getAttribute('aria-label'),
+    ).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Draft' })).toBeTruthy();
+  });
   it('shows a sidebar with search, new chat, saved chats and the account picker', () => {
     const close = vi.fn();
     const toggleRef = createRef<HTMLButtonElement>();
@@ -59,8 +89,8 @@ describe(WiredGlyphChatHistory, () => {
     const running = screen.getByRole('button', { name: 'Running chat' });
     expect(running.getAttribute('aria-current')).toBe('true');
     expect(Object.hasOwn(running.parentElement!.dataset, 'selected')).toBe(true);
-    expect(within(running).getByLabelText('Running').textContent).toBe('◌');
-    expect(screen.getByRole('button', { name: 'Pinned chat' }).textContent).toBe('○Pinned chat');
+    expect(within(running).getByRole('img', { name: 'Working' }).tagName).toBe('SPAN');
+    expect(screen.getByRole('button', { name: 'Pinned chat' }).textContent).toBe('Pinned chat');
   });
 
   it('opens, pins, unpins and archives chats', () => {

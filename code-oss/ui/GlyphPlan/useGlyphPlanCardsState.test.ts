@@ -13,6 +13,25 @@ const cardActions = () => ({
 });
 
 describe(useGlyphPlanCardsState, () => {
+  it('preserves an active build and still permits a different plan to build', async () => {
+    const actions = cardActions();
+    const target = plan({ id: 'active' });
+    const other = plan({ id: 'other' });
+    const { result } = renderHook(useGlyphPlanCardsState, {
+      initialProps: {
+        chatId: 'chat',
+        plans: [target, other],
+        actions: actions as unknown as GlyphWorkbenchViewActions,
+        buildingPlanIds: ['active'],
+      },
+    });
+    expect(result.current.building(target)).toBe(true);
+    expect(result.current.building(other)).toBe(false);
+    await act(() => result.current.build(target));
+    expect(actions.buildPlan).not.toHaveBeenCalled();
+    await act(() => result.current.build(other));
+    expect(actions.buildPlan).toHaveBeenCalledWith('chat', other, false);
+  });
   it('shows the latest revision of each plan once', () => {
     const latest = plan({ id: 'a', revision: 2 });
     const { result } = renderHook(useGlyphPlanCardsState, {

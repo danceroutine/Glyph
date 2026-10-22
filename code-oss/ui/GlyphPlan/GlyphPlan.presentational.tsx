@@ -31,6 +31,7 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
           )}
           <GlyphPlanBuild
             disabled={state.disabled}
+            building={state.building}
             build={() => {
               void state.build();
             }}

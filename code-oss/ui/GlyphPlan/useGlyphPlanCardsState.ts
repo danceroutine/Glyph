@@ -5,13 +5,16 @@ export function useGlyphPlanCardsState({
   chatId,
   plans,
   actions,
+  buildingPlanIds,
 }: {
   readonly chatId: string;
   readonly plans: readonly GlyphPlan[];
   readonly actions: GlyphWorkbenchViewActions;
+  readonly buildingPlanIds?: readonly string[] | undefined;
 }) {
   const busy = useRef(false);
   const [pending, setPending] = useState(false);
+  const [requested, setRequested] = useState<string>();
   const [error, setError] = useState<string>();
   const perform = async (operation: () => Promise<void> | undefined) => {
     if (busy.current) return;
@@ -31,7 +34,18 @@ export function useGlyphPlanCardsState({
     pending,
     error,
     plans: [...new Map(plans.map(plan => [plan.id, plan])).values()],
+    building: (plan: GlyphPlan) => requested === plan.id || !!buildingPlanIds?.includes(plan.id),
     view: (plan: GlyphPlan) => perform(() => actions.viewPlan?.(chatId, plan)),
-    build: (plan: GlyphPlan, newChat = false) => perform(() => actions.buildPlan?.(chatId, plan, newChat)),
+    build: (plan: GlyphPlan, newChat = false) =>
+      buildingPlanIds?.includes(plan.id)
+        ? Promise.resolve()
+        : perform(async () => {
+            setRequested(plan.id);
+            try {
+              await actions.buildPlan?.(chatId, plan, newChat);
+            } finally {
+              setRequested(undefined);
+            }
+          }),
   };
 }

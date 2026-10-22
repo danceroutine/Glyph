@@ -34,6 +34,46 @@ function freezeToday() {
 }
 
 describe(useGlyphChatHistoryState, () => {
+  it('keeps an unsent draft in history, opens it, and filters it by its first line', () => {
+    const actions = historyActions();
+    const { result } = renderHook(useGlyphChatHistoryState, {
+      initialProps: {
+        actions,
+        state: workbenchState({
+          newChatDraft: { text: '  Draft work\nMore context', createdAt: new Date().toISOString() },
+        }),
+      },
+    });
+    expect(result.current.emptyMessage).toBeUndefined();
+    const draft = result.current.groups.flatMap(group => group.chats)[0]!;
+    expect(draft).toMatchObject({ id: '', draft: true, title: 'Draft: Draft work', selected: true });
+    act(() => {
+      result.current.openChat('');
+    });
+    expect(actions.newChat).toHaveBeenCalledOnce();
+    act(() => {
+      result.current.setQuery('absent');
+    });
+    expect(result.current.groups.flatMap(group => group.chats)).toEqual([]);
+    expect(result.current.emptyMessage).toBe('No matching chats.');
+  });
+
+  it('distinguishes unopened completed conversations from conversations without messages', () => {
+    const { result } = renderHook(useGlyphChatHistoryState, {
+      initialProps: {
+        actions: historyActions(),
+        state: workbenchState({
+          chats: [aGlyphChatSummary({ id: 'empty', turnCount: 0 }), aGlyphChatSummary({ id: 'saved', turnCount: 1 })],
+        }),
+      },
+    });
+    expect(
+      result.current.groups
+        .flatMap(group => group.chats)
+        .map(value => value.activity)
+        .toSorted(),
+    ).toEqual(['completed', 'empty']);
+  });
   it('groups chats by pin and recency, newest first', () => {
     freezeToday();
     const { result } = renderHook(useGlyphChatHistoryState, {
@@ -104,11 +144,11 @@ describe(useGlyphChatHistoryState, () => {
     });
 
     const chats = result.current.groups.flatMap(group => group.chats);
-    expect(chats.map(value => [value.id, value.active, value.selected])).toEqual([
-      ['streaming', true, true],
-      ['question', true, false],
-      ['approval', true, false],
-      ['done', false, false],
+    expect(chats.map(value => [value.id, value.activity, value.selected])).toEqual([
+      ['streaming', 'working', true],
+      ['question', 'awaiting_input', false],
+      ['approval', 'awaiting_input', false],
+      ['done', 'completed', false],
     ]);
   });
 

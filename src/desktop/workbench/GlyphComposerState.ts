@@ -27,6 +27,7 @@ type SendMessage = (
 /** Window-owned drafts outlive panes, including sends that settle after unmount. */
 export class GlyphComposerState {
   private commandHandler: ((command: GlyphComposerCommand) => void) | undefined;
+  private turnOptions: (() => GlyphTurnOptions | undefined) | undefined;
   private queueSequence = 0;
   private modeTouched = false;
   private annotationSequence = 0;
@@ -73,6 +74,9 @@ export class GlyphComposerState {
   }
   executeCommand(command: GlyphComposerCommand): void {
     this.commandHandler?.(command);
+  }
+  provideTurnOptions(provider: () => GlyphTurnOptions | undefined): void {
+    this.turnOptions = provider;
   }
   hydrateMode(mode: AgentModeID): void {
     if (!this.modeTouched && this.value.document.options?.mode !== mode)
@@ -211,7 +215,7 @@ export class GlyphComposerState {
   enqueueDraft(): void {
     if (!this.value.draft.trim() || this.value.submitting) return;
     const id = this.value.editingQueuedMessage ?? `queued-${++this.queueSequence}`;
-    const message = { id, document: structuredClone(this.value.document), text: this.value.draft };
+    const message = { id, document: this.stamp(structuredClone(this.value.document)), text: this.value.draft };
     const queued = this.value.queued.some(value => value.id === id)
       ? this.value.queued.map(value => (value.id === id ? message : value))
       : [...this.value.queued, message];
@@ -302,7 +306,7 @@ export class GlyphComposerState {
       submitting: true,
     });
     try {
-      await sendDocument(document, send);
+      await sendDocument(this.stamp(document), send);
     } catch (error) {
       if (this.value.document.parts.length > 0) this.documents = [...this.documents, document];
       else this.setDocument(document);
@@ -313,6 +317,11 @@ export class GlyphComposerState {
     } finally {
       this.update({ submitting: false });
     }
+  }
+  private stamp(document: GlyphPromptDocument): GlyphPromptDocument {
+    // Only nonempty drafts reach stamp; setDocument has normalized their options.
+    const { planProgress: _, ...options } = document.options!;
+    return { ...document, options: { ...options, ...this.turnOptions?.() } };
   }
   private update(change: Partial<typeof this.value>): void {
     this.value = { ...this.value, ...change };

@@ -1,7 +1,42 @@
 import type { GlyphWorkbenchState } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import { GlyphRunStatus, type GlyphRunProjection } from '#src/desktop/protocol/events/GlyphRunProjection.js';
+import type { GlyphChatSummary } from '#src/desktop/protocol/events/GlyphChatSummary.js';
+
+export enum GlyphChatActivity {
+  WORKING = 'working',
+  AWAITING_INPUT = 'awaiting_input',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+  INTERRUPTED = 'interrupted',
+  FAILED = 'failed',
+  EMPTY = 'empty',
+  DRAFT = 'draft',
+}
+
+const GLYPH_RUN_STATUS_TO_GLYPH_CHAT_ACTIVITY: Record<GlyphRunStatus, GlyphChatActivity> = {
+  [GlyphRunStatus.STREAMING]: GlyphChatActivity.WORKING,
+  [GlyphRunStatus.WAITING_FOR_QUESTION]: GlyphChatActivity.AWAITING_INPUT,
+  [GlyphRunStatus.WAITING_FOR_APPROVAL]: GlyphChatActivity.AWAITING_INPUT,
+  [GlyphRunStatus.COMPLETED]: GlyphChatActivity.COMPLETED,
+  [GlyphRunStatus.CANCELLED]: GlyphChatActivity.CANCELLED,
+  [GlyphRunStatus.INTERRUPTED]: GlyphChatActivity.INTERRUPTED,
+  [GlyphRunStatus.FAILED]: GlyphChatActivity.FAILED,
+};
+
+const ACTIVE_RUN_STATUSES = new Set([
+  GlyphRunStatus.STREAMING,
+  GlyphRunStatus.WAITING_FOR_QUESTION,
+  GlyphRunStatus.WAITING_FOR_APPROVAL,
+]);
+
+function toChatActivity(chat: GlyphChatSummary, runs: readonly GlyphRunProjection[]): GlyphChatActivity {
+  const chatRuns = runs.filter(run => run.chatId === chat.id);
+  const run = chatRuns.find(value => ACTIVE_RUN_STATUSES.has(value.status)) ?? chatRuns.at(-1);
+  if (run) return GLYPH_RUN_STATUS_TO_GLYPH_CHAT_ACTIVITY[run.status];
+  return chat.turnCount > 0 ? GlyphChatActivity.COMPLETED : GlyphChatActivity.EMPTY;
+}
 
 export interface GlyphChatHistoryStateOptions {
   readonly state: GlyphWorkbenchState;
@@ -15,26 +50,39 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
   const [query, setQuery] = useState('');
   const search = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => search.current?.focus(), []);
+  const matches = (title: string) => title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const allChats = state.chats
     .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
-    .filter(chat => chat.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    .filter(chat => matches(chat.title))
     .map(chat => ({
       id: chat.id,
       archived: state.archivedChatIds?.includes(chat.id) ?? false,
       pinned: state.pinnedChatIds?.includes(chat.id) ?? false,
+      draft: false,
       title: chat.title,
       updatedAt: chat.updatedAt,
       selected: state.selectedChatId === chat.id,
-      active: state.runs.some(
-        run =>
-          run.chatId === chat.id &&
-          [GlyphRunStatus.STREAMING, GlyphRunStatus.WAITING_FOR_QUESTION, GlyphRunStatus.WAITING_FOR_APPROVAL].includes(
-            run.status,
-          ),
-      ),
+      activity: toChatActivity(chat, state.runs),
     }));
+  const draft = state.newChatDraft;
+  const draftTitle = draft && `Draft: ${draft.text.trim().split('\n')[0]!.trim()}`;
+  const drafts =
+    draft && draftTitle && matches(draftTitle)
+      ? [
+          {
+            id: '',
+            archived: false,
+            pinned: false,
+            draft: true,
+            title: draftTitle,
+            updatedAt: draft.createdAt,
+            selected: state.selectedChatId === undefined,
+            activity: GlyphChatActivity.DRAFT,
+          },
+        ]
+      : [];
   const chats = allChats.filter(chat => !chat.archived);
-  const unpinned = chats.filter(chat => !chat.pinned);
+  const unpinned = [...drafts, ...chats.filter(chat => !chat.pinned)];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const yesterday = new Date(today);
@@ -62,14 +110,20 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
     setQuery,
     search,
     groups,
-    emptyMessage: chats.length > 0 ? undefined : query ? 'No matching chats.' : 'Your conversations will appear here.',
+    emptyMessage:
+      chats.length > 0 || drafts.length > 0
+        ? undefined
+        : query
+          ? 'No matching chats.'
+          : 'Your conversations will appear here.',
     newChatDisabled: state.navigationPending === true || state.readOnly,
     navigationPending: state.navigationPending === true,
     newChat: () => {
       actions.newChat();
     },
     openChat: (id: string) => {
-      void actions.openChat(id);
+      if (id) void actions.openChat(id);
+      else actions.newChat();
     },
   };
 }

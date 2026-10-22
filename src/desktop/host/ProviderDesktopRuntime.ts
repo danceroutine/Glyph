@@ -6,6 +6,8 @@ import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
+import { TodoStatus } from '#src/todos/TodoStatus.js';
+
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
@@ -711,6 +713,23 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       // Review decisions must enter provider history before the next turn can reason about the files.
       await this.options.glyph.commitReviewResults(session, { currentChatOnly: true, signal });
       signal.throwIfAborted();
+      const build = command.options?.planBuild;
+      if (build) {
+        const chat = await this.options.glyph.updateTodos(
+          session.summary,
+          {
+            items: build.todos.map(todo => ({
+              id: todo.id,
+              text: todo.text,
+              status: todo.completed ? TodoStatus.COMPLETED : TodoStatus.PENDING,
+            })),
+            replace: true,
+          },
+          signal,
+        );
+        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
+        signal.throwIfAborted();
+      }
       // Bind tool prompts to this exact run so another chat cannot answer them.
       await this.options.interactions.run(command, () =>
         session.send(

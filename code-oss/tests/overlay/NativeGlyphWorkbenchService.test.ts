@@ -934,6 +934,7 @@ describe(NativeGlyphWorkbenchService, () => {
         plan: current,
         modelLabel: 'model',
         disabled: false,
+        building: false,
         agents: [
           { chatId: 'beta', role: 'Builder', title: 'beta' },
           { chatId: 'gone', role: 'Reviewer', title: 'Chat unavailable' },
@@ -947,7 +948,13 @@ describe(NativeGlyphWorkbenchService, () => {
 
       const input = await planInput(test, 'gone', shown);
 
-      expect(input.read()).toEqual({ plan: shown, modelLabel: undefined, disabled: false, agents: [] });
+      expect(input.read()).toEqual({
+        plan: shown,
+        modelLabel: undefined,
+        disabled: false,
+        building: false,
+        agents: [],
+      });
     });
 
     it('names the chat model from the catalog', async () => {
@@ -1061,6 +1068,88 @@ describe(NativeGlyphWorkbenchService, () => {
   });
 
   describe(NativeGlyphWorkbenchService.prototype.buildPlan, () => {
+    it('tracks plan progress through follow-up messages and reconciles builds against reconnect snapshots', async () => {
+      const approved = plan();
+      const test = await workbench({
+        chats: [
+          chat('alpha', {
+            plans: [approved],
+            todos: [
+              { id: 'done', text: 'Done', status: 'completed' },
+              { id: 'next', text: 'Next', status: 'in_progress' },
+            ],
+          }),
+          chat('beta'),
+        ],
+      });
+      await test.service.buildPlan('alpha', approved);
+      const sent = test.commands().findLast(command => command.type === GlyphWorkbenchCommandType.SEND)!;
+      expect(test.service.state.buildingPlanIds).toEqual(['plan']);
+      test.host.state.runs = [
+        run('alpha', sent.runId, GlyphRunStatus.STREAMING),
+        run('beta', 'other', GlyphRunStatus.COMPLETED),
+      ];
+      test.host.emit({ type: GlyphHostEventType.INITIAL_STATE, state: test.host.snapshot() });
+      expect(test.service.state.buildingPlanIds).toEqual(['plan']);
+      test.service.composer.setDraft('Follow up');
+      test.service.composer.pauseQueue();
+      test.service.composer.enqueueDraft();
+      expect(test.service.composer.snapshot.queued[0].document.options?.planProgress).toEqual({
+        planId: 'plan',
+        title: approved.title,
+        current: 'Next',
+        completed: 1,
+        total: 2,
+      });
+      test.host.emit({ type: GlyphHostEventType.RUN_STATE, run: run('beta', 'unrelated', GlyphRunStatus.COMPLETED) });
+      expect(test.service.state.buildingPlanIds).toEqual(['plan']);
+      test.host.emit({ type: GlyphHostEventType.RUN_STATE, run: run('alpha', sent.runId, GlyphRunStatus.COMPLETED) });
+      expect(test.service.state.buildingPlanIds).toBeUndefined();
+    });
+
+    it('removes a completed build on reconnect and omits absent todo progress', async () => {
+      const approved = plan();
+      const test = await workbench({ chats: [chat('alpha', { plans: [approved] })] });
+      await test.service.buildPlan('alpha', approved);
+      const sent = test.commands().findLast(command => command.type === GlyphWorkbenchCommandType.SEND)!;
+      test.service.composer.setDraft('Follow up');
+      test.service.composer.pauseQueue();
+      test.service.composer.enqueueDraft();
+      expect(test.service.composer.snapshot.queued[0].document.options?.planProgress).toEqual({
+        planId: 'plan',
+        title: approved.title,
+        completed: 0,
+        total: 0,
+      });
+      test.host.state.runs = [run('alpha', sent.runId)];
+      test.host.emit({ type: GlyphHostEventType.INITIAL_STATE, state: test.host.snapshot() });
+      expect(test.service.state.buildingPlanIds).toBeUndefined();
+    });
+
+    it('does not mark a synchronously completed build as active', async () => {
+      const approved = plan();
+      const test = await workbench({
+        chats: [chat('alpha', { plans: [approved] })],
+        handler(command, host) {
+          if (command.type === GlyphWorkbenchCommandType.SEND)
+            host.emit({ type: GlyphHostEventType.RUN_STATE, run: run('alpha', command.runId) });
+          else host.respond(command);
+        },
+      });
+      await test.service.buildPlan('alpha', approved);
+      expect(test.service.state.buildingPlanIds).toBeUndefined();
+    });
+
+    it.each([
+      { text: 'Recovered draft', createdAt: '2026-01-01' },
+      { text: ' ', createdAt: '2026-01-01' },
+      { text: 'Invalid', createdAt: 42 },
+    ])('restores only a usable saved draft: %j', async savedDraft => {
+      const test = await workbench({ saved: { 'glyph.selectedChat': '', 'glyph.newChatDraft': savedDraft } });
+      expect(test.service.composer.snapshot.draft).toBe(
+        typeof savedDraft.createdAt === 'string' ? (savedDraft.text.trim() ? savedDraft.text : '') : '',
+      );
+    });
     it('sends the approved plan in agent mode from its chat', async () => {
       const { service, commands } = await workbench({
         chats: [chat('alpha', { plans: [plan()] })],
@@ -1083,7 +1172,7 @@ describe(NativeGlyphWorkbenchService, () => {
         expect.objectContaining({
           type: GlyphWorkbenchCommandType.SEND,
           chatId: 'alpha',
-          text: 'Context\n\nBuild this approved plan: Approved work (plan plan, revision 1).\n\nChange source\n\nTodos:\n- [x] Done step\n- [ ] Next step',
+          text: expect.stringContaining('Context\n\nBuild this approved plan: Approved work (plan plan, revision 1).'),
           options: expect.objectContaining({ mode: AgentModeID.AGENT }),
         }),
       ]);

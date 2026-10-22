@@ -45,6 +45,58 @@ const workbenchActions = (overrides: Partial<GlyphWorkbenchViewActions> = {}): G
   }) as Partial<GlyphWorkbenchViewActions> as GlyphWorkbenchViewActions;
 
 describe(WiredGlyphWorkbench, () => {
+  it.each(['available', 'missing-chat', 'missing-plan', 'no-plans'])(
+    'opens a build order only when its source plan is available: %s',
+    async availability => {
+      const sourcePlan = {
+        id: 'plan',
+        revision: 1,
+        title: 'Build work',
+        summary: '',
+        markdown: '',
+        todos: [],
+        agents: [],
+      };
+      const viewPlan = vi.fn(async () => {
+        throw new Error('Editor unavailable');
+      });
+      const state = workbench({
+        selectedChatId: 'chat',
+        buildingPlanIds: ['plan'],
+        chats: [
+          chat({
+            id: 'chat',
+            ...(availability === 'no-plans'
+              ? {}
+              : { plans: [{ ...sourcePlan, id: availability === 'missing-plan' ? 'other' : 'plan' }] }),
+          }),
+        ],
+        transcript: [
+          {
+            id: 'build',
+            role: GlyphTranscriptRole.USER,
+            text: 'Build order',
+            options: {
+              planBuild: {
+                planId: 'plan',
+                revision: 1,
+                title: 'Build work',
+                sourceChatId: availability === 'missing-chat' ? 'gone' : 'chat',
+                todos: [],
+              },
+            },
+          },
+        ],
+      });
+      render(<WiredGlyphWorkbench state={state} actions={workbenchActions({ viewPlan })} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Build Build work. Open plan' }));
+      if (availability === 'available') {
+        await waitFor(() => {
+          expect(viewPlan).toHaveBeenCalledWith('chat', sourcePlan);
+        });
+      } else expect(viewPlan).not.toHaveBeenCalled();
+    },
+  );
   it('shows a new chat draft with a composer and model picker', () => {
     render(<WiredGlyphWorkbench state={workbench()} actions={workbenchActions()} />);
 

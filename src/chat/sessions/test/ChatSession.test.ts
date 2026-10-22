@@ -103,6 +103,17 @@ describe(ChatSession, () => {
   });
 
   describe(ChatSession.prototype.send, () => {
+    it('persists plan build and progress metadata with the completed turn', async () => {
+      const { session, record } = harness();
+      const planBuild = { planId: 'plan', revision: 1, title: 'Plan', sourceChatId: 'source', todos: [] };
+      const planProgress = { planId: 'plan', title: 'Plan', completed: 0, total: 1 };
+      await session.send(
+        { text: 'Continue', attachments: [], planBuild, planProgress },
+        { push() {} },
+        new AbortController().signal,
+      );
+      expect(record().transcript[0]!.options).toMatchObject({ planBuild, planProgress });
+    });
     it('records text, reasoning, diagnostics, and bounded tool summaries in the saved turn', async () => {
       const logger = new NullLogger();
       vi.spyOn(logger, 'trace').mockImplementation(() => {

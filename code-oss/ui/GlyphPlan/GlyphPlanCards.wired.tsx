@@ -7,13 +7,15 @@ export function WiredGlyphPlanCards({
   plans,
   actions,
   disabled,
+  buildingPlanIds,
 }: {
   readonly chatId: string;
   readonly plans: readonly GlyphPlan[];
   readonly actions: GlyphWorkbenchViewActions;
   readonly disabled: boolean;
+  readonly buildingPlanIds?: readonly string[];
 }) {
-  const decision = useGlyphPlanCardsState({ chatId, plans, actions });
+  const decision = useGlyphPlanCardsState({ chatId, plans, actions, buildingPlanIds });
   return (
     <>
       {decision.plans.map(plan => (
@@ -21,6 +23,7 @@ export function WiredGlyphPlanCards({
           key={plan.id}
           plan={plan}
           disabled={disabled || decision.pending}
+          building={decision.building(plan)}
           view={() => void decision.view(plan)}
           build={() => void decision.build(plan)}
           buildNew={() => void decision.build(plan, true)}

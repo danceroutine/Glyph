@@ -22,5 +22,6 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 export const Document: Story = {};
 export const ReadOnly: Story = { args: { state: { ...meta.args.state, disabled: true } } };
+export const Building: Story = { args: { state: { ...meta.args.state, building: true } } };
 
 export const Narrow: Story = { globals: { paneWidth: '360' } };

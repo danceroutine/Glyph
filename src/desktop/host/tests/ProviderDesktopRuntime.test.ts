@@ -324,6 +324,50 @@ describe(ProviderDesktopRuntime, () => {
     }
   });
 
+  it('puts a plan’s todos on the building chat before the agent starts and keeps the build order with the turn', async () => {
+    let seen: unknown;
+    const harness = await fixture(async () => {
+      seen = harness.saved.get(harness.chatId)?.todos;
+    });
+    try {
+      const planBuild = {
+        planId: 'plan',
+        revision: 1,
+        title: 'Ship it',
+        sourceChatId: harness.chatId,
+        todos: [
+          { id: 'first', text: 'First', completed: true },
+          { id: 'second', text: 'Second', completed: false },
+        ],
+      };
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'run',
+        text: 'Build this approved plan',
+        attachments: [],
+        options: { planBuild },
+      });
+      await vi.waitFor(() => {
+        expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(1);
+      });
+
+      expect(seen).toEqual([
+        { id: 'first', text: 'First', status: 'completed' },
+        { id: 'second', text: 'Second', status: 'pending' },
+      ]);
+      expect(harness.events).toContainEqual(
+        expect.objectContaining({
+          type: GlyphHostEventType.CHAT_UPDATED,
+          chat: expect.objectContaining({ todos: seen }),
+        }),
+      );
+      expect(harness.saved.get(harness.chatId)?.transcript[0]?.options?.planBuild).toEqual(planBuild);
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
   it('publishes independent branches and replaces stale runs on restore, including after reopening', async () => {
     const harness = await fixture(async options => {
       options.onText('Answer');

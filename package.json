@@ -21,7 +21,7 @@
       "import": "./dist/desktop/host/index.js"
     }
   },
-  "description": "A local-first terminal coding agent with ChatGPT authentication and reviewable workspace edits.",
+  "description": "An agent-native IDE built on Code OSS, combining Cursor- and Codex-style workflows with bring-your-own provider accounts.",
   "engines": {
     "node": ">=22.18.0"
   },
@@ -59,14 +59,17 @@
     "oxlint:fix": "oxlint . --fix",
     "fix": "pnpm lint:fix && pnpm format",
     "check": "pnpm format:check && pnpm lint && pnpm context-index:check && pnpm shell-sandbox:check && pnpm context-index:build && pnpm shell-sandbox:build && tsc --noEmit && pnpm code-oss:check:ui && pnpm code-oss:check:storybook && pnpm build",
-    "test": "run-s --continue-on-error test:parallel test:integration test:coverage",
+    "test": "run-s --continue-on-error test:parallel test:coverage",
+    "test:all": "run-s --continue-on-error test:parallel test:integration test:coverage:all",
+    "test:select": "node scripts/coverage/select-electron-tests.mjs",
     "test:parallel": "run-p --continue-on-error --print-label test:native test:suites",
     "test:suites": "run-s test:prepare test:vitest",
     "test:native": "cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-functions 100 --html --output-dir coverage/native -- --include-ignored --skip measures_ && node src/shell/test/remediation/validate-plan.mjs",
     "test:prepare": "pnpm desktop:artifact && pnpm code-oss:bootstrap && pnpm code-oss:install && pnpm code-oss:compile",
     "test:vitest": "rm -rf .artifacts/coverage/v8/components && GLYPH_COMPONENT_COVERAGE_DIR=.artifacts/coverage/v8/components pnpm test:unit:coverage",
     "test:integration": "rm -rf .artifacts/coverage/v8/electron && GLYPH_COVERAGE_DIR=.artifacts/coverage/v8/electron node scripts/code-oss/test-electron.mjs",
-    "test:coverage": "node scripts/coverage/check-coverage.mjs",
+    "test:coverage": "node scripts/coverage/check-coverage.mjs .artifacts/coverage/v8/components",
+    "test:coverage:all": "node scripts/coverage/check-coverage.mjs .artifacts/coverage/v8/components .artifacts/coverage/v8/electron",
     "test:unit": "vitest run --project unit --project code-oss --project overlay --project ui --maxWorkers=2",
     "test:unit:coverage": "vitest run --project unit --project code-oss --project overlay --project ui --coverage --coverage.thresholds.100 --coverage.thresholds.perFile --maxWorkers=2",
     "test:ui": "vitest run --project ui",
@@ -114,6 +117,9 @@
     "@storybook/preact-vite": "10.6.1",
     "@testing-library/preact": "3.2.4",
     "@types/better-sqlite3": "7.6.13",
+    "@types/istanbul-lib-coverage": "^2.0.6",
+    "@types/istanbul-lib-report": "^3.0.3",
+    "@types/istanbul-reports": "^3.0.4",
     "@types/node": "^22.0.0",
     "@types/react": "19.3.0",
     "@vitest/browser-playwright": "5.0.3",

@@ -25,6 +25,7 @@ function pristineCheckout() {
     [join(repositoryRoot, 'src/desktop/workbench/GlyphState.ts')]: 'export const state = 1;\n',
     [join(repositoryRoot, 'src/chat/AgentMode.ts')]: "import { x } from './x.ts';\nexport const AgentMode = x;\n",
     [join(repositoryRoot, 'src/reviewing/AgentReview.ts')]: "export const review = 'AgentReview.ts';\n",
+    [join(repositoryRoot, 'src/shared/validators/isRecord.ts')]: 'export const isRecord = () => true;\n',
     [upstream('src/vs/workbench/workbench.desktop.main.ts')]:
       "import './contrib/terminal/electron-browser/terminal.contribution.js';\n",
     [upstream('src/vs/workbench/contrib/testing/browser/testResultsView/testResultsSubject.ts')]:
@@ -151,11 +152,15 @@ describe('apply-overlay', () => {
     expect(run.files[upstream('src/vs/platform/glyph/reviewing/AgentReview.ts')]).toBe(
       "export const review = 'AgentReview.ts';\n",
     );
+    expect(run.files[upstream('src/vs/platform/glyph/shared/validators/isRecord.ts')]).toBe(
+      'export const isRecord = () => true;\n',
+    );
     expect(run.operations.filter(([kind]) => kind === 'mkdir').map(([, path]) => path)).toEqual([
       upstream('src/vs/platform/glyph/common/protocol'),
       upstream('src/vs/platform/glyph/common/protocol/nested'),
       upstream('src/vs/platform/glyph/chat'),
       upstream('src/vs/platform/glyph/reviewing'),
+      upstream('src/vs/platform/glyph/shared/validators'),
       upstream('src/vs/platform/glyph/common/workbench'),
     ]);
   });

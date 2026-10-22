@@ -2,7 +2,16 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -10,6 +19,8 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: rustup toolchain install 1.88.0 --profile minimal --component clippy --component rustfmt --component llvm-tools
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: pnpm/action-setup@v4
@@ -22,8 +33,41 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y bubblewrap xvfb libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: pnpm install --frozen-lockfile
+      - name: Select relevant Electron suites
+        if: github.event_name == 'pull_request'
+        id: electron
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/coverage/select-electron-tests.mjs --base "$PR_BASE_SHA" --output .artifacts/electron-selection.json
       - run: pnpm exec playwright install --with-deps chromium
+      - name: Prepare Code OSS dependencies and generated types
+        run: pnpm test:prepare
       - name: Lint, format, type-check, and validate Rust
         run: pnpm check
-      - name: Test
+      - name: Fast tests and 100% coverage across all projects
+        if: github.event_name == 'pull_request'
         run: xvfb-run -a pnpm test
+      - name: Relevant Electron integration suites
+        if: github.event_name == 'pull_request' && steps.electron.outputs.mode != 'skip'
+        env:
+          GLYPH_ELECTRON_SELECTION: .artifacts/electron-selection.json
+          GLYPH_ELECTRON_WORKERS: '2'
+        run: xvfb-run -a pnpm test:integration
+      - name: Full tests and coverage
+        if: github.event_name != 'pull_request'
+        env:
+          GLYPH_ELECTRON_WORKERS: '2'
+        run: xvfb-run -a pnpm test:all
+      - name: Preserve test selection, reports, and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence-${{ github.run_id }}
+          path: |
+            .artifacts/electron-selection.json
+            .artifacts/code-oss-integration/results.json
+            .artifacts/code-oss-integration/report/
+            .artifacts/code-oss-integration/results/
+            coverage/vitest/coverage-summary.json
+            coverage/merged/coverage-summary.json
+          retention-days: 7

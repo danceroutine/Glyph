@@ -1,8 +1,20 @@
 import { Button, ButtonAppearance, ButtonSize, IconButton } from '#code-oss/ui/Button/Button.tsx';
 import { GlyphSidebarIcon } from '#code-oss/ui/GlyphSidebarIcon/GlyphSidebarIcon.tsx';
-import type { GlyphChatHistoryState } from './useGlyphChatHistoryState.ts';
+import { GlyphChatActivity, type GlyphChatHistoryState } from './useGlyphChatHistoryState.ts';
 import { css, tokens, space } from '#code-oss/ui/design-system/index.ts';
-import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Pin, PinOff } from 'lucide-preact';
+import {
+  Archive,
+  ArchiveRestore,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  CircleQuestionMark,
+  Pin,
+  PinOff,
+} from 'lucide-preact';
 import type { ComponentChildren, Ref } from 'preact';
 
 const styles = {
@@ -70,12 +82,69 @@ const styles = {
       overflow: 'hidden',
       textOverflow: 'ellipsis',
     },
+    '&&[data-draft]': { color: tokens.text.muted },
     '&&[aria-current="true"]': { color: tokens.list.selected.foreground },
     ':focus-visible': { outlineOffset: tokens.focus.inset },
   }),
-  activity: css({ display: 'inline-block', width: 16, color: tokens.text.muted }),
+  activity: css({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 16,
+    height: 16,
+    marginRight: tokens.space.xs,
+    verticalAlign: 'text-bottom',
+    color: tokens.text.muted,
+    '&[data-activity=working]': { color: 'inherit' },
+    '&[data-activity=awaiting_input]': { color: tokens.text.warning },
+    '&[data-activity=cancelled], &[data-activity=interrupted], &[data-activity=failed]': {
+      color: tokens.history.alertForeground,
+    },
+  }),
+  pulse: css({
+    width: 6,
+    height: 6,
+    borderRadius: '50%',
+    background: 'currentColor',
+    animation: 'glyph-chat-pulse 1.2s ease-in-out infinite',
+    '@keyframes glyph-chat-pulse': {
+      '0%, 100%': { opacity: 1, transform: 'scale(1)' },
+      '50%': { opacity: 0.35, transform: 'scale(0.6)' },
+    },
+    '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+  }),
   empty: css({ padding: tokens.space.md, color: tokens.text.muted }),
 };
+
+const activityLabels: Record<GlyphChatActivity, string> = {
+  [GlyphChatActivity.WORKING]: 'Working',
+  [GlyphChatActivity.AWAITING_INPUT]: 'Awaiting input',
+  [GlyphChatActivity.COMPLETED]: 'Completed',
+  [GlyphChatActivity.CANCELLED]: 'Cancelled',
+  [GlyphChatActivity.INTERRUPTED]: 'Interrupted',
+  [GlyphChatActivity.FAILED]: 'Failed',
+  [GlyphChatActivity.EMPTY]: 'No messages yet',
+  [GlyphChatActivity.DRAFT]: 'Draft',
+};
+
+function ActivityIcon({ activity }: { readonly activity: GlyphChatActivity }) {
+  switch (activity) {
+    case GlyphChatActivity.WORKING:
+      return <span class={styles.pulse} />;
+    case GlyphChatActivity.AWAITING_INPUT:
+      return <CircleQuestionMark size={14} aria-hidden="true" />;
+    case GlyphChatActivity.COMPLETED:
+      return <CircleCheck size={14} aria-hidden="true" />;
+    case GlyphChatActivity.CANCELLED:
+    case GlyphChatActivity.INTERRUPTED:
+    case GlyphChatActivity.FAILED:
+      return <CircleAlert size={14} aria-hidden="true" />;
+    case GlyphChatActivity.EMPTY:
+      return <Circle size={14} aria-hidden="true" />;
+    case GlyphChatActivity.DRAFT:
+      return <CircleDashed size={14} aria-hidden="true" />;
+  }
+}
 
 export type GlyphChatHistoryProps = GlyphChatHistoryState & {
   readonly accountControl: ComponentChildren;
@@ -113,45 +182,54 @@ export function GlyphChatHistory({
         aria-current={chat.selected ? 'true' : undefined}
         aria-label={chat.title}
         title={chat.title}
+        data-draft={chat.draft || undefined}
         disabled={navigationPending}
         onClick={() => {
           openChat(chat.id);
         }}
       >
-        <span class={styles.activity} aria-label={chat.active ? 'Running' : undefined}>
-          {chat.active ? '◌' : '○'}
+        <span
+          class={styles.activity}
+          data-activity={chat.activity}
+          role="img"
+          aria-label={activityLabels[chat.activity]}
+          title={activityLabels[chat.activity]}
+        >
+          <ActivityIcon activity={chat.activity} />
         </span>
         {chat.title}
       </Button>
-      <div class="chat-row-actions">
-        {!chat.archived && (
+      {!chat.draft && (
+        <div class="chat-row-actions">
+          {!chat.archived && (
+            <IconButton
+              appearance={ButtonAppearance.BORDERLESS_GHOST}
+              size={ButtonSize.SMALL}
+              iconSize={14}
+              type="button"
+              aria-label={`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`}
+              title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
+              onClick={() => pin(chat.id, !chat.pinned)}
+            >
+              {chat.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+            </IconButton>
+          )}
           <IconButton
             appearance={ButtonAppearance.BORDERLESS_GHOST}
             size={ButtonSize.SMALL}
             iconSize={14}
             type="button"
-            aria-label={`${chat.pinned ? 'Unpin' : 'Pin'} ${chat.title}`}
-            title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
-            onClick={() => pin(chat.id, !chat.pinned)}
+            disabled={newChatDisabled}
+            aria-label={`${chat.archived ? 'Unarchive' : 'Archive'} ${chat.title}`}
+            title={chat.archived ? 'Unarchive chat' : 'Archive chat'}
+            onClick={() => {
+              archive(chat.id, !chat.archived);
+            }}
           >
-            {chat.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+            {chat.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
           </IconButton>
-        )}
-        <IconButton
-          appearance={ButtonAppearance.BORDERLESS_GHOST}
-          size={ButtonSize.SMALL}
-          iconSize={14}
-          type="button"
-          disabled={newChatDisabled}
-          aria-label={`${chat.archived ? 'Unarchive' : 'Archive'} ${chat.title}`}
-          title={chat.archived ? 'Unarchive chat' : 'Archive chat'}
-          onClick={() => {
-            archive(chat.id, !chat.archived);
-          }}
-        >
-          {chat.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-        </IconButton>
-      </div>
+        </div>
+      )}
     </div>
   );
   return (

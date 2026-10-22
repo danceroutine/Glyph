@@ -1,5 +1,10 @@
 # Coverage seams
 
+For the current test commands and coverage requirements, see
+[Local tests and PR integration selection](test-selection.md). `pnpm test`
+enforces coverage without Electron; `pnpm test:all` additionally runs the full
+desktop integration suite.
+
 The 2026-10-20 audit reviewed 49 `TODO(coverage)` markers: 27 internal invariant cases were removed, and the remaining 22 cases now have implemented boundaries and deterministic tests. No coverage markers remain for this inventory. The original invariant findings are retained below.
 
 The seams follow existing responsibilities. `ProjectRoot` owns the lossless representation of a canonical workspace directory; `SearchGenerations` represents which query may still publish. Cache codecs, durable files, catalog storage, filesystem discovery, transport streams, and worker acquisition are infrastructure boundaries. They do not introduce a test mode, configurable fault flags, arbitrary checkpoints, or a second production algorithm. Test doubles live in test modules.

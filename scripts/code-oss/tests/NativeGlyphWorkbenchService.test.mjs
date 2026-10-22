@@ -243,6 +243,7 @@ function chat(id) {
  *   handler?: (command: GlyphWorkbenchCommand, host: FixtureHost) => Promise<void>,
  *   openInGlyph?: boolean,
  *   attachedState?: boolean,
+ *   storage?: Map<string, unknown>,
  * }} [options]
  */
 async function fixture({
@@ -251,14 +252,13 @@ async function fixture({
   handler = async () => {},
   openInGlyph = false,
   attachedState = true,
+  storage = new Map(),
 } = {}) {
   const { NativeGlyphWorkbenchService } = await (loaded ??= modules());
   /** @type {Set<(message: { event: unknown }) => void>} */
   const listeners = new Set();
   /** @type {Set<(trusted: boolean) => unknown>} */
   const trustListeners = new Set();
-  /** @type {Map<string, unknown>} */
-  const storage = new Map();
   let trusted = true;
   /** @type {FixtureState} */
   const state = {
@@ -511,6 +511,61 @@ it('ignores late navigation completions and retains a separate composer for each
 
 const accounts = ['a', 'b'].map(id => ({ provider: 'fixture', id, label: id, connected: true, inferenceAccess: true }));
 
+it('keeps typed new-chat text as a draft across a reload until it becomes a conversation', async () => {
+  const storage = new Map();
+  const first = await fixture({ storage });
+  let createdAt;
+  try {
+    first.service.composer.setDraft('alpha draft');
+    expect(first.service.state.newChatDraft).toBeUndefined();
+    first.service.newChat();
+    first.service.composer.setDraft('   ');
+    expect(first.service.state.newChatDraft).toBeUndefined();
+    first.service.composer.setDraft('Get me a screenshot');
+    createdAt = first.service.state.newChatDraft.createdAt;
+    expect(Date.parse(createdAt)).not.toBeNaN();
+    first.service.composer.setDraft('Get me a screenshot of the sidebar');
+    expect(first.service.state.newChatDraft).toEqual({ text: 'Get me a screenshot of the sidebar', createdAt });
+  } finally {
+    first.dispose();
+  }
+  const reloaded = await fixture({ storage });
+  try {
+    expect(reloaded.service.state.newChatDraft).toEqual({ text: 'Get me a screenshot of the sidebar', createdAt });
+    expect(reloaded.service.composer.snapshot.draft).toBe('Get me a screenshot of the sidebar');
+    reloaded.service.composer.setDraft('');
+    expect(reloaded.service.state.newChatDraft).toBeUndefined();
+    expect(storage.get('glyph.newChatDraft')).toBeUndefined();
+  } finally {
+    reloaded.dispose();
+  }
+});
+
+it('stops listing the draft once its text moves into a created conversation', async () => {
+  const test = await fixture({
+    chats: [],
+    accounts: [{ provider: 'fixture', id: 'a', label: 'a', connected: true, inferenceAccess: true }],
+    handler: async (command, { state, emit }) => {
+      if (command.type === GlyphWorkbenchCommandType.SELECT_ACCOUNT) state.models = [{ slug: 'model', name: 'Model' }];
+      if (command.type === GlyphWorkbenchCommandType.CREATE_CHAT) {
+        state.chats.push(chat('created'));
+        emit({ type: 'chat_updated', chat: chat('created'), creationId: command.creationId });
+      }
+    },
+  });
+  try {
+    test.service.composer.setDraft('Carry this over');
+    expect(test.service.state.newChatDraft?.text).toBe('Carry this over');
+    await test.service.createChat('fixture', 'a', 'model');
+    expect(test.service.state.selectedChatId).toBe('created');
+    expect(test.service.composer.snapshot.draft).toBe('Carry this over');
+    expect(test.service.state.newChatDraft).toBeUndefined();
+    expect(test.storage.get('glyph.newChatDraft')).toBeUndefined();
+  } finally {
+    test.dispose();
+  }
+});
+
 it('restores the draft account catalog before changing models after host replacement', async () => {
   const test = await fixture({
     chats: [],
@@ -711,5 +766,221 @@ it('opens web links externally by default and uses the native browser editor whe
     } finally {
       f.dispose();
     }
+  }
+});
+
+it.each([false, true])('shows a plan as building until its build finishes (new chat: %s)', async newChat => {
+  const plan = {
+    id: 'plan',
+    revision: 1,
+    title: 'Approved work',
+    summary: '',
+    markdown: 'Change source',
+    todos: [],
+    agents: [],
+  };
+  /** @type {Record<string, unknown>} */
+  let buildRun;
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }],
+    handler: async (command, { state, emit }) => {
+      if (command.type === GlyphWorkbenchCommandType.CREATE_CHAT) {
+        state.chats.push(chat('builder'));
+        emit({ type: 'chat_updated', chat: chat('builder'), creationId: command.creationId });
+      }
+      if (command.type !== GlyphWorkbenchCommandType.SEND) return;
+      buildRun = {
+        chatId: command.chatId,
+        runId: command.runId,
+        userText: command.text,
+        text: '',
+        reasoning: '',
+        tools: [],
+      };
+      emit({ type: 'run_state', run: { ...buildRun, status: 'streaming' } });
+    },
+  });
+  try {
+    expect(test.service.state.buildingPlanIds).toBeUndefined();
+    await test.service.buildPlan('alpha', plan, newChat);
+    expect(buildRun.chatId).toBe(newChat ? 'builder' : 'alpha');
+    expect(test.service.state.buildingPlanIds).toEqual(['plan']);
+    test.emit({ type: 'run_state', run: { ...buildRun, status: 'completed' } });
+    expect(test.service.state.buildingPlanIds).toBeUndefined();
+  } finally {
+    test.dispose();
+  }
+});
+
+it('does not show a plan as building when its build finishes before the request settles', async () => {
+  const plan = {
+    id: 'plan',
+    revision: 1,
+    title: 'Approved work',
+    summary: '',
+    markdown: 'Change source',
+    todos: [],
+    agents: [],
+  };
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }],
+    handler: async (command, { emit }) => {
+      if (command.type !== GlyphWorkbenchCommandType.SEND) return;
+      emit({
+        type: 'run_state',
+        run: {
+          chatId: command.chatId,
+          runId: command.runId,
+          userText: command.text,
+          text: 'Done',
+          reasoning: '',
+          tools: [],
+          status: 'completed',
+        },
+      });
+    },
+  });
+  try {
+    await test.service.buildPlan('alpha', plan);
+    expect(test.service.state.buildingPlanIds).toBeUndefined();
+  } finally {
+    test.dispose();
+  }
+});
+
+it('stops showing a plan as building when the host no longer reports its build', async () => {
+  const plan = {
+    id: 'plan',
+    revision: 1,
+    title: 'Approved work',
+    summary: '',
+    markdown: 'Change source',
+    todos: [],
+    agents: [],
+  };
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }],
+    handler: async (command, { emit }) => {
+      if (command.type !== GlyphWorkbenchCommandType.SEND) return;
+      emit({
+        type: 'run_state',
+        run: {
+          chatId: command.chatId,
+          runId: command.runId,
+          userText: command.text,
+          text: '',
+          reasoning: '',
+          tools: [],
+          status: 'streaming',
+        },
+      });
+    },
+  });
+  try {
+    await test.service.buildPlan('alpha', plan);
+    expect(test.service.state.buildingPlanIds).toEqual(['plan']);
+    test.emit({ type: 'initial_state', state: { ...test.state, runs: [] } });
+    expect(test.service.state.buildingPlanIds).toBeUndefined();
+  } finally {
+    test.dispose();
+  }
+});
+
+it('sends a build as a build order carrying the plan’s todos', async () => {
+  const plan = {
+    id: 'plan',
+    revision: 2,
+    title: 'Approved work',
+    summary: '',
+    markdown: 'Change source',
+    todos: [
+      { id: 'first', text: 'First step', completed: true },
+      { id: 'second', text: 'Second step', completed: false },
+    ],
+    agents: [],
+  };
+  /** @type {Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.SEND }>} */
+  let sent;
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }],
+    handler: async command => {
+      if (command.type === GlyphWorkbenchCommandType.SEND) sent = command;
+    },
+  });
+  try {
+    await test.service.buildPlan('alpha', plan);
+
+    expect(sent.options.planBuild).toEqual({
+      planId: 'plan',
+      revision: 2,
+      title: 'Approved work',
+      sourceChatId: 'alpha',
+      todos: plan.todos,
+    });
+    expect(sent.text).toContain('- [ ] Second step (todo id: second)');
+  } finally {
+    test.dispose();
+  }
+});
+
+it('notes build progress on messages written while a plan is building in that chat', async () => {
+  const plan = {
+    id: 'plan',
+    revision: 1,
+    title: 'Approved work',
+    summary: '',
+    markdown: 'Change source',
+    todos: [],
+    agents: [],
+  };
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), plans: [plan] }, chat('beta')],
+    handler: async (command, { emit }) => {
+      if (command.type !== GlyphWorkbenchCommandType.SEND) return;
+      emit({
+        type: 'run_state',
+        run: {
+          chatId: command.chatId,
+          runId: command.runId,
+          userText: command.text,
+          text: '',
+          reasoning: '',
+          tools: [],
+          status: 'streaming',
+        },
+      });
+    },
+  });
+  try {
+    await test.service.buildPlan('alpha', plan);
+    test.emit({
+      type: 'chat_updated',
+      chat: {
+        ...chat('alpha'),
+        plans: [plan],
+        todos: [
+          { id: 'first', text: 'First step', status: 'completed' },
+          { id: 'second', text: 'Second step', status: 'in_progress' },
+          { id: 'third', text: 'Third step', status: 'pending' },
+        ],
+      },
+    });
+    test.service.composer.setDraft('Keep the public API unchanged');
+    test.service.composer.enqueueDraft();
+    const queued = test.service.composer.snapshot.queued[0];
+    await test.service.openChat('beta');
+    test.service.composer.setDraft('Unrelated question');
+    test.service.composer.enqueueDraft();
+
+    expect(queued.document.options.planProgress).toEqual({
+      planId: 'plan',
+      title: 'Approved work',
+      current: 'Second step',
+      completed: 1,
+      total: 3,
+    });
+    expect(test.service.composer.snapshot.queued[0].document.options.planProgress).toBeUndefined();
+  } finally {
+    test.dispose();
   }
 });

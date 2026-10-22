@@ -9,7 +9,8 @@ const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url
  * @param {string[]} argv
  * @param {{ playwright?: string | null, missing?: string[] }} [options]
  */
-async function runScript(argv, { playwright = '/upstream/@playwright/test/cli.js', missing = [] } = {}) {
+async function runScript(argv, { playwright = '/upstream/@playwright/test/cli.js', missing = [], selection } = {}) {
+  vi.stubEnv('GLYPH_ELECTRON_SELECTION', selection === undefined ? '' : '/selection.json');
   const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
   /** @type {Map<string, () => void>} */
   const signals = new Map();
@@ -22,6 +23,7 @@ async function runScript(argv, { playwright = '/upstream/@playwright/test/cli.js
     })),
   };
   const filesystem = {
+    readFile: vi.fn(async () => JSON.stringify(selection)),
     access: vi.fn(async (/** @type {URL} */ url) => {
       if (missing.some(file => url.href.endsWith(file))) throw new Error('missing');
     }),
@@ -36,6 +38,7 @@ async function runScript(argv, { playwright = '/upstream/@playwright/test/cli.js
   const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
   const originalArgv = process.argv;
   onTestFinished(() => {
+    vi.unstubAllEnvs();
     process.argv = originalArgv;
     process.exitCode = undefined;
     on.mockRestore();
@@ -54,6 +57,36 @@ async function runScript(argv, { playwright = '/upstream/@playwright/test/cli.js
 }
 
 describe('test-electron', () => {
+  it('passes selected suites as literal, end-anchored Playwright file filters', async () => {
+    const run = await runScript(['--list'], {
+      selection: { mode: 'selected', tests: ['code-oss/tests/electron/GlyphChats.test.mjs'] },
+    });
+    await run.loaded;
+    expect(run.childProcess.spawn.mock.calls[0][1]).toContain('code-oss/tests/electron/GlyphChats\\.test\\.mjs$');
+  });
+
+  it('accepts an explicit full-suite selection', async () => {
+    const run = await runScript(['--list'], {
+      selection: { mode: 'full', tests: ['code-oss/tests/electron/GlyphChats.test.mjs'] },
+    });
+    await run.loaded;
+    expect(run.childProcess.spawn).toHaveBeenCalled();
+  });
+
+  it.each([{ mode: 'skip', tests: [] }, { mode: 'selected', tests: [] }, { mode: 'selected' }])(
+    'rejects an empty or invalid selection instead of running all tests: %j',
+    async selection => {
+      const run = await runScript([], { selection });
+      await expect(run.loaded).rejects.toThrow();
+      expect(run.childProcess.spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([42, '--grep', 'code-oss/tests/electron/../other.test.mjs'])('rejects unsafe suite paths %s', async file => {
+    const run = await runScript([], { selection: { mode: 'selected', tests: [file] } });
+    await expect(run.loaded).rejects.toThrow();
+  });
+
   it('requires the upstream Playwright installation', async () => {
     const run = await runScript([], { playwright: null });
 

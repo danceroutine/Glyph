@@ -35,6 +35,16 @@ const planActions = () => ({
 });
 
 describe(useGlyphPlanState, () => {
+  it('does not submit another build while the plan is already building', async () => {
+    const actions = planActions();
+    const { result } = renderHook(useGlyphPlanState, {
+      initialProps: { state: viewState({ building: true }), actions },
+    });
+    await act(() => result.current.build());
+    await act(() => result.current.buildNew());
+    expect(result.current.building).toBe(true);
+    expect(actions.build).not.toHaveBeenCalled();
+  });
   it('exposes the plan view with an idle todo draft', () => {
     const state = viewState({ modelLabel: 'GPT-5' });
 

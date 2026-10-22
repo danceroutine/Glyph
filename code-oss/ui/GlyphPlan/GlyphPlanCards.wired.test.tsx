@@ -67,7 +67,7 @@ describe(WiredGlyphPlanCards, () => {
         disabled
       />,
     );
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Build\s*⌘↵$/u }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Building/u }).disabled).toBe(true);
   });
 
   it('shows why the last plan action failed', async () => {

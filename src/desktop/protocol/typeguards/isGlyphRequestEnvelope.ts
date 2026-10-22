@@ -1,4 +1,4 @@
-import { isRecord } from '#src/shared/validators/isRecord.ts';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 import type { GlyphRequestEnvelope } from '#src/desktop/protocol/GlyphRequestEnvelope.js';
 
 export function isGlyphRequestEnvelope(value: unknown): value is GlyphRequestEnvelope {

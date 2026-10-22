@@ -40,6 +40,9 @@ const definitions = {
   editorWarning: {
     foreground: hostToken('editorWarning.foreground', palette.yellow[500], palette.yellow[600], palette.yellow[600]),
   },
+  editorError: {
+    foreground: hostToken('editorError.foreground', palette.red[400], palette.red[500], palette.red[500]),
+  },
   sideBar: { background: hostToken('sideBar.background', palette.neutral[900], palette.neutral[50]) },
   editor: {
     background: hostToken('editor.background', palette.neutral[800], palette.neutral[0]),

@@ -53,6 +53,7 @@ interface Window {
   showMarkdown: HarnessAction;
   showMessageActions: HarnessAction;
   showWorkbench: HarnessAction;
+  showTranscript: HarnessAction;
   showWorkbenchStory: HarnessAction;
   update: HarnessAction;
 }

@@ -26,6 +26,7 @@ beforeAll(async () => {
           selectAccount: async (...args) => { window.requests.push(['account', ...args]); },
           selectModel: async (...args) => { window.requests.push(['model', ...args]); },
           openChat: async (...args) => { window.requests.push(['open', ...args]); },
+          newChat: () => { window.requests.push(['new']); },
         });
         window.update = patch => { state = { ...state, ...patch }; view.update(state); };
         window.showApproval = () => window.update({ status: 'waiting_for_approval', runs: [{ ...run, status: 'waiting_for_approval', question: undefined, approval: { id: 'approval', title: 'Allow shell command?', detail: 'pwd', command: 'pwd', workingDirectory: '/workspace', sandboxed: true, canRemember: true } }] });
@@ -292,6 +293,141 @@ it('wires account and model choices and keeps filtered history open until explic
     await toggle.click();
     await expect(account).toBeDisabled();
     await expect(account).toHaveValue(JSON.stringify(['provider', 'a']));
+  } finally {
+    await page.close();
+  }
+});
+
+it('shows whether each saved chat is working, awaiting input, completed, ended early, or empty', async () => {
+  const page = await pageForTest();
+  try {
+    await page.evaluate(() => {
+      const updatedAt = new Date().toISOString();
+      const chat = (id, turnCount = 1) => ({
+        id,
+        title: `${id} chat`,
+        accountProvider: 'provider',
+        accountId: 'a',
+        modelSlug: 'first',
+        updatedAt,
+        turnCount,
+      });
+      const run = (chatId, runId, status) => ({ chatId, runId, status, text: '', reasoning: '', tools: [] });
+      window.update({
+        selectedChatId: undefined,
+        status: 'ready',
+        chats: [
+          chat('working'),
+          chat('question'),
+          chat('approval'),
+          chat('completed'),
+          chat('cancelled'),
+          chat('interrupted'),
+          chat('failed'),
+          chat('unopened'),
+          chat('empty', 0),
+        ],
+        runs: [
+          run('working', 'earlier', 'completed'),
+          run('working', 'current', 'streaming'),
+          run('question', 'current', 'waiting_for_question'),
+          run('approval', 'current', 'waiting_for_approval'),
+          run('completed', 'current', 'completed'),
+          run('cancelled', 'current', 'cancelled'),
+          run('interrupted', 'current', 'interrupted'),
+          run('failed', 'earlier', 'completed'),
+          run('failed', 'current', 'failed'),
+        ],
+      });
+    });
+    await page.getByRole('button', { name: 'Chat history', exact: true }).click();
+    const status = (id, name) =>
+      page.getByRole('button', { name: `${id} chat`, exact: true }).getByRole('img', { name, exact: true });
+    await expect(status('working', 'Working')).toBeVisible();
+    await expect(status('question', 'Awaiting input')).toBeVisible();
+    await expect(status('approval', 'Awaiting input')).toBeVisible();
+    await expect(status('completed', 'Completed')).toBeVisible();
+    await expect(status('cancelled', 'Cancelled')).toBeVisible();
+    await expect(status('interrupted', 'Interrupted')).toBeVisible();
+    await expect(status('failed', 'Failed')).toBeVisible();
+    await expect(status('unopened', 'Completed')).toBeVisible();
+    await expect(status('empty', 'No messages yet')).toBeVisible();
+    await page.evaluate(
+      () =>
+        (document.querySelector(/** @type {'div'} */ ('#root')).style.cssText +=
+          '; --vscode-editorError-foreground: rgb(241, 76, 76)'),
+    );
+    for (const [id, name] of [
+      ['cancelled', 'Cancelled'],
+      ['interrupted', 'Interrupted'],
+      ['failed', 'Failed'],
+    ])
+      await expect(status(id, name)).toHaveCSS('color', 'rgb(241, 76, 76)');
+    const pulse = status('working', 'Working').locator('span');
+    await expect(pulse).toHaveCSS('animation-iteration-count', 'infinite');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(pulse).toHaveCSS('animation-name', 'none');
+    await page.evaluate(() =>
+      window.update({
+        runs: [{ chatId: 'working', runId: 'current', status: 'completed', text: '', reasoning: '', tools: [] }],
+      }),
+    );
+    await expect(status('working', 'Completed')).toBeVisible();
+  } finally {
+    await page.close();
+  }
+});
+
+it('lists an unsent new chat as a draft at the top of the day it was started and reopens it', async () => {
+  const page = await pageForTest();
+  try {
+    await page.evaluate(() => {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      yesterday.setHours(12, 0, 0, 0);
+      const chat = (id, updatedAt) => ({
+        id,
+        title: `${id} chat`,
+        accountProvider: 'provider',
+        accountId: 'a',
+        modelSlug: 'first',
+        updatedAt,
+        turnCount: 1,
+      });
+      window.update({
+        selectedChatId: 'today',
+        status: 'ready',
+        runs: [],
+        chats: [
+          chat('today', new Date().toISOString()),
+          chat('yesterday', new Date(yesterday.getTime() + 60_000).toISOString()),
+        ],
+        newChatDraft: {
+          text: '\n  Get me a screenshot of the sidebar\nwith every status',
+          createdAt: yesterday.toISOString(),
+        },
+      });
+    });
+    await page.getByRole('button', { name: 'Chat history', exact: true }).click();
+    const yesterdayGroup = page.getByRole('region', { name: 'Yesterday', exact: true });
+    const rows = yesterdayGroup.getByRole('button', { name: /chat|Draft/u });
+    await expect(rows).toHaveText(
+      ['Get me a screenshot of the sidebar', 'yesterday chat'].map(text => new RegExp(text, 'u')),
+    );
+    const draft = yesterdayGroup.getByRole('button', {
+      name: 'Draft: Get me a screenshot of the sidebar',
+      exact: true,
+    });
+    await expect(draft.getByRole('img', { name: 'Draft', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Today', exact: true })).not.toContainText('Draft');
+    await draft.hover();
+    await expect(page.getByRole('button', { name: /^(Pin|Archive) Draft/u })).toHaveCount(0);
+    await draft.click();
+    expect(await page.evaluate(() => window.requests)).toEqual([['new']]);
+    await page.evaluate(() => window.update({ selectedChatId: undefined }));
+    await expect(draft).toHaveAttribute('aria-current', 'true');
+    await page.getByRole('searchbox', { name: 'Search chats' }).fill('today');
+    await expect(draft).toHaveCount(0);
   } finally {
     await page.close();
   }

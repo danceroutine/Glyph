@@ -1,5 +1,6 @@
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { PlanUpdate } from '#src/planning/PlanSchema.js';
+import type { TodoUpdate } from '#src/todos/TodoUpdate.js';
 import { PlanError } from '#src/planning/PlanError.js';
 import { ChatConversation } from '#src/chat/ChatConversation.js';
 import type { ChatAccount } from '#src/chat/ChatAccount.js';
@@ -75,6 +76,11 @@ export class GlyphService {
   updatePlan(chat: ChatSessionSummary, update: PlanUpdate): Promise<ChatSessionSummary> {
     if (!this.chatSessions) throw new PlanError('Plan storage is unavailable.');
     return this.chatSessions.updatePlan(chat, update);
+  }
+
+  updateTodos(chat: ChatSessionSummary, update: TodoUpdate, signal?: AbortSignal): Promise<ChatSessionSummary> {
+    if (!this.chatSessions) throw new PlanError('Todo storage is unavailable.');
+    return this.chatSessions.updateTodos(chat, update, signal);
   }
 
   get accounts(): readonly ChatAccount[] {

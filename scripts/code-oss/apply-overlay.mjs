@@ -40,6 +40,14 @@ await writeFile(
   join(reviewContractTarget, 'AgentReview.ts'),
   await readFile(join(repositoryRoot, 'src/reviewing/AgentReview.ts'), 'utf8'),
 );
+// Request-envelope validation is shared with the host. Its generated relative
+// import must resolve inside Code OSS, just like the mode and review contracts.
+const validatorTarget = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'shared', 'validators');
+await mkdir(validatorTarget, { recursive: true });
+await writeFile(
+  join(validatorTarget, 'isRecord.ts'),
+  await readFile(join(repositoryRoot, 'src/shared/validators/isRecord.ts'), 'utf8'),
+);
 await copyProtocol(
   join(repositoryRoot, 'src', 'desktop', 'workbench'),
   join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'common', 'workbench'),

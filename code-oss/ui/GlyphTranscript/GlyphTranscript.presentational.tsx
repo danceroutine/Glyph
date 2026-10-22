@@ -5,30 +5,9 @@ import { Undo2 } from 'lucide-preact';
 import type { ComponentChildren } from 'preact';
 import type { GlyphTranscriptState } from './useGlyphTranscriptState.ts';
 import { GlyphTurnProgress } from '#code-oss/ui/GlyphTurnProgress/GlyphTurnProgress.presentational.tsx';
-import { css, tokens } from '#code-oss/ui/design-system/index.ts';
+import { GlyphPlanProgressRider } from './GlyphPlanProgressRider.presentational.tsx';
+import { transcriptStyles as styles } from './GlyphTranscript.styles.ts';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
-
-const styles = {
-  root: css({ flex: 1, minHeight: 0, overflowY: 'auto', padding: tokens.space.lg }),
-  entry: css({
-    marginBottom: tokens.space.lg,
-    userSelect: 'text',
-    '&:hover time, &:focus-within time, &:hover .glyph-restore, &:focus-within .glyph-restore': { opacity: 1 },
-  }),
-  bubble: css({
-    position: 'relative',
-    background: tokens.input.background,
-    border: tokens.input.strongBorder,
-    borderRadius: 12,
-    padding: '10px 12px',
-    '&:has(.glyph-restore)': { paddingRight: 38 },
-    '& p:first-child': { marginTop: 0 },
-    '& p:last-child': { marginBottom: 0 },
-  }),
-  steering: css({ background: `color-mix(in srgb, ${tokens.input.background} 70%, black)`, borderStyle: 'dotted' }),
-  answer: css({ padding: '0 10px' }),
-  restore: css({ position: 'absolute', right: 10, top: 10, opacity: 0 }),
-};
 
 export interface GlyphTranscriptProps {
   readonly plans?: ComponentChildren;
@@ -51,8 +30,40 @@ export interface GlyphTranscriptMessageProps {
   readonly content: ComponentChildren;
 }
 
+export function GlyphRestoreCheckpoint({ entry }: { readonly entry: GlyphTranscriptState['entries'][number] }) {
+  return entry.role === GlyphTranscriptRole.USER && entry.restore ? (
+    <IconButton
+      size={ButtonSize.SMALL}
+      class={`glyph-restore ${styles.restore}`}
+      type="button"
+      aria-label="Restore checkpoint"
+      title="Restore checkpoint"
+      disabled={entry.historyPending}
+      onClick={entry.restore}
+    >
+      <Undo2 size={15} aria-hidden="true" />
+    </IconButton>
+  ) : null;
+}
+
 /** User and diagnostic rows; assistant messages have their own complete component. */
 export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessageProps) {
+  const progress = entry.role === GlyphTranscriptRole.USER ? entry.options?.planProgress : undefined;
+  const bubble = (
+    <div
+      data-steering={entry.steering || undefined}
+      class={
+        entry.role === GlyphTranscriptRole.USER
+          ? `${styles.bubble} ${entry.steering ? styles.steering : ''} ${progress ? styles.riderBubble : ''}`
+          : styles.answer
+      }
+    >
+      <div data-glyph-source={entry.id} data-kind="chat" data-label={entry.label} data-revision={entry.text.length}>
+        {content}
+      </div>
+      <GlyphRestoreCheckpoint entry={entry} />
+    </div>
+  );
   return (
     <div class={`glyph-entry ${entry.role} ${styles.entry}`} key={entry.id}>
       {entry.questionResponses?.map(response => (
@@ -60,31 +71,14 @@ export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessag
       ))}
       {entry.role === GlyphTranscriptRole.DIAGNOSTIC && <strong>{entry.label}</strong>}
       {entry.progress && <GlyphTurnProgress progress={entry.progress} openLink={entry.openLink} />}
-      <div
-        data-steering={entry.steering === true || undefined}
-        class={
-          entry.role === GlyphTranscriptRole.USER
-            ? `${styles.bubble} ${entry.steering === true ? styles.steering : ''}`
-            : styles.answer
-        }
-      >
-        <div data-glyph-source={entry.id} data-kind="chat" data-label={entry.label} data-revision={entry.text.length}>
-          {content}
+      {progress ? (
+        <div class={styles.rider}>
+          {bubble}
+          <GlyphPlanProgressRider progress={progress} />
         </div>
-        {entry.role === GlyphTranscriptRole.USER && entry.restore && (
-          <IconButton
-            size={ButtonSize.SMALL}
-            class={`glyph-restore ${styles.restore}`}
-            type="button"
-            aria-label="Restore checkpoint"
-            title="Restore checkpoint"
-            disabled={entry.historyPending}
-            onClick={entry.restore}
-          >
-            <Undo2 size={15} aria-hidden="true" />
-          </IconButton>
-        )}
-      </div>
+      ) : (
+        bubble
+      )}
       {entry.options?.annotations && <GlyphAnnotationPill annotations={entry.options.annotations} />}
       {entry.attachmentError !== undefined && entry.attachmentError !== '' && (
         <p role="alert">{entry.attachmentError}</p>

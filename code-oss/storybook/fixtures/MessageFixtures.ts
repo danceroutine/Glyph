@@ -1,5 +1,7 @@
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
+import type { GlyphPlanBuildOrder } from '#src/desktop/protocol/events/GlyphPlanBuildOrder.js';
+import { GlyphPlanPromptIntent, toGlyphPlanPrompt } from '#src/desktop/workbench/GlyphPlanPrompt.js';
 
 /** Fixed dates keep static stories reproducible. Interactive turns pass their creation time explicitly. */
 export const fixtureCreatedAt = '2026-10-19T14:30:00Z';
@@ -95,3 +97,58 @@ export const messageActionsConversation: readonly GlyphTranscriptEntry[] = [
     createdAt: '2026-10-18T14:32:00Z',
   }),
 ];
+
+export const planBuildFixture: GlyphPlanBuildOrder = {
+  planId: 'plan',
+  revision: 1,
+  title: 'Queue composer messages',
+  sourceChatId: 'chat',
+  todos: [
+    { id: 'state', text: 'Add a queued-messages list to GlyphComposerState', completed: true },
+    { id: 'runtime', text: 'Send the next queued message when a run completes', completed: false },
+    { id: 'ui', text: 'Show queued messages above the composer with a remove action', completed: false },
+    { id: 'test', text: 'Cover queue ordering and removal in GlyphComposerState tests', completed: false },
+  ],
+};
+
+export function planBuildConversationFixture(): readonly GlyphTranscriptEntry[] {
+  return [
+    userMessageFixture({
+      id: 'build:user',
+      checkpointTurnId: 'build',
+      text: toGlyphPlanPrompt(GlyphPlanPromptIntent.BUILD, {
+        id: planBuildFixture.planId,
+        revision: planBuildFixture.revision,
+        title: planBuildFixture.title,
+        summary: 'Preserve prompts until the active run finishes.',
+        markdown: '# Queue composer messages',
+        todos: planBuildFixture.todos,
+        agents: [],
+      }),
+      options: { planBuild: planBuildFixture },
+    }),
+    agentMessageFixture({
+      id: 'build',
+      text: `Starting with the composer state.\n\n${'The queue keeps each draft with its captured context, and the runtime drains it in order once the active run settles. '.repeat(8)}`,
+    }),
+    userMessageFixture({
+      id: 'steer:user',
+      steering: true,
+      text: 'Keep the queue order stable when a message is edited.',
+      options: {
+        planProgress: {
+          planId: planBuildFixture.planId,
+          title: planBuildFixture.title,
+          current: 'Send the next queued message when a run completes',
+          completed: 1,
+          total: 4,
+        },
+      },
+    }),
+    agentMessageFixture({
+      id: 'build-continued',
+      checkpointTurnId: 'build',
+      text: `Understood. Edits keep their position in the queue.\n\n${'The runtime sends the next queued message only after the current run finishes, so the order you see is the order the agent receives. '.repeat(10)}`,
+    }),
+  ];
+}

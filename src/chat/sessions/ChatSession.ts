@@ -244,6 +244,8 @@ export class ChatSession {
             : {}),
           ...(request.mode !== undefined ? { mode: request.mode } : {}),
           ...(request.annotations ? { annotations: request.annotations } : {}),
+          ...(request.planBuild ? { planBuild: request.planBuild } : {}),
+          ...(request.planProgress ? { planProgress: request.planProgress } : {}),
         },
         attachmentPaths: request.attachments.map(attachment => attachment.path),
         ...(request.attachments.length > 0 ? { attachments: request.attachments } : {}),

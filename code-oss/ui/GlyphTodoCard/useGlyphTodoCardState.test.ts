@@ -18,16 +18,13 @@ describe(useGlyphTodoCardState, () => {
     expect(result.current.expanded).toBe(false);
     expect(result.current.listId).toBeTruthy();
     expect(result.current.items).toEqual([
-      { id: 'a', text: 'Plan', status: 'completed', label: 'Completed', path: 'm5 8 2 2 4-4', filled: false },
+      { id: 'a', text: 'Plan', status: 'completed' },
       {
         id: 'b',
         text: 'Build',
         status: 'in_progress',
-        label: 'In progress',
-        path: 'M8 3a5 5 0 0 1 0 10Z',
-        filled: true,
       },
-      { id: 'c', text: 'Ship', status: 'pending', label: 'Pending', path: null, filled: false },
+      { id: 'c', text: 'Ship', status: 'pending' },
     ]);
   });
 

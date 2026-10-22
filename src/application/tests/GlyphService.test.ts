@@ -522,6 +522,12 @@ describe(GlyphService, () => {
   });
 
   describe(GlyphService.prototype.updatePlan, () => {
+    it('refuses to seed plan todos without session storage', () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+      expect(() => service.updateTodos(chatSummary('chat'), { items: [], replace: true })).toThrow(
+        'Todo storage is unavailable.',
+      );
+    });
     it('refuses to update a plan without plan storage', () => {
       const service = new GlyphService(new FakeBackend(), logger());
       const chat = chatSummary('chat');
