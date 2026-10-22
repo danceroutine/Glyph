@@ -198,7 +198,13 @@ describe('Inline attachment editing', () => {
       const composer = page.getByRole('textbox', { name: 'Message Glyph' });
       const attach = page.getByRole('button', { name: 'Attach file', exact: true });
       await composer.fill('before  after');
-      for (let index = 0; index < 6; index++) await composer.press('ArrowLeft');
+      // fill mutates the contenteditable DOM; wait for the editor to observe it
+      // before sending native selection changes against that document.
+      await expect.poll(() => page.evaluate(() => window.composerTest.snapshot().document.from)).toBe(13);
+      for (let index = 0; index < 6; index++) {
+        await composer.press('ArrowLeft');
+        await expect.poll(() => page.evaluate(() => window.composerTest.snapshot().document.from)).toBe(12 - index);
+      }
       await expect
         .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 10_000 })
         .toBe(7);
@@ -225,7 +231,11 @@ describe('Inline attachment editing', () => {
       await page.addScriptTag({ content: script });
       const composer = page.getByRole('textbox', { name: 'Message Glyph' });
       await composer.fill('before  after');
-      for (let index = 0; index < 6; index++) await composer.press('ArrowLeft');
+      await expect.poll(() => page.evaluate(() => window.composerTest.snapshot().document.from)).toBe(13);
+      for (let index = 0; index < 6; index++) {
+        await composer.press('ArrowLeft');
+        await expect.poll(() => page.evaluate(() => window.composerTest.snapshot().document.from)).toBe(12 - index);
+      }
       await expect
         .poll(() => page.evaluate(() => window.composerTest.snapshot().document.from), { timeout: 10_000 })
         .toBe(7);
