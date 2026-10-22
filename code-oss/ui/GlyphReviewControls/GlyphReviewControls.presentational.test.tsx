@@ -36,6 +36,18 @@ const controlsState = (overrides: Partial<GlyphReviewControlsState> = {}): Glyph
 });
 
 describe(GlyphReviewControls, () => {
+  it('measures file controls when the host blocks HTML string assignment', () => {
+    const html = vi.spyOn(Element.prototype, 'innerHTML', 'set').mockImplementation(() => {
+      throw new TypeError('TrustedHTML required');
+    });
+    try {
+      render(<GlyphReviewControls {...controlsState({ fileLabel: 'app.ts' })} />);
+      expect(screen.getByRole('region', { name: 'File review controls' })).toBeTruthy();
+    } finally {
+      html.mockRestore();
+    }
+  });
+
   it('reviews an edit with change navigation, revert and keep', () => {
     const state = controlsState();
     render(<GlyphReviewControls {...state} />);

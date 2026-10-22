@@ -50,7 +50,7 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
       // Measure the full labels on one row, independent of the current compact state.
       const copy = document.createElement(node.localName);
       copy.className = node.className;
-      copy.innerHTML = node.innerHTML;
+      copy.append(...Array.from(node.childNodes, child => child.cloneNode(true)));
       Object.assign(copy.style, { position: 'fixed', visibility: 'hidden', width: 'max-content', flexWrap: 'nowrap' });
       copy.querySelector<HTMLElement>('[data-keep-all-suffix]')?.removeAttribute('hidden');
       node.parentElement!.append(copy);
