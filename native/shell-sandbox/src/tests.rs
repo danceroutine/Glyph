@@ -791,10 +791,12 @@ fn records_git_metadata_from_absolute_and_unresolvable_pointers() {
     create_dir(&unrecognized).expect("unrecognized fixture");
     write(unrecognized.join(".git"), "not a pointer\n").expect("plain marker");
     let policy = WorkspaceAccessPolicy::default();
+    let mut expected_absolute = vec![absolute_target, absolute.join(".git")];
+    expected_absolute.sort();
 
     assert_eq!(
         repository_metadata_paths(&absolute, &policy).unwrap(),
-        vec![absolute_target, absolute.join(".git")]
+        expected_absolute
     );
     assert_eq!(
         repository_metadata_paths(&unresolvable, &policy).unwrap(),
