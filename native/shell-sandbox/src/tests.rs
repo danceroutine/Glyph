@@ -374,9 +374,17 @@ fn bubblewrap_arguments_fail_closed_and_overlay_writable_roots_safely() {
             && values[1] == root.join(".git").as_os_str()
             && values[2] == root.join(".git").as_os_str()
     }));
-    assert!(writable
-        .windows(2)
-        .any(|values| { values[0] == "--tmpfs" && values[1] == state.as_os_str() }));
+    for arguments in [&read_only, &writable] {
+        assert!(arguments.windows(4).any(|values| {
+            values[0] == "--tmpfs"
+                && values[1] == state.as_os_str()
+                && values[2] == "--remount-ro"
+                && values[3] == state.as_os_str()
+        }));
+        assert!(!arguments
+            .windows(2)
+            .any(|values| values[0] == "--remount-ro" && values[1] == "/tmp"));
+    }
 
     let config_root = home.join(".config");
     let docker_root = home.join(".docker");

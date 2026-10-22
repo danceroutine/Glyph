@@ -39,6 +39,8 @@ jobs:
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/coverage/select-electron-tests.mjs --base "$PR_BASE_SHA" --output .artifacts/electron-selection.json
+      - name: Native tests and 100% coverage
+        run: pnpm test:native
       - run: pnpm exec playwright install --with-deps chromium
       - name: Prepare Code OSS dependencies and generated types
         run: pnpm test:prepare
@@ -46,7 +48,7 @@ jobs:
         run: pnpm check
       - name: Fast tests and 100% coverage across all projects
         run: |
-          xvfb-run -a pnpm exec run-p --continue-on-error --print-label test:native test:vitest
+          xvfb-run -a pnpm test:vitest
           pnpm test:coverage
       - name: Relevant Electron integration suites
         if: github.event_name == 'pull_request' && steps.electron.outputs.mode != 'skip'

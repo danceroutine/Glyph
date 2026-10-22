@@ -9,7 +9,8 @@ run cannot fill a hole in the local result.
 
 `pnpm test:all` adds the complete Electron suite. CI runs the same gates on every
 push to `main` and on manual workflow dispatch, reusing the preparation already
-completed before lint and type-checking. PRs run the same local gate followed by
+completed before lint and type-checking. The native gate runs before expensive
+Code OSS preparation so platform failures stop early. PRs run the same local gate followed by
 the relevant Electron suites. Branch pushes do not create a duplicate CI run,
 and a newer PR commit cancels its superseded run. Integration retries and pending
 `fixme` contracts remain visible in the Playwright report.

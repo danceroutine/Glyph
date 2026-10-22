@@ -812,6 +812,9 @@ pub mod linux {
         if request.state_directory.exists() {
             arguments.push("--tmpfs".into());
             arguments.push(request.state_directory.as_os_str().to_owned());
+            // Conceal host state without allowing writes to its masked pathname.
+            arguments.push("--remount-ro".into());
+            arguments.push(request.state_directory.as_os_str().to_owned());
         }
         for path in super::home_sensitive_paths(home_directory) {
             let exposed = request
