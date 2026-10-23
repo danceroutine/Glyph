@@ -1,5 +1,6 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { editToolOutput, parseJson } from './ProviderPayloads.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
@@ -54,18 +55,62 @@ async function annotate(glyph, source, comment) {
   await glyph.page.getByRole('textbox', { name: 'Annotation comment' }).press('Enter');
   await expect(glyph.page.getByRole('form', { name: 'Annotation editor' })).not.toBeVisible();
 }
+/** @param {ScriptedProvider['requests'][number] | undefined} request */
+function sentAnnotations(request) {
+  if (!request) throw new Error('No provider request');
+  const text = request.body.input
+    .flatMap(item => (Array.isArray(item.content) ? item.content.map(part => part.text ?? '') : [item.content ?? '']))
+    .findLast(value => value.includes('User annotations'));
+  if (!text) throw new Error('No annotations in provider request');
+  return z
+    .array(z.looseObject({ id: z.string(), order: z.number(), quote: z.string() }))
+    .parse(parseJson(text.slice(text.indexOf('\n[', text.indexOf('User annotations')) + 1)));
+}
 it.describe('Plans and passage annotations', () => {
   it.describe.configure({ mode: 'default' });
   it.use({ sharedLaunch: true, scriptedProvider: true });
-  it.fixme(
-    'renders agent annotation citations as links that scroll to the annotated source range and briefly highlight it before fading, without repeating the original text',
-    async () => {
-      // Cite a submitted annotation in a later assistant response, with its source
-      // passage above the viewport. Clicking the citation must reveal that exact
-      // range and fade its temporary highlight; it must not open a quote preview
-      // or duplicate the original passage in the citation or a popover.
-    },
-  );
+  it('previews the cited passage and comment from an agent annotation citation and reveals the passage on click', async ({
+    glyph,
+    provider,
+  }) => {
+    provider.enqueue({ chunks: ['Exact passage for feedback.'] });
+    await glyph.send('Show a passage.');
+    const transcript = glyph.page.locator('.glyph-transcript');
+    const source = transcript.locator('[data-glyph-source]').filter({ hasText: 'Exact passage for feedback.' });
+    await expect(source).toBeVisible();
+    await annotate(glyph, source, 'Please clarify');
+    provider.enqueue({ chunks: ['Noted.'] });
+    await glyph.send('Use my feedback.');
+    await expect(transcript).toContainText('Noted.');
+    const [annotation] = sentAnnotations(provider.requests.at(-1));
+    const filler = Array.from({ length: 60 }, (_, index) => `Detail ${index + 1}.`).join('\n\n');
+    provider.enqueue({
+      chunks: [`${filler}\n\nSee [Annotation ${annotation.order}](glyph-annotation:${annotation.id}).`],
+    });
+    await glyph.send('Cite my annotation.');
+    const citation = transcript.getByRole('link', { name: `Annotation ${annotation.order}`, exact: true });
+    await expect(citation).toBeVisible();
+    await expect(citation).toHaveText(`Annotation ${annotation.order}`);
+    await expect(source).not.toBeInViewport();
+    const preview = glyph.page.getByRole('tooltip');
+    await citation.hover();
+    await expect(preview).toBeVisible();
+    await expect(preview).toContainText('Selected text:');
+    await expect(preview).toContainText(annotation.quote);
+    await expect(preview).toContainText('User comment:');
+    await expect(preview).toContainText('Please clarify');
+    await glyph.page.mouse.move(0, 0);
+    await expect(preview).toBeHidden();
+    await citation.focus();
+    await expect(preview).toContainText('Please clarify');
+    await citation.press('Escape');
+    await expect(preview).toBeHidden();
+    await citation.click();
+    await expect(source).toBeInViewport();
+    const highlight = glyph.page.locator('.glyph-annotation-reveal');
+    await expect(highlight.first()).toBeVisible();
+    await expect(highlight).toHaveCount(0);
+  });
   it(
     'blocks execution while planning and renders a saved native plan with editable todos and linked chats',
     reloadsWindow,

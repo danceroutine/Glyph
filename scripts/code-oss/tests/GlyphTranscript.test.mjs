@@ -49,6 +49,16 @@ beforeAll(async () => {
       { id: 'context', checkpointTurnId: 'turn', role: 'user', text: '**Compare @a.ts and \`@b.ts\` here**', attachments: [{ path: 'a.ts', text: 'exact', revision: '1' }, { path: 'b.ts', text: 'exact b', revision: '2' }] }];
     const actions = { branchChat: async (chat, turn) => window.actions.push(['branch', chat, turn]), restoreCheckpoint: async (chat, turn) => window.actions.push(['restore', chat, turn]), openLink: async path => window.actions.push(['link', path]), context: { openAttachment: async attachment => window.actions.push(['attachment', attachment.path]) } };
     render(h('div', {}, [h(WiredGlyphTranscript, { entries, actions, chatId: 'chat' }), h(WiredGlyphUsageSummary, { usage })]), document.getElementById('root'));
+    window.showCitations = () => {
+      const quote = 'Exact passage';
+      const annotation = { id: 'note', order: 1, kind: 'chat', sourceId: 'source', revision: String(quote.length), label: 'Glyph', quote, from: 0, to: quote.length, comment: 'Please clarify' };
+      const citations = [
+        { id: 'source', role: 'assistant', text: quote },
+        { id: 'feedback', role: 'user', text: 'Use my feedback.', options: { annotations: [annotation] } },
+        { id: 'citing', role: 'assistant', text: 'See [Annotation 1](glyph-annotation:note) and [Annotation 9](glyph-annotation:missing).' },
+      ];
+      render(h(WiredGlyphTranscript, { entries: citations, actions }), document.getElementById('root'));
+    };
   `,
     },
     bundle: true,
@@ -352,6 +362,34 @@ describe('Mermaid diagrams', () => {
     }
   }, 15000);
 });
+
+it('previews and reveals the passage behind an annotation the agent cites, and leaves unknown citations as text', async () => {
+  const page = await newCoveredPage(browser);
+  try {
+    await mount(page);
+    await page.evaluate(() => window.showCitations());
+    const citation = page.getByRole('link', { name: 'Annotation 1', exact: true });
+    const preview = page.getByRole('tooltip');
+    await citation.hover();
+    await expect(preview).toContainText('Exact passage');
+    await expect(preview).toContainText('Please clarify');
+    await expect(citation).toHaveAttribute('aria-describedby', await preview.getAttribute('id'));
+    await page.mouse.move(0, 0);
+    await expect(preview).toHaveCount(0);
+    await citation.focus();
+    await expect(preview).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(preview).toHaveCount(0);
+    await citation.click();
+    await expect(page.locator('.glyph-annotation-reveal')).toHaveCount(1);
+    await expect(page.locator('.glyph-annotation-reveal')).toHaveCount(0, { timeout: 5000 });
+    await expect(page.getByRole('link', { name: 'Annotation 9' })).toHaveCount(0);
+    await expect(page.locator('[data-glyph-source="citing"]')).toContainText('Annotation 9');
+    expect(await page.evaluate(() => window.actions)).toEqual([]);
+  } finally {
+    await page.close();
+  }
+}, 15000);
 
 it('shows a date on hover for both assistant messages in the actual Message Actions story', async () => {
   const page = await newCoveredPage(browser);

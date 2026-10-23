@@ -1,6 +1,8 @@
 import { toGlyphTranscriptParts } from '#src/desktop/workbench/toGlyphTranscriptParts.js';
 import { toGlyphPlanBuildLead } from '#src/desktop/workbench/GlyphPlanPrompt.js';
 import type { GlyphContextActions } from '#src/desktop/workbench/GlyphContextActions.js';
+import type { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
+import type { GlyphAnnotation } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { GlyphAttachmentPreview } from '#src/desktop/protocol/events/GlyphAttachmentPreview.js';
 import type { GlyphToolActivity } from '#src/desktop/protocol/events/GlyphToolActivity.js';
 import type { GlyphShellCommand } from '#src/desktop/protocol/events/GlyphShellCommand.js';
@@ -8,6 +10,7 @@ import { useState } from 'preact/hooks';
 import { GlyphTranscriptRole, type GlyphTranscriptEntry } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 
 export interface GlyphMessageStateOptions {
+  readonly composer?: Pick<GlyphComposerState, 'revealAnnotation'> | undefined;
   readonly branch?: ((turnId: string) => Promise<void>) | undefined;
   readonly restore?: ((turnId: string) => Promise<void>) | undefined;
   readonly context?: GlyphContextActions | undefined;
@@ -20,6 +23,7 @@ export type GlyphMessageState = ReturnType<typeof useGlyphMessageState>;
 
 export function useGlyphMessageState({
   entries,
+  composer,
   context,
   openLink,
   branch,
@@ -36,6 +40,9 @@ export function useGlyphMessageState({
       setAttachmentError({ id, message: error instanceof Error ? error.message : String(error) });
     }
   };
+  const annotations = new Map(
+    entries.flatMap(entry => entry.options?.annotations ?? []).map(annotation => [annotation.id, annotation]),
+  );
   const historyAction = (entry: GlyphTranscriptEntry, action: ((turnId: string) => Promise<void>) | undefined) => {
     if (!action || entry.checkpointTurnId === undefined || entry.checkpointTurnId === '' || historyPending) return;
     setHistoryPending(true);
@@ -67,6 +74,12 @@ export function useGlyphMessageState({
           : undefined,
       attachmentError: attachmentError?.id === entry.id ? attachmentError.message : undefined,
       copyText,
+      annotation: (id: string) => annotations.get(id),
+      revealAnnotation: (annotation: GlyphAnnotation) => {
+        void composer?.revealAnnotation(annotation).catch(error => {
+          setAttachmentError({ id: entry.id, message: error instanceof Error ? error.message : String(error) });
+        });
+      },
       copy: () => {
         void copyText(entry.text).catch(error => {
           setAttachmentError({ id: entry.id, message: String(error) });

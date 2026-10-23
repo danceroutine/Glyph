@@ -45,6 +45,7 @@ export function WiredGlyphTranscript({
   const state = useGlyphTranscriptState({
     entries,
     context: actions?.context,
+    composer: actions?.composer,
     openLink: actions?.openLink,
     copyText: actions?.copyText,
     branch:

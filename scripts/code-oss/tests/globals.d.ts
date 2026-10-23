@@ -57,6 +57,7 @@ interface Window {
   showComposer: HarnessAction;
   showMarkdown: HarnessAction;
   showMessageActions: HarnessAction;
+  showCitations: HarnessAction;
   showWorkbench: HarnessAction;
   showTranscript: HarnessAction;
   showWorkbenchStory: HarnessAction;

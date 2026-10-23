@@ -9,6 +9,7 @@ import { aGlyphProposalFileSummary } from '#src/desktop/tests/fixtures/aGlyphPro
 import { aGlyphProposalSummary } from '#src/desktop/tests/fixtures/aGlyphProposalSummary.ts';
 import type { GlyphMessageActions } from '#code-oss/ui/GlyphAgentMessage/GlyphAgentMessage.wired.tsx';
 import { WiredGlyphTranscript } from '#code-oss/ui/GlyphTranscript/GlyphTranscript.wired.tsx';
+import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 
 afterEach(cleanup);
 
@@ -44,6 +45,36 @@ const assistantReply = (summary?: string): GlyphTranscriptEntry => ({
 });
 
 describe(WiredGlyphTranscript, () => {
+  it('reveals a cited native proposal through the conversation composer', async () => {
+    const composer = new GlyphComposerState();
+    const reveal = vi.fn(async () => ({ x: 10, y: 20 }));
+    composer.registerAnnotationSource('proposal:file', reveal);
+    const annotation = {
+      id: 'note',
+      order: 1,
+      kind: 'proposal' as const,
+      sourceId: 'proposal:file',
+      revision: '1',
+      label: 'file',
+      quote: 'text',
+      from: 0,
+      to: 4,
+      comment: 'Explain',
+    };
+    render(
+      <WiredGlyphTranscript
+        actions={messageActions({ composer })}
+        entries={[
+          { id: 'feedback', role: GlyphTranscriptRole.USER, text: 'Feedback', options: { annotations: [annotation] } },
+          { id: 'reply', role: GlyphTranscriptRole.ASSISTANT, text: '[Annotation 1](glyph-annotation:note)' },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('link', { name: 'Annotation 1' }));
+    await waitFor(() => {
+      expect(reveal).toHaveBeenCalledWith(annotation);
+    });
+  });
   it('renders user and assistant messages in order with plans after them', () => {
     render(
       <WiredGlyphTranscript

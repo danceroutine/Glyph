@@ -6,6 +6,9 @@ import { WiredGlyphDiagram } from '#code-oss/ui/GlyphDiagram/GlyphDiagram.wired.
 import { GlyphContextBadge } from '#code-oss/ui/GlyphContextBadge/GlyphContextBadge.presentational.tsx';
 import type { GlyphMessageState } from '#code-oss/ui/GlyphAgentMessage/useGlyphMessageState.ts';
 import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
+import { WiredGlyphAnnotationCitation } from '#code-oss/ui/GlyphAnnotations/GlyphAnnotationCitation.wired.tsx';
+
+const annotationScheme = 'glyph-annotation:';
 
 export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMessageState['entries'][number] }) {
   const { items, prefix } = useMemo(() => {
@@ -94,6 +97,17 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
         />
       )}
       inline={token => badge(token.index)}
+      link={(token, children) => {
+        if (!token.href.startsWith(annotationScheme)) return undefined;
+        const annotation = entry.annotation(token.href.slice(annotationScheme.length));
+        return annotation ? (
+          <WiredGlyphAnnotationCitation annotation={annotation} revealNative={entry.revealAnnotation}>
+            {children}
+          </WiredGlyphAnnotationCitation>
+        ) : (
+          <span>{children}</span>
+        );
+      }}
     />
   );
 }
