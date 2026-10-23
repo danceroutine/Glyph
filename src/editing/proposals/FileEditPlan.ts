@@ -122,9 +122,10 @@ export interface PlannedTextAcceptance {
  * observed (`current`). It owns the coordinated transitions that keep those snapshots, revisions, and hunk
  * ranges aligned while a human reviews the proposal and continues editing the file.
  *
- * `EditProposalService` compiles plans, `ProposalReviewManager` coordinates workspace I/O and checkpoints,
- * and persistence converts plans through `FileEditPlanRecord`. Every field therefore remains serializable
- * and meaningful after crash recovery even though the live object has domain behavior.
+ * `EditProposalService` compiles plans, `ProposalReviewExecutor` coordinates workspace I/O through
+ * `ProposalReviewCheckpoint`, and `ProposalReviewManager` owns queue persistence. Persistence converts plans
+ * through `FileEditPlanRecord`, so every field remains serializable and meaningful after crash recovery even
+ * though the live object has domain behavior.
  */
 export class FileEditPlan implements FileEditPlanRecord {
   readonly id: string;
