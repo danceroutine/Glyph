@@ -19,7 +19,7 @@ import { z } from 'zod';
  *   output?: string,
  *   content?: string | ResponseContentPart[],
  * }} ResponseInputItem
- * @typedef {{ model: string, stream: boolean, input: ResponseInputItem[], tools?: unknown[] }} ResponseRequestBody
+ * @typedef {{ model: string, stream: boolean, input: ResponseInputItem[], instructions?: string, tools?: unknown[] }} ResponseRequestBody
  * @typedef {{ input?: number, cached?: number, output?: number, reasoning?: number, total?: number }} ScriptedUsage
  * @typedef {{
  *   chunks?: string[],

@@ -8,7 +8,7 @@ import type { ContextAttachment } from '#src/context/attachments/ContextAttachme
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
 import { TodoStatus } from '#src/todos/TodoStatus.js';
 
-import { AgentMode, AgentModeID } from '#src/chat/AgentMode.js';
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
@@ -913,7 +913,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           runId,
           text: GOAL_CONTINUATION_TEXT,
           attachments: [],
-          options: { mode: session.summary.mode ?? AgentMode.default.id },
+          options: { mode: session.summary.mode },
         },
         session,
         controller.signal,

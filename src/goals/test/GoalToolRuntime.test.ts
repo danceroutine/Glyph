@@ -5,6 +5,32 @@ import { GoalStatus } from '#src/goals/GoalStatus.js';
 import { Goal } from '#src/goals/Goal.js';
 
 describe(GoalToolRuntime, () => {
+  it('executes both registered tools through their host callbacks', async () => {
+    const chat = { id: 'chat', accountProvider: 'fixture', accountId: 'account' };
+    const goal = Goal.create('goal', 'Ship', new Date()).toChatGoal();
+    const propose = vi.fn(async () => goal);
+    const update = vi.fn(async () => goal);
+    const runtime = new GoalToolRuntime(propose, update);
+    const signal = new AbortController().signal;
+    await runtime.tools[0]!.execute('{"objective":"Ship"}', signal, { chat });
+    await runtime.tools[1]!.execute('{"status":"complete"}', signal, { chat });
+    expect(propose).toHaveBeenCalledWith(chat, 'Ship', signal);
+    expect(update).toHaveBeenCalledWith(chat, GoalStatus.COMPLETE, signal);
+  });
+
+  it('preserves the execution error when cancellation has no reason', async () => {
+    const controller = new AbortController();
+    const failure = new Error('Stopped during approval');
+    const runtime = new GoalToolRuntime(async () => {
+      controller.abort(null);
+      throw failure;
+    }, vi.fn());
+    await expect(
+      runtime.execute('create_goal', '{"objective":"Ship"}', controller.signal, {
+        chat: { id: 'chat', accountProvider: 'fixture', accountId: 'account' },
+      }),
+    ).rejects.toBe(failure);
+  });
   it('offers both goal tools in Agent and Plan modes and asks for approval in a round of its own', () => {
     const runtime = new GoalToolRuntime(vi.fn(), vi.fn());
 

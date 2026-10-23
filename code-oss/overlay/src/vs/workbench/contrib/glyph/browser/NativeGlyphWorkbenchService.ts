@@ -1123,12 +1123,24 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     };
   }
 
+  private sendToChat(
+    text: string,
+    attachments: readonly GlyphContextAttachment[],
+    options: GlyphTurnOptions & { readonly planBuild: NonNullable<GlyphTurnOptions['planBuild']> },
+    targetChatId: string,
+  ): Promise<string>;
+  private sendToChat(
+    text: string,
+    attachments: readonly GlyphContextAttachment[],
+    options?: GlyphTurnOptions,
+    targetChatId?: string,
+  ): Promise<string | undefined>;
   private async sendToChat(
     text: string,
     attachments: readonly GlyphContextAttachment[] = [],
     options: GlyphTurnOptions = {},
     targetChatId = this.selectedChatId,
-  ): Promise<string> {
+  ): Promise<string | undefined> {
     if (this.workspaceRevision)
       attachments = attachments.map(value =>
         URI.parse(value.uri).scheme === 'file' ? this.context.rebindAttachment(value) : value,
@@ -1150,7 +1162,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     // run guard so the composer retains a prompt submitted after invalidation.
     this.assertSessionBinding();
     const prompt = text.trim();
-    const objective = parseGoalCommand(prompt);
+    const objective = options.planBuild ? undefined : parseGoalCommand(prompt);
     if (objective === '') throw new Error(GOAL_COMMAND_USAGE);
     if (
       !prompt ||

@@ -87,7 +87,10 @@ it.describe('Durable goals', () => {
     await expect(row(glyph)).toHaveCount(0);
   });
 
-  it('pauses the goal when the human stops a continuation', async ({ glyph, provider }) => {
+  it('pauses the goal when the human stops a continuation and restarts only after Resume', async ({
+    glyph,
+    provider,
+  }) => {
     provider.enqueue({ chunks: ['Working'], hold: true });
 
     await glyph.send('/goal Make CI green');
@@ -98,6 +101,11 @@ it.describe('Durable goals', () => {
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await glyph.page.waitForTimeout(1000);
     expect(provider.requests).toHaveLength(1);
+
+    provider.enqueue({ output: [completeGoal('resumed-finish')] }, { chunks: ['Finished after resuming.'] });
+    await row(glyph).getByRole('button', { name: 'Resume goal' }).click();
+    await expect.poll(() => provider.requests.length).toBe(3);
+    await expect(row(glyph)).toContainText('Complete');
   });
 
   it('arms an agent-proposed goal only after the human approves it', async ({ glyph, provider }) => {
