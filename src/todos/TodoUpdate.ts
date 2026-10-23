@@ -5,8 +5,8 @@ export const todoItemsSchema = z
   .array(
     z
       .object({
-        id: z.string().trim().min(1).max(80),
-        text: z.string().trim().min(1).max(500),
+        id: z.string().trim().min(1).max(256),
+        text: z.string().trim().min(1).max(1000),
         status: z.enum(TodoStatus),
       })
       .strict(),

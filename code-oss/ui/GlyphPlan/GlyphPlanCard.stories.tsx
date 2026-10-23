@@ -19,5 +19,5 @@ type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {};
 export const ReadOnly: Story = { args: { disabled: true } };
-export const Building: Story = { args: { building: true } };
+export const Building: Story = { args: { building: true, stop: fn().mockName('PlanCard.stop') } };
 export const Narrow: Story = { globals: { paneWidth: '280' } };

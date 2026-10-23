@@ -2,7 +2,7 @@ import type { GlyphSteeringMessage } from '#src/desktop/protocol/events/GlyphSte
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
-import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
 import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
@@ -22,7 +22,7 @@ export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'> & 
 
 export interface ChatHistoryCheckpoint {
   readonly providerState: ChatProviderState;
-  readonly plans: readonly GlyphPlan[];
+  readonly plans: readonly GlyphPlanRecord[];
   readonly todos: readonly TodoItem[];
   readonly mode: AgentModeID;
 }
@@ -59,7 +59,7 @@ export interface ChatSessionRecord {
   readonly updatedAt: string;
   readonly providerState: ChatProviderState;
   readonly transcript: readonly ChatTranscriptTurn[];
-  readonly plans?: readonly GlyphPlan[];
+  readonly plans?: readonly GlyphPlanRecord[];
   readonly todos?: readonly TodoItem[];
   readonly goal?: ChatGoal;
 }

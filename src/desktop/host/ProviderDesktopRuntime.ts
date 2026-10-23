@@ -6,8 +6,6 @@ import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
-import { TodoStatus } from '#src/todos/TodoStatus.js';
-
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
@@ -443,6 +441,20 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
         return;
       }
+      case GlyphWorkbenchCommandType.SET_PLAN_TODO: {
+        this.session(command.chatId);
+        for (const chat of await glyph.setPlanTodo(command.chatId, command.planId, command.todoId, command.completed))
+          this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
+        return;
+      }
+      case GlyphWorkbenchCommandType.STOP_PLAN_BUILD: {
+        this.session(command.chatId);
+        this.publish({
+          type: GlyphHostEventType.CHAT_UPDATED,
+          chat: await glyph.stopPlanBuild(command.chatId, command.planId),
+        });
+        return;
+      }
       case GlyphWorkbenchCommandType.SEND: {
         chatTurnOptionsSchema.parse(command.options ?? {});
         if (this.active.has(command.chatId) || this.historyChanges.has(command.chatId))
@@ -467,9 +479,15 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           ),
         );
         this.active.set(command.chatId, { controller, completion, runId: command.runId, steering });
-        void completion.finally(() => {
-          this.finishRun(command.chatId, steering);
-        });
+        void completion
+          .finally(() => {
+            this.finishRun(command.chatId, steering);
+          })
+          .then(async () => {
+            if (!command.options?.planBuild) return;
+            for (const chat of await glyph.finishPlanBuildRun(command.chatId, command.runId))
+              this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
+          });
         return;
       }
       case GlyphWorkbenchCommandType.CREATE_GOAL: {
@@ -793,19 +811,13 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       signal.throwIfAborted();
       const build = command.options?.planBuild;
       if (build) {
-        const chat = await this.options.glyph.updateTodos(
-          session.summary,
-          {
-            items: build.todos.map(todo => ({
-              id: todo.id,
-              text: todo.text,
-              status: todo.completed ? TodoStatus.COMPLETED : TodoStatus.PENDING,
-            })),
-            replace: true,
-          },
-          signal,
-        );
-        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
+        for (const chat of await this.options.glyph.startPlanBuild(
+          build.sourceChatId,
+          build.planId,
+          command.chatId,
+          command.runId,
+        ))
+          this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
         signal.throwIfAborted();
       }
       // Bind tool prompts to this exact run so another chat cannot answer them.

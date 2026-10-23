@@ -1,13 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { aGlyphPlan } from '#src/desktop/tests/fixtures/aGlyphPlan.ts';
 import { WiredGlyphPlanCards } from '#code-oss/ui/GlyphPlan/GlyphPlanCards.wired.tsx';
 
 afterEach(cleanup);
 
-const plan = (overrides: Partial<GlyphPlan> = {}) => aGlyphPlan({ title: 'Ship it', summary: 'Summary', ...overrides });
+const plan = (overrides: Partial<GlyphPlanRecord> = {}) =>
+  aGlyphPlan({ title: 'Ship it', summary: 'Summary', ...overrides });
 
 describe(WiredGlyphPlanCards, () => {
   it('views and builds each plan of the chat through the host', async () => {
@@ -68,6 +69,26 @@ describe(WiredGlyphPlanCards, () => {
       />,
     );
     expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Building/u }).disabled).toBe(true);
+  });
+
+  it('stops a persisted plan build through the host', async () => {
+    const stopPlanBuild = vi.fn(async () => {});
+    render(
+      <WiredGlyphPlanCards
+        chatId="chat"
+        plans={[plan({ id: 'active' })]}
+        actions={{ stopPlanBuild } as unknown as GlyphWorkbenchViewActions}
+        disabled={false}
+        buildingPlanIds={['active']}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Build options' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop building' }));
+
+    await waitFor(() => {
+      expect(stopPlanBuild).toHaveBeenCalledWith('chat', 'active');
+    });
   });
 
   it('shows why the last plan action failed', async () => {

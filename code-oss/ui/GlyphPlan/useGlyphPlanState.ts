@@ -17,8 +17,8 @@ export function useGlyphPlanState({
   useEffect(() => {
     if (adding) input.current?.focus();
   }, [adding]);
-  const perform = async (operation: () => Promise<void>) => {
-    if (busy.current || state.disabled) return;
+  const perform = async (operation: () => Promise<void>, gated = true) => {
+    if (busy.current || (gated && state.disabled)) return;
     busy.current = true;
     setPending(true);
     setError(undefined);
@@ -65,14 +65,10 @@ export function useGlyphPlanState({
         setAdding(false);
       }),
     toggleTodo: (id: string) =>
-      perform(() =>
-        actions.update({
-          ...state.plan,
-          todos: state.plan.todos.map(item => (item.id === id ? { ...item, completed: !item.completed } : item)),
-        }),
-      ),
+      perform(() => actions.setTodo(id, !state.plan.todos.find(item => item.id === id)?.completed)),
     build: () => build(),
     buildNew: () => build(true),
+    stop: () => perform(() => actions.stopBuild(), false),
     newAgent: () => perform(() => actions.newAgent()),
     openChat: (id: string) => perform(() => actions.openChat(id)),
     openLink: (href: string) => {

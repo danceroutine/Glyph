@@ -1,7 +1,7 @@
 import type { AgentReviewInput, AgentReviewModel } from '#src/reviewing/AgentReview.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwapPolicy } from './events/GlyphModeSwap.ts';
-import type { GlyphPlan } from './events/GlyphPlan.ts';
+import type { GlyphPlanRecord } from './events/GlyphPlanRecord.ts';
 import type { GlyphTurnOptions } from './events/GlyphAnnotation.ts';
 import type { GlyphApprovalDecision } from './GlyphApprovalDecision.ts';
 import type { GlyphWorkspaceRoot } from './connection/GlyphWorkspaceRoot.ts';
@@ -24,6 +24,8 @@ export enum GlyphWorkbenchCommandType {
   STEER = 'steer',
   UPDATE_PLAN = 'update_plan',
   LINK_PLAN = 'link_plan',
+  SET_PLAN_TODO = 'set_plan_todo',
+  STOP_PLAN_BUILD = 'stop_plan_build',
   SET_CHAT_MODE = 'set_chat_mode',
   CREATE_GOAL = 'create_goal',
   PAUSE_GOAL = 'pause_goal',
@@ -68,6 +70,8 @@ export type GlyphWorkbenchCommand =
   | CreateChatCommand
   | LinkPlanCommand
   | UpdatePlanCommand
+  | SetPlanTodoCommand
+  | StopPlanBuildCommand
   | OpenChatCommand
   | SelectAccountCommand
   | SelectModelCommand
@@ -152,7 +156,21 @@ type LinkPlanCommand = {
 type UpdatePlanCommand = {
   readonly type: GlyphWorkbenchCommandType.UPDATE_PLAN;
   readonly chatId: string;
-  readonly plan: GlyphPlan;
+  readonly plan: GlyphPlanRecord;
+};
+
+type SetPlanTodoCommand = {
+  readonly type: GlyphWorkbenchCommandType.SET_PLAN_TODO;
+  readonly chatId: string;
+  readonly planId: string;
+  readonly todoId: string;
+  readonly completed: boolean;
+};
+
+type StopPlanBuildCommand = {
+  readonly type: GlyphWorkbenchCommandType.STOP_PLAN_BUILD;
+  readonly chatId: string;
+  readonly planId: string;
 };
 
 type OpenChatCommand = { readonly type: GlyphWorkbenchCommandType.OPEN_CHAT; readonly chatId: string };

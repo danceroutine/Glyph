@@ -840,3 +840,329 @@ function fixedClock(): () => Date {
   let milliseconds = 0;
   return () => new Date(milliseconds++);
 }
+
+describe('plan builds', () => {
+  it('pauses the current build and resumes its namespaced todos after another plan uses the builder', async () => {
+    const manager = new ChatSessionManager(
+      new MemoryChatSessionStore(),
+      await ProjectContextResolver.folder(await projectFixture()),
+    );
+    await manager.initialize();
+    const author = await manager.create(input(), conversation());
+    const builder = await manager.create(input(), conversation());
+    const owner = { id: author.id, accountProvider: 'fixture', accountId: 'account' };
+    const first = (
+      await manager.updatePlan(owner, {
+        id: null,
+        expectedRevision: null,
+        title: 'First plan',
+        summary: 'Summary',
+        markdown: '# First',
+        todos: [
+          { id: 'done', text: 'Finish this before pausing', completed: false },
+          { id: 'step', text: 'Shared ID in the first plan', completed: false },
+        ],
+      })
+    ).plans!.at(-1)!;
+    const second = (
+      await manager.updatePlan(owner, {
+        id: null,
+        expectedRevision: null,
+        title: 'Second plan',
+        summary: 'Summary',
+        markdown: '# Second',
+        todos: [{ id: 'step', text: 'Shared ID in the second plan', completed: false }],
+      })
+    ).plans!.at(-1)!;
+
+    await manager.startPlanBuild(author.id, first.id, builder.id, 'first-run');
+    await manager.updateTodos(
+      { id: builder.id, accountProvider: 'fixture', accountId: 'account' },
+      {
+        items: [{ id: 'done', text: 'Finish this before pausing', status: TodoStatus.COMPLETED }],
+        replace: false,
+      },
+    );
+    await manager.syncPlanBuild(builder.id);
+    const switched = await manager.startPlanBuild(author.id, second.id, builder.id, 'second-run');
+    const pausedFirst = switched.find(chat => chat.id === author.id)!.plans!.findLast(plan => plan.id === first.id)!;
+    const activeSecond = switched.find(chat => chat.id === author.id)!.plans!.findLast(plan => plan.id === second.id)!;
+    const secondTray = switched.find(chat => chat.id === builder.id)!.todos!;
+
+    expect(pausedFirst).toMatchObject({
+      todos: [
+        { id: 'done', completed: true },
+        { id: 'step', completed: false },
+      ],
+    });
+    expect(pausedFirst.build).toBeUndefined();
+    expect(activeSecond.build).toMatchObject({ chatId: builder.id, runId: 'second-run' });
+    expect(secondTray).toEqual([
+      { id: `plan:${second.id}:step`, text: 'Shared ID in the second plan', status: TodoStatus.PENDING },
+    ]);
+
+    await manager.updateTodos(
+      { id: builder.id, accountProvider: 'fixture', accountId: 'account' },
+      {
+        items: [{ id: 'step', text: 'Shared ID in the second plan', status: TodoStatus.COMPLETED }],
+        replace: false,
+      },
+    );
+    await manager.syncPlanBuild(builder.id);
+    const resumed = await manager.startPlanBuild(author.id, first.id, builder.id, 'resumed-run');
+    const pausedSecond = resumed.find(chat => chat.id === author.id)!.plans!.findLast(plan => plan.id === second.id)!;
+    const resumedFirst = resumed.find(chat => chat.id === author.id)!.plans!.findLast(plan => plan.id === first.id)!;
+    const resumedTray = resumed.find(chat => chat.id === builder.id)!.todos!;
+
+    expect(pausedSecond.build).toBeUndefined();
+    expect(pausedSecond.todos).toEqual([{ id: 'step', text: 'Shared ID in the second plan', completed: true }]);
+    expect(resumedFirst.build).toMatchObject({ chatId: builder.id, runId: 'resumed-run' });
+    expect(resumedFirst.todos).toMatchObject([
+      { id: 'done', completed: true },
+      { id: 'step', completed: false },
+    ]);
+    expect(resumedTray).toEqual([
+      { id: `plan:${first.id}:done`, text: 'Finish this before pausing', status: TodoStatus.COMPLETED },
+      { id: `plan:${first.id}:step`, text: 'Shared ID in the first plan', status: TodoStatus.PENDING },
+    ]);
+  });
+
+  it('marks plan todos off as the builder completes them without saving a new plan revision', async () => {
+    const manager = new ChatSessionManager(
+      new MemoryChatSessionStore(),
+      await ProjectContextResolver.folder(await projectFixture()),
+    );
+    await manager.initialize();
+    const author = await manager.create(input(), conversation());
+    const builder = await manager.create(input(), conversation());
+    const plan = (
+      await manager.updatePlan(
+        { id: author.id, accountProvider: 'fixture', accountId: 'account' },
+        {
+          id: null,
+          expectedRevision: null,
+          title: 'Plan',
+          summary: 'Summary',
+          markdown: '# Plan',
+          todos: [
+            { id: 'first', text: 'First', completed: false },
+            { id: 'second', text: 'Second', completed: false },
+          ],
+        },
+      )
+    ).plans!.at(-1)!;
+
+    const started = await manager.startPlanBuild(author.id, plan.id, builder.id, 'run');
+    await manager.updateTodos(
+      { id: builder.id, accountProvider: 'fixture', accountId: 'account' },
+      { items: [], replace: true },
+    );
+    const unchanged = await manager.syncPlanBuild(builder.id);
+    await manager.updateTodos(
+      { id: builder.id, accountProvider: 'fixture', accountId: 'account' },
+      { items: [{ id: 'first', text: 'First', status: TodoStatus.COMPLETED }], replace: false },
+    );
+    const [synced] = await manager.syncPlanBuild(builder.id);
+
+    expect(started.find(chat => chat.id === builder.id)?.todos).toEqual([
+      { id: `plan:${plan.id}:first`, text: 'First', status: TodoStatus.PENDING },
+      { id: `plan:${plan.id}:second`, text: 'Second', status: TodoStatus.PENDING },
+    ]);
+    expect(unchanged).toEqual([]);
+    expect(synced!.plans).toHaveLength(1);
+    expect(synced!.plans!.at(-1)).toMatchObject({
+      revision: 1,
+      todos: [
+        { id: 'first', completed: true },
+        { id: 'second', completed: false },
+      ],
+      build: { chatId: builder.id, runId: 'run' },
+    });
+  });
+
+  it('keeps building after a turn ends with todos left and finishes once every todo is done', async () => {
+    const manager = new ChatSessionManager(
+      new MemoryChatSessionStore(),
+      await ProjectContextResolver.folder(await projectFixture()),
+    );
+    await manager.initialize();
+    const chat = await manager.create(input(), conversation());
+    const owner = { id: chat.id, accountProvider: 'fixture', accountId: 'account' };
+    const plan = (
+      await manager.updatePlan(owner, {
+        id: null,
+        expectedRevision: null,
+        title: 'Plan',
+        summary: 'Summary',
+        markdown: '# Plan',
+        todos: [{ id: 'only', text: 'Only step', completed: false }],
+      })
+    ).plans!.at(-1)!;
+    await manager.startPlanBuild(chat.id, plan.id, chat.id, 'run');
+
+    expect(await manager.finishPlanBuildRun(chat.id, 'run')).toEqual([]);
+    await manager.updateTodos(owner, {
+      items: [{ id: 'only', text: 'Only step', status: TodoStatus.COMPLETED }],
+      replace: false,
+    });
+    const [finished] = await manager.syncPlanBuild(chat.id);
+
+    expect(finished!.plans!.at(-1)!.build).toBeUndefined();
+    expect(finished!.plans!.at(-1)!.todos).toEqual([{ id: 'only', text: 'Only step', completed: true }]);
+  });
+
+  it('finishes a build without todos when its turn ends', async () => {
+    const manager = new ChatSessionManager(
+      new MemoryChatSessionStore(),
+      await ProjectContextResolver.folder(await projectFixture()),
+    );
+    await manager.initialize();
+    const chat = await manager.create(input(), conversation());
+    const plan = (
+      await manager.updatePlan(
+        { id: chat.id, accountProvider: 'fixture', accountId: 'account' },
+        { id: null, expectedRevision: null, title: 'Plan', summary: 'Summary', markdown: '# Plan', todos: [] },
+      )
+    ).plans!.at(-1)!;
+    await manager.startPlanBuild(chat.id, plan.id, chat.id, 'run');
+
+    expect(await manager.finishPlanBuildRun(chat.id, 'another run')).toEqual([]);
+    const [finished] = await manager.finishPlanBuildRun(chat.id, 'run');
+
+    expect(finished!.plans!.at(-1)!.build).toBeUndefined();
+  });
+
+  it('carries a todo ticked on the plan over to the builder’s list', async () => {
+    const manager = new ChatSessionManager(
+      new MemoryChatSessionStore(),
+      await ProjectContextResolver.folder(await projectFixture()),
+    );
+    await manager.initialize();
+    const author = await manager.create(input(), conversation());
+    const builder = await manager.create(input(), conversation());
+    const plan = (
+      await manager.updatePlan(
+        { id: author.id, accountProvider: 'fixture', accountId: 'account' },
+        {
+          id: null,
+          expectedRevision: null,
+          title: 'Plan',
+          summary: 'Summary',
+          markdown: '# Plan',
+          todos: [
+            { id: 'first', text: 'First', completed: false },
+            { id: 'second', text: 'Second', completed: false },
+          ],
+        },
+      )
+    ).plans!.at(-1)!;
+    await manager.startPlanBuild(author.id, plan.id, builder.id, 'run');
+
+    const [, initiallyPending] = await manager.setPlanTodo(author.id, plan.id, 'first', false);
+    const [source, tray] = await manager.setPlanTodo(author.id, plan.id, 'first', true);
+    const [, reopened] = await manager.setPlanTodo(author.id, plan.id, 'first', false);
+
+    expect(source!.plans!.at(-1)).toMatchObject({ revision: 1, todos: [{ id: 'first', completed: true }, {}] });
+    expect(initiallyPending!.todos![0]!.status).toBe(TodoStatus.PENDING);
+    expect(tray!.todos![0]).toEqual({
+      id: `plan:${plan.id}:first`,
+      text: 'First',
+      status: TodoStatus.COMPLETED,
+    });
+    expect(reopened!.todos![0]!.status).toBe(TodoStatus.PENDING);
+    await expect(manager.setPlanTodo(author.id, plan.id, 'missing', true)).rejects.toThrow(
+      'The plan todo is unavailable.',
+    );
+  });
+
+  it('stops a build on request while keeping the plan’s todo progress, including across a new revision', async () => {
+    const manager = new ChatSessionManager(
+      new MemoryChatSessionStore(),
+      await ProjectContextResolver.folder(await projectFixture()),
+    );
+    await manager.initialize();
+    const chat = await manager.create(input(), conversation());
+    const owner = { id: chat.id, accountProvider: 'fixture', accountId: 'account' };
+    const plan = (
+      await manager.updatePlan(owner, {
+        id: null,
+        expectedRevision: null,
+        title: 'Plan',
+        summary: 'Summary',
+        markdown: '# Plan',
+        todos: [
+          { id: 'first', text: 'First', completed: false },
+          { id: 'second', text: 'Second', completed: false },
+        ],
+      })
+    ).plans!.at(-1)!;
+    await manager.startPlanBuild(chat.id, plan.id, chat.id, 'run');
+    await manager.setPlanTodo(chat.id, plan.id, 'first', true);
+
+    const revised = await manager.updatePlan(owner, {
+      id: plan.id,
+      expectedRevision: 1,
+      title: 'Plan',
+      summary: 'Revised',
+      markdown: '# Plan',
+      todos: [
+        { id: 'first', text: 'First', completed: true },
+        { id: 'second', text: 'Second', completed: false },
+      ],
+    });
+    const stopped = await manager.stopPlanBuild(chat.id, plan.id);
+
+    expect(revised.plans!.at(-1)).toMatchObject({ revision: 2, build: { chatId: chat.id, runId: 'run' } });
+    expect(stopped.plans!.at(-1)!.build).toBeUndefined();
+    expect(stopped.plans!.at(-1)!.todos.map(todo => todo.completed)).toEqual([true, false]);
+  });
+
+  it('refuses to build a plan into a chat from another account', async () => {
+    const manager = new ChatSessionManager(
+      new MemoryChatSessionStore(),
+      await ProjectContextResolver.folder(await projectFixture()),
+    );
+    await manager.initialize();
+    const author = await manager.create(input(), conversation());
+    const other = await manager.create({ ...input(), accountId: 'other' }, conversation());
+    const plan = (
+      await manager.updatePlan(
+        { id: author.id, accountProvider: 'fixture', accountId: 'account' },
+        { id: null, expectedRevision: null, title: 'Plan', summary: 'Summary', markdown: '# Plan', todos: [] },
+      )
+    ).plans!.at(-1)!;
+
+    await expect(manager.startPlanBuild(author.id, plan.id, other.id, 'run')).rejects.toThrow(
+      'Linked chats must use the same account.',
+    );
+    await expect(manager.startPlanBuild(author.id, 'missing', author.id, 'run')).rejects.toThrow(
+      'The plan is unavailable.',
+    );
+  });
+
+  it('handles plan progress requests when no build or plan exists', async () => {
+    const manager = new ChatSessionManager(
+      new MemoryChatSessionStore(),
+      await ProjectContextResolver.folder(await projectFixture()),
+    );
+    await manager.initialize();
+    const chat = await manager.create(input(), conversation());
+    const owner = { id: chat.id, accountProvider: 'fixture', accountId: 'account' };
+    const plan = (
+      await manager.updatePlan(owner, {
+        id: null,
+        expectedRevision: null,
+        title: 'Plan',
+        summary: 'Summary',
+        markdown: '# Plan',
+        todos: [{ id: 'todo', text: 'Todo', completed: false }],
+      })
+    ).plans!.at(-1)!;
+
+    expect(await manager.syncPlanBuild(chat.id)).toEqual([]);
+    const [updated] = await manager.setPlanTodo(chat.id, plan.id, 'todo', true);
+    expect(updated!.plans!.at(-1)!.todos[0]!.completed).toBe(true);
+    await expect(manager.setPlanTodo(chat.id, 'missing', 'todo', true)).rejects.toThrow('The plan is unavailable.');
+    await expect(manager.stopPlanBuild(chat.id, 'missing')).rejects.toThrow('The plan is unavailable.');
+  });
+});

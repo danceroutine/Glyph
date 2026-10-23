@@ -38,6 +38,7 @@ export function GlyphPlan(state: GlyphPlanState & { readonly markdown: Component
             buildNew={() => {
               void state.buildNew();
             }}
+            stop={() => void state.stop()}
           />
         </div>
       </header>

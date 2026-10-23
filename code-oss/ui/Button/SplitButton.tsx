@@ -65,9 +65,11 @@ export function SplitButtonGroup({
 export interface SplitButtonProps extends ButtonProps {
   readonly menuLabel: string;
   readonly menu: ComponentChildren;
+  readonly menuDisabled?: boolean;
 }
 /** A primary action plus a separate, keyboard-accessible options popover. */
-export function SplitButton({ menuLabel, menu, ...props }: SplitButtonProps) {
+export function SplitButton({ menuLabel, menu, menuDisabled, ...props }: SplitButtonProps) {
+  const unavailable = menuDisabled ?? (isOn(props.disabled) || props.loading === true);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
@@ -85,8 +87,8 @@ export function SplitButton({ menuLabel, menu, ...props }: SplitButtonProps) {
     };
   }, [open]);
   useEffect(() => {
-    if (isOn(props.disabled) || props.loading === true) setOpen(false);
-  }, [props.disabled, props.loading]);
+    if (unavailable) setOpen(false);
+  }, [unavailable]);
   return (
     <SplitButtonGroup
       groupRef={root}
@@ -109,7 +111,7 @@ export function SplitButton({ menuLabel, menu, ...props }: SplitButtonProps) {
         mode={props.mode ?? AgentModeID.AGENT}
         size={props.size ?? ButtonSize.MEDIUM}
         appearance={props.appearance ?? ButtonAppearance.FILLED}
-        disabled={isOn(props.disabled) || props.loading === true}
+        disabled={unavailable}
         onClick={() => {
           setOpen(value => !value);
         }}

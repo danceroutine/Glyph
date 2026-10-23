@@ -1,4 +1,4 @@
-import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
 import type { GlyphPlanBuildOrder } from '#src/desktop/protocol/events/GlyphPlanBuildOrder.js';
 
 export enum GlyphPlanPromptIntent {
@@ -8,7 +8,7 @@ export enum GlyphPlanPromptIntent {
 
 export function toGlyphPlanPromptHeading(
   intent: GlyphPlanPromptIntent,
-  plan: Pick<GlyphPlan, 'id' | 'revision' | 'title'>,
+  plan: Pick<GlyphPlanRecord, 'id' | 'revision' | 'title'>,
 ): string {
   return `${intent}: ${plan.title} (plan ${plan.id}, revision ${plan.revision}).`;
 }
@@ -23,7 +23,7 @@ export function toGlyphPlanBuildLead(text: string, build: GlyphPlanBuildOrder): 
   return index < 0 ? '' : text.slice(0, index).trimEnd();
 }
 
-export function toGlyphPlanPrompt(intent: GlyphPlanPromptIntent, plan: GlyphPlan): string {
+export function toGlyphPlanPrompt(intent: GlyphPlanPromptIntent, plan: GlyphPlanRecord): string {
   const building = intent === GlyphPlanPromptIntent.BUILD;
   const todos = plan.todos.map(
     todo => `- [${todo.completed ? 'x' : ' '}] ${todo.text}${building ? ` (todo id: ${todo.id})` : ''}`,

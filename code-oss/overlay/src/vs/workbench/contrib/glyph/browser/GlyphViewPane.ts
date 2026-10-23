@@ -132,6 +132,7 @@ export class GlyphViewPane extends ViewPane {
       viewPlan: (chatId, plan) => service.viewPlan!(chatId, plan),
       selectMode: mode => service.selectMode!(mode),
       buildPlan: (chatId, plan, newChat) => service.buildPlan!(chatId, plan, newChat),
+      stopPlanBuild: (chatId, planId) => service.stopPlanBuild!(chatId, planId),
       cancel: () => {
         this.glyphService.cancel();
       },

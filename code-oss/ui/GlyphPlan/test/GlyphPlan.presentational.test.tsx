@@ -32,6 +32,7 @@ const planState = (overrides: Partial<GlyphPlanState> = {}): GlyphPlanState => (
   toggleTodo: vi.fn(async (_id: string) => {}),
   build: vi.fn(async () => {}),
   buildNew: vi.fn(async () => {}),
+  stop: vi.fn(async () => {}),
   newAgent: vi.fn(async () => {}),
   openChat: vi.fn(async (_id: string) => {}),
   openLink: vi.fn(),
@@ -68,6 +69,16 @@ describe(GlyphPlan, () => {
 
     expect(state.build).toHaveBeenCalledOnce();
     expect(state.buildNew).toHaveBeenCalledOnce();
+  });
+
+  it('stops a plan that is currently building', () => {
+    const state = planState({ building: true });
+    render(<GlyphPlan {...state} markdown={null} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Build options' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop building' }));
+
+    expect(state.stop).toHaveBeenCalledOnce();
   });
 
   it('builds the plan with the command or control enter shortcut', () => {

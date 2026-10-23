@@ -4,11 +4,13 @@ import { AgentModeID } from '#src/chat/AgentMode.js';
 export function GlyphPlanBuild({
   build,
   buildNew,
+  stop,
   disabled,
   building = false,
 }: {
   readonly build: () => void;
   readonly buildNew: () => void;
+  readonly stop?: (() => void) | undefined;
   readonly disabled: boolean;
   readonly building?: boolean;
 }) {
@@ -23,10 +25,17 @@ export function GlyphPlanBuild({
       onClick={build}
       {...(building ? {} : { shortcut: '⌘↵' })}
       menuLabel="Build options"
+      menuDisabled={building ? !stop : disabled}
       menu={
-        <Button disabled={disabled || building} onClick={buildNew}>
-          Build in new chat
-        </Button>
+        building ? (
+          <Button disabled={!stop} onClick={stop}>
+            Stop building
+          </Button>
+        ) : (
+          <Button disabled={disabled} onClick={buildNew}>
+            Build in new chat
+          </Button>
+        )
       }
     >
       {building ? 'Building' : 'Build'}

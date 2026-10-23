@@ -26,4 +26,16 @@ describe(GlyphPlanBuild, () => {
     expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Build\s*⌘↵$/u }).disabled).toBe(true);
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Build options' }).disabled).toBe(true);
   });
+
+  it('offers to stop an active build', () => {
+    const stop = vi.fn();
+    render(<GlyphPlanBuild build={vi.fn()} buildNew={vi.fn()} stop={stop} disabled building />);
+
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Building' }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Build options' }));
+    expect(screen.queryByRole('button', { name: 'Build in new chat' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop building' }));
+
+    expect(stop).toHaveBeenCalledOnce();
+  });
 });

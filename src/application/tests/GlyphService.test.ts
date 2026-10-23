@@ -536,6 +536,24 @@ describe(GlyphService, () => {
         'Todo storage is unavailable.',
       );
     });
+    it('updates todos through session storage', async () => {
+      const chat = chatSummary('chat');
+      const update = { items: [], replace: true };
+      const signal = new AbortController().signal;
+      const sessions = { updateTodos: vi.fn(async () => chat) };
+      const service = new GlyphService(
+        new FakeBackend(),
+        logger(),
+        {},
+        undefined,
+        undefined,
+        undefined,
+        sessions as unknown as ChatSessionManager,
+      );
+
+      await expect(service.updateTodos(chat, update, signal)).resolves.toBe(chat);
+      expect(sessions.updateTodos).toHaveBeenCalledWith(chat, update, signal);
+    });
     it('refuses to update a plan without plan storage', () => {
       const service = new GlyphService(new FakeBackend(), logger());
       const chat = chatSummary('chat');
@@ -574,6 +592,17 @@ describe(GlyphService, () => {
 
       await expect(service.updatePlan(chat, update)).resolves.toBe(chat);
       expect(sessions.updatePlan).toHaveBeenCalledWith(chat, update);
+    });
+  });
+
+  describe('plan build delegation', () => {
+    it('rejects plan build operations without session storage', () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+
+      expect(() => service.startPlanBuild('chat', 'plan', 'builder', 'run')).toThrow('Plan storage is unavailable.');
+      expect(() => service.finishPlanBuildRun('builder', 'run')).toThrow('Plan storage is unavailable.');
+      expect(() => service.setPlanTodo('chat', 'plan', 'todo', true)).toThrow('Plan storage is unavailable.');
+      expect(() => service.stopPlanBuild('chat', 'plan')).toThrow('Plan storage is unavailable.');
     });
   });
 

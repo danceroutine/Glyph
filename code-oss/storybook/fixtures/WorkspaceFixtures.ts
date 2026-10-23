@@ -144,7 +144,9 @@ Queue --> Finished
 
 export const planActions: GlyphPlanViewActions = {
   update: fn<() => Promise<void>>().mockName('WorkspaceFixtures.update').mockResolvedValue(undefined),
+  setTodo: fn<() => Promise<void>>().mockName('WorkspaceFixtures.setTodo').mockResolvedValue(undefined),
   build: fn<() => Promise<void>>().mockName('WorkspaceFixtures.build').mockResolvedValue(undefined),
+  stopBuild: fn<() => Promise<void>>().mockName('WorkspaceFixtures.stopBuild').mockResolvedValue(undefined),
   newAgent: fn<() => Promise<void>>().mockName('WorkspaceFixtures.newAgent').mockResolvedValue(undefined),
   openChat: fn<() => Promise<void>>().mockName('WorkspaceFixtures.openChat').mockResolvedValue(undefined),
   openLink: fn<() => Promise<void>>().mockName('WorkspaceFixtures.openLink').mockResolvedValue(undefined),

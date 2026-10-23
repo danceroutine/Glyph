@@ -24,7 +24,9 @@ describe(WiredGlyphPlan, () => {
         }}
         actions={{
           update: vi.fn(async () => {}),
+          setTodo: vi.fn(async () => {}),
           build: vi.fn(async () => {}),
+          stopBuild: vi.fn(async () => {}),
           newAgent: vi.fn(async () => {}),
           openChat: vi.fn(async () => {}),
           openLink,
@@ -50,7 +52,9 @@ describe(WiredGlyphPlan, () => {
         }}
         actions={{
           update: vi.fn(async () => {}),
+          setTodo: vi.fn(async () => {}),
           build: vi.fn(async () => {}),
+          stopBuild: vi.fn(async () => {}),
           newAgent: vi.fn(async () => {}),
           openChat: vi.fn(async () => {}),
           openLink: vi.fn(async () => {}),

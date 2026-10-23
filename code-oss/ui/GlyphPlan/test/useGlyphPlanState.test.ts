@@ -1,11 +1,11 @@
 import { act, renderHook } from '@testing-library/preact';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
 import type { GlyphPlanViewState } from '#src/desktop/workbench/GlyphPlanView.js';
 import { aGlyphPlan } from '#src/desktop/tests/fixtures/aGlyphPlan.ts';
 import { useGlyphPlanState } from '#code-oss/ui/GlyphPlan/useGlyphPlanState.ts';
 
-const plan = (overrides: Partial<GlyphPlan> = {}): GlyphPlan =>
+const plan = (overrides: Partial<GlyphPlanRecord> = {}): GlyphPlanRecord =>
   aGlyphPlan({
     revision: 2,
     title: 'Ship it',
@@ -27,8 +27,10 @@ const viewState = (overrides: Partial<GlyphPlanViewState> = {}): GlyphPlanViewSt
 });
 
 const planActions = () => ({
-  update: vi.fn(async (_plan: GlyphPlan) => {}),
+  update: vi.fn(async (_plan: GlyphPlanRecord) => {}),
+  setTodo: vi.fn(async (_id: string, _completed: boolean) => {}),
   build: vi.fn(async (_newChat?: boolean) => {}),
+  stopBuild: vi.fn(async () => {}),
   newAgent: vi.fn(async () => {}),
   openChat: vi.fn(async (_id: string) => {}),
   openLink: vi.fn(async (_href: string) => {}),
@@ -120,13 +122,19 @@ describe(useGlyphPlanState, () => {
 
     await act(() => result.current.toggleTodo('b'));
 
-    expect(actions.update).toHaveBeenCalledWith({
-      ...state.plan,
-      todos: [
-        { id: 'a', text: 'First', completed: false },
-        { id: 'b', text: 'Second', completed: false },
-      ],
+    expect(actions.setTodo).toHaveBeenCalledWith('b', false);
+    expect(actions.update).not.toHaveBeenCalled();
+  });
+
+  it('can stop an active build even while the plan is otherwise disabled', async () => {
+    const actions = planActions();
+    const { result } = renderHook(useGlyphPlanState, {
+      initialProps: { state: viewState({ building: true, disabled: true }), actions },
     });
+
+    await act(() => result.current.stop());
+
+    expect(actions.stopBuild).toHaveBeenCalledOnce();
   });
 
   it('builds the plan here or in a new chat', async () => {

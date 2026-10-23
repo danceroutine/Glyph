@@ -22,6 +22,18 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 export const Document: Story = {};
 export const ReadOnly: Story = { args: { state: { ...meta.args.state, disabled: true } } };
-export const Building: Story = { args: { state: { ...meta.args.state, building: true } } };
+export const Building: Story = {
+  args: {
+    state: {
+      ...meta.args.state,
+      building: true,
+      plan: {
+        ...meta.args.state.plan,
+        todos: meta.args.state.plan.todos.map((todo, index) => ({ ...todo, completed: index < 2 })),
+        build: { chatId: 'author', runId: 'build', startedAt: '2026-10-21T10:00:00Z' },
+      },
+    },
+  },
+};
 
 export const Narrow: Story = { globals: { paneWidth: '360' } };
