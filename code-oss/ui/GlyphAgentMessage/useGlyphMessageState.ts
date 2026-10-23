@@ -37,38 +37,54 @@ export function useGlyphMessageState({
     }
   };
   const historyAction = (entry: GlyphTranscriptEntry, action: ((turnId: string) => Promise<void>) | undefined) => {
-    if (!action || !entry.checkpointTurnId || historyPending) return;
+    if (!action || entry.checkpointTurnId === undefined || entry.checkpointTurnId === '' || historyPending) return;
     setHistoryPending(true);
     setAttachmentError(undefined);
     void action(entry.checkpointTurnId)
-      .catch(error =>
-        setAttachmentError({ id: entry.id, message: error instanceof Error ? error.message : String(error) }),
-      )
-      .finally(() => setHistoryPending(false));
+      .catch(error => {
+        setAttachmentError({ id: entry.id, message: error instanceof Error ? error.message : String(error) });
+      })
+      .finally(() => {
+        setHistoryPending(false);
+      });
   };
   return {
     entries: entries.map(entry => ({
       ...entry,
       label: roleLabel(entry.role),
       historyPending,
-      branch: branch && entry.checkpointTurnId ? () => historyAction(entry, branch) : undefined,
-      restore: restore && entry.checkpointTurnId ? () => historyAction(entry, restore) : undefined,
+      branch:
+        branch && entry.checkpointTurnId !== undefined && entry.checkpointTurnId !== ''
+          ? () => {
+              historyAction(entry, branch);
+            }
+          : undefined,
+      restore:
+        restore && entry.checkpointTurnId !== undefined && entry.checkpointTurnId !== ''
+          ? () => {
+              historyAction(entry, restore);
+            }
+          : undefined,
       attachmentError: attachmentError?.id === entry.id ? attachmentError.message : undefined,
       copyText,
       copy: () => {
-        void copyText(entry.text).catch(error => setAttachmentError({ id: entry.id, message: String(error) }));
+        void copyText(entry.text).catch(error => {
+          setAttachmentError({ id: entry.id, message: String(error) });
+        });
       },
       openLink: (href: string) => {
         void (
           openLink
             ? openLink(href)
-            : /^https?:\/\//i.test(href)
+            : /^https?:\/\//iu.test(href)
               ? Promise.resolve(window.open(href, '_blank', 'noopener,noreferrer'))
               : (context?.openAttachment({ path: href }) ?? Promise.resolve())
-        ).catch(error => setAttachmentError({ id: entry.id, message: String(error) }));
+        ).catch(error => {
+          setAttachmentError({ id: entry.id, message: String(error) });
+        });
       },
       datetime:
-        entry.createdAt && Number.isFinite(Date.parse(entry.createdAt))
+        entry.createdAt !== undefined && entry.createdAt !== '' && Number.isFinite(Date.parse(entry.createdAt))
           ? new Date(entry.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
           : undefined,
       openAttachment: (attachment: GlyphAttachmentPreview) => void open(entry.id, attachment),

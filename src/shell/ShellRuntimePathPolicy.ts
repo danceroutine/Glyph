@@ -44,5 +44,5 @@ function resolveAvailableIdentity(path: string): string {
     missing.push(basename(existing));
     existing = parent;
   }
-  return missing.reverse().reduce((current, component) => join(current, component), realpathSync(existing));
+  return missing.toReversed().reduce((current, component) => join(current, component), realpathSync(existing));
 }

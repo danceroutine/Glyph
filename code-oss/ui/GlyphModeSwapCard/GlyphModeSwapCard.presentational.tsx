@@ -95,7 +95,7 @@ export function GlyphModeSwapCard({
             </Button>
           </div>
           {disabled && <p class={styles.note}>Respond in the window that owns this chat.</p>}
-          {error && (
+          {error !== undefined && error !== '' && (
             <p role="alert" class={shared.error}>
               {error}
             </p>

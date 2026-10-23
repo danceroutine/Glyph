@@ -15,7 +15,7 @@ export function WiredGlyphPlanCards({
   readonly disabled: boolean;
   readonly buildingPlanIds?: readonly string[];
 }) {
-  const decision = useGlyphPlanCardsState(chatId, plans, actions, buildingPlanIds);
+  const decision = useGlyphPlanCardsState({ chatId, plans, actions, buildingPlanIds });
   return (
     <>
       {decision.plans.map(plan => (
@@ -29,7 +29,7 @@ export function WiredGlyphPlanCards({
           buildNew={() => void decision.build(plan, true)}
         />
       ))}
-      {decision.error && <p role="alert">{decision.error}</p>}
+      {decision.error !== undefined && decision.error !== '' && <p role="alert">{decision.error}</p>}
     </>
   );
 }

@@ -10,7 +10,7 @@ export function WiredGlyphChatHistory(props: WiredGlyphChatHistoryProps) {
   return (
     <GlyphChatHistory
       {...state}
-      {...(props.compact ? { compact: true } : {})}
+      {...(props.compact === true ? { compact: true } : {})}
       {...(props.close ? { close: props.close } : {})}
       {...(props.toggleRef ? { toggleRef: props.toggleRef } : {})}
       accountControl={<WiredGlyphAccountPicker state={props.state} actions={props.actions} />}

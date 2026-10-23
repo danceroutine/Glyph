@@ -5,7 +5,8 @@ import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 
 it.describe('Scripted provider through the production desktop runtime', () => {
-  it.use({ scriptedProvider: true });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true });
 
   it('executes a scripted tool call through editor RPC and returns its real result to the provider', async ({
     glyph,

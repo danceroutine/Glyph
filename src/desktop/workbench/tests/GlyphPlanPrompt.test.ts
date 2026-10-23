@@ -58,5 +58,6 @@ describe(toGlyphPlanBuildLead, () => {
       ),
     ).toBe('Prefer small commits.');
     expect(toGlyphPlanBuildLead('Build this approved plan: Queue messages (plan plan, revision 1).', build)).toBe('');
+    expect(toGlyphPlanBuildLead('An unrelated message', build)).toBe('');
   });
 });

@@ -20,6 +20,11 @@ const MAX_CONTEXT_LINES: u32 = 20;
 const MAX_CAPTURE_BYTES: usize = 8 * 1_024;
 const MAX_LINE_BYTES: usize = 8 * 1_024;
 const MAX_RESULT_TEXT_BYTES: usize = 512 * 1_024;
+// Upper bounds for JSON keys, punctuation, and u32 coordinates. Reserve the
+// envelope separately so text escaping cannot exhaust the response budget.
+const MATCH_JSON_OVERHEAD: usize = 256;
+const CONTEXT_LINE_JSON_OVERHEAD: usize = 64;
+const RESULT_JSON_OVERHEAD: usize = 1_024;
 const MAX_WORKERS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -156,6 +161,58 @@ pub(crate) struct ContentSearchContext {
     max_file_bytes: u64,
 }
 
+/// Reads a catalog-relative file under the workspace's content access policy.
+/// Editor overrides are applied by the search operation before consulting disk.
+trait SearchableFiles: Sync {
+    fn read(&self, path: &str) -> Result<String, ()>;
+}
+
+impl SearchableFiles for ContentSearchContext {
+    fn read(&self, path: &str) -> Result<String, ()> {
+        read_searchable_file(&self.root, path, self.max_file_bytes)
+    }
+}
+
+/// A lane preserves catalog order and owns backpressure through its bounded
+/// sender. Closing the consumer ends the lane without another file read.
+fn search_lane<'a>(
+    paths: impl Iterator<Item = &'a str>,
+    cancelled: &AtomicBool,
+    finished: &AtomicBool,
+    sender: mpsc::SyncSender<FileOutcome>,
+    mut search: impl FnMut(&str) -> FileOutcome,
+) {
+    for path in paths {
+        if cancelled.load(Ordering::Acquire) || finished.load(Ordering::Acquire) {
+            break;
+        }
+        let outcome = search(path);
+        if sender.send(outcome).is_err() {
+            break;
+        }
+    }
+}
+
+/// Consume the lanes in file order, releasing blocked sends before workers join.
+fn collect_outcomes(
+    file_count: usize,
+    receivers: Vec<mpsc::Receiver<FileOutcome>>,
+    cancelled: &AtomicBool,
+    finished: &AtomicBool,
+    accumulator: &mut ResultAccumulator,
+) {
+    for index in 0..file_count {
+        let Ok(outcome) = receivers[index % receivers.len()].recv() else {
+            break;
+        };
+        if cancelled.load(Ordering::Acquire) || accumulator.push(outcome) {
+            finished.store(true, Ordering::Release);
+            break;
+        }
+    }
+    drop(receivers);
+}
+
 impl ContentSearchContext {
     pub(crate) fn new(
         root: PathBuf,
@@ -177,6 +234,15 @@ impl ContentSearchContext {
         &self,
         params: ContentSearchParams,
         cancelled: &AtomicBool,
+    ) -> Result<ContentSearchResult, ContentSearchError> {
+        self.search_files(params, cancelled, self)
+    }
+
+    fn search_files(
+        &self,
+        params: ContentSearchParams,
+        cancelled: &AtomicBool,
+        files: &impl SearchableFiles,
     ) -> Result<ContentSearchResult, ContentSearchError> {
         params
             .validate()
@@ -221,13 +287,15 @@ impl ContentSearchContext {
                 let skipped_files = &skipped_files;
                 let finished = &finished;
                 scope.spawn(move || {
-                    for index in (lane..candidates.len()).step_by(worker_count) {
-                        if cancelled.load(Ordering::Acquire) || finished.load(Ordering::Acquire) {
-                            break;
-                        }
-                        let path = &candidates[index];
-                        let outcome = match params.overrides.get(path).map_or_else(
-                            || read_searchable_file(&self.root, path, self.max_file_bytes),
+                    search_lane(
+                        (lane..candidates.len())
+                            .step_by(worker_count)
+                            .map(|index| candidates[index].as_str()),
+                        cancelled,
+                        finished,
+                        sender,
+                        |path| match params.overrides.get(path).map_or_else(
+                            || files.read(path),
                             |text| {
                                 if text.len() as u64 > self.max_file_bytes || text.contains('\0') {
                                     Err(())
@@ -251,24 +319,17 @@ impl ContentSearchContext {
                                 skipped_files.fetch_add(1, Ordering::AcqRel);
                                 FileOutcome::empty(path)
                             }
-                        };
-                        if sender.send(outcome).is_err() {
-                            break;
-                        }
-                    }
+                        },
+                    );
                 });
             }
-            for index in 0..candidates.len() {
-                let Ok(outcome) = receivers[index % worker_count].recv() else {
-                    break;
-                };
-                if cancelled.load(Ordering::Acquire) || accumulator.push(outcome) {
-                    finished.store(true, Ordering::Release);
-                    break;
-                }
-            }
-            // Release blocked sends before scoped threads are joined.
-            drop(receivers);
+            collect_outcomes(
+                candidates.len(),
+                receivers,
+                cancelled,
+                &finished,
+                &mut accumulator,
+            );
         });
 
         if cancelled.load(Ordering::Acquire) {
@@ -409,7 +470,7 @@ impl<'a> ResultAccumulator<'a> {
                         end,
                         self.params,
                     );
-                    if self.content_bytes + bytes > MAX_RESULT_TEXT_BYTES {
+                    if self.content_bytes + bytes > MAX_RESULT_TEXT_BYTES - RESULT_JSON_OVERHEAD {
                         self.has_more = true;
                         return true;
                     }
@@ -423,7 +484,7 @@ impl<'a> ResultAccumulator<'a> {
                         end,
                         self.params,
                     );
-                    debug_assert_eq!(bytes, content_match_bytes(&found));
+                    debug_assert!(serde_json::to_vec(&found).unwrap().len() <= bytes);
                     self.matches.push(found);
                 }
                 if outcome.matches_truncated {
@@ -779,7 +840,7 @@ fn content_match(
         end_line: end_line as u32 + 1,
         end_column: end_column as u32,
         line_text: clipped_line(text, lines[start_line]),
-        matched_text: clip_utf8(&text[start..end], MAX_CAPTURE_BYTES),
+        matched_text: clip_json_text(&text[start..end], MAX_CAPTURE_BYTES),
         lines_before: (before_start..start_line)
             .map(|index| content_line(text, lines, index))
             .collect(),
@@ -800,31 +861,53 @@ fn content_match_size(
     let first = line_index_at(lines, start);
     let last = line_index_at(lines, end);
     let line_bytes = |index: usize| {
-        clipped_utf8_len(
+        clipped_json_text_size(
             &text[lines[index].start..lines[index].content_end],
             MAX_LINE_BYTES,
         )
     };
-    path.len()
+    MATCH_JSON_OVERHEAD
+        + path.chars().map(json_character_bytes).sum::<usize>()
         + line_bytes(first)
-        + clipped_utf8_len(&text[start..end], MAX_CAPTURE_BYTES)
+        + clipped_json_text_size(&text[start..end], MAX_CAPTURE_BYTES)
         + (first.saturating_sub(params.lines_before as usize)..first)
-            .map(line_bytes)
+            .map(|index| CONTEXT_LINE_JSON_OVERHEAD + line_bytes(index))
             .sum::<usize>()
         + ((last + 1)..(last + params.lines_after as usize + 1).min(lines.len()))
-            .map(line_bytes)
+            .map(|index| CONTEXT_LINE_JSON_OVERHEAD + line_bytes(index))
             .sum::<usize>()
 }
 
-fn clipped_utf8_len(value: &str, maximum: usize) -> usize {
-    if value.len() <= maximum {
-        return value.len();
+fn json_character_bytes(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\u{0008}' | '\u{000c}' | '\n' | '\r' | '\t' => 2,
+        '\u{0000}'..='\u{001f}' => 6,
+        _ => character.len_utf8(),
     }
-    let mut end = maximum;
-    while !value.is_char_boundary(end) {
-        end -= 1;
+}
+
+// Bound the serialized string, retaining UTF-8 boundaries and a visible
+// clipping marker. Even a full 40-line context then fits in one response.
+fn json_text_prefix(value: &str, maximum: usize) -> (&str, usize) {
+    let mut bytes = 0;
+    for (index, character) in value.char_indices() {
+        let next = bytes + json_character_bytes(character);
+        if next > maximum {
+            return (&value[..index], bytes);
+        }
+        bytes = next;
     }
-    end + '…'.len_utf8()
+    (value, bytes)
+}
+
+fn clipped_json_text_size(value: &str, maximum: usize) -> usize {
+    let (prefix, bytes) = json_text_prefix(value, maximum);
+    bytes
+        + if prefix.len() < value.len() {
+            '…'.len_utf8()
+        } else {
+            0
+        }
 }
 
 fn line_index_at(lines: &[LineRange], offset: usize) -> usize {
@@ -842,466 +925,17 @@ fn content_line(text: &str, lines: &[LineRange], index: usize) -> ContentLine {
 }
 
 fn clipped_line(text: &str, line: LineRange) -> String {
-    clip_utf8(&text[line.start..line.content_end], MAX_LINE_BYTES)
+    clip_json_text(&text[line.start..line.content_end], MAX_LINE_BYTES)
 }
 
-fn clip_utf8(value: &str, maximum_bytes: usize) -> String {
-    if value.len() <= maximum_bytes {
-        return value.to_owned();
+fn clip_json_text(value: &str, maximum_bytes: usize) -> String {
+    let (prefix, _) = json_text_prefix(value, maximum_bytes);
+    if prefix.len() == value.len() {
+        prefix.to_owned()
+    } else {
+        format!("{prefix}…")
     }
-    let mut end = maximum_bytes;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &value[..end])
-}
-
-fn content_match_bytes(found: &ContentMatch) -> usize {
-    found.path.len()
-        + found.line_text.len()
-        + found.matched_text.len()
-        + found
-            .lines_before
-            .iter()
-            .chain(&found.lines_after)
-            .map(|line| line.content.len())
-            .sum::<usize>()
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs::{create_dir_all, write};
-
-    use tempfile::tempdir;
-
-    use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn refuses_a_symlink_inserted_at_the_inspected_path_even_to_the_original_file() {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("file.txt");
-        let previous = directory.path().join("previous.txt");
-        write(&path, "initial").unwrap();
-        let expected = fs::symlink_metadata(&path).unwrap();
-        fs::rename(&path, &previous).unwrap();
-        std::os::unix::fs::symlink(previous, &path).unwrap();
-        assert!(open_searchable_file(&path, &expected, 32).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn refuses_a_fifo_inserted_at_the_inspected_path_without_waiting_for_a_writer() {
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::time::Duration;
-
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("file.txt");
-        write(&path, "initial").unwrap();
-        let expected = fs::symlink_metadata(&path).unwrap();
-        fs::remove_file(&path).unwrap();
-        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        // SAFETY: the owned CString remains alive and is NUL-terminated. This
-        // creates only a private empty FIFO in the disposable test directory.
-        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
-        let (sender, receiver) = mpsc::channel();
-        let worker_path = path.clone();
-        let worker = thread::spawn(move || {
-            sender
-                .send(open_searchable_file(&worker_path, &expected, 32))
-                .unwrap();
-        });
-        let result = receiver.recv_timeout(Duration::from_millis(500));
-        if result.is_err() {
-            // Unblock the old implementation so a regression reports failure
-            // instead of leaving a reader thread behind or hanging the suite.
-            let _rescue = fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .custom_flags(libc::O_NONBLOCK)
-                .open(&path)
-                .unwrap();
-            worker.join().unwrap();
-        } else {
-            worker.join().unwrap();
-        }
-        assert_eq!(result.unwrap(), Err(()));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rejects_a_different_file_replacing_the_inspected_path_before_open() {
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("file.txt");
-        write(&path, "initial").unwrap();
-        let expected = fs::symlink_metadata(&path).unwrap();
-        fs::rename(&path, directory.path().join("previous.txt")).unwrap();
-        write(&path, "replacement").unwrap();
-        let replacement = fs::File::open(&path).unwrap();
-        assert!(read_opened_searchable_file(replacement, &expected, 32).is_err());
-    }
-
-    #[test]
-    fn stops_reading_after_the_budget_and_one_overflow_byte() {
-        let mut reader = std::io::Cursor::new(vec![b'x'; 128]);
-        assert!(read_searchable_text(&mut reader, 8).is_err());
-        assert_eq!(reader.position(), 9);
-    }
-
-    #[test]
-    fn accepts_exactly_budgeted_text_and_rejects_overflow_without_decoding_it() {
-        assert_eq!(
-            read_searchable_text(&b"needle"[..], 6),
-            Ok("needle".to_owned())
-        );
-        assert_eq!(read_searchable_text(&b""[..], 0), Ok(String::new()));
-        assert!(read_searchable_text(&b"x"[..], 0).is_err());
-        assert_eq!(
-            read_searchable_text(&b"\xef\xbb\xbfneedle"[..], 9),
-            Ok("needle".to_owned())
-        );
-        assert!(read_searchable_text(&b"\xef\xbb\xbfneedle"[..], 8).is_err());
-        assert!(read_searchable_text(&b"bad\0text"[..], 8).is_err());
-        assert!(read_searchable_text(&b"\xff"[..], 1).is_err());
-    }
-
-    #[test]
-    fn preserves_the_last_allowed_page_without_advertising_an_invalid_cursor() {
-        let text = "needle\n".repeat(MAX_OFFSET as usize + 2);
-        let (_directory, search) = context(&[("many.txt", &text)]);
-        let mut params = parameters(ContentSearchOutputMode::Content);
-        params.offset = MAX_OFFSET;
-        params.limit = 1;
-        let ContentSearchResult::Content { matches, metadata } =
-            search.search(params, &AtomicBool::new(false)).unwrap()
-        else {
-            panic!("content expected");
-        };
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].line, MAX_OFFSET + 1);
-        assert!(metadata.truncated);
-        assert_eq!(metadata.next_offset, None);
-    }
-
-    #[test]
-    fn unicode_empty_matches_never_slice_inside_a_codepoint() {
-        for multiline in [false, true] {
-            let mut params = parameters(ContentSearchOutputMode::Content);
-            params.pattern = "a*".to_owned();
-            params.pattern_kind = ContentSearchPatternKind::RegularExpression;
-            params.multiline = multiline;
-            let matcher = compile_matcher(&params).unwrap();
-            let outcome = search_file(
-                "unicode.txt",
-                "é",
-                &matcher,
-                &params,
-                100,
-                &AtomicBool::new(false),
-            );
-            assert_eq!(outcome.count, 2);
-        }
-    }
-
-    #[test]
-    fn buffers_match_locations_without_copying_megabytes_of_repeated_context() {
-        let mut params = parameters(ContentSearchOutputMode::Content);
-        params.lines_before = 20;
-        params.lines_after = 20;
-        let text = format!("needle {}\n", "x".repeat(2048)).repeat(80);
-        let matcher = compile_matcher(&params).unwrap();
-        let outcome = search_file(
-            "context.txt",
-            &text,
-            &matcher,
-            &params,
-            100,
-            &AtomicBool::new(false),
-        );
-        assert!(serde_json::to_vec(&outcome.matches).unwrap().len() <= MAX_RESULT_TEXT_BYTES);
-    }
-
-    fn parameters(output_mode: ContentSearchOutputMode) -> ContentSearchParams {
-        ContentSearchParams {
-            pattern: "needle".to_owned(),
-            pattern_kind: ContentSearchPatternKind::Literal,
-            path: None,
-            file_glob: None,
-            file_type: None,
-            output_mode,
-            lines_before: 0,
-            lines_after: 0,
-            case_sensitive: true,
-            multiline: false,
-            limit: 100,
-            offset: 0,
-            overrides: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn materializes_only_budgeted_context_and_resumes_the_next_match() {
-        let text = format!("needle {}\n", "x".repeat(2048)).repeat(80);
-        let (_directory, search) = context(&[("context.txt", &text)]);
-        let mut params = parameters(ContentSearchOutputMode::Content);
-        params.lines_before = 20;
-        params.lines_after = 20;
-        let ContentSearchResult::Content { matches, metadata } = search
-            .search(params.clone(), &AtomicBool::new(false))
-            .unwrap()
-        else {
-            panic!("content expected");
-        };
-        assert!(matches.iter().map(content_match_bytes).sum::<usize>() <= MAX_RESULT_TEXT_BYTES);
-        assert!(metadata.truncated);
-        assert!(!matches.is_empty());
-        params.offset = metadata.next_offset.unwrap();
-        let ContentSearchResult::Content { matches: next, .. } =
-            search.search(params, &AtomicBool::new(false)).unwrap()
-        else {
-            panic!("content expected");
-        };
-        assert_eq!(next[0].line, matches.last().unwrap().line + 1);
-    }
-
-    fn context(files: &[(&str, &str)]) -> (tempfile::TempDir, ContentSearchContext) {
-        let directory = tempdir().expect("temporary directory should be created");
-        let mut paths = BTreeSet::new();
-        for (path, content) in files {
-            let absolute = directory.path().join(path);
-            create_dir_all(absolute.parent().expect("fixture has a parent"))
-                .expect("fixture directory should be created");
-            write(&absolute, content).expect("fixture should be written");
-            paths.insert((*path).to_owned());
-        }
-        let search = ContentSearchContext::new(
-            fs::canonicalize(directory.path()).expect("fixture root should canonicalize"),
-            Arc::new(RwLock::new(paths)),
-            Arc::new(AtomicBool::new(false)),
-            true,
-            1024 * 1024,
-        );
-        (directory, search)
-    }
-
-    #[test]
-    fn editor_snapshots_replace_disk_before_filters_context_and_pagination() {
-        let (directory, search) = context(&[
-            ("a.ts", "needle disk"),
-            ("b.ts", "nothing"),
-            ("c.md", "needle disk"),
-        ]);
-        let mut params = parameters(ContentSearchOutputMode::Content);
-        params.overrides = BTreeMap::from([
-            ("a.ts".to_owned(), "no match".to_owned()),
-            (
-                "b.ts".to_owned(),
-                "before\nneedle café\nneedle next\nafter".to_owned(),
-            ),
-            ("not-indexed.ts".to_owned(), "needle forbidden".to_owned()),
-        ]);
-        params.file_glob = Some("*.ts".to_owned());
-        params.limit = 1;
-        params.lines_before = 1;
-        params.lines_after = 1;
-        let ContentSearchResult::Content { matches, metadata } = search
-            .search(params.clone(), &AtomicBool::new(false))
-            .unwrap()
-        else {
-            panic!("content expected")
-        };
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].path, "b.ts");
-        assert_eq!(matches[0].line, 2);
-        assert_eq!(matches[0].lines_before[0].content, "before");
-        assert_eq!(metadata.next_offset, Some(1));
-        params.offset = 1;
-        let ContentSearchResult::Content { matches, metadata } = search
-            .search(params.clone(), &AtomicBool::new(false))
-            .unwrap()
-        else {
-            panic!("content expected")
-        };
-        assert_eq!(matches[0].line, 3);
-        assert!(!metadata.truncated);
-        params.offset = 0;
-        params.output_mode = ContentSearchOutputMode::Count;
-        let ContentSearchResult::Count { counts, .. } = search
-            .search(params.clone(), &AtomicBool::new(false))
-            .unwrap()
-        else {
-            panic!("count expected")
-        };
-        assert_eq!(counts.len(), 1);
-        assert_eq!(counts[0].path, "b.ts");
-        assert_eq!(counts[0].count, 2);
-        params.output_mode = ContentSearchOutputMode::FilesWithMatches;
-        let ContentSearchResult::FilesWithMatches { files, .. } = search
-            .search(params.clone(), &AtomicBool::new(false))
-            .unwrap()
-        else {
-            panic!("files expected")
-        };
-        assert_eq!(files, ["b.ts"]);
-        assert_eq!(
-            fs::read_to_string(directory.path().join("a.ts")).unwrap(),
-            "needle disk"
-        );
-        params
-            .overrides
-            .insert("../outside".to_owned(), "needle".to_owned());
-        assert!(matches!(
-            search.search(params, &AtomicBool::new(false)),
-            Err(ContentSearchError::InvalidRequest(_))
-        ));
-    }
-
-    #[test]
-    fn searches_literal_content_with_unicode_columns_context_and_pagination() {
-        let (_directory, search) = context(&[
-            ("src/a.ts", "before\n🦀 needle one\nafter\nneedle two\n"),
-            ("src/b.ts", "needle three\n"),
-            ("README.md", "needle documentation\n"),
-        ]);
-        let mut params = parameters(ContentSearchOutputMode::Content);
-        params.path = Some("src".to_owned());
-        params.file_glob = Some("*.ts".to_owned());
-        params.file_type = Some("ts".to_owned());
-        params.lines_before = 1;
-        params.lines_after = 1;
-        params.limit = 1;
-        params.offset = 1;
-
-        let result = search
-            .search(params, &AtomicBool::new(false))
-            .expect("search should succeed");
-        let ContentSearchResult::Content { matches, metadata } = result else {
-            panic!("expected content results");
-        };
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].path, "src/a.ts");
-        assert_eq!(matches[0].line, 4);
-        assert_eq!(matches[0].column, 1);
-        assert_eq!(matches[0].lines_before[0].content, "after");
-        assert!(metadata.truncated);
-        assert_eq!(metadata.next_offset, Some(2));
-    }
-
-    #[test]
-    fn supports_regular_expressions_case_folding_multiline_files_and_counts() {
-        let (_directory, search) = context(&[
-            ("src/a.ts", "Begin\nMIDDLE\nEnd\n"),
-            ("src/b.js", "begin end\n"),
-        ]);
-        let mut params = parameters(ContentSearchOutputMode::Count);
-        params.pattern = "begin.*end".to_owned();
-        params.pattern_kind = ContentSearchPatternKind::RegularExpression;
-        params.case_sensitive = false;
-        params.multiline = true;
-        params.file_type = Some("ts".to_owned());
-
-        let result = search
-            .search(params, &AtomicBool::new(false))
-            .expect("search should succeed");
-        let ContentSearchResult::Count { counts, metadata } = result else {
-            panic!("expected count results");
-        };
-        assert_eq!(counts.len(), 1);
-        assert_eq!(counts[0].path, "src/a.ts");
-        assert_eq!(counts[0].count, 1);
-        assert!(!metadata.truncated);
-    }
-
-    #[test]
-    fn strips_a_utf8_byte_order_mark_before_reporting_columns() {
-        let (_directory, search) = context(&[("bom.txt", "\u{feff}needle\n")]);
-        let mut params = parameters(ContentSearchOutputMode::Content);
-        params.path = Some("bom.txt".to_owned());
-
-        let result = search
-            .search(params, &AtomicBool::new(false))
-            .expect("search should succeed");
-        let ContentSearchResult::Content { matches, .. } = result else {
-            panic!("expected content results");
-        };
-        assert_eq!(matches[0].column, 1);
-        assert_eq!(matches[0].line_text, "needle");
-    }
-
-    #[test]
-    fn returns_matching_files_and_skips_binary_oversized_and_symlinked_files() {
-        let (directory, search) = context(&[
-            ("a.txt", "needle\n"),
-            ("binary.txt", "needle\0hidden"),
-            ("large.txt", &"x".repeat(2_000)),
-        ]);
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(
-                directory.path().join("a.txt"),
-                directory.path().join("link.txt"),
-            )
-            .expect("symlink should be created");
-            search
-                .paths
-                .write()
-                .expect("paths lock should work")
-                .insert("link.txt".to_owned());
-        }
-        let constrained = ContentSearchContext::new(
-            search.root.clone(),
-            Arc::clone(&search.paths),
-            Arc::clone(&search.index_truncated),
-            true,
-            1_024,
-        );
-
-        let result = constrained
-            .search(
-                parameters(ContentSearchOutputMode::FilesWithMatches),
-                &AtomicBool::new(false),
-            )
-            .expect("search should succeed");
-        let ContentSearchResult::FilesWithMatches { files, metadata } = result else {
-            panic!("expected file results");
-        };
-        assert_eq!(files, ["a.txt"]);
-        assert!(metadata.skipped_files >= 2);
-    }
-
-    #[test]
-    fn rejects_invalid_requests_and_honors_cancellation() {
-        let (_directory, search) = context(&[("a.txt", "needle")]);
-        let mut invalid = parameters(ContentSearchOutputMode::Content);
-        invalid.pattern.clear();
-        assert!(matches!(
-            search.search(invalid, &AtomicBool::new(false)),
-            Err(ContentSearchError::InvalidRequest(_))
-        ));
-
-        let mutations: [fn(&mut ContentSearchParams); 4] = [
-            |params: &mut ContentSearchParams| params.path = Some("../outside".to_owned()),
-            |params: &mut ContentSearchParams| params.file_glob = Some("[".to_owned()),
-            |params: &mut ContentSearchParams| params.file_type = Some("unknown-type".to_owned()),
-            |params: &mut ContentSearchParams| {
-                params.pattern_kind = ContentSearchPatternKind::RegularExpression;
-                params.pattern = "[".to_owned();
-            },
-        ];
-        for mutate in mutations {
-            let mut invalid = parameters(ContentSearchOutputMode::Content);
-            mutate(&mut invalid);
-            assert!(matches!(
-                search.search(invalid, &AtomicBool::new(false)),
-                Err(ContentSearchError::InvalidRequest(_))
-            ));
-        }
-
-        let cancelled = AtomicBool::new(true);
-        assert!(matches!(
-            search.search(parameters(ContentSearchOutputMode::Content), &cancelled),
-            Err(ContentSearchError::Cancelled)
-        ));
-    }
-}
+mod tests;

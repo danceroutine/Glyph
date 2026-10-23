@@ -4,16 +4,24 @@ import { join } from 'node:path';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+
 it.use({ scriptedProvider: true });
-async function prepare(glyph) {
+/** @param {GlyphWorkbench} glyph */
+async function prepare(
+  glyph,
+  before = 'const count = 1;\nconsole.log(count);\n',
+  after = 'const count = 0;\nconsole.log(10 / count);\n',
+) {
+  /** @param {string[]} args */
   const git = (...args) => execFileSync('git', args, { cwd: glyph.workspace });
   git('init', '-b', 'main');
   git('config', 'user.email', 'fixture@example.invalid');
   git('config', 'user.name', 'Glyph Fixture');
-  await writeFile(join(glyph.workspace, 'review.ts'), 'const count = 1;\nconsole.log(count);\n');
+  await writeFile(join(glyph.workspace, 'review.ts'), before);
   git('add', 'review.ts');
   git('commit', '-m', 'initial');
-  await writeFile(join(glyph.workspace, 'review.ts'), 'const count = 0;\nconsole.log(10 / count);\n');
+  await writeFile(join(glyph.workspace, 'review.ts'), after);
   git('commit', '-am', 'change');
   await glyph.command('Glyph: Open Agent Review');
   await expect(glyph.page.getByRole('button', { name: 'Find Issues', exact: true })).toBeEnabled({ timeout: 30000 });
@@ -27,6 +35,77 @@ const findings = [
     body: 'The zero initialization changes the recorded count.',
   },
 ];
+it('anchors partial-deletion findings to the original side and keeps modified findings on their own side', async ({
+  glyph,
+  provider,
+}) => {
+  await prepare(glyph, 'one\ntwo\nthree\nfour\nfive\nsix\nseven', 'one\ntwo');
+  provider.enqueue({
+    chunks: [
+      '<glyph_review>\n' +
+        [
+          {
+            path: 'review.ts',
+            line: 4,
+            side: 'original',
+            title: 'Deleted validation',
+            body: 'The removed validation is still required.',
+          },
+          {
+            path: 'review.ts',
+            line: 2,
+            side: 'modified',
+            title: 'Changed result',
+            body: 'The result no longer includes the validated value.',
+          },
+        ]
+          .map(value => JSON.stringify(value))
+          .join('\n') +
+        '\n{"complete":true}\n</glyph_review>',
+    ],
+  });
+  await glyph.page.getByRole('button', { name: 'Find Issues', exact: true }).click();
+  await expect(glyph.page.getByRole('button', { name: 'Review Again', exact: true })).toBeVisible();
+  await glyph.page.getByRole('button', { name: 'Deleted validation', exact: true }).click();
+  const diff = glyph.page.locator('.monaco-diff-editor');
+  const original = diff.locator('.editor.original').getByRole('region', { name: 'Agent review comment' });
+  const modified = diff.locator('.editor.modified').getByRole('region', { name: 'Agent review comment' });
+  await expect(original).toHaveCount(1);
+  await expect(original).toContainText('Deleted validation');
+  await expect(modified).toHaveCount(1);
+  await expect(modified).toContainText('Changed result');
+  provider.enqueue({ chunks: ['I checked the removed validation against the current source.'] });
+  await original.getByRole('button', { name: 'Fix with Agent', exact: true }).click();
+  await expect.poll(() => provider.requests.length).toBe(2);
+  expect(JSON.stringify(provider.requests[1].body.input)).toContain('review.ts:4 (original)');
+});
+
+it('reopens the same review finding after closing its native diff editor', async ({ glyph, provider }) => {
+  await prepare(glyph);
+  provider.enqueue({
+    chunks: [
+      '<glyph_review>\n' +
+        findings.map(finding => JSON.stringify(finding)).join('\n') +
+        '\n{"complete":true}\n</glyph_review>',
+    ],
+  });
+  await glyph.page.getByRole('button', { name: 'Find Issues', exact: true }).click();
+  await expect(glyph.page.getByRole('button', { name: 'Review Again', exact: true })).toBeVisible();
+  const finding = glyph.page.getByRole('button', { name: 'Division by zero', exact: true });
+  await finding.click();
+  const diff = glyph.page.locator('.monaco-diff-editor');
+  await expect(diff).toBeVisible();
+  await expect(glyph.page.getByRole('region', { name: 'Agent review comment' })).toHaveCount(2);
+  await glyph.command('View: Close Editor');
+  await expect(diff).toHaveCount(0);
+  await writeFile(join(glyph.workspace, 'review.ts'), 'unrelated newer contents\n');
+  await finding.click();
+  await expect(diff).toBeVisible();
+  await expect(diff.locator('.editor.original .view-lines:not([monaco-view-zone])')).toContainText('const count = 1;');
+  await expect(diff.locator('.editor.modified .view-lines:not([monaco-view-zone])')).toContainText('const count = 0;');
+  await expect(glyph.page.getByRole('region', { name: 'Agent review comment' })).toHaveCount(2);
+  expect(provider.requests).toHaveLength(1);
+});
 it('shows streamed findings, opens native diff comments, dismisses one and fixes in the active chat', async ({
   glyph,
   provider,
@@ -77,14 +156,14 @@ it('shows streamed findings, opens native diff comments, dismisses one and fixes
   expect(input).toContain('10 / count');
   await expect(glyph.userEntries).toHaveCount(1);
   await expect(glyph.userEntries).toContainText('Fix this agent review issue');
-  await expect(glyph.page.getByRole('button', { name: /thumbs/i })).toHaveCount(0);
+  await expect(glyph.page.getByRole('button', { name: /thumbs/iu })).toHaveCount(0);
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
   await expect(glyph.page.getByRole('button', { name: 'Review Again', exact: true })).toBeInViewport();
   const icon = glyph.page.locator('[aria-label="Review findings"] .file-icon');
   await expect(icon).toBeVisible();
   await expect
     .poll(() => icon.evaluate(element => getComputedStyle(element, '::before').content))
-    .not.toMatch(/^(none|normal|""|)$/);
+    .not.toMatch(/^(none|normal|""|)$/u);
 });
 it('cancels the actual in-flight review from its hover stop action', async ({ glyph, provider }) => {
   await prepare(glyph);

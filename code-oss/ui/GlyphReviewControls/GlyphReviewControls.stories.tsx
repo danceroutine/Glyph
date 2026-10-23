@@ -100,7 +100,7 @@ function EditorPreview() {
   const decide = async (index: number, decision: 'keep' | 'undo', comment?: string) => {
     setDecisions(value => ({ ...value, [`${activeFile}:${index}`]: decision }));
     setNotice(
-      comment
+      comment !== undefined && comment !== ''
         ? `Change ${index + 1} rejected: ${comment}`
         : `Change ${index + 1} ${decision === 'keep' ? 'kept' : 'undone'}.`,
     );
@@ -133,12 +133,12 @@ function EditorPreview() {
           nextFile={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['nextFile']>>(() =>
             moveFile(1),
           ).mockName('GlyphReviewControls.nextFile')}
-          previous={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['previous']>>(() =>
-            setActive(0),
-          ).mockName('GlyphReviewControls.previous')}
-          next={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['next']>>(() => setActive(1)).mockName(
-            'GlyphReviewControls.next',
-          )}
+          previous={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['previous']>>(() => {
+            setActive(0);
+          }).mockName('GlyphReviewControls.previous')}
+          next={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['next']>>(() => {
+            setActive(1);
+          }).mockName('GlyphReviewControls.next')}
           keepFile={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['keepFile']>>(() =>
             decideFile('keep'),
           ).mockName('GlyphReviewControls.keepFile')}
@@ -169,12 +169,12 @@ function EditorPreview() {
                   shortcuts={reviewShortcutLabels}
                   disabled={false}
                   keepDisabled={false}
-                  previous={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['previous']>>(() =>
-                    setActive(Math.max(0, index - 1)),
-                  ).mockName('GlyphReviewControls.previous')}
-                  next={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['next']>>(() =>
-                    setActive(Math.min(1, index + 1)),
-                  ).mockName('GlyphReviewControls.next')}
+                  previous={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['previous']>>(() => {
+                    setActive(Math.max(0, index - 1));
+                  }).mockName('GlyphReviewControls.previous')}
+                  next={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['next']>>(() => {
+                    setActive(Math.min(1, index + 1));
+                  }).mockName('GlyphReviewControls.next')}
                   keep={fn<NonNullable<ComponentProps<typeof WiredGlyphReviewControls>['keep']>>(() =>
                     decide(index, 'keep'),
                   ).mockName('GlyphReviewControls.keep')}

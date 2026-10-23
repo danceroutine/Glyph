@@ -34,17 +34,17 @@ export function GlyphApprovalCard({ request, disabled, pending, error, skip, alw
         <span class={shared.detail}>Pending approval</span>
       </header>
       <pre class={styles.command}>{request.command ?? request.detail}</pre>
-      {request.workingDirectory && (
+      {request.workingDirectory !== undefined && request.workingDirectory !== '' && (
         <p class={`${shared.detail} ${styles.detail}`}>Working directory: {request.workingDirectory}</p>
       )}
-      {request.canRemember && (
+      {request.canRemember === true && (
         <p class={`${shared.detail} ${styles.detail}`}>Always Run remembers this exact command in this directory.</p>
       )}
       <div class={shared.actions}>
         <Button appearance={ButtonAppearance.GHOST} type="button" disabled={disabled || pending} onClick={skip}>
           Skip
         </Button>
-        {request.canRemember && (
+        {request.canRemember === true && (
           <Button type="button" disabled={disabled || pending} onClick={alwaysRun}>
             Always Run
           </Button>
@@ -54,7 +54,7 @@ export function GlyphApprovalCard({ request, disabled, pending, error, skip, alw
         </Button>
       </div>
       {disabled && <p class={shared.error}>Approve in the window that owns this chat.</p>}
-      {error && (
+      {error !== undefined && error !== '' && (
         <div class={shared.error} role="alert">
           {error}
         </div>

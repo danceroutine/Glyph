@@ -46,7 +46,9 @@ describe(OpenAIBackend, () => {
     vi.spyOn(authentication, 'refresh').mockImplementation(
       () =>
         new Promise(resolve => {
-          finish = () => resolve({ ...account.tokens!, accessToken: 'late' });
+          finish = () => {
+            resolve({ ...account.tokens!, accessToken: 'late' });
+          };
         }),
     );
     const session = new OpenAISession(store, authentication, configuration);
@@ -58,7 +60,7 @@ describe(OpenAIBackend, () => {
       configuration,
     );
     await backend.initialize();
-    const pending = session.accessToken(account).catch(error => error);
+    const pending = session.accessToken(account).catch((error: unknown) => error);
     await backend.dispose();
     expect(store.release).toHaveBeenCalledOnce();
     finish();
@@ -117,7 +119,7 @@ describe(OpenAIBackend, () => {
     };
     const session: OpenAISessionService = {
       dispose: vi.fn(async () => {}),
-      signIn: vi.fn(async (_existing, _consent, authorize) => {
+      signIn: vi.fn<OpenAISessionService['signIn']>(async (_existing, _consent, authorize) => {
         await authorize?.({ url: 'https://auth.example.test/authorize' });
         return openAIAccount;
       }),
@@ -165,4 +167,254 @@ describe(OpenAIBackend, () => {
     expect(store.load).toHaveBeenCalledOnce();
     expect(store.release).toHaveBeenCalledOnce();
   });
+
+  describe(OpenAIBackend.prototype.initialize, () => {
+    it('acquires and loads the store only once', async () => {
+      const store = fakeStore([]);
+      const backend = new OpenAIBackend(store, fakeSession(), { list: vi.fn() }, { create: vi.fn() }, configuration);
+
+      await backend.initialize();
+      await backend.initialize();
+
+      expect(store.acquire).toHaveBeenCalledOnce();
+      expect(store.load).toHaveBeenCalledOnce();
+    });
+
+    it('releases the store and rethrows when loading fails', async () => {
+      const store = fakeStore([]);
+      const failure = new Error('corrupt');
+      vi.mocked(store.load).mockRejectedValueOnce(failure);
+      const backend = new OpenAIBackend(store, fakeSession(), { list: vi.fn() }, { create: vi.fn() }, configuration);
+
+      await expect(backend.initialize()).rejects.toBe(failure);
+      expect(store.release).toHaveBeenCalledOnce();
+      await backend.initialize();
+      expect(store.acquire).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports both failures when cleanup after a failed load also fails', async () => {
+      const store = fakeStore([]);
+      const failure = new Error('corrupt');
+      const cleanupFailure = new Error('unlock failed');
+      vi.mocked(store.load).mockRejectedValueOnce(failure);
+      vi.mocked(store.release).mockRejectedValueOnce(cleanupFailure);
+      const backend = new OpenAIBackend(store, fakeSession(), { list: vi.fn() }, { create: vi.fn() }, configuration);
+
+      const error = await backend.initialize().catch((reason: unknown) => reason);
+
+      expect(error).toBeInstanceOf(AggregateError);
+      expect(error).toMatchObject({
+        message: 'Account initialization failed and cleanup was incomplete.',
+        errors: [failure, cleanupFailure],
+      });
+    });
+  });
+
+  describe(OpenAIBackend.prototype.dispose, () => {
+    it('does not release a store it never acquired', async () => {
+      const store = fakeStore([]);
+      const session = fakeSession();
+      const backend = new OpenAIBackend(store, session, { list: vi.fn() }, { create: vi.fn() }, configuration);
+
+      await backend.dispose();
+
+      expect(session.dispose).not.toHaveBeenCalled();
+      expect(store.release).not.toHaveBeenCalled();
+    });
+  });
+
+  describe(OpenAIBackend.prototype.signIn, () => {
+    it('signs in a new account without inference access or a browser handler by default', async () => {
+      const session = fakeSession();
+      const backend = new OpenAIBackend(fakeStore([]), session, { list: vi.fn() }, { create: vi.fn() }, configuration);
+
+      const account = await backend.signIn();
+
+      expect(session.signIn).toHaveBeenCalledWith(undefined, false, undefined);
+      expect(account).toMatchObject({ provider: 'openai', label: 'developer@example.com' });
+    });
+  });
+
+  describe(OpenAIBackend.prototype.acknowledgeNotice, () => {
+    it('records the plan notice once and stops presenting it', async () => {
+      const saved = structuredClone(openAIAccount);
+      const store = fakeStore([saved]);
+      const backend = new OpenAIBackend(store, fakeSession(), { list: vi.fn() }, { create: vi.fn() }, configuration);
+      const account = backend.accounts[0]!;
+      expect(account.notice).toEqual({
+        message:
+          "You're using your ChatGPT plan. Manage this app's plan allowance and credit access at https://chatgpt.com/settings/usage",
+        acknowledgementPrompt: 'Got it [Enter]: ',
+        url: 'https://chatgpt.com/settings/usage',
+      });
+
+      await backend.acknowledgeNotice(account);
+      await backend.acknowledgeNotice(account);
+
+      expect(saved.planNoticeSeen).toBe(true);
+      expect(store.save).toHaveBeenCalledOnce();
+      expect(backend.accounts[0]).not.toHaveProperty('notice');
+    });
+  });
+
+  describe(OpenAIBackend.prototype.listModels, () => {
+    it('rejects accounts without plan inference access', async () => {
+      const saved = structuredClone(openAIAccount);
+      delete saved.tokens;
+      const models = { list: vi.fn() };
+      const backend = new OpenAIBackend(fakeStore([saved]), fakeSession(), models, { create: vi.fn() }, configuration);
+      const account = backend.accounts[0]!;
+
+      expect(account).toMatchObject({ connected: false, inferenceAccess: false });
+      await expect(backend.listModels(account)).rejects.toThrow(
+        'Sign-in completed, but ChatGPT plan usage was not granted.',
+      );
+      expect(models.list).not.toHaveBeenCalled();
+    });
+
+    it('honors caller cancellation and the shared store lifetime', async () => {
+      const store = { ...fakeStore([structuredClone(openAIAccount)]), lifetimeSignal: new AbortController().signal };
+      const models = {
+        list: vi.fn(async (_token: string, _signal?: AbortSignal) => [{ slug: 'model-a', name: 'Model A' }]),
+      };
+      const backend = new OpenAIBackend(store, fakeSession(), models, { create: vi.fn() }, configuration);
+      const account = backend.accounts[0]!;
+      const cancellation = new AbortController();
+
+      await expect(backend.listModels(account, cancellation.signal)).resolves.toEqual([
+        { slug: 'model-a', name: 'Model A' },
+      ]);
+      const signal = models.list.mock.calls[0]![1]!;
+      expect(signal.aborted).toBe(false);
+      cancellation.abort(new Error('Stopped'));
+      expect(signal.aborted).toBe(true);
+    });
+
+    it('stops waiting for credentials when cancelled', async () => {
+      const session = fakeSession();
+      vi.mocked(session.accessToken).mockReturnValue(new Promise(() => {}));
+      const models = { list: vi.fn() };
+      const backend = new OpenAIBackend(
+        fakeStore([structuredClone(openAIAccount)]),
+        session,
+        models,
+        { create: vi.fn() },
+        configuration,
+      );
+      const account = backend.accounts[0]!;
+      const cancellation = new AbortController();
+      const reason = new Error('Stopped');
+
+      const pending = backend.listModels(account, cancellation.signal);
+      await vi.waitFor(() => {
+        expect(session.accessToken).toHaveBeenCalled();
+      });
+      cancellation.abort(reason);
+
+      await expect(pending).rejects.toBe(reason);
+      expect(models.list).not.toHaveBeenCalled();
+    });
+
+    it('rejects immediately once the backend has been disposed', async () => {
+      const session = fakeSession();
+      const backend = new OpenAIBackend(
+        fakeStore([structuredClone(openAIAccount)]),
+        session,
+        { list: vi.fn() },
+        { create: vi.fn() },
+        configuration,
+      );
+      const account = backend.accounts[0]!;
+      await backend.dispose();
+
+      await expect(backend.listModels(account)).rejects.toThrow('Model discovery stopped with its backend.');
+      expect(session.accessToken).not.toHaveBeenCalled();
+    });
+  });
+
+  describe(OpenAIBackend.prototype.createProvider, () => {
+    it('restores providers from saved state', () => {
+      const provider = {} as ChatProvider;
+      const providers = { create: vi.fn((): ChatProvider => provider) };
+      const backend = new OpenAIBackend(
+        fakeStore([structuredClone(openAIAccount)]),
+        fakeSession(),
+        { list: vi.fn() },
+        providers,
+        configuration,
+      );
+      const state = { version: 1 } as unknown as ChatProviderState;
+
+      expect(backend.createProvider(backend.accounts[0]!, { slug: 'model-a', name: 'Model A' }, state)).toBe(provider);
+      expect(providers.create).toHaveBeenCalledWith('model-a', expect.any(Function), state);
+    });
+
+    it.each([
+      ['another provider', { provider: 'other' }, 'This account belongs to another provider.'],
+      ['an unregistered account', { id: 'missing' }, 'This account is no longer registered.'],
+    ])('rejects %s', (_case, override, message) => {
+      const backend = new OpenAIBackend(
+        fakeStore([structuredClone(openAIAccount)]),
+        fakeSession(),
+        { list: vi.fn() },
+        { create: vi.fn() },
+        configuration,
+      );
+
+      expect(() =>
+        backend.createProvider({ ...backend.accounts[0]!, ...override }, { slug: 'model-a', name: 'Model A' }),
+      ).toThrow(message);
+    });
+  });
+
+  describe(OpenAIBackend.prototype.logout, () => {
+    it('logs out the registered account', async () => {
+      const saved = structuredClone(openAIAccount);
+      const session = fakeSession();
+      const backend = new OpenAIBackend(
+        fakeStore([saved]),
+        session,
+        { list: vi.fn() },
+        { create: vi.fn() },
+        configuration,
+      );
+
+      await expect(backend.logout(backend.accounts[0]!)).resolves.toBe(true);
+      expect(session.logout).toHaveBeenCalledWith(saved);
+    });
+  });
+
+  describe(OpenAIBackend.prototype.redact, () => {
+    it('delegates redaction to the session', () => {
+      const backend = new OpenAIBackend(
+        fakeStore([]),
+        fakeSession(),
+        { list: vi.fn() },
+        { create: vi.fn() },
+        configuration,
+      );
+
+      expect(backend.redact('token secret-access-token')).toBe('token [REDACTED]');
+    });
+  });
 });
+
+function fakeStore(accounts: OpenAIAccount[]): OpenAIAccountStore {
+  return {
+    state: { version: 1, hostId: 'host', accounts },
+    acquire: vi.fn(async () => {}),
+    load: vi.fn(async () => {}),
+    save: vi.fn(async () => {}),
+    release: vi.fn(async () => {}),
+  };
+}
+
+function fakeSession(): OpenAISessionService {
+  return {
+    dispose: vi.fn(async () => {}),
+    signIn: vi.fn(async () => structuredClone(openAIAccount)),
+    accessToken: vi.fn(async () => 'secret-access-token'),
+    logout: vi.fn(async () => true),
+    redact: message => message.replaceAll('secret-access-token', '[REDACTED]'),
+  };
+}

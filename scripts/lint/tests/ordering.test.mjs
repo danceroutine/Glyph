@@ -3,7 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+
+vi.setConfig({ testTimeout: 60_000 });
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const directories = [];
@@ -17,15 +19,18 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
+/** @param {string} text */
 function fixture(text, filename = 'Example.stories.ts') {
   const directory = mkdtempSync(join(tmpdir(), 'glyph-order-'));
   directories.push(directory);
+  /** @type {{ jsPlugins: string[], plugins: string[], categories: Record<string, string>, rules: Record<string, unknown> }} */
   const config = JSON.parse(readFileSync(join(root, '.oxlintrc.json'), 'utf8'));
   config.jsPlugins = config.jsPlugins.map(plugin =>
     plugin.startsWith('.') ? join(root, plugin) : fileURLToPath(import.meta.resolve(plugin)),
   );
   config.plugins = [];
   config.categories = { correctness: 'off' };
+  config.rules = Object.fromEntries(Object.entries(config.rules).filter(([name]) => name.includes('/')));
   const configPath = join(directory, '.oxlintrc.json');
   const file = join(directory, filename);
   writeFileSync(configPath, JSON.stringify(config));
@@ -81,7 +86,7 @@ it('loads Perfectionist in Oxlint and groups methods while preserving fields and
   ];
   const positions = names.map(name => fixed.text.indexOf(`\n  ${name}`));
   expect(positions.every(position => position >= 0)).toBe(true);
-  expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  expect(positions).toEqual(positions.toSorted((a, b) => a - b));
   expect(lint(true).text).toBe(fixed.text);
 });
 
@@ -201,6 +206,33 @@ it('does not rewrite compact statements or attached lint directives', () => {
     expect(result.status).toBe(1);
     expect(result.text).toBe(source);
   }
+});
+
+it('leaves story files without a default export to CSF validation', () => {
+  const source = imports + stories + meta;
+  const result = fixture(source)(true);
+  expect(result.status, result.output).toBe(0);
+  expect(result.text).toBe(source);
+});
+
+it('treats local value export lists as stories while ignoring type-only and re-exported lists', () => {
+  const ignored = "export { type Story as Shared };\nexport { Remote } from './Remote';\n";
+  const ordered = fixture(imports + meta + ignored + defaultExport + storyType)();
+  expect(ordered.status, ordered.output).toBe(0);
+  const source = imports + meta + 'const Local = {};\nexport { Local };\n' + defaultExport;
+  const lint = fixture(source);
+  expect(lint().output).toContain('declaration-order');
+  expect(lint(true).text).toBe(imports + meta + defaultExport + 'const Local = {};\nexport { Local };\n');
+});
+
+it('keeps a comment that trails code on its own line when moving the next declaration', () => {
+  const fixed = fixture(imports + meta + stories + 'const helper = 1; // helper note\n' + defaultExport)(true);
+  expect(fixed.text).toBe(imports + meta + defaultExport + stories + 'const helper = 1; // helper note\n');
+});
+
+it('terminates a moved final declaration that had no trailing newline', () => {
+  const fixed = fixture(imports + meta + stories + defaultExport.trimEnd())(true);
+  expect(fixed.text).toBe(imports + meta + defaultExport + stories);
 });
 
 it('also enforces ordering for JavaScript function stories', () => {

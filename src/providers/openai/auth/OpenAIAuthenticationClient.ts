@@ -49,7 +49,7 @@ export class OpenAIAuthenticationClient {
       nonce,
       code_challenge_method: 'S256',
       code_challenge: createHash('sha256').update(verifier).digest('base64url'),
-      ...(!clientId ? { agent_name_hint: 'Glyph' } : {}),
+      ...(clientId === undefined || clientId === '' ? { agent_name_hint: 'Glyph' } : {}),
       ...(consent ? { prompt: 'consent' } : {}),
     }).toString();
     return { state, nonce, verifier, url: url.toString(), redirectUri, clientId };
@@ -68,11 +68,17 @@ export class OpenAIAuthenticationClient {
     }
     if (url.searchParams.has('error')) throw new AuthenticationError('Sign-in was declined or could not be completed.');
     const returnedId = url.searchParams.get('client_id');
-    if (attempt.clientId && returnedId && attempt.clientId !== returnedId) {
+    if (
+      attempt.clientId !== undefined &&
+      attempt.clientId !== '' &&
+      returnedId !== null &&
+      returnedId !== '' &&
+      attempt.clientId !== returnedId
+    ) {
       throw new AuthenticationError('OAuth client ID changed during reauthorization.');
     }
     const clientId = returnedId ?? attempt.clientId;
-    if (!clientId || clientId === 'dynamic_agent_client') {
+    if (clientId === undefined || clientId === '' || clientId === 'dynamic_agent_client') {
       throw new AuthenticationError('Registration did not return an issued client ID.');
     }
     return { clientId, code: this.toRequiredString(url.searchParams.get('code'), 'authorization code') };
@@ -107,7 +113,7 @@ export class OpenAIAuthenticationClient {
     if (typeof expiresIn !== 'number' || !Number.isFinite(expiresIn) || expiresIn <= 0) {
       throw new ProtocolError('Invalid token expiry.');
     }
-    const scopes = typeof body.scope === 'string' ? body.scope.split(/\s+/).filter(Boolean) : previous?.scopes;
+    const scopes = typeof body.scope === 'string' ? body.scope.split(/\s+/u).filter(Boolean) : previous?.scopes;
     if (!scopes) throw new ProtocolError('Token response did not include granted scopes.');
     return {
       accessToken: this.toRequiredString(body.access_token, 'access_token'),
@@ -157,7 +163,13 @@ export class OpenAIAuthenticationClient {
       response.setHeader('Content-Type', 'text/plain; charset=utf-8');
       response.setHeader('Content-Security-Policy', "default-src 'none'");
       response.setHeader('Referrer-Policy', 'no-referrer');
-      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      let url: URL;
+      try {
+        url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      } catch {
+        response.writeHead(400).end('Invalid request URL.');
+        return;
+      }
       if (request.method !== 'GET' || url.pathname !== '/auth/callback' || !attempt || consumed) {
         response.writeHead(404).end('Not found.');
         return;
@@ -180,7 +192,7 @@ export class OpenAIAuthenticationClient {
       server.listen(0, '127.0.0.1', resolve);
     });
     const address = server.address();
-    if (!address || typeof address === 'string') {
+    if (address === null || typeof address === 'string') {
       server.close();
       throw new AuthenticationError('Could not bind the local callback.');
     }
@@ -190,12 +202,13 @@ export class OpenAIAuthenticationClient {
       existing?.clientId,
       consent,
     );
-    const timer = setTimeout(
-      () => rejectCallback(new AuthenticationError('Sign-in timed out after five minutes.')),
-      300_000,
-    );
-    const cancel = () => rejectCallback(new AuthenticationError('Sign-in cancelled.'));
-    if (signal?.aborted) cancel();
+    const timer = setTimeout(() => {
+      rejectCallback(new AuthenticationError('Sign-in timed out after five minutes.'));
+    }, 300_000);
+    const cancel = () => {
+      rejectCallback(new AuthenticationError('Sign-in cancelled.'));
+    };
+    if (signal?.aborted === true) cancel();
     else signal?.addEventListener('abort', cancel, { once: true });
     try {
       await authorize({ url: attempt.url });
@@ -222,7 +235,11 @@ export class OpenAIAuthenticationClient {
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
       server.closeAllConnections();
-      await new Promise<void>(resolve => server.close(() => resolve()));
+      await new Promise<void>(resolve => {
+        server.close(() => {
+          resolve();
+        });
+      });
     }
   }
 
@@ -238,7 +255,7 @@ export class OpenAIAuthenticationClient {
       },
       signal,
     );
-    if (body.id_token) {
+    if (body.id_token !== undefined && body.id_token !== null) {
       await this.verifyIdentity(
         this.toRequiredString(body.id_token, 'id_token'),
         account.clientId,
@@ -281,7 +298,10 @@ export class OpenAIAuthenticationClient {
         } catch {
           // One bounded retry while the token remains available.
         }
-        if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 500));
+        if (attempt === 0)
+          await new Promise(resolve => {
+            setTimeout(resolve, 500);
+          });
       }
     } catch {
       // The caller still clears local tokens when revocation cannot be confirmed.

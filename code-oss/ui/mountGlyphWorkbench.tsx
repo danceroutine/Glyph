@@ -14,7 +14,7 @@ import { render } from 'preact';
 import type { GlyphWorkbenchMount } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { WiredGlyphWorkbench } from './GlyphWorkbench/GlyphWorkbench.wired.tsx';
 
-if (import.meta.url) configureGlyphDiagramRenderer(new URL('./glyph-diagram.html', import.meta.url).href);
+configureGlyphDiagramRenderer(new URL('./glyph-diagram.html', import.meta.url).href);
 
 /** Unmounting through Preact releases component effects when Code OSS disposes the pane. */
 export const mountGlyphWorkbench: GlyphWorkbenchMount = (container, state, actions) => {
@@ -40,15 +40,29 @@ export const mountGlyphWorkbench: GlyphWorkbenchMount = (container, state, actio
 };
 
 export const mountGlyphReview: GlyphReviewMount = (container, controls) => {
-  const update = (next: typeof controls) => render(<WiredGlyphReviewControls {...next} />, container);
+  const update = (next: typeof controls) => {
+    render(<WiredGlyphReviewControls {...next} />, container);
+  };
   update(controls);
-  return { update, dispose: () => render(null, container) };
+  return {
+    update,
+    dispose: () => {
+      render(null, container);
+    },
+  };
 };
 
 export const mountGlyphPlan: GlyphPlanMount = (container, state, actions) => {
-  const update = (next: typeof state) => render(<WiredGlyphPlan state={next} actions={actions} />, container);
+  const update = (next: typeof state) => {
+    render(<WiredGlyphPlan state={next} actions={actions} />, container);
+  };
   update(state);
-  return { update, dispose: () => render(null, container) };
+  return {
+    update,
+    dispose: () => {
+      render(null, container);
+    },
+  };
 };
 
 export const mountGlyphCommentButton = (
@@ -58,10 +72,18 @@ export const mountGlyphCommentButton = (
   shortcut?: string,
 ) => {
   render(
-    <GlyphCommentButton open={open} {...(order ? { order } : {})} {...(shortcut ? { shortcut } : {})} />,
+    <GlyphCommentButton
+      open={open}
+      {...(order !== undefined && order !== 0 ? { order } : {})}
+      {...(shortcut !== undefined && shortcut !== '' ? { shortcut } : {})}
+    />,
     container,
   );
-  return { dispose: () => render(null, container) };
+  return {
+    dispose: () => {
+      render(null, container);
+    },
+  };
 };
 
 export const mountGlyphEditorAnnotationMarker = (
@@ -71,7 +93,11 @@ export const mountGlyphEditorAnnotationMarker = (
   open: () => void,
 ) => {
   render(<GlyphEditorAnnotationMarker order={order} comment={comment} open={open} />, container);
-  return { dispose: () => render(null, container) };
+  return {
+    dispose: () => {
+      render(null, container);
+    },
+  };
 };
 
 export const mountGlyphContextButton = (
@@ -85,7 +111,9 @@ export const mountGlyphContextButton = (
     <Button
       variant={primary ? ButtonVariant.PRIMARY : ButtonVariant.SECONDARY}
       appearance={primary ? ButtonAppearance.FILLED : ButtonAppearance.OUTLINE}
-      onMouseDown={event => event.preventDefault()}
+      onMouseDown={event => {
+        event.preventDefault();
+      }}
       onClick={action}
       shortcut={shortcut}
     >
@@ -93,13 +121,24 @@ export const mountGlyphContextButton = (
     </Button>,
     container,
   );
-  return { dispose: () => render(null, container) };
+  return {
+    dispose: () => {
+      render(null, container);
+    },
+  };
 };
 
 export const mountGlyphAgentReview: GlyphAgentReviewMount = (container, controls) => {
-  const update = (next: typeof controls) => render(<GlyphAgentReview {...next} />, container);
+  const update = (next: typeof controls) => {
+    render(<GlyphAgentReview {...next} />, container);
+  };
   update(controls);
-  return { update, dispose: () => render(null, container) };
+  return {
+    update,
+    dispose: () => {
+      render(null, container);
+    },
+  };
 };
 
 export const mountGlyphAgentReviewComment = (
@@ -109,5 +148,9 @@ export const mountGlyphAgentReviewComment = (
   dismiss: () => void,
 ) => {
   render(<GlyphAgentReviewComment finding={finding} fix={fix} dismiss={dismiss} />, container);
-  return { dispose: () => render(null, container) };
+  return {
+    dispose: () => {
+      render(null, container);
+    },
+  };
 };

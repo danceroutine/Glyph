@@ -35,7 +35,10 @@ const preview: Preview = {
   },
   decorators: [
     (Story, context) => (
-      <div class={`glyph-story-stage ${stageClassName}`} data-theme={context.globals.theme}>
+      <div
+        class={`glyph-story-stage ${stageClassName}`}
+        data-theme={typeof context.globals.theme === 'string' ? context.globals.theme : undefined}
+      >
         <div
           class={`glyph-story-frame ${frameClassName}`}
           style={{ '--glyph-preview-width': `${context.globals.paneWidth}px` }}

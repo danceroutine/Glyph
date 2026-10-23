@@ -57,10 +57,12 @@ export const agentReviewSchema = agentReviewInputSchema
             id: z.string().min(1),
             path,
             line: z.number().int().positive(),
+            side: z.enum(['original', 'modified']).optional(),
             title: z.string().min(1).max(300),
             body: z.string().min(1).max(8000),
           })
-          .strict(),
+          .strict()
+          .transform(({ side, ...finding }) => ({ ...finding, ...(side === undefined ? {} : { side }) })),
       )
       .max(100),
     dismissedIds: z.array(z.string()).max(100),

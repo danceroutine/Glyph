@@ -1,4 +1,4 @@
-import type { AgentModeID } from "#src/chat/AgentMode.js";
+import type { AgentModeID } from '#src/chat/AgentMode.js';
 
 export enum GlyphModeSwapStatus {
   PENDING = 'pending',

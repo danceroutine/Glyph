@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FileSearchResult } from '#src/context/search/FileSearchResult.js';
 import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
 import type { WorkspaceContentSearchOptions } from '#src/context/search/WorkspaceContentSearchOptions.js';
@@ -279,6 +279,327 @@ describe(MultiRootWorkspacePathIndex, () => {
       }),
     ).resolves.toMatchObject({ outputMode: 'files_with_matches', files: ['api/src/server.ts'] });
     expect(api.lastContentPath).toBe('src');
+  });
+
+  it('requires at least one workspace folder', () => {
+    expect(() => new MultiRootWorkspacePathIndex('workspace', [])).toThrow(
+      'A multi-root workspace requires at least one path index.',
+    );
+  });
+
+  it('requires unique workspace folder names', () => {
+    expect(
+      () =>
+        new MultiRootWorkspacePathIndex('workspace', [
+          { name: 'api', index: new FixtureIndex('api', 'one.ts', 1) },
+          { name: 'api', index: new FixtureIndex('api', 'two.ts', 1) },
+        ]),
+    ).toThrow('Workspace folder names must be unique.');
+  });
+
+  describe(MultiRootWorkspacePathIndex.prototype.search, () => {
+    it('orders equally scored matches by their qualified path', async () => {
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'web', index: new FixtureIndex('web', 'app.ts', 5) },
+        { name: 'api', index: new FixtureIndex('api', 'app.ts', 5) },
+      ]);
+
+      const result = await index.search('app', { generation: 1 });
+
+      expect(result.matches.map(match => match.path)).toEqual(['api/app.ts', 'web/app.ts']);
+    });
+
+    it('searches every folder when a query prefix does not name a workspace folder', async () => {
+      const api = new FixtureIndex('api', 'src/a.ts', 1);
+      const web = new FixtureIndex('web', 'src/b.ts', 2);
+      const apiSearch = vi.spyOn(api, 'search');
+      const webSearch = vi.spyOn(web, 'search');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+      ]);
+
+      const result = await index.search('src/a', { generation: 2 });
+
+      expect(apiSearch).toHaveBeenCalledWith('src/a', { generation: 2 });
+      expect(webSearch).toHaveBeenCalledWith('src/a', { generation: 2 });
+      expect(result.matches.map(match => match.path)).toEqual(['web/src/b.ts', 'api/src/a.ts']);
+    });
+  });
+
+  describe(MultiRootWorkspacePathIndex.prototype.glob, () => {
+    it('stops at the limit and reports truncation before visiting later folders', async () => {
+      const api = new FixtureIndex('api', 'one.ts', 1);
+      const web = new FixtureIndex('web', 'two.ts', 1);
+      const webGlob = vi.spyOn(web, 'glob');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+      ]);
+
+      await expect(index.glob('*.ts', { limit: 1 })).resolves.toEqual({ files: ['api/one.ts'], truncated: true });
+      expect(webGlob).not.toHaveBeenCalled();
+    });
+
+    it('treats a bare folder prefix as every file in that folder and forwards cancellation', async () => {
+      const api = new FixtureIndex('api', 'one.ts', 1);
+      const web = new FixtureIndex('web', 'two.ts', 1);
+      const apiGlob = vi.spyOn(api, 'glob');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+      ]);
+      const signal = new AbortController().signal;
+
+      await expect(index.glob('web/', { limit: 5, signal })).resolves.toEqual({
+        files: ['web/two.ts'],
+        truncated: false,
+      });
+      expect(web.lastGlob).toEqual({ pattern: '**/*', targetDirectory: undefined });
+      expect(apiGlob).not.toHaveBeenCalled();
+    });
+
+    it('forwards cancellation to each folder index', async () => {
+      const api = new FixtureIndex('api', 'one.ts', 1);
+      const apiGlob = vi.spyOn(api, 'glob');
+      const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
+      const signal = new AbortController().signal;
+
+      await index.glob('*.ts', { limit: 5, signal });
+
+      expect(apiGlob).toHaveBeenCalledWith('*.ts', { limit: 5, signal });
+    });
+
+    it('targets a whole folder when the target directory names only the folder', async () => {
+      const api = new FixtureIndex('api', 'one.ts', 1);
+      const web = new FixtureIndex('web', 'two.ts', 1);
+      const apiGlob = vi.spyOn(api, 'glob');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+      ]);
+
+      await expect(index.glob('*.ts', { targetDirectory: 'web', limit: 5 })).resolves.toEqual({
+        files: ['web/two.ts'],
+        truncated: false,
+      });
+      expect(web.lastGlob).toEqual({ pattern: '*.ts', targetDirectory: undefined });
+      expect(apiGlob).not.toHaveBeenCalled();
+    });
+
+    it('rejects a target directory outside every workspace folder', async () => {
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: new FixtureIndex('api', 'one.ts', 1) },
+      ]);
+
+      await expect(index.glob('*.ts', { targetDirectory: 'docs/guides', limit: 5 })).rejects.toThrow(
+        'Unknown workspace folder: docs',
+      );
+    });
+  });
+
+  describe(MultiRootWorkspacePathIndex.prototype.searchContents, () => {
+    it('routes a folder-qualified file glob to that folder and forwards cancellation', async () => {
+      const api = new FixtureIndex('api', 'src/server.ts', 1);
+      const web = new FixtureIndex('web', 'src/App.tsx', 1);
+      const apiSearch = vi.spyOn(api, 'searchContents');
+      const webSearch = vi.spyOn(web, 'searchContents');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+      ]);
+      const signal = new AbortController().signal;
+
+      const result = await index.searchContents('value', {
+        fileGlob: 'web/**/*.tsx',
+        outputMode: 'files_with_matches',
+        signal,
+      });
+
+      expect(result).toMatchObject({ files: ['web/src/App.tsx'] });
+      expect(apiSearch).not.toHaveBeenCalled();
+      expect(webSearch).toHaveBeenCalledWith('value', expect.objectContaining({ fileGlob: '**/*.tsx', signal }));
+    });
+
+    it('keeps an unqualified file glob for every folder', async () => {
+      const api = new FixtureIndex('api', 'src/server.ts', 1);
+      const apiSearch = vi.spyOn(api, 'searchContents');
+      const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
+
+      await index.searchContents('value', { fileGlob: '**/*.ts', outputMode: 'count' });
+
+      expect(apiSearch).toHaveBeenCalledWith('value', expect.objectContaining({ fileGlob: '**/*.ts' }));
+    });
+
+    it('rejects a single entry that cannot fit in the response', async () => {
+      const api = new FixtureIndex('api', 'big.ts', 1);
+      vi.spyOn(api, 'searchContents').mockResolvedValue({
+        outputMode: 'content',
+        matches: [
+          {
+            path: 'big.ts',
+            line: 1,
+            column: 1,
+            endLine: 1,
+            endColumn: 2,
+            lineText: 'x'.repeat(600 * 1024),
+            matchedText: 'x',
+            linesBefore: [],
+            linesAfter: [],
+          },
+        ],
+        searchedFiles: 1,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: false,
+        nextOffset: null,
+      });
+      const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
+
+      await expect(index.searchContents('x', { outputMode: 'content' })).rejects.toThrow(
+        'A content-search entry exceeds the response byte limit.',
+      );
+    });
+
+    it('rejects an output mode it does not know how to combine', async () => {
+      const api = new FixtureIndex('api', 'file.ts', 1);
+      vi.spyOn(api, 'searchContents').mockResolvedValue({
+        outputMode: 'files_with_matches',
+        files: [],
+        searchedFiles: 0,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: false,
+        nextOffset: null,
+      });
+      const resolved = workspaceContentSearchOptionsSchema.parse({});
+      const parse = vi
+        .spyOn(workspaceContentSearchOptionsSchema, 'parse')
+        .mockReturnValueOnce({ ...resolved, outputMode: 'unknown' as 'content' });
+      onTestFinished(() => {
+        parse.mockRestore();
+      });
+      const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
+
+      await expect(index.searchContents('x', {})).rejects.toThrow('Unsupported content-search output mode.');
+    });
+
+    it('rejects a native page whose continuation does not advance', async () => {
+      const api = new FixtureIndex('api', 'file.ts', 1);
+      vi.spyOn(api, 'searchContents').mockResolvedValue({
+        outputMode: 'files_with_matches',
+        files: [],
+        searchedFiles: 1,
+        skippedFiles: 0,
+        indexTruncated: false,
+        truncated: true,
+        nextOffset: 0,
+      });
+      const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
+
+      await expect(index.searchContents('x', { outputMode: 'files_with_matches' })).rejects.toThrow(
+        'Content search returned a non-advancing page offset.',
+      );
+    });
+
+    it.each([
+      { truncated: false, indexTruncated: false, nextOffset: 1 },
+      { truncated: true, indexTruncated: true, nextOffset: 1 },
+      { truncated: true, indexTruncated: false, nextOffset: null },
+    ])(
+      'continues into later folders after a full first folder page truncated $truncated with index truncated $indexTruncated',
+      async ({ truncated, indexTruncated, nextOffset }) => {
+        const api = new FixtureIndex('api', 'one.ts', 1);
+        vi.spyOn(api, 'searchContents').mockResolvedValue({
+          outputMode: 'files_with_matches',
+          files: ['one.ts'],
+          searchedFiles: 1,
+          skippedFiles: 0,
+          indexTruncated,
+          truncated,
+          nextOffset: null,
+        });
+        const index = new MultiRootWorkspacePathIndex('workspace', [
+          { name: 'api', index: api },
+          { name: 'web', index: new FixtureIndex('web', 'two.ts', 1) },
+        ]);
+
+        const result = await index.searchContents('x', { outputMode: 'files_with_matches', limit: 1 });
+
+        expect(result).toMatchObject({ files: ['api/one.ts'], truncated: true, nextOffset });
+      },
+    );
+  });
+
+  describe(MultiRootWorkspacePathIndex.prototype.refresh, () => {
+    it('combines refreshed state from every folder and forwards cancellation', async () => {
+      const api = new FixtureIndex('api', 'one.ts', 1);
+      const web = new FixtureIndex('web', 'two.ts', 1);
+      vi.spyOn(web, 'refresh').mockResolvedValue({
+        root: 'web',
+        fileCount: 4,
+        fromCache: false,
+        truncated: true,
+        durationMilliseconds: 9,
+      });
+      const apiRefresh = vi.spyOn(api, 'refresh');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+      ]);
+      const signal = new AbortController().signal;
+
+      await expect(index.refresh(signal)).resolves.toEqual({
+        root: 'workspace',
+        fileCount: 5,
+        fromCache: false,
+        truncated: true,
+        durationMilliseconds: 9,
+      });
+      expect(apiRefresh).toHaveBeenCalledWith(signal);
+    });
+  });
+
+  describe(MultiRootWorkspacePathIndex.prototype.dispose, () => {
+    it('disposes every folder index', async () => {
+      const api = new FixtureIndex('api', 'one.ts', 1);
+      const web = new FixtureIndex('web', 'two.ts', 1);
+      const apiDispose = vi.spyOn(api, 'dispose');
+      const webDispose = vi.spyOn(web, 'dispose');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+      ]);
+
+      await expect(index.dispose()).resolves.toBeUndefined();
+      expect(apiDispose).toHaveBeenCalledOnce();
+      expect(webDispose).toHaveBeenCalledOnce();
+    });
+
+    it('disposes every folder index before reporting all failures together', async () => {
+      const api = new FixtureIndex('api', 'one.ts', 1);
+      const web = new FixtureIndex('web', 'two.ts', 1);
+      const docs = new FixtureIndex('docs', 'three.md', 1);
+      const apiFailure = new Error('api stuck');
+      const docsFailure = new Error('docs stuck');
+      vi.spyOn(api, 'dispose').mockRejectedValue(apiFailure);
+      vi.spyOn(docs, 'dispose').mockRejectedValue(docsFailure);
+      const webDispose = vi.spyOn(web, 'dispose');
+      const index = new MultiRootWorkspacePathIndex('workspace', [
+        { name: 'api', index: api },
+        { name: 'web', index: web },
+        { name: 'docs', index: docs },
+      ]);
+
+      const error = await index.dispose().catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(AggregateError);
+      expect(error).toMatchObject({
+        message: 'Could not dispose all workspace indexes.',
+        errors: [apiFailure, docsFailure],
+      });
+      expect(webDispose).toHaveBeenCalledOnce();
+    });
   });
 });
 

@@ -1,5 +1,5 @@
 import type { GlyphSteeringMessage } from '#src/desktop/protocol/events/GlyphSteeringMessage.js';
-import { AgentModeID } from '../AgentMode.ts';
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';

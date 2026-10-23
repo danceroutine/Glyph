@@ -35,7 +35,7 @@ export class OpenAISession implements OpenAISessionService {
       if (account.tokens) this.remember(account.tokens);
     }
     for (const value of this.secrets) message = message.split(value).join('[REDACTED]');
-    return message.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED JWT]');
+    return message.replaceAll(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gu, '[REDACTED JWT]');
   }
 
   async signIn(existing?: OpenAIAccount, consent = false, authorize?: AuthorizationHandler): Promise<OpenAIAccount> {
@@ -153,12 +153,15 @@ export class OpenAISession implements OpenAISessionService {
   }
 
   private assertOpen(): void {
-    if (this.disposed || this.signal?.aborted || this.store.lifetimeSignal?.aborted)
+    if (this.disposed || this.signal?.aborted === true || this.store.lifetimeSignal?.aborted === true)
       throw new AuthenticationError('The authentication session has stopped.');
   }
 
   private assertRefreshOpen(lifetime = this.store.lifetimeSignal): void {
-    if (!lifetime) return this.assertOpen();
+    if (!lifetime) {
+      this.assertOpen();
+      return;
+    }
     if (lifetime.aborted) throw new AuthenticationError('The shared account store has stopped.');
   }
 

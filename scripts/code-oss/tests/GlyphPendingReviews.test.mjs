@@ -1,10 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { beforeAll, afterAll, it } from 'vitest';
-const { chromium, expect } = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url))(
-  '@playwright/test',
-);
-let browser, script;
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let script;
 beforeAll(async () => {
   script = (
     await build({
@@ -28,6 +29,7 @@ beforeAll(async () => {
       write: false,
       format: 'iife',
       platform: 'browser',
+      ...coverageBuildOptions,
       define: { 'process.env.NODE_ENV': '"production"' },
       tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
     })
@@ -39,7 +41,7 @@ afterAll(async () => {
 });
 
 it('keeps review actions scoped, keyboard accessible, pending until acknowledged and retryable on failure', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   page.setDefaultTimeout(3000);
   try {
     await page.setContent(
@@ -50,8 +52,8 @@ it('keeps review actions scoped, keyboard accessible, pending until acknowledged
     await expect(card).toContainText('1 File');
     await expect(card).not.toContainText('secret.ts');
     await expect(card.locator('script')).toHaveCount(0);
-    const disclosure = card.locator('summary');
-    const count = disclosure.locator('.glyph-review-count');
+    const disclosure = card.locator('button[aria-controls]');
+    const count = disclosure;
     await expect(count).toHaveCSS('color', 'rgb(153, 153, 153)');
     await count.hover();
     await expect(count).toHaveCSS('color', 'rgb(204, 204, 204)');
@@ -62,7 +64,7 @@ it('keeps review actions scoped, keyboard accessible, pending until acknowledged
     await expect(card.locator('.glyph-file-actions')).toHaveCSS('opacity', '0');
     await file.focus();
     await expect(card.locator('.glyph-file-actions')).toHaveCSS('opacity', '1');
-    const undo = card.getByRole('button', { name: 'Undo src/<script>.ts', exact: true });
+    const undo = card.getByRole('button', { name: 'Revert src/<script>.ts', exact: true });
     const keep = card.getByRole('button', { name: 'Keep src/<script>.ts', exact: true });
     await expect(undo.locator('svg')).toHaveCount(1);
     await expect(keep.locator('svg')).toHaveCount(1);
@@ -73,7 +75,7 @@ it('keeps review actions scoped, keyboard accessible, pending until acknowledged
     await expect(keep).toHaveCSS('background-color', 'rgb(51, 51, 51)');
     await expect(keep).toHaveCSS('color', 'rgb(204, 204, 204)');
     await card.getByRole('button', { name: 'Keep', exact: true }).click();
-    await expect(card.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+    await expect(card.getByRole('button', { name: 'Revert', exact: true })).toBeDisabled();
     expect(await page.evaluate(() => window.decisions)).toEqual([
       [
         'one',
@@ -86,12 +88,12 @@ it('keeps review actions scoped, keyboard accessible, pending until acknowledged
     ]);
     await page.evaluate(() => window.fail(new TypeError('Fixture failure')));
     await expect(card.getByRole('alert')).toHaveText('Fixture failure');
-    await card.getByRole('button', { name: 'Undo', exact: true }).click();
+    await card.getByRole('button', { name: 'Revert', exact: true }).click();
     await page.evaluate(() => window.finish());
     await expect(card.getByRole('button', { name: 'Keep', exact: true })).toBeEnabled();
     await page.evaluate(() => window.update({ readOnly: true }));
     await expect(card.getByRole('button', { name: 'Keep', exact: true })).toBeDisabled();
-    await card.locator('summary').press('Enter');
+    await disclosure.press('Enter');
     await expect(card.getByRole('list')).toHaveCount(0);
     await disclosure.press('Space');
     await expect(card.getByRole('list')).toBeVisible();

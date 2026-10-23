@@ -7,6 +7,7 @@ import type { GlyphTranscriptState } from './useGlyphTranscriptState.ts';
 import { GlyphTurnProgress } from '#code-oss/ui/GlyphTurnProgress/GlyphTurnProgress.presentational.tsx';
 import { GlyphPlanProgressRider } from './GlyphPlanProgressRider.presentational.tsx';
 import { transcriptStyles as styles } from './GlyphTranscript.styles.ts';
+import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 
 export interface GlyphTranscriptProps {
   readonly plans?: ComponentChildren;
@@ -30,7 +31,7 @@ export interface GlyphTranscriptMessageProps {
 }
 
 export function GlyphRestoreCheckpoint({ entry }: { readonly entry: GlyphTranscriptState['entries'][number] }) {
-  return entry.role === 'user' && entry.restore ? (
+  return entry.role === GlyphTranscriptRole.USER && entry.restore ? (
     <IconButton
       size={ButtonSize.SMALL}
       class={`glyph-restore ${styles.restore}`}
@@ -47,12 +48,12 @@ export function GlyphRestoreCheckpoint({ entry }: { readonly entry: GlyphTranscr
 
 /** User and diagnostic rows; assistant messages have their own complete component. */
 export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessageProps) {
-  const progress = entry.role === 'user' ? entry.options?.planProgress : undefined;
+  const progress = entry.role === GlyphTranscriptRole.USER ? entry.options?.planProgress : undefined;
   const bubble = (
     <div
       data-steering={entry.steering || undefined}
       class={
-        entry.role === 'user'
+        entry.role === GlyphTranscriptRole.USER
           ? `${styles.bubble} ${entry.steering ? styles.steering : ''} ${progress ? styles.riderBubble : ''}`
           : styles.answer
       }
@@ -68,7 +69,7 @@ export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessag
       {entry.questionResponses?.map(response => (
         <GlyphQuestionResponses key={response.id} response={response} />
       ))}
-      {entry.role === 'diagnostic' && <strong>{entry.label}</strong>}
+      {entry.role === GlyphTranscriptRole.DIAGNOSTIC && <strong>{entry.label}</strong>}
       {entry.progress && <GlyphTurnProgress progress={entry.progress} openLink={entry.openLink} />}
       {progress ? (
         <div class={styles.rider}>
@@ -79,7 +80,9 @@ export function GlyphTranscriptMessage({ entry, content }: GlyphTranscriptMessag
         bubble
       )}
       {entry.options?.annotations && <GlyphAnnotationPill annotations={entry.options.annotations} />}
-      {entry.attachmentError && <p role="alert">{entry.attachmentError}</p>}
+      {entry.attachmentError !== undefined && entry.attachmentError !== '' && (
+        <p role="alert">{entry.attachmentError}</p>
+      )}
     </div>
   );
 }

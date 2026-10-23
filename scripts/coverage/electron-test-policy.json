@@ -1,0 +1,143 @@
+{
+  "rules": [
+    {
+      "area": "todos and plan execution",
+      "prefixes": [
+        "src/todos/",
+        "src/planning/",
+        "code-oss/ui/GlyphTodoCard/",
+        "code-oss/ui/GlyphPlan/",
+        "code-oss/ui/GlyphTranscript/GlyphPlan"
+      ],
+      "tests": ["GlyphTodos", "GlyphPlansAnnotations", "GlyphModeSwitch"]
+    },
+    {
+      "area": "web tools",
+      "prefixes": ["src/web/", "code-oss/ui/GlyphWebActivity/"],
+      "tests": ["GlyphWeb"]
+    },
+    {
+      "area": "shells and approvals",
+      "prefixes": [
+        "src/shell/",
+        "code-oss/ui/GlyphShellCommandCard/",
+        "code-oss/ui/GlyphBackgroundTerminals/",
+        "code-oss/ui/GlyphApprovalCard/",
+        "code-oss/overlay/src/vs/workbench/contrib/glyph/browser/GlyphShellTerminals.ts"
+      ],
+      "tests": ["GlyphShells", "GlyphBackgroundShells", "GlyphInteractions", "GlyphModeSwitch", "GlyphWorkspaceChanges"]
+    },
+    {
+      "area": "questions",
+      "prefixes": ["src/interaction/questions/", "code-oss/ui/GlyphQuestionCard/"],
+      "tests": ["GlyphInteractions", "GlyphProgress", "GlyphModeSwitch", "GlyphMessageQueue", "GlyphWorkspaceChanges"]
+    },
+    {
+      "area": "agent modes",
+      "prefixes": [
+        "src/interaction/modes/",
+        "code-oss/ui/GlyphModeSwapCard/",
+        "code-oss/ui/GlyphModePicker/",
+        "code-oss/ui/AgentMode/"
+      ],
+      "tests": ["GlyphModeSwitch", "GlyphPlansAnnotations", "GlyphComposerCommands"]
+    },
+    {
+      "area": "edits and reviews",
+      "prefixes": [
+        "src/editing/",
+        "src/reviewing/",
+        "code-oss/ui/GlyphAgentReview/",
+        "code-oss/ui/GlyphReviewControls/",
+        "code-oss/ui/GlyphPendingReviews/",
+        "code-oss/ui/GlyphFileChanges/",
+        "code-oss/overlay/src/vs/workbench/contrib/glyph/browser/GlyphAgentReview",
+        "code-oss/overlay/src/vs/workbench/contrib/glyph/browser/GlyphProposal"
+      ],
+      "tests": [
+        "GlyphAgentReview",
+        "GlyphProposals",
+        "GlyphReviewToolbar",
+        "GlyphReviewRegressions",
+        "GlyphToolCalls",
+        "GlyphModeSwitch",
+        "GlyphChats",
+        "GlyphWorkspaceChanges"
+      ]
+    },
+    {
+      "area": "context and attachments",
+      "prefixes": [
+        "src/context/",
+        "code-oss/ui/GlyphCapturedContext/",
+        "code-oss/ui/GlyphContextBadge/",
+        "code-oss/ui/GlyphContextPicker/",
+        "code-oss/overlay/src/vs/workbench/contrib/glyph/browser/GlyphContext",
+        "code-oss/overlay/src/vs/workbench/contrib/glyph/browser/GlyphIde",
+        "code-oss/overlay/src/vs/workbench/contrib/glyph/browser/GlyphNativeContextActions.ts"
+      ],
+      "tests": [
+        "GlyphAttachments",
+        "GlyphExplorerAttachments",
+        "GlyphFolderContext",
+        "GlyphIdeCaptures",
+        "GlyphNativeContextActions",
+        "GlyphProjectTools",
+        "GlyphWorkspaceChanges",
+        "GlyphMessageQueue"
+      ]
+    },
+    {
+      "area": "chat history",
+      "prefixes": ["code-oss/ui/GlyphChatHistory/", "code-oss/ui/GlyphSidebarIcon/"],
+      "tests": [
+        "GlyphChats",
+        "GlyphChatTabs",
+        "GlyphHistoryLayout",
+        "GlyphExplorerAttachments",
+        "GlyphMessageQueue",
+        "GlyphRecovery",
+        "GlyphWorkspaceChanges"
+      ]
+    },
+    {
+      "area": "queued messages",
+      "prefixes": ["code-oss/ui/GlyphQueuedMessages/"],
+      "tests": ["GlyphMessageQueue", "GlyphComposerCommands", "GlyphWorkspaceChanges"]
+    },
+    {
+      "area": "annotations",
+      "prefixes": ["code-oss/ui/GlyphAnnotations/"],
+      "tests": ["GlyphPlansAnnotations", "GlyphAttachments", "GlyphAgentReview"]
+    },
+    {
+      "area": "response rendering",
+      "prefixes": [
+        "code-oss/ui/GlyphMarkdown/",
+        "code-oss/ui/GlyphCodeBlock/",
+        "code-oss/ui/GlyphSyntaxHighlighting/",
+        "code-oss/ui/GlyphDiagram/",
+        "code-oss/ui/GlyphAgentMessage/"
+      ],
+      "tests": [
+        "GlyphProgress",
+        "GlyphWorkbench",
+        "GlyphStyling",
+        "GlyphTheme",
+        "GlyphPlansAnnotations",
+        "GlyphAgentReview",
+        "GlyphWeb"
+      ]
+    },
+    {
+      "area": "usage and progress",
+      "prefixes": ["code-oss/ui/GlyphUsageSummary/", "code-oss/ui/GlyphTurnProgress/"],
+      "tests": ["GlyphProgress", "GlyphRecovery", "GlyphChats"]
+    },
+    {
+      "area": "account and model controls",
+      "prefixes": ["code-oss/ui/GlyphAccountPicker/", "code-oss/ui/GlyphModelPicker/"],
+      "tests": ["GlyphChats", "GlyphChatTabs", "GlyphWorkbench", "GlyphReviewRegressions"]
+    }
+  ]
+}

@@ -103,18 +103,23 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     super();
     this.shellTerminals = this._register(
       instantiationService.createInstance(GlyphShellTerminals, shell => {
-        if (this.state.readOnly || !this.projection.state.shells?.some(value => value.id === shell.id && value.running))
+        if (
+          this.state.readOnly ||
+          this.projection.state.shells?.some(value => value.id === shell.id && value.running) !== true
+        )
           return;
-        void this.stopShell(shell.chatId, shell.id).catch(error => this.report(error));
+        void this.stopShell(shell.chatId, shell.id).catch(error => {
+          this.report(error);
+        });
       }),
     );
     const savedChat = this.storageService.get('glyph.selectedChat', StorageScope.WORKSPACE);
     this.selectionInitialized = savedChat !== undefined;
-    this.selectedChatId = savedChat || undefined;
+    this.selectedChatId = (savedChat ?? '') || undefined;
     const savedTabs = this.storageService.getObject<object>('glyph.openChatTabs', StorageScope.WORKSPACE);
     this.openChatIds = Array.isArray(savedTabs)
       ? [...new Set(savedTabs.filter((id): id is string => typeof id === 'string'))]
-      : [savedChat || ''];
+      : [(savedChat ?? '') || ''];
     for (const key of ['archivedChatIds', 'pinnedChatIds'] as const) {
       const saved = this.storageService.getObject<object>(`glyph.${key}`, StorageScope.WORKSPACE);
       this[key] = Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : [];
@@ -141,7 +146,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       instantiationService.createInstance(GlyphProposalEditor, {
         state: () => this.state,
         composer: () => this.composer,
-        report: (error: unknown) => this.report(error),
+        report: (error: unknown) => {
+          this.report(error);
+        },
         annotate: async (
           chatId: string,
           annotation: import('#glyph/protocol/events/GlyphAnnotation.js').GlyphAnnotation,
@@ -167,8 +174,18 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         ) => this.decideProposalItems(chatId, items, accept, comment),
       }),
     );
-    this._register(this.onDidChangeState(() => this.proposalEditor.changed()));
-    this._register(this.onDidChangeState(() => queueMicrotask(() => this.flushQueues())));
+    this._register(
+      this.onDidChangeState(() => {
+        this.proposalEditor.changed();
+      }),
+    );
+    this._register(
+      this.onDidChangeState(() => {
+        queueMicrotask(() => {
+          this.flushQueues();
+        });
+      }),
+    );
     this._register(
       this.configuration.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration('glyph.chat.followUpBehavior')) this.changeEmitter.fire(this.state);
@@ -213,9 +230,18 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           case GlyphHostEventType.INITIAL_STATE:
             if (
               !this.selectionInitialized ||
-              (this.selectedChatId && !event.state.chats.some(chat => chat.id === this.selectedChatId))
+              (this.selectedChatId !== undefined &&
+                this.selectedChatId !== '' &&
+                !event.state.chats.some(chat => chat.id === this.selectedChatId))
             ) {
-              this.selectChat(event.state.chats[0]?.id);
+              const restored = event.state.chats[0]?.id;
+              if (!this.selectionInitialized && restored) {
+                const composer = this.composer;
+                this.composers.delete('');
+                this.composers.set(restored, composer);
+                this.openChatIds = [...new Set(this.openChatIds.map(id => id || restored))];
+              }
+              this.selectChat(restored);
             }
             this.pendingRunId = undefined;
             for (const [planId, { runId }] of this.planBuilds)
@@ -223,11 +249,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
                 this.planBuilds.delete(planId);
             break;
           case GlyphHostEventType.CHAT_UPDATED:
-            if (event.chat.mode && event.chat.mode !== previousMode)
+            if (event.chat.mode !== undefined && event.chat.mode !== previousMode)
               this.composers.get(event.chat.id)?.setMode(event.chat.mode);
-            if (this.pendingCreation && event.creationId === this.pendingCreation) {
-              const composer = this.selectedChatId ? this.createComposer() : this.composer;
-              if (!this.selectedChatId) {
+            if (
+              this.pendingCreation !== undefined &&
+              this.pendingCreation !== '' &&
+              event.creationId === this.pendingCreation
+            ) {
+              const composer =
+                this.selectedChatId !== undefined && this.selectedChatId !== '' ? this.createComposer() : this.composer;
+              if (this.selectedChatId === undefined || this.selectedChatId === '') {
                 this.composers.delete('');
                 this.openChatIds = this.openChatIds.map(id => (id === '' ? event.chat.id : id));
                 this.syncNewChatDraft();
@@ -251,7 +282,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
                 ? part
                 : {
                     type: 'attachment' as const,
-                    attachment: attachments[previews.indexOf(part.attachment as (typeof previews)[number])]!,
+                    attachment: attachments[previews.findIndex(preview => preview === part.attachment)],
                   },
             );
             const end = parts.reduce((size, part) => size + (part.type === 'text' ? part.text.length : 1), 0);
@@ -264,6 +295,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
               for (const [planId, { runId }] of this.planBuilds)
                 if (runId === event.run.runId) this.planBuilds.delete(planId);
             break;
+          default:
+            break;
         }
         this.changeEmitter.fire(this.state);
       }),
@@ -272,13 +305,19 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.workspaceTrustService.onDidChangeTrust(() => {
         if (this.invalidateChangedSession()) return;
         editor.invalidate();
-        void this.connect().catch(error => this.report(error));
+        void this.connect().catch(error => {
+          this.report(error);
+        });
       }),
     );
-    if (this.workspaceRoots().length > 0) void this.connect().catch(error => this.report(error));
+    if (this.workspaceRoots().length > 0)
+      void this.connect().catch(error => {
+        this.report(error);
+      });
   }
   get followUpBehavior(): GlyphFollowUpBehavior {
-    return this.configuration.getValue<string>('glyph.chat.followUpBehavior') === GlyphFollowUpBehavior.SEND_IMMEDIATELY
+    return this.configuration.getValue<GlyphFollowUpBehavior>('glyph.chat.followUpBehavior') ===
+      GlyphFollowUpBehavior.SEND_IMMEDIATELY
       ? GlyphFollowUpBehavior.SEND_IMMEDIATELY
       : GlyphFollowUpBehavior.QUEUE;
   }
@@ -287,7 +326,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     let composer = this.composers.get(key);
     if (!composer) this.composers.set(key, (composer = this.createComposer()));
     const chat = this.projection.state.chats.find(value => value.id === key);
-    if (chat?.mode) composer.hydrateMode(chat.mode);
+    if (chat?.mode !== undefined) composer.hydrateMode(chat.mode);
     return composer;
   }
   get ideContext() {
@@ -328,7 +367,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   async openLink(href: string): Promise<void> {
-    if (/^https?:\/\//i.test(href)) {
+    if (/^https?:\/\//iu.test(href)) {
       const url = new URL(href);
       if (url.username || url.password) throw new Error('Web links cannot contain embedded credentials.');
       if (this.configuration.getValue<boolean>('glyph.preferOpeningWebLinksInGlyph')) {
@@ -341,21 +380,21 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       }
       return;
     }
-    const path = href.replace(/#L\d+(?:-L?\d+)?$/, '');
-    const root = this.workspaceContextService.getWorkspace().folders[0];
-    if (!root || /^(?:[a-z]+:|\/)|(?:^|\/)\.\.(?:\/|$)/i.test(path))
+    const path = href.replace(/#L\d+(?:-L?\d+)?$/u, '');
+    const root = this.workspaceContextService.getWorkspace().folders.at(0);
+    if (root === undefined || /^(?:[a-z]+:|\/)|(?:^|\/)\.\.(?:\/|$)/iu.test(path))
       throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This link is not a workspace path.');
     await this.editors.openEditor({ resource: URI.joinPath(root.uri, path) });
   }
 
-  get state(): GlyphWorkbenchState {
+  get state(): GlyphWorkbenchState & { readonly openChatIds: readonly string[] } {
     const { selectedAccount: _account, selectedModel: _model, models: _models, ...snapshot } = this.projection.state;
     const runs = snapshot.runs.filter(run => run.chatId === this.selectedChatId);
     const active = runs.find(run => isActive(run.status));
     const transcript: GlyphTranscriptEntry[] = runs.flatMap(run => {
       const prompt = run.userText ?? this.prompts.get(run.runId);
       return [
-        ...(prompt
+        ...(prompt !== undefined && prompt !== ''
           ? [
               {
                 id: `${run.options?.turnId ?? run.runId}:user`,
@@ -363,8 +402,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
                   ? GlyphTranscriptRole.DIAGNOSTIC
                   : GlyphTranscriptRole.USER,
                 text: prompt,
-                ...(run.createdAt ? { createdAt: run.createdAt } : {}),
-                ...(!active && !this.sending && run.checkpointTurnId ? { checkpointTurnId: run.checkpointTurnId } : {}),
+                ...(run.createdAt !== undefined && run.createdAt !== '' ? { createdAt: run.createdAt } : {}),
+                ...(!active && !this.sending && run.checkpointTurnId !== undefined && run.checkpointTurnId !== ''
+                  ? { checkpointTurnId: run.checkpointTurnId }
+                  : {}),
                 ...(run.options ? { options: run.options } : {}),
                 ...(run.attachments ? { attachments: run.attachments } : {}),
               },
@@ -381,17 +422,19 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           text: run.text,
           ...(run.modeSwaps ? { modeSwaps: run.modeSwaps } : {}),
           ...(run.questionResponses ? { questionResponses: run.questionResponses } : {}),
-          ...(run.createdAt ? { createdAt: run.createdAt } : {}),
-          ...(!active && !this.sending && run.checkpointTurnId ? { checkpointTurnId: run.checkpointTurnId } : {}),
+          ...(run.createdAt !== undefined && run.createdAt !== '' ? { createdAt: run.createdAt } : {}),
+          ...(!active && !this.sending && run.checkpointTurnId !== undefined && run.checkpointTurnId !== ''
+            ? { checkpointTurnId: run.checkpointTurnId }
+            : {}),
           ...(run.usage ? { usage: run.usage } : {}),
           progress: { reasoning: run.reasoning, tools: run.tools, status: run.status },
         },
-        ...(run.terminalMessage
+        ...(run.terminalMessage !== undefined && run.terminalMessage !== ''
           ? [{ id: `${run.runId}:terminal`, role: GlyphTranscriptRole.DIAGNOSTIC, text: run.terminalMessage }]
           : []),
       ];
     });
-    if (this.pendingRunId && this.prompts.has(this.pendingRunId))
+    if (this.pendingRunId !== undefined && this.pendingRunId !== '' && this.prompts.has(this.pendingRunId))
       transcript.push({
         id: `${this.pendingRunId}:user`,
         role: GlyphTranscriptRole.USER,
@@ -409,12 +452,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       ...(this.newChatDraft ? { newChatDraft: this.newChatDraft } : {}),
       models: this.draftModels,
       ...(this.draftAccount ? { selectedAccount: this.draftAccount } : {}),
-      ...(this.draftModel ? { selectedModel: this.draftModel } : {}),
+      ...(this.draftModel !== undefined && this.draftModel !== '' ? { selectedModel: this.draftModel } : {}),
       catalogPending: this.catalogPending || this.modelPending,
       navigationPending: this.navigationPending || this.sending || this.workspaceBlocked,
-      ...(this.workspaceMessage ? { workspaceMessage: this.workspaceMessage } : {}),
-      ...(this.navigationError ? { navigationError: this.navigationError } : {}),
-      ...(this.planBuilds.size ? { buildingPlanIds: [...this.planBuilds.keys()] } : {}),
+      ...(this.workspaceMessage !== undefined && this.workspaceMessage !== ''
+        ? { workspaceMessage: this.workspaceMessage }
+        : {}),
+      ...(this.navigationError !== undefined && this.navigationError !== ''
+        ? { navigationError: this.navigationError }
+        : {}),
+      ...(this.planBuilds.size > 0 ? { buildingPlanIds: [...this.planBuilds.keys()] } : {}),
       status: this.workbenchStatus(active?.status),
       transcript: [
         ...transcript,
@@ -426,18 +473,24 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         ...this.errors,
       ],
       usage: this.projection.usage,
-      ...(this.selectedChatId ? { selectedChatId: this.selectedChatId } : {}),
+      ...(this.selectedChatId !== undefined && this.selectedChatId !== ''
+        ? { selectedChatId: this.selectedChatId }
+        : {}),
     };
   }
 
   async connect(): Promise<void> {
-    if (this.workspaceBlocked && !this.workspaceRefresh && this.workspaceRoots().length) this.refreshWorkspace();
+    if (this.workspaceBlocked && !this.workspaceRefresh && this.workspaceRoots().length > 0) this.refreshWorkspace();
     if (this.workspaceRefresh) await this.workspaceRefresh;
     this.assertSessionBinding();
     await this.client.connect(this.workspaceRoots(), this.workspaceTrustService.isWorkspaceTrusted());
     this.assertSessionBinding();
     await this.hydrateSelectedChat();
-    if (!this.selectedChatId && !this.draftAccount && !this.catalogPending) {
+    if (
+      (this.selectedChatId === undefined || this.selectedChatId === '') &&
+      !this.draftAccount &&
+      !this.catalogPending
+    ) {
       const account = this.projection.state.accounts.find(value => value.connected && value.inferenceAccess);
       if (account) await this.selectAccount(account.provider, account.id);
     }
@@ -445,7 +498,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
 
   async selectMode(mode: AgentModeID): Promise<void> {
     const composer = this.composer;
-    if (this.selectedChatId)
+    if (this.selectedChatId !== undefined && this.selectedChatId !== '')
       await this.request({ type: GlyphWorkbenchCommandType.SET_CHAT_MODE, chatId: this.selectedChatId, mode });
     composer.setMode(mode);
   }
@@ -465,7 +518,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         building: this.planBuilds.has(current.id),
         agents: current.agents.map(agent => ({
           ...agent,
-          title: this.state.chats.find(chat => chat.id === agent.chatId)?.title ?? 'Chat unavailable',
+          title: this.state.chats.find(candidate => candidate.id === agent.chatId)?.title ?? 'Chat unavailable',
         })),
       };
     };
@@ -475,7 +528,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         {
           update: value => this.request({ type: GlyphWorkbenchCommandType.UPDATE_PLAN, chatId, plan: value }),
           build: newChat => this.buildPlan(chatId, read().plan, newChat),
-          newAgent: () => this.linkPlanChat(chatId, read().plan),
+          newAgent: async () => {
+            await this.linkPlanChat(chatId, read().plan);
+          },
           openChat: id => this.openChat(id),
           openLink: href => this.openLink(href),
           copyText: text => this.copyText(text),
@@ -487,22 +542,37 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   async buildPlan(chatId: string, plan: GlyphPlan, newChat = false): Promise<void> {
+    const workspaceRevision = this.workspaceRevision;
     const latest = this.state.chats.find(chat => chat.id === chatId)?.plans?.findLast(value => value.id === plan.id);
     if (!latest || latest.revision !== plan.revision)
       throw new GlyphContextError(
         GlyphDesktopErrorCode.NOT_FOUND,
         'The plan changed. Review its current revision before building.',
       );
+    let targetChatId = chatId;
+    let composer: GlyphComposerState;
     if (newChat) {
-      await this.linkPlanChat(chatId, plan);
-      this.composer.setDraft('');
-    } else if (this.selectedChatId !== chatId) await this.openChat(chatId);
-    const composer = this.composer;
-    await this.selectMode(AgentModeID.AGENT);
+      const chat = this.state.chats.find(value => value.id === chatId)!;
+      targetChatId = await this.createChatTarget(chat.accountProvider, chat.accountId, chat.modelSlug);
+      this.assertWorkspaceRevision(workspaceRevision);
+      composer = this.composers.get(targetChatId)!;
+    } else {
+      if (this.selectedChatId !== chatId) await this.openChat(chatId);
+      this.assertWorkspaceRevision(workspaceRevision);
+      if (this.selectedChatId !== chatId || this.navigationPending)
+        throw new Error(this.navigationError ?? 'The plan chat could not be selected. Try building again.');
+      composer = this.composer;
+    }
+    await this.request({
+      type: GlyphWorkbenchCommandType.SET_CHAT_MODE,
+      chatId: targetChatId,
+      mode: AgentModeID.AGENT,
+    });
+    this.assertWorkspaceRevision(workspaceRevision);
+    composer.setMode(AgentModeID.AGENT);
     const document = composer.snapshot.document;
     const text = `\n\n${toGlyphPlanPrompt(GlyphPlanPromptIntent.BUILD, plan)}`;
     composer.setDocument({ ...document, parts: [...document.parts, { type: 'text', text }] });
-    const targetChatId = this.selectedChatId!;
     await this.request({
       type: GlyphWorkbenchCommandType.LINK_PLAN,
       chatId,
@@ -510,6 +580,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       targetChatId,
       role: 'Builder',
     });
+    this.assertWorkspaceRevision(workspaceRevision);
     const planBuild = {
       planId: plan.id,
       revision: plan.revision,
@@ -517,9 +588,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       sourceChatId: chatId,
       todos: plan.todos.map(todo => ({ ...todo })),
     };
-    await composer.submit(async (text, attachments, options) => {
+    await composer.submit(async (submittedText, attachments, options) => {
       if (this.immediatePending) throw new Error('Waiting for the current response to stop.');
-      const runId = await this.sendToChat(text, attachments, { ...options, planBuild });
+      const runId = await this.sendToChat(submittedText, attachments, { ...options, planBuild }, targetChatId);
       if (this.projection.state.runs.some(run => run.runId === runId && !isActive(run.status))) return;
       this.planBuilds.set(plan.id, { runId, chatId: targetChatId, title: plan.title });
       this.changeEmitter.fire(this.state);
@@ -574,7 +645,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       await this.sendToChat(text, attachments, options, chatId);
     } finally {
       this.immediatePending = false;
-      queueMicrotask(() => this.flushQueues());
+      queueMicrotask(() => {
+        this.flushQueues();
+      });
     }
   }
 
@@ -584,8 +657,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     options: GlyphTurnOptions = {},
   ): Promise<void> {
     this.assertSessionBinding();
-    if (attachments.some(value => value.unavailable))
-      throw new Error(attachments.find(value => value.unavailable)!.unavailable);
+    const unavailableMessage = attachments
+      .map(value => value.unavailable)
+      .find(message => message !== undefined && message !== '');
+    if (unavailableMessage !== undefined) throw new Error(unavailableMessage);
     const run = this.projection.state.runs.find(
       value => value.chatId === this.selectedChatId && isActive(value.status),
     );
@@ -606,7 +681,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     const chat = this.state.chats.find(chat => chat.id === this.selectedChatId);
     const account = chat ? { provider: chat.accountProvider, id: chat.accountId } : this.state.selectedAccount;
     const model = chat?.modelSlug ?? this.state.selectedModel;
-    if (!account || !model) throw new Error('Choose an account and model before reviewing.');
+    if (!account || model === undefined || model === '')
+      throw new Error('Choose an account and model before reviewing.');
     await this.request({
       type: GlyphWorkbenchCommandType.START_AGENT_REVIEW,
       review,
@@ -625,19 +701,21 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   cancel(): void {
-    if (this.composer.snapshot.queued.length) this.composer.pauseQueue();
+    if (this.composer.snapshot.queued.length > 0) this.composer.pauseQueue();
     const run = this.projection.state.runs.find(run => run.chatId === this.selectedChatId && isActive(run.status));
     const runId = run?.runId ?? this.pendingRunId;
-    if (!runId || !this.selectedChatId) return;
-    void this.request({ type: GlyphWorkbenchCommandType.CANCEL_RUN, chatId: this.selectedChatId, runId }).catch(error =>
-      this.report(error),
+    if (runId === undefined || runId === '' || this.selectedChatId === undefined || this.selectedChatId === '') return;
+    void this.request({ type: GlyphWorkbenchCommandType.CANCEL_RUN, chatId: this.selectedChatId, runId }).catch(
+      error => {
+        this.report(error);
+      },
     );
   }
 
   /** Draft setup belongs to this window; saved chats retain their original account/model. */
   async selectAccount(provider: string, accountId: string): Promise<void> {
     this.assertSessionBinding();
-    if (this.selectedChatId) return Promise.resolve();
+    if (this.selectedChatId !== undefined && this.selectedChatId !== '') return;
     const revision = ++this.catalogRevision;
     this.modelOperation = undefined;
     this.modelRevision++;
@@ -663,7 +741,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       throw new Error('Wait for the current chat transition.');
     const source = this.composer;
     const message = source.snapshot.queued.find(value => value.id === id);
-    if (!message || source.snapshot.queueSubmitting || source.snapshot.editingQueuedMessage) return;
+    if (!message || source.snapshot.queueSubmitting !== undefined || source.snapshot.editingQueuedMessage !== undefined)
+      return;
     this.newChat();
     this.composer.restoreDraft(structuredClone(message.document));
     source.removeQueued(id);
@@ -678,7 +757,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.navigationError = undefined;
     this.selectChat(undefined);
     this.changeEmitter.fire(this.state);
-    void this.connect().catch(error => this.report(error));
+    void this.connect().catch(error => {
+      this.report(error);
+    });
   }
 
   async setChatArchived(chatId: string, archived: boolean): Promise<void> {
@@ -703,7 +784,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
 
   async closeChat(chatId: string): Promise<void> {
     if (this.sending || this.navigationPending || this.state.readOnly) return;
-    const tabs = this.state.openChatIds ?? [];
+    const tabs = this.state.openChatIds;
     const index = tabs.indexOf(chatId);
     if (index < 0) return;
     const remaining = tabs.filter(id => id !== chatId);
@@ -713,31 +794,18 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       else this.newChat();
       if (next && this.selectedChatId !== next) return;
     }
-    this.openChatIds = remaining.length ? [...remaining] : [''];
+    this.openChatIds = remaining.length > 0 ? [...remaining] : [''];
     this.persistChatTabs();
     this.changeEmitter.fire(this.state);
   }
 
   async createChat(provider: string, accountId: string, model: string): Promise<void> {
-    const creationId = generateUuid();
-    this.pendingCreation = creationId;
-    try {
-      await this.request({
-        type: GlyphWorkbenchCommandType.CREATE_CHAT,
-        creationId,
-        accountProvider: provider,
-        accountId,
-        model,
-      });
-      if (!this.selectedChatId) throw new Error('The new chat was not acknowledged. Try again.');
-    } finally {
-      this.pendingCreation = undefined;
-    }
+    await this.createChatTarget(provider, accountId, model);
   }
 
   async branchChat(chatId: string, turnId: string): Promise<void> {
     const creationId = generateUuid();
-    if (this.pendingCreation) return;
+    if (this.pendingCreation !== undefined && this.pendingCreation !== '') return;
     this.pendingCreation = creationId;
     try {
       await this.request({ type: GlyphWorkbenchCommandType.BRANCH_CHAT, chatId, turnId, creationId });
@@ -821,7 +889,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       );
     this.decidingProposal = true;
     try {
-      for (const item of accept ? items : [...items].reverse()) {
+      for (const item of accept ? items : items.toReversed()) {
         if (accept) await this.acceptProposalItem(chatId, item.proposalId, item.itemId);
         else await this.rejectProposalItem(chatId, item.proposalId, item.itemId, comment);
       }
@@ -851,7 +919,13 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       const planProgress = chatId ? this.planProgress(chatId) : undefined;
       return planProgress ? { planProgress } : undefined;
     });
-    this._register({ dispose: composer.subscribe(() => queueMicrotask(() => this.flushQueues())) });
+    this._register({
+      dispose: composer.subscribe(() => {
+        queueMicrotask(() => {
+          this.flushQueues();
+        });
+      }),
+    });
     this._register({
       dispose: composer.subscribe(() => {
         if (this.composers.get('') === composer && this.syncNewChatDraft()) this.changeEmitter.fire(this.state);
@@ -877,7 +951,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.workspaceBlocked ||
       this.sending ||
       this.navigationPending ||
-      this.pendingRunId ||
+      (this.pendingRunId !== undefined && this.pendingRunId !== '') ||
       this.immediatePending ||
       this.projection.status !== GlyphHostStatus.READY ||
       this.projection.state.readOnly
@@ -885,20 +959,29 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       return;
     for (const [chatId, composer] of this.composers) {
       const state = composer.snapshot;
-      const first = state.queued[0];
+      const first = state.queued.at(0);
       if (
         !chatId ||
-        !first ||
+        first === undefined ||
         state.queuePaused ||
-        state.queueSubmitting ||
-        state.editingQueuedMessage ||
+        (state.queueSubmitting !== undefined && state.queueSubmitting !== '') ||
+        (state.editingQueuedMessage !== undefined && state.editingQueuedMessage !== '') ||
         state.submitting ||
         this.projection.state.runs.some(run => run.chatId === chatId && isActive(run.status))
       )
         continue;
-      void composer.sendQueued(first.id, async (text, attachments, options) => {
-        await this.sendToChat(text, attachments, options, chatId);
-      });
+      void composer
+        .sendQueued(first.id, async (text, attachments, options) => {
+          await this.sendToChat(text, attachments, options, chatId);
+        })
+        .then(() => {
+          if (
+            composer.snapshot.queueError !== undefined &&
+            composer.snapshot.queueError !== '' &&
+            this.projection.state.runs.some(run => run.chatId === chatId && isActive(run.status))
+          )
+            composer.resumeQueue();
+        });
       return;
     }
   }
@@ -911,8 +994,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         return GlyphWorkbenchStatus.WAITING_FOR_QUESTION;
       case GlyphRunStatus.WAITING_FOR_APPROVAL:
         return GlyphWorkbenchStatus.WAITING_FOR_APPROVAL;
+      default:
+        break;
     }
-    if (activeStatus || this.pendingRunId) return GlyphWorkbenchStatus.STREAMING;
+    if (activeStatus !== undefined || (this.pendingRunId !== undefined && this.pendingRunId !== ''))
+      return GlyphWorkbenchStatus.STREAMING;
     return this.projection.status === GlyphHostStatus.READY
       ? GlyphWorkbenchStatus.READY
       : GlyphWorkbenchStatus.DISCONNECTED;
@@ -920,16 +1006,49 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
 
   /** Replacement runtimes recover durable history separately from their live-run snapshot. */
   private async hydrateSelectedChat(): Promise<void> {
-    if (this.selectedChatId && !this.projection.state.runs.some(run => run.chatId === this.selectedChatId)) {
+    if (
+      this.selectedChatId !== undefined &&
+      this.selectedChatId !== '' &&
+      !this.projection.state.runs.some(run => run.chatId === this.selectedChatId)
+    ) {
       await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
     }
   }
 
-  private async linkPlanChat(chatId: string, plan: GlyphPlan): Promise<void> {
+  private async createChatTarget(provider: string, accountId: string, model: string): Promise<string> {
+    if (this.pendingCreation !== undefined && this.pendingCreation !== '')
+      throw new Error('Another chat is being created. Try again when it finishes.');
+    const creationId = generateUuid();
+    let createdChatId: string | undefined;
+    const listener = this.client.onDidReceiveEvent(({ event }) => {
+      if (event.type === GlyphHostEventType.CHAT_UPDATED && event.creationId === creationId)
+        createdChatId = event.chat.id;
+    });
+    this.pendingCreation = creationId;
+    try {
+      await this.request({
+        type: GlyphWorkbenchCommandType.CREATE_CHAT,
+        creationId,
+        accountProvider: provider,
+        accountId,
+        model,
+      });
+      if (createdChatId === undefined || createdChatId === '')
+        throw new Error('The new chat was not acknowledged. Try again.');
+      return createdChatId;
+    } finally {
+      listener.dispose();
+      this.pendingCreation = undefined;
+    }
+  }
+
+  private async linkPlanChat(chatId: string, plan: GlyphPlan): Promise<string> {
+    const workspaceRevision = this.workspaceRevision;
     const chat = this.state.chats.find(value => value.id === chatId);
     if (!chat) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'The plan chat is unavailable.');
-    await this.createChat(chat.accountProvider, chat.accountId, chat.modelSlug);
-    const targetChatId = this.selectedChatId!;
+    const targetChatId = await this.createChatTarget(chat.accountProvider, chat.accountId, chat.modelSlug);
+    this.assertWorkspaceRevision(workspaceRevision);
+    const composer = this.composers.get(targetChatId)!;
     await this.request({
       type: GlyphWorkbenchCommandType.LINK_PLAN,
       chatId,
@@ -937,9 +1056,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       targetChatId,
       role: 'Reviewer',
     });
-    this.composer.setMode(AgentModeID.PLAN);
-    this.composer.setDraft(toGlyphPlanPrompt(GlyphPlanPromptIntent.REVIEW, plan));
-    this.composer.focus();
+    this.assertWorkspaceRevision(workspaceRevision);
+    composer.setMode(AgentModeID.PLAN);
+    composer.setDraft(toGlyphPlanPrompt(GlyphPlanPromptIntent.REVIEW, plan));
+    composer.focus();
+    return targetChatId;
   }
 
   private planProgress(chatId: string): GlyphPlanProgress | undefined {
@@ -967,8 +1088,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       attachments = attachments.map(value =>
         URI.parse(value.uri).scheme === 'file' ? this.context.rebindAttachment(value) : value,
       );
-    const unavailable = attachments.find(value => value.unavailable);
-    if (unavailable) throw new Error(unavailable.unavailable);
+    const unavailable = attachments
+      .map(value => value.unavailable)
+      .find(message => message !== undefined && message !== '');
+    if (unavailable !== undefined) throw new Error(unavailable);
     const bytes = attachments.reduce(
       (total, attachment) => total + new TextEncoder().encode(attachment.text).byteLength,
       0,
@@ -986,7 +1109,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       !prompt ||
       this.sending ||
       this.navigationPending ||
-      this.pendingRunId ||
+      (this.pendingRunId !== undefined && this.pendingRunId !== '') ||
       this.projection.state.runs.some(run => run.chatId === targetChatId && isActive(run.status))
     )
       throw new Error('The chat is busy. Queue the message or send it immediately.');
@@ -996,21 +1119,21 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       await this.connect();
       this.assertWorkspaceRevision(workspaceRevision);
       if (this.projection.state.readOnly) throw new Error('Another window owns this workspace’s Glyph session.');
-      if (!targetChatId) {
+      if (targetChatId === undefined || targetChatId === '') {
         await this.catalogOperation;
         await this.modelOperation;
         this.assertWorkspaceRevision(workspaceRevision);
         const account = this.draftAccount;
         if (!account) throw new Error('Sign in to a Glyph account with inference access before sending a message.');
-        if (!this.draftModel)
+        if (this.draftModel === undefined || this.draftModel === '')
           throw new Error(this.navigationError ?? 'No models are available for the selected account.');
         await this.createChat(account.provider, account.id, this.draftModel);
         this.assertWorkspaceRevision(workspaceRevision);
         targetChatId = this.selectedChatId;
       }
       const chatId = targetChatId;
-      if (!chatId) throw new Error('Create or open a chat before sending.');
-      if (options.mode && this.state.chats.find(chat => chat.id === chatId)?.mode !== options.mode)
+      if (chatId === undefined || chatId === '') throw new Error('Create or open a chat before sending.');
+      if (options.mode !== undefined && this.state.chats.find(chat => chat.id === chatId)?.mode !== options.mode)
         await this.request({ type: GlyphWorkbenchCommandType.SET_CHAT_MODE, chatId, mode: options.mode });
       this.assertWorkspaceRevision(workspaceRevision);
       const runId = generateUuid();
@@ -1032,7 +1155,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       return runId;
     } catch (error) {
       this.pendingRunId = undefined;
-      this.report(error);
+      if (!this.projection.state.runs.some(run => run.chatId === targetChatId && isActive(run.status)))
+        this.report(error);
       // The composer owns its draft and restores it when submission fails.
       throw error;
     } finally {
@@ -1060,7 +1184,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private assertSessionBinding(): void {
     if (this.invalidateChangedSession())
       throw new Error(this.sessionChanged ? this.invalidationMessage : this.workspaceMessage);
-    if (this.workspaceBlocked) throw new Error(this.workspaceMessage ?? 'Updating workspace folders.');
+    if (this.workspaceBlocked) throw new Error(this.workspaceMessage);
   }
 
   private refreshWorkspace(): void {
@@ -1093,14 +1217,14 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             for (const composer of this.composers.values())
               composer.mapAttachments(value => this.context.rebindAttachment(value));
             const roots = this.workspaceRoots();
-            if (!roots.length) {
+            if (roots.length === 0) {
               this.workspaceMessage =
                 'Add a local workspace folder to continue. Your conversation and draft are preserved.';
               return;
             }
             await this.client.connect(roots, this.workspaceTrustService.isWorkspaceTrusted());
             if (attempted !== this.currentWorkspaceBinding()) continue;
-            if (this.selectedChatId)
+            if (this.selectedChatId !== undefined && this.selectedChatId !== '')
               await this.client.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
             if (this.draftAccount && this.workspaceTrustService.isWorkspaceTrusted())
               await this.client.request({
@@ -1108,7 +1232,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
                 accountProvider: this.draftAccount.provider,
                 accountId: this.draftAccount.id,
               });
-            if (this.draftModel && this.workspaceTrustService.isWorkspaceTrusted())
+            if (
+              this.draftModel !== undefined &&
+              this.draftModel !== '' &&
+              this.workspaceTrustService.isWorkspaceTrusted()
+            )
               await this.client.request({ type: GlyphWorkbenchCommandType.SELECT_MODEL, model: this.draftModel });
             if (attempted !== this.currentWorkspaceBinding()) continue;
             this.persistChatTabs();

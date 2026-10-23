@@ -11,7 +11,7 @@ export class ChatSteeringQueue {
   take = (finishing: boolean): readonly ChatRequest[] => {
     const requests = this.pending;
     this.pending = [];
-    if (finishing && !requests.length) this.close();
+    if (finishing && requests.length === 0) this.close();
     return requests;
   };
   get messages(): readonly GlyphSteeringMessage[] {

@@ -1,8 +1,7 @@
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
 import { ProjectToolName } from '#src/project/ProjectToolName.js';
 import { ProjectAccess } from '#src/project/ProjectAccess.js';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,7 +44,7 @@ async function fixture(initial = 'one\nmiddle\nthree\n') {
     service.proposeStructured({
       files: [
         {
-          operation: rename ? 'RENAME' : 'UPDATE',
+          operation: rename !== undefined && rename !== '' ? 'RENAME' : 'UPDATE',
           path: 'file.txt',
           new_path: rename ?? null,
           base_revision: (await workspace.read('file.txt')).revision,
@@ -67,18 +66,18 @@ describe('Immediate edits with Keep/Revert review', () => {
     expect(file.items).toHaveLength(2);
     expect(manager.pendingChangeCount).toBe(2);
     expect(manager.pendingResults).toEqual([]);
-    const result = await promisify(execFile)(
+    const stdout = execFileSync(
       process.execPath,
       ['-e', "process.stdout.write(require('node:fs').readFileSync('file.txt'))"],
-      { cwd: root },
+      { cwd: root, encoding: 'utf8' },
     );
-    expect(result.stdout).toBe('ONE\nmiddle\nTHREE\n');
+    expect(stdout).toBe('ONE\nmiddle\nTHREE\n');
     expect(toGlyphProposalFilePreview(edit.id, file)).toMatchObject({
       before: 'one\nmiddle\nthree\n',
-      after: result.stdout,
+      after: stdout,
     });
     await manager.acceptInReview(edit.id, file.items[0]!.id);
-    expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe(result.stdout);
+    expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe(stdout);
     expect(manager.pendingChangeCount).toBe(1);
     await manager.rejectInReview(edit.id, file.items[1]!.id, 'Keep the original ending');
     expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('ONE\nmiddle\nthree\n');
@@ -195,7 +194,7 @@ it('tells the agent edits are applied and lets its next read observe them', asyn
       ProjectToolName.PROPOSE_PATCH,
       `*** Begin Patch\n*** Update File: file.txt\n*** Revision: ${revision}\n@@\n-one\n+ONE\n middle\n three\n*** End Patch`,
     ),
-  );
+  ) as { status: string; message: string };
   expect(result.status).toBe('APPLIED_WITH_REVERT');
   expect(result.message).toContain('iterate immediately');
   const read = JSON.parse(

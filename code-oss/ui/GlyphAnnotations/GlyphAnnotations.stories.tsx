@@ -29,9 +29,9 @@ function DraftPill({ annotations: initial }: { readonly annotations: readonly Gl
     <GlyphAnnotationPill
       annotations={annotations}
       edit={fn().mockName('GlyphAnnotations.edit')}
-      remove={fn<NonNullable<ComponentProps<typeof GlyphAnnotationPill>['remove']>>(id =>
-        setAnnotations(values => values.filter(value => value.id !== id)),
-      ).mockName('GlyphAnnotations.remove')}
+      remove={fn<NonNullable<ComponentProps<typeof GlyphAnnotationPill>['remove']>>(id => {
+        setAnnotations(values => values.filter(value => value.id !== id));
+      }).mockName('GlyphAnnotations.remove')}
     />
   );
 }

@@ -1,0 +1,1227 @@
+import { link, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createElement } from 'react';
+import { render } from 'ink-testing-library';
+import { WiredProposalReview } from '#src/terminal/ui/proposal/ProposalReview.wired.js';
+import { GlyphService } from '#src/application/GlyphService.js';
+import type { ChatBackend } from '#src/chat/ChatBackend.js';
+import { NullLogger } from '#src/observability/NullLogger.js';
+import type { Logger } from '#src/observability/Logger.js';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationOptions.js';
+import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
+import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
+import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
+import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
+import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
+import { EditError } from '#src/editing/errors/EditError.js';
+import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
+import { EditOperation } from '#src/editing/proposals/EditOperation.js';
+import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
+import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
+import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
+import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
+import type { ProposalReviewStore } from '#src/editing/reviews/persistence/ProposalReviewStore.js';
+
+const directories: string[] = [];
+const configuration: EditingConfiguration = {
+  maxRawProposalBytes: 1_048_576,
+  maxChangedBytes: 1_048_576,
+  maxResultingBytesPerFile: 1_048_576,
+  maxFiles: 64,
+  maxTotalHunks: 256,
+  maxHunksPerFile: 64,
+  diffBudgetMs: 1_000,
+  maxActiveReviews: 8,
+  newFileByteOrderMark: false,
+  newFileLineEnding: '\n',
+};
+
+afterEach(async () => Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))));
+
+describe(ProposalReviewManager, () => {
+  it.each(['source recovery', 'rename destination recovery', 'acceptance'] as const)(
+    'keeps a replaced file identity stale and rejectable during %s',
+    async phase => {
+      const fixture = await createFixture();
+      const proposal =
+        phase === 'rename destination recovery'
+          ? await proposeRename(fixture)
+          : await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      if (phase === 'rename destination recovery') markApplying(proposal);
+      await fixture.manager.stage(proposal);
+      const read = fixture.workspace.readOptional.bind(fixture.workspace);
+      const changedPath = phase === 'rename destination recovery' ? 'renamed.txt' : 'file.txt';
+      vi.spyOn(fixture.workspace, 'readOptional').mockImplementation((path, options) => {
+        if (path === changedPath) {
+          return Promise.reject(
+            new EditError(EditFailureReason.STALE, 'File identity changed before descriptor read.'),
+          );
+        }
+        return read(path, options);
+      });
+      let manager = fixture.manager;
+      if (phase === 'acceptance') {
+        await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      } else {
+        manager = new ProposalReviewManager(fixture.workspace, new FileProposalReviewStore(fixture.state));
+        await expect(manager.initialize()).resolves.toBeUndefined();
+      }
+
+      expect(manager.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+      expect(manager.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
+      expect(manager.active?.files[0]?.applyingItemId).toBeNull();
+      expect(fixture.workspace.mutationCalls).toBe(0);
+      await manager.rejectAll();
+      expect(manager.pendingResults[0]?.items[0]?.decision).toBe(EditDecisionState.REJECTED);
+    },
+  );
+
+  it.each(['recovery', 'acceptance'] as const)(
+    'checks pending CREATE collisions with metadata only during %s',
+    async phase => {
+      const fixture = await createFixture();
+      const proposal = await fixture.service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'created.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'proposed',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      await fixture.manager.stage(proposal);
+      await writeFile(join(fixture.root, 'created.txt'), 'x'.repeat(2 * 1024 * 1024 + 1));
+      const read = vi
+        .spyOn(fixture.workspace, 'readOptional')
+        .mockRejectedValue(new Error('Collision content must not be read.'));
+      let manager = fixture.manager;
+      if (phase === 'recovery') {
+        manager = new ProposalReviewManager(fixture.workspace, new FileProposalReviewStore(fixture.state));
+        await expect(manager.initialize()).resolves.toBeUndefined();
+      } else await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      expect(read).not.toHaveBeenCalled();
+      expect(manager.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+      expect(fixture.workspace.mutationCalls).toBe(0);
+      await manager.rejectAll();
+      expect(manager.pendingResults[0]?.items[0]?.decision).toBe(EditDecisionState.REJECTED);
+    },
+  );
+
+  it.each(['pending update', 'applying delete'] as const)(
+    'recovers an oversized %s source as stale rather than reading it or inferring a completed mutation',
+    async kind => {
+      const fixture = await createFixture();
+      const base = await fixture.workspace.read('file.txt');
+      const proposal =
+        kind === 'pending update'
+          ? await proposeReplacement(fixture.service, fixture.workspace, 'next')
+          : await fixture.service.proposeStructured({
+              files: [
+                {
+                  operation: EditOperation.DELETE,
+                  path: 'file.txt',
+                  new_path: null,
+                  base_revision: base.revision,
+                  content: null,
+                  byte_order_mark: null,
+                  edits: [],
+                },
+              ],
+            });
+      if (kind === 'applying delete') markApplying(proposal);
+      await fixture.store.save([proposal], fixture.root);
+      const content = 'x'.repeat(2 * 1024 * 1024 + 1);
+      await writeFile(join(fixture.root, 'file.txt'), content);
+      const reads = vi.spyOn(fixture.workspace, 'readOptional');
+      const recovered = new ProposalReviewManager(fixture.workspace, new FileProposalReviewStore(fixture.state));
+
+      await expect(recovered.initialize()).resolves.toBeUndefined();
+      expect(reads).toHaveBeenCalledWith('file.txt', { maxBytes: 2 * 1024 * 1024 + 3 });
+      expect(recovered.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+      expect(recovered.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
+      expect(recovered.active?.files[0]?.applyingItemId).toBeNull();
+      expect(fixture.workspace.mutationCalls).toBe(0);
+      await recovered.rejectAll();
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe(content);
+      expect(recovered.pendingResults[0]?.items[0]?.decision).toBe(EditDecisionState.REJECTED);
+    },
+  );
+
+  it.each([true, false])(
+    'bounds interrupted rename destination recovery when source exists is %s',
+    async sourceExists => {
+      const fixture = await createFixture();
+      const proposal = await proposeRename(fixture);
+      markApplying(proposal);
+      await fixture.store.save([proposal], fixture.root);
+      if (!sourceExists) await rm(join(fixture.root, 'file.txt'));
+      await writeFile(join(fixture.root, 'renamed.txt'), 'x'.repeat(65));
+      const reads = vi.spyOn(fixture.workspace, 'readOptional');
+      const recovered = new ProposalReviewManager(
+        fixture.workspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+        fixture.root,
+        { maxReadBytes: 64 },
+      );
+
+      await expect(recovered.initialize()).resolves.toBeUndefined();
+      expect(reads).toHaveBeenCalledWith('file.txt', { maxBytes: 64 });
+      expect(reads).toHaveBeenCalledWith('renamed.txt', { maxBytes: 64 });
+      expect(recovered.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+      expect(recovered.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
+      expect(fixture.workspace.mutationCalls).toBe(0);
+      await recovered.rejectAll();
+      expect(await readFile(join(fixture.root, 'renamed.txt'), 'utf8')).toBe('x'.repeat(65));
+    },
+  );
+
+  it('bounds acceptance synchronization and retains oversized sources for rejection without applying edits', async () => {
+    const fixture = await createFixture();
+    const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+    const manager = new ProposalReviewManager(fixture.workspace, fixture.store, new NullLogger(), 8, fixture.root, {
+      maxReadBytes: 64,
+    });
+    await manager.stage(proposal);
+    await writeFile(join(fixture.root, 'file.txt'), 'x'.repeat(65));
+    const reads = vi.spyOn(fixture.workspace, 'readOptional');
+
+    await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+    expect(reads).toHaveBeenCalledWith('file.txt', { maxBytes: 64 });
+    expect(proposal.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+    expect(fixture.workspace.mutationCalls).toBe(0);
+    await manager.rejectAll();
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 0.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid recovery read budget of %s before starting recovery',
+    async maxReadBytes => {
+      const fixture = await createFixture();
+      expect(
+        () =>
+          new ProposalReviewManager(fixture.workspace, fixture.store, new NullLogger(), 8, fixture.root, {
+            maxReadBytes,
+          }),
+      ).toThrow('Review read budget must be a non-negative safe integer.');
+    },
+  );
+
+  it.each(['directory', 'binary'] as const)(
+    'recovers an interrupted rename with a %s destination without deleting its source',
+    async kind => {
+      const fixture = await createFixture();
+      const proposal = await proposeRename(fixture);
+      markApplying(proposal);
+      await fixture.store.save([proposal], fixture.root);
+      const target = join(fixture.root, 'renamed.txt');
+      if (kind === 'directory') await mkdir(target);
+      else await writeFile(target, 'binary\0content');
+      const recovered = new ProposalReviewManager(fixture.workspace, new FileProposalReviewStore(fixture.state));
+      await recovered.initialize();
+      expect(recovered.active?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+      expect(recovered.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
+      expect(fixture.workspace.mutationCalls).toBe(0);
+      await recovered.rejectAll();
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
+      expect(recovered.pendingResults[0]?.items[0]?.decision).toBe(EditDecisionState.REJECTED);
+    },
+  );
+
+  it.each(['directory', 'binary'] as const)(
+    'recovers a reviewed file replaced by a %s as stale and still permits rejection',
+    async kind => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      const path = join(fixture.root, 'file.txt');
+      if (kind === 'directory') {
+        await rm(path);
+        await mkdir(path);
+      } else await writeFile(path, 'binary\0content');
+      const restarted = new ProposalReviewManager(fixture.workspace, new FileProposalReviewStore(fixture.state));
+      await restarted.initialize();
+      expect(restarted.activeReviews[0]?.files[0]?.applicability).toBe(EditApplicabilityState.STALE);
+      await restarted.rejectAll();
+      expect(restarted.activeReviews).toEqual([]);
+      const again = new ProposalReviewManager(fixture.workspace, new FileProposalReviewStore(fixture.state));
+      await again.initialize();
+      expect(again.activeReviews).toEqual([]);
+      expect(fixture.workspace.mutationCalls).toBe(0);
+    },
+  );
+
+  it.each(['reopen', 'retry'] as const)(
+    'keeps failed completion visible and recovers via %s without reapplying the edit',
+    async recovery => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      let unavailable = true;
+      const save = fixture.store.save.bind(fixture.store);
+      const saves = vi.spyOn(fixture.store, 'save').mockImplementation(async (reviews, identity) => {
+        if (
+          unavailable &&
+          reviews.some(review =>
+            review.files.some(file => file.items.some(item => item.decision === EditDecisionState.ACCEPTED)),
+          )
+        )
+          throw new Error('Checkpoint unavailable');
+        await save(reviews, identity);
+      });
+      const complete = vi.fn();
+      const request = { id: 1, manager: fixture.manager, complete, interrupt: vi.fn() };
+      let view = render(createElement(WiredProposalReview, { request }));
+      const glyph = new GlyphService({} as ChatBackend, new NullLogger(), {}, fixture.manager);
+      const recordContext = vi.fn(async () => {});
+      try {
+        view.stdin.write('y');
+        await vi.waitFor(() => {
+          expect(proposal.files[0]!.items[0]!.decision).toBe(EditDecisionState.ACCEPTED);
+        });
+        await new Promise(resolve => {
+          setTimeout(resolve, 30);
+        });
+        expect.soft(complete).not.toHaveBeenCalled();
+        expect.soft(view.lastFrame()).toContain('Checkpoint unavailable');
+        const delivery = await glyph.commitReviewResults({ recordContext }).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect.soft(delivery).toBeInstanceOf(Error);
+        expect(recordContext).not.toHaveBeenCalled();
+        expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+        unavailable = false;
+        const previousSaves = saves.mock.calls.length;
+        if (recovery === 'reopen') {
+          view.unmount();
+          view = render(createElement(WiredProposalReview, { request: { ...request, id: 2 } }));
+        } else view.stdin.write('r');
+        await vi.waitFor(
+          () => {
+            expect(saves.mock.calls.length).toBeGreaterThan(previousSaves);
+          },
+          { timeout: 200 },
+        );
+        await vi.waitFor(() => {
+          expect(complete).toHaveBeenCalledWith({ accepted: 1, rejected: 0 });
+        });
+        await glyph.commitReviewResults({ recordContext });
+        expect(recordContext).toHaveBeenCalledOnce();
+        expect(recordContext.mock.calls[0]).toEqual([
+          expect.arrayContaining([expect.objectContaining({ type: 'edit_review_result' })]),
+        ]);
+        expect(fixture.workspace.mutationCalls).toBe(1);
+      } finally {
+        view.unmount();
+      }
+    },
+  );
+  it.each(['reject', 'rejectAll'] as const)(
+    'publishes only durable decisions when %s fails and the user subsequently accepts',
+    async operation => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      const item = proposal.files[0]!.items[0]!;
+      let entered!: () => void;
+      let fail!: (error: Error) => void;
+      const saving = new Promise<void>(resolve => {
+        entered = resolve;
+      });
+      vi.spyOn(fixture.store, 'save').mockImplementationOnce(() => {
+        entered();
+        return new Promise<void>((_resolve, reject) => {
+          fail = reject;
+        });
+      });
+      const rejecting = operation === 'reject' ? fixture.manager.reject(item.id) : fixture.manager.rejectAll();
+      const rejection = expect(rejecting).rejects.toThrow('checkpoint failed');
+      await saving;
+      const leaked = structuredClone(fixture.manager.pendingResults);
+      fail(new Error('checkpoint failed'));
+      await rejection;
+      await fixture.manager.accept(item.id);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+      expect(fixture.manager.pendingResults.flatMap(result => result.items).map(entry => entry.decision)).toEqual([
+        EditDecisionState.ACCEPTED,
+      ]);
+      expect(leaked.flatMap(result => result.items)).toEqual([]);
+    },
+  );
+  describe(ProposalReviewManager.prototype.accept, () => {
+    it('withholds accepted receipts until the completed checkpoint is durable', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      const save = fixture.store.save.bind(fixture.store);
+      let entered!: () => void;
+      let release!: () => void;
+      const blocked = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const saving = new Promise<void>(resolve => {
+        entered = resolve;
+      });
+      let calls = 0;
+      vi.spyOn(fixture.store, 'save').mockImplementation(async (...args) => {
+        if (++calls === 2) {
+          entered();
+          await blocked;
+        }
+        await save(...args);
+      });
+      const accepting = fixture.manager.accept(proposal.files[0]!.items[0]!.id);
+      await saving;
+      const pending = fixture.manager.pendingResults;
+      release();
+      await accepting;
+      expect(pending).toEqual([]);
+      expect(fixture.manager.pendingResults.flatMap(result => result.items).map(item => item.decision)).toEqual([
+        EditDecisionState.ACCEPTED,
+      ]);
+    });
+    it('exposes no accepted receipt while a text mutation is pending and subsequently fails', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      let rejectMutation!: (error: Error) => void;
+      let started!: () => void;
+      const entered = new Promise<void>(resolve => {
+        started = resolve;
+      });
+      vi.spyOn(fixture.workspace, 'replace').mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectMutation = reject;
+            started();
+          }),
+      );
+      const accepting = fixture.manager.accept(proposal.files[0]!.items[0]!.id);
+      const failure = expect(accepting).rejects.toThrow('mutation failed');
+      await entered;
+      // A concurrent chat flush reads this public projection before awaiting acknowledgement.
+      const recordedReceipts = structuredClone(fixture.manager.pendingResults);
+      rejectMutation(new Error('mutation failed'));
+      await failure;
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
+      expect(fixture.manager.pendingChangeCount).toBe(1);
+      expect(recordedReceipts.flatMap(result => result.items)).toEqual([]);
+    });
+
+    it('does not touch the workspace when the applying checkpoint cannot be persisted, then retries once', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      fixture.store.failSaveCall(3);
+
+      await expect(fixture.manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.PERSISTENCE,
+      });
+
+      expect(fixture.workspace.replaceCalls).toBe(0);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
+
+      await fixture.manager.accept(proposal.files[0]!.items[0]!.id);
+
+      expect(fixture.workspace.replaceCalls).toBe(1);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+      expect(fixture.manager.activeReviews).toStrictEqual([]);
+    });
+
+    it('recovers an applied edit after its completed checkpoint fails without writing it twice', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      fixture.store.failSaveCall(4);
+
+      await expect(fixture.manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.PERSISTENCE,
+      });
+      expect(fixture.workspace.replaceCalls).toBe(1);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+      await expect(fixture.manager.accept(proposal.files[0]!.items[0]!.id)).resolves.toBeUndefined();
+      expect(fixture.workspace.replaceCalls).toBe(1);
+      expect(fixture.manager.activeReviews).toStrictEqual([]);
+
+      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recovered = new ProposalReviewManager(
+        recoveredWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+
+      expect(recoveredWorkspace.replaceCalls).toBe(0);
+      expect(recovered.activeReviews).toStrictEqual([]);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+    });
+
+    it('preserves an applied first hunk when its completed checkpoint fails before accepting a second hunk', async () => {
+      const fixture = await createFixture();
+      await writeFile(join(fixture.root, 'file.txt'), 'one\nmiddle\nthree\n');
+      const proposal = await proposeTwoReplacements(fixture.service, fixture.workspace);
+      const [first, second] = proposal.files[0]!.items;
+      await fixture.manager.stage(proposal);
+      fixture.store.failSaveCall(4);
+
+      await expect(fixture.manager.accept(first!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.PERSISTENCE,
+      });
+
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('ONE\nmiddle\nthree\n');
+      expect(first!.decision).toBe(EditDecisionState.ACCEPTED);
+      expect(second!.decision).toBe(EditDecisionState.PENDING);
+
+      await fixture.manager.accept(second!.id);
+
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('ONE\nmiddle\nTHREE\n');
+      expect(fixture.workspace.replaceCalls).toBe(2);
+      expect(fixture.manager.activeReviews).toStrictEqual([]);
+    });
+
+    it('recovers when the workspace commits a replacement but reports an I/O failure afterward', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      fixture.workspace.failAfterNextReplace();
+
+      await expect(fixture.manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toThrow(
+        'Injected failure after replace committed.',
+      );
+      expect(fixture.workspace.replaceCalls).toBe(1);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+      await expect(fixture.manager.accept(proposal.files[0]!.items[0]!.id)).resolves.toBeUndefined();
+      expect(fixture.workspace.replaceCalls).toBe(1);
+      expect(fixture.manager.activeReviews).toStrictEqual([]);
+
+      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recovered = new ProposalReviewManager(
+        recoveredWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+
+      expect(recoveredWorkspace.replaceCalls).toBe(0);
+      expect(recovered.activeReviews).toStrictEqual([]);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+    });
+
+    it('does not turn a successful workspace mutation into a failed decision when logging fails', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      const manager = new ProposalReviewManager(
+        fixture.workspace,
+        new FileProposalReviewStore(fixture.state),
+        new ThrowingLogger(),
+        8,
+      );
+
+      await manager.stage(proposal);
+      await expect(manager.accept(proposal.files[0]!.items[0]!.id)).resolves.toBeUndefined();
+
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+      expect(manager.activeReviews).toStrictEqual([]);
+      expect(manager.pendingResults).toHaveLength(1);
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.reject, () => {
+    it('can retry a rejection whose checkpoint failed and does not resurrect it after restart', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      fixture.store.failSaveCall(2);
+
+      await expect(fixture.manager.reject(proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.PERSISTENCE,
+      });
+      await fixture.manager.reject(proposal.files[0]!.items[0]!.id);
+
+      expect(fixture.manager.activeReviews).toStrictEqual([]);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
+
+      const recovered = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(fixture.root),
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+      expect(recovered.activeReviews).toStrictEqual([]);
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.rejectAll, () => {
+    it('reconciles an applied edit before reject-all after both completion checkpoints fail', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+      fixture.store.failSaveCall(4);
+      fixture.store.failSaveCall(5);
+      await expect(fixture.manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
+        reason: EditFailureReason.PERSISTENCE,
+      });
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+      expect(fixture.workspace.replaceCalls).toBe(1);
+
+      await fixture.manager.rejectAll();
+      const recovered = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(fixture.root),
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+      const decisions = recovered.pendingResults.flatMap(result => result.items.map(item => item.decision));
+      expect(decisions).toEqual([EditDecisionState.ACCEPTED]);
+      expect(recovered.activeReviews).toEqual([]);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+    });
+
+    it('rolls every in-memory decision back when its checkpoint fails, then retries durably', async () => {
+      const fixture = await createFixture();
+      await writeFile(join(fixture.root, 'file.txt'), 'one\nmiddle\nthree\n');
+      const proposal = await proposeTwoReplacements(fixture.service, fixture.workspace);
+      await fixture.manager.stage(proposal);
+      fixture.store.failSaveCall(2);
+
+      await expect(fixture.manager.rejectAll()).rejects.toMatchObject({ reason: EditFailureReason.PERSISTENCE });
+
+      expect(proposal.files[0]!.items.map(item => item.decision)).toStrictEqual([
+        EditDecisionState.PENDING,
+        EditDecisionState.PENDING,
+      ]);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('one\nmiddle\nthree\n');
+
+      await fixture.manager.rejectAll();
+
+      expect(fixture.manager.activeReviews).toStrictEqual([]);
+      const recovered = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(fixture.root),
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+      expect(recovered.activeReviews).toStrictEqual([]);
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.acknowledgeResults, () => {
+    it('retains accepted and rejected item receipts across restart until the host acknowledges them', async () => {
+      const fixture = await createFixture();
+      await writeFile(join(fixture.root, 'file.txt'), 'one\nmiddle\nthree\n');
+      const proposal = {
+        ...(await proposeTwoReplacements(fixture.service, fixture.workspace)),
+        origin: { chatId: 'chat-1', accountProvider: 'fixture', accountId: 'account-1' },
+      };
+      const [first, second] = proposal.files[0]!.items;
+      await fixture.manager.stage(proposal);
+      await fixture.manager.accept(first!.id);
+
+      expect(fixture.manager.activeReviews).toHaveLength(1);
+      expect(fixture.manager.pendingResults).toEqual([
+        expect.objectContaining({
+          id: `edit-review-result:${proposal.id}:${first!.id}`,
+          origin: proposal.origin,
+        }),
+      ]);
+
+      await fixture.manager.reject(second!.id);
+
+      expect(fixture.manager.activeReviews).toStrictEqual([]);
+      expect(fixture.manager.pendingResults).toEqual([
+        expect.objectContaining({
+          id: `edit-review-result:${proposal.id}:${first!.id}`,
+          reviewId: proposal.id,
+          items: [
+            expect.objectContaining({
+              itemId: first!.id,
+              decision: EditDecisionState.ACCEPTED,
+              affectedPaths: ['file.txt'],
+              resultingRevision: expect.any(String),
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          id: `edit-review-result:${proposal.id}:${second!.id}`,
+          reviewId: proposal.id,
+          items: [
+            expect.objectContaining({
+              itemId: second!.id,
+              decision: EditDecisionState.REJECTED,
+              affectedPaths: ['file.txt'],
+              resultingRevision: expect.any(String),
+            }),
+          ],
+        }),
+      ]);
+
+      const recovered = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(fixture.root),
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+      expect(recovered.activeReviews).toStrictEqual([]);
+      expect(recovered.pendingResults).toEqual(fixture.manager.pendingResults);
+
+      await recovered.acknowledgeResults(recovered.pendingResults.map(result => result.id));
+
+      expect(recovered.pendingResults).toStrictEqual([]);
+      await expect(readFile(join(fixture.state, 'active-proposal-review.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+  });
+
+  describe(ProposalReviewManager.prototype.initialize, () => {
+    it('rejects a checkpoint from another workspace even when paths and contents match', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      await fixture.manager.stage(proposal);
+
+      const otherRoot = await mkdtemp(join(tmpdir(), 'proposal-recovery-other-root-'));
+      directories.push(otherRoot);
+      await writeFile(join(otherRoot, 'file.txt'), 'base');
+      const otherWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(otherRoot));
+      const otherManager = new ProposalReviewManager(
+        otherWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+
+      await expect(otherManager.initialize()).rejects.toMatchObject({ reason: EditFailureReason.PERSISTENCE });
+      expect(otherManager.activeReviews).toStrictEqual([]);
+      expect(otherWorkspace.mutationCalls).toBe(0);
+      expect(await readFile(join(otherRoot, 'file.txt'), 'utf8')).toBe('base');
+    });
+
+    it('turns an applying checkpoint back into a retryable pending edit when no mutation occurred', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      const file = proposal.files[0]!;
+      file.applicability = EditApplicabilityState.APPLYING;
+      file.applyingItemId = file.items[0]!.id;
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
+
+      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recovered = new ProposalReviewManager(
+        recoveredWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+
+      const recoveredItem = recovered.activeReviews[0]!.files[0]!.items[0]!;
+      expect(recoveredItem.decision).toBe(EditDecisionState.PENDING);
+      expect(recovered.activeReviews[0]!.files[0]!.applicability).toBe(EditApplicabilityState.READY);
+      expect(recovered.activeReviews[0]!.files[0]!.applyingItemId).toBeNull();
+      expect(recoveredWorkspace.replaceCalls).toBe(0);
+
+      await recovered.accept(recoveredItem.id);
+
+      expect(recoveredWorkspace.replaceCalls).toBe(1);
+      expect(recovered.activeReviews).toStrictEqual([]);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+    });
+
+    it('retries recovery after the reconciled checkpoint itself fails to persist', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeReplacement(fixture.service, fixture.workspace, 'next');
+      const file = proposal.files[0]!;
+      file.applicability = EditApplicabilityState.APPLYING;
+      file.applyingItemId = file.items[0]!.id;
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
+      await fixture.workspace.replace('file.txt', file.currentRevision!, 'next', false);
+
+      const firstStore = new FaultInjectingProposalReviewStore(new FileProposalReviewStore(fixture.state));
+      firstStore.failSaveCall(1);
+      const firstRecovery = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(fixture.root),
+        firstStore,
+        new NullLogger(),
+        8,
+      );
+      await expect(firstRecovery.initialize()).rejects.toMatchObject({ reason: EditFailureReason.PERSISTENCE });
+
+      const secondRecovery = new ProposalReviewManager(
+        new FileSystemWorkspaceTextStore(fixture.root),
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await secondRecovery.initialize();
+
+      expect(secondRecovery.activeReviews).toStrictEqual([]);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('next');
+    });
+
+    it('recognizes a completed create from its applying checkpoint without creating it twice', async () => {
+      const fixture = await createFixture();
+      const proposal = await fixture.service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.CREATE,
+            path: 'created.txt',
+            new_path: null,
+            base_revision: null,
+            content: 'created',
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      markApplying(proposal);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
+      await new FileSystemWorkspaceTextStore(fixture.root).create('created.txt', 'created', false);
+
+      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recovered = new ProposalReviewManager(
+        recoveredWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+
+      expect(recoveredWorkspace.mutationCalls).toBe(0);
+      expect(recovered.activeReviews).toStrictEqual([]);
+      expect(await readFile(join(fixture.root, 'created.txt'), 'utf8')).toBe('created');
+    });
+
+    it('recognizes a completed delete from its applying checkpoint without deleting anything else', async () => {
+      const fixture = await createFixture();
+      const base = await fixture.workspace.read('file.txt');
+      const proposal = await fixture.service.proposeStructured({
+        files: [
+          {
+            operation: EditOperation.DELETE,
+            path: 'file.txt',
+            new_path: null,
+            base_revision: base.revision,
+            content: null,
+            byte_order_mark: null,
+            edits: [],
+          },
+        ],
+      });
+      markApplying(proposal);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
+      await new FileSystemWorkspaceTextStore(fixture.root).delete('file.txt', base.revision);
+
+      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recovered = new ProposalReviewManager(
+        recoveredWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+
+      expect(recoveredWorkspace.mutationCalls).toBe(0);
+      expect(recovered.activeReviews).toStrictEqual([]);
+      await expect(readFile(join(fixture.root, 'file.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('recognizes a completed rename from its applying checkpoint without moving it twice', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeRename(fixture);
+      const file = proposal.files[0]!;
+      markApplying(proposal);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
+      await new FileSystemWorkspaceTextStore(fixture.root).rename(
+        file.sourcePath,
+        file.targetPath,
+        file.currentRevision!,
+      );
+
+      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recovered = new ProposalReviewManager(
+        recoveredWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+
+      expect(recoveredWorkspace.mutationCalls).toBe(0);
+      expect(recovered.activeReviews).toStrictEqual([]);
+      expect(await readFile(join(fixture.root, 'renamed.txt'), 'utf8')).toBe('base');
+      await expect(readFile(join(fixture.root, 'file.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('finishes a rename interrupted between linking the target and unlinking the source', async () => {
+      const fixture = await createFixture();
+      const proposal = await proposeRename(fixture);
+      markApplying(proposal);
+      await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
+      await link(join(fixture.root, 'file.txt'), join(fixture.root, 'renamed.txt'));
+
+      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recovered = new ProposalReviewManager(
+        recoveredWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+      await recovered.initialize();
+
+      expect(recoveredWorkspace.mutationCalls).toBe(1);
+      expect(recovered.activeReviews).toStrictEqual([]);
+      expect(await readFile(join(fixture.root, 'renamed.txt'), 'utf8')).toBe('base');
+      await expect(readFile(join(fixture.root, 'file.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it.each([
+      { name: 'an unsupported source', error: new EditError(EditFailureReason.UNSUPPORTED, 'Parent became a file.') },
+      { name: 'a changed source', error: new EditError(EditFailureReason.STALE, 'Source changed before deletion.') },
+      { name: 'an oversized source', error: new WorkspaceReadLimitError('file.txt', 64, 65) },
+      {
+        name: 'a vanished source',
+        error: Object.assign(new Error('Source vanished before unlink.'), { code: 'ENOENT' }),
+      },
+    ])('retains an interrupted rename as stale when cleanup encounters $name', async ({ error }) => {
+      const fixture = await createFixture();
+      const proposal = await proposeRename(fixture);
+      markApplying(proposal);
+      await fixture.store.save([proposal], fixture.root);
+      await link(join(fixture.root, 'file.txt'), join(fixture.root, 'renamed.txt'));
+      const remove = vi.spyOn(fixture.workspace, 'delete').mockRejectedValue(error);
+      const checkpoint = new FileProposalReviewStore(fixture.state);
+      const recovered = new ProposalReviewManager(fixture.workspace, checkpoint);
+
+      await expect(recovered.initialize()).resolves.toBeUndefined();
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(recovered.pendingResults).toEqual([]);
+      const [stored] = await checkpoint.load(fixture.root);
+      expect(stored?.files[0]).toMatchObject({
+        sourcePath: 'file.txt',
+        targetPath: 'renamed.txt',
+        currentPath: 'file.txt',
+        currentRevision: proposal.files[0]!.currentRevision,
+        applicability: EditApplicabilityState.STALE,
+        applyingItemId: null,
+        items: [{ decision: EditDecisionState.PENDING }],
+      });
+      await recovered.rejectAll();
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(recovered.pendingResults[0]?.items[0]?.decision).toBe(EditDecisionState.REJECTED);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
+      expect(await readFile(join(fixture.root, 'renamed.txt'), 'utf8')).toBe('base');
+    });
+
+    it.each([
+      { name: 'permission denial', error: Object.assign(new Error('Permission denied.'), { code: 'EACCES' }) },
+      {
+        name: 'an operation permission denial',
+        error: Object.assign(new Error('Operation denied.'), { code: 'EPERM' }),
+      },
+      { name: 'checkpoint failure', error: new EditError(EditFailureReason.PERSISTENCE, 'Checkpoint failed.') },
+      { name: 'an unexpected failure', error: new Error('Unexpected cleanup failure.') },
+    ])('does not hide $name from interrupted rename cleanup', async ({ error }) => {
+      const fixture = await createFixture();
+      const proposal = await proposeRename(fixture);
+      markApplying(proposal);
+      await fixture.store.save([proposal], fixture.root);
+      await link(join(fixture.root, 'file.txt'), join(fixture.root, 'renamed.txt'));
+      vi.spyOn(fixture.workspace, 'delete').mockRejectedValue(error);
+      const checkpoint = new FileProposalReviewStore(fixture.state);
+      const save = vi.spyOn(checkpoint, 'save');
+      const recovered = new ProposalReviewManager(fixture.workspace, checkpoint);
+
+      await expect(recovered.initialize()).rejects.toBe(error);
+      expect(save).not.toHaveBeenCalled();
+      expect(recovered.pendingResults).toEqual([]);
+      expect((await checkpoint.load(fixture.root))[0]?.files[0]).toMatchObject({
+        applyingItemId: proposal.files[0]!.applyingItemId,
+        items: [{ decision: EditDecisionState.PENDING }],
+      });
+    });
+
+    it('rejects a malformed checkpoint without touching the workspace', async () => {
+      const fixture = await createFixture();
+      await writeFile(join(fixture.state, 'active-proposal-review.json'), '{"schemaVersion":2,"proposals":[');
+
+      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recovered = new ProposalReviewManager(
+        recoveredWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+
+      await expect(recovered.initialize()).rejects.toMatchObject({ reason: EditFailureReason.PERSISTENCE });
+      expect(recoveredWorkspace.mutationCalls).toBe(0);
+      expect(recovered.activeReviews).toStrictEqual([]);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
+    });
+
+    it('rejects a structurally incomplete proposal before attempting workspace recovery', async () => {
+      const fixture = await createFixture();
+      await writeFile(
+        join(fixture.state, 'active-proposal-review.json'),
+        JSON.stringify({ schemaVersion: 2, proposals: [{ schemaVersion: 1, id: 'broken', files: [{}] }] }),
+      );
+
+      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recovered = new ProposalReviewManager(
+        recoveredWorkspace,
+        new FileProposalReviewStore(fixture.state),
+        new NullLogger(),
+        8,
+      );
+
+      await expect(recovered.initialize()).rejects.toMatchObject({ reason: EditFailureReason.PERSISTENCE });
+      expect(recoveredWorkspace.mutationCalls).toBe(0);
+      expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
+    });
+  });
+});
+
+class FaultInjectingProposalReviewStore implements ProposalReviewStore {
+  private saveCalls = 0;
+  private readonly failingSaveCalls = new Set<number>();
+
+  constructor(private readonly delegate: ProposalReviewStore) {}
+
+  failSaveCall(call: number): void {
+    this.failingSaveCalls.add(call);
+  }
+
+  load(workspaceIdentity: string): Promise<EditProposal[]> {
+    return this.delegate.load(workspaceIdentity);
+  }
+
+  async save(proposals: readonly EditProposal[], workspaceIdentity: string): Promise<void> {
+    this.saveCalls++;
+    if (this.failingSaveCalls.delete(this.saveCalls)) {
+      throw new EditError(EditFailureReason.PERSISTENCE, 'Injected checkpoint failure.');
+    }
+    await this.delegate.save(proposals, workspaceIdentity);
+  }
+
+  clear(): Promise<void> {
+    return this.delegate.clear();
+  }
+}
+
+class ThrowingLogger implements Logger {
+  forNamespace(): Logger {
+    return this;
+  }
+  trace(): never {
+    throw new Error('Injected logging failure.');
+  }
+  debug(): never {
+    throw new Error('Injected logging failure.');
+  }
+  info(): never {
+    throw new Error('Injected logging failure.');
+  }
+  warn(): never {
+    throw new Error('Injected logging failure.');
+  }
+  error(): never {
+    throw new Error('Injected logging failure.');
+  }
+}
+
+class CountingWorkspaceTextStore implements WorkspaceTextStore {
+  private failReplaceAfterCommit = false;
+  mutationCalls = 0;
+  replaceCalls = 0;
+
+  constructor(private readonly delegate: WorkspaceTextStore) {}
+
+  canonicalPath(path: string): Promise<string> {
+    return this.delegate.canonicalPath(path);
+  }
+
+  exists(path: string): Promise<boolean> {
+    return this.delegate.exists(path);
+  }
+
+  get root(): string {
+    return this.delegate.root;
+  }
+
+  get caseSensitive(): boolean {
+    return this.delegate.caseSensitive;
+  }
+
+  get mutationConsistency() {
+    return this.delegate.mutationConsistency;
+  }
+
+  failAfterNextReplace(): void {
+    this.failReplaceAfterCommit = true;
+  }
+
+  list(
+    maxFiles: number,
+    globPattern?: string,
+    targetDirectory?: string,
+  ): Promise<{ files: string[]; truncated: boolean }> {
+    return this.delegate.list(maxFiles, globPattern, targetDirectory);
+  }
+
+  normalizePath(path: string): string {
+    return this.delegate.normalizePath(path);
+  }
+
+  read(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot> {
+    return this.delegate.read(path, options);
+  }
+
+  readOptional(path: string, options?: WorkspaceReadOptions): Promise<WorkspaceTextSnapshot | undefined> {
+    return this.delegate.readOptional(path, options);
+  }
+
+  async create(
+    path: string,
+    text: string,
+    byteOrderMark: boolean,
+    mode?: number,
+    options?: WorkspaceMutationOptions,
+  ): Promise<WorkspaceTextSnapshot> {
+    this.mutationCalls++;
+    return this.delegate.create(path, text, byteOrderMark, mode, options);
+  }
+
+  async replace(
+    path: string,
+    expectedRevision: string,
+    text: string,
+    byteOrderMark: boolean,
+    options?: WorkspaceMutationOptions,
+  ): Promise<WorkspaceTextSnapshot> {
+    this.mutationCalls++;
+    this.replaceCalls++;
+    const result = await this.delegate.replace(path, expectedRevision, text, byteOrderMark, options);
+    if (this.failReplaceAfterCommit) {
+      this.failReplaceAfterCommit = false;
+      throw new Error('Injected failure after replace committed.');
+    }
+    return result;
+  }
+
+  async rename(
+    source: string,
+    target: string,
+    expectedRevision: string,
+    options?: WorkspaceMutationOptions,
+  ): Promise<WorkspaceTextSnapshot> {
+    this.mutationCalls++;
+    return this.delegate.rename(source, target, expectedRevision, options);
+  }
+
+  async delete(path: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void> {
+    this.mutationCalls++;
+    await this.delegate.delete(path, expectedRevision, options);
+  }
+}
+
+async function createFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'proposal-recovery-root-'));
+  const state = await mkdtemp(join(tmpdir(), 'proposal-recovery-state-'));
+  directories.push(root, state);
+  await writeFile(join(root, 'file.txt'), 'base');
+  const workspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(root));
+  const store = new FaultInjectingProposalReviewStore(new FileProposalReviewStore(state));
+  const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
+  const manager = new ProposalReviewManager(workspace, store, new NullLogger(), 8);
+  return { root, state, workspace, store, service, manager };
+}
+
+async function proposeReplacement(
+  service: EditProposalService,
+  workspace: WorkspaceTextStore,
+  content: string,
+): Promise<EditProposal> {
+  const base = await workspace.read('file.txt');
+  return service.proposeStructured({
+    files: [
+      {
+        operation: EditOperation.UPDATE,
+        path: 'file.txt',
+        new_path: null,
+        base_revision: base.revision,
+        content,
+        byte_order_mark: null,
+        edits: [],
+      },
+    ],
+  });
+}
+
+async function proposeTwoReplacements(
+  service: EditProposalService,
+  workspace: WorkspaceTextStore,
+): Promise<EditProposal> {
+  const base = await workspace.read('file.txt');
+  return service.proposeStructured({
+    files: [
+      {
+        operation: EditOperation.UPDATE,
+        path: 'file.txt',
+        new_path: null,
+        base_revision: base.revision,
+        content: null,
+        byte_order_mark: null,
+        edits: [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+            expected_text: 'one',
+            replacement_text: 'ONE',
+          },
+          {
+            range: { start: { line: 2, character: 0 }, end: { line: 2, character: 5 } },
+            expected_text: 'three',
+            replacement_text: 'THREE',
+          },
+        ],
+      },
+    ],
+  });
+}
+
+async function proposeRename(fixture: Awaited<ReturnType<typeof createFixture>>): Promise<EditProposal> {
+  const base = await fixture.workspace.read('file.txt');
+  return fixture.service.proposeStructured({
+    files: [
+      {
+        operation: EditOperation.RENAME,
+        path: 'file.txt',
+        new_path: 'renamed.txt',
+        base_revision: base.revision,
+        content: 'base',
+        byte_order_mark: null,
+        edits: [],
+      },
+    ],
+  });
+}
+
+function markApplying(proposal: EditProposal): void {
+  const file = proposal.files[0]!;
+  file.applicability = EditApplicabilityState.APPLYING;
+  file.applyingItemId = file.items[0]!.id;
+}

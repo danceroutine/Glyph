@@ -26,9 +26,10 @@ export function useGlyphQuestionCardState({
   initialAnswers,
   onDraftChange,
 }: GlyphQuestionCardStateOptions) {
-  const questions = request.questions?.length
-    ? request.questions
-    : [{ id: request.id, prompt: request.prompt, allowMultiple: false, options: [] }];
+  const questions =
+    request.questions !== undefined && request.questions.length > 0
+      ? request.questions
+      : [{ id: request.id, prompt: request.prompt, allowMultiple: false, options: [] }];
   const [answers, setAnswers] = useState(initialAnswers);
   const [step, setStep] = useState(0);
   const viewport = useRef<HTMLDivElement>(null);
@@ -81,7 +82,7 @@ export function useGlyphQuestionCardState({
       if (!container) return;
       const top = container.getBoundingClientRect().top;
       const index = fieldsets.current.findIndex(
-        fieldset => fieldset && fieldset.getBoundingClientRect().bottom > top + 24,
+        fieldset => fieldset !== null && fieldset.getBoundingClientRect().bottom > top + 24,
       );
       if (index !== -1) setStep(index);
     },
@@ -93,7 +94,9 @@ export function useGlyphQuestionCardState({
         fieldset: (element: HTMLFieldSetElement | null) => {
           fieldsets.current[index] = element;
         },
-        activate: () => setStep(index),
+        activate: () => {
+          setStep(index);
+        },
         other: answer?.type === QuestionAnswerType.OTHER || question.options.length === 0,
         selectedOptionIds: answer?.type === QuestionAnswerType.SELECTION ? answer.optionIds : [],
         otherText: answer?.type === QuestionAnswerType.OTHER ? answer.text : '',
@@ -109,8 +112,12 @@ export function useGlyphQuestionCardState({
               : [optionId],
           });
         },
-        enterOther: () => update({ questionId: question.id, type: QuestionAnswerType.OTHER, text: '' }),
-        updateOther: (text: string) => update({ questionId: question.id, type: QuestionAnswerType.OTHER, text }),
+        enterOther: () => {
+          update({ questionId: question.id, type: QuestionAnswerType.OTHER, text: '' });
+        },
+        updateOther: (text: string) => {
+          update({ questionId: question.id, type: QuestionAnswerType.OTHER, text });
+        },
       };
     }),
     disabled,
@@ -118,8 +125,14 @@ export function useGlyphQuestionCardState({
     error,
     valid: isValid(questions[step]!.id),
     continueForm,
-    cancel: () => actions.cancel(),
-    back: () => navigate(step - 1),
-    next: () => navigate(step + 1),
+    cancel: () => {
+      actions.cancel();
+    },
+    back: () => {
+      navigate(step - 1);
+    },
+    next: () => {
+      navigate(step + 1);
+    },
   };
 }

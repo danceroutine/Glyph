@@ -17,14 +17,18 @@ export function GlyphModelPicker({ model, label, disabled, models, selectModel }
     items: models,
     selectedIndex,
     label: item => item.label,
-    choose: item => selectModel(item.value),
+    choose: item => {
+      selectModel(item.value);
+    },
     disabled,
   });
   return (
     <div
       ref={dropdown.root}
       class={`glyph-model-picker ${styles.root}`}
-      onBlur={event => dropdown.blur(event.relatedTarget)}
+      onBlur={event => {
+        dropdown.blur(event.relatedTarget);
+      }}
     >
       <Button
         buttonRef={dropdown.trigger}

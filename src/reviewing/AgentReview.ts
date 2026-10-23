@@ -16,6 +16,8 @@ export interface AgentReviewFinding {
   readonly id: string;
   readonly path: string;
   readonly line: number;
+  /** Older persisted reports infer the side from whether the captured file was deleted. */
+  readonly side?: 'original' | 'modified';
   readonly title: string;
   readonly body: string;
 }

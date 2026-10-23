@@ -13,5 +13,5 @@ it('binds CLI review persistence to the resolved workspace mutation scope', asyn
   };
   visit(source);
   expect(stores).toHaveLength(1);
-  expect(stores[0]?.arguments?.[1]?.getText(source)).toMatch(/mutationScope:\s*projectContext\.mutationIdentity/);
+  expect(stores[0]?.arguments?.[1]?.getText(source)).toMatch(/mutationScope:\s*projectContext\.mutationIdentity/u);
 });

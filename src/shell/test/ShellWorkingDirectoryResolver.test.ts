@@ -68,6 +68,20 @@ describe(ShellWorkingDirectoryResolver, () => {
       await expect(workspace.resolve()).rejects.toThrow('select a root');
       await expect(workspace.resolve('missing/path')).rejects.toThrow('must begin with a root name');
     });
+
+    it('resolves a bare workspace root name to that root', async () => {
+      const root = await temporaryDirectory();
+      const workspace = new ShellWorkingDirectoryResolver({
+        id: 'workspace',
+        mutationIdentity: 'workspace-root',
+        kind: ProjectContextKind.WORKSPACE,
+        name: 'Workspace',
+        authority: 'local',
+        roots: [{ name: 'app', path: root }],
+      });
+
+      await expect(workspace.resolve('app')).resolves.toBe(await realpath(root));
+    });
   });
 });
 

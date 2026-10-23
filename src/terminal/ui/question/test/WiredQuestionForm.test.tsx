@@ -7,9 +7,9 @@ import { WiredQuestionForm } from '#src/terminal/ui/question/QuestionForm.wired.
 describe(WiredQuestionForm, () => {
   describe('interaction', () => {
     it.each([
-      ['Down', '\x1b[1;1:3B'],
-      ['Enter', '\x1b[13;1:3u'],
-      ['Ctrl+C', '\x1b[99;5:3u'],
+      ['Down', '\u001B[1;1:3B'],
+      ['Enter', '\u001B[13;1:3u'],
+      ['Ctrl+C', '\u001B[99;5:3u'],
     ])('ignores a %s release without navigating, submitting, or interrupting', async (_key, input) => {
       const complete = vi.fn();
       const interrupt = vi.fn();
@@ -33,12 +33,12 @@ describe(WiredQuestionForm, () => {
       const complete = vi.fn();
       const view = render(<WiredQuestionForm request={request(complete, [question('choice', false)])} />);
       try {
-        await write(view, '\x1b[B');
-        await write(view, '\x1b[B');
+        await write(view, '\u001B[B');
+        await write(view, '\u001B[B');
         await write(view, '\r');
         await write(view, 'answer');
-        await write(view, '\x1b[127;1:3u');
-        await write(view, '\x1b[120;1:3u');
+        await write(view, '\u001B[127;1:3u');
+        await write(view, '\u001B[120;1:3u');
         await write(view, '\r');
         expect(complete).toHaveBeenCalledExactlyOnceWith({
           answers: [{ questionId: 'choice', type: QuestionAnswerType.OTHER, text: 'answer' }],
@@ -59,7 +59,7 @@ describe(WiredQuestionForm, () => {
         );
         try {
           await tick();
-          view.stdin.write(reveal === 'Enter' ? '\r' : '\x1b[B');
+          view.stdin.write(reveal === 'Enter' ? '\r' : '\u001B[B');
           view.stdin.write('\r');
           await tick();
           expect(complete).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ describe(WiredQuestionForm, () => {
       const view = render(<WiredQuestionForm request={request(complete, [question('choice', false)])} />);
       try {
         await tick();
-        view.stdin.write('\x1b[B');
+        view.stdin.write('\u001B[B');
         view.stdin.write('\r');
         await tick();
         expect(complete).toHaveBeenCalledExactlyOnceWith({
@@ -93,7 +93,7 @@ describe(WiredQuestionForm, () => {
       try {
         await tick();
         view.stdin.write(' ');
-        view.stdin.write('\x1b[B');
+        view.stdin.write('\u001B[B');
         view.stdin.write(' ');
         view.stdin.write('\r');
         await tick();
@@ -110,16 +110,16 @@ describe(WiredQuestionForm, () => {
       const view = render(<WiredQuestionForm request={request(complete, [question('name', false)])} />);
       try {
         await tick();
-        view.stdin.write('\x1b[B');
-        view.stdin.write('\x1b[B');
+        view.stdin.write('\u001B[B');
+        view.stdin.write('\u001B[B');
         view.stdin.write('\r');
         if (input === 'typed') {
           view.stdin.write('ab');
           view.stdin.write('cd');
-          view.stdin.write('\x7f');
+          view.stdin.write('\u007F');
           view.stdin.write('!');
         } else {
-          view.stdin.write('\x1b[200~abc!\x1b[201~');
+          view.stdin.write('\u001B[200~abc!\u001B[201~');
         }
         view.stdin.write('\r');
         await tick();
@@ -139,13 +139,13 @@ describe(WiredQuestionForm, () => {
       );
       try {
         await write(view, '\r');
-        await waitUntil(() => (view.lastFrame() ?? '').includes('Question  2/2'));
+        await expect.poll(() => (view.lastFrame() ?? '').includes('Question  2/2')).toBe(true);
         await write(view, '\r');
         expect(firstComplete).toHaveBeenCalledTimes(1);
         view.rerender(
           <WiredQuestionForm request={{ ...request(nextComplete, [question('replacement', false)]), id: 2 }} />,
         );
-        await waitUntil(() => (view.lastFrame() ?? '').includes('Choose for replacement.'));
+        await expect.poll(() => (view.lastFrame() ?? '').includes('Choose for replacement.')).toBe(true);
         await write(view, '\r');
         expect(nextComplete).toHaveBeenCalledExactlyOnceWith({
           answers: [{ questionId: 'replacement', type: QuestionAnswerType.SELECTION, optionIds: ['first'] }],
@@ -164,7 +164,7 @@ describe(WiredQuestionForm, () => {
         await tick();
         view.stdin.write('\r');
         view.stdin.write('\r');
-        await waitUntil(() => (view.lastFrame() ?? '').includes('Question  2/2'));
+        await expect.poll(() => (view.lastFrame() ?? '').includes('Question  2/2')).toBe(true);
         expect(complete).not.toHaveBeenCalled();
         view.stdin.write('\r');
         view.stdin.write('\r');
@@ -191,17 +191,17 @@ describe(WiredQuestionForm, () => {
         try {
           await tick();
           if (kind === 'other') {
-            await write(view, '\x1b[B');
-            await write(view, '\x1b[B');
+            await write(view, '\u001B[B');
+            await write(view, '\u001B[B');
             await write(view, '\r');
             await write(view, 'custom');
           }
           view.stdin.write('\r');
           view.stdin.write('\r');
-          view.stdin.write('\x03');
+          view.stdin.write('\u0003');
           await tick();
           expect(complete).toHaveBeenCalledTimes(1);
-          expect(complete.mock.calls[0]?.[0].answers).toHaveLength(1);
+          expect((complete.mock.calls[0]?.[0] as { answers: unknown[] } | undefined)?.answers).toHaveLength(1);
           expect(interrupt).not.toHaveBeenCalled();
         } finally {
           view.unmount();
@@ -217,8 +217,8 @@ describe(WiredQuestionForm, () => {
       );
       try {
         await tick();
-        view.stdin.write('\x03');
-        view.stdin.write('\x03');
+        view.stdin.write('\u0003');
+        view.stdin.write('\u0003');
         view.stdin.write('\r');
         await tick();
         expect(interrupt).toHaveBeenCalledTimes(1);
@@ -234,18 +234,18 @@ describe(WiredQuestionForm, () => {
         <WiredQuestionForm request={request(complete, [question('first', false), question('second', false)])} />,
       );
 
-      await write(view, '\x1b[B');
+      await write(view, '\u001B[B');
       await write(view, '\r');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('Question  2/2'));
-      await write(view, '\x1b[B');
-      await write(view, '\x1b[B');
+      await expect.poll(() => (view.lastFrame() ?? '').includes('Question  2/2')).toBe(true);
+      await write(view, '\u001B[B');
+      await write(view, '\u001B[B');
       await write(view, '\r');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('other>'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('other>')).toBe(true);
       await write(view, '\r');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('Type an answer'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('Type an answer')).toBe(true);
       await write(view, 'Custom');
       await write(view, '\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(complete).toHaveBeenCalledWith({
         answers: [
@@ -261,14 +261,14 @@ describe(WiredQuestionForm, () => {
       const view = render(<WiredQuestionForm request={request(complete, [question('features', true)])} />);
 
       await write(view, '\r');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('Select at least one'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('Select at least one')).toBe(true);
       await write(view, ' ');
-      await write(view, '\x1b[B');
+      await write(view, '\u001B[B');
       await write(view, ' ');
-      await write(view, '\x1b[A');
+      await write(view, '\u001B[A');
       await write(view, ' ');
       await write(view, '\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(complete).toHaveBeenCalledWith({
         answers: [{ questionId: 'features', type: QuestionAnswerType.SELECTION, optionIds: ['second'] }],
@@ -281,36 +281,36 @@ describe(WiredQuestionForm, () => {
       const view = render(<WiredQuestionForm request={request(complete, [question('name', false)])} />);
 
       await write(view, 'x');
-      await write(view, '\x1b[A');
-      await write(view, '\x1b[B');
-      await write(view, '\x1b[B');
+      await write(view, '\u001B[A');
+      await write(view, '\u001B[B');
+      await write(view, '\u001B[B');
       await write(view, ' ');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('other>'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('other>')).toBe(true);
       await write(view, 'a😀b');
-      await write(view, '\x1b[H');
-      await write(view, '\x1b[C');
-      await write(view, '\x1b[C');
-      await write(view, '\x05');
-      await write(view, '\x1b[D');
-      await write(view, '\x7f');
-      await write(view, '\x1b[C');
-      await write(view, '\x1b[C');
-      await write(view, '\x1b[3~');
-      await write(view, '\x1b[H');
-      await write(view, '\x7f');
-      await write(view, '\x1b[3~');
-      await write(view, '\x05');
-      await write(view, '\x01');
-      await write(view, '\x1b[C');
-      await write(view, '\x18');
-      await write(view, '\x1b[200~ pasted\ntext\x1b[201~');
+      await write(view, '\u001B[H');
+      await write(view, '\u001B[C');
+      await write(view, '\u001B[C');
+      await write(view, '\u0005');
+      await write(view, '\u001B[D');
+      await write(view, '\u007F');
+      await write(view, '\u001B[C');
+      await write(view, '\u001B[C');
+      await write(view, '\u001B[3~');
+      await write(view, '\u001B[H');
+      await write(view, '\u007F');
+      await write(view, '\u001B[3~');
+      await write(view, '\u0005');
+      await write(view, '\u0001');
+      await write(view, '\u001B[C');
+      await write(view, '\u0018');
+      await write(view, '\u001B[200~ pasted\ntext\u001B[201~');
       await writeEscape(view);
-      await waitUntil(() => !(view.lastFrame() ?? '').includes('other>'));
+      await expect.poll(() => !(view.lastFrame() ?? '').includes('other>')).toBe(true);
       await write(view, ' ');
-      await waitUntil(() => (view.lastFrame() ?? '').includes('other>'));
+      await expect.poll(() => (view.lastFrame() ?? '').includes('other>')).toBe(true);
       await write(view, 'final');
       await write(view, '\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(complete.mock.calls[0]?.[0]).toEqual({
         answers: [{ questionId: 'name', type: QuestionAnswerType.OTHER, text: expect.stringContaining('final') }],
@@ -323,8 +323,8 @@ describe(WiredQuestionForm, () => {
       const inactive = render(
         <WiredQuestionForm request={{ ...request(vi.fn(), [question('one', false)]), interrupt }} active={false} />,
       );
-      inactive.stdin.write('\x1b[B');
-      inactive.stdin.write('\x03');
+      inactive.stdin.write('\u001B[B');
+      inactive.stdin.write('\u0003');
       await tick();
 
       expect(inactive.lastFrame()).toContain('› ● First');
@@ -334,8 +334,8 @@ describe(WiredQuestionForm, () => {
       const active = render(
         <WiredQuestionForm request={{ ...request(vi.fn(), [question('one', false)]), interrupt }} />,
       );
-      active.stdin.write('\x03');
-      await waitUntil(() => interrupt.mock.calls.length === 1);
+      active.stdin.write('\u0003');
+      await expect.poll(() => interrupt.mock.calls.length === 1).toBe(true);
       active.unmount();
     });
 
@@ -343,9 +343,9 @@ describe(WiredQuestionForm, () => {
       const complete = vi.fn();
       const view = render(<WiredQuestionForm request={request(complete, [question('one', false)])} />);
 
-      view.stdin.write('\x1b[200~ignored\x1b[201~');
+      view.stdin.write('\u001B[200~ignored\u001B[201~');
       view.stdin.write('\r');
-      await waitUntil(() => complete.mock.calls.length === 1);
+      await expect.poll(() => complete.mock.calls.length === 1).toBe(true);
 
       expect(complete.mock.calls[0]?.[0]).toEqual({
         answers: [{ questionId: 'one', type: QuestionAnswerType.SELECTION, optionIds: ['first'] }],
@@ -374,16 +374,10 @@ function question(id: string, allowMultiple: boolean) {
   };
 }
 
-async function waitUntil(assertion: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    if (assertion()) return;
-    await tick();
-  }
-  throw new Error('Timed out waiting for terminal render.');
-}
-
 async function tick(): Promise<void> {
-  await new Promise<void>(resolve => setImmediate(resolve));
+  await new Promise<void>(resolve => {
+    setImmediate(resolve);
+  });
 }
 
 async function write(view: ReturnType<typeof render>, input: string): Promise<void> {
@@ -392,6 +386,8 @@ async function write(view: ReturnType<typeof render>, input: string): Promise<vo
 }
 
 async function writeEscape(view: ReturnType<typeof render>): Promise<void> {
-  view.stdin.write('\x1b');
-  await new Promise<void>(resolve => setTimeout(resolve, 75));
+  view.stdin.write('\u001B');
+  await new Promise<void>(resolve => {
+    setTimeout(resolve, 75);
+  });
 }

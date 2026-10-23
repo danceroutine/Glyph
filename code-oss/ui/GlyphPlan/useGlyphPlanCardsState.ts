@@ -1,12 +1,17 @@
 import { useRef, useState } from 'preact/hooks';
 import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
-export function useGlyphPlanCardsState(
-  chatId: string,
-  plans: readonly GlyphPlan[],
-  actions: GlyphWorkbenchViewActions,
-  buildingPlanIds?: readonly string[],
-) {
+export function useGlyphPlanCardsState({
+  chatId,
+  plans,
+  actions,
+  buildingPlanIds,
+}: {
+  readonly chatId: string;
+  readonly plans: readonly GlyphPlan[];
+  readonly actions: GlyphWorkbenchViewActions;
+  readonly buildingPlanIds?: readonly string[] | undefined;
+}) {
   const busy = useRef(false);
   const [pending, setPending] = useState(false);
   const [requested, setRequested] = useState<string>();

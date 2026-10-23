@@ -1,8 +1,7 @@
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
 import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
@@ -34,7 +33,7 @@ export class DeterministicDesktopRuntimeFactory implements GlyphDesktopWorkspace
     readonly emit: (event: GlyphHostEvent) => void;
   }): Promise<GlyphDesktopWorkspaceRuntime> {
     const root = input.roots[0]?.canonicalPath;
-    if (!root) throw new Error('The native Glyph runtime requires a local workspace root.');
+    if (root === undefined || root === '') throw new Error('The native Glyph runtime requires a local workspace root.');
     await (this.probe ??= probePackagedRuntime(root));
     return new DeterministicDesktopRuntime(input.emit);
   }
@@ -70,12 +69,11 @@ class DeterministicDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   async handle(command: GlyphRuntimeCommand): Promise<void> {
     if (command.type === GlyphWorkbenchCommandType.SEND) {
-      await this.send(command);
+      void this.send(command);
       return;
     }
     if (command.type === GlyphWorkbenchCommandType.CANCEL_RUN) {
       this.cancellations.add(command.runId);
-      return;
     }
   }
 
@@ -139,19 +137,21 @@ class DeterministicDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 }
 
 function delay(milliseconds: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, milliseconds));
+  return new Promise(settle => {
+    setTimeout(settle, milliseconds);
+  });
 }
 
 async function probePackagedRuntime(workspaceRoot: string): Promise<void> {
   const database = new Database(':memory:');
   try {
-    const result = database.prepare('select 1 as ok').get() as { ok?: number };
-    if (result.ok !== 1) throw new Error('The packaged SQLite probe returned an invalid result.');
+    const result = database.prepare<[], { ok?: number }>('select 1 as ok').get();
+    if (result?.ok !== 1) throw new Error('The packaged SQLite probe returned an invalid result.');
   } finally {
     database.close();
   }
 
-  const artifactRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const artifactRoot = resolve(import.meta.dirname, '..', '..', '..');
   const nativeRoot = join(artifactRoot, 'native', `${process.platform}-${process.arch}`);
   const suffix = process.platform === 'win32' ? '.exe' : '';
   await execute(join(nativeRoot, `glyph-context-index${suffix}`), ['--help']);
@@ -173,7 +173,10 @@ async function probePackagedRuntime(workspaceRoot: string): Promise<void> {
 
 function execute(file: string, arguments_: readonly string[]): Promise<void> {
   return new Promise((resolvePromise, reject) => {
-    const child = execFile(file, arguments_, error => (error ? reject(error) : resolvePromise()));
+    const child = execFile(file, arguments_, (error: Error | null) => {
+      if (error) reject(error);
+      else resolvePromise();
+    });
     child.stdin?.end();
   });
 }
@@ -181,7 +184,9 @@ function execute(file: string, arguments_: readonly string[]): Promise<void> {
 function childResult(child: ReturnType<NativeShellSandboxLauncher['launch']>): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     let stderr = '';
-    child.stderr?.on('data', chunk => (stderr += String(chunk)));
+    child.stderr?.on('data', chunk => {
+      stderr += String(chunk);
+    });
     child.once('error', reject);
     child.once('exit', (code, signal) => {
       if (code === 0) resolvePromise();

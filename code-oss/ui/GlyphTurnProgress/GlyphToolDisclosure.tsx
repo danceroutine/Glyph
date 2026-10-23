@@ -58,7 +58,7 @@ export function GlyphToolDisclosure({
   return (
     <details class={className}>
       <summary class={`${styles.summary} ${running ? styles.running : ''}`} title={label}>
-        {prefix && <span>{prefix}</span>}
+        {prefix !== undefined && prefix !== '' && <span>{prefix}</span>}
         {icon}
         <span class={styles.label}>{label}</span>
         <ChevronRight class="glyph-tool-chevron" size={14} aria-hidden="true" />

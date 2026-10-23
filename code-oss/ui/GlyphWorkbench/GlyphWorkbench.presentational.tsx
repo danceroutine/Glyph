@@ -140,7 +140,9 @@ export function GlyphWorkbench({
                     tabIndex={tab.selected ? 0 : -1}
                     title={tab.title}
                     disabled={newChatDisabled}
-                    onClick={() => selectTab(tab.id)}
+                    onClick={() => {
+                      selectTab(tab.id);
+                    }}
                     ref={element => {
                       if (tab.selected) element?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
                     }}
@@ -175,7 +177,9 @@ export function GlyphWorkbench({
                       aria-label={`Close ${tab.title}`}
                       title="Close chat tab"
                       disabled={newChatDisabled}
-                      onClick={() => closeTab(tab.id)}
+                      onClick={() => {
+                        closeTab(tab.id);
+                      }}
                     >
                       <svg width="14" height="14" viewBox="0 0 18 18" aria-hidden="true">
                         <path d="m5 5 8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.4" />
@@ -214,7 +218,7 @@ export function GlyphWorkbench({
               </IconButton>
             )}
           </header>
-          {workspaceMessage && (
+          {workspaceMessage !== undefined && workspaceMessage !== '' && (
             <div role="status" class={styles.workspaceStatus}>
               {workspaceMessage}
               {retryWorkspace && (
@@ -225,7 +229,7 @@ export function GlyphWorkbench({
             </div>
           )}
           {transcript}
-          {navigationError && (
+          {navigationError !== undefined && navigationError !== '' && (
             <div class={styles.error} role="alert">
               {navigationError}
             </div>

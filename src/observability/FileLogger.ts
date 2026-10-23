@@ -15,7 +15,10 @@ export class FileLogger implements Logger {
   ) {}
 
   forNamespace(namespace: string): Logger {
-    return new FileLogger(this.destination, this.namespace ? `${this.namespace}.${namespace}` : namespace);
+    return new FileLogger(
+      this.destination,
+      this.namespace !== undefined && this.namespace !== '' ? `${this.namespace}.${namespace}` : namespace,
+    );
   }
 
   trace(message: string, data?: unknown): Promise<void> {
@@ -39,13 +42,13 @@ export class FileLogger implements Logger {
     const entry = {
       timestamp: new Date().toISOString(),
       level,
-      message: this.namespace ? `${this.namespace}.${message}` : message,
+      message: this.namespace !== undefined && this.namespace !== '' ? `${this.namespace}.${message}` : message,
       ...(data === undefined ? {} : { data }),
     };
     const record = `${JSON.stringify(entry)}\n`;
     const file = await open(
       this.destination,
-      constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW,
+      constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
       0o600,
     );
     let key: string;

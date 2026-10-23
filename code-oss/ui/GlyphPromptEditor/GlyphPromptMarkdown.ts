@@ -8,6 +8,8 @@ import {
   defaultMarkdownSerializer,
 } from 'prosemirror-markdown';
 import type { GlyphPromptDocument, GlyphPromptPart } from '#src/desktop/workbench/GlyphPromptDocument.js';
+import { isRecord } from '#src/shared/validators/isRecord.js';
+import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 
 export const promptSchema = new Schema({
   nodes: markdownSchema.spec.nodes
@@ -16,7 +18,7 @@ export const promptSchema = new Schema({
     // Images stay textual; pasted Markdown must not fetch remote resources.
     .update('image', {
       ...markdownSchema.spec.nodes.get('image')!,
-      toDOM: node => ['span', node.attrs.alt || node.attrs.src],
+      toDOM: node => ['span', attrString(node, 'alt') || attrString(node, 'src')],
     })
     .addToEnd('attachment', {
       inline: true,
@@ -24,7 +26,7 @@ export const promptSchema = new Schema({
       atom: true,
       selectable: true,
       attrs: { attachment: {} },
-      toDOM: node => ['span', { 'data-glyph-attachment': 'true' }, node.attrs.attachment.path],
+      toDOM: node => ['span', { 'data-glyph-attachment': 'true' }, attachmentOf(node).path],
     }),
   marks: markdownSchema.spec.marks.update('link', {
     ...markdownSchema.spec.marks.get('link')!,
@@ -39,13 +41,13 @@ const nonce = () =>
  * They never leave this codec, and are unique per conversion (user text cannot forge a badge).
  */
 export function parsePrompt(document: GlyphPromptDocument): { doc: PromptNode; from: number; to: number } {
-  const start = nonce(),
-    end = nonce();
+  const start = nonce();
+  const end = nonce();
   const attachments = new Map<string, GlyphPromptPart & { type: 'attachment' }>();
-  let source = '',
-    offset = 0;
+  let offset = 0,
+    source = '';
   for (const part of document.parts) {
-    const text = part.type === 'text' ? part.text : '\ufffc';
+    const text = part.type === 'text' ? part.text : '\uFFFC';
     for (let index = 0; index < text.length; index++, offset++) {
       if (offset > 0 && offset === document.from) source += start;
       if (offset > 0 && offset === document.to) source += end;
@@ -76,7 +78,7 @@ export function parsePrompt(document: GlyphPromptDocument): { doc: PromptNode; f
   const doc = parser.parse(source);
   const transaction = EditorState.create({ doc }).tr;
   const replacements: { from: number; to: number; marker: string }[] = [];
-  const pattern = new RegExp([start, end, ...attachments.keys()].join('|'), 'g');
+  const pattern = new RegExp([start, end, ...attachments.keys()].join('|'), 'gu');
   doc.descendants((node, position) => {
     if (!node.isText) return;
     for (const match of node.text!.matchAll(pattern))
@@ -119,8 +121,8 @@ export function parsePrompt(document: GlyphPromptDocument): { doc: PromptNode; f
 }
 
 export function serializePrompt(state: EditorState): GlyphPromptDocument {
-  const start = nonce(),
-    end = nonce();
+  const start = nonce();
+  const end = nonce();
   const attachments = new Map<string, GlyphPromptPart & { type: 'attachment' }>();
   // Insert the later marker first to keep the original document positions valid.
   const transaction = state.tr.insertText(end, state.selection.to).insertText(start, state.selection.from);
@@ -129,14 +131,14 @@ export function serializePrompt(state: EditorState): GlyphPromptDocument {
       ...defaultMarkdownSerializer.nodes,
       attachment(output, node) {
         const marker = nonce();
-        attachments.set(marker, { type: 'attachment', attachment: node.attrs.attachment });
+        attachments.set(marker, { type: 'attachment', attachment: attachmentOf(node) });
         output.text(marker, false);
       },
       code_block(output, node) {
         const fence = '`'.repeat(
-          Math.max(3, ...[...node.textContent.matchAll(/`+/g)].map(match => match[0].length + 1)),
+          Math.max(3, ...[...node.textContent.matchAll(/`+/gu)].map(match => match[0].length + 1)),
         );
-        output.write(`${fence}${node.attrs.params || ''}\n`);
+        output.write(`${fence}${attrString(node, 'params')}\n`);
         node.forEach(child => {
           if (child.isText) output.text(child.text!, false);
           else serializer.nodes.attachment!(output, child, node, 0);
@@ -148,11 +150,11 @@ export function serializePrompt(state: EditorState): GlyphPromptDocument {
     defaultMarkdownSerializer.marks,
   );
   const text = serializer.serialize(transaction.doc, { tightLists: true });
-  const pattern = new RegExp([start, end, ...attachments.keys()].join('|'), 'g');
+  const pattern = new RegExp([start, end, ...attachments.keys()].join('|'), 'gu');
   const parts: GlyphPromptPart[] = [];
-  let previous = 0,
+  let from = 0,
     offset = 0,
-    from = 0,
+    previous = 0,
     to = 0;
   for (const match of text.matchAll(pattern)) {
     const fragment = text.slice(previous, match.index);
@@ -175,4 +177,19 @@ export function promptSelection(doc: PromptNode, from: number, to: number) {
     doc.resolve(Math.min(from, doc.content.size)),
     doc.resolve(Math.min(to, doc.content.size)),
   );
+}
+
+export function attrString(node: PromptNode, name: string): string {
+  const value: unknown = node.attrs[name];
+  return typeof value === 'string' ? value : '';
+}
+
+function isAttachment(value: unknown): value is GlyphContextAttachment {
+  return isRecord(value) && typeof value.path === 'string';
+}
+
+export function attachmentOf(node: PromptNode): GlyphContextAttachment {
+  const value: unknown = node.attrs.attachment;
+  if (!isAttachment(value)) throw new Error('Prompt attachment nodes require an attachment.');
+  return value;
 }

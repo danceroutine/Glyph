@@ -104,12 +104,15 @@ export class GlyphComposerState {
     this.setDocument({ parts: draft ? [{ type: 'text', text: draft }] : [], from: draft.length, to: draft.length });
   }
   restoreDraft(document: GlyphPromptDocument): void {
-    if (this.value.document.parts.length) this.documents = [...this.documents, this.value.document];
+    if (this.value.document.parts.length > 0) this.documents = [...this.documents, this.value.document];
     this.setDocument(document);
     this.update({ unsent: this.documents.map(value => toGlyphPromptText(value.parts)) });
   }
   setDocument(document: GlyphPromptDocument): void {
     document = { ...document, options: document.options ?? this.value.document.options ?? {} };
+    for (const annotation of document.options?.annotations ?? []) {
+      this.annotationSequence = Math.max(this.annotationSequence, annotation.order);
+    }
     this.update({ document, draft: toGlyphPromptText(document.parts) });
   }
   requestAnnotation(annotation: GlyphAnnotation): void {
@@ -193,8 +196,8 @@ export class GlyphComposerState {
       draft: toGlyphPromptText(document.parts),
       unsent: this.documents.map(value => toGlyphPromptText(value.parts)),
       queued: this.value.queued.map(message => {
-        const document = transform(message.document);
-        return { ...message, document, text: toGlyphPromptText(document.parts) };
+        const transformed = transform(message.document);
+        return { ...message, document: transformed, text: toGlyphPromptText(transformed.parts) };
       }),
     });
   }
@@ -203,7 +206,7 @@ export class GlyphComposerState {
     if (!document) return;
     const previous = this.value.document;
     this.documents = this.documents.flatMap((value, position) =>
-      position !== index ? [value] : previous.parts.length ? [previous] : [],
+      position !== index ? [value] : previous.parts.length > 0 ? [previous] : [],
     );
     this.setDocument(document);
     this.update({ unsent: this.documents.map(value => toGlyphPromptText(value.parts)) });
@@ -227,15 +230,25 @@ export class GlyphComposerState {
   }
   editQueued(id: string): void {
     const message = this.value.queued.find(value => value.id === id);
-    if (!message || this.value.queueSubmitting || this.value.editingQueuedMessage) return;
+    if (!message || this.value.queueSubmitting !== undefined || this.value.editingQueuedMessage !== undefined) return;
     this.update({ editingQueuedMessage: id });
     this.restoreDraft(structuredClone(message.document));
     this.focus();
   }
   cancelQueueEdit(): void {
-    if (!this.value.editingQueuedMessage) return;
-    this.setDraft('');
-    this.update({ editingQueuedMessage: undefined });
+    if (this.value.editingQueuedMessage === undefined) return;
+    this.update({
+      draft: '',
+      document: {
+        parts: [],
+        from: 0,
+        to: 0,
+        options: { mode: this.value.document.options?.mode ?? AgentMode.default.id },
+      },
+      editingQueuedMessage: undefined,
+      editingAnnotation: undefined,
+      annotationDraft: undefined,
+    });
   }
   removeQueued(id: string): void {
     if (this.value.queueSubmitting === id) return;
@@ -254,7 +267,7 @@ export class GlyphComposerState {
     });
   }
   moveQueued(id: string, target: number): void {
-    if (this.value.queueSubmitting) return;
+    if (this.value.queueSubmitting !== undefined) return;
     const queued = [...this.value.queued];
     const from = queued.findIndex(value => value.id === id);
     if (from < 0) return;
@@ -263,14 +276,14 @@ export class GlyphComposerState {
     this.update({ queued });
   }
   pauseQueue(): void {
-    if (this.value.queued.length) this.update({ queuePaused: true });
+    if (this.value.queued.length > 0) this.update({ queuePaused: true });
   }
   resumeQueue(): void {
     this.update({ queuePaused: false, queueError: undefined });
   }
   async sendQueued(id: string, send: SendMessage): Promise<void> {
     const message = this.value.queued.find(value => value.id === id);
-    if (!message || this.value.queueSubmitting || this.value.editingQueuedMessage) return;
+    if (!message || this.value.queueSubmitting !== undefined || this.value.editingQueuedMessage !== undefined) return;
     this.update({ queueSubmitting: id, queueError: undefined });
     try {
       await sendDocument(message.document, send);
@@ -295,7 +308,7 @@ export class GlyphComposerState {
     try {
       await sendDocument(this.stamp(document), send);
     } catch (error) {
-      if (this.value.document.parts.length) this.documents = [...this.documents, document];
+      if (this.value.document.parts.length > 0) this.documents = [...this.documents, document];
       else this.setDocument(document);
       this.update({
         unsent: this.documents.map(value => toGlyphPromptText(value.parts)),
@@ -306,7 +319,8 @@ export class GlyphComposerState {
     }
   }
   private stamp(document: GlyphPromptDocument): GlyphPromptDocument {
-    const { planProgress: _, ...options } = document.options ?? {};
+    // Only nonempty drafts reach stamp; setDocument has normalized their options.
+    const { planProgress: _, ...options } = document.options!;
     return { ...document, options: { ...options, ...this.turnOptions?.() } };
   }
   private update(change: Partial<typeof this.value>): void {
@@ -325,5 +339,5 @@ async function sendDocument(document: GlyphPromptDocument, send: SendMessage): P
     offset += toGlyphPromptText([part]).length;
     return part.type === 'attachment' ? [{ from, to: offset }] : [];
   });
-  await send(draft, attachments, { ...document.options, ...(attachmentSpans.length ? { attachmentSpans } : {}) });
+  await send(draft, attachments, { ...document.options, ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}) });
 }

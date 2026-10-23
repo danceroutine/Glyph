@@ -15,7 +15,7 @@ export class ScriptedOpenAIResponsesFixture {
   readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<globalThis.Response> => {
     const url = String(input instanceof Request ? input.url : input);
     if (url !== 'https://responses.fixture.invalid/v1/responses') throw new Error(`Unexpected fixture URL: ${url}`);
-    const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const request = JSON.parse(typeof init?.body === 'string' ? init.body : '') as Record<string, unknown>;
     this.requests.push(request);
     const round = this.rounds[this.index++];
     if (!round) throw new Error('Unexpected extra Responses request.');
@@ -121,8 +121,10 @@ function cancelledSse(signal: AbortSignal | null | undefined): globalThis.Respon
   return new globalThis.Response(
     new ReadableStream({
       start(controller) {
-        const cancel = (): void => controller.error(signal?.reason ?? new Error('Fixture request cancelled.'));
-        if (signal?.aborted) cancel();
+        const cancel = (): void => {
+          controller.error(signal?.reason ?? new Error('Fixture request cancelled.'));
+        };
+        if (signal?.aborted === true) cancel();
         else signal?.addEventListener('abort', cancel, { once: true });
       },
     }),

@@ -14,7 +14,7 @@ export function toChatUsage(turns: readonly ChatTranscriptTurn[]): ChatUsage {
       unreportedTurns++;
       continue;
     }
-    if (turn.usage.incomplete) unreportedTurns++;
+    if (turn.usage.incomplete === true) unreportedTurns++;
     total.inputTokens += turn.usage.inputTokens;
     total.cachedInputTokens += turn.usage.cachedInputTokens;
     total.outputTokens += turn.usage.outputTokens;

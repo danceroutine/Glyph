@@ -13,6 +13,7 @@ import type { ShellPermissionPresenter } from '#src/shell/ShellPermissionPresent
 import type { ShellPermissionRequest } from '#src/shell/ShellPermissionRequest.js';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
 import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
+import { questionAnswersSchema } from '#src/interaction/questions/questionAnswersSchema.js';
 
 interface RunIdentity {
   readonly chatId: string;
@@ -24,22 +25,10 @@ interface PendingDecision extends RunIdentity {
   readonly reject: (error: Error) => void;
   readonly kind: 'question' | 'approval';
 }
-const answersSchema = z.object({
-  answers: z.array(
-    z.discriminatedUnion('type', [
-      z.object({ questionId: z.string(), type: z.literal(QuestionAnswerType.OTHER), text: z.string().trim().min(1) }),
-      z.object({
-        questionId: z.string(),
-        type: z.literal(QuestionAnswerType.SELECTION),
-        optionIds: z.array(z.string()).min(1),
-      }),
-    ]),
-  ),
-});
 
 /** Routes human decisions to the originating run even when several chats execute concurrently. */
 export class DesktopInteractionBroker implements QuestionPresenter, ShellPermissionPresenter {
-  private readonly scope = new AsyncLocalStorage<RunIdentity>();
+  private readonly scope = new AsyncLocalStorage<Required<RunIdentity>>();
   private readonly pending = new Map<string, PendingDecision>();
   private readonly queues = new Map<string, Promise<void>>();
 
@@ -65,7 +54,7 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
       'question',
       signal,
       value => {
-        const result = answersSchema.parse(value);
+        const result = questionAnswersSchema.parse(value);
         if (
           result.answers.length !== form.questions.length ||
           new Set(result.answers.map(answer => answer.questionId)).size !== result.answers.length
@@ -73,18 +62,18 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
           throw new Error('Answer every question exactly once.');
         }
         for (const question of form.questions) {
-          const answer = result.answers.find(value => value.questionId === question.id);
+          const answer = result.answers.find(candidate => candidate.questionId === question.id);
           if (!answer) throw new Error('An answer is missing.');
           if (
             answer.type === QuestionAnswerType.SELECTION &&
             ((!question.allowMultiple && answer.optionIds.length !== 1) ||
-              answer.optionIds.some(id => !question.options.some(option => option.id === id)))
+              answer.optionIds.some(optionId => !question.options.some(option => option.id === optionId)))
           )
             throw new Error('The selected answer is invalid.');
         }
         return result;
       },
-      () =>
+      () => {
         this.emit({
           type: GlyphHostEventType.QUESTION,
           ...identity,
@@ -94,7 +83,8 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
             prompt: form.questions.map(question => question.prompt).join('\n'),
             questions: form.questions,
           },
-        }),
+        });
+      },
     );
   }
 
@@ -110,7 +100,7 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
         const decision = z.enum(GlyphApprovalDecision).parse(value);
         return GLYPH_APPROVAL_TO_SHELL_PERMISSION[decision];
       },
-      () =>
+      () => {
         this.emit({
           type: GlyphHostEventType.APPROVAL,
           ...identity,
@@ -123,7 +113,8 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
             workingDirectory: request.workingDirectory,
             canRemember: true,
           },
-        }),
+        });
+      },
     );
   }
 
@@ -134,7 +125,7 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     settle: (id: string, status: GlyphModeSwap['status']) => void,
   ): Promise<boolean> {
     const identity = this.requireRun();
-    const policy = modeSwapPolicySchema.parse(identity.modeSwapPolicy ?? {});
+    const policy = identity.modeSwapPolicy;
     const id = randomUUID();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let committed = false;
@@ -211,7 +202,7 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     pending.resolve(input.value);
   }
 
-  private requireRun(): RunIdentity {
+  private requireRun(): Required<RunIdentity> {
     const identity = this.scope.getStore();
     if (!identity) throw new Error('Human interaction requires an active chat run.');
     return identity;
@@ -230,7 +221,9 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     const key = `${identity.chatId}\0${identity.runId}`;
     const previous = this.queues.get(key);
     return new Promise<T>((resolve, reject) => {
-      const abort = () => reject(signal.reason ?? new Error('Run cancelled.'));
+      const abort = () => {
+        reject(signal.reason ?? new Error('Run cancelled.'));
+      };
       if (previous) {
         if (signal.aborted) abort();
         else signal.addEventListener('abort', abort, { once: true });

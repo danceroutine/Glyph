@@ -1,7 +1,8 @@
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
 it.describe('Desktop recovery and window ownership with the production runtime', () => {
-  it.use({ scriptedProvider: true });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true });
 
   it('restores a partial answer without duplicating streamed text after reconnecting', async ({ glyph, provider }) => {
     const prefix = 'Before reconnect: café 🌱\nA partial answer.';
@@ -10,7 +11,9 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText([prefix]);
     await expect(glyph.sendButton).toHaveText('Cancel');
     await glyph.reload();
-    await expect(glyph.userEntries.locator('div')).toHaveText(['Keep this partial answer across reload.']);
+    await expect(glyph.userEntries.locator('[data-glyph-source]')).toHaveText([
+      'Keep this partial answer across reload.',
+    ]);
     await expect(glyph.assistantEntries.locator('[data-glyph-source]')).toHaveText([prefix]);
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
     await expect.poll(() => provider.requests[0].closed).toBe(true);
@@ -44,7 +47,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     await expect(glyph.sendButton).toHaveText('Cancel');
     await glyph.crashHost();
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
-    await expect(glyph.diagnostics).toContainText([/host exited.*interrupted/i]);
+    await expect(glyph.diagnostics).toContainText([/host exited.*interrupted/iu]);
     await expect(glyph.assistantEntries.last()).toContainText('An interrupted partial answer.');
     await expect.poll(() => provider.requests[1].closed).toBe(true);
     expect(provider.requests).toHaveLength(2);
@@ -54,7 +57,7 @@ it.describe('Desktop recovery and window ownership with the production runtime',
       'A durable completed answer.',
       'A new answer after the restart.',
     ]);
-    await expect(glyph.userEntries.locator('div')).toHaveText([
+    await expect(glyph.userEntries.locator('[data-glyph-source]')).toHaveText([
       'Persist this completed turn.',
       'Continue after the host restart.',
     ]);
@@ -83,16 +86,18 @@ it.describe('Desktop recovery and window ownership with the production runtime',
     await expect(glyph.assistantEntries).toContainText(['The owner is still working.']);
     const duplicate = await glyph.duplicateWorkspace();
     const draft = 'Do not run a second agent against these files.';
-    await duplicate.send(draft);
-    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
+    await duplicate.composer.fill(draft);
+    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/iu]);
+    await expect(duplicate.sendButton).toBeDisabled();
     await expect(duplicate.composer).toHaveText(draft);
     await expect(duplicate.assistantEntries).toHaveCount(0);
     await expect(glyph.sendButton).toHaveText('Cancel');
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0].closed).toBe(false);
     await duplicate.reload();
-    await duplicate.send(draft);
-    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/i]);
+    await duplicate.composer.fill(draft);
+    await expect(duplicate.diagnostics).toContainText([/overlap.*owned by window/iu]);
+    await expect(duplicate.sendButton).toBeDisabled();
     await expect(duplicate.composer).toHaveText(draft);
     expect(provider.requests).toHaveLength(1);
     provider.release(0);

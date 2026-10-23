@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { inlineMarkdownText, parseInlineMarkdown } from '#src/terminal/ui/response/parseInlineMarkdown.js';
 
 describe(parseInlineMarkdown, () => {
+  it('decodes text entities once while preserving code, escaped text, and autolinks', () => {
+    expect(inlineMarkdownText('**A &amp; B** &lt;Widget&gt; &copy; &#38;amp; &amp;amp;')).toBe(
+      'A & B <Widget> © &amp; &amp;',
+    );
+    expect(inlineMarkdownText('![A &amp; B](image.png) [C &amp; D](https://example.com)')).toBe('A & B C & D');
+    expect(inlineMarkdownText('`&amp; &#38;` \\&amp; <https://example.com/?a=1&amp;b=2>')).toBe(
+      '&amp; &#38; &amp; https://example.com/?a=1&amp;b=2',
+    );
+    expect(inlineMarkdownText('<code>&amp;</code>')).toBe('<code>&amp;</code>');
+  });
+
   it('uses Markdown emphasis rules and preserves nested inline text', () => {
     expect(parseInlineMarkdown('before **bold _and italic_** after __also bold__')).toEqual([
       { value: 'before ', strong: false },

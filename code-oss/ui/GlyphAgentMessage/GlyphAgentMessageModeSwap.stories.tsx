@@ -25,17 +25,20 @@ function Example({
 }) {
   const [swap, setSwap] = useState<GlyphModeSwap>(() => modeSwapFixture({ autoApprove, status, target }, Date.now()));
   useEffect(() => {
-    if (swap.status !== GlyphModeSwapStatus.PENDING) return;
+    if (swap.status !== GlyphModeSwapStatus.PENDING) return undefined;
     // Story-only host simulation. Production decisions come from DesktopInteractionBroker.
     const timer = setTimeout(
-      () =>
+      () => {
         setSwap(current => ({
           ...current,
           status: current.autoApprove ? GlyphModeSwapStatus.APPROVED : GlyphModeSwapStatus.DENIED,
-        })),
+        }));
+      },
       Math.max(0, Date.parse(swap.expiresAt) - Date.now()),
     );
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+    };
   }, [swap]);
   return (
     <WiredGlyphAgentMessage

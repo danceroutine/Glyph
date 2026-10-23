@@ -7,6 +7,8 @@ import { ContextAttachmentService } from '#src/context/attachments/ContextAttach
 import { ContextAttachmentFailureReason } from '#src/context/attachments/ContextAttachmentFailureReason.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 
+type ProjectOutput = { error: unknown };
+
 vi.mock('node:fs/promises', async importOriginal => {
   const original = await importOriginal<typeof import('node:fs/promises')>();
   return { ...original, readFile: vi.fn(original.readFile) };
@@ -35,8 +37,8 @@ describe('Workspace read budgets', () => {
                 end_line: 1,
               }),
             ),
-          );
-          expect(result.error).toMatchObject({ message: expect.stringMatching(/32-byte.*limit/) });
+          ) as ProjectOutput;
+          expect(result.error).toMatchObject({ message: expect.stringMatching(/32-byte.*limit/u) });
         } else {
           const attachments = new ContextAttachmentService(workspace, { maxFileBytes: 32 });
           await expect(attachments.resolve([{ path: 'data/large.txt' }])).rejects.toMatchObject({

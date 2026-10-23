@@ -9,5 +9,5 @@ export function WiredGlyphCodeBlock({
   readonly source: string;
   readonly language?: string | undefined;
 }) {
-  return <GlyphCodeBlock {...useGlyphCodeBlockState(source, language, copyText)} />;
+  return <GlyphCodeBlock {...useGlyphCodeBlockState({ source, info: language, copyText })} />;
 }

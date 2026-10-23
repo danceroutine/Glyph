@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const source = z.object({ title: z.string(), url: z.string().url() });
+const source = z.object({ title: z.string(), url: z.url() });
 /** Page text and search snippets are untrusted evidence, never agent instructions. */
 export const webToolResultSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -14,7 +14,7 @@ export const webToolResultSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('web_search'),
     query: z.string(),
-    searchUrl: z.string().url(),
+    searchUrl: z.url(),
     results: z.array(source.extend({ snippet: z.string() })),
     truncated: z.boolean().optional(),
     provenance: z.literal('search_snippets_only'),

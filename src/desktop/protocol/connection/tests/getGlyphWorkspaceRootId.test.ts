@@ -8,9 +8,9 @@ describe(getGlyphWorkspaceRootId, () => {
     'preserves the existing review mutation scope for a unique %s root',
     name => {
       const root = { name, uri: 'file:///workspace/project' };
-      const scope = (name: string) =>
+      const scope = (rootName: string) =>
         ProjectContextIdentity.createMutationScope(ProjectContextKind.FOLDER, 'file', [
-          { name, path: '/workspace/project' },
+          { name: rootName, path: '/workspace/project' },
         ]);
       expect(scope(getGlyphWorkspaceRootId(root, [root]))).toBe(scope(name));
     },

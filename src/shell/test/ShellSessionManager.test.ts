@@ -1,7 +1,9 @@
+import { ChildProcess } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PassThrough, Writable } from 'node:stream';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
 import type { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.js';
 import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
@@ -47,7 +49,7 @@ describe(ShellSessionManager, () => {
           wakeOn: 'ready',
           signal: new AbortController().signal,
         });
-        await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+        await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
         await manager.execute('printf dy', {
           terminalId: first.terminalId,
           signal: new AbortController().signal,
@@ -85,7 +87,7 @@ describe(ShellSessionManager, () => {
         ).rejects.toThrow('busy');
         expect.soft(manager.sessions[0]?.wakePattern).toBe('ready');
         await manager.writeInput({ terminalId: running.terminalId, input: 'continue', appendNewline: true });
-        await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+        await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
         expect(wake).toHaveBeenCalledWith(expect.objectContaining({ pattern: 'ready' }));
       } finally {
         stop();
@@ -136,14 +138,16 @@ describe(ShellSessionManager, () => {
       const { manager } = await fixture();
       manager.setOwnerChat('chat-one');
       const wakes: unknown[] = [];
-      const stopWake = manager.onDidWake(event => wakes.push(event));
+      const stopWake = manager.onDidWake(event => {
+        wakes.push(event);
+      });
 
       const background = await manager.execute('printf rea; sleep 0.02; printf dy', {
         background: true,
         wakeOn: 'ready',
         signal: new AbortController().signal,
       });
-      await waitUntil(() => wakes.length === 1 && manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+      await expect.poll(() => wakes.length === 1 && manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
 
       expect(manager.takePendingWake('missing')).toBeUndefined();
       expect(manager.takePendingWake()).toMatchObject({
@@ -184,11 +188,13 @@ describe(ShellSessionManager, () => {
         appendNewline: true,
         wakeOn: 'got:answer',
       });
-      await waitUntil(
-        () =>
-          manager.sessions[0]?.status === ShellSessionStatus.IDLE &&
-          manager.sessions[0]?.outputTail.includes('got:answer') === true,
-      );
+      await expect
+        .poll(
+          () =>
+            manager.sessions[0]?.status === ShellSessionStatus.IDLE &&
+            manager.sessions[0]?.outputTail.includes('got:answer'),
+        )
+        .toBe(true);
 
       expect(manager.takePendingWake()).toMatchObject({ pattern: 'got:answer' });
       expect(manager.sessions[0]?.outputTail).toContain('got:answer');
@@ -243,7 +249,7 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+      await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
 
       await expect(
         manager.execute('sleep 1', {
@@ -307,7 +313,7 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => authorize.mock.calls.length === 1);
+      await expect.poll(() => authorize.mock.calls.length === 1).toBe(true);
       await manager.dispose();
       pendingAuthorization.resolve({ sandboxProfile: ShellSandboxProfile.FULL_ACCESS });
 
@@ -321,14 +327,14 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+      await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
       const pendingAuthorization = deferredAuthorization();
       authorize.mockImplementationOnce(() => pendingAuthorization.promise);
       const pending = manager.execute('printf forbidden', {
         terminalId: first.terminalId,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => authorize.mock.calls.length === 2);
+      await expect.poll(() => authorize.mock.calls.length === 2).toBe(true);
       await manager.close(first.terminalId);
       pendingAuthorization.resolve({ sandboxProfile: ShellSandboxProfile.FULL_ACCESS });
 
@@ -383,7 +389,7 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => authorize.mock.calls.length === 2);
+      await expect.poll(() => authorize.mock.calls.length === 2).toBe(true);
       firstAuthorization.resolve({ sandboxProfile: ShellSandboxProfile.FULL_ACCESS });
       secondAuthorization.resolve({ sandboxProfile: ShellSandboxProfile.FULL_ACCESS });
 
@@ -422,14 +428,468 @@ describe(ShellSessionManager, () => {
         background: true,
         signal: new AbortController().signal,
       });
-      await waitUntil(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE);
+      await expect.poll(() => manager.sessions[0]?.status === ShellSessionStatus.IDLE).toBe(true);
       const processId = Number(/\d+/u.exec(manager.sessions[0]?.outputTail ?? '')?.[0]);
 
       expect(Number.isInteger(processId)).toBe(true);
-      await waitUntil(() => !processExists(processId));
+      await expect.poll(() => !processExists(processId)).toBe(true);
+    });
+  });
+
+  describe(ShellSessionManager.prototype.execute, () => {
+    it('rejects a blank command without retaining a terminal', async () => {
+      const { manager } = fakeShell([]);
+
+      await expect(manager.execute('   ', { signal: new AbortController().signal })).rejects.toThrow(
+        'Shell command cannot be empty.',
+      );
+      expect(manager.allSessions).toEqual([]);
+    });
+
+    it('records stderr output, execution IDs, and output that arrives after the command exits', async () => {
+      const child = fakeChild();
+      const { manager } = fakeShell([child]);
+      const { terminalId } = await manager.execute('build', {
+        background: true,
+        executionId: 'execution-1',
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+
+      child.stderr!.emit('data', 'warning\n');
+      child.emit('close', 0, null);
+      child.stdout!.emit('data', 'late output');
+
+      expect(manager.sessionsFor('chat')).toEqual([
+        expect.objectContaining({
+          id: terminalId,
+          executionId: 'execution-1',
+          status: ShellSessionStatus.IDLE,
+          exitCode: 0,
+          outputTail: 'warning\nlate output',
+        }),
+      ]);
+    });
+
+    it('reports exit code 1 when a command closes without a code or signal', async () => {
+      const child = fakeChild();
+      const { manager, launch } = fakeShell([child]);
+
+      const pending = manager.execute('mystery', { signal: new AbortController().signal });
+      await vi.waitFor(() => {
+        expect(launch).toHaveBeenCalledOnce();
+      });
+      child.stdout!.emit('data', 'partial');
+      child.emit('close', null, null);
+
+      await expect(pending).resolves.toMatchObject({ status: 'completed', output: 'partial', exitCode: 1 });
+    });
+
+    it('rejects a foreground command whose process fails', async () => {
+      const child = fakeChild();
+      const { manager, launch } = fakeShell([child]);
+
+      const pending = manager.execute('missing-binary', { signal: new AbortController().signal });
+      await vi.waitFor(() => {
+        expect(launch).toHaveBeenCalledOnce();
+      });
+      child.emit('error', new Error('spawn ENOENT'));
+      child.emit('close', -2, null);
+
+      await expect(pending).rejects.toThrow('spawn ENOENT');
+      expect(manager.allSessions).toEqual([]);
+    });
+
+    it('rejects a command cancelled while it is being launched', async () => {
+      const child = fakeChild();
+      const controller = new AbortController();
+      const reason = new Error('Cancelled during launch');
+      const { manager } = fakeShell([child], () => {
+        controller.abort(reason);
+      });
+
+      const pending = manager.execute('slow start', { signal: controller.signal });
+      const outcome = pending.catch((error: unknown) => error);
+      await vi.waitFor(() => {
+        expect(manager.allSessions).toHaveLength(1);
+      });
+      child.emit('close', null, 'SIGTERM');
+
+      expect(await outcome).toBe(reason);
+      expect(manager.allSessions).toEqual([]);
+    });
+
+    it('ignores failures reported by a previous process after the terminal is reused', async () => {
+      const first = fakeChild();
+      const second = fakeChild();
+      const { manager } = fakeShell([first, second]);
+      const { terminalId } = await manager.execute('first', {
+        background: true,
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+      first.emit('close', 0, null);
+      await manager.execute('second', {
+        terminalId,
+        background: true,
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+
+      first.emit('error', new Error('stale failure'));
+
+      expect(manager.sessionsFor('chat')[0]).toMatchObject({ command: 'second', status: ShellSessionStatus.RUNNING });
+      expect(manager.sessionsFor('chat')[0]).not.toHaveProperty('error');
+    });
+  });
+
+  describe(ShellSessionManager.prototype.takePendingWake, () => {
+    it('takes a specific wake by ID and keeps other terminals’ wakes when one terminal closes', async () => {
+      const first = fakeChild();
+      const second = fakeChild();
+      const { manager } = fakeShell([first, second]);
+      const firstTerminal = await manager.execute('serve one', {
+        background: true,
+        wakeOn: 'ready',
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+      await manager.execute('serve two', {
+        background: true,
+        wakeOn: 'ready',
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+      first.stdout!.emit('data', 'ready');
+      second.stdout!.emit('data', 'ready');
+      const [firstWake, secondWake] = [
+        manager.peekPendingWake(event => event.command === 'serve one')!,
+        manager.peekPendingWake(event => event.command === 'serve two')!,
+      ];
+
+      expect(manager.takePendingWake('missing')).toBeUndefined();
+      expect(manager.takePendingWake(secondWake.id)).toEqual(secondWake);
+      second.stdout!.emit('data', 'ready');
+      expect(manager.takePendingWake()).toEqual(firstWake);
+      expect(manager.takePendingWake()).toBeUndefined();
+      first.stdout!.emit('data', 'ready again');
+      expect(manager.takePendingWake()).toBeUndefined();
+      expect(firstTerminal.terminalId).toBe(firstWake.terminalId);
+    });
+
+    it('keeps wakes from other terminals when a terminal closes', async () => {
+      const first = fakeChild();
+      const second = fakeChild();
+      const { manager } = fakeShell([first, second]);
+      const firstTerminal = await manager.execute('serve one', {
+        background: true,
+        wakeOn: 'ready',
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+      await manager.execute('serve two', {
+        background: true,
+        wakeOn: 'ready',
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+      second.stdout!.emit('data', 'ready');
+      first.stdout!.emit('data', 'ready');
+
+      const closing = manager.close(firstTerminal.terminalId, 'chat');
+      first.emit('close', 0, null);
+      await closing;
+
+      expect(manager.takePendingWake()).toMatchObject({ command: 'serve two' });
+      expect(manager.takePendingWake()).toBeUndefined();
+    });
+  });
+
+  describe(ShellSessionManager.prototype.writeInput, () => {
+    it('writes input without a trailing newline when requested', async () => {
+      const child = fakeChild();
+      const written: string[] = [];
+      child.stdin!.on('data', chunk => {
+        written.push(String(chunk));
+      });
+      const { manager } = fakeShell([child]);
+      const { terminalId } = await manager.execute('read value', {
+        background: true,
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+
+      await manager.writeInput({ terminalId, input: 'raw', appendNewline: false, ownerChatId: 'chat' });
+
+      expect(written).toEqual(['raw']);
+    });
+
+    it('rejects a blank wake pattern', async () => {
+      const child = fakeChild();
+      const { manager } = fakeShell([child]);
+      const { terminalId } = await manager.execute('read value', {
+        background: true,
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+
+      await expect(
+        manager.writeInput({ terminalId, input: 'x', appendNewline: true, wakeOn: '   ', ownerChatId: 'chat' }),
+      ).rejects.toThrow('Shell wake pattern cannot be empty.');
+    });
+
+    it('reports a failed write that had no replacement wake condition', async () => {
+      const child = fakeChild();
+      Object.assign(child, {
+        stdin: new Writable({
+          write(_chunk, _encoding, done) {
+            done(new Error('write EPIPE'));
+          },
+        }),
+      });
+      const { manager } = fakeShell([child]);
+      const { terminalId } = await manager.execute('read value', {
+        background: true,
+        wakeOn: 'ready',
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+
+      await expect(
+        manager.writeInput({ terminalId, input: 'x', appendNewline: true, ownerChatId: 'chat' }),
+      ).rejects.toThrow('write EPIPE');
+      expect(manager.sessionsFor('chat')[0]?.wakePattern).toBe('ready');
+    });
+
+    it.each([
+      ['an error', new Error('pipe exploded'), 'pipe exploded'],
+      ['a non-error value', 'pipe exploded', 'pipe exploded'],
+    ])('rejects when writing to the pipe throws %s', async (_case, thrown, message) => {
+      const child = fakeChild();
+      Object.assign(child.stdin!, {
+        write: () => {
+          throw thrown;
+        },
+      });
+      const { manager } = fakeShell([child]);
+      const { terminalId } = await manager.execute('read value', {
+        background: true,
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+
+      const failure = await manager
+        .writeInput({ terminalId, input: 'x', appendNewline: true, wakeOn: 'next', ownerChatId: 'chat' })
+        .catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({ message });
+    });
+
+    it('rejects with a generic cancellation when the signal carries no reason', async () => {
+      const child = fakeChild();
+      let complete: ((error?: Error | null) => void) | undefined;
+      Object.assign(child, {
+        stdin: new Writable({
+          write(_chunk, _encoding, done) {
+            complete = done;
+          },
+        }),
+      });
+      const { manager } = fakeShell([child]);
+      const { terminalId } = await manager.execute('read value', {
+        background: true,
+        wakeOn: 'ready',
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+      const signal = Object.assign(new EventTarget(), { aborted: false, reason: undefined, throwIfAborted: () => {} });
+
+      const pending = manager.writeInput({
+        terminalId,
+        input: 'x',
+        appendNewline: true,
+        wakeOn: 'replacement',
+        ownerChatId: 'chat',
+        signal: signal as unknown as AbortSignal,
+      });
+      await vi.waitFor(() => {
+        expect(complete).toBeDefined();
+      });
+      signal.dispatchEvent(new Event('abort'));
+
+      await expect(pending).rejects.toThrow('Shell input cancelled.');
+      complete!(new Error('late failure'));
+      expect(manager.sessionsFor('chat')[0]?.wakePattern).toBe('ready');
+    });
+
+    it('rejects input acknowledged only after its command has ended', async () => {
+      const child = fakeChild();
+      let complete: ((error?: Error | null) => void) | undefined;
+      Object.assign(child, {
+        stdin: new Writable({
+          write(_chunk, _encoding, done) {
+            complete = done;
+          },
+        }),
+      });
+      const { manager } = fakeShell([child]);
+      const { terminalId } = await manager.execute('read value', {
+        background: true,
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+      const pending = manager.writeInput({ terminalId, input: 'x', appendNewline: true, ownerChatId: 'chat' });
+      await vi.waitFor(() => {
+        expect(complete).toBeDefined();
+      });
+      manager.onDidChange(() => {
+        if (manager.sessionsFor('chat')[0]?.status !== ShellSessionStatus.IDLE) return;
+        const accept = complete;
+        complete = undefined;
+        accept?.();
+      });
+
+      child.emit('close', 0, null);
+
+      await expect(pending).rejects.toThrow('The shell command ended before accepting the input.');
+    });
+
+    it('wakes once when the replacement pattern appears repeatedly before the write is accepted', async () => {
+      const child = fakeChild();
+      let complete: ((error?: Error | null) => void) | undefined;
+      Object.assign(child, {
+        stdin: new Writable({
+          write(_chunk, _encoding, done) {
+            complete = done;
+          },
+        }),
+      });
+      const { manager } = fakeShell([child]);
+      const wake = vi.fn();
+      manager.onDidWake(wake);
+      const { terminalId } = await manager.execute('read value', {
+        background: true,
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+      const pending = manager.writeInput({
+        terminalId,
+        input: 'x',
+        appendNewline: true,
+        wakeOn: 'ready',
+        ownerChatId: 'chat',
+      });
+      await vi.waitFor(() => {
+        expect(complete).toBeDefined();
+      });
+
+      child.stdout!.emit('data', 'ready');
+      child.stdout!.emit('data', 'ready again');
+      complete!();
+      await pending;
+
+      expect(wake).toHaveBeenCalledOnce();
+      expect(wake).toHaveBeenCalledWith(expect.objectContaining({ pattern: 'ready', terminalId }));
+    });
+  });
+
+  describe(ShellSessionManager.prototype.close, () => {
+    it('escalates on Windows by signalling the process directly', async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const child = fakeChild();
+      Object.assign(child, { pid: 4242, exitCode: null, signalCode: null });
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+        throw Object.assign(new Error('Not supported'), { code: 'EINVAL' });
+      });
+      onTestFinished(() => {
+        kill.mockRestore();
+      });
+      const childKill = vi.spyOn(child, 'kill').mockReturnValue(true);
+      const { manager } = fakeShell([child]);
+      const { terminalId } = await manager.execute('serve', {
+        background: true,
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+      let closing: Promise<void>;
+      try {
+        closing = manager.close(terminalId, 'chat');
+        Object.assign(child, { pid: undefined });
+        child.emit('close', null, 'SIGTERM');
+        await vi.advanceTimersByTimeAsync(2_000);
+        await closing;
+      } finally {
+        Object.defineProperty(process, 'platform', platform);
+      }
+
+      expect(kill).toHaveBeenCalledWith(-4242, 'SIGTERM');
+      expect(childKill).toHaveBeenCalledWith('SIGTERM');
+      expect(childKill).not.toHaveBeenCalledWith('SIGKILL');
+    });
+
+    it('skips group escalation once the process identifier is no longer available', async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const child = fakeChild();
+      Object.assign(child, { pid: 4242, exitCode: null, signalCode: null });
+      const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+      onTestFinished(() => {
+        kill.mockRestore();
+      });
+      const { manager } = fakeShell([child]);
+      const { terminalId } = await manager.execute('serve', {
+        background: true,
+        ownerChatId: 'chat',
+        signal: new AbortController().signal,
+      });
+
+      const closing = manager.close(terminalId, 'chat');
+      Object.assign(child, { pid: undefined });
+      child.emit('close', null, 'SIGTERM');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await closing;
+
+      expect(kill).toHaveBeenCalledWith(-4242, 'SIGTERM');
+      expect(kill).not.toHaveBeenCalledWith(expect.anything(), 'SIGKILL');
     });
   });
 });
+
+function fakeChild(): ChildProcess {
+  const child = new ChildProcess();
+  Object.assign(child, { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+  return child;
+}
+
+function fakeShell(children: ChildProcess[], onLaunch: () => void = () => {}) {
+  const queue = [...children];
+  let id = 0;
+  const launch = vi.fn(() => {
+    onLaunch();
+    const child = queue.shift();
+    if (!child) throw new Error('No fake process remains.');
+    return child;
+  });
+  const manager = new ShellSessionManager(
+    { authorize: async () => ({ sandboxProfile: ShellSandboxProfile.READ_ONLY }) } as unknown as ShellCommandAuthorizer,
+    { resolve: async () => '/fixture' } as unknown as ShellWorkingDirectoryResolver,
+    { launch },
+    () => `id-${++id}`,
+  );
+  onTestFinished(async () => {
+    for (const child of children) child.emit('close', 0, null);
+    await manager.dispose();
+  });
+  return { manager, launch };
+}
 
 async function fixture(profile = ShellSandboxProfile.FULL_ACCESS): Promise<{
   manager: ShellSessionManager;
@@ -463,14 +923,6 @@ function launcher(root: string): NativeShellSandboxLauncher {
     workspaceRoots: [root],
     stateDirectory: join(root, 'state'),
   });
-}
-
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (predicate()) return;
-    await new Promise<void>(resolve => setTimeout(resolve, 5));
-  }
-  throw new Error('Timed out waiting for shell state.');
 }
 
 function processExists(processId: number): boolean {

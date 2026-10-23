@@ -1,16 +1,29 @@
 import { randomUUID } from 'node:crypto';
-import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { parseJson } from './ProviderPayloads.mjs';
+import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
 
 const items = [
   { id: 'inspect', text: 'Inspect the current implementation', status: 'completed' },
   { id: 'implement', text: 'Implement the requested change', status: 'in_progress' },
   { id: 'verify', text: 'Verify café 🌱 and Unicode behavior', status: 'pending' },
 ];
+const reloadsWindow = isolatedLaunch('reloads the window');
+const restartsHost = isolatedLaunch('restarts the host and reloads the window');
+/** @param {GlyphWorkbench} glyph */
 const card = glyph => glyph.page.getByRole('region', { name: 'To-dos', exact: true });
-const update = (items, replace = false, callId = randomUUID()) =>
-  ScriptedProvider.tool('update_todos', { items, replace }, { namespace: 'todo', callId });
+/** @param {unknown[]} todoItems */
+const update = (todoItems, replace = false, callId = randomUUID()) =>
+  ScriptedProvider.tool('update_todos', { items: todoItems, replace }, { namespace: 'todo', callId });
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {unknown[]} next
+ * @param {{ replace?: boolean, hold?: boolean, prompt?: string }} [options]
+ */
 async function runUpdate(
   glyph,
   provider,
@@ -25,16 +38,21 @@ async function runUpdate(
   if (!hold) await expect(glyph.sendButton).toHaveText('Send (Enter)');
   const outputs = provider.requests
     .at(-1)
-    .body.input.filter(value => value.type === 'function_call_output' && value.call_id === callId);
+    ?.body.input.filter(value => value.type === 'function_call_output' && value.call_id === callId);
   expect(outputs).toHaveLength(1);
-  return JSON.parse(outputs[0].output);
+  return parseJson(outputs?.[0]?.output);
 }
 
+/** @param {GlyphWorkbench} glyph */
 async function expand(glyph) {
   const toggle = card(glyph).getByRole('button');
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
 }
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} name
+ */
 async function openChat(glyph, name) {
   const toggle = glyph.page.getByRole('button', { name: 'Chat history', exact: true });
   await toggle.click();
@@ -48,7 +66,8 @@ async function openChat(glyph, name) {
 }
 
 it.describe('Action items and read-only todo cards', () => {
-  it.use({ scriptedProvider: true });
+  it.describe.configure({ mode: 'default' });
+  it.use({ sharedLaunch: true, scriptedProvider: true });
 
   it('shows distinct pending, in-progress, and completed items in a read-only card that expands upward', async ({
     glyph,
@@ -96,7 +115,7 @@ it.describe('Action items and read-only todo cards', () => {
     expect(await runUpdate(glyph, provider, [completed], { hold: true })).toEqual({
       items: [items[0], completed, items[2]],
     });
-    await expect(card(glyph).getByRole('button')).toHaveText('⌃2 of 3 To-dos completed');
+    await expect(card(glyph).getByRole('button')).toHaveText('2 of 3 To-dos completed');
     await expect(card(glyph).getByRole('button')).toHaveAttribute('aria-expanded', 'true');
     await expect(card(glyph).getByRole('listitem')).toHaveCount(3);
     await expect(
@@ -109,67 +128,73 @@ it.describe('Action items and read-only todo cards', () => {
   });
 
   for (const ending of ['completion', 'cancellation', 'host failure']) {
-    it(`keeps unfinished items after ${ending} and restores them after reload`, async ({ glyph, provider }) => {
-      await runUpdate(glyph, provider, items, { hold: ending !== 'completion' });
-      if (ending === 'cancellation') {
-        await glyph.sendButton.click();
-        await expect(glyph.sendButton).toHaveText('Send (Enter)');
-      }
-      if (ending === 'host failure') await glyph.crashHost();
-      await expect(card(glyph).getByRole('button', { name: '1 of 3 To-dos completed' })).toBeVisible();
-      await glyph.reload();
-      await expect(card(glyph).getByRole('button', { name: '1 of 3 To-dos completed' })).toBeVisible();
-      await expand(glyph);
-      await expect(
-        card(glyph).getByRole('listitem').nth(1).getByRole('img', { name: 'In progress', exact: true }),
-      ).toBeVisible();
-      await expect(
-        card(glyph).getByRole('listitem').nth(2).getByRole('img', { name: 'Pending', exact: true }),
-      ).toBeVisible();
-    });
+    it(
+      `keeps unfinished items after ${ending} and restores them after reload`,
+      restartsHost,
+      async ({ glyph, provider }) => {
+        await runUpdate(glyph, provider, items, { hold: ending !== 'completion' });
+        if (ending === 'cancellation') {
+          await glyph.sendButton.click();
+          await expect(glyph.sendButton).toHaveText('Send (Enter)');
+        }
+        if (ending === 'host failure') await glyph.crashHost();
+        await expect(card(glyph).getByRole('button', { name: '1 of 3 To-dos completed' })).toBeVisible();
+        await glyph.reload();
+        await expect(card(glyph).getByRole('button', { name: '1 of 3 To-dos completed' })).toBeVisible();
+        await expand(glyph);
+        await expect(
+          card(glyph).getByRole('listitem').nth(1).getByRole('img', { name: 'In progress', exact: true }),
+        ).toBeVisible();
+        await expect(
+          card(glyph).getByRole('listitem').nth(2).getByRole('img', { name: 'Pending', exact: true }),
+        ).toBeVisible();
+      },
+    );
   }
 
-  it('restores separate chat lists after reload and host restart without background completion stealing selection', async ({
-    glyph,
-    provider,
-  }) => {
-    const alpha = [{ id: 'shared', text: 'Alpha work', status: 'pending' }];
-    const beta = [{ id: 'shared', text: 'Beta work', status: 'completed' }];
-    await runUpdate(glyph, provider, alpha, { prompt: 'Alpha tasks', hold: true });
-    await glyph.page.getByRole('button', { name: 'New chat', exact: true }).click();
-    await expect(card(glyph)).toHaveCount(0);
-    await runUpdate(glyph, provider, beta, { prompt: 'Beta tasks' });
-    provider.release(1);
-    await expect.poll(() => provider.requests[1].completed).toBe(true);
-    await expect(card(glyph).getByRole('button', { name: '1 of 1 To-dos completed' })).toBeVisible();
-    await expand(glyph);
-    await expect(card(glyph).getByRole('listitem')).toContainText(['Beta work']);
-    await openChat(glyph, 'Alpha');
-    await expect(card(glyph).getByRole('button', { name: '0 of 1 To-dos completed' })).toBeVisible();
-    await glyph.reload();
-    await expand(glyph);
-    await expect(card(glyph).getByRole('listitem')).toContainText(['Alpha work']);
-    await glyph.crashHost();
-    await glyph.reload();
-    await openChat(glyph, 'Beta');
-    await expand(glyph);
-    await expect(card(glyph).getByRole('listitem')).toContainText(['Beta work']);
-    await expect(card(glyph)).not.toContainText('Alpha work');
-  });
+  it(
+    'restores separate chat lists after reload and host restart without background completion stealing selection',
+    restartsHost,
+    async ({ glyph, provider }) => {
+      const alpha = [{ id: 'shared', text: 'Alpha work', status: 'pending' }];
+      const beta = [{ id: 'shared', text: 'Beta work', status: 'completed' }];
+      await runUpdate(glyph, provider, alpha, { prompt: 'Alpha tasks', hold: true });
+      await glyph.page.getByRole('button', { name: 'New chat', exact: true }).click();
+      await expect(card(glyph)).toHaveCount(0);
+      await runUpdate(glyph, provider, beta, { prompt: 'Beta tasks' });
+      provider.release(1);
+      await expect.poll(() => provider.requests[1].completed).toBe(true);
+      await expect(card(glyph).getByRole('button', { name: '1 of 1 To-dos completed' })).toBeVisible();
+      await expand(glyph);
+      await expect(card(glyph).getByRole('listitem')).toContainText(['Beta work']);
+      await openChat(glyph, 'Alpha');
+      await expect(card(glyph).getByRole('button', { name: '0 of 1 To-dos completed' })).toBeVisible();
+      await glyph.reload();
+      await expand(glyph);
+      await expect(card(glyph).getByRole('listitem')).toContainText(['Alpha work']);
+      await glyph.crashHost();
+      await glyph.reload();
+      await openChat(glyph, 'Beta');
+      await expand(glyph);
+      await expect(card(glyph).getByRole('listitem')).toContainText(['Beta work']);
+      await expect(card(glyph)).not.toContainText('Alpha work');
+    },
+  );
 
-  it('rejects malformed updates without changing the list and supports deliberate replacement and clearing', async ({
-    glyph,
-    provider,
-  }) => {
-    await runUpdate(glyph, provider, items);
-    expect(await runUpdate(glyph, provider, [items[0], items[0]])).toMatchObject({ error: { code: 'MALFORMED' } });
-    await expect(card(glyph).getByRole('button', { name: '1 of 3 To-dos completed' })).toBeVisible();
-    const replacement = [{ id: 'new', text: 'A new task', status: 'pending' }];
-    expect(await runUpdate(glyph, provider, replacement, { replace: true })).toEqual({ items: replacement });
-    await expect(card(glyph).getByRole('button', { name: '0 of 1 To-dos completed' })).toBeVisible();
-    expect(await runUpdate(glyph, provider, [], { replace: true })).toEqual({ items: [] });
-    await expect(card(glyph)).toHaveCount(0);
-    await glyph.reload();
-    await expect(card(glyph)).toHaveCount(0);
-  });
+  it(
+    'rejects malformed updates without changing the list and supports deliberate replacement and clearing',
+    reloadsWindow,
+    async ({ glyph, provider }) => {
+      await runUpdate(glyph, provider, items);
+      expect(await runUpdate(glyph, provider, [items[0], items[0]])).toMatchObject({ error: { code: 'MALFORMED' } });
+      await expect(card(glyph).getByRole('button', { name: '1 of 3 To-dos completed' })).toBeVisible();
+      const replacement = [{ id: 'new', text: 'A new task', status: 'pending' }];
+      expect(await runUpdate(glyph, provider, replacement, { replace: true })).toEqual({ items: replacement });
+      await expect(card(glyph).getByRole('button', { name: '0 of 1 To-dos completed' })).toBeVisible();
+      expect(await runUpdate(glyph, provider, [], { replace: true })).toEqual({ items: [] });
+      await expect(card(glyph)).toHaveCount(0);
+      await glyph.reload();
+      await expect(card(glyph)).toHaveCount(0);
+    },
+  );
 });

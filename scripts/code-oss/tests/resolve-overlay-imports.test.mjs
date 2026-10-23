@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +62,32 @@ describe(resolveOverlayImports, () => {
     expect(resolveOverlayImports(input, browser)).toBe(input);
   });
 
+  it('leaves computed dynamic imports untouched', () => {
+    const input = 'const load = (name: string) => import(name);';
+    expect(resolveOverlayImports(input, browser)).toBe(input);
+  });
+
+  it('rejects aliases whose configured target leaves the overlay tree', async () => {
+    const realFilesystem = await vi.importActual('node:fs');
+    vi.resetModules();
+    vi.doMock('node:fs', () => ({
+      ...realFilesystem,
+      readFileSync: () =>
+        JSON.stringify({ compilerOptions: { paths: { '#outside/*': ['../outside/*'], '#root/*': ['./overlay*'] } } }),
+    }));
+    onTestFinished(() => {
+      vi.doUnmock('node:fs');
+    });
+    const { resolveOverlayImports: resolveWithConfig } = await import('#scripts/code-oss/resolve-overlay-imports.mjs');
+
+    expect(() => resolveWithConfig("import '#outside/module.js';", browser)).toThrow(
+      'Code OSS alias #outside/module.js must target the overlay tree',
+    );
+    expect(() => resolveWithConfig("import '#root/x';", browser)).toThrow(
+      'Code OSS alias #root/x must target the overlay tree',
+    );
+  });
+
   it('keeps generated imports unchanged when overlay processing runs again', () => {
     const output = resolveOverlayImports("import { URI } from '#vs/base/common/uri.js';", browser);
     expect(resolveOverlayImports(output, browser)).toBe(output);
@@ -70,7 +96,7 @@ describe(resolveOverlayImports, () => {
   it.each(['#missing/module.js', '#vs/../escape.js', '#glyph/../../escape.js', '#vs/'])(
     'rejects an unknown or invalid alias %s instead of emitting an unusable import',
     specifier => {
-      expect(() => resolveOverlayImports(`import '${specifier}';`, browser)).toThrow(/Code OSS import alias/);
+      expect(() => resolveOverlayImports(`import '${specifier}';`, browser)).toThrow(/Code OSS import alias/u);
     },
   );
 
@@ -103,6 +129,10 @@ describe(resolveOverlayImports, () => {
   });
 });
 
+/**
+ * @param {string} directory
+ * @returns {Generator<string>}
+ */
 function* files(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const file = join(directory, entry.name);

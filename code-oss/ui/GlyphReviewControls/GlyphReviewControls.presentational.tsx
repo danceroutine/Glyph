@@ -45,10 +45,12 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
   const [compact, setCompact] = useState(false);
   useLayoutEffect(() => {
     const node = bar.current;
-    if (!node || !state.fileLabel) return;
+    if (!node || state.fileLabel === undefined || state.fileLabel === '') return undefined;
     const measure = () => {
       // Measure the full labels on one row, independent of the current compact state.
-      const copy = node.cloneNode(true) as HTMLElement;
+      const copy = document.createElement(node.localName);
+      copy.className = node.className;
+      copy.append(...Array.from(node.childNodes, child => child.cloneNode(true)));
       Object.assign(copy.style, { position: 'fixed', visibility: 'hidden', width: 'max-content', flexWrap: 'nowrap' });
       copy.querySelector<HTMLElement>('[data-keep-all-suffix]')?.removeAttribute('hidden');
       node.parentElement!.append(copy);
@@ -59,13 +61,20 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(node);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+    };
   }, [state.fileLabel, state.fileComplete, state.shortcuts]);
-  if (!state.fileLabel && state.fileComplete) return null;
+  if ((state.fileLabel === undefined || state.fileLabel === '') && state.fileComplete === true) return null;
   return (
-    <section class={styles.root} aria-label={state.fileLabel ? 'File review controls' : 'Edit review controls'}>
+    <section
+      class={styles.root}
+      aria-label={
+        state.fileLabel !== undefined && state.fileLabel !== '' ? 'File review controls' : 'Edit review controls'
+      }
+    >
       <div ref={bar} class={styles.bar}>
-        {!state.fileComplete && (
+        {state.fileComplete !== true && (
           <>
             <IconButton
               size={ButtonSize.SMALL}
@@ -88,7 +97,9 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
             >
               <ChevronDown size={16} aria-hidden="true" />
             </IconButton>
-            {state.fileLabel && <span class={styles.separator} aria-hidden="true" />}
+            {state.fileLabel !== undefined && state.fileLabel !== '' && (
+              <span class={styles.separator} aria-hidden="true" />
+            )}
             {state.previousFile && (
               <IconButton
                 size={ButtonSize.SMALL}
@@ -96,12 +107,14 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
                 type="button"
                 aria-label="Previous file"
                 disabled={state.navigationDisabled}
-                onClick={state.previousFile}
+                onClick={() => {
+                  void state.previousFile?.();
+                }}
               >
                 <ChevronLeft size={16} aria-hidden="true" />
               </IconButton>
             )}
-            {state.fileLabel && <span>{state.fileLabel}</span>}
+            {state.fileLabel !== undefined && state.fileLabel !== '' && <span>{state.fileLabel}</span>}
             {state.nextFile && (
               <IconButton
                 size={ButtonSize.SMALL}
@@ -109,12 +122,14 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
                 type="button"
                 aria-label="Review Next File"
                 disabled={state.navigationDisabled}
-                onClick={state.nextFile}
+                onClick={() => {
+                  void state.nextFile?.();
+                }}
               >
                 <ChevronRight size={16} aria-hidden="true" />
               </IconButton>
             )}
-            {!state.fileLabel && (
+            {(state.fileLabel === undefined || state.fileLabel === '') && (
               <Button
                 shortcut={state.shortcuts?.[GlyphReviewCommand.UNDO]}
                 size={ButtonSize.SMALL}
@@ -122,12 +137,14 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
                 type="button"
                 aria-label="Revert"
                 disabled={state.disabled}
-                onClick={state.undo}
+                onClick={() => {
+                  void state.undo();
+                }}
               >
                 Revert
               </Button>
             )}
-            {!state.fileLabel && (
+            {(state.fileLabel === undefined || state.fileLabel === '') && (
               <Button
                 shortcut={state.shortcuts?.[GlyphReviewCommand.KEEP]}
                 size={ButtonSize.SMALL}
@@ -136,12 +153,14 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
                 type="button"
                 aria-label="Keep"
                 disabled={state.keepDisabled}
-                onClick={state.keep}
+                onClick={() => {
+                  void state.keep();
+                }}
               >
                 Keep
               </Button>
             )}
-            {!state.fileLabel && state.rejectWithComment && (
+            {(state.fileLabel === undefined || state.fileLabel === '') && state.rejectWithComment && (
               <Button
                 shortcut={state.shortcuts?.[GlyphReviewCommand.COMMENT]}
                 size={ButtonSize.SMALL}
@@ -165,7 +184,9 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
                 type="button"
                 aria-label="Revert File"
                 disabled={state.disabled}
-                onClick={state.undoFile}
+                onClick={() => {
+                  void state.undoFile?.();
+                }}
               >
                 Revert File
               </Button>
@@ -179,14 +200,16 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
                 type="button"
                 disabled={state.keepDisabled}
                 aria-label="Keep File"
-                onClick={state.keepFile}
+                onClick={() => {
+                  void state.keepFile?.();
+                }}
               >
                 Keep File
               </Button>
             )}
           </>
         )}
-        {state.fileComplete && state.nextFile && (
+        {state.fileComplete === true && state.nextFile && (
           <Button
             shortcut={state.shortcuts?.[GlyphReviewCommand.NEXT_FILE]}
             size={ButtonSize.SMALL}
@@ -194,7 +217,9 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
             type="button"
             aria-label="Review Next File"
             disabled={state.navigationDisabled}
-            onClick={state.nextFile}
+            onClick={() => {
+              void state.nextFile?.();
+            }}
           >
             Review Next File
           </Button>
@@ -209,7 +234,9 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
             type="button"
             aria-label="Keep all changes"
             disabled={state.keepAllDisabled}
-            onClick={state.keepAll}
+            onClick={() => {
+              void state.keepAll?.();
+            }}
           >
             <span>
               Keep all
@@ -238,7 +265,9 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
             value={state.comment}
             maxLength={4000}
             disabled={state.commentPending}
-            onInput={event => state.setComment(event.currentTarget.value)}
+            onInput={event => {
+              state.setComment(event.currentTarget.value);
+            }}
             onKeyDown={event => {
               if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
                 event.preventDefault();
@@ -267,7 +296,7 @@ export function GlyphReviewControls(state: GlyphReviewControlsState) {
           </div>
         </form>
       )}
-      {state.error && (
+      {state.error !== undefined && state.error !== '' && (
         <div class={styles.error} role="alert">
           {state.error}
         </div>

@@ -27,8 +27,12 @@ export function installShutdownHandlers(
     active?.abort();
     options.shutdown(signal);
   };
-  const onInterrupt = (): void => handle(ShutdownSignal.SIGINT);
-  const onTerminate = (): void => handle(ShutdownSignal.SIGTERM);
+  const onInterrupt = (): void => {
+    handle(ShutdownSignal.SIGINT);
+  };
+  const onTerminate = (): void => {
+    handle(ShutdownSignal.SIGTERM);
+  };
   source.on(ShutdownSignal.SIGINT, onInterrupt);
   source.on(ShutdownSignal.SIGTERM, onTerminate);
   options.interrupt?.on(ShutdownSignal.SIGINT, onInterrupt);

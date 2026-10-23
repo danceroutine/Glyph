@@ -16,21 +16,21 @@ export function formatFolderContextOutline(paths: readonly string[], truncated =
       }
       branch = child;
     }
-    if (parts.length && !path.endsWith('/')) branch.file = true;
+    if (parts.length > 0 && !path.endsWith('/')) branch.file = true;
   }
   const lines: string[] = [];
   const visit = (branch: Branch, depth: number) => {
-    const children = [...branch.children].sort(
+    const children = [...branch.children].toSorted(
       ([left, a], [right, b]) => Number(a.file) - Number(b.file) || left.localeCompare(right, 'en'),
     );
     for (const [name, child] of children) {
-      const label = /[\r\n\t]/.test(name) ? JSON.stringify(name) : name;
+      const label = /[\r\n\t]/u.test(name) ? JSON.stringify(name) : name;
       lines.push(`${'  '.repeat(depth)}${label}${child.file ? '' : '/'}`);
       visit(child, depth + 1);
     }
   };
   visit(root, 0);
-  if (!lines.length) lines.push('(No search-visible files)');
+  if (lines.length === 0) lines.push('(No search-visible files)');
   if (truncated) lines.push('… Tree truncated at the search limit.');
   return lines.join('\n');
 }

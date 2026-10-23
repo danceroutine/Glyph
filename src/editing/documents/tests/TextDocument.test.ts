@@ -148,6 +148,69 @@ describe(TextDocument, () => {
       ).toBe('A🧪b');
     });
 
+    it('returns the original text when there are no edits', () => {
+      const document = new TextDocument('example.txt', 'abc');
+
+      expect(document.apply([])).toBe('abc');
+    });
+
+    it('rejects a range that ends before it starts', () => {
+      const document = new TextDocument('example.txt', 'abc');
+
+      expect(() =>
+        document.apply([
+          {
+            range: { start: { line: 0, character: 2 }, end: { line: 0, character: 1 } },
+            expected_text: '',
+            replacement_text: 'x',
+          },
+        ]),
+      ).toThrow(
+        expect.objectContaining({
+          reason: EditFailureReason.INCONSISTENT,
+          message: 'Edit range ends before it starts.',
+        }),
+      );
+    });
+
+    it('rejects an edit whose expected text differs from the document', () => {
+      const document = new TextDocument('example.txt', 'abc');
+
+      expect(() =>
+        document.apply([
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 2 } },
+            expected_text: 'ax',
+            replacement_text: 'x',
+          },
+        ]),
+      ).toThrow(
+        expect.objectContaining({
+          reason: EditFailureReason.INCONSISTENT,
+          message: 'Edit expected_text does not match Base exactly.',
+        }),
+      );
+    });
+
+    it.each([
+      { line: 2, character: 0, label: 'a line past the end of the document' },
+      { line: 0, character: 4, label: 'a character past the end of its line' },
+    ])('rejects $label', ({ line, character }) => {
+      const document = new TextDocument('example.txt', 'abc\n');
+
+      expect(() =>
+        document.apply([
+          {
+            range: { start: { line, character }, end: { line, character } },
+            expected_text: '',
+            replacement_text: 'x',
+          },
+        ]),
+      ).toThrow(
+        expect.objectContaining({ reason: EditFailureReason.INCONSISTENT, message: 'Edit position is outside Base.' }),
+      );
+    });
+
     it('rejects a position that splits a surrogate pair', () => {
       const document = new TextDocument('example.txt', 'a😀b');
 

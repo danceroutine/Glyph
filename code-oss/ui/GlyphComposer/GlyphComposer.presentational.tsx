@@ -133,7 +133,12 @@ export function GlyphComposer(state: GlyphComposerProps) {
           {state.unsent.map((text, index) => (
             <div key={index}>
               <pre>{text}</pre>
-              <Button type="button" onClick={() => state.editUnsent(index)}>
+              <Button
+                type="button"
+                onClick={() => {
+                  state.editUnsent(index);
+                }}
+              >
                 Edit unsent message
               </Button>
             </div>
@@ -154,14 +159,26 @@ export function GlyphComposer(state: GlyphComposerProps) {
           </header>
           <small>Captured revision {state.preview.contentRevision.slice(0, 12)}</small>
           <pre>{state.preview.text}</pre>
-          {state.sourceStatus && <p role="status">{state.sourceStatus}</p>}
+          {state.sourceStatus !== undefined && state.sourceStatus !== '' && <p role="status">{state.sourceStatus}</p>}
           <div class={styles.footer}>
-            <Button type="button" disabled={state.pending} onClick={state.openPreview}>
+            <Button
+              type="button"
+              disabled={state.pending}
+              onClick={() => {
+                void state.openPreview();
+              }}
+            >
               <ExternalLink size={14} />
               Open source
             </Button>
             {['file', 'selection', 'folder'].includes(state.preview.kind) && (
-              <Button type="button" disabled={state.pending} onClick={state.refreshPreview}>
+              <Button
+                type="button"
+                disabled={state.pending}
+                onClick={() => {
+                  void state.refreshPreview();
+                }}
+              >
                 <RefreshCw size={14} />
                 Refresh capture
               </Button>
@@ -188,7 +205,7 @@ export function GlyphComposer(state: GlyphComposerProps) {
             choose={candidate => void state.choose(candidate)}
           />
         )}
-        {state.editingQueuedMessage && (
+        {state.editingQueuedMessage !== undefined && state.editingQueuedMessage !== '' && (
           <div class={styles.queueEditHeader}>
             <span>Editing queued message</span>
             <Button
@@ -224,12 +241,16 @@ export function GlyphComposer(state: GlyphComposerProps) {
               title="Attach file"
               aria-label="Attach file"
               disabled={state.pending || state.disabled}
-              onMouseDown={event => event.preventDefault()}
-              onClick={state.attachFile}
+              onMouseDown={event => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                void state.attachFile();
+              }}
             >
               <Paperclip size={18} aria-hidden="true" />
             </IconButton>
-            {state.active && !state.editingQueuedMessage && state.draft.trim() && (
+            {state.active && state.editingQueuedMessage === undefined && state.draft.trim() && (
               <IconButton
                 type="button"
                 shape={IconButtonShape.CIRCLE}
@@ -250,11 +271,13 @@ export function GlyphComposer(state: GlyphComposerProps) {
               class={'glyph-send'}
 
               type="button"
-              disabled={state.disabled || state.submitting || (!!state.editingQueuedMessage && !state.draft.trim())}
+              disabled={
+                state.disabled || state.submitting || (state.editingQueuedMessage !== undefined && !state.draft.trim())
+              }
               onClick={state.activate}
               title={state.saveQueueLabel ?? (state.active ? 'Cancel' : state.sendLabel)}
             >
-              {state.active && !state.editingQueuedMessage && !state.draft.trim() ? (
+              {state.active && state.editingQueuedMessage === undefined && !state.draft.trim() ? (
                 <Square size={13} style={{ width: 13, height: 13 }} fill="currentColor" aria-hidden="true" />
               ) : (
                 <ArrowUp size={18} aria-hidden="true" />
@@ -264,7 +287,7 @@ export function GlyphComposer(state: GlyphComposerProps) {
           </div>
         </div>
       </div>
-      {state.error && (
+      {state.error !== undefined && state.error !== '' && (
         <div class={styles.error} role="alert">
           {state.error}
         </div>

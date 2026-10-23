@@ -40,7 +40,11 @@ export function GlyphDiagram({ root, diagram, error, source, expanded, toggle }:
       >
         {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </IconButton>
-      {diagram ? <img src={diagram} alt="Plan diagram" /> : <span role="status">Rendering diagram…</span>}
+      {diagram !== undefined && diagram !== '' ? (
+        <img src={diagram} alt="Plan diagram" />
+      ) : (
+        <span role="status">Rendering diagram…</span>
+      )}
     </div>
   );
 }

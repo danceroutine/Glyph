@@ -2,10 +2,12 @@ import { WebRequestError } from './WebRequestError.ts';
 import { webUrl } from './WebUrl.ts';
 
 /** Anonymous, bounded requests; never forwards account tokens, cookies, or page scripts. */
+const defaultLimits = { maxBytes: 1024 * 1024, timeoutMs: 20_000, maxRedirects: 5 };
+
 export class WebHttpClient {
   constructor(
     private readonly transport: typeof fetch = fetch,
-    private readonly limits = { maxBytes: 1024 * 1024, timeoutMs: 20_000, maxRedirects: 5 },
+    private readonly limits = defaultLimits,
   ) {}
 
   async read(value: string, cancellation: AbortSignal): Promise<{ url: string; contentType: string; text: string }> {
@@ -26,7 +28,7 @@ export class WebHttpClient {
         if ([301, 302, 303, 307, 308].includes(response.status)) {
           await response.body?.cancel();
           const location = response.headers.get('location');
-          if (!location || redirects >= this.limits.maxRedirects)
+          if (location === null || location === '' || redirects >= this.limits.maxRedirects)
             throw new WebRequestError('REDIRECT_LIMIT', 'The page has an invalid redirect or too many redirects.');
           url = webUrl(new URL(location, url).href);
           continue;
@@ -58,12 +60,12 @@ export class WebHttpClient {
           if (reader)
             for (;;) {
               signal.throwIfAborted();
-              const { done, value } = await reader.read();
+              const { done, value: chunk } = await reader.read();
               if (done) break;
-              length += value.byteLength;
+              length += chunk.byteLength;
               if (length > this.limits.maxBytes)
                 throw new WebRequestError('RESPONSE_TOO_LARGE', 'The page exceeds the download limit.');
-              chunks.push(value);
+              chunks.push(chunk);
             }
         } finally {
           await reader?.cancel().catch(() => {});
@@ -72,7 +74,7 @@ export class WebHttpClient {
         signal.throwIfAborted();
         const bytes = Buffer.concat(chunks);
         const charset =
-          /charset\s*=\s*["']?([^;\s"']+)/i.exec(response.headers.get('content-type') ?? '')?.[1] ?? 'utf-8';
+          /charset\s*=\s*["']?([^;\s"']+)/iu.exec(response.headers.get('content-type') ?? '')?.[1] ?? 'utf-8';
         let decoder: TextDecoder;
         try {
           decoder = new TextDecoder(charset);

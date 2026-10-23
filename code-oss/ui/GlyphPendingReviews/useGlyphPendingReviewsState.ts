@@ -40,7 +40,7 @@ export function useGlyphPendingReviewsState({ chatId, proposals, readOnly, actio
           ...file,
           proposalId: proposal.id,
           key: `${proposal.id}/${file.id}`,
-          name: file.path.split('/').at(-1) ?? file.path,
+          name: file.path.slice(file.path.lastIndexOf('/') + 1),
           canKeep:
             (file.textOnly === true || file.autoApplied === true) &&
             [GlyphProposalApplicability.READY, GlyphProposalApplicability.FAILED_RETRYABLE].includes(
@@ -49,7 +49,7 @@ export function useGlyphPendingReviewsState({ chatId, proposals, readOnly, actio
           status:
             file.applicability === GlyphProposalApplicability.STALE
               ? 'File changed. Revert newer edits first, or keep this change.'
-              : file.textOnly === false && !file.autoApplied
+              : file.textOnly === false && file.autoApplied !== true
                 ? 'The file operation could not be applied. Revert to dismiss it.'
                 : undefined,
         })),
@@ -78,7 +78,9 @@ export function useGlyphPendingReviewsState({ chatId, proposals, readOnly, actio
     summary: `${files.length} ${files.length === 1 ? 'File' : 'Files'}`,
     keepLabel: files.length === 1 ? 'Keep' : 'Keep All',
     undoLabel: files.length === 1 ? 'Revert' : 'Revert All',
-    toggle: () => setExpanded(value => !value),
+    toggle: () => {
+      setExpanded(value => !value);
+    },
     keep: () => decide(files, true),
     undo: () => decide(files, false),
     review: () =>

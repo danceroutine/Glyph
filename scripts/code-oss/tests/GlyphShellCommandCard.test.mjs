@@ -1,10 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { beforeAll, afterAll, it } from 'vitest';
-const { chromium, expect } = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url))(
-  '@playwright/test',
-);
-let browser, script;
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let script;
 beforeAll(async () => {
   script = (
     await build({
@@ -26,6 +27,7 @@ beforeAll(async () => {
       write: false,
       format: 'iife',
       platform: 'browser',
+      ...coverageBuildOptions,
       define: { 'process.env.NODE_ENV': '"production"' },
       tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
     })
@@ -36,7 +38,7 @@ afterAll(async () => {
   await browser?.close();
 });
 async function mount() {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   await page.setContent('<div id="root" style="width:280px"></div>');
   await page.addScriptTag({ content: script });
   return page;
@@ -50,6 +52,7 @@ it('keeps failed input editable, prevents duplicate writes, and preserves expans
     await toggle.click();
     await card.getByRole('textbox').fill('draft');
     await card.getByRole('form').evaluate(element => {
+      if (!(element instanceof HTMLFormElement)) throw new TypeError('Expected a form.');
       element.requestSubmit();
       element.requestSubmit();
     });

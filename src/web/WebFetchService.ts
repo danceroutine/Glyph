@@ -12,18 +12,25 @@ export class WebFetchService implements WebPageFetcher {
     let content = page.text;
     if (['text/html', 'application/xhtml+xml'].includes(page.contentType)) {
       const { document } = parseHTML(page.text);
-      title = document.querySelector('title')?.textContent?.trim() || page.url;
+      title = (document.querySelector('title')?.textContent?.trim() ?? '') || page.url;
       for (const node of document.querySelectorAll(
-        'script,style,noscript,template,nav,header,footer,form,[hidden],[aria-hidden="true"]',
+        'title,script,style,noscript,template,nav,header,footer,form,[hidden],[aria-hidden="true"]',
       ))
         node.remove();
-      const root = document.querySelector('main,article') ?? document.body;
+      // LinkeDOM does not infer omitted document wrappers like a browser does.
+      // Its body getter can create an empty body or throw for a text-only page.
+      const root = document.querySelector('main,article') ?? document.querySelector('body') ?? document;
+      for (const row of root.querySelectorAll('tr')) {
+        const cells = Array.from(row.children).filter(cell => cell.matches('td,th'));
+        for (const cell of cells.slice(1)) cell.insertBefore(document.createTextNode(' | '), cell.firstChild);
+      }
       // Preserve paragraph, heading, table-row, and code-block boundaries in plain text.
       for (const node of root.querySelectorAll('p,div,section,li,h1,h2,h3,h4,h5,h6,pre,tr,br'))
-        node.appendChild(document.createTextNode('\n'));
-      content = (root.textContent ?? '')
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\n\s*\n/g, '\n\n')
+        node.append(document.createTextNode('\n'));
+      content = Array.from(root.childNodes, node => node.textContent ?? '')
+        .join('')
+        .replaceAll(/[ \t]+/gu, ' ')
+        .replaceAll(/\n\s*\n/gu, '\n\n')
         .trim();
     }
     signal.throwIfAborted();

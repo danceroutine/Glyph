@@ -20,8 +20,12 @@ export class OpenAIAccountService {
       get lifetimeSignal() {
         return lifetimeSignal();
       },
-      acquire: async () => this.requireInitialized(),
-      load: async () => this.requireInitialized(),
+      acquire: async () => {
+        this.requireInitialized();
+      },
+      load: async () => {
+        this.requireInitialized();
+      },
       save: async () => {
         this.requireInitialized();
         const pending = store.save();
@@ -48,7 +52,9 @@ export class OpenAIAccountService {
       try {
         await this.store.release();
       } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], 'Account initialization failed and cleanup was incomplete.');
+        throw new AggregateError([error, cleanupError], 'Account initialization failed and cleanup was incomplete.', {
+          cause: cleanupError,
+        });
       }
       throw error;
     }

@@ -1,9 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
-const requireUpstream = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = requireUpstream('@playwright/test');
-let browser, script;
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let script;
 beforeAll(async () => {
   const result = await build({
     stdin: {
@@ -33,6 +35,7 @@ beforeAll(async () => {
     write: false,
     format: 'iife',
     platform: 'browser',
+    ...coverageBuildOptions,
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   script = result.outputFiles[0].text;
@@ -42,7 +45,7 @@ afterAll(async () => {
   await browser?.close();
 });
 it('preserves native form behavior, keyboard activation, and disabled loading actions', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   page.setDefaultTimeout(2500);
   try {
     await page.setContent('<div id="root"></div>');
@@ -67,7 +70,7 @@ it('preserves native form behavior, keyboard activation, and disabled loading ac
   }
 });
 it('uses mode colors while outline keeps neutral text in both themes', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   page.setDefaultTimeout(2500);
   try {
     await page.setContent('<div id="root"></div>');
@@ -91,7 +94,7 @@ it('uses mode colors while outline keeps neutral text in both themes', async () 
   }
 });
 it('opens split options by keyboard, restores focus on Escape and runs the alternate action', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   page.setDefaultTimeout(2500);
   try {
     await page.setContent('<div id="root"></div>');

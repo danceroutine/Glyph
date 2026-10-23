@@ -12,8 +12,7 @@ import { PlanToolRuntime } from '#src/planning/PlanToolRuntime.js';
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { realpath } from 'node:fs/promises';
-import { dirname, join, relative, isAbsolute, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
 import { SqliteChatSessionStore } from '#src/chat/sessions/SqliteChatSessionStore.js';
@@ -104,33 +103,33 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       authority,
       roots,
     };
-    const artifactRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+    const artifactRoot = resolve(import.meta.dirname, '../../..');
     const native = join(artifactRoot, 'native', `${process.platform}-${process.arch}`);
     const suffix = process.platform === 'win32' ? '.exe' : '';
     const indexExecutable = join(native, `glyph-context-index${suffix}`);
     const sandboxExecutable = join(native, `glyph-shell-sandbox${suffix}`);
     assertShellRuntimePathIsolation(
-      roots.map(root => root.path),
+      roots.map(workspaceRoot => workspaceRoot.path),
       configuration.stateDirectory,
       configuration.traceFile,
     );
     const policy = new WorkspaceAccessPolicy();
     const logger = new FileLogger(configuration.traceFile);
-    const parts = roots.map(root => {
+    const parts = roots.map(workspaceRoot => {
       const excludedPaths = [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(target => {
-        const path = relative(root.path, target);
+        const path = relative(workspaceRoot.path, target);
         return path && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
           ? [path.split(sep).join('/')]
           : [];
       });
-      const disk = new FileSystemWorkspaceTextStore(root.path, { accessPolicy: policy, excludedPaths });
+      const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, { accessPolicy: policy, excludedPaths });
       const index: RustWorkspacePathIndex = new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
-        root: root.path,
+        root: workspaceRoot.path,
         cachePath: join(
           configuration.stateDirectory,
           `desktop-index-${createHash('sha256')
-            .update(context.id + root.path)
+            .update(context.id + workspaceRoot.path)
             .digest('hex')}.bin`,
         ),
         accessPolicy: policy,
@@ -141,18 +140,21 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             disk,
             index,
             (request, cancellation) => this.editors.request(input.identity, request, cancellation),
-            roots.length > 1 ? `${root.name}/` : '',
+            roots.length > 1 ? `${workspaceRoot.name}/` : '',
             signal,
           ),
       });
-      const workspace = new EditorWorkspaceTextStore(root.path, disk.caseSensitive, {
+      const workspace = new EditorWorkspaceTextStore(workspaceRoot.path, disk.caseSensitive, {
         canonicalPath: path => disk.canonicalPath(path),
         listPaths: (limit, glob = '**/*', targetDirectory) =>
-          index.glob(glob, { limit, ...(targetDirectory ? { targetDirectory } : {}) }),
+          index.glob(glob, {
+            limit,
+            ...(targetDirectory !== undefined && targetDirectory !== '' ? { targetDirectory } : {}),
+          }),
         request: async (request, signal) => {
           // Reuse filesystem policy and symlink checks before granting editor access.
           const path = this.requestPath(request);
-          if (path) {
+          if (path !== undefined && path !== '') {
             if (request.type === GlyphEditorRequestType.EXISTS) await disk.exists(path);
             else await disk.validateAccess(path);
           }
@@ -163,7 +165,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ) {
             await disk.validateAccess(request.mutation.target);
           }
-          const qualified = path && roots.length > 1 ? `${root.name}/${path}` : path;
+          const qualified =
+            path !== undefined && path !== '' && roots.length > 1 ? `${workspaceRoot.name}/${path}` : path;
           let wire = this.withRequestPath(request, qualified);
           if (
             wire.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
@@ -171,9 +174,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             wire.mutation.target &&
             roots.length > 1
           )
-            wire = { ...wire, mutation: { ...wire.mutation, target: `${root.name}/${wire.mutation.target}` } };
+            wire = { ...wire, mutation: { ...wire.mutation, target: `${workspaceRoot.name}/${wire.mutation.target}` } };
           const response = await this.editors.request(input.identity, wire, signal);
-          return response.snapshot && path
+          return response.snapshot && path !== undefined && path !== ''
             ? {
                 ...response,
                 snapshot: {
@@ -187,7 +190,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             : response;
         },
       });
-      return { name: root.name, workspace, index };
+      return { name: workspaceRoot.name, workspace, index };
     });
     const workspace =
       roots.length === 1
@@ -224,7 +227,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       new ShellWorkingDirectoryResolver(context),
       new NativeShellSandboxLauncher({
         binaryPath: sandboxExecutable,
-        workspaceRoots: roots.map(root => root.path),
+        workspaceRoots: roots.map(workspaceRoot => workspaceRoot.path),
         stateDirectory: configuration.stateDirectory,
         protectedPaths: [artifactRoot],
         accessPolicy: policy,
@@ -239,15 +242,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const webHttp = new WebHttpClient(this.transport);
     const tools = new ToolRegistry(
       [
-        new ModeSwitchToolRuntime((target, description, context, signal) =>
+        new ModeSwitchToolRuntime((target, description, toolContext, signal) =>
           interactions.presentModeSwitch(
-            { source: context.mode ?? AgentMode.default.id, target, description },
+            { source: toolContext.mode ?? AgentMode.default.id, target, description },
             signal,
             async () => {
-              const summary = await sessions.setMode(context.chat!.id, target);
+              const summary = await sessions.setMode(toolContext.chat!.id, target);
               runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
             },
-            (id, status) => runtime?.finishModeSwap(context.chat!.id, id, status),
+            (swapId, status) => runtime?.finishModeSwap(toolContext.chat!.id, swapId, status),
           ),
         ),
         new PlanToolRuntime(async (chat, update, signal) => {

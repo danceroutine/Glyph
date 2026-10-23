@@ -3,6 +3,7 @@ import { Box, Text } from 'ink';
 import type { ToolActivity as ToolActivityModel } from '#src/chat/ToolActivity.js';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import { sanitizeText } from '#src/terminal/ui/shared/sanitizeText.js';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 export interface ToolActivityProps {
   activity: ToolActivityModel;
@@ -17,7 +18,10 @@ const TOOL_STATUS_SUCCESS_BACKGROUND = '#9ece6a';
 const TOOL_STATUS_ERROR_BACKGROUND = '#eb6f92';
 
 export function ToolActivity({ activity, frame = 0 }: ToolActivityProps): ReactElement {
-  const name = activity.namespace ? `${activity.namespace}.${activity.name}` : activity.name;
+  const name =
+    activity.namespace !== undefined && activity.namespace !== ''
+      ? `${activity.namespace}.${activity.name}`
+      : activity.name;
   if (activity.phase === ToolActivityPhase.STARTED) {
     const icon = SPINNER_FRAMES[frame % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0];
     return <ToolTag name={name} icon={icon} statusBackground={TOOL_STATUS_RUNNING_BACKGROUND} />;
@@ -71,7 +75,7 @@ function formatToolResult(activity: ToolActivityModel): { message: string; faile
   try {
     const result: unknown = JSON.parse(activity.output ?? '');
     if (typeof result === 'object' && result !== null && 'error' in result) {
-      return { message: `Error: ${formatToolError((result as { error: unknown }).error)}`, failed: true };
+      return { message: `Error: ${formatToolError(result.error)}`, failed: true };
     }
   } catch {
     // Non-JSON output is still a successful tool result.
@@ -81,8 +85,8 @@ function formatToolResult(activity: ToolActivityModel): { message: string; faile
 
 function formatToolError(error: unknown): string {
   if (typeof error === 'string') return error;
-  if (!error || typeof error !== 'object' || Array.isArray(error)) return formatToolErrorValue(error);
-  const details = error as Record<string, unknown>;
+  if (!isRecord(error)) return formatToolErrorValue(error);
+  const details = error;
   const code = typeof details.code === 'string' ? details.code : undefined;
   const message = typeof details.message === 'string' ? details.message : undefined;
   const context = Object.entries(details)
@@ -94,7 +98,7 @@ function formatToolError(error: unknown): string {
 
 function formatToolErrorValue(value: unknown): string {
   if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(formatToolErrorValue).join(', ');
+  if (Array.isArray(value)) return value.map(entry => formatToolErrorValue(entry)).join(', ');
   try {
     return JSON.stringify(value) ?? String(value);
   } catch {

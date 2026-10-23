@@ -7,14 +7,27 @@ import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:
 import { basename, join, relative, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const artifactsRoot = join(repositoryRoot, '.artifacts');
 const staging = join(artifactsRoot, 'glyph-desktop-host');
 const deployment = join(artifactsRoot, '.glyph-desktop-host-deploy');
 const archive = join(artifactsRoot, 'glyph-desktop-host.tgz');
-const sourcePackage = JSON.parse(await readFile(join(repositoryRoot, 'package.json'), 'utf8'));
-const codeOssPin = JSON.parse(await readFile(join(repositoryRoot, 'code-oss', 'upstream.json'), 'utf8'));
+const sourcePackage = z
+  .object({
+    name: z.string(),
+    version: z.string(),
+    type: z.string(),
+    engines: z.record(z.string(), z.string()),
+    bin: z.record(z.string(), z.string()),
+    exports: z.record(z.string(), z.unknown()),
+    dependencies: z.record(z.string(), z.string()),
+  })
+  .parse(JSON.parse(await readFile(join(repositoryRoot, 'package.json'), 'utf8')));
+const codeOssPin = z
+  .object({ protocolVersion: z.number() })
+  .parse(JSON.parse(await readFile(join(repositoryRoot, 'code-oss', 'upstream.json'), 'utf8')));
 
 await rm(staging, { recursive: true, force: true });
 await rm(deployment, { recursive: true, force: true });
@@ -92,12 +105,15 @@ const archiveHash = await sha256(archive);
 await writeFile(`${archive}.sha256`, `${archiveHash}  ${basename(archive)}\n`);
 process.stdout.write(`${archive}\nsha256 ${archiveHash}\n`);
 
+/** @param {string} directory */
 async function checksums(directory) {
   // The manifest covers every staged byte before the archive itself is created.
+  /** @type {{ path: string, sha256: string, bytes: number }[]} */
   const entries = [];
   await visit(directory);
-  return entries.sort((left, right) => left.path.localeCompare(right.path));
+  return entries.toSorted((left, right) => left.path.localeCompare(right.path));
 
+  /** @param {string} current */
   async function visit(current) {
     for (const name of await readdir(current)) {
       const path = join(current, name);
@@ -109,6 +125,7 @@ async function checksums(directory) {
   }
 }
 
+/** @param {string} path */
 async function sha256(path) {
   return createHash('sha256')
     .update(await readFile(path))

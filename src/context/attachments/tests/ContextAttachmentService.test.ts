@@ -2,7 +2,7 @@ import { posix } from 'node:path';
 import { join } from 'node:path';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { ConfigurationError } from '#src/errors/ConfigurationError.js';
 import type { WorkspaceMutationOptions } from '#src/workspace/WorkspaceMutationOptions.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
@@ -207,6 +207,76 @@ describe(ContextAttachmentService, () => {
       await expect(service.resolve([{ path: 'missing.ts' }])).rejects.toMatchObject({
         reason: ContextAttachmentFailureReason.READ_FAILED,
         details: { path: 'missing.ts' },
+      });
+    });
+
+    it('reports a malformed reference without a path as invalid and without path details', async () => {
+      const service = new ContextAttachmentService(new MutableWorkspaceTextStore());
+
+      const result = service.resolve([{} as { path: string }]);
+
+      await expect(result).rejects.toMatchObject({
+        reason: ContextAttachmentFailureReason.INVALID_REFERENCE,
+        details: {},
+      });
+    });
+
+    it('reports a non-object reference as invalid and without path details', async () => {
+      const service = new ContextAttachmentService(new MutableWorkspaceTextStore());
+
+      const result = service.resolve([null as unknown as { path: string }]);
+
+      await expect(result).rejects.toMatchObject({
+        reason: ContextAttachmentFailureReason.INVALID_REFERENCE,
+        details: {},
+      });
+    });
+
+    it('reports a non-string reference path in its stringified form', async () => {
+      const service = new ContextAttachmentService(new MutableWorkspaceTextStore());
+
+      const result = service.resolve([{ path: 42 } as unknown as { path: string }]);
+
+      await expect(result).rejects.toMatchObject({
+        reason: ContextAttachmentFailureReason.INVALID_REFERENCE,
+        details: { path: '42' },
+      });
+    });
+
+    it('reports a file that the workspace refuses to read past the per-file limit', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'glyph-attachment-file-limit-'));
+      onTestFinished(() => rm(root, { recursive: true, force: true }));
+      await writeFile(join(root, 'large.ts'), '12345');
+      const service = new ContextAttachmentService(new FileSystemWorkspaceTextStore(root), {
+        maxFileBytes: 4,
+        maxTotalBytes: 10,
+      });
+
+      const result = service.resolve([{ path: 'large.ts' }]);
+
+      await expect(result).rejects.toMatchObject({
+        reason: ContextAttachmentFailureReason.FILE_SIZE_LIMIT_EXCEEDED,
+        message: 'Context attachment large.ts exceeds the 4-byte limit.',
+        details: { path: 'large.ts', limit: 4, actual: 5 },
+      });
+    });
+
+    it('reports a file that the workspace refuses to read past the remaining total budget', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'glyph-attachment-total-limit-'));
+      onTestFinished(() => rm(root, { recursive: true, force: true }));
+      await writeFile(join(root, 'one.ts'), '123');
+      await writeFile(join(root, 'two.ts'), '45');
+      const service = new ContextAttachmentService(new FileSystemWorkspaceTextStore(root), {
+        maxFileBytes: 4,
+        maxTotalBytes: 4,
+      });
+
+      const result = service.resolve([{ path: 'one.ts' }, { path: 'two.ts' }]);
+
+      await expect(result).rejects.toMatchObject({
+        reason: ContextAttachmentFailureReason.TOTAL_SIZE_LIMIT_EXCEEDED,
+        message: 'Context attachment two.ts exceeds the 4-byte limit.',
+        details: { path: 'two.ts', limit: 4, actual: 5 },
       });
     });
 

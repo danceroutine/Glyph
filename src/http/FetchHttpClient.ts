@@ -5,6 +5,7 @@ import type { HttpClient } from './HttpClient.ts';
 import type { HttpRequestOptions } from './HttpRequestOptions.ts';
 import type { HttpResponse } from './HttpResponse.ts';
 import { HttpResponseBody } from './HttpResponseBody.ts';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 export class FetchHttpClient implements HttpClient {
   constructor(
@@ -69,18 +70,32 @@ export class FetchHttpClient implements HttpClient {
   }
 }
 
+function encodeBody(body: unknown, encoding: HttpBodyEncoding.JSON, headers: Headers): string;
+function encodeBody(body: unknown, encoding: HttpBodyEncoding.FORM, headers: Headers): URLSearchParams;
+function encodeBody(body: unknown, encoding: HttpBodyEncoding.TEXT, headers: Headers): string;
+function encodeBody(body: unknown, encoding: undefined, headers: Headers): string;
+function encodeBody(body: unknown, encoding: HttpBodyEncoding | undefined, headers: Headers): BodyInit | undefined;
 function encodeBody(body: unknown, encoding: HttpBodyEncoding | undefined, headers: Headers): BodyInit | undefined {
   if (body === undefined) return undefined;
   switch (encoding) {
     case HttpBodyEncoding.FORM:
+      if (!isStringRecord(body)) throw new TypeError('Form bodies must map field names to string values.');
       headers.set('Content-Type', 'application/x-www-form-urlencoded');
-      return new URLSearchParams(body as Record<string, string>);
+      return new URLSearchParams(body);
     case HttpBodyEncoding.JSON:
       headers.set('Content-Type', 'application/json');
       return JSON.stringify(body);
     case HttpBodyEncoding.TEXT:
     case undefined:
-      return String(body);
+      if (
+        typeof body === 'string' ||
+        typeof body === 'number' ||
+        typeof body === 'boolean' ||
+        typeof body === 'bigint' ||
+        body === null
+      )
+        return String(body);
+      throw new TypeError('Text request bodies must be primitive values.');
   }
 }
 
@@ -93,4 +108,9 @@ async function decodeBody(response: Response, responseBody: HttpResponseBody): P
     case HttpResponseBody.NONE:
       return undefined;
   }
+}
+
+export { encodeBody as encodeBody__TESTING_ONLY, decodeBody as decodeBody__TESTING_ONLY };
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every(entry => typeof entry === 'string');
 }

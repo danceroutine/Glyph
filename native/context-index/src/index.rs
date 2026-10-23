@@ -37,18 +37,27 @@ pub(crate) enum SearchFailure {
     Superseded,
 }
 
+/// The request coordinator owns which generation may publish a search result.
+pub(crate) trait SearchGenerations {
+    fn latest(&self) -> u64;
+}
+
+impl SearchGenerations for AtomicU64 {
+    fn latest(&self) -> u64 {
+        self.load(Ordering::Acquire)
+    }
+}
+
 pub(crate) struct SearchIndex {
     matcher: Nucleo<FileRecord>,
     query: String,
 }
 
 impl SearchIndex {
-    pub(crate) fn from_paths(mut paths: Vec<String>) -> Result<Self, String> {
+    // Service scans and cache loads both enforce the policy's u32 max_files.
+    pub(crate) fn from_paths(mut paths: Vec<String>) -> Self {
         paths.sort_unstable();
         paths.dedup();
-        if paths.len() > u32::MAX as usize {
-            return Err("The project contains more files than the index can address.".to_owned());
-        }
 
         let notify = Arc::new(|| {});
         let threads = available_parallelism()
@@ -70,10 +79,10 @@ impl SearchIndex {
         drop(injector);
         settle(&mut matcher);
 
-        Ok(Self {
+        Self {
             matcher,
             query: String::new(),
-        })
+        }
     }
 
     pub(crate) fn file_count(&self) -> u32 {
@@ -85,9 +94,9 @@ impl SearchIndex {
         query: String,
         limit: usize,
         generation: u64,
-        latest_generation: &AtomicU64,
+        latest_generation: &impl SearchGenerations,
     ) -> Result<SearchResult, SearchFailure> {
-        if latest_generation.load(Ordering::Acquire) > generation {
+        if latest_generation.latest() > generation {
             return Err(SearchFailure::Superseded);
         }
 
@@ -107,7 +116,7 @@ impl SearchIndex {
         // publishing its snapshot. Even unchanged text must settle the worker.
         loop {
             let status = self.matcher.tick(MATCH_WAIT_MS);
-            if latest_generation.load(Ordering::Acquire) > generation {
+            if latest_generation.latest() > generation {
                 return Err(SearchFailure::Superseded);
             }
             if !status.running {
@@ -156,152 +165,4 @@ fn settle<T: Sync + Send + 'static>(matcher: &mut Nucleo<T>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Instant;
-
-    fn search(index: &mut SearchIndex, query: &str, generation: u64) -> SearchResult {
-        let latest = AtomicU64::new(generation);
-        index
-            .search(query.to_owned(), 20, generation, &latest)
-            .expect("search should complete")
-    }
-
-    #[test]
-    fn ranks_and_highlights_fuzzy_path_matches() {
-        let mut index = SearchIndex::from_paths(vec![
-            "src/application/GlyphService.ts".to_owned(),
-            "src/chat/ChatProvider.ts".to_owned(),
-            "examples/todo-app/src/App.tsx".to_owned(),
-        ])
-        .expect("index should build");
-
-        let result = search(&mut index, "apptsx", 1);
-
-        assert_eq!(result.matches[0].path, "examples/todo-app/src/App.tsx");
-        assert_eq!(result.matches[0].indices.len(), 6);
-        assert!(result.matches[0]
-            .indices
-            .windows(2)
-            .all(|pair| pair[0] < pair[1]));
-    }
-
-    #[test]
-    fn settles_an_unpublished_query_when_the_next_generation_repeats_it() {
-        let mut index = SearchIndex::from_paths(vec!["alpha.ts".into(), "zebra.ts".into()])
-            .expect("index should build");
-        let _ = search(&mut index, "zebra", 1);
-        // Reproduce the state left by an interrupted search: the parsed query
-        // changed but the matcher has not published its replacement snapshot.
-        index
-            .matcher
-            .pattern
-            .reparse(0, "alpha", CaseMatching::Smart, Normalization::Smart, false);
-        index.query = "alpha".into();
-        let result = search(&mut index, "alpha", 3);
-        assert_eq!(
-            result
-                .matches
-                .iter()
-                .map(|item| item.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["alpha.ts"]
-        );
-        assert_eq!(result.matches[0].indices.len(), 5);
-    }
-
-    #[test]
-    fn an_appended_query_matches_a_subset_of_the_previous_query() {
-        let paths = vec![
-            "src/App.tsx".to_owned(),
-            "src/application/GlyphService.ts".to_owned(),
-            "src/chat/ChatProvider.ts".to_owned(),
-        ];
-        let mut incremental = SearchIndex::from_paths(paths.clone()).expect("index should build");
-        let _ = search(&mut incremental, "ap", 1);
-        let refined = search(&mut incremental, "appt", 2);
-
-        let mut clean = SearchIndex::from_paths(paths).expect("index should build");
-        let expected = search(&mut clean, "appt", 2);
-
-        assert_eq!(refined.matches, expected.matches);
-    }
-
-    #[test]
-    fn rejects_a_generation_superseded_before_search() {
-        let mut index =
-            SearchIndex::from_paths(vec!["src/App.tsx".to_owned()]).expect("index should build");
-        let latest = AtomicU64::new(2);
-
-        let result = index.search("app".to_owned(), 20, 1, &latest);
-
-        assert_eq!(result, Err(SearchFailure::Superseded));
-    }
-
-    #[test]
-    fn empty_query_returns_deterministic_lexical_results() {
-        let mut index =
-            SearchIndex::from_paths(vec!["z-last.ts".to_owned(), "a-first.ts".to_owned()])
-                .expect("index should build");
-
-        let result = search(&mut index, "", 1);
-
-        assert_eq!(result.matches[0].path, "a-first.ts");
-        assert!(result.matches[0].indices.is_empty());
-    }
-
-    #[test]
-    fn searches_a_deterministic_large_synthetic_corpus() {
-        let mut paths: Vec<_> = (0..100_000)
-            .map(|number| {
-                format!(
-                    "packages/package-{:04}/src/generated/component-{number:06}.tsx",
-                    number / 100
-                )
-            })
-            .collect();
-        paths.push("packages/payments/src/context/FilePickerController.tsx".to_owned());
-        let mut index = SearchIndex::from_paths(paths).expect("large index should build");
-
-        let broad = search(&mut index, "payfile", 1);
-        let refined = search(&mut index, "payfilepickctrl", 2);
-
-        assert_eq!(broad.file_count, 100_001);
-        assert_eq!(
-            refined.matches[0].path,
-            "packages/payments/src/context/FilePickerController.tsx"
-        );
-    }
-
-    #[test]
-    #[ignore = "manual performance harness; run with --ignored --nocapture"]
-    fn measures_cold_build_and_incremental_refinement_on_half_a_million_paths() {
-        let paths: Vec<_> = (0..500_000)
-            .map(|number| {
-                format!(
-                    "workspaces/workspace-{:05}/src/module-{number:06}.typescript",
-                    number / 50
-                )
-            })
-            .collect();
-        let build_started = Instant::now();
-        let mut index = SearchIndex::from_paths(paths).expect("benchmark index should build");
-        let build_elapsed = build_started.elapsed();
-        let latest = AtomicU64::new(3);
-        let search_started = Instant::now();
-        let _ = index
-            .search("work".to_owned(), 20, 3, &latest)
-            .expect("broad benchmark search should complete");
-        let broad_elapsed = search_started.elapsed();
-        let refine_started = Instant::now();
-        let result = index
-            .search("workspace09999module499999".to_owned(), 20, 3, &latest)
-            .expect("refined benchmark search should complete");
-        let refine_elapsed = refine_started.elapsed();
-
-        assert_eq!(result.file_count, 500_000);
-        eprintln!(
-            "500k paths: cold build={build_elapsed:?}, broad search={broad_elapsed:?}, incremental refinement={refine_elapsed:?}"
-        );
-    }
-}
+mod tests;

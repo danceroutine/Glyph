@@ -1,4 +1,4 @@
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphPlan } from './GlyphPlan.ts';
 import type { GlyphTodoItem } from './GlyphTodoItem.ts';
 

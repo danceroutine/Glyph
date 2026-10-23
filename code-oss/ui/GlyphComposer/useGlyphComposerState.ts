@@ -42,9 +42,9 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     GlyphWorkbenchStatus.WAITING_FOR_APPROVAL,
   ].includes(status);
   const submit = async () => {
-    if (disabled || busy.current) return;
+    if (disabled === true || busy.current) return;
     if (
-      model.snapshot.editingQueuedMessage ||
+      (model.snapshot.editingQueuedMessage !== undefined && model.snapshot.editingQueuedMessage !== '') ||
       (active && actions.followUpBehavior !== GlyphFollowUpBehavior.SEND_IMMEDIATELY)
     ) {
       model.enqueueDraft();
@@ -54,7 +54,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     } else await model.submit((text, attachments, options) => actions.send(text, attachments, options));
   };
   const steer = async () => {
-    if (active && !disabled && !busy.current && actions.steer)
+    if (active && disabled !== true && !busy.current && actions.steer)
       await model.submit((text, attachments, options) => actions.steer!(text, attachments, options));
   };
   const perform = async (operation: () => Promise<void>) => {
@@ -99,7 +99,9 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
   useLayoutEffect(() => {
     mounted.current = true;
     const view = new GlyphPromptEditor(composer.current!, model.snapshot.document, {
-      change: document => model.setDocument(document),
+      change: document => {
+        model.setDocument(document);
+      },
       preview: attachment => {
         setPreview(['file', 'selection', 'folder'].includes(attachment.kind) ? attachment : undefined);
         setSourceStatus(undefined);
@@ -178,7 +180,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     setSelected(0);
     if (!query) {
       setSearching(false);
-      return;
+      return undefined;
     }
     setSearching(true);
     const timer = setTimeout(() => {
@@ -217,8 +219,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     };
   }, [preview, actions.context]);
   useEffect(() => {
-    const input = editor.current?.view.dom;
-    if (!input) return;
+    const input = editor.current!.view.dom;
     input.setAttribute('aria-expanded', String(!!query));
     if (query) input.setAttribute('aria-controls', pickerId);
     else input.removeAttribute('aria-controls');
@@ -228,13 +229,13 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
   useEffect(() => {
     const first = state.queued[0];
     if (
-      !actions.managesQueue &&
+      actions.managesQueue !== true &&
       !active &&
-      !disabled &&
+      disabled !== true &&
       first &&
       !state.queuePaused &&
-      !state.queueSubmitting &&
-      !state.editingQueuedMessage
+      state.queueSubmitting === undefined &&
+      state.editingQueuedMessage === undefined
     )
       void model.sendQueued(first.id, (text, attachments, options) => actions.send(text, attachments, options));
   }, [active, disabled, state.queued, state.queuePaused, state.queueSubmitting, state.editingQueuedMessage, model]);
@@ -242,35 +243,46 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     ? actions.composerKeybindings.label(GlyphComposerCommand.SEND)
     : 'Enter';
   return {
-    saveQueueLabel: state.editingQueuedMessage
-      ? 'Save queued message'
-      : active && state.draft.trim()
-        ? actions.followUpBehavior === GlyphFollowUpBehavior.SEND_IMMEDIATELY
-          ? 'Send immediately'
-          : 'Queue message'
-        : undefined,
+    saveQueueLabel:
+      state.editingQueuedMessage !== undefined && state.editingQueuedMessage !== ''
+        ? 'Save queued message'
+        : active && state.draft.trim()
+          ? actions.followUpBehavior === GlyphFollowUpBehavior.SEND_IMMEDIATELY
+            ? 'Send immediately'
+            : 'Queue message'
+          : undefined,
     moveQueuedToNewChat: (id: string) => {
       if (actions.moveQueuedToNewChat) void perform(() => actions.moveQueuedToNewChat!(id));
     },
     openMessageSettings: () => actions.openMessageSettings?.(),
     sendQueued: (id: string) => {
-      if (!disabled && actions.sendImmediately)
+      if (disabled !== true && actions.sendImmediately)
         void model.sendQueued(id, (text, attachments, options) => actions.sendImmediately!(text, attachments, options));
     },
     steerQueued: (id: string) => {
-      if (active && !disabled && actions.steer)
+      if (active && disabled !== true && actions.steer)
         void model.sendQueued(id, (text, attachments, options) => actions.steer!(text, attachments, options));
     },
-    cancelQueueEdit: () => model.cancelQueueEdit(),
-    editQueued: (id: string) => model.editQueued(id),
-    removeQueued: (id: string) => model.removeQueued(id),
-    moveQueued: (id: string, target: number) => model.moveQueued(id, target),
-    resumeQueue: () => model.resumeQueue(),
+    cancelQueueEdit: () => {
+      model.cancelQueueEdit();
+    },
+    editQueued: (id: string) => {
+      model.editQueued(id);
+    },
+    removeQueued: (id: string) => {
+      model.removeQueued(id);
+    },
+    moveQueued: (id: string, target: number) => {
+      model.moveQueued(id, target);
+    },
+    resumeQueue: () => {
+      model.resumeQueue();
+    },
     cancel: () => {
       model.pauseQueue();
       actions.cancel();
     },
-    sendLabel: sendShortcut ? `Send (${sendShortcut})` : 'Send',
+    sendLabel: sendShortcut !== undefined && sendShortcut !== '' ? `Send (${sendShortcut})` : 'Send',
     mode: state.document.options?.mode ?? AgentMode.default.id,
     setMode: (mode: AgentModeID) =>
       perform(async () => {
@@ -278,14 +290,18 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
         else model.setMode(mode);
       }),
     annotations: state.document.options?.annotations ?? [],
-    editAnnotation: (id: string) => model.editAnnotation(id),
-    removeAnnotation: (id: string) => model.removeAnnotation(id),
+    editAnnotation: (id: string) => {
+      model.editAnnotation(id);
+    },
+    removeAnnotation: (id: string) => {
+      model.removeAnnotation(id);
+    },
     pickerId,
     ...state,
     error: failure ?? state.error,
     composer,
     active,
-    disabled: disabled || pending,
+    disabled: disabled === true || pending,
     query,
     candidates,
     highlightCandidate: setSelected,
@@ -300,7 +316,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
         const document = model.snapshot.document;
         const attachments = await actions.context.selectFiles();
         if (!isMounted()) return;
-        if (attachments.length) {
+        if (attachments.length > 0) {
           if (document !== model.snapshot.document)
             throw new GlyphComposerError('The prompt changed during capture. Choose the files again.');
           model.insertAttachments(attachments);
@@ -309,7 +325,9 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
         editor.current?.focus();
       }),
     submit,
-    updateDraft: (text: string) => model.setDraft(text),
+    updateDraft: (text: string) => {
+      model.setDraft(text);
+    },
     editUnsent: (index: number) => {
       model.editUnsent(index);
       editor.current?.focus();
@@ -319,13 +337,13 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
       editor.current?.focus();
     },
     removePreview: () => {
-      if (preview?.id) model.replaceAttachment(preview.id);
+      if (preview?.id !== undefined && preview?.id !== '') model.replaceAttachment(preview.id);
       setPreview(undefined);
       editor.current?.focus();
     },
     refreshPreview: () =>
       perform(async () => {
-        if (!preview?.id) return;
+        if (preview?.id === undefined || preview?.id === '') return;
         const next = await actions.context.refreshAttachment(preview);
         model.replaceAttachment(preview.id, next);
         if (isMounted()) {
@@ -338,7 +356,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
         if (preview) await actions.context.openAttachment(preview);
       }),
     activate: () => {
-      if (active && !state.editingQueuedMessage && !state.draft.trim()) {
+      if (active && state.editingQueuedMessage === undefined && !state.draft.trim()) {
         model.pauseQueue();
         actions.cancel();
       } else void submit();

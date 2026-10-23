@@ -8,6 +8,7 @@ import type { ContextAttachmentConfiguration } from './ContextAttachmentConfigur
 import { ContextAttachmentError } from './ContextAttachmentError.ts';
 import { ContextAttachmentFailureReason } from './ContextAttachmentFailureReason.ts';
 import type { ContextAttachmentReference } from './ContextAttachmentReference.ts';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 const defaults = {
   maxFiles: 32,
@@ -17,9 +18,9 @@ const defaults = {
 
 const configurationSchema = z
   .object({
-    maxFiles: z.number().int().positive().safe().default(defaults.maxFiles),
-    maxFileBytes: z.number().int().positive().safe().default(defaults.maxFileBytes),
-    maxTotalBytes: z.number().int().positive().safe().default(defaults.maxTotalBytes),
+    maxFiles: z.number().int().positive().default(defaults.maxFiles),
+    maxFileBytes: z.number().int().positive().default(defaults.maxFileBytes),
+    maxTotalBytes: z.number().int().positive().default(defaults.maxTotalBytes),
   })
   .strict();
 
@@ -97,10 +98,8 @@ export class ContextAttachmentService {
         input = referenceSchema.parse(reference).path;
         path = this.workspace.normalizePath(input);
       } catch (error) {
-        const candidate =
-          typeof reference === 'object' && reference !== null && 'path' in reference
-            ? String(reference.path)
-            : undefined;
+        const untrusted: unknown = reference;
+        const candidate = isRecord(untrusted) && 'path' in untrusted ? String(untrusted.path) : undefined;
         throw new ContextAttachmentError(
           ContextAttachmentFailureReason.INVALID_REFERENCE,
           'Context attachments require a valid project-relative file path.',

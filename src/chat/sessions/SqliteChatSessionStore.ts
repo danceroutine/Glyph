@@ -1,4 +1,4 @@
-import { AgentModeID } from '../AgentMode.ts';
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { planSchema } from '#src/planning/PlanSchema.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
@@ -15,6 +15,7 @@ import { ProjectContextIdentity } from '#src/project/context/ProjectContextIdent
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 import type { ChatSessionRecord } from './ChatSessionRecord.ts';
 import type { ChatSessionStore } from './ChatSessionStore.ts';
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 
 const providerStateSchema = z
   .object({
@@ -23,6 +24,8 @@ const providerStateSchema = z
     data: z.json(),
   })
   .strict();
+
+const storedProviderStateSchema = z.object({ provider: z.string(), version: z.number(), data: z.unknown() }).loose();
 
 const historyCheckpointSchema = z
   .object({
@@ -60,7 +63,7 @@ const transcriptTurnSchema = z
                 })
                 .transform(({ uri, side, range, ...attachment }) => ({
                   ...attachment,
-                  ...(uri ? { uri } : {}),
+                  ...(uri !== undefined && uri !== '' ? { uri } : {}),
                   ...(side ? { side } : {}),
                   ...(range ? { range } : {}),
                 })),
@@ -84,7 +87,10 @@ const transcriptTurnSchema = z
             autoApprove: z.boolean(),
           })
           .strict()
-          .transform(({ startedAt, ...swap }) => ({ ...swap, ...(startedAt ? { startedAt } : {}) })),
+          .transform(({ startedAt, ...swap }) => ({
+            ...swap,
+            ...(startedAt !== undefined && startedAt !== '' ? { startedAt } : {}),
+          })),
       )
       .optional(),
     questionResponses: z
@@ -245,7 +251,7 @@ const storedRecordSchema = z
   })
   .strict()
   .transform(({ todos, plans, mode, ...record }) => ({
-    ...(mode ? { mode } : {}),
+    ...(mode !== undefined ? { mode } : {}),
     ...record,
     ...(plans ? { plans } : {}),
     ...(todos === undefined ? {} : { todos }),
@@ -339,12 +345,12 @@ export class SqliteChatSessionStore implements ChatSessionStore {
     try {
       const database = this.requireDatabase();
       const chats = database
-        .prepare('SELECT * FROM chats WHERE project_context_id = ? ORDER BY updated_at DESC')
-        .all(projectContextId) as ChatRow[];
-      const turns = database.prepare(
+        .prepare<[string], ChatRow>('SELECT * FROM chats WHERE project_context_id = ? ORDER BY updated_at DESC')
+        .all(projectContextId);
+      const turns = database.prepare<[string], TurnRow>(
         'SELECT steering, mode_swaps, question_responses, checkpoints, options, user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
       );
-      return chats.map(row => toRecord(row, turns.all(row.id) as TurnRow[]));
+      return chats.map(row => toRecord(row, turns.all(row.id)));
     } catch (error) {
       throw new PersistenceError('Could not load saved chats.', { cause: error });
     }
@@ -443,13 +449,13 @@ export class SqliteChatSessionStore implements ChatSessionStore {
     // may open this shared catalog at the same time during an upgrade.
     database
       .transaction(() => {
-        const chatColumns = database.prepare('PRAGMA table_info(chats)').all() as { name: string }[];
+        const chatColumns = database.prepare<[], { name: string }>('PRAGMA table_info(chats)').all();
         if (!chatColumns.some(value => value.name === 'todos'))
           database.exec('ALTER TABLE chats ADD COLUMN todos TEXT');
         if (!chatColumns.some(value => value.name === 'mode')) database.exec('ALTER TABLE chats ADD COLUMN mode TEXT');
         if (!chatColumns.some(value => value.name === 'plans'))
           database.exec('ALTER TABLE chats ADD COLUMN plans TEXT');
-        const columns = database.prepare('PRAGMA table_info(chat_turns)').all() as { name: string }[];
+        const columns = database.prepare<[], { name: string }>('PRAGMA table_info(chat_turns)').all();
         for (const column of [
           'usage',
           'tools',
@@ -468,21 +474,27 @@ export class SqliteChatSessionStore implements ChatSessionStore {
   }
 
   private async migrateLegacyCatalog(database: Database.Database, authority: string): Promise<void> {
-    const migrated = database.prepare("SELECT value FROM metadata WHERE key = 'legacy_chats_json_migrated'").get() as
-      { value: string } | undefined;
+    const migrated = database
+      .prepare<[], { value: string }>("SELECT value FROM metadata WHERE key = 'legacy_chats_json_migrated'")
+      .get();
     if (migrated) return;
     let catalog: z.infer<typeof legacyCatalogSchema> | undefined;
     try {
       catalog = legacyCatalogSchema.parse(JSON.parse(await readFile(this.legacyPath, 'utf8')));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (errorCodeOf(error) !== 'ENOENT') throw error;
     }
     database
       .transaction(() => {
         // The legacy read yielded to other workspaces. Check again while holding
         // the write reservation, before importing anything or publishing a marker.
         // Otherwise a second importer could overwrite a newer chat checkpoint.
-        if (database.prepare("SELECT value FROM metadata WHERE key = 'legacy_chats_json_migrated'").get()) return;
+        if (
+          database
+            .prepare<[], { value: string }>("SELECT value FROM metadata WHERE key = 'legacy_chats_json_migrated'")
+            .get() !== undefined
+        )
+          return;
         for (const legacy of catalog?.chats ?? []) {
           const context = legacyContext(legacy.scope.root, authority);
           registerContext(database, context);
@@ -532,7 +544,9 @@ function registerContext(database: Database.Database, context: ProjectContext): 
     const insertRoot = database.prepare(
       'INSERT INTO project_roots(project_context_id, position, name, path) VALUES (?, ?, ?, ?)',
     );
-    context.roots.forEach((root, position) => insertRoot.run(context.id, position, root.name, root.path));
+    context.roots.forEach((root, position) => {
+      insertRoot.run(context.id, position, root.name, root.path);
+    });
   })();
 }
 
@@ -584,7 +598,7 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
          chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools, attachments, options, checkpoints, question_responses, mode_swaps, steering
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    record.transcript.forEach((turn, position) =>
+    record.transcript.forEach((turn, position) => {
       insertTurn.run(
         record.id,
         position,
@@ -601,15 +615,15 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         turn.questionResponses ? JSON.stringify(turn.questionResponses) : null,
         turn.modeSwaps ? JSON.stringify(turn.modeSwaps) : null,
         turn.steering ? JSON.stringify(turn.steering) : null,
-      ),
-    );
+      );
+    });
   })();
 }
 
 function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
   return storedRecordSchema.parse({
     schemaVersion: 3,
-    ...(row.mode ? { mode: row.mode } : {}),
+    ...(row.mode !== null && row.mode !== '' ? { mode: row.mode } : {}),
     id: row.id,
     title: row.title,
     titleOrigin: row.title_origin,
@@ -621,7 +635,7 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
     modelName: row.model_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    providerState: JSON.parse(row.provider_state),
+    providerState: storedProviderStateSchema.parse(JSON.parse(row.provider_state)),
     ...(row.plans == null ? {} : { plans: JSON.parse(row.plans) as unknown }),
     ...(row.todos === null ? {} : { todos: JSON.parse(row.todos) as unknown }),
     transcript: turns.map(turn => ({

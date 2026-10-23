@@ -1,0 +1,4 @@
+{
+  "vitest.rootConfig": "vitest.config.ts",
+  "vitest.logLevel": "verbose"
+}

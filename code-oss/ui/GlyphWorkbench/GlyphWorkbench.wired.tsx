@@ -30,8 +30,10 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
       />
       <GlyphWorkbench
         {...view}
-        {...(state.workspaceMessage ? { workspaceMessage: state.workspaceMessage } : {})}
-        {...(state.workspaceRetryable && actions.reconnectWorkspace
+        {...(state.workspaceMessage !== undefined && state.workspaceMessage !== ''
+          ? { workspaceMessage: state.workspaceMessage }
+          : {})}
+        {...(state.workspaceRetryable === true && actions.reconnectWorkspace
           ? { retryWorkspace: () => void actions.reconnectWorkspace?.().catch(() => {}) }
           : {})}
         recentChats={<GlyphRecentChats state={state} actions={actions} />}
@@ -39,7 +41,8 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
         transcript={
           <WiredGlyphTranscript
             plans={
-              state.selectedChatId && (
+              state.selectedChatId !== undefined &&
+              state.selectedChatId !== '' && (
                 <WiredGlyphPlanCards
                   chatId={state.selectedChatId}
                   plans={plans}
@@ -68,7 +71,10 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
             {...(approvalRun ? { pendingApproval: approvalRun } : {})}
           />
         }
-        usage={state.selectedChatId && <GlyphUsageSummary usage={state.usage[state.selectedChatId]} />}
+        usage={
+          state.selectedChatId !== undefined &&
+          state.selectedChatId !== '' && <GlyphUsageSummary usage={state.usage[state.selectedChatId]} />
+        }
         question={
           questionRun?.question && (
             <WiredGlyphQuestionCard
@@ -97,7 +103,8 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
               />
             }
             reviews={
-              state.selectedChatId &&
+              state.selectedChatId !== undefined &&
+              state.selectedChatId !== '' &&
               proposals.length > 0 && (
                 <WiredGlyphPendingReviews
                   key={state.selectedChatId}
@@ -112,7 +119,11 @@ export function WiredGlyphWorkbench({ state, actions }: WiredGlyphWorkbenchProps
             status={state.status}
             key={state.selectedChatId ?? 'draft'}
             actions={actions}
-            disabled={state.readOnly || !!state.navigationPending || (!state.selectedChatId && !!state.catalogPending)}
+            disabled={
+              state.readOnly ||
+              state.navigationPending === true ||
+              ((state.selectedChatId === undefined || state.selectedChatId === '') && state.catalogPending === true)
+            }
             modelControl={<WiredGlyphModelPicker state={state} actions={actions} />}
           />
         }

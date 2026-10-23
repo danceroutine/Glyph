@@ -36,7 +36,7 @@ export class OpenAIModelCatalog implements ModelCatalog<string> {
           model.visibility === 'list' && typeof model.slug === 'string' && typeof model.display_name === 'string',
       )
       .map(model => ({ slug: String(model.slug), name: String(model.display_name) }));
-    if (!models.length) throw new ProviderError('No selectable models are available to this ChatGPT account.');
+    if (models.length === 0) throw new ProviderError('No selectable models are available to this ChatGPT account.');
     return models;
   }
 }

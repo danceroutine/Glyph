@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "rootDir": "../../..",
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "paths": {
+      "@playwright/test": ["../../../.code-oss/src/node_modules/@playwright/test/index.d.ts"],
+      "electron": ["../../../.code-oss/src/.build/typings/electron.d.ts"]
+    }
+  },
+  "include": ["./**/*.mjs", "./**/*.cjs", "./**/*.d.ts", "../../../.code-oss/src/src/vscode-dts/vscode.d.ts"]
+}

@@ -73,7 +73,7 @@ function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolSo
     apiKey: 'test-secret',
     maxRetries: 0,
     fetch: async (_url, init) => {
-      requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      requests.push(JSON.parse(typeof init?.body === 'string' ? init.body : '') as Record<string, unknown>);
       const reply = replies.shift();
       if (!reply) throw new Error('Unexpected extra request.');
       return reply();
@@ -236,7 +236,7 @@ describe(OpenAIProvider, () => {
     const client = new OpenAI({
       apiKey: 'unused',
       fetch: async (_url, init) => {
-        requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        requests.push(JSON.parse(typeof init?.body === 'string' ? init.body : '') as Record<string, unknown>);
         return sse([requests.length === 1 ? toolCompleted : completed]);
       },
     });
@@ -283,9 +283,19 @@ describe(OpenAIProvider, () => {
         failure = error;
       });
       try {
-        await vi.waitFor(() => expect(token).toHaveBeenCalledTimes(2), { timeout: 300 });
+        await vi.waitFor(
+          () => {
+            expect(token).toHaveBeenCalledTimes(2);
+          },
+          { timeout: 300 },
+        );
         if (mode === 'cancel') controller.abort();
-        await vi.waitFor(() => expect(failure).toBeInstanceOf(Error), { timeout: 300 });
+        await vi.waitFor(
+          () => {
+            expect(failure).toBeInstanceOf(Error);
+          },
+          { timeout: 300 },
+        );
         expect(fetch).toHaveBeenCalledOnce();
         expect(provider.exportState().data).toEqual(
           expect.objectContaining({
@@ -328,9 +338,16 @@ describe(OpenAIProvider, () => {
         failure = error;
       });
       try {
-        await vi.waitFor(() => expect(token).toHaveBeenCalledOnce());
+        await vi.waitFor(() => {
+          expect(token).toHaveBeenCalledOnce();
+        });
         if (mode === 'cancel') controller.abort();
-        await vi.waitFor(() => expect(failure).toBeInstanceOf(Error), { timeout: 200 });
+        await vi.waitFor(
+          () => {
+            expect(failure).toBeInstanceOf(Error);
+          },
+          { timeout: 200 },
+        );
         expect(fetch).not.toHaveBeenCalled();
         resolveToken('refreshed');
         await sending;
@@ -409,9 +426,9 @@ describe(OpenAIProvider, () => {
         ...completed.response.output,
         { role: 'user', content: 'restored' },
       ]);
-      expect(() => provider.restoreState({ provider: 'somewhere-else', version: 1, data: { history: [] } })).toThrow(
-        'not compatible',
-      );
+      expect(() => {
+        provider.restoreState({ provider: 'somewhere-else', version: 1, data: { history: [] } });
+      }).toThrow('not compatible');
     });
 
     it('commits idempotent host context before the next model turn and preserves it across restore', async () => {
@@ -689,7 +706,12 @@ describe(OpenAIProvider, () => {
       ]);
       const trace: ProviderTraceEntry[] = [];
 
-      await provider.send('trace me', { ...options(), onTrace: entry => trace.push(entry) });
+      await provider.send('trace me', {
+        ...options(),
+        onTrace: entry => {
+          trace.push(entry);
+        },
+      });
 
       expect(trace.map(entry => entry.kind)).toEqual([
         'turn.started',
@@ -734,7 +756,7 @@ describe(OpenAIProvider, () => {
       };
       const { provider, requests } = harness([() => sse([empty]), () => sse([completed])]);
 
-      await expect(provider.send('empty', options())).rejects.toThrow(/without returning text or a tool call/);
+      await expect(provider.send('empty', options())).rejects.toThrow(/without returning text or a tool call/u);
       await provider.send('retry', options());
 
       expect(requests[1]?.input).toEqual([{ role: 'user', content: 'retry' }]);
@@ -787,7 +809,7 @@ describe(OpenAIProvider, () => {
       const toolOutput = (requests[1]!.input as { type?: string; output?: string }[]).find(
         item => item.type === 'function_call_output',
       );
-      expect(toolOutput?.output ?? '').toMatch(/export const answer = 42/);
+      expect(toolOutput?.output ?? '').toMatch(/export const answer = 42/u);
 
       await provider.send('And again?', options());
       expect(
@@ -882,7 +904,9 @@ describe(OpenAIProvider, () => {
         onText: delta => {
           text += delta;
         },
-        onToolActivity: event => activity.push({ phase: event.phase, name: `${event.namespace}.${event.name}` }),
+        onToolActivity: event => {
+          activity.push({ phase: event.phase, name: `${event.namespace}.${event.name}` });
+        },
       });
 
       expect(result.responseId).toBe('resp_buffered_message');
@@ -897,7 +921,7 @@ describe(OpenAIProvider, () => {
       expect(
         (requests[1]!.input as { type?: string; output?: string }[]).find(item => item.type === 'function_call_output')
           ?.output,
-      ).toMatch(/answer = 42/);
+      ).toMatch(/answer = 42/u);
       expect(activity).toEqual([
         { phase: 'started', name: 'project.read_project_file' },
         { phase: 'completed', name: 'project.read_project_file' },
@@ -944,8 +968,8 @@ describe(OpenAIProvider, () => {
         expect.unreachable('Expected provider.send to reject.');
       } catch (error) {
         const message = describeError(error);
-        expect(message).toMatch(/401/);
-        expect(message).toMatch(/ChatGPT account/);
+        expect(message).toMatch(/401/u);
+        expect(message).toMatch(/ChatGPT account/u);
       }
     });
 
@@ -956,10 +980,282 @@ describe(OpenAIProvider, () => {
       ]);
       const controller = new AbortController();
       await expect(
-        provider.send('cancelled', { signal: controller.signal, onText: () => controller.abort() }),
-      ).rejects.toThrow(/cancelled/);
+        provider.send('cancelled', {
+          signal: controller.signal,
+          onText: () => {
+            controller.abort();
+          },
+        }),
+      ).rejects.toThrow(/cancelled/u);
       await provider.send('retry', options());
       expect(requests[1]?.input).toEqual([{ role: 'user', content: 'retry' }]);
+    });
+
+    it('appends accepted steering to the next model request', async () => {
+      const { provider, requests } = harness([() => sse([completed])], new ToolRegistry([]));
+      const steering = [[{ text: 'Prefer TypeScript.', attachments: [] }], [], []];
+
+      await provider.send('Start the task.', { ...options(), takeSteering: () => steering.shift() ?? [] });
+
+      expect(requests[0]?.input).toEqual([
+        { role: 'user', content: 'Start the task.' },
+        { role: 'user', content: 'Prefer TypeScript.' },
+      ]);
+    });
+
+    it('advertises text tools as custom tools and returns their results as custom outputs', async () => {
+      const execute = vi.fn(async () => 'patched');
+      const tools = testToolSource(
+        [
+          {
+            namespace: 'editing',
+            name: 'apply_patch',
+            description: 'Apply a patch.',
+            inputKind: ToolInputKind.TEXT,
+            allowedModes: [AgentModeID.AGENT],
+          },
+        ],
+        execute,
+      );
+      const customCall = {
+        ...completed,
+        response: {
+          ...completed.response,
+          output: [
+            {
+              type: 'custom_tool_call',
+              id: 'ctc_patch',
+              call_id: 'call_patch',
+              namespace: 'editing',
+              name: 'apply_patch',
+              input: '*** Begin Patch',
+            },
+          ],
+        },
+      };
+      const { provider, requests } = harness([() => sse([customCall]), () => sse([completed])], {
+        tools: tools.tools.map(tool => ({ ...tool, validateInput: () => {} })),
+      });
+
+      await provider.send('Patch it.', options());
+
+      expect(requests[0]?.tools).toEqual([
+        {
+          type: 'namespace',
+          name: 'editing',
+          description: 'editing tools supplied by the host runtime.',
+          tools: [{ type: 'custom', name: 'apply_patch', description: 'Apply a patch.' }],
+        },
+      ]);
+      expect(execute).toHaveBeenCalledWith(
+        'apply_patch',
+        '*** Begin Patch',
+        expect.any(AbortSignal),
+        expect.anything(),
+      );
+      expect(requests[1]?.input).toEqual(
+        expect.arrayContaining([{ type: 'custom_tool_call_output', call_id: 'call_patch', output: 'patched' }]),
+      );
+    });
+
+    it('settles an interrupted custom tool call with a custom output', async () => {
+      const { provider, requests } = harness([() => sse([completed])], new ToolRegistry([]));
+      provider.restoreState({
+        provider: 'openai-responses',
+        version: 1,
+        data: {
+          history: [
+            { type: 'custom_tool_call', call_id: 'call-custom', name: 'apply_patch', input: 'patch' },
+            { type: 'function_call', call_id: 'call-settled', name: 'read', arguments: '{}' },
+            { type: 'function_call_output', call_id: 'call-settled', output: 'done' },
+          ],
+        },
+      });
+
+      await provider.send('Continue.', options());
+
+      const input = requests[0]!.input as Array<Record<string, unknown>>;
+      expect(input.filter(item => String(item.type).endsWith('_output'))).toEqual([
+        { type: 'function_call_output', call_id: 'call-settled', output: 'done' },
+        { type: 'custom_tool_call_output', call_id: 'call-custom', output: expect.stringContaining('unknown') },
+      ]);
+    });
+
+    it('reconciles streamed reasoning summaries with completed summary parts', async () => {
+      const summarized = {
+        type: 'response.completed',
+        response: {
+          ...completed.response,
+          output: [
+            {
+              type: 'reasoning',
+              id: 'rs_summary',
+              encrypted_content: 'opaque',
+              summary: [
+                { type: 'summary_text', text: 'Inspected.' },
+                { type: 'summary_text', text: 'Second.' },
+              ],
+            },
+            completed.response.output[1],
+          ],
+        },
+      };
+      const { provider } = harness([
+        () =>
+          sse([
+            {
+              type: 'response.reasoning_summary_text.delta',
+              item_id: 'rs_summary',
+              output_index: 0,
+              summary_index: 0,
+              delta: 'Insp',
+              sequence_number: 1,
+            },
+            {
+              type: 'response.reasoning_summary_text.done',
+              item_id: 'rs_summary',
+              output_index: 0,
+              summary_index: 0,
+              text: 'Inspected.',
+              sequence_number: 2,
+            },
+            {
+              type: 'response.reasoning_summary_part.done',
+              item_id: 'rs_summary',
+              output_index: 0,
+              summary_index: 1,
+              part: { type: 'summary_text', text: 'Second.' },
+              sequence_number: 3,
+            },
+            {
+              type: 'response.reasoning_summary_text.done',
+              item_id: 'rs_summary',
+              output_index: 0,
+              summary_index: 0,
+              text: 'A rewritten summary.',
+              sequence_number: 4,
+            },
+            summarized,
+          ]),
+      ]);
+      let summary = '';
+
+      await provider.send('hello', {
+        ...options(),
+        onReasoningSummary: delta => {
+          summary += delta;
+        },
+      });
+
+      expect(summary).toBe('Inspected.\n\nSecond.');
+    });
+
+    it('presents refusals from completed output as visible text', async () => {
+      const refused = {
+        ...completed,
+        response: {
+          ...completed.response,
+          output: [
+            {
+              type: 'message',
+              id: 'msg_refusal',
+              role: 'assistant',
+              status: 'completed',
+              content: [{ type: 'refusal', refusal: 'I cannot help with that.' }],
+            },
+          ],
+        },
+      };
+      const { provider } = harness([() => sse([refused])]);
+      let text = '';
+
+      await provider.send('hello', {
+        ...options(),
+        onText: delta => {
+          text += delta;
+        },
+      });
+
+      expect(text).toBe('I cannot help with that.');
+    });
+
+    it.each([
+      [
+        'an incomplete response without a reason',
+        { type: 'response.incomplete', response: {} },
+        'Response incomplete (unknown). Try a shorter request.',
+      ],
+      [
+        'a failed response without error details',
+        { type: 'response.failed', response: {} },
+        'Response failed: unknown: unknown error',
+      ],
+      [
+        'a stream error',
+        { type: 'error', message: 'overloaded', code: null, param: null, sequence_number: 1 },
+        'API stream error: overloaded',
+      ],
+    ])('reports %s', async (_case, event, message) => {
+      const { provider } = harness([() => sse([event])]);
+
+      await expect(provider.send('hello', options())).rejects.toThrow(message);
+    });
+
+    it('includes attachment provenance in the workspace context', async () => {
+      const { provider, requests } = harness([() => sse([completed])]);
+      const source = { kind: 'selection' as const, uri: 'file:///workspace/a.ts', version: 3, revision: 'revision-1' };
+
+      await provider.send(
+        {
+          text: 'Explain the selection.',
+          attachments: [
+            { source, path: 'a.ts', revision: 'revision-1', text: 'a', byteOrderMark: false, byteLength: 1 },
+          ],
+        },
+        options(),
+      );
+
+      const content = (requests[0]!.input as Array<{ content: Array<{ text: string }> }>)[0]!.content;
+      expect((JSON.parse(content[0]!.text) as { files: unknown[] }).files[0]).toEqual({
+        path: 'a.ts',
+        revision: 'revision-1',
+        byteOrderMark: false,
+        source,
+        text: 'a',
+      });
+    });
+
+    it('records host context alongside history items that are not host context events', async () => {
+      const { provider, requests } = harness([() => sse([completed])], new ToolRegistry([]));
+      const history = [
+        { type: 'function_call', call_id: 'call-1', name: 'read', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call-1', output: 'done' },
+        { id: 'reference-only' },
+        { role: 'assistant', content: 'Earlier answer.' },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Rich input.' }] },
+        { role: 'user', content: 'Plain text, not JSON.' },
+        { role: 'developer', content: JSON.stringify({ schema: 'other.schema', event: { id: 'event-1' } }) },
+        { role: 'developer', content: JSON.stringify({ schema: 'glyph.context-event.v1', event: {} }) },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            schema: 'glyph.context-event.v1',
+            event: { id: 'event-1', type: 'edit_review_result' },
+          }),
+        },
+      ];
+      provider.restoreState({ provider: 'openai-responses', version: 1, data: { history } });
+      const event = { schemaVersion: 1 as const, id: 'event-1', type: 'edit_review_result', payload: {} };
+
+      provider.recordContext([event]);
+      await provider.send('Continue.', options());
+
+      const input = requests[0]!.input as Array<{ role?: string; content?: unknown }>;
+      expect(input.slice(0, history.length)).toEqual(history);
+      expect(input[history.length]).toEqual({
+        role: 'developer',
+        content: JSON.stringify({ schema: 'glyph.context-event.v1', event }),
+      });
     });
   });
 });

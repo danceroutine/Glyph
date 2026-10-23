@@ -1,8 +1,8 @@
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import { ProjectContextResolver } from '#src/project/context/ProjectContextResolver.js';
@@ -398,6 +398,237 @@ describe(ChatSessionManager, () => {
     expect(() => manager.open('missing', () => conversation())).toThrow('No chat');
     expect(() => manager.open('same-prefix-', () => conversation())).toThrow('ambiguous');
   });
+
+  describe(ChatSessionManager.prototype.initialize, () => {
+    it('loads saved chats only once', async () => {
+      const store = new MemoryChatSessionStore();
+      const load = vi.spyOn(store, 'load');
+      const manager = new ChatSessionManager(store, await ProjectContextResolver.folder(await projectFixture()));
+
+      await manager.initialize();
+      await manager.initialize();
+
+      expect(load).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe(ChatSessionManager.prototype.list, () => {
+    it('lists only chats owned by the requested account', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+        sequentialIds(),
+      );
+      await manager.initialize();
+      await manager.create(input(), conversation());
+      await manager.create({ ...input(), accountId: 'other-account' }, conversation());
+      await manager.create({ ...input(), accountProvider: 'other-provider' }, conversation());
+
+      expect(manager.list({ provider: 'fixture', id: 'account' }).map(chat => chat.id)).toEqual(['chat-1']);
+      expect(manager.list()).toHaveLength(3);
+    });
+  });
+
+  describe(ChatSessionManager.prototype.branch, () => {
+    it('rejects branching at a turn without a saved checkpoint', async () => {
+      const store = new MemoryChatSessionStore();
+      const context = await ProjectContextResolver.folder(await projectFixture());
+      store.records = [
+        {
+          schemaVersion: 3,
+          id: 'legacy',
+          title: 'Legacy',
+          titleOrigin: 'human',
+          projectContextId: context.id,
+          accountProvider: 'fixture',
+          accountId: 'account',
+          modelSlug: 'model',
+          modelName: 'Model',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          providerState: { provider: 'test', version: 1, data: { messages: [] } },
+          transcript: [
+            {
+              userText: 'old',
+              attachmentPaths: [],
+              assistantText: 'reply',
+              reasoningSummary: '',
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+      ];
+      const manager = new ChatSessionManager(store, context);
+      await manager.initialize();
+      const session = manager.open('legacy', record => conversation(record.providerState));
+
+      await expect(manager.branch(session, 'legacy:history:0', () => conversation())).rejects.toThrow(
+        'This message has no saved checkpoint.',
+      );
+    });
+  });
+
+  describe(ChatSessionManager.prototype.setMode, () => {
+    it('rejects unknown modes', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+      );
+      await manager.initialize();
+      const session = await manager.create(input(), conversation());
+
+      await expect(manager.setMode(session.id, 'chaos' as AgentModeID)).rejects.toThrow('Unknown conversation mode.');
+    });
+
+    it('rejects chats that no longer exist', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+      );
+      await manager.initialize();
+
+      await expect(manager.setMode('missing', AgentModeID.PLAN)).rejects.toThrow('Chat "missing" no longer exists.');
+    });
+  });
+
+  describe(ChatSessionManager.prototype.updatePlan, () => {
+    it('rejects plans from another account', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+      );
+      await manager.initialize();
+      const session = await manager.create(input(), conversation());
+
+      await expect(
+        manager.updatePlan(
+          { id: session.id, accountProvider: 'fixture', accountId: 'intruder' },
+          { id: null, expectedRevision: null, title: 'Plan', summary: 'Summary', markdown: '# Plan', todos: [] },
+        ),
+      ).rejects.toThrow('The plan must belong to the requesting chat.');
+    });
+
+    it('rejects plans once the chat holds one hundred revisions', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+      );
+      await manager.initialize();
+      const session = await manager.create(input(), conversation());
+      const owner = { id: session.id, accountProvider: 'fixture', accountId: 'account' };
+      const update = {
+        id: null,
+        expectedRevision: null,
+        title: 'Plan',
+        summary: 'Summary',
+        markdown: '# Plan',
+        todos: [],
+      };
+      for (let index = 0; index < 100; index++) await manager.updatePlan(owner, update);
+
+      await expect(manager.updatePlan(owner, update)).rejects.toThrow(
+        'This chat has reached its saved plan revision limit.',
+      );
+    });
+
+    it('cancels before reading the chat', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+      );
+      await manager.initialize();
+
+      await expect(
+        manager.updatePlan(
+          { id: 'missing', accountProvider: 'fixture', accountId: 'account' },
+          { id: null, expectedRevision: null, title: 'Plan', summary: 'Summary', markdown: '# Plan', todos: [] },
+          AbortSignal.abort(new Error('Cancelled')),
+        ),
+      ).rejects.toThrow('Cancelled');
+    });
+  });
+
+  describe(ChatSessionManager.prototype.linkPlan, () => {
+    it('rejects linking chats from different accounts', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+      );
+      await manager.initialize();
+      const first = await manager.create(input(), conversation());
+      const second = await manager.create({ ...input(), accountId: 'other' }, conversation());
+
+      await expect(manager.linkPlan(first.id, 'plan', second.id, 'Builder')).rejects.toThrow(
+        'Linked chats must use the same account.',
+      );
+    });
+
+    it('rejects linking a plan that does not exist', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+      );
+      await manager.initialize();
+      const first = await manager.create(input(), conversation());
+      const second = await manager.create(input(), conversation());
+
+      await expect(manager.linkPlan(first.id, 'missing', second.id, 'Builder')).rejects.toThrow(
+        'The plan is unavailable.',
+      );
+    });
+
+    it('updates the role of an already linked chat without demoting the author', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+      );
+      await manager.initialize();
+      const author = await manager.create(input(), conversation());
+      const builder = await manager.create(input(), conversation());
+      const reviewer = await manager.create(input(), conversation());
+      const owner = { id: author.id, accountProvider: 'fixture', accountId: 'account' };
+      const plan = (
+        await manager.updatePlan(owner, {
+          id: null,
+          expectedRevision: null,
+          title: 'Plan',
+          summary: 'Summary',
+          markdown: '# Plan',
+          todos: [],
+        })
+      ).plans![0]!;
+      await manager.linkPlan(author.id, plan.id, builder.id, 'Builder');
+      await manager.linkPlan(author.id, plan.id, reviewer.id, 'Reviewer');
+
+      const relinked = await manager.linkPlan(author.id, plan.id, builder.id, 'Reviewer');
+      const unchanged = await manager.linkPlan(author.id, plan.id, author.id, 'Builder');
+
+      expect(relinked.plans!.at(-1)!.agents).toEqual([
+        { chatId: author.id, role: 'Author' },
+        { chatId: builder.id, role: 'Reviewer' },
+        { chatId: reviewer.id, role: 'Reviewer' },
+      ]);
+      expect(unchanged.plans!.at(-1)!.agents).toEqual(relinked.plans!.at(-1)!.agents);
+    });
+  });
+
+  describe(ChatSessionManager.prototype.create, () => {
+    it('falls back to a placeholder title when the generated title is blank', async () => {
+      const manager = new ChatSessionManager(
+        new MemoryChatSessionStore(),
+        await ProjectContextResolver.folder(await projectFixture()),
+        () => 'chat-blank-title',
+        () => new Date(0),
+        { generate: async () => '   ' },
+      );
+      await manager.initialize();
+      const session = await manager.create(input(), conversation());
+
+      await session.send('Hello', { push: () => {} }, new AbortController().signal);
+
+      expect(session.summary).toMatchObject({ title: 'New chat', titleOrigin: 'generated' });
+    });
+  });
 });
 
 class MemoryChatSessionStore implements ChatSessionStore {
@@ -448,8 +679,8 @@ class StatefulProvider implements ChatProvider {
     this.messages = [];
   }
 
-  async send(input: ChatRequestInput, options: Parameters<ChatProvider['send']>[1]): Promise<TurnResult> {
-    const text = typeof input === 'string' ? input : input.text;
+  async send(requestInput: ChatRequestInput, options: Parameters<ChatProvider['send']>[1]): Promise<TurnResult> {
+    const text = typeof requestInput === 'string' ? requestInput : requestInput.text;
     this.messages.push(text);
     if (text === 'tool then fail') {
       this.messages.push('tool-result:mutation-complete');

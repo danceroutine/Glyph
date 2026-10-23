@@ -138,7 +138,7 @@ export function GlyphAnnotationPill({
   readonly edit?: (id: string) => void;
   readonly remove?: (id: string) => void;
 }) {
-  if (!annotations.length) return null;
+  if (annotations.length === 0) return null;
   return (
     <div class={`glyph-annotation-pill ${styles.pill}`}>
       <Button
@@ -159,7 +159,11 @@ export function GlyphAnnotationPill({
           shape={IconButtonShape.CIRCLE}
           class={`glyph-annotation-clear ${styles.clear}`}
           aria-label="Remove all annotations"
-          onClick={() => annotations.forEach(annotation => remove(annotation.id))}
+          onClick={() => {
+            annotations.forEach(annotation => {
+              remove(annotation.id);
+            });
+          }}
         >
           <X size={16} aria-hidden="true" />
         </IconButton>
@@ -185,7 +189,9 @@ export function GlyphAnnotationPill({
                   type="button"
 
                   aria-label={`Edit annotation ${annotation.order}`}
-                  onClick={() => edit(annotation.id)}
+                  onClick={() => {
+                    edit(annotation.id);
+                  }}
                 >
                   <Pencil size={18} aria-hidden="true" />
                 </IconButton>
@@ -196,7 +202,9 @@ export function GlyphAnnotationPill({
                   type="button"
 
                   aria-label={`Delete annotation ${annotation.order}`}
-                  onClick={() => remove(annotation.id)}
+                  onClick={() => {
+                    remove(annotation.id);
+                  }}
                 >
                   <Trash2 size={18} aria-hidden="true" />
                 </IconButton>
@@ -252,7 +260,9 @@ export function GlyphAnnotations(
         ref={state.textarea}
         value={state.comment}
         maxLength={10000}
-        onInput={event => state.setComment(event.currentTarget.value)}
+        onInput={event => {
+          state.setComment(event.currentTarget.value);
+        }}
         onKeyDown={event => {
           event.stopPropagation();
           if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -282,20 +292,24 @@ export function GlyphAnnotations(
   );
   return (
     <>
-      {!state.hideMarkers &&
+      {state.hideMarkers !== true &&
         state.markers.map(({ annotation, x, y }) => (
           <GlyphCommentButton
             key={annotation.id}
             position={{ x, y }}
             order={annotation.order}
-            open={() => state.edit(annotation.id)}
+            open={() => {
+              state.edit(annotation.id);
+            }}
           />
         ))}
       {state.candidate && (
         <GlyphCommentButton
           position={state.candidate}
           open={state.open}
-          {...(state.selectionShortcut ? { shortcut: state.selectionShortcut } : {})}
+          {...(state.selectionShortcut !== undefined && state.selectionShortcut !== ''
+            ? { shortcut: state.selectionShortcut }
+            : {})}
         />
       )}
       {form && (container ? createPortal(form, container) : form)}

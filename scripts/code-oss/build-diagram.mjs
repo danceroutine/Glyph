@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/** @param {string} destination */
 export async function buildGlyphDiagram(destination) {
   await mkdir(destination, { recursive: true });
   const result = await build({
@@ -18,7 +19,7 @@ export async function buildGlyphDiagram(destination) {
     legalComments: 'inline',
     define: { 'process.env.NODE_ENV': '"production"' },
   });
-  const script = result.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
+  const script = result.outputFiles[0].text.replaceAll(/<\/script/giu, '<\\/script');
   const hash = createHash('sha256').update(script).digest('base64');
   await writeFile(
     join(destination, 'glyph-diagram.html'),
@@ -28,4 +29,4 @@ export async function buildGlyphDiagram(destination) {
 <body><script>${script}</script></body>`,
   );
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) await buildGlyphDiagram('.artifacts/diagram');
+if (process.argv[1] === import.meta.filename) await buildGlyphDiagram('.artifacts/diagram');

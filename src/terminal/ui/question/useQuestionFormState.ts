@@ -120,7 +120,7 @@ export function useQuestionFormState({ request, active = true }: UseQuestionForm
     value => {
       const { enteringOther, otherText, otherCursor } = current.current;
       if (!enteringOther || settled.current || answeredQuestion.current === questionIndex) return;
-      const safe = value.replace(/[\r\n]+/gu, ' ');
+      const safe = value.replaceAll(/[\r\n]+/gu, ' ');
       updateOtherText(
         `${otherText.slice(0, otherCursor)}${safe}${otherText.slice(otherCursor)}`,
         otherCursor + safe.length,
@@ -230,28 +230,15 @@ function initialInteraction(): QuestionInteraction {
 }
 
 function isPrintableInput(input: string, control: boolean, meta: boolean): boolean {
-  return input.length > 0 && !control && !meta && !/[\x00-\x1f\x7f]/u.test(input);
+  return input.length > 0 && !control && !meta && !/[\u0000-\u001F\u007F]/u.test(input);
 }
 
 function previousCharacterOffset(text: string, offset: number): number {
   if (offset <= 0) return 0;
-  const previous = text.charCodeAt(offset - 1);
-  return previous >= 0xdc00 &&
-    previous <= 0xdfff &&
-    offset > 1 &&
-    text.charCodeAt(offset - 2) >= 0xd800 &&
-    text.charCodeAt(offset - 2) <= 0xdbff
-    ? offset - 2
-    : offset - 1;
+  return offset > 1 && text.codePointAt(offset - 2)! > 0xffff ? offset - 2 : offset - 1;
 }
 
 function nextCharacterOffset(text: string, offset: number): number {
   if (offset >= text.length) return text.length;
-  const current = text.charCodeAt(offset);
-  return current >= 0xd800 &&
-    current <= 0xdbff &&
-    text.charCodeAt(offset + 1) >= 0xdc00 &&
-    text.charCodeAt(offset + 1) <= 0xdfff
-    ? offset + 2
-    : offset + 1;
+  return text.codePointAt(offset)! > 0xffff ? offset + 2 : offset + 1;
 }

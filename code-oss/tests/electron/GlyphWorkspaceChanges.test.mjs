@@ -1,7 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { contextFiles } from './ProviderPayloads.mjs';
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
 
 it.use({ scriptedProvider: true, workspaceFiles: { 'kept.txt': 'ORIGINAL CAPTURE' } });
 
@@ -10,6 +13,10 @@ it.beforeEach(async ({ glyph }) => {
   await expect(glyph.sendButton).toBeEnabled();
 });
 
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} file
+ */
 async function attach(glyph, file) {
   await glyph.page.keyboard.press('ControlOrMeta+p');
   await glyph.page.locator('.quick-input-widget input').fill(file);
@@ -19,6 +26,11 @@ async function attach(glyph, file) {
   await glyph.page.keyboard.press('ControlOrMeta+a');
   await glyph.page.keyboard.press('ControlOrMeta+l');
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ * @param {string} path
+ */
 async function read(glyph, provider, path) {
   const count = provider.requests.length;
   provider.enqueue(
@@ -36,10 +48,7 @@ async function read(glyph, provider, path) {
   await glyph.send('Read the updated workspace file.');
   await expect.poll(() => provider.requests.length).toBe(count + 2);
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
-  return provider.requests
-    .at(-1)
-    .body.input.filter(item => item.type === 'function_call_output')
-    .at(-1).output;
+  return provider.requests.at(-1)?.body.input.findLast(item => item.type === 'function_call_output')?.output;
 }
 
 it.describe('single-folder conversion', () => {
@@ -69,8 +78,8 @@ it.describe('single-folder conversion', () => {
     await glyph.sendButton.click();
     await expect.poll(() => provider.requests.length).toBe(2);
     await expect(glyph.sendButton).toHaveText('Send (Enter)');
-    const user = provider.requests[1].body.input.filter(item => item.role === 'user').at(-1);
-    expect(JSON.parse(user.content[0].text).files).toEqual([
+    const user = provider.requests[1].body.input.findLast(item => item.role === 'user');
+    expect(contextFiles(user)).toEqual([
       expect.objectContaining({ path: 'workspace/kept.txt', text: 'ORIGINAL CAPTURE' }),
     ]);
     expect(await read(glyph, provider, 'added/new.txt')).toContain('NEW ROOT CONTENT');
@@ -96,7 +105,7 @@ it.describe('saved workspace folder changes', () => {
     await expect(glyph.page.getByRole('status').filter({ hasText: 'Workspace updated: other.' })).toBeVisible();
     await expect(glyph.composer).toContainText('(unavailable)');
     await glyph.sendButton.click();
-    await expect(glyph.page.getByText(/Source folder was removed/).first()).toBeVisible();
+    await expect(glyph.page.getByText(/Source folder was removed/u).first()).toBeVisible();
     expect(provider.requests).toHaveLength(1);
     expect(await read(glyph, provider, 'kept.txt')).toContain('OTHER ROOT CONTENT');
     expect(await read(glyph, provider, 'workspace/kept.txt')).not.toContain('ORIGINAL CAPTURE');
@@ -123,10 +132,10 @@ it.describe('work in flight', () => {
     await expect.poll(() => provider.requests[0].closed).toBe(true);
     await expect(glyph.composer).toHaveText('Keep my newer draft');
     await expect(queue).toContainText('Queued follow-up');
-    await expect(queue.getByRole('button', { name: /Resume/ })).toBeVisible();
+    await expect(queue.getByRole('button', { name: /Resume/u })).toBeVisible();
     expect(provider.requests).toHaveLength(1);
     provider.enqueue({ chunks: ['Explicitly resumed in the updated workspace.'] });
-    await queue.getByRole('button', { name: /Resume/ }).click();
+    await queue.getByRole('button', { name: /Resume/u }).click();
     await expect(glyph.assistantEntries.last()).toContainText('Explicitly resumed in the updated workspace.');
     await expect(queue).toHaveCount(0);
     await expect(glyph.composer).toHaveText('Keep my newer draft');
@@ -169,7 +178,7 @@ it.describe('managed processes', () => {
     await expect(glyph.page.getByRole('region', { name: 'Background terminals', exact: true })).toContainText(
       '1 background terminal',
     );
-    let pid;
+    let pid = 0;
     await expect
       .poll(async () => {
         pid = Number(await readFile(join(glyph.workspace, 'glyph-background.pid'), 'utf8').catch(() => '0'));
@@ -177,11 +186,13 @@ it.describe('managed processes', () => {
       })
       .toBe(true);
     expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
-    process.kill(pid, 0);
+    const hostPid = await hostProcessId(glyph.application.process().pid, pid);
+    expect(processExists(hostPid)).toBe(true);
     await writeFile(glyph.workspaceTarget, JSON.stringify({ folders: [{ path: glyph.rootPaths[1] }] }));
     await expect(glyph.page.getByRole('status').filter({ hasText: 'Workspace updated: other.' })).toBeVisible();
-    expect(() => process.kill(pid, 0)).toThrow();
+    await expect.poll(() => processExists(hostPid)).toBe(false);
     await expect(glyph.page.getByRole('region', { name: 'Background terminals', exact: true })).toHaveCount(0);
     expect(provider.requests).toHaveLength(2);
   });
 });
+import { hostProcessId, processExists } from './SandboxProcess.mjs';

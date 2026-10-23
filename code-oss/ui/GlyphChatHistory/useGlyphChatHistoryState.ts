@@ -25,15 +25,15 @@ const GLYPH_RUN_STATUS_TO_GLYPH_CHAT_ACTIVITY: Record<GlyphRunStatus, GlyphChatA
   [GlyphRunStatus.FAILED]: GlyphChatActivity.FAILED,
 };
 
-const ACTIVE_RUN_STATUSES = [
+const ACTIVE_RUN_STATUSES = new Set([
   GlyphRunStatus.STREAMING,
   GlyphRunStatus.WAITING_FOR_QUESTION,
   GlyphRunStatus.WAITING_FOR_APPROVAL,
-];
+]);
 
 function toChatActivity(chat: GlyphChatSummary, runs: readonly GlyphRunProjection[]): GlyphChatActivity {
   const chatRuns = runs.filter(run => run.chatId === chat.id);
-  const run = chatRuns.find(value => ACTIVE_RUN_STATUSES.includes(value.status)) ?? chatRuns.at(-1);
+  const run = chatRuns.find(value => ACTIVE_RUN_STATUSES.has(value.status)) ?? chatRuns.at(-1);
   if (run) return GLYPH_RUN_STATUS_TO_GLYPH_CHAT_ACTIVITY[run.status];
   return chat.turnCount > 0 ? GlyphChatActivity.COMPLETED : GlyphChatActivity.EMPTY;
 }
@@ -51,8 +51,8 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
   const search = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => search.current?.focus(), []);
   const matches = (title: string) => title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
-  const allChats = [...state.chats]
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
+  const allChats = state.chats
+    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
     .filter(chat => matches(chat.title))
     .map(chat => ({
       id: chat.id,
@@ -65,7 +65,7 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
       activity: toChatActivity(chat, state.runs),
     }));
   const draft = state.newChatDraft;
-  const draftTitle = draft && `Draft: ${draft.text.trim().split('\n')[0]?.trim()}`;
+  const draftTitle = draft && `Draft: ${draft.text.trim().split('\n')[0]!.trim()}`;
   const drafts =
     draft && draftTitle && matches(draftTitle)
       ? [
@@ -100,7 +100,9 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
   ];
   return {
     archivedOpen,
-    toggleArchived: () => setArchivedOpen(!archivedOpen),
+    toggleArchived: () => {
+      setArchivedOpen(!archivedOpen);
+    },
     archived: allChats.filter(chat => chat.archived),
     archive: (id: string, archived: boolean) => void actions.setChatArchived?.(id, archived),
     pin: (id: string, pinned: boolean) => actions.setChatPinned?.(id, pinned),
@@ -109,12 +111,19 @@ export function useGlyphChatHistoryState({ state, actions }: GlyphChatHistorySta
     search,
     groups,
     emptyMessage:
-      chats.length || drafts.length ? undefined : query ? 'No matching chats.' : 'Your conversations will appear here.',
-    newChatDisabled: state.navigationPending || state.readOnly,
-    navigationPending: !!state.navigationPending,
+      chats.length > 0 || drafts.length > 0
+        ? undefined
+        : query
+          ? 'No matching chats.'
+          : 'Your conversations will appear here.',
+    newChatDisabled: state.navigationPending === true || state.readOnly,
+    navigationPending: state.navigationPending === true,
     newChat: () => {
       actions.newChat();
     },
-    openChat: (id: string) => (id ? void actions.openChat(id) : actions.newChat()),
+    openChat: (id: string) => {
+      if (id) void actions.openChat(id);
+      else actions.newChat();
+    },
   };
 }

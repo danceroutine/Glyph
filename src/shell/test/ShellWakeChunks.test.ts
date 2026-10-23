@@ -6,7 +6,7 @@ import type { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.j
 import type { ShellWorkingDirectoryResolver } from '#src/shell/ShellWorkingDirectoryResolver.js';
 import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 
-it.each(['Server \x1b[32mready\x1b[0m 🧪', 'Server \x1b]8;;https://example.test\x1b\\ready\x1b]8;;\x1b\\'])(
+it.each(['Server \u001B[32mready\u001B[0m 🧪', 'Server \u001B]8;;https://example.test\u001B\\ready\u001B]8;;\u001B\\'])(
   'wakes for identical terminal bytes at every chunk boundary: %j',
   async output => {
     const bytes = Buffer.from(output);
@@ -22,7 +22,9 @@ it.each(['Server \x1b[32mready\x1b[0m 🧪', 'Server \x1b]8;;https://example.tes
         { launch: () => child },
       );
       const wakes: string[] = [];
-      manager.onDidWake(event => wakes.push(event.pattern));
+      manager.onDidWake(event => {
+        wakes.push(event.pattern);
+      });
       try {
         await manager.execute('inert fixture', {
           background: true,
@@ -51,7 +53,9 @@ it('revokes queued matches on close and retains final output until termination s
     { launch: () => child },
   );
   const snapshots: unknown[] = [];
-  manager.onDidChange(() => snapshots.push(manager.allSessions[0]));
+  manager.onDidChange(() => {
+    snapshots.push(manager.allSessions[0]);
+  });
   try {
     const result = await manager.execute('inert', {
       background: true,

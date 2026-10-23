@@ -1,6 +1,6 @@
 import type { AgentReview } from '#src/reviewing/AgentReview.js';
 import type { GlyphBackgroundShell } from './GlyphBackgroundShell.ts';
-import type { GlyphContextAttachment } from '../connection/GlyphContextAttachment.ts';
+import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { GlyphTurnOptions } from './GlyphAnnotation.ts';
 import type { GlyphProposalFilePreview } from './GlyphProposalFilePreview.ts';
 import type { GlyphHostStatus } from './GlyphHostStatus.ts';

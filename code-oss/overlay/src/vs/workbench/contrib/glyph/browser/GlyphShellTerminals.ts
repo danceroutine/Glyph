@@ -68,7 +68,9 @@ export class GlyphShellTerminals extends Disposable {
     for (const viewer of this.viewers.values()) {
       viewer.process.dispose();
       void viewer.terminal.then(
-        terminal => terminal.dispose(),
+        terminal => {
+          terminal.dispose();
+        },
         () => {},
       );
     }
@@ -108,13 +110,13 @@ class GlyphShellOutput extends Disposable implements ITerminalChildProcess {
     }
     this.shell = shell;
     if (!this.started) return;
-    const output = shell.output.replace(/\r?\n/g, '\r\n');
+    const output = shell.output.replaceAll(/\r?\n/gu, '\r\n');
     if (output.startsWith(this.output)) this.data.fire(output.slice(this.output.length));
-    else if (output !== this.output) this.data.fire(`\x1b[2J\x1b[H${output}`);
+    else this.data.fire(`\u001B[2J\u001B[H${output}`);
     this.output = output;
     const status = shell.running
       ? 'running'
-      : shell.error
+      : shell.error !== undefined && shell.error !== ''
         ? `Failed: ${shell.error}`
         : `Exited${shell.exitCode === undefined ? '' : ` (${shell.exitCode})`}`;
     if (status !== this.status && !shell.running) this.data.fire(`\r\n[${status}]\r\n`);

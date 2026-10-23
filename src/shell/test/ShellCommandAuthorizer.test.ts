@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -26,7 +26,9 @@ describe(ShellCommandAuthorizer, () => {
   describe(ShellCommandAuthorizer.prototype.authorize, () => {
     it('cancels a queued chat shell command before another chat answers its approval', async () => {
       const events: GlyphHostEvent[] = [];
-      const broker = new DesktopInteractionBroker(event => events.push(event));
+      const broker = new DesktopInteractionBroker(event => {
+        events.push(event);
+      });
       const save = vi.fn<ShellPermissionStore['save']>();
       const authorizer = new ShellCommandAuthorizer('project', store(undefined, save), broker);
       const launch = vi.fn(() => {
@@ -43,7 +45,7 @@ describe(ShellCommandAuthorizer, () => {
         .run({ chatId: 'first', runId: 'first-run' }, () =>
           manager.execute('first command', { signal: firstController.signal, ownerChatId: 'first' }),
         )
-        .catch(error => error);
+        .catch((error: unknown) => error);
       let queuedError: unknown;
       const queued = broker
         .run({ chatId: 'queued', runId: 'queued-run' }, () =>
@@ -397,6 +399,18 @@ describe(ShellCommandAuthorizer, () => {
       expect(presentShellPermission).not.toHaveBeenCalled();
     });
 
+    it('runs a safe foreground command read-only when the user allows safe commands', async () => {
+      const save = vi.fn<ShellPermissionStore['save']>(async () => {});
+      const authorizer = new ShellCommandAuthorizer('project', store(undefined, save), {
+        presentShellPermission: async () => ShellPermissionDecision.ALLOW_SAFE,
+      });
+
+      await expect(authorizer.authorize('ls -la', '/project', new AbortController().signal)).resolves.toEqual({
+        sandboxProfile: ShellSandboxProfile.READ_ONLY,
+      });
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({ mode: ShellPermissionMode.ALLOW_SAFE }));
+    });
+
     it('rejects denied and empty commands', async () => {
       const authorizer = new ShellCommandAuthorizer('project', store(), {
         presentShellPermission: async () => ShellPermissionDecision.DENY,
@@ -445,14 +459,32 @@ describe(isSafeShellCommand, () => {
   ])('does not classify %s as safe', command => {
     expect(isSafeShellCommand(command)).toBe(false);
   });
+
+  it.each([
+    'cat file\\ name.txt',
+    "cat 'literal\\backslash'",
+    'ls  -la   src',
+    'ls ""',
+    'cat .env.example',
+    'cat "quoted name"',
+  ])('recognizes escaped, quoted, and spaced arguments in %s', command => {
+    expect(isSafeShellCommand(command)).toBe(true);
+  });
+
+  it.each(['cat file\\', "cat 'unterminated", 'cat "unterminated', '', '   '])(
+    'does not classify incomplete or empty input %j as safe',
+    command => {
+      expect(isSafeShellCommand(command)).toBe(false);
+    },
+  );
 });
 
 describe(FileShellPermissionStore, () => {
   describe('persistence', () => {
     it('round-trips a private policy without granting its permissions to another mutation scope', async () => {
       const directory = await temporaryDirectory();
-      const store = new FileShellPermissionStore(directory);
-      expect(await store.load('project')).toBeUndefined();
+      const reopened = new FileShellPermissionStore(directory);
+      expect(await reopened.load('project')).toBeUndefined();
       const policy = {
         schemaVersion: 2 as const,
         projectContextId: 'project',
@@ -460,10 +492,10 @@ describe(FileShellPermissionStore, () => {
         allowedCommands: [{ command: 'pnpm test', workingDirectory: '/project' }],
       };
 
-      await store.save(policy);
+      await reopened.save(policy);
 
-      await expect(store.load('project')).resolves.toEqual(policy);
-      await expect(store.load('other')).resolves.toBeUndefined();
+      await expect(reopened.load('project')).resolves.toEqual(policy);
+      await expect(reopened.load('other')).resolves.toBeUndefined();
       expect(JSON.parse(await readFile(join(directory, 'shell-permissions.json'), 'utf8'))).toEqual(policy);
       if (process.platform !== 'win32') {
         expect((await stat(directory)).mode & 0o777).toBe(0o700);
@@ -497,6 +529,60 @@ describe(FileShellPermissionStore, () => {
       });
     });
   });
+
+  describe(FileShellPermissionStore.prototype.load, () => {
+    it.each([
+      ['an unrecognized policy', JSON.stringify({ schemaVersion: 3, projectContextId: 'project' })],
+      ['malformed JSON', '{'],
+    ])('fails closed for %s', async (_case, contents) => {
+      const directory = await temporaryDirectory();
+      await writeFile(join(directory, 'shell-permissions.json'), contents);
+
+      await expect(new FileShellPermissionStore(directory).load('project')).rejects.toThrow(
+        'Could not load shell permissions.',
+      );
+    });
+
+    it('fails when the policy path cannot be read', async () => {
+      const directory = await temporaryDirectory();
+      await mkdir(join(directory, 'shell-permissions.json'));
+
+      await expect(new FileShellPermissionStore(directory).load('project')).rejects.toThrow(
+        'Could not load shell permissions.',
+      );
+    });
+  });
+
+  describe(FileShellPermissionStore.prototype.save, () => {
+    it('fails without leaving a temporary file when the policy cannot replace its destination', async () => {
+      const directory = await temporaryDirectory();
+      await mkdir(join(directory, 'shell-permissions.json', 'occupied'), { recursive: true });
+
+      await expect(
+        new FileShellPermissionStore(directory).save({
+          schemaVersion: 2,
+          projectContextId: 'project',
+          mode: ShellPermissionMode.ASK,
+          allowedCommands: [],
+        }),
+      ).rejects.toThrow('Could not persist shell permissions.');
+      expect((await readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('reports the cleanup failure when the policy directory cannot be created', async () => {
+      const directory = await temporaryDirectory();
+      await writeFile(join(directory, 'file'), '');
+
+      await expect(
+        new FileShellPermissionStore(join(directory, 'file', 'nested')).save({
+          schemaVersion: 2,
+          projectContextId: 'project',
+          mode: ShellPermissionMode.ASK,
+          allowedCommands: [],
+        }),
+      ).rejects.toMatchObject({ code: 'ENOTDIR' });
+    });
+  });
 });
 
 function store(
@@ -517,5 +603,7 @@ function signal(): AbortSignal {
 }
 
 function flushQueue(): Promise<void> {
-  return new Promise(resolve => setImmediate(resolve));
+  return new Promise(resolve => {
+    setImmediate(resolve);
+  });
 }

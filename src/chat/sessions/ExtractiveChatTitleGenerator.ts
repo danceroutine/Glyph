@@ -34,7 +34,7 @@ export class ExtractiveChatTitleGenerator implements ChatTitleGenerator {
     const meaningful = words.filter(word => !ignoredWords.has(word.toLocaleLowerCase('en-US')));
     const selected = (meaningful.length >= 3 ? meaningful : words).slice(0, 4);
     if (selected.length === 0) return 'New chat';
-    return selected.map(titleCase).join(' ');
+    return selected.map(value => titleCase(value)).join(' ');
   }
 }
 

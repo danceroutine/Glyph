@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import { ToolRegistry } from '#src/tools/ToolRegistry.js';
@@ -65,5 +65,16 @@ describe(ToolRegistry, () => {
       execute: vi.fn(async () => 'read'),
     };
     expect(() => new ToolRegistry([missingModes])).toThrow('explicitly declare');
+  });
+  it.each([
+    { namespace: '', name: 'read' },
+    { namespace: 'project', name: '' },
+  ])('rejects tools without a complete identity: %j', identity => {
+    expect(() => new ToolRegistry([{ ...tool(), ...identity }])).toThrow('Tools require a namespace and name.');
+  });
+  it.each(['validateInput', 'execute'])('rejects tools missing the %s handler', handler => {
+    const incomplete = { ...tool(), [handler]: undefined } as unknown as Tool;
+
+    expect(() => new ToolRegistry([incomplete])).toThrow('Tool project.read requires validation and execution.');
   });
 });

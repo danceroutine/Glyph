@@ -41,7 +41,9 @@ export function WiredTerminalRoot({ snapshot }: WiredTerminalRootProps): ReactEl
       <TerminalRoot
         entries={state.entries}
         display={state.review ? 'none' : 'flex'}
-        pagingActive={!state.shellPermission && !state.question && Boolean(state.prompt || state.responseParts)}
+        pagingActive={
+          !state.shellPermission && !state.question && (state.prompt !== undefined || state.responseParts !== undefined)
+        }
         height={Math.max(1, rows)}
         response={response}
         backgroundShells={

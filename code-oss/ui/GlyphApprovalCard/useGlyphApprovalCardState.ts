@@ -29,8 +29,14 @@ export function useGlyphApprovalCardState({
     disabled,
     pending,
     error,
-    skip: () => decide(GlyphApprovalDecision.DENY),
-    alwaysRun: () => decide(GlyphApprovalDecision.ALWAYS_ALLOW),
-    run: () => decide(GlyphApprovalDecision.ALLOW_ONCE),
+    skip: () => {
+      decide(GlyphApprovalDecision.DENY);
+    },
+    alwaysRun: () => {
+      decide(GlyphApprovalDecision.ALWAYS_ALLOW);
+    },
+    run: () => {
+      decide(GlyphApprovalDecision.ALLOW_ONCE);
+    },
   };
 }

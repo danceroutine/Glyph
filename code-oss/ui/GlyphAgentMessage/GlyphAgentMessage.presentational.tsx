@@ -59,7 +59,9 @@ export function GlyphAgentMessage({
         </div>
       </div>
       {entry.options?.annotations && <GlyphAnnotationPill annotations={entry.options.annotations} />}
-      {entry.attachmentError && <p role="alert">{entry.attachmentError}</p>}
+      {entry.attachmentError !== undefined && entry.attachmentError !== '' && (
+        <p role="alert">{entry.attachmentError}</p>
+      )}
       {approval}
       {shells}
       <footer class={styles.footer} aria-label="Message actions">
@@ -86,7 +88,7 @@ export function GlyphAgentMessage({
           </IconButton>
         )}
         {usage}
-        {entry.datetime && (
+        {entry.datetime !== undefined && entry.datetime !== '' && (
           <time dateTime={entry.createdAt} title={entry.datetime}>
             {entry.datetime}
           </time>

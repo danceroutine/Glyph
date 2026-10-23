@@ -2,15 +2,25 @@ import ts from 'typescript';
 import { sourceImportPath } from './source-import-path.mjs';
 
 /** Transform JS and declaration imports during emit, retaining original ranges for source maps. */
+/**
+ * @param {ts.TransformationContext} context
+ * @returns {ts.Transformer<ts.SourceFile>}
+ */
 export function sourceAliasTransformer(context) {
   const factory = context.factory;
   return source => {
+    /**
+     * @template {ts.Expression} T
+     * @param {T} node
+     * @returns {T | ts.StringLiteral}
+     */
     const specifier = node => {
-      if (!node || !(ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))) return node;
+      if (!(ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))) return node;
       const path = sourceImportPath(node.text, source.fileName);
       if (path === node.text) return node;
       return ts.setTextRange(ts.setOriginalNode(factory.createStringLiteral(path), node), node);
     };
+    /** @type {ts.Visitor<ts.Node, ts.Node>} */
     const visit = node => {
       node = ts.visitEachChild(node, visit, context);
       if (ts.isImportDeclaration(node))
@@ -27,7 +37,7 @@ export function sourceAliasTransformer(context) {
           node.modifiers,
           node.isTypeOnly,
           node.exportClause,
-          specifier(node.moduleSpecifier),
+          node.moduleSpecifier === undefined ? undefined : specifier(node.moduleSpecifier),
           node.attributes,
         );
       if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument))
@@ -39,7 +49,11 @@ export function sourceAliasTransformer(context) {
           node.typeArguments,
           node.isTypeOf,
         );
-      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0])
+      if (
+        ts.isCallExpression(node) &&
+        node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        node.arguments.length > 0
+      )
         return factory.updateCallExpression(node, node.expression, node.typeArguments, [
           specifier(node.arguments[0]),
           ...node.arguments.slice(1),
@@ -48,6 +62,15 @@ export function sourceAliasTransformer(context) {
         return factory.updateExternalModuleReference(node, specifier(node.expression));
       return node;
     };
-    return ts.visitNode(source, visit);
+    return ts.visitNode(source, visit, ts.isSourceFile);
   };
 }
+
+/** @type {ts.CustomTransformerFactory} */
+export const sourceAliasDeclarationTransformer = context => {
+  const transformSourceFile = sourceAliasTransformer(context);
+  return {
+    transformSourceFile,
+    transformBundle: bundle => context.factory.updateBundle(bundle, bundle.sourceFiles.map(transformSourceFile)),
+  };
+};

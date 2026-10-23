@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type SyntheticEvent } from 'react';
 
 type Filter = 'all' | 'active' | 'completed';
 
@@ -12,6 +12,20 @@ interface Todo {
 const STORAGE_KEY = 'glyph.todo-app.todos';
 const filters: Filter[] = ['all', 'active', 'completed'];
 
+function isTodo(value: unknown): value is Todo {
+  if (typeof value !== 'object' || value === null) return false;
+  return (
+    'id' in value &&
+    typeof value.id === 'string' &&
+    'title' in value &&
+    typeof value.title === 'string' &&
+    'completed' in value &&
+    typeof value.completed === 'boolean' &&
+    'createdAt' in value &&
+    typeof value.createdAt === 'number'
+  );
+}
+
 function loadTodos(): Todo[] {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -20,15 +34,7 @@ function loadTodos(): Todo[] {
     const value: unknown = JSON.parse(saved);
     if (!Array.isArray(value)) return [];
 
-    return value.filter(
-      (todo): todo is Todo =>
-        typeof todo === 'object' &&
-        todo !== null &&
-        typeof todo.id === 'string' &&
-        typeof todo.title === 'string' &&
-        typeof todo.completed === 'boolean' &&
-        typeof todo.createdAt === 'number',
-    );
+    return value.filter(item => isTodo(item));
   } catch {
     return [];
   }
@@ -56,7 +62,7 @@ export function App() {
   const activeCount = todos.filter(todo => !todo.completed).length;
   const completedCount = todos.length - activeCount;
 
-  function addTodo(event: FormEvent<HTMLFormElement>) {
+  function addTodo(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
     const title = draft.trim();
     if (!title) return;
@@ -93,7 +99,9 @@ export function App() {
           <input
             id="new-todo"
             value={draft}
-            onChange={event => setDraft(event.target.value)}
+            onChange={event => {
+              setDraft(event.target.value);
+            }}
             placeholder="What needs doing?"
             autoComplete="off"
           />
@@ -110,7 +118,9 @@ export function App() {
                 key={name}
                 type="button"
                 aria-pressed={filter === name}
-                onClick={() => setFilter(name)}
+                onClick={() => {
+                  setFilter(name);
+                }}
               >
                 {name}
               </button>
@@ -126,14 +136,22 @@ export function App() {
             {visibleTodos.map(todo => (
               <li className={todo.completed ? 'todo-item completed' : 'todo-item'} key={todo.id}>
                 <label className="todo-label">
-                  <input type="checkbox" checked={todo.completed} onChange={() => toggleTodo(todo.id)} />
+                  <input
+                    type="checkbox"
+                    checked={todo.completed}
+                    onChange={() => {
+                      toggleTodo(todo.id);
+                    }}
+                  />
                   <span className="checkmark" aria-hidden="true" />
                   <span className="todo-title">{todo.title}</span>
                 </label>
                 <button
                   className="delete-button"
                   type="button"
-                  onClick={() => removeTodo(todo.id)}
+                  onClick={() => {
+                    removeTodo(todo.id);
+                  }}
                   aria-label={`Delete ${todo.title}`}
                 >
                   <span aria-hidden="true">×</span>

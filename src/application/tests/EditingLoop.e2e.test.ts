@@ -438,7 +438,7 @@ describe('staged editing loop', () => {
       },
     ]);
     try {
-      await expect(harness.send()).rejects.toThrow(/model failed after staging/);
+      await expect(harness.send()).rejects.toThrow(/model failed after staging/u);
       expect(harness.reviews.active).toBeDefined();
       await writeFile(join(harness.projectRoot, 'file.txt'), 'collaborator\n');
       await writeFile(join(harness.projectRoot, 'unrelated.txt'), 'collaborator unrelated\n');
@@ -486,11 +486,15 @@ describe('staged editing loop', () => {
         id: 'response-cancelled',
         status: 'cancelled',
         output: [],
-        validate: () => setImmediate(() => controller.abort()),
+        validate: () => {
+          setImmediate(() => {
+            controller.abort();
+          });
+        },
       },
     ]);
     try {
-      await expect(harness.sendWithSignal(controller.signal)).rejects.toThrow(/cancelled/i);
+      await expect(harness.sendWithSignal(controller.signal)).rejects.toThrow(/cancelled/iu);
       expect(harness.reviews.active?.files[0]?.items[0]?.decision).toBe(EditDecisionState.PENDING);
       expect(await readFile(join(harness.projectRoot, 'file.txt'), 'utf8')).toBe(base);
       expect(networkAttempts).toBe(0);

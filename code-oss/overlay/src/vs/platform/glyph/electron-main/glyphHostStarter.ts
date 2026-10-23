@@ -37,7 +37,11 @@ export class GlyphHostStarter extends Disposable {
     super();
     const listener = (event: IpcMainEvent, nonce: unknown) => void this.connectWindow(event, nonce);
     validatedIpcMain.on(requestChannel, listener);
-    this._register(toDisposable(() => validatedIpcMain.removeListener(requestChannel, listener)));
+    this._register(
+      toDisposable(() => {
+        validatedIpcMain.removeListener(requestChannel, listener);
+      }),
+    );
     const preserveHistory = (event: IpcMainEvent) => {
       const window = this.windowsMainService.getWindowByWebContents(event.sender);
       const previous = this.historyIdentities.get(event.sender.id);
@@ -45,11 +49,13 @@ export class GlyphHostStarter extends Disposable {
       // Both identities come from Electron main. The renderer supplies no source
       // or destination IDs and cannot claim another workspace's conversation store.
       const key = `glyph.historyWorkspace.${previous.profileId}.${window.openedWorkspace.id}`;
-      if (!this.stateService.getItem<string>(key)) this.stateService.setItem(key, previous.workspaceId);
+      if ((this.stateService.getItem<string>(key) ?? '') === '') this.stateService.setItem(key, previous.workspaceId);
     };
     validatedIpcMain.on('vscode:glyph:preserveWorkspaceHistory', preserveHistory);
     this._register(
-      toDisposable(() => validatedIpcMain.removeListener('vscode:glyph:preserveWorkspaceHistory', preserveHistory)),
+      toDisposable(() => {
+        validatedIpcMain.removeListener('vscode:glyph:preserveWorkspaceHistory', preserveHistory);
+      }),
     );
     this._register(
       toDisposable(() => {
@@ -64,7 +70,10 @@ export class GlyphHostStarter extends Disposable {
   private async connectWindow(event: IpcMainEvent, nonce: unknown): Promise<void> {
     if (typeof nonce !== 'string' || event.sender.isDestroyed()) return;
     const window = this.windowsMainService.getWindowByWebContents(event.sender);
-    if (!window) return this.fail(event.sender, nonce, 'The requesting Glyph window is not registered.');
+    if (!window) {
+      this.fail(event.sender, nonce, 'The requesting Glyph window is not registered.');
+      return;
+    }
     const currentWorkspaceId = window.openedWorkspace?.id ?? `empty:${window.id}`;
     const profileId = window.profile?.id ?? 'default';
     const workspaceId =
@@ -83,7 +92,10 @@ export class GlyphHostStarter extends Disposable {
       const process = this.start();
       const connectionId = generateUuid();
       const port = process.connect({ type: GlyphTransportMessageType.CONNECTION, connectionId, identity });
-      if (event.sender.isDestroyed()) return port.close();
+      if (event.sender.isDestroyed()) {
+        port.close();
+        return;
+      }
       this.track(event.sender);
       event.sender.postMessage(responseChannel, nonce, [port]);
     } catch (error) {
@@ -129,7 +141,11 @@ export class GlyphHostStarter extends Disposable {
         }
       }),
     );
-    this._register(utilityProcess.onStderr(data => this.logService.error(`[Glyph host] ${data}`)));
+    this._register(
+      utilityProcess.onStderr(data => {
+        this.logService.error(`[Glyph host] ${data}`);
+      }),
+    );
     return utilityProcess;
   }
 

@@ -2,10 +2,18 @@ import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#src/desktop/protocol/GlyphDeskt
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
+import { GlyphHostEventType } from '#glyph/protocol/events/GlyphHostEvent.js';
+
+/** @typedef {{ requestId: string, command: { type: string } }} PortRequest */
 
 /** Use the real client and Code OSS lifecycle primitives, replacing only Electron's transport. */
+/**
+ * @param {unknown} fixture
+ * @returns {Promise<typeof import('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js')>}
+ */
 async function clientModule(fixture) {
-  globalThis.__glyphClientFixture = fixture;
+  globalThis.glyphClientFixture = fixture;
   const result = await build({
     entryPoints: ['code-oss/overlay/src/vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.ts'],
     bundle: true,
@@ -25,20 +33,21 @@ async function clientModule(fixture) {
           );
           builder.onLoad({ filter: /.*/, namespace: 'transport' }, args => ({
             contents: args.path.endsWith('ipc.mp.js')
-              ? 'export const acquirePort = async () => globalThis.__glyphClientFixture.port;'
+              ? 'export const acquirePort = async () => globalThis.glyphClientFixture.port;'
               : 'export const ipcRenderer = { on() {}, removeListener() {} };',
             loader: 'js',
           }));
           builder.onResolve({ filter: /^#(vs|glyph|src)\// }, args => {
+            /** @type {Record<string, string>} */
             const roots = { vs: '.code-oss/src/src/vs', glyph: 'src/desktop', src: 'src' };
-            const [, alias, path] = /^#(vs|glyph|src)\/(.*)$/.exec(args.path);
-            return { path: resolve(roots[alias], path.replace(/\.js$/, '.ts')) };
+            const [, alias = '', path = ''] = /^#(vs|glyph|src)\/(.*)$/.exec(args.path) ?? [];
+            return { path: resolve(roots[alias] ?? '', path.replace(/\.js$/, '.ts')) };
           });
         },
       },
     ],
   });
-  return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+  return importBundle(result.outputFiles[0].text, ['GlyphDesktopClient']);
 }
 
 describe('Glyph desktop connection attachment', () => {
@@ -46,6 +55,7 @@ describe('Glyph desktop connection attachment', () => {
     'retries a superseded attachment failure with the latest %s configuration',
     async change => {
       const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
+      /** @type {PortRequest[]} */
       const requests = [];
       let sequence = 0;
       class FixturePort extends EventTarget {
@@ -55,6 +65,7 @@ describe('Glyph desktop connection attachment', () => {
           );
         }
         close() {}
+        /** @param {unknown} event */
         emit(event) {
           this.dispatchEvent(
             new MessageEvent('message', {
@@ -68,6 +79,7 @@ describe('Glyph desktop connection attachment', () => {
             }),
           );
         }
+        /** @param {PortRequest} request */
         postMessage(request) {
           requests.push(request);
           if (requests.length > 1)
@@ -99,12 +111,16 @@ describe('Glyph desktop connection attachment', () => {
       const latestRoots =
         change === 'roots' ? [{ name: 'other', uri: 'file:///other', canonicalPath: '/other' }] : roots;
       const trusted = change !== 'trust';
-      const first = client.connect(roots, true).catch(error => error);
+      const first = client.connect(roots, true).catch((/** @type {unknown} */ error) => error);
       try {
-        await vi.waitFor(() => expect(requests).toHaveLength(1));
+        await vi.waitFor(() => {
+          expect(requests).toHaveLength(1);
+        });
         if (change === 'trust restored') void client.connect(roots, false).catch(() => {});
-        const latest = client.connect(latestRoots, trusted).catch(error => error);
-        const send = client.request({ type: 'open_chat', chatId: 'saved-chat' }).catch(error => error);
+        const latest = client.connect(latestRoots, trusted).catch((/** @type {unknown} */ error) => error);
+        const send = client
+          .request({ type: 'open_chat', chatId: 'saved-chat' })
+          .catch((/** @type {unknown} */ error) => error);
         port.emit({
           type: 'error',
           requestId: requests[0].requestId,
@@ -120,13 +136,14 @@ describe('Glyph desktop connection attachment', () => {
         ]);
       } finally {
         client.dispose();
-        delete globalThis.__glyphClientFixture;
+        delete globalThis.glyphClientFixture;
       }
     },
   );
 
   it('does not retry an attachment failure when its configuration is still current', async () => {
     const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
+    /** @type {PortRequest[]} */
     const requests = [];
     class FixturePort extends EventTarget {
       start() {
@@ -135,9 +152,10 @@ describe('Glyph desktop connection attachment', () => {
         );
       }
       close() {}
+      /** @param {PortRequest} request */
       postMessage(request) {
         requests.push(request);
-        queueMicrotask(() =>
+        queueMicrotask(() => {
           this.dispatchEvent(
             new MessageEvent('message', {
               data: {
@@ -152,8 +170,8 @@ describe('Glyph desktop connection attachment', () => {
                 },
               },
             }),
-          ),
-        );
+          );
+        });
       }
     }
     const { GlyphDesktopClient } = await clientModule({ port: new FixturePort() });
@@ -165,12 +183,13 @@ describe('Glyph desktop connection attachment', () => {
       expect(requests).toHaveLength(1);
     } finally {
       client.dispose();
-      delete globalThis.__glyphClientFixture;
+      delete globalThis.glyphClientFixture;
     }
   });
 
   it('reattaches an existing peer connection after the owning window detaches', async () => {
     const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'peer' };
+    /** @type {PortRequest[]} */
     const requests = [];
     let sequence = 0;
     class FixturePort extends EventTarget {
@@ -180,6 +199,7 @@ describe('Glyph desktop connection attachment', () => {
         );
       }
       close() {}
+      /** @param {unknown} event */
       emit(event) {
         this.dispatchEvent(
           new MessageEvent('message', {
@@ -193,6 +213,7 @@ describe('Glyph desktop connection attachment', () => {
           }),
         );
       }
+      /** @param {PortRequest} request */
       postMessage(request) {
         requests.push(request);
         queueMicrotask(() => {
@@ -219,9 +240,10 @@ describe('Glyph desktop connection attachment', () => {
     const client = new GlyphDesktopClient(async () => {
       throw new Error('No editor requests expected');
     });
+    /** @type {{ ownerWindowId?: string, readOnly: boolean }[]} */
     const snapshots = [];
     client.onDidReceiveEvent(envelope => {
-      if (envelope.event.type === 'initial_state') snapshots.push(envelope.event.state);
+      if (envelope.event.type === GlyphHostEventType.INITIAL_STATE) snapshots.push(envelope.event.state);
     });
     try {
       const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }];
@@ -235,7 +257,7 @@ describe('Glyph desktop connection attachment', () => {
       ]);
     } finally {
       client.dispose();
-      delete globalThis.__glyphClientFixture;
+      delete globalThis.glyphClientFixture;
     }
   });
 });

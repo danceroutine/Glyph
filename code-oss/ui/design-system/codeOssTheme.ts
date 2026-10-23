@@ -107,12 +107,13 @@ function isToken(value: ThemeToken | ThemeGroup): value is ThemeToken {
   return value.kind === 'token';
 }
 
-function references<T extends ThemeGroup>(group: T): References<T> {
-  // Object.fromEntries loses key information; the traversal preserves every
-  // branch and replaces only token leaves, matching References<T>.
+function references<T extends ThemeGroup>(group: T): References<T>;
+// Object.fromEntries loses key information; the traversal preserves every
+// branch and replaces only token leaves, matching References<T>.
+function references(group: ThemeGroup): unknown {
   return Object.fromEntries(
     Object.entries(group).map(([name, value]) => [name, isToken(value) ? value.reference : references(value)]),
-  ) as References<T>;
+  );
 }
 
 /** Typed native vocabulary. Components consume tokens.ts instead. */

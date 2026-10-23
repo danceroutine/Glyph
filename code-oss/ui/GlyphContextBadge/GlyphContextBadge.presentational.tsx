@@ -29,13 +29,13 @@ export function GlyphContextBadge({ label, title, skill, onClick, actionLabel = 
     <Button
       appearance={ButtonAppearance.GHOST}
       type="button"
-      class={`${styles.badge} ${skill ? styles.skill : ''}`}
+      class={`${styles.badge} ${skill === true ? styles.skill : ''}`}
       title={title}
       aria-label={`${actionLabel} ${title}`}
       onClick={onClick}
     >
-      {!skill && <FileText size={14} aria-hidden="true" />}
-      {skill ? '/' : ''}
+      {skill !== true && <FileText size={14} aria-hidden="true" />}
+      {skill === true ? '/' : ''}
       {label}
     </Button>
   );

@@ -7,7 +7,10 @@ export class RecordingLogger implements Logger {
   ) {}
 
   forNamespace(namespace: string): Logger {
-    return new RecordingLogger(this.entries, this.namespace ? `${this.namespace}.${namespace}` : namespace);
+    return new RecordingLogger(
+      this.entries,
+      this.namespace !== undefined && this.namespace !== '' ? `${this.namespace}.${namespace}` : namespace,
+    );
   }
 
   trace(message: string, data?: unknown): void {
@@ -29,7 +32,7 @@ export class RecordingLogger implements Logger {
   private record(level: string, message: string, data?: unknown): void {
     this.entries.push({
       level,
-      message: this.namespace ? `${this.namespace}.${message}` : message,
+      message: this.namespace !== undefined && this.namespace !== '' ? `${this.namespace}.${message}` : message,
       ...(data === undefined ? {} : { data }),
     });
   }

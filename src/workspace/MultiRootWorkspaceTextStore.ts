@@ -28,7 +28,10 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
   constructor(context: ProjectContext, roots: readonly NamedWorkspaceTextStore[]) {
     if (roots.length === 0) throw new Error('A multi-root workspace requires at least one root.');
     for (const root of roots) assertWellFormedWorkspacePath(root.name);
-    this.root = context.workspaceFile ? dirname(context.workspaceFile) : roots[0]!.store.root;
+    this.root =
+      context.workspaceFile !== undefined && context.workspaceFile !== ''
+        ? dirname(context.workspaceFile)
+        : roots[0]!.store.root;
     this.caseSensitive = roots.every(root => root.store.caseSensitive);
     this.mutationConsistency = roots.every(
       root => root.store.mutationConsistency === WorkspaceMutationConsistency.ATOMIC_VERSIONED,
@@ -70,7 +73,7 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
       const result = await store.list(
         maxFiles - files.length,
         pattern?.pattern ?? globPattern,
-        target?.relativePath || undefined,
+        (target?.relativePath ?? '') || undefined,
       );
       files.push(...result.files.map(path => this.join(name, path)));
       truncated ||= result.truncated;

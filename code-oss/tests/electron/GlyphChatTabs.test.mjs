@@ -1,6 +1,9 @@
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+
 it.use({ scriptedProvider: true });
+/** @param {GlyphWorkbench} glyph */
 const tabs = glyph => glyph.page.getByRole('tablist', { name: 'Open chats' });
 
 it('uses one compact header and keeps tabs, drafts, and saved chats independent', async ({ glyph, provider }) => {
@@ -71,7 +74,7 @@ it('changes header controls with the sidebar and restores archived chats from th
   await glyph.reload();
   await glyph.page.getByRole('button', { name: 'Recent chats', exact: true }).click();
   const picker = glyph.page.getByRole('dialog', { name: 'Recent chats' });
-  await picker.getByRole('button', { name: /Archived/ }).click();
+  await picker.getByRole('button', { name: /Archived/u }).click();
   const archived = picker.getByRole('region', { name: 'Archived chats' });
   await expect(archived).toContainText('Archive Example');
   await archived.getByRole('button', { name: 'Archive Example', exact: true }).hover();

@@ -39,7 +39,10 @@ export function WiredGlyphAgentMessage({
     context: actions?.context,
     openLink: actions?.openLink,
     copyText: actions?.copyText,
-    branch: !readOnly && chatId && actions?.branchChat ? turnId => actions.branchChat!(chatId, turnId) : undefined,
+    branch:
+      !readOnly && chatId !== undefined && chatId !== '' && actions?.branchChat
+        ? turnId => actions.branchChat!(chatId, turnId)
+        : undefined,
   });
   return (
     <GlyphAgentMessageWithState
@@ -77,7 +80,7 @@ export function GlyphAgentMessageWithState({
       content={<WiredGlyphTranscriptContent entry={entry} />}
       usage={<WiredGlyphUsageSummary usage={entry.usage} turn />}
       shells={
-        actions && chatId
+        actions && chatId !== undefined && chatId !== ''
           ? entry.shellActivities.map(tool => (
               <WiredGlyphShellCommandCard
                 key={tool.id}
@@ -90,7 +93,7 @@ export function GlyphAgentMessageWithState({
           : undefined
       }
       modeSwapCards={
-        actions && chatId
+        actions && chatId !== undefined && chatId !== ''
           ? entry.modeSwaps?.map(swap => (
               <WiredGlyphModeSwapCard
                 key={swap.id}

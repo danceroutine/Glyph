@@ -1,10 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
-const { chromium, expect } = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url))(
-  '@playwright/test',
-);
-let browser, script;
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let script;
 beforeAll(async () => {
   const result = await build({
     stdin: {
@@ -20,6 +21,7 @@ beforeAll(async () => {
     write: false,
     format: 'iife',
     platform: 'browser',
+    ...coverageBuildOptions,
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   script = result.outputFiles[0].text;
@@ -37,8 +39,9 @@ const calls = [
   },
   { id: 'search', name: 'search_project', status: 'started', arguments: '{"query":"queue"}', textOffset: 0 },
 ];
+/** @param {import('@playwright/test').BrowserContextOptions} [options] */
 async function mount(options) {
-  const page = await browser.newPage(options);
+  const page = await newCoveredPage(browser, options);
   await page.setContent(
     '<div id="root" style="width:280px;--vscode-descriptionForeground:#888;--vscode-foreground:#ccc"></div><button id="outside">Outside</button>',
   );
@@ -48,7 +51,7 @@ async function mount(options) {
 it('bundles consecutive calls, reveals details, and preserves expanded rows across streaming updates', async () => {
   const page = await mount();
   try {
-    await page.evaluate(calls => window.show(calls), calls);
+    await page.evaluate(value => window.show(value), calls);
     const group = page.locator('.glyph-tool-group > summary');
     await expect(group).toHaveText('Exploring2 tools');
     await expect(page.getByRole('list', { name: 'Tool activity' })).toBeHidden();
@@ -63,7 +66,7 @@ it('bundles consecutive calls, reveals details, and preserves expanded rows acro
     const running = page.locator('[data-tool-id="search"] summary');
     await expect(running).toHaveCSS('animation-name', 'glyph-tool-shimmer');
     await page.evaluate(
-      calls => window.show(calls, 'completed'),
+      value => window.show(value, 'completed'),
       calls.map(call => ({ ...call, status: 'completed' })),
     );
     await expect(group).toHaveText('Explored2 tools');
@@ -81,7 +84,7 @@ it('bundles consecutive calls, reveals details, and preserves expanded rows acro
 it('sweeps once across the entire summary and resets only after the highlight leaves the text', async () => {
   const page = await mount();
   try {
-    await page.evaluate(calls => window.show(calls), calls);
+    await page.evaluate(value => window.show(value), calls);
     const summary = page.locator('.glyph-tool-group > summary');
     await page.mouse.move(600, 400);
     const count = await summary.evaluate(
@@ -92,10 +95,13 @@ it('sweeps once across the entire summary and resets only after the highlight le
     expect(count).toBe(1);
     await expect(summary.locator('span').first()).toHaveCSS('animation-name', 'none');
     const frame = async time => {
-      await summary.evaluate((element, time) => {
-        const animation = element.getAnimations().find(animation => animation.animationName === 'glyph-tool-shimmer');
+      await summary.evaluate((element, /** @type {number} */ elapsed) => {
+        const animation = element
+          .getAnimations()
+          .find(animation => animation instanceof CSSAnimation && animation.animationName === 'glyph-tool-shimmer');
+        if (animation === undefined) throw new Error('The shimmer animation is missing.');
         animation.pause();
-        animation.currentTime = time;
+        animation.currentTime = elapsed;
       }, time);
       return summary.screenshot();
     };
@@ -115,7 +121,7 @@ it('separates batches across assistant text and stops shimmer on interruption or
   const page = await mount({ reducedMotion: 'reduce' });
   try {
     await page.evaluate(
-      calls => window.show([...calls, ...calls.map(call => ({ ...call, id: call.id + '-later', textOffset: 80 }))]),
+      value => window.show([...value, ...value.map(call => ({ ...call, id: call.id + '-later', textOffset: 80 }))]),
       calls,
     );
     await expect(page.locator('.glyph-tool-group')).toHaveCount(2);
@@ -123,7 +129,7 @@ it('separates batches across assistant text and stops shimmer on interruption or
     const row = page.locator('[data-tool-id="search"]');
     await expect(row).toHaveAttribute('aria-busy', 'true');
     await expect(row.locator('summary')).toHaveCSS('animation-name', 'none');
-    await page.evaluate(calls => window.show(calls, 'interrupted'), calls);
+    await page.evaluate(value => window.show(value, 'interrupted'), calls);
     await expect(row).toHaveAttribute('aria-busy', 'false');
     await expect(row.locator('summary')).toHaveText('Interrupted · search project');
   } finally {
@@ -222,7 +228,8 @@ it('shows one empty-result message inside the toggle and keeps errors and cancel
       ['interrupted', undefined, 'Request cancelled'],
     ]) {
       await page.evaluate(
-        ({ tool, status, result }) => window.show([{ ...tool, status, summary: JSON.stringify(result) }], 'completed'),
+        ({ tool, status: toolStatus, result: toolResult }) =>
+          window.show([{ ...tool, status: toolStatus, summary: JSON.stringify(toolResult) }], 'completed'),
         { tool: webSearch, status, result },
       );
       const summary = page.locator('[data-tool-id="web"] summary');

@@ -70,9 +70,10 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
 function mostSpecificWorkspaceRoot(roots: readonly string[], workingDirectory: string): string {
   const matches = roots
     .filter(root => isInside(root, workingDirectory))
-    .sort((left, right) => right.length - left.length);
+    .toSorted((left, right) => right.length - left.length);
   const root = matches[0];
-  if (!root) throw new Error('Shell working directory must be inside a configured workspace root.');
+  if (root === undefined || root === '')
+    throw new Error('Shell working directory must be inside a configured workspace root.');
   return root;
 }
 
@@ -100,7 +101,7 @@ function sandboxShell(environment: NodeJS.ProcessEnv): {
 }
 
 function trustedShell(candidate: string | undefined): string | undefined {
-  if (!candidate || !isAbsolute(candidate)) return undefined;
+  if (candidate === undefined || candidate === '' || !isAbsolute(candidate)) return undefined;
   try {
     const resolved = realpathSync(candidate);
     if (!statSync(resolved).isFile() || !trustedShellName(basename(resolved))) return undefined;

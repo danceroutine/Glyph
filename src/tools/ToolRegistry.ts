@@ -1,4 +1,4 @@
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from './Tool.ts';
 import type { ToolSource } from './ToolSource.ts';
 
@@ -25,12 +25,13 @@ export class ToolRegistry implements ToolSource {
           throw new Error(`Tool ${tool.namespace}.${tool.name} must explicitly declare valid allowed modes.`);
         }
         if (typeof tool.validateInput !== 'function' || typeof tool.execute !== 'function') {
-          throw new Error(`Tool ${tool.namespace}.${tool.name} requires validation and execution.`);
+          throw new TypeError(`Tool ${tool.namespace}.${tool.name} requires validation and execution.`);
         }
         // Snapshot policy and handlers so later mutation cannot change a registered permission.
+        const allowedModes: Tool['allowedModes'] = [tool.allowedModes[0], ...tool.allowedModes.slice(1)];
         const registered: Tool = Object.freeze({
           ...tool,
-          allowedModes: Object.freeze([...tool.allowedModes]) as Tool['allowedModes'],
+          allowedModes: Object.freeze(allowedModes),
           validateInput: tool.validateInput.bind(tool),
           execute: tool.execute.bind(tool),
         });

@@ -184,7 +184,9 @@ export function GlyphChatHistory({
         title={chat.title}
         data-draft={chat.draft || undefined}
         disabled={navigationPending}
-        onClick={() => openChat(chat.id)}
+        onClick={() => {
+          openChat(chat.id);
+        }}
       >
         <span
           class={styles.activity}
@@ -220,7 +222,9 @@ export function GlyphChatHistory({
             disabled={newChatDisabled}
             aria-label={`${chat.archived ? 'Unarchive' : 'Archive'} ${chat.title}`}
             title={chat.archived ? 'Unarchive chat' : 'Archive chat'}
-            onClick={() => archive(chat.id, !chat.archived)}
+            onClick={() => {
+              archive(chat.id, !chat.archived);
+            }}
           >
             {chat.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
           </IconButton>
@@ -231,10 +235,10 @@ export function GlyphChatHistory({
   return (
     <aside
       id="glyph-chat-history"
-      class={`glyph-chat-history ${styles.root} ${compact ? styles.compact : ''}`}
+      class={`glyph-chat-history ${styles.root} ${compact === true ? styles.compact : ''}`}
       aria-label="Chat history"
     >
-      {!compact && close && (
+      {compact !== true && close && (
         <div class={styles.toolbar}>
           <IconButton
             appearance={ButtonAppearance.BORDERLESS_GHOST}
@@ -258,9 +262,11 @@ export function GlyphChatHistory({
           aria-label="Search chats"
           placeholder="Search chats…"
           value={query}
-          onInput={event => setQuery(event.currentTarget.value)}
+          onInput={event => {
+            setQuery(event.currentTarget.value);
+          }}
         />
-        {!compact && (
+        {compact !== true && (
           <Button
             appearance={ButtonAppearance.GHOST}
             class={styles.newChatLayout}
@@ -290,16 +296,20 @@ export function GlyphChatHistory({
           onClick={toggleArchived}
           leadingIcon={archivedOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         >
-          Archived{archived.length ? ` (${archived.length})` : ''}
+          Archived{archived.length > 0 ? ` (${archived.length})` : ''}
         </Button>
         {archivedOpen && (
           <section aria-label="Archived chats">
-            {archived.length ? archived.map(chatRow) : <p class={styles.empty}>No archived chats.</p>}
+            {archived.length > 0 ? (
+              archived.map(value => chatRow(value))
+            ) : (
+              <p class={styles.empty}>No archived chats.</p>
+            )}
           </section>
         )}
-        {emptyMessage && <p class={styles.empty}>{emptyMessage}</p>}
+        {emptyMessage !== undefined && emptyMessage !== '' && <p class={styles.empty}>{emptyMessage}</p>}
       </nav>
-      {!compact && accountControl}
+      {compact !== true && accountControl}
     </aside>
   );
 }

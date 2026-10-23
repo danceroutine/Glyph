@@ -57,6 +57,25 @@ describe(ProposeQuestionToolRuntime, () => {
         }),
       ]);
     });
+
+    it('validates input and presents questions through its tool', async () => {
+      const present = vi.fn<QuestionPresenter['present']>(async () => ({
+        answers: [{ questionId: 'storage', type: QuestionAnswerType.SELECTION, optionIds: ['files'] }],
+      }));
+      const [tool] = new ProposeQuestionToolRuntime({ present }).tools;
+      const signal = new AbortController().signal;
+
+      expect(() => {
+        tool!.validateInput(singleQuestionInput());
+      }).not.toThrow();
+      expect(() => {
+        tool!.validateInput(JSON.stringify({ questions: [] }));
+      }).toThrow();
+      await expect(tool!.execute(singleQuestionInput(), signal, {})).resolves.toBe(
+        JSON.stringify({ answers: { storage: 'files' } }),
+      );
+      expect(present).toHaveBeenCalledWith(expect.objectContaining({ questions: [expect.anything()] }), signal);
+    });
   });
 
   describe(ProposeQuestionToolRuntime.prototype.execute, () => {
@@ -237,8 +256,16 @@ describe(ProposeQuestionToolRuntime, () => {
     });
 
     it('reports presenter failures and preserves non-Error failures', async () => {
-      const failed = new ProposeQuestionToolRuntime(presenter(async () => Promise.reject(new Error('screen failed'))));
-      const unknown = new ProposeQuestionToolRuntime(presenter(async () => Promise.reject('broken')));
+      const failed = new ProposeQuestionToolRuntime(
+        presenter(async () => {
+          throw new Error('screen failed');
+        }),
+      );
+      const unknown = new ProposeQuestionToolRuntime(
+        presenter(async () => {
+          throw 'broken';
+        }),
+      );
 
       await expect(failed.execute(QuestionToolName.PROPOSE_QUESTION, singleQuestionInput())).resolves.toContain(
         'screen failed',
@@ -260,6 +287,36 @@ describe(ProposeQuestionToolRuntime, () => {
       await expect(
         runtime.execute(QuestionToolName.PROPOSE_QUESTION, singleQuestionInput(), controller.signal),
       ).rejects.toThrow('cancelled');
+    });
+
+    it.each([
+      ['a non-object payload', '[1, 2]'],
+      ['a non-array question list', JSON.stringify({ title: null, questions: 'storage?' })],
+    ])('returns a malformed result for %s', async (_case, input) => {
+      const present = vi.fn<QuestionPresenter['present']>();
+      const runtime = new ProposeQuestionToolRuntime({ present });
+
+      const result = JSON.parse(await runtime.execute(QuestionToolName.PROPOSE_QUESTION, input)) as {
+        error: { code: string };
+      };
+
+      expect(result.error.code).toBe('MALFORMED');
+      expect(present).not.toHaveBeenCalled();
+    });
+
+    it('rethrows the presenter failure when cancelled without a cancellation reason', async () => {
+      const signal = { aborted: false, reason: undefined };
+      const failure = new Error('presenter stopped');
+      const runtime = new ProposeQuestionToolRuntime(
+        presenter(async () => {
+          signal.aborted = true;
+          throw failure;
+        }),
+      );
+
+      await expect(
+        runtime.execute(QuestionToolName.PROPOSE_QUESTION, singleQuestionInput(), signal as unknown as AbortSignal),
+      ).rejects.toBe(failure);
     });
 
     it('rejects unknown interaction tools before invoking the presenter', async () => {

@@ -32,9 +32,11 @@ describe('concurrent saved-chat initialization', () => {
     const retried = startup.catch(() => store.initialize(context));
     const result = retried.then(
       () => undefined,
-      error => error,
+      (error: unknown) => error,
     );
-    await vi.waitFor(() => expect(readLegacy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(readLegacy).toHaveBeenCalledTimes(1);
+    });
     const disposal = store.dispose();
     firstRead.reject(new Error('First migration read failed.'));
     await disposal;
@@ -55,13 +57,17 @@ describe('concurrent saved-chat initialization', () => {
     const second = new SqliteChatSessionStore(directory);
     stores.push(first, second);
     const firstInit = first.initialize(context);
-    await vi.waitFor(() => expect(readLegacy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(readLegacy).toHaveBeenCalledTimes(1);
+    });
     const secondInit = second.initialize(context);
     const secondResult = secondInit.then(
       () => undefined,
-      error => error,
+      (error: unknown) => error,
     );
-    await vi.waitFor(() => expect(readLegacy).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      expect(readLegacy).toHaveBeenCalledTimes(2);
+    });
     const catalog = legacyCatalog(context.roots[0]!.path);
     firstRead.resolve(catalog);
     await firstInit;
@@ -83,12 +89,16 @@ describe('concurrent saved-chat initialization', () => {
     const store = new SqliteChatSessionStore(directory);
     stores.push(store);
     const first = store.initialize(firstContext);
-    await vi.waitFor(() => expect(readLegacy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(readLegacy).toHaveBeenCalledTimes(1);
+    });
     let secondSettled = false;
     const second = store.initialize(secondContext).then(() => {
       secondSettled = true;
     });
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => {
+      setImmediate(resolve);
+    });
     const settledBeforeMigration = secondSettled;
     read.resolve(legacyCatalog(firstContext.roots[0]!.path));
     await Promise.all([first, second]);
@@ -107,12 +117,16 @@ describe('concurrent saved-chat initialization', () => {
     const store = new SqliteChatSessionStore(directory);
     stores.push(store);
     const startup = store.initialize(context);
-    await vi.waitFor(() => expect(readLegacy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(readLegacy).toHaveBeenCalledTimes(1);
+    });
     let disposed = false;
     const disposal = store.dispose().then(() => {
       disposed = true;
     });
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => {
+      setImmediate(resolve);
+    });
     const disposedBeforeStartupSettled = disposed;
     read.resolve(legacyCatalog(context.roots[0]!.path));
     await Promise.allSettled([startup, disposal]);

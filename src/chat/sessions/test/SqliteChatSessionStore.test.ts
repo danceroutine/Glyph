@@ -104,7 +104,7 @@ describe(SqliteChatSessionStore, () => {
               target: AgentModeID.AGENT as const,
               description: 'Implement the approved plan.',
               status: GlyphModeSwapStatus.APPROVED as const,
-              ...(startedAt ? { startedAt } : {}),
+              ...(startedAt !== undefined && startedAt !== '' ? { startedAt } : {}),
               expiresAt: new Date(0).toISOString(),
               autoApprove: false,
             },
@@ -496,6 +496,135 @@ describe(SqliteChatSessionStore, () => {
       store.save({ ...record(context.id), providerState: { provider: 'test', version: 1, data: undefined } }),
     ).rejects.toBeInstanceOf(PersistenceError);
     await store.dispose();
+  });
+
+  it('round-trips optional turn details exactly across reopen', async () => {
+    const directory = await fixture('glyph-chat-details-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-chat-details-project-'), 'local');
+    const source = record(context.id);
+    const range = { start: { line: 1, column: 0 }, end: { line: 1, column: 4 } };
+    const saved: ChatSessionRecord = {
+      ...source,
+      transcript: [
+        {
+          ...source.transcript[0]!,
+          questionResponses: [{ id: 'question', answers: [{ question: 'Which?', answer: 'This one.' }] }],
+          steering: [
+            {
+              id: 'guidance',
+              text: 'Look here',
+              createdAt: source.createdAt,
+              options: {},
+              attachments: [
+                {
+                  path: 'src/App.tsx',
+                  text: 'App',
+                  revision: 'r1',
+                  uri: 'file:///src/App.tsx',
+                  side: 'modified',
+                  range,
+                },
+              ],
+            },
+          ],
+          attachments: [{ path: 'notes.md', revision: 'r2', text: 'Notes', byteOrderMark: true, byteLength: 8 }],
+          usage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            outputTokens: 2,
+            reasoningTokens: 0,
+            totalTokens: 3,
+            incomplete: true,
+          },
+          tools: [
+            {
+              callId: 'call',
+              name: 'execute_shell',
+              phase: ToolActivityPhase.COMPLETED,
+              shell: { command: 'ls', output: 'App.tsx', background: false },
+            },
+            {
+              callId: 'read',
+              name: 'read_project_file',
+              phase: ToolActivityPhase.COMPLETED,
+              arguments: '{"path":"App.tsx"}',
+              output: 'contents',
+              textOffset: 3,
+            },
+          ],
+        },
+        {
+          ...source.transcript[0]!,
+          usage: { inputTokens: 4, cachedInputTokens: 1, outputTokens: 5, reasoningTokens: 2, totalTokens: 9 },
+        },
+      ],
+    };
+    const store = new SqliteChatSessionStore(directory);
+    await store.initialize(context);
+    await store.save(saved);
+    await store.dispose();
+    const reopened = new SqliteChatSessionStore(directory);
+    await reopened.initialize(context);
+
+    expect((await reopened.load(context.id))[0]).toEqual(saved);
+    await reopened.dispose();
+  });
+
+  it('rejects a migration whose target is not the active context', async () => {
+    const directory = await fixture('glyph-chat-migration-target-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-chat-migration-project-'), 'local');
+    const store = new SqliteChatSessionStore(directory, {
+      contextMigration: { targetId: 'another-context', sourceIds: [] },
+    });
+
+    const failure = await store.initialize(context).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PersistenceError);
+    expect(failure).toMatchObject({
+      message: 'Could not register the active project context.',
+      cause: new Error('Chat migration target does not match the active context.'),
+    });
+    await store.dispose();
+  });
+
+  it('ignores the active context when it is listed among migration sources', async () => {
+    const directory = await fixture('glyph-chat-migration-self-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-chat-migration-project-'), 'local');
+    const seed = new SqliteChatSessionStore(directory);
+    await seed.initialize(context);
+    await seed.save(record(context.id));
+    await seed.dispose();
+    const store = new SqliteChatSessionStore(directory, {
+      contextMigration: { targetId: context.id, sourceIds: [context.id] },
+    });
+
+    await store.initialize(context);
+
+    await expect(store.load(context.id)).resolves.toEqual([record(context.id)]);
+    await store.dispose();
+  });
+
+  it('rejects a context registration that completes after disposal began', async () => {
+    const directory = await fixture('glyph-chat-late-dispose-');
+    const context = await ProjectContextResolver.folder(await fixture('glyph-chat-late-project-'), 'local');
+    const store = new SqliteChatSessionStore(directory);
+    const first = store.initialize(context);
+    const opening = (store as unknown as { initialization: Promise<void> }).initialization;
+    let disposal: Promise<void> | undefined;
+    void opening.then(() => {
+      disposal = store.dispose();
+    });
+    const second = store.initialize(context);
+
+    await expect(first).resolves.toBeUndefined();
+    const failure = await second.catch((error: unknown) => error);
+    await disposal;
+
+    expect(failure).toBeInstanceOf(PersistenceError);
+    expect(failure).toMatchObject({
+      message: 'Could not register the active project context.',
+      cause: new Error('Chat storage has stopped.'),
+    });
   });
 });
 

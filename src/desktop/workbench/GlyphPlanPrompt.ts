@@ -32,7 +32,7 @@ export function toGlyphPlanPrompt(intent: GlyphPlanPromptIntent, plan: GlyphPlan
     toGlyphPlanPromptHeading(intent, plan),
     plan.markdown,
     `Todos:\n${todos.join('\n')}`,
-    ...(building && plan.todos.length
+    ...(building && plan.todos.length > 0
       ? ['These todos are already on your todo list. Update them by ID with update_todos as you work.']
       : []),
   ].join('\n\n');

@@ -22,6 +22,12 @@ import { GlyphService } from '#src/application/GlyphService.js';
 import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
+import type { EditReviewResult } from '#src/editing/reviews/EditReviewResult.js';
+import { AgentModeID } from '#src/chat/AgentMode.js';
+import type { ChatSessionSummary } from '#src/chat/sessions/ChatSessionRecord.js';
+import type { ContextAttachmentService } from '#src/context/attachments/ContextAttachmentService.js';
+import { PlanError } from '#src/planning/PlanError.js';
+import type { PlanUpdate } from '#src/planning/PlanSchema.js';
 
 const account: ChatAccount = {
   provider: 'fixture',
@@ -164,6 +170,94 @@ describe(GlyphService, () => {
       await service.dispose();
       expect(backend.dispose).toHaveBeenCalledOnce();
     });
+
+    it('restores persisted chats without indexing or reconciling an untrusted workspace', async () => {
+      const fileSearch = { initialize: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
+      const reviews = { initialize: vi.fn(async () => {}) };
+      const sessions = { initialize: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
+      const service = new GlyphService(
+        new FakeBackend(),
+        logger(),
+        {},
+        reviews as unknown as ProposalReviewManager,
+        undefined,
+        fileSearch as unknown as WorkspacePathIndex,
+        sessions as unknown as ChatSessionManager,
+      );
+
+      await service.initialize({ workspaceTrusted: false });
+
+      expect(sessions.initialize).toHaveBeenCalledOnce();
+      expect(reviews.initialize).toHaveBeenCalledWith({ reconcileWorkspace: false });
+      expect(fileSearch.initialize).not.toHaveBeenCalled();
+    });
+
+    it('closes chat storage and the backend without touching an unstarted index when recovery fails', async () => {
+      const failure = new Error('recovery failed');
+      const backend = new FakeBackend();
+      const fileSearch = { initialize: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
+      const reviews = {
+        initialize: vi.fn(async () => {
+          throw failure;
+        }),
+      };
+      const sessions = { initialize: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
+      const service = new GlyphService(
+        backend,
+        logger(),
+        {},
+        reviews as unknown as ProposalReviewManager,
+        undefined,
+        fileSearch as unknown as WorkspacePathIndex,
+        sessions as unknown as ChatSessionManager,
+      );
+
+      await expect(service.initialize()).rejects.toBe(failure);
+
+      expect(fileSearch.dispose).not.toHaveBeenCalled();
+      expect(sessions.dispose).toHaveBeenCalledOnce();
+      expect(backend.dispose).toHaveBeenCalledOnce();
+    });
+
+    it('reports the startup failure together with every incomplete cleanup', async () => {
+      const startup = new Error('index failed');
+      const indexCleanup = new Error('index cleanup failed');
+      const chatCleanup = new Error('chat cleanup failed');
+      const backendCleanup = new Error('backend cleanup failed');
+      const backend = new FakeBackend();
+      backend.dispose.mockRejectedValue(backendCleanup);
+      const fileSearch = {
+        initialize: vi.fn(async () => {
+          throw startup;
+        }),
+        dispose: vi.fn(async () => {
+          throw indexCleanup;
+        }),
+      };
+      const sessions = {
+        initialize: vi.fn(async () => {}),
+        dispose: vi.fn(async () => {
+          throw chatCleanup;
+        }),
+      };
+      const service = new GlyphService(
+        backend,
+        logger(),
+        {},
+        undefined,
+        undefined,
+        fileSearch as unknown as WorkspacePathIndex,
+        sessions as unknown as ChatSessionManager,
+      );
+
+      const error = await service.initialize().catch((reason: unknown) => reason);
+
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).message).toBe(
+        'Glyph initialization failed and resource cleanup was incomplete.',
+      );
+      expect((error as AggregateError).errors).toEqual([startup, indexCleanup, chatCleanup, backendCleanup]);
+    });
   });
 
   describe(GlyphService.prototype.createConversation, () => {
@@ -184,7 +278,11 @@ describe(GlyphService, () => {
       const conversation = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
       const result = await conversation.send(
         'question',
-        { push: part => parts.push(part) },
+        {
+          push: part => {
+            parts.push(part);
+          },
+        },
         new AbortController().signal,
       );
       conversation.reset();
@@ -216,7 +314,11 @@ describe(GlyphService, () => {
 
       const result = await conversation.send(
         'question',
-        { push: part => parts.push(part) },
+        {
+          push: part => {
+            parts.push(part);
+          },
+        },
         new AbortController().signal,
       );
 
@@ -246,6 +348,23 @@ describe(GlyphService, () => {
       expect(created).toHaveLength(2);
       expect(created[0]?.prompts).toEqual(['first-session']);
       expect(created[1]?.prompts).toEqual(['second-session']);
+    });
+
+    it('leaves aggregate usage unchanged when a turn reports no usage', async () => {
+      const provider = new FakeProvider();
+      vi.spyOn(provider, 'send').mockResolvedValue({ responseId: 'response', usage: null });
+      const service = new GlyphService(new FakeBackend(() => provider), logger());
+      const conversation = service.createConversation(account, { slug: 'model-a', name: 'Model A' });
+
+      await conversation.send('question', { push: () => {} }, new AbortController().signal);
+
+      expect(service.usage).toEqual({
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 0,
+      });
     });
   });
 
@@ -347,7 +466,417 @@ describe(GlyphService, () => {
       }
     });
   });
+
+  describe(GlyphService.prototype.setChatMode, () => {
+    it('refuses to change the mode without chat storage', () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+
+      expect(() => service.setChatMode('chat', AgentModeID.PLAN)).toThrow(
+        new PlanError('Chat storage is unavailable.'),
+      );
+    });
+
+    it('stores the selected mode for the chat', async () => {
+      const summary = { id: 'chat', mode: AgentModeID.PLAN };
+      const sessions = { setMode: vi.fn(async () => summary) };
+      const service = new GlyphService(
+        new FakeBackend(),
+        logger(),
+        {},
+        undefined,
+        undefined,
+        undefined,
+        sessions as unknown as ChatSessionManager,
+      );
+
+      await expect(service.setChatMode('chat', AgentModeID.PLAN)).resolves.toBe(summary);
+      expect(sessions.setMode).toHaveBeenCalledWith('chat', AgentModeID.PLAN);
+    });
+  });
+
+  describe(GlyphService.prototype.linkPlan, () => {
+    it('refuses to link a plan without plan storage', () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+
+      expect(() => service.linkPlan('chat', 'plan', 'target', 'Builder')).toThrow(
+        new PlanError('Plan storage is unavailable.'),
+      );
+    });
+
+    it('links the plan to the target chat in the requested role', async () => {
+      const summary = { id: 'chat' };
+      const sessions = { linkPlan: vi.fn(async () => summary) };
+      const service = new GlyphService(
+        new FakeBackend(),
+        logger(),
+        {},
+        undefined,
+        undefined,
+        undefined,
+        sessions as unknown as ChatSessionManager,
+      );
+
+      await expect(service.linkPlan('chat', 'plan', 'target', 'Reviewer')).resolves.toBe(summary);
+      expect(sessions.linkPlan).toHaveBeenCalledWith('chat', 'plan', 'target', 'Reviewer');
+    });
+  });
+
+  describe(GlyphService.prototype.updatePlan, () => {
+    it('refuses to seed plan todos without session storage', () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+      expect(() => service.updateTodos(chatSummary('chat'), { items: [], replace: true })).toThrow(
+        'Todo storage is unavailable.',
+      );
+    });
+    it('refuses to update a plan without plan storage', () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+      const chat = chatSummary('chat');
+      const update: PlanUpdate = {
+        id: null,
+        expectedRevision: null,
+        title: 'Plan',
+        summary: 'Summary',
+        markdown: '# Plan',
+        todos: [],
+      };
+
+      expect(() => service.updatePlan(chat, update)).toThrow(new PlanError('Plan storage is unavailable.'));
+    });
+
+    it('saves the plan update for the chat', async () => {
+      const chat = chatSummary('chat');
+      const update: PlanUpdate = {
+        id: null,
+        expectedRevision: null,
+        title: 'Plan',
+        summary: 'Summary',
+        markdown: '# Plan',
+        todos: [],
+      };
+      const sessions = { updatePlan: vi.fn(async () => chat) };
+      const service = new GlyphService(
+        new FakeBackend(),
+        logger(),
+        {},
+        undefined,
+        undefined,
+        undefined,
+        sessions as unknown as ChatSessionManager,
+      );
+
+      await expect(service.updatePlan(chat, update)).resolves.toBe(chat);
+      expect(sessions.updatePlan).toHaveBeenCalledWith(chat, update);
+    });
+  });
+
+  describe('account and provider delegation', () => {
+    it('exposes backend accounts, presentation, and trace destination', () => {
+      const backend = new FakeBackend();
+      const service = new GlyphService(backend, logger(), { traceEnabled: false });
+
+      expect(service.accounts).toBe(backend.accounts);
+      expect(service.providerPresentation).toBe(backend.presentation);
+      expect(service.tracePath).toBe('/config/trace.log');
+      expect(service.isTraceEnabled).toBe(false);
+      expect(service.hasInferenceAccess(account)).toBe(true);
+    });
+
+    it('signs in without requesting inference access by default', async () => {
+      const backend = new FakeBackend();
+      const service = new GlyphService(backend, logger());
+
+      await expect(service.signIn()).resolves.toBe(account);
+      expect(backend.signIn).toHaveBeenCalledWith(undefined, { requestInferenceAccess: false }, undefined);
+    });
+
+    it('forwards an inference access request and authorization handler when signing in', async () => {
+      const backend = new FakeBackend();
+      const service = new GlyphService(backend, logger());
+      const authorize = vi.fn(async () => {});
+
+      await service.signIn(account, true, authorize);
+
+      expect(backend.signIn).toHaveBeenCalledWith(account, { requestInferenceAccess: true }, authorize);
+    });
+
+    it('acknowledges an account notice with the backend', async () => {
+      const backend = new FakeBackend();
+      const service = new GlyphService(backend, logger());
+
+      await service.acknowledgeAccountNotice(account);
+
+      expect(backend.acknowledgeNotice).toHaveBeenCalledWith(account);
+    });
+
+    it('signs out through the backend', async () => {
+      const backend = new FakeBackend();
+      backend.logout.mockResolvedValue(false);
+      const service = new GlyphService(backend, logger());
+
+      await expect(service.logout(account)).resolves.toBe(false);
+      expect(backend.logout).toHaveBeenCalledWith(account);
+    });
+
+    it('redacts messages with the backend policy', () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+
+      expect(service.redact('a secret value')).toBe('a [REDACTED] value');
+    });
+  });
+
+  describe(GlyphService.prototype.setTraceEnabled, () => {
+    it('applies the trace setting to conversations created afterwards', () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+
+      service.setTraceEnabled(false);
+
+      expect(service.isTraceEnabled).toBe(false);
+      expect(service.createConversation(account, { slug: 'model-a', name: 'Model A' }).isTraceEnabled).toBe(false);
+    });
+  });
+
+  describe(GlyphService.prototype.resolveChatRequest, () => {
+    it('returns a text-only request when nothing is attached', async () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+
+      await expect(service.resolveChatRequest('hello')).resolves.toEqual({ text: 'hello', attachments: [] });
+    });
+
+    it('rejects attachments when the host cannot resolve workspace context', async () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+
+      await expect(service.resolveChatRequest('hello', [{ path: 'a.ts' }])).rejects.toThrow(
+        'This host does not support workspace context attachments.',
+      );
+    });
+
+    it('resolves attachments into fresh workspace snapshots', async () => {
+      const attachments = [{ path: 'a.ts', content: 'export {}' }];
+      const contextAttachments = { resolve: vi.fn(async () => attachments) };
+      const service = new GlyphService(
+        new FakeBackend(),
+        logger(),
+        {},
+        undefined,
+        contextAttachments as unknown as ContextAttachmentService,
+      );
+
+      await expect(service.resolveChatRequest('hello', [{ path: 'a.ts' }])).resolves.toEqual({
+        text: 'hello',
+        attachments,
+      });
+      expect(contextAttachments.resolve).toHaveBeenCalledWith([{ path: 'a.ts' }]);
+    });
+  });
+
+  describe('persistent chat delegation', () => {
+    it('refuses chat operations when the host has no chat storage', () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+
+      expect(() => service.listChats(account)).toThrow('This host does not support persistent chat sessions.');
+    });
+
+    it('opens a stored chat with a conversation restored from its provider state', () => {
+      const backend = new FakeBackend();
+      const providerState = { provider: 'fake', version: 1, data: 'saved' };
+      const record = { ...chatSummary('chat'), accountId: account.id, providerState };
+      const sessions = {
+        open: vi.fn(
+          (
+            _identifier: string,
+            create: (value: typeof record) => unknown,
+            assertCanOpen: (value: typeof record) => void,
+          ) => {
+            assertCanOpen(record);
+            return create(record);
+          },
+        ),
+      };
+      const service = new GlyphService(
+        backend,
+        logger(),
+        {},
+        undefined,
+        undefined,
+        undefined,
+        sessions as unknown as ChatSessionManager,
+      );
+
+      const opened = service.openChat('chat', account);
+
+      expect(opened).toBeDefined();
+      expect(sessions.open).toHaveBeenCalledWith('chat', expect.any(Function), expect.any(Function));
+      expect(backend.createProvider).toHaveBeenCalledWith(account, { slug: 'model', name: 'Model' }, providerState);
+    });
+
+    it('branches a chat into a new conversation restored from the fork state', async () => {
+      const backend = new FakeBackend();
+      const providerState = { provider: 'fake', version: 1, data: 'fork' };
+      const record = { ...chatSummary('chat'), accountId: account.id, providerState };
+      const source = { id: 'chat' };
+      const branched = { id: 'branch' };
+      const sessions = {
+        open: vi.fn(() => source),
+        branch: vi.fn(async (_session: unknown, _turnId: string, create: (value: typeof record) => unknown) => {
+          create(record);
+          return branched;
+        }),
+      };
+      const service = new GlyphService(
+        backend,
+        logger(),
+        {},
+        undefined,
+        undefined,
+        undefined,
+        sessions as unknown as ChatSessionManager,
+      );
+
+      await expect(service.branchChat('chat', 'turn', account)).resolves.toBe(branched);
+      expect(sessions.branch).toHaveBeenCalledWith(source, 'turn', expect.any(Function));
+      expect(backend.createProvider).toHaveBeenCalledWith(account, { slug: 'model', name: 'Model' }, providerState);
+    });
+  });
+
+  describe(GlyphService.prototype.commitReviewResults, () => {
+    it('completes immediately when the host has no proposal reviews', async () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+      const destination = { id: 'chat', recordContext: vi.fn() };
+
+      await expect(service.commitReviewResults(destination)).resolves.toBeUndefined();
+      expect(destination.recordContext).not.toHaveBeenCalled();
+    });
+
+    it('requires a chat id for chat-scoped delivery', async () => {
+      const service = new GlyphService(new FakeBackend(), logger());
+
+      await expect(service.commitReviewResults({ recordContext: vi.fn() }, { currentChatOnly: true })).rejects.toThrow(
+        'Chat-scoped review delivery requires a chat id.',
+      );
+    });
+
+    it('delivers only the current chat receipts during chat-scoped delivery', async () => {
+      const own = reviewResult('own', { chatId: 'chat', accountProvider: 'fixture', accountId: 'account-1' });
+      const foreign = reviewResult('foreign', { chatId: 'other', accountProvider: 'fixture', accountId: 'account-1' });
+      const reviews = {
+        pendingResults: [own, foreign],
+        flushPendingCheckpoint: vi.fn(async () => {}),
+        acknowledgeResults: vi.fn(async () => {}),
+      };
+      const service = new GlyphService(new FakeBackend(), logger(), {}, reviews as unknown as ProposalReviewManager);
+      const destination = { id: 'chat', recordContext: vi.fn() };
+
+      await service.commitReviewResults(destination, { currentChatOnly: true });
+
+      expect(destination.recordContext).toHaveBeenCalledWith([
+        { schemaVersion: 1, id: 'own', type: 'edit_review_result', payload: own },
+      ]);
+      expect(reviews.acknowledgeResults).toHaveBeenCalledWith(['own']);
+    });
+
+    it('delivers ownerless receipts to the requesting conversation', async () => {
+      const legacy = reviewResult('legacy');
+      const reviews = {
+        pendingResults: [legacy],
+        flushPendingCheckpoint: vi.fn(async () => {}),
+        acknowledgeResults: vi.fn(async () => {}),
+      };
+      const service = new GlyphService(new FakeBackend(), logger(), {}, reviews as unknown as ProposalReviewManager);
+      const destination = { recordContext: vi.fn() };
+
+      await service.commitReviewResults(destination, { signal: new AbortController().signal });
+
+      expect(destination.recordContext).toHaveBeenCalledWith([
+        { schemaVersion: 1, id: 'legacy', type: 'edit_review_result', payload: legacy },
+      ]);
+      expect(reviews.acknowledgeResults).toHaveBeenCalledWith(['legacy']);
+    });
+
+    it('fails when the account that owns a receipt is no longer available', async () => {
+      const result = reviewResult('receipt', { chatId: 'other', accountProvider: 'fixture', accountId: 'gone' });
+      const reviews = {
+        pendingResults: [result],
+        flushPendingCheckpoint: vi.fn(async () => {}),
+        acknowledgeResults: vi.fn(async () => {}),
+      };
+      const service = new GlyphService(new FakeBackend(), logger(), {}, reviews as unknown as ProposalReviewManager);
+
+      await expect(service.commitReviewResults({ id: 'chat', recordContext: vi.fn() })).rejects.toThrow(
+        'The proposal owner account is no longer available.',
+      );
+      expect(reviews.acknowledgeResults).not.toHaveBeenCalled();
+    });
+
+    it('rejects with the abort reason when cancelled before the delivery starts waiting', async () => {
+      const controller = new AbortController();
+      const reason = new Error('cancelled');
+      const reviews = {
+        pendingResults: [],
+        flushPendingCheckpoint: vi.fn(async () => {
+          controller.abort(reason);
+        }),
+        acknowledgeResults: vi.fn(async () => {}),
+      };
+      const service = new GlyphService(new FakeBackend(), logger(), {}, reviews as unknown as ProposalReviewManager);
+
+      await expect(
+        service.commitReviewResults({ id: 'chat', recordContext: vi.fn() }, { signal: controller.signal }),
+      ).rejects.toBe(reason);
+    });
+
+    it('surfaces a delivery failure to a caller that is still waiting', async () => {
+      const failure = new Error('checkpoint failed');
+      const reviews = {
+        pendingResults: [],
+        flushPendingCheckpoint: vi.fn(async () => {
+          throw failure;
+        }),
+        acknowledgeResults: vi.fn(async () => {}),
+      };
+      const service = new GlyphService(new FakeBackend(), logger(), {}, reviews as unknown as ProposalReviewManager);
+
+      await expect(
+        service.commitReviewResults({ id: 'chat', recordContext: vi.fn() }, { signal: new AbortController().signal }),
+      ).rejects.toBe(failure);
+    });
+  });
 });
+
+function chatSummary(id: string): ChatSessionSummary {
+  return {
+    schemaVersion: 3,
+    id,
+    title: 'Chat',
+    titleOrigin: 'generated',
+    projectContextId: 'project',
+    accountProvider: 'fixture',
+    accountId: 'account',
+    modelSlug: 'model',
+    modelName: 'Model',
+    createdAt: '2026-10-07T00:00:00.000Z',
+    updatedAt: '2026-10-07T00:00:00.000Z',
+    turnCount: 0,
+  };
+}
+
+function reviewResult(id: string, origin?: EditReviewResult['origin']): EditReviewResult {
+  return {
+    schemaVersion: 1,
+    id,
+    reviewId: 'proposal',
+    ...(origin ? { origin } : {}),
+    items: [
+      {
+        itemId: 'item',
+        fileId: 'file',
+        kind: EditReviewItemKind.TEXT,
+        decision: EditDecisionState.ACCEPTED,
+        affectedPaths: ['src/App.tsx'],
+        resultingRevision: 'revision-2',
+      },
+    ],
+  };
+}
 
 class MemoryChatSessionStore implements ChatSessionStore {
   private records: readonly ChatSessionRecord[] = [];

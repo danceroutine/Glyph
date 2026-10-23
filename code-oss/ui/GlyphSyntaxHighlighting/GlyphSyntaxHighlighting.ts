@@ -5,10 +5,11 @@ highlighter.registerAlias({ javascript: ['jsx'], typescript: ['tsx'] });
 
 /** Produces token nodes without HTML injection. Explicit unknown languages stay plain text. */
 export function highlightGlyphCode(source: string, info: string | undefined, detectLanguage = false) {
-  const language = info?.trim().split(/\s+/)[0]?.toLowerCase();
+  const language = info?.trim().split(/\s+/u)[0]?.toLowerCase();
   try {
-    if (language && highlighter.registered(language)) return highlighter.highlight(language, source).children;
-    if (!language && detectLanguage)
+    if (language !== undefined && language !== '' && highlighter.registered(language))
+      return highlighter.highlight(language, source).children;
+    if ((language === undefined || language === '') && detectLanguage)
       return highlighter.highlightAuto(source, {
         subset: ['typescript', 'javascript', 'json', 'python', 'bash', 'css', 'xml', 'sql'],
       }).children;

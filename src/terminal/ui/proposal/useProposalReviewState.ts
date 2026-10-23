@@ -76,13 +76,19 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
     setPending(true);
     void request.manager
       .flushPendingCheckpoint()
-      .then(() => setDiagnostic(''))
-      .catch((error: unknown) => setDiagnostic(error instanceof Error ? error.message : String(error)))
-      .finally(() => setPending(false));
+      .then(() => {
+        setDiagnostic('');
+      })
+      .catch((error: unknown) => {
+        setDiagnostic(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        setPending(false);
+      });
   }, [request.manager, setPending]);
 
   useEffect(() => {
-    if (busy || entries.length !== 0) return;
+    if (busy || entries.length > 0) return;
     if (!request.manager.hasPendingCheckpoint) completeReview();
     else if (!diagnostic) retryPersistence();
   }, [busy, completeReview, entries.length, diagnostic, request.manager, retryPersistence]);
@@ -131,7 +137,9 @@ export function useProposalReviewState(request: ProposalReviewRequest): Proposal
         };
         setDiagnostic(error instanceof Error ? error.message : String(error));
       })
-      .finally(() => setPending(false));
+      .finally(() => {
+        setPending(false);
+      });
   };
 
   useInput((input, key) => {

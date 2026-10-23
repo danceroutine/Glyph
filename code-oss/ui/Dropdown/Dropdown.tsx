@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Check } from 'lucide-preact';
 import { Button, ButtonAppearance } from '#code-oss/ui/Button/Button.tsx';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
+import { hasContent } from '#code-oss/ui/hasContent.ts';
 
 const styles = {
   popup: css({
@@ -124,7 +125,7 @@ export function Dropdown<T>({
   useLayoutEffect(() => {
     const element = menu.current;
     const anchor = element?.parentElement;
-    if (!element || !anchor) return;
+    if (!element || !anchor) return undefined;
     if (topLayer) element.showPopover();
     const measure = () => {
       const bounds = anchor.getBoundingClientRect();
@@ -136,7 +137,10 @@ export function Dropdown<T>({
       );
       const left =
         Math.max(8, Math.min(bounds.left + inset, window.innerWidth - actualWidth - 8)) - (topLayer ? 0 : bounds.left);
-      const height = Math.max(0, Math.min(336, (below ? availableBelow : bounds.top) - offset - (heading ? 40 : 16)));
+      const height = Math.max(
+        0,
+        Math.min(336, (below ? availableBelow : bounds.top) - offset - (hasContent(heading) ? 40 : 16)),
+      );
       const edge = below ? bounds.bottom + offset : window.innerHeight - bounds.top + offset;
       setLayout(previous =>
         previous.edge === edge &&
@@ -156,7 +160,8 @@ export function Dropdown<T>({
     window.addEventListener('resize', measure);
     // Scrolling an ancestor may change which side of the anchor has room.
     const scroll = (event: Event) => {
-      if (!element.contains(event.target as Node)) measure();
+      const update = event.composedPath().includes(element) ? positionPreview : measure;
+      update();
     };
     document.addEventListener('scroll', scroll, true);
     return () => {
@@ -165,7 +170,7 @@ export function Dropdown<T>({
       window.removeEventListener('resize', measure);
       document.removeEventListener('scroll', scroll, true);
     };
-  }, [width, inset, offset, constrainToAnchor, topLayer, !!heading]);
+  }, [width, inset, offset, constrainToAnchor, topLayer, hasContent(heading)]);
   useLayoutEffect(() => {
     const row = list.current?.querySelector<HTMLElement>('[data-highlighted=true]');
     const container = list.current;
@@ -206,7 +211,7 @@ export function Dropdown<T>({
       }}
     >
       <div class={styles.panel}>
-        {heading && <div class={styles.heading}>{heading}</div>}
+        {hasContent(heading) && <div class={styles.heading}>{heading}</div>}
         <div
           ref={list}
           id={id}
@@ -218,7 +223,7 @@ export function Dropdown<T>({
           onScroll={positionPreview}
         >
           {children ??
-            (busy || !items.length ? (
+            (busy || items.length === 0 ? (
               <div class={styles.status} role="status">
                 {busy ? busyMessage : emptyMessage}
               </div>
@@ -236,9 +241,15 @@ export function Dropdown<T>({
                   data-highlighted={activeIndex === index}
                   class={styles.row}
                   disabled={disabled}
-                  onMouseDown={event => event.preventDefault()}
-                  onMouseEnter={() => highlight(index)}
-                  onClick={() => choose(item)}
+                  onMouseDown={event => {
+                    event.preventDefault();
+                  }}
+                  onMouseEnter={() => {
+                    highlight(index);
+                  }}
+                  onClick={() => {
+                    choose(item);
+                  }}
                 >
                   {renderItem(item)}
                   {showCheck && selectedIndex === index && <Check class={styles.check} size={16} aria-hidden="true" />}
@@ -247,7 +258,7 @@ export function Dropdown<T>({
             ))}
         </div>
       </div>
-      {preview && (
+      {hasContent(preview) && (
         <div
           ref={previewNode}
           class={`${styles.panel} ${styles.preview}`}

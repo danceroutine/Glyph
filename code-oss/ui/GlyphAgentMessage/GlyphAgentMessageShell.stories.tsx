@@ -16,7 +16,7 @@ import { previewActionsFixture } from '#code-oss/storybook/fixtures/ActionFixtur
 import { GlyphToolActivityStatus, type GlyphToolActivity } from '#src/desktop/protocol/events/GlyphToolActivity.js';
 
 const shell = shellFixture();
-const activity = shellActivityFixture();
+const shellActivity = shellActivityFixture();
 function ShellMessage({
   activity,
   ...props
@@ -30,7 +30,7 @@ function ShellMessage({
         text: 'I’ll run the project checks.',
         progress: progressFixture({
           reasoning: '',
-          status: activity.shell?.running ? GlyphRunStatus.STREAMING : GlyphRunStatus.COMPLETED,
+          status: activity.shell?.running === true ? GlyphRunStatus.STREAMING : GlyphRunStatus.COMPLETED,
           tools: [activity],
         }),
       })}
@@ -41,7 +41,7 @@ const meta = {
   title: 'Glyph/Chat/In Transcript/Agent Message/Shell command',
   component: ShellMessage,
   decorators: agentMessageDecorators,
-  args: { activity, chatId: 'chat', readOnly: false, actions: previewActionsFixture() },
+  args: { activity: shellActivity, chatId: 'chat', readOnly: false, actions: previewActionsFixture() },
 } satisfies Meta<typeof ShellMessage>;
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -49,7 +49,7 @@ export const Completed: Story = {};
 export const Failed: Story = {
   args: {
     activity: {
-      ...activity,
+      ...shellActivity,
       status: GlyphToolActivityStatus.FAILED,
       shell: { ...shell, output: 'Missing configuration.\n', exitCode: 2, error: 'Command exited with code 2.' },
     },
@@ -59,7 +59,7 @@ const { exitCode: _exitCode, ...runningShell } = shell;
 export const Interactive: Story = {
   args: {
     activity: {
-      ...activity,
+      ...shellActivity,
       status: GlyphToolActivityStatus.STARTED,
       shell: shellFixture({
         ...runningShell,

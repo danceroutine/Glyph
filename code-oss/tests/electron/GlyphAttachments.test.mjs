@@ -1,14 +1,32 @@
 import { readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { basename, join } from 'node:path';
+import { contextFiles } from './ProviderPayloads.mjs';
+import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 
+/** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
+/** @typedef {import('./ScriptedProvider.mjs').ScriptedProvider} ScriptedProvider */
+
+const restartsHost = isolatedLaunch('restarts the host and reloads the window');
+const reloadsWindow = isolatedLaunch('reloads the window');
+const stubsDialog = isolatedLaunch('replaces the native file dialog in the main process');
+const opensWindow = isolatedLaunch('opens a second window');
+const leavesUnsentDraft = isolatedLaunch('leaves an unsent draft that closing chats keeps');
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} path
+ */
 async function openFile(glyph, path) {
   await glyph.page.keyboard.press('ControlOrMeta+p');
   await glyph.page.locator('.quick-input-widget input').fill(path);
+  await expect(glyph.page.locator('.quick-input-list').getByRole('option').first()).toContainText(basename(path));
   await glyph.page.keyboard.press('Enter');
   await expect(glyph.page.locator('.quick-input-widget')).not.toBeVisible();
   await expect(glyph.page.locator('.editor-instance .monaco-editor').first()).toBeVisible();
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {number} line
+ */
 async function selectLine(glyph, line) {
   await glyph.page.keyboard.press('Control+g');
   await glyph.page.locator('.quick-input-widget input').fill(`:${line}:1`);
@@ -16,34 +34,42 @@ async function selectLine(glyph, line) {
   await expect(glyph.page.locator('.quick-input-widget')).not.toBeVisible();
   await glyph.page.keyboard.press('Shift+End');
 }
+/** @param {GlyphWorkbench} glyph */
 async function attachSelection(glyph) {
   await glyph.page.keyboard.press('ControlOrMeta+l');
   await expect(glyph.composer.getByRole('button').last()).toBeVisible();
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {string} query
+ */
 async function chooseFile(glyph, query) {
   await glyph.composer.pressSequentially(` @${query}`);
   await expect(glyph.page.getByRole('option', { name: query, exact: true })).toBeVisible();
   await glyph.composer.press('Enter');
   await expect(glyph.page.getByRole('listbox', { name: 'Files and folders to attach' })).not.toBeVisible();
 }
+/**
+ * @param {GlyphWorkbench} glyph
+ * @param {ScriptedProvider} provider
+ */
 async function send(glyph, provider) {
   const count = provider.requests.length;
   provider.enqueue({ chunks: ['Captured context received.'] });
   await glyph.sendButton.click();
   await expect.poll(() => provider.requests.length).toBe(count + 1);
   await expect(glyph.sendButton).toHaveText('Send (Enter)');
-  const user = provider.requests
-    .at(-1)
-    .body.input.filter(item => item.role === 'user')
-    .at(-1);
+  const user = provider.requests.at(-1)?.body.input.findLast(item => item.role === 'user');
   return {
-    prompt: typeof user.content === 'string' ? user.content : user.content[1].text,
-    files: typeof user.content === 'string' ? [] : JSON.parse(user.content[0].text).files,
+    prompt: typeof user?.content === 'string' ? user.content : user?.content?.[1]?.text,
+    files: typeof user?.content === 'string' ? [] : contextFiles(user),
   };
 }
 
 it.describe('Explicit editor and file attachments', () => {
+  it.describe.configure({ mode: 'default' });
   it.use({
+    sharedLaunch: true,
     scriptedProvider: true,
     workspaceFiles: {
       'alpha.txt': 'OUTSIDE BEFORE\n  café 🌱\nOUTSIDE AFTER\n',
@@ -51,67 +77,69 @@ it.describe('Explicit editor and file attachments', () => {
       'empty.txt': '',
     },
   });
-  it('restores inline file badges with their original snapshots after the source changes', async ({
-    glyph,
-    provider,
-  }) => {
-    await glyph.composer.fill('Explain');
-    await chooseFile(glyph, 'alpha.txt');
-    await glyph.composer.pressSequentially(' please');
-    const original = await send(glyph, provider);
-    await expect(glyph.userEntries.getByRole('button', { name: 'Restore checkpoint' })).toHaveCount(1);
-    await writeFile(join(glyph.workspace, 'alpha.txt'), 'Changed after the checkpoint.');
-    await glyph.crashHost();
-    await glyph.reload();
-    await glyph.userEntries.hover();
-    await glyph.userEntries.getByRole('button', { name: 'Restore checkpoint' }).click();
-    await expect(glyph.userEntries).toHaveCount(0);
-    await expect(glyph.composer).toHaveText('Explain alpha.txt please');
-    await expect(glyph.composer.getByRole('button', { name: 'Preview alpha.txt', exact: true })).toBeVisible();
-    const resent = await send(glyph, provider);
-    expect(resent.prompt).toBe(original.prompt);
-    expect(resent.files).toEqual(original.files);
-    expect(resent.files[0].text).toContain('café 🌱');
-    expect(resent.files[0].text).not.toContain('Changed after');
-  });
+  it(
+    'restores inline file badges with their original snapshots after the source changes',
+    restartsHost,
+    async ({ glyph, provider }) => {
+      await glyph.composer.fill('Explain');
+      await chooseFile(glyph, 'alpha.txt');
+      await glyph.composer.pressSequentially(' please');
+      const original = await send(glyph, provider);
+      await expect(glyph.userEntries.getByRole('button', { name: 'Restore checkpoint' })).toHaveCount(1);
+      await writeFile(join(glyph.workspace, 'alpha.txt'), 'Changed after the checkpoint.');
+      await glyph.crashHost();
+      await glyph.reload();
+      await glyph.userEntries.hover();
+      await glyph.userEntries.getByRole('button', { name: 'Restore checkpoint' }).click();
+      await expect(glyph.userEntries).toHaveCount(0);
+      await expect(glyph.composer).toHaveText('Explain alpha.txt please');
+      await expect(glyph.composer.getByRole('button', { name: 'Preview alpha.txt', exact: true })).toBeVisible();
+      const resent = await send(glyph, provider);
+      expect(resent.prompt).toBe(original.prompt);
+      expect(resent.files).toEqual(original.files);
+      expect(resent.files[0].text).toContain('café 🌱');
+      expect(resent.files[0].text).not.toContain('Changed after');
+    },
+  );
 
-  it('opens the native file dialog from the paperclip, preserves cancellation, and captures selected files', async ({
-    glyph,
-    provider,
-  }) => {
-    // Stub only the OS dialog boundary: UI activation, native IPC, and file capture stay real.
-    await glyph.application.evaluate(({ dialog }, workspace) => {
-      globalThis.glyphFileDialogs = [];
-      dialog.showOpenDialog = async (_window, options) => {
-        globalThis.glyphFileDialogs.push(options);
-        const canceled = globalThis.glyphFileDialogs.length === 1;
-        return { canceled, filePaths: canceled ? [] : [`${workspace}/alpha.txt`, `${workspace}/empty.txt`] };
-      };
-    }, glyph.workspace);
-    await glyph.composer.fill('before  after');
-    for (let index = 0; index < 6; index++) await glyph.composer.press('ArrowLeft');
-    const attach = glyph.page.getByRole('button', { name: 'Attach file', exact: true });
-    await attach.click();
-    await expect.poll(() => glyph.application.evaluate(() => globalThis.glyphFileDialogs.length)).toBe(1);
-    await expect(attach).toBeEnabled();
-    await expect(glyph.composer).toHaveText('before  after');
-    await attach.click();
-    await expect(glyph.composer).toHaveText('before alpha.txtempty.txt after');
-    await expect(glyph.page.getByRole('listbox', { name: 'Files and folders to attach' })).toHaveCount(0);
-    const dialogs = await glyph.application.evaluate(() => globalThis.glyphFileDialogs);
-    expect(dialogs).toHaveLength(2);
-    expect(dialogs[0]).toMatchObject({
-      title: 'Attach files to Glyph',
-      properties: expect.arrayContaining(['openFile', 'multiSelections']),
-    });
-    expect(dialogs[0].properties).not.toContain('openDirectory');
-    const sent = await send(glyph, provider);
-    expect(sent.files).toMatchObject([
-      { path: 'alpha.txt', text: 'OUTSIDE BEFORE\n  café 🌱\nOUTSIDE AFTER\n' },
-      { path: 'empty.txt', text: '' },
-    ]);
-    expect(sent.prompt).toBe('before @alpha.txt@empty.txt after');
-  });
+  it(
+    'opens the native file dialog from the paperclip, preserves cancellation, and captures selected files',
+    stubsDialog,
+    async ({ glyph, provider }) => {
+      // Stub only the OS dialog boundary: UI activation, native IPC, and file capture stay real.
+      await glyph.application.evaluate(({ dialog }, workspace) => {
+        globalThis.glyphFileDialogs = [];
+        dialog.showOpenDialog = async (_window, options) => {
+          globalThis.glyphFileDialogs.push(options);
+          const canceled = globalThis.glyphFileDialogs.length === 1;
+          return { canceled, filePaths: canceled ? [] : [`${workspace}/alpha.txt`, `${workspace}/empty.txt`] };
+        };
+      }, glyph.workspace);
+      await glyph.composer.fill('before  after');
+      for (let index = 0; index < 6; index++) await glyph.composer.press('ArrowLeft');
+      const attach = glyph.page.getByRole('button', { name: 'Attach file', exact: true });
+      await attach.click();
+      await expect.poll(() => glyph.application.evaluate(() => globalThis.glyphFileDialogs.length)).toBe(1);
+      await expect(attach).toBeEnabled();
+      await expect(glyph.composer).toHaveText('before  after');
+      await attach.click();
+      await expect(glyph.composer).toHaveText('before alpha.txtempty.txt after');
+      await expect(glyph.page.getByRole('listbox', { name: 'Files and folders to attach' })).toHaveCount(0);
+      const dialogs = await glyph.application.evaluate(() => globalThis.glyphFileDialogs);
+      expect(dialogs).toHaveLength(2);
+      expect(dialogs[0]).toMatchObject({
+        title: 'Attach files to Glyph',
+        properties: expect.arrayContaining(['openFile', 'multiSelections']),
+      });
+      expect(dialogs[0].properties).not.toContain('openDirectory');
+      const sent = await send(glyph, provider);
+      expect(sent.files).toMatchObject([
+        { path: 'alpha.txt', text: 'OUTSIDE BEFORE\n  café 🌱\nOUTSIDE AFTER\n' },
+        { path: 'empty.txt', text: '' },
+      ]);
+      expect(sent.prompt).toBe('before @alpha.txt@empty.txt after');
+    },
+  );
 
   it('inserts an unsaved whole file at the prompt caret and keeps it pinned while the active editor changes', async ({
     glyph,
@@ -122,7 +150,7 @@ it.describe('Explicit editor and file attachments', () => {
     await glyph.page.keyboard.press('ControlOrMeta+a');
     await glyph.page.keyboard.insertText('UNSAVED café 🌱\nexact buffer');
     await glyph.command('Focus Glyph');
-    await expect(glyph.page.getByRole('button', { name: /^Attach active file/ })).toHaveCount(0);
+    await expect(glyph.page.getByRole('button', { name: /^Attach active file/u })).toHaveCount(0);
     await expect(glyph.page.getByText('No active text editor', { exact: true })).toHaveCount(0);
     await glyph.composer.fill('before  after');
     for (let n = 0; n < 6; n++) await glyph.composer.press('ArrowLeft');
@@ -137,7 +165,7 @@ it.describe('Explicit editor and file attachments', () => {
     await expect(glyph.page.locator('.tab.dirty')).toHaveCount(1);
     await openFile(glyph, join(glyph.workspace, 'beta.txt'));
     await glyph.command('Focus Glyph');
-    await expect(glyph.page.getByRole('button', { name: /^Attach active file/ })).toHaveCount(0);
+    await expect(glyph.page.getByRole('button', { name: /^Attach active file/u })).toHaveCount(0);
     await expect(glyph.composer.getByRole('button', { name: 'Preview alpha.txt' })).toBeVisible();
     const sent = await send(glyph, provider);
     expect(sent.prompt).toBe('before @alpha.txt after');
@@ -155,52 +183,53 @@ it.describe('Explicit editor and file attachments', () => {
     expect(await readFile(path, 'utf8')).toContain('OUTSIDE BEFORE');
   });
 
-  it('attaches only highlighted text with Cmd+L, previews exact capture, refreshes explicitly, and preserves sent history', async ({
-    glyph,
-    provider,
-  }) => {
-    const path = join(glyph.workspace, 'alpha.txt');
-    await glyph.composer.fill('Explain ');
-    await openFile(glyph, path);
-    await selectLine(glyph, 2);
-    await attachSelection(glyph);
-    expect(provider.requests).toHaveLength(0);
-    const badge = glyph.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)', exact: true });
-    await badge.click();
-    const preview = glyph.page.getByRole('region', { name: 'Attachment preview' });
-    await expect(preview.locator('pre')).toHaveText('  café 🌱');
-    await preview.getByRole('button', { name: 'Close attachment preview' }).click();
-    await openFile(glyph, path);
-    await selectLine(glyph, 2);
-    await glyph.page.keyboard.insertText('  zoom 🌱');
-    await glyph.command('Focus Glyph');
-    await badge.click();
-    await expect(preview).toContainText('Source changed');
-    await expect(preview.locator('pre')).toHaveText('  café 🌱');
-    await preview.getByRole('button', { name: 'Refresh capture' }).click();
-    // Refresh uses the original range, not the current cursor or the whole file.
-    await expect(preview.locator('pre')).toHaveText('  zoom 🌱');
-    await preview.getByRole('button', { name: 'Close attachment preview' }).click();
-    const sent = await send(glyph, provider);
-    expect(sent.files).toHaveLength(1);
-    expect(sent.files[0]).toMatchObject({
-      text: '  zoom 🌱',
-      source: { kind: 'selection', range: { start: { line: 2, column: 1 }, end: { line: 2, column: 10 } } },
-    });
-    expect(JSON.stringify(sent.files)).not.toContain('OUTSIDE');
-    await openFile(glyph, path);
-    await glyph.page.keyboard.press('ControlOrMeta+a');
-    await glyph.page.keyboard.insertText('Entirely different current source');
-    await glyph.page.keyboard.press('ControlOrMeta+s');
-    await glyph.reload();
-    const message = glyph.page.locator('.glyph-entry.user').last();
-    await expect(message.getByLabel('Captured attachment alpha.txt')).toHaveCount(0);
-    await message.getByRole('button', { name: 'Open alpha.txt (2-2)', exact: true }).click();
-    await expect(glyph.page.locator('.tab.active')).toContainText('alpha.txt');
-    await expect(glyph.page.locator('.editor-instance .view-lines').first()).toContainText(
-      'Entirely different current source',
-    );
-  });
+  it(
+    'attaches only highlighted text with Cmd+L, previews exact capture, refreshes explicitly, and preserves sent history',
+    reloadsWindow,
+    async ({ glyph, provider }) => {
+      const path = join(glyph.workspace, 'alpha.txt');
+      await glyph.composer.fill('Explain ');
+      await openFile(glyph, path);
+      await selectLine(glyph, 2);
+      await attachSelection(glyph);
+      expect(provider.requests).toHaveLength(0);
+      const badge = glyph.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)', exact: true });
+      await badge.click();
+      const preview = glyph.page.getByRole('region', { name: 'Attachment preview' });
+      await expect(preview.locator('pre')).toHaveText('  café 🌱');
+      await preview.getByRole('button', { name: 'Close attachment preview' }).click();
+      await openFile(glyph, path);
+      await selectLine(glyph, 2);
+      await glyph.page.keyboard.insertText('  zoom 🌱');
+      await glyph.command('Focus Glyph');
+      await badge.click();
+      await expect(preview).toContainText('Source changed');
+      await expect(preview.locator('pre')).toHaveText('  café 🌱');
+      await preview.getByRole('button', { name: 'Refresh capture' }).click();
+      // Refresh uses the original range, not the current cursor or the whole file.
+      await expect(preview.locator('pre')).toHaveText('  zoom 🌱');
+      await preview.getByRole('button', { name: 'Close attachment preview' }).click();
+      const sent = await send(glyph, provider);
+      expect(sent.files).toHaveLength(1);
+      expect(sent.files[0]).toMatchObject({
+        text: '  zoom 🌱',
+        source: { kind: 'selection', range: { start: { line: 2, column: 1 }, end: { line: 2, column: 10 } } },
+      });
+      expect(JSON.stringify(sent.files)).not.toContain('OUTSIDE');
+      await openFile(glyph, path);
+      await glyph.page.keyboard.press('ControlOrMeta+a');
+      await glyph.page.keyboard.insertText('Entirely different current source');
+      await glyph.page.keyboard.press('ControlOrMeta+s');
+      await glyph.reload();
+      const message = glyph.page.locator('.glyph-entry.user').last();
+      await expect(message.getByLabel('Captured attachment alpha.txt')).toHaveCount(0);
+      await message.getByRole('button', { name: 'Open alpha.txt (2-2)', exact: true }).click();
+      await expect(glyph.page.locator('.tab.active')).toContainText('alpha.txt');
+      await expect(glyph.page.locator('.editor-instance .view-lines').first()).toContainText(
+        'Entirely different current source',
+      );
+    },
+  );
 
   it('keeps multiple files independently removable and reports a deleted source while retaining captured bytes', async ({
     glyph,
@@ -283,8 +312,8 @@ it.describe('Explicit editor and file attachments', () => {
     }
     const compared = await send(glyph, provider);
     expect(compared.files.map(file => file.source.side)).toEqual(['original', 'modified']);
-    expect(compared.files.map(file => file.text).sort()).toEqual(
-      ['OUTSIDE BEFORE\n  café 🌱\nOUTSIDE AFTER\n', 'Other tab is never implicit.\n'].sort(),
+    expect(compared.files.map(file => file.text).toSorted()).toEqual(
+      ['OUTSIDE BEFORE\n  café 🌱\nOUTSIDE AFTER\n', 'Other tab is never implicit.\n'].toSorted(),
     );
   });
 
@@ -295,51 +324,66 @@ it.describe('Explicit editor and file attachments', () => {
     // accounting for provider context budgets and aggregate attachment limits.
   });
 
-  it('reports unsupported sources and oversized captures without dropping draft text or sending partial data', async ({
-    glyph,
-    provider,
-  }) => {
-    await glyph.composer.fill('Keep this draft');
-    await glyph.command('Preferences: Open User Settings (JSON)');
-    await glyph.page.keyboard.press('ControlOrMeta+a');
-    await glyph.page.keyboard.press('ControlOrMeta+l');
-    await expect(glyph.page.locator('.notifications-toasts')).toContainText('UNSUPPORTED_RESOURCE');
-    await writeFile(join(glyph.workspace, 'large.txt'), 'x'.repeat(512 * 1024 + 1));
-    await glyph.composer.press('ControlOrMeta+a');
-    await glyph.composer.press('ArrowRight');
-    await glyph.composer.pressSequentially(' @large.txt');
-    await expect(glyph.page.getByRole('option', { name: 'large.txt', exact: true })).toBeVisible();
-    await glyph.composer.press('Enter');
-    await expect(glyph.page.locator('.glyph-composer').getByRole('alert')).toContainText('512 KiB');
-    await expect(glyph.composer).toHaveText('Keep this draft @large.txt');
-    expect(provider.requests).toHaveLength(0);
-  });
+  it(
+    'reports unsupported sources and oversized captures without dropping draft text or sending partial data',
+    leavesUnsentDraft,
+    async ({ glyph, provider }) => {
+      await glyph.composer.fill('Keep this draft');
+      await glyph.command('Preferences: Open User Settings (JSON)');
+      await glyph.page.keyboard.press('ControlOrMeta+a');
+      await glyph.page.keyboard.press('ControlOrMeta+l');
+      await expect(glyph.page.locator('.notifications-toasts')).toContainText('UNSUPPORTED_RESOURCE');
+      await glyph.page.getByRole('button', { name: /^Close Modal Editor/u }).click();
+      await expect(glyph.page.locator('.monaco-modal-editor-block')).toHaveCount(0);
+      await writeFile(join(glyph.workspace, 'large.txt'), 'x'.repeat(512 * 1024 + 1));
+      await glyph.composer.click();
+      await glyph.composer.press('ControlOrMeta+End');
+      await expect
+        .poll(() =>
+          glyph.composer.evaluate(element => {
+            const selection = element.ownerDocument.getSelection();
+            const before = element.ownerDocument.createRange();
+            before.selectNodeContents(element);
+            before.setEnd(selection.focusNode, selection.focusOffset);
+            return selection.isCollapsed && before.toString() === 'Keep this draft';
+          }),
+        )
+        .toBe(true);
+      await glyph.composer.pressSequentially(' @large.txt');
+      await expect(glyph.page.getByRole('option', { name: 'large.txt', exact: true })).toBeVisible();
+      await glyph.composer.press('Enter');
+      await expect(glyph.page.locator('.glyph-composer').getByRole('alert')).toContainText('512 KiB');
+      await expect(glyph.composer).toHaveText('Keep this draft @large.txt');
+      expect(provider.requests).toHaveLength(0);
+    },
+  );
 
-  it('restores exact selection badges after a rejected send and keeps them editable across pane remounts', async ({
-    glyph,
-    provider,
-  }) => {
-    provider.enqueue({ chunks: ['Owner running'], hold: true });
-    await glyph.send('Hold ownership');
-    await expect(glyph.sendButton).toHaveText('Cancel');
-    const duplicate = await glyph.duplicateWorkspace();
-    await duplicate.composer.fill('Preserve ');
-    await openFile(duplicate, join(glyph.workspace, 'alpha.txt'));
-    await selectLine(duplicate, 2);
-    await attachSelection(duplicate);
-    await duplicate.sendButton.click();
-    await expect(duplicate.page.locator('.glyph-composer').getByRole('alert')).toContainText('owned by window');
-    await expect(duplicate.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)' })).toBeVisible();
-    await duplicate.command('View: Toggle Secondary Side Bar Visibility');
-    await duplicate.command('Focus Glyph');
-    await duplicate.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)' }).click();
-    const preview = duplicate.page.getByRole('region', { name: 'Attachment preview' });
-    await expect(preview.locator('pre')).toHaveText('  café 🌱');
-    await preview.getByRole('button', { name: 'Remove', exact: true }).click();
-    await expect(duplicate.composer).toHaveText('Preserve ');
-    expect(provider.requests).toHaveLength(1);
-    provider.release(0);
-  });
+  it(
+    'restores exact selection badges after a rejected send and keeps them editable across pane remounts',
+    opensWindow,
+    async ({ glyph, provider }) => {
+      provider.enqueue({ chunks: ['Owner running'], hold: true });
+      await glyph.send('Hold ownership');
+      await expect(glyph.sendButton).toHaveText('Cancel');
+      const duplicate = await glyph.duplicateWorkspace();
+      await duplicate.composer.fill('Preserve ');
+      await openFile(duplicate, join(glyph.workspace, 'alpha.txt'));
+      await selectLine(duplicate, 2);
+      await attachSelection(duplicate);
+      await expect(duplicate.diagnostics).toContainText([/owned by window/u]);
+      await expect(duplicate.sendButton).toBeDisabled();
+      await expect(duplicate.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)' })).toBeVisible();
+      await duplicate.command('View: Toggle Secondary Side Bar Visibility');
+      await duplicate.command('Focus Glyph');
+      await duplicate.composer.getByRole('button', { name: 'Preview alpha.txt (2-2)' }).click();
+      const preview = duplicate.page.getByRole('region', { name: 'Attachment preview' });
+      await expect(preview.locator('pre')).toHaveText('  café 🌱');
+      await preview.getByRole('button', { name: 'Remove', exact: true }).click();
+      await expect(duplicate.composer).toHaveText('Preserve ');
+      expect(provider.requests).toHaveLength(1);
+      provider.release(0);
+    },
+  );
 
   it('allows empty and untitled buffers explicitly without automatically attaching another open tab', async ({
     glyph,

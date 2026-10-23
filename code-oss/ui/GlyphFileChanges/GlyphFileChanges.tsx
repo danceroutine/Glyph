@@ -34,7 +34,7 @@ export function GlyphFileChanges({
   return (
     <>
       {files
-        .filter(file => file.operation && file.operation !== 'UPDATE')
+        .filter(file => file.operation !== undefined && file.operation !== 'UPDATE')
         .map(file => {
           const removed = file.operation === 'DELETE';
           const created = file.operation === 'CREATE';
@@ -45,15 +45,17 @@ export function GlyphFileChanges({
                 appearance={ButtonAppearance.GHOST}
                 class={styles.header}
                 title={file.path}
-                onClick={() => review(file.id)}
+                onClick={() => {
+                  review(file.id);
+                }}
               >
                 <GlyphFileIcon path={file.path} />
                 <span class={styles.name}>{file.path.split('/').at(-1)}</span>
                 {file.operation === 'RENAME' && <GlyphRenameBadge />}
-                {!!file.additions && <span style={{ color: tokens.diff.added }}>+{file.additions}</span>}
-                {!!file.deletions && <span style={{ color: tokens.diff.removed }}>−{file.deletions}</span>}
+                {(file.additions ?? 0) > 0 && <span style={{ color: tokens.diff.added }}>+{file.additions}</span>}
+                {(file.deletions ?? 0) > 0 && <span style={{ color: tokens.diff.removed }}>−{file.deletions}</span>}
               </Button>
-              {text && (
+              {text !== undefined && text !== '' && (
                 <pre
                   class={styles.code}
                   style={{

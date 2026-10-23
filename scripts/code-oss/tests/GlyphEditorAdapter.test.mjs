@@ -1,8 +1,23 @@
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { importBundle } from '#scripts/code-oss/tests/support/bundle.mjs';
 
 /** Real adapter, URI and lifecycle code; only injected workbench services are simulated. */
+/**
+ * @typedef {{
+ *   GlyphEditorAdapter: typeof import('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js').GlyphEditorAdapter,
+ *   URI: typeof import('#vs/base/common/uri.js').URI,
+ * }} AdapterModule
+ * @typedef {import('#vs/base/common/uri.js').URI} URIValue
+ * @typedef {{ createTextModel: typeof import('#vs/editor/test/common/testTextModel.js').createTextModel }} TextModelModule
+ * @typedef {{ edit: { text?: string, eol?: number }, version?: number }} LaunchedEdit
+ * @typedef {{ token?: { isCancellationRequested: boolean }, reason?: unknown, undoRedoGroupId?: number }} LaunchOptions
+ * @typedef {import('#vs/platform/workspace/common/workspace.js').IWorkspaceContextService} WorkspaceService
+ * @typedef {import('#vs/workbench/services/userDataProfile/common/userDataProfile.js').IUserDataProfileService} ProfileService
+ */
+
+/** @returns {Promise<AdapterModule>} */
 async function adapterModule() {
   const result = await build({
     stdin: {
@@ -42,7 +57,7 @@ async function adapterModule() {
         export class BulkTextEdits {}
         export const EndOfLineSequence = { LF: 0, CRLF: 1 };
         export class ResourceFileEdit { constructor(oldResource, newResource, options) { Object.assign(this, { oldResource, newResource, options }); } }
-        export class ResourceTextEdit { constructor(resource, edit, version) { Object.assign(this, { resource, edit, version }); } }
+        export class ResourceTextEdit { constructor(resource, edit, version, metadata) { Object.assign(this, { resource, edit, version, metadata }); } }
         export class UndoRedoGroup { id = 1; }
         export const UNDO_REDO_SOURCE = { id: 1 };
         export const EditSources = { unknown: metadata => ({ metadata }) };
@@ -55,7 +70,7 @@ async function adapterModule() {
       },
     ],
   });
-  return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+  return importBundle(result.outputFiles[0].text, ['GlyphEditorAdapter', 'URI']);
 }
 
 describe('Editor workspace binding', () => {
@@ -123,7 +138,7 @@ describe('Editor workspace binding', () => {
       {
         createModelReference: async uri => {
           const model = models.find(value => value.uri.toString() === uri.toString());
-          if (!model) throw new Error(`Wrong route: ${uri}`);
+          if (!model) throw new Error(`Wrong route: ${uri.toString()}`);
           return { object: { textEditorModel: model }, dispose() {} };
         },
       },
@@ -245,9 +260,8 @@ describe('Editor workspace binding', () => {
         tsconfigRaw: { compilerOptions: { experimentalDecorators: true } },
         loader: { '.css': 'empty' },
       });
-      const { createTextModel } = await import(
-        `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`
-      );
+      /** @type {TextModelModule} */
+      const { createTextModel } = await importBundle(built.outputFiles[0].text, ['createTextModel']);
       const resource = URI.file('/workspace/file.ts');
       const model = createTextModel('hello\n\nend', null, { trimAutoWhitespace: true }, resource);
       const prefix = literalPrefix ? '\uFEFF' : '';
@@ -304,7 +318,7 @@ describe('Editor workspace binding', () => {
         { isDirty: () => true },
         { isWorkspaceTrusted: () => true },
         {},
-        { asCanonicalUri: resource => resource },
+        { asCanonicalUri: value => value },
         { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
       );
       try {
@@ -337,6 +351,80 @@ describe('Editor workspace binding', () => {
       }
     },
   );
+
+  it('keeps astral characters intact when an open editor would shrink the replacement', async () => {
+    const { GlyphEditorAdapter, URI } = await adapterModule();
+    const built = await build({
+      entryPoints: ['.code-oss/src/src/vs/editor/test/common/testTextModel.ts'],
+      bundle: true,
+      write: false,
+      platform: 'node',
+      format: 'esm',
+      tsconfigRaw: { compilerOptions: { experimentalDecorators: true } },
+      loader: { '.css': 'empty' },
+    });
+    /** @type {TextModelModule} */
+    const { createTextModel } = await importBundle(built.outputFiles[0].text, ['createTextModel']);
+    const resource = URI.file('/workspace/file.ts');
+    const model = createTextModel('café 🌱\n', null, {}, resource);
+    const adapter = new GlyphEditorAdapter(
+      { createModelReference: async () => ({ object: { textEditorModel: model }, dispose() {} }) },
+      {
+        apply: async (
+          /** @type {{ metadata?: unknown, edit: import('#vs/editor/common/model.js').IIdentifiedSingleEditOperation }[]} */ [
+            edit,
+          ],
+          /** @type {{ reason?: unknown }} */ options,
+        ) => {
+          model.pushEditOperations(
+            null,
+            [
+              edit.metadata !== undefined
+                ? edit.edit
+                : { range: { startLineNumber: 1, startColumn: 7, endLineNumber: 1, endColumn: 8 }, text: '\uDF33' },
+            ],
+            () => null,
+            undefined,
+            options.reason,
+          );
+          return { isApplied: true };
+        },
+      },
+      {
+        getWorkspace: () => ({ id: 'workspace', folders: [{ name: 'workspace', uri: URI.file('/workspace') }] }),
+        isInsideWorkspace: () => true,
+        onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+        onDidChangeWorkspaceName: () => ({ dispose() {} }),
+        onDidChangeWorkbenchState: () => ({ dispose() {} }),
+      },
+      { getModels: () => [model] },
+      { isDirty: () => true },
+      { isWorkspaceTrusted: () => true },
+      {},
+      { asCanonicalUri: value => value },
+      { currentProfile: { id: 'profile' }, onDidChangeCurrentProfile: () => ({ dispose() {} }) },
+    );
+    try {
+      const before = await adapter.read('file.ts');
+      const response = await adapter.handle({
+        type: 'apply_text_mutation',
+        mutation: {
+          operationId: 'astral',
+          path: 'file.ts',
+          text: 'café 🌳\n',
+          byteOrderMark: false,
+          undoGroupId: 'astral',
+          expectedContentRevision: before.contentRevision,
+          expectedToken: before.token,
+        },
+      });
+      expect(response).toMatchObject({ ok: true, snapshot: { text: 'café 🌳\n' }, receipt: { state: 'applied' } });
+      expect(model.getValue()).toBe('café 🌳\n');
+    } finally {
+      adapter.dispose();
+      model.dispose();
+    }
+  });
 
   it('does not claim an unrelated matching user edit when Bulk Edit rejects its stale version', async () => {
     const fixture = await pendingEdit({ sourceTagged: false, failAfterWrite: true });
@@ -421,7 +509,7 @@ describe('Editor workspace binding', () => {
     }
   });
 
-  it.each(['invalidate', 'dispose', 'rebindWorkspace'])(
+  it.each(/** @type {const} */ (['invalidate', 'dispose', 'rebindWorkspace']))(
     'cancels a queued edit when the adapter receives %s',
     async operation => {
       const fixture = await pendingEdit();
@@ -579,18 +667,25 @@ describe('Editor workspace binding', () => {
   it('refuses old host paths after folder removal instead of reading or editing a nested namesake', async () => {
     const { GlyphEditorAdapter, URI } = await adapterModule();
     let folders = ['A', 'B'].map(name => ({ name, uri: URI.file(`/workspace/${name}`) }));
+    /** @type {Set<(event: { added: unknown[], removed: { name: string }[], changed: unknown[] }) => void>} */
     const listeners = new Set();
     const workspace = {
       getWorkspace: () => ({ folders }),
       isInsideWorkspace: () => true,
-      onDidChangeWorkspaceFolders: callback => {
+      onDidChangeWorkspaceFolders: (
+        /** @type {(event: { added: unknown[], removed: { name: string }[], changed: unknown[] }) => void} */ callback,
+      ) => {
         listeners.add(callback);
-        return { dispose: () => listeners.delete(callback) };
+        return {
+          dispose: () => {
+            listeners.delete(callback);
+          },
+        };
       },
       onDidChangeWorkspaceName: () => ({ dispose() {} }),
       onDidChangeWorkbenchState: () => ({ dispose() {} }),
     };
-    const reference = vi.fn(async uri => ({
+    const reference = vi.fn(async (/** @type {URIValue} */ uri) => ({
       object: {
         textEditorModel: {
           uri,
@@ -643,7 +738,10 @@ describe('Editor workspace binding', () => {
   });
 });
 
-/** Gates preparation and completion separately, matching Bulk Edit's cancellation boundary. */
+/**
+ * Gates preparation and completion separately, matching Bulk Edit's cancellation boundary.
+ * @param {{ initial?: string, eol?: string, replacement?: string, sourceTagged?: boolean, failAfterWrite?: boolean }} [options]
+ */
 async function pendingEdit({
   initial = 'original',
   eol = '\n',
@@ -658,7 +756,7 @@ async function pendingEdit({
   const finish = Promise.withResolvers();
   let dirty = true;
   let diskText = initial;
-  const save = vi.fn(async resource => {
+  const save = vi.fn(async (/** @type {URIValue} */ resource) => {
     diskText = text;
     dirty = false;
     return resource;
@@ -667,10 +765,15 @@ async function pendingEdit({
   let workspaceId = 'workspace';
   let profileId = 'profile';
   let configuration = URI.file('/workspace/original.code-workspace');
+  /** @type {Set<Parameters<WorkspaceService['onDidChangeWorkspaceFolders']>[0]>} */
   const folderListeners = new Set();
+  /** @type {Set<Parameters<WorkspaceService['onDidChangeWorkspaceName']>[0]>} */
   const nameListeners = new Set();
+  /** @type {Set<Parameters<WorkspaceService['onDidChangeWorkbenchState']>[0]>} */
   const stateListeners = new Set();
+  /** @type {Set<Parameters<ProfileService['onDidChangeCurrentProfile']>[0]>} */
   const profileListeners = new Set();
+  /** @type {Set<(event: { detailedReasons: unknown[], isEolChange?: boolean }) => void>} */
   const contentListeners = new Set();
   let text = initial;
   let version = 1;
@@ -681,24 +784,30 @@ async function pendingEdit({
     getEOL: () => eol,
     getValueLength: () => text.length,
     getFullModelRange: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: text.length + 1 }),
-    onDidChangeContent: listener => {
+    onDidChangeContent: (
+      /** @type {(event: { detailedReasons: unknown[], isEolChange?: boolean }) => void} */ listener,
+    ) => {
       contentListeners.add(listener);
-      return { dispose: () => contentListeners.delete(listener) };
+      return {
+        dispose: () => {
+          contentListeners.delete(listener);
+        },
+      };
     },
   };
-  const launch = vi.fn(async (_edits, options) => {
+  const launch = vi.fn(async (/** @type {LaunchedEdit[]} */ _edits, /** @type {LaunchOptions} */ options) => {
     entered.resolve();
     await write.promise;
-    if (!options.token?.isCancellationRequested && text !== replacement.replace(/\r\n|\r|\n/g, eol)) {
-      text = replacement.replace(/\r\n|\r|\n/g, eol);
+    if (options.token?.isCancellationRequested !== true && text !== replacement.replaceAll(/\r\n|\r|\n/g, eol)) {
+      text = replacement.replaceAll(/\r\n|\r|\n/g, eol);
       version++;
       for (const listener of contentListeners) listener({ detailedReasons: sourceTagged ? [options.reason] : [] });
     }
-    if (!options.token?.isCancellationRequested && _edits[0].edit.eol !== undefined) {
+    if (options.token?.isCancellationRequested !== true && _edits[0].edit.eol !== undefined) {
       const nextEol = _edits[0].edit.eol === 1 ? '\r\n' : '\n';
       if (eol !== nextEol) {
         eol = nextEol;
-        text = text.replace(/\r\n|\r|\n/g, eol);
+        text = text.replaceAll(/\r\n|\r|\n/g, eol);
         version++;
         for (const listener of contentListeners) listener({ detailedReasons: [], isEolChange: true });
       }
@@ -717,15 +826,27 @@ async function pendingEdit({
       isInsideWorkspace: () => folders.length > 0,
       onDidChangeWorkspaceFolders: listener => {
         folderListeners.add(listener);
-        return { dispose: () => folderListeners.delete(listener) };
+        return {
+          dispose: () => {
+            folderListeners.delete(listener);
+          },
+        };
       },
       onDidChangeWorkspaceName: listener => {
         nameListeners.add(listener);
-        return { dispose: () => nameListeners.delete(listener) };
+        return {
+          dispose: () => {
+            nameListeners.delete(listener);
+          },
+        };
       },
       onDidChangeWorkbenchState: listener => {
         stateListeners.add(listener);
-        return { dispose: () => stateListeners.delete(listener) };
+        return {
+          dispose: () => {
+            stateListeners.delete(listener);
+          },
+        };
       },
     },
     { getModels: () => [model] },
@@ -739,12 +860,26 @@ async function pendingEdit({
       },
       onDidChangeCurrentProfile: listener => {
         profileListeners.add(listener);
-        return { dispose: () => profileListeners.delete(listener) };
+        return {
+          dispose: () => {
+            profileListeners.delete(listener);
+          },
+        };
       },
     },
     {
-      createInstance: (_constructor, _label, _code, _editor, group, _source, _progress, token, edits) => ({
-        apply: async reason => {
+      createInstance: (
+        /** @type {unknown} */ _constructor,
+        /** @type {unknown} */ _label,
+        /** @type {unknown} */ _code,
+        /** @type {unknown} */ _editor,
+        /** @type {{ id: number }} */ group,
+        /** @type {unknown} */ _source,
+        /** @type {unknown} */ _progress,
+        /** @type {{ isCancellationRequested: boolean }} */ token,
+        /** @type {LaunchedEdit[]} */ edits,
+      ) => ({
+        apply: async (/** @type {unknown} */ reason) => {
           const result = await launch(edits, { token, reason, undoRedoGroupId: group.id });
           return result.isApplied ? [model.uri] : [];
         },
@@ -763,7 +898,7 @@ async function pendingEdit({
     text: () => text,
     diskText: () => diskText,
     save,
-    changeWorkspace: change => {
+    changeWorkspace: (/** @type {string} */ change) => {
       if (change.startsWith('profile')) {
         if (change !== 'profile metadata') profileId = 'replacement-profile';
         if (change !== 'profile pending notification') for (const listener of profileListeners) listener();
@@ -778,12 +913,12 @@ async function pendingEdit({
       folders = [];
       for (const listener of folderListeners) listener({});
     },
-    apply: (save = false) =>
+    apply: (shouldSave = false) =>
       adapter.handle({
         type: 'apply_text_mutation',
         mutation: {
           operationId: 'edit',
-          save,
+          save: shouldSave,
           path: 'file.ts',
           text: replacement,
           byteOrderMark: false,
@@ -803,7 +938,7 @@ it.each(['trust revoked', 'destination occupied'])(
     let trusted = true;
     let occupied = false;
     let written = false;
-    const apply = vi.fn(async edits => {
+    const apply = vi.fn(async (/** @type {{ validate(): Promise<void> }[]} */ edits) => {
       if (race === 'trust revoked') trusted = false;
       else occupied = true;
       await edits[0].validate();

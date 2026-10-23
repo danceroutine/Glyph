@@ -102,7 +102,7 @@ function PendingReviewEyebrow({ count }: { count: number }): ReactElement {
 
 function highlightMatch(match: FileSearchMatch): ReactNode[] {
   const selected = new Set(match.indices);
-  return [...sanitizeText(match.path)].map((character, index) =>
+  return Array.from(sanitizeText(match.path)).map((character, index) =>
     selected.has(index) ? (
       <Text key={index} bold color="cyan">
         {character}

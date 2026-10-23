@@ -13,6 +13,7 @@ import type { ProjectAccess } from './ProjectAccess.ts';
 import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 
 export class ProjectToolRuntime implements ToolSource {
   private readonly logger: Logger;
@@ -79,11 +80,11 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
       await this.logger.debug('ingested', { name, inputBytes: Buffer.byteLength(input) });
       signal?.throwIfAborted();
       let proposal;
-      switch (name) {
+      switch (isEnumValue(ProjectToolName, name) ? name : undefined) {
         case ProjectToolName.LIST_FILES:
         case ProjectToolName.READ_FILE:
         case ProjectToolName.SEARCH_CONTENTS:
-          return this.access.execute(name, input, signal);
+          return await this.access.execute(name, input, signal);
         case ProjectToolName.PROPOSE_PATCH:
           proposal = await this.proposals.proposePatch(input, signal);
           break;
@@ -96,6 +97,7 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
         default:
           throw new Error(`Unknown project tool: ${name}`);
       }
+      // Follow-up: decide whether ProposalService should own this mode check.
       await this.proposals.assertModeAllows(proposal, AgentMode.resolve(context?.mode ?? AgentMode.default.id));
       const stagedProposal = context?.chat
         ? {
@@ -131,7 +133,7 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
           : 'The proposal was appended to the review queue, but no workspace changes have been written. The user must accept review items.',
       });
     } catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error;
+      if (signal?.aborted === true) throw signal.reason ?? error;
       await this.logger.error('failed', {
         name,
         error:

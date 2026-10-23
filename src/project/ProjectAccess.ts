@@ -12,6 +12,7 @@ import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
+import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 
 interface ProjectAccessOptions {
   maxFiles?: number;
@@ -79,7 +80,7 @@ const searchProjectContentsArguments = z
     file_type: z
       .string()
       .max(64)
-      .regex(/^[A-Za-z0-9_-]+$/)
+      .regex(/^[A-Za-z0-9_-]+$/u)
       .nullable()
       .describe('Optional ripgrep file type such as ts or py.'),
     output_mode: z.enum(['content', 'files_with_matches', 'count']),
@@ -188,7 +189,7 @@ export class ProjectAccess {
 
   async execute(name: string, rawArguments: string, signal?: AbortSignal): Promise<string> {
     try {
-      switch (name) {
+      switch (isEnumValue(ProjectToolName, name) ? name : undefined) {
         case ProjectToolName.LIST_FILES:
           return JSON.stringify(
             await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments)), signal),
@@ -203,7 +204,7 @@ export class ProjectAccess {
           throw new Error(`Unknown project tool: ${name}`);
       }
     } catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error;
+      if (signal?.aborted === true) throw signal.reason ?? error;
       return JSON.stringify({
         error:
           error instanceof EditError
@@ -265,7 +266,7 @@ export class ProjectAccess {
   }> {
     const startLine = requestedStart ?? 1;
     const snapshot = await this.workspace.read(path, { maxBytes: this.options.maxFileBytes });
-    // TODO: Read oversized files incrementally so line-range requests do not require loading the whole file.
+    // Follow-up: read oversized files incrementally so line-range requests do not load the whole file.
     if (snapshot.byteLength > this.options.maxFileBytes) {
       throw new Error(`File exceeds the ${this.options.maxFileBytes}-byte read limit.`);
     }
@@ -286,7 +287,7 @@ export class ProjectAccess {
       const numberedLine = `${line.number}: ${line.content}`;
       const added = Buffer.byteLength(JSON.stringify(line)) + Buffer.byteLength(JSON.stringify(numberedLine)) + 3;
       if (bytes + added > 512 * 1024) {
-        if (!selected.length) throw new Error('This line exceeds the 512 KiB serialized read limit.');
+        if (selected.length === 0) throw new Error('This line exceeds the 512 KiB serialized read limit.');
         budgetFull = true;
         continue;
       }

@@ -1,9 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
-const require = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = require('@playwright/test');
-let browser, script;
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let script;
 beforeAll(async () => {
   const result = await build({
     stdin: {
@@ -37,6 +39,7 @@ beforeAll(async () => {
     write: false,
     format: 'iife',
     platform: 'browser',
+    ...coverageBuildOptions,
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   script = result.outputFiles[0].text;
@@ -46,7 +49,7 @@ afterAll(async () => {
   await browser?.close();
 });
 async function mount() {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   await page.goto('about:blank');
   await page.setContent('<div id="root"></div>');
   await page.addScriptTag({ content: script });

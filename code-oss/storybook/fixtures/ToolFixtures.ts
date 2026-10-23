@@ -40,7 +40,7 @@ export function shellFixture(overrides: Partial<GlyphShellCommand> = {}): GlyphS
     background: false,
     live: false,
     running: false,
-    ...(overrides.running ? {} : { exitCode: 0 }),
+    ...(overrides.running === true ? {} : { exitCode: 0 }),
     ...structuredClone(overrides),
   };
 }
@@ -48,7 +48,7 @@ export function toolActivityFixture(overrides: Partial<GlyphToolActivity> = {}):
   const base = projectToolCalls.find(tool => tool.name === overrides.name) ?? projectToolCalls[0]!;
   return {
     ...structuredClone(base),
-    ...(overrides.status && overrides.status !== Status.COMPLETED ? { summary: '' } : {}),
+    ...(overrides.status !== undefined && overrides.status !== Status.COMPLETED ? { summary: '' } : {}),
     ...structuredClone(overrides),
   };
 }

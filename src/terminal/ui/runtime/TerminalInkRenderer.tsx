@@ -1,4 +1,3 @@
-import { EventEmitter } from 'node:events';
 import type { ReactNode } from 'react';
 import { render } from 'ink';
 import type { Instance } from 'ink';
@@ -27,17 +26,19 @@ import type { ShellPermissionRequest } from '#src/shell/ShellPermissionRequest.j
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
 import type { TerminalShellPermissionRequest } from '#src/terminal/ui/shell-permission/ShellPermissionRequest.js';
 
+type RendererPromptRequest = PromptRequest & { pendingChanges: number };
+
 /**
  * Owns the single interactive Ink tree for the terminal host. All prompt,
  * streaming-response, and review rendering passes through this object so raw
  * input and redraw behavior have exactly one owner.
  */
 export class TerminalInkRenderer {
-  private readonly events = new EventEmitter();
+  private readonly listeners = { SIGINT: new Set<() => void>(), close: new Set<() => void>() };
   private readonly instance: Instance;
   private readonly entries: TranscriptEntry[] = [];
   private responseParts: ChatResponsePart[] | undefined;
-  private promptRequest: PromptRequest | undefined;
+  private promptRequest: RendererPromptRequest | undefined;
   private questionRequest: QuestionFormRequest | undefined;
   private shellPermissionRequest: TerminalShellPermissionRequest | undefined;
   private reviewRequest: ProposalReviewRequest | undefined;
@@ -55,7 +56,10 @@ export class TerminalInkRenderer {
   private closed = false;
 
   private readonly handleInputClosed = (): void => {
-    this.events.emit('close');
+    this.emit('close');
+  };
+  readonly requestInterrupt = (): void => {
+    this.emit('SIGINT');
   };
 
   constructor(
@@ -81,11 +85,11 @@ export class TerminalInkRenderer {
   }
 
   on(event: 'SIGINT' | 'close', listener: () => void): void {
-    this.events.on(event, listener);
+    this.listeners[event].add(listener);
   }
 
   off(event: 'SIGINT' | 'close', listener: () => void): void {
-    this.events.off(event, listener);
+    this.listeners[event].delete(listener);
   }
 
   append(content: ReactNode): void {
@@ -148,7 +152,9 @@ export class TerminalInkRenderer {
     const result = new Deferred<UserPromptDraft>();
     this.promptResult = result;
     const id = draftRequest?.id ?? this.nextId++;
-    const cleanup = (): void => signal.removeEventListener('abort', abort);
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', abort);
+    };
     const abort = (): void => {
       if (this.promptRequest?.id !== id) return;
       if (this.promptRequest.acceptsSubmission) this.promptRequest = undefined;
@@ -195,7 +201,9 @@ export class TerminalInkRenderer {
     const result = new Deferred<void>();
     this.reviewResult = result;
     const id = this.nextId++;
-    const cleanup = (): void => signal.removeEventListener('abort', abort);
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', abort);
+    };
     const complete = (summary?: ProposalReviewSummary): void => {
       if (this.reviewRequest?.id !== id) return;
       this.reviewRequest = undefined;
@@ -230,7 +238,9 @@ export class TerminalInkRenderer {
     const result = new Deferred<QuestionFormResult>();
     this.questionResult = result;
     const id = this.nextId++;
-    const cleanup = (): void => signal.removeEventListener('abort', abort);
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', abort);
+    };
     const complete = (formResult: QuestionFormResult): void => {
       if (this.questionRequest?.id !== id) return;
       this.questionRequest = undefined;
@@ -265,7 +275,9 @@ export class TerminalInkRenderer {
     const result = new Deferred<ShellPermissionDecision>();
     this.shellPermissionResult = result;
     const id = this.nextId++;
-    const cleanup = (): void => signal.removeEventListener('abort', abort);
+    const cleanup = (): void => {
+      signal.removeEventListener('abort', abort);
+    };
     const complete = (decision: ShellPermissionDecision): void => {
       if (this.shellPermissionRequest?.id !== id) return;
       this.shellPermissionRequest = undefined;
@@ -293,18 +305,14 @@ export class TerminalInkRenderer {
     this.refresh();
   }
 
-  requestInterrupt(): void {
-    this.events.emit('SIGINT');
-  }
-
   preservePromptDraft(): void {
     const request = this.promptRequest;
-    if (!request?.acceptsSubmission) return;
+    if (request?.acceptsSubmission !== true) return;
     this.promptRequest = {
       id: request.id,
       label: request.label,
       acceptsSubmission: false,
-      pendingChanges: request.pendingChanges as number,
+      pendingChanges: request.pendingChanges,
       ...(request.files ? { files: request.files } : {}),
     };
     this.refresh();
@@ -329,6 +337,10 @@ export class TerminalInkRenderer {
     this.input.off('end', this.handleInputClosed);
     this.input.off('close', this.handleInputClosed);
     this.instance.cleanup();
+  }
+
+  private emit(event: 'SIGINT' | 'close'): void {
+    for (const listener of Array.from(this.listeners[event])) listener();
   }
 
   private assertAvailable(reusablePrompt?: PromptRequest): void {
@@ -357,7 +369,7 @@ export class TerminalInkRenderer {
       ...(this.shellPermissionRequest ? { shellPermission: this.shellPermissionRequest } : {}),
       backgroundShells: this.backgroundShells,
       review: this.reviewRequest,
-      interrupt: () => this.requestInterrupt(),
+      interrupt: this.requestInterrupt,
     };
   }
 }

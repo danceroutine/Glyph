@@ -35,7 +35,7 @@ export function GlyphUsageSummary({
   position,
   toggle,
 }: { readonly usage: GlyphUsage | undefined; readonly turn?: boolean } & ReturnType<typeof useGlyphUsageState>) {
-  const label = turn ? 'Turn token usage' : 'Conversation token usage';
+  const label = turn === true ? 'Turn token usage' : 'Conversation token usage';
   const triggerProps = {
     buttonRef: trigger,
     'aria-label': label,
@@ -45,8 +45,8 @@ export function GlyphUsageSummary({
     onClick: toggle,
   };
   return (
-    <div class={`glyph-usage ${turn ? '' : styles.root}`}>
-      {turn ? (
+    <div class={`glyph-usage ${turn === true ? '' : styles.root}`}>
+      {turn === true ? (
         <IconButton {...triggerProps} size={ButtonSize.SMALL}>
           <Gauge size={16} aria-hidden="true" />
         </IconButton>
@@ -70,7 +70,7 @@ export function GlyphUsageSummary({
             class={styles.popup}
             style={{ left: `${position.left}px`, top: `${position.top}px` }}
           >
-            <strong>{turn ? 'Turn usage' : 'Conversation usage'}</strong>
+            <strong>{turn === true ? 'Turn usage' : 'Conversation usage'}</strong>
             {usage ? (
               <dl>
                 {(
@@ -92,12 +92,12 @@ export function GlyphUsageSummary({
               <p>Token usage unavailable.</p>
             )}
             <p>
-              {turn
+              {turn === true
                 ? 'Reported usage for this turn.'
                 : 'Reported usage for completed turns. Interrupted turns are excluded.'}
             </p>
             {usage && <p>Cached input is included in input; reasoning is included in output.</p>}
-            {!!usage?.unreportedTurns && (
+            {usage?.unreportedTurns !== undefined && usage.unreportedTurns > 0 && (
               <p role="status">
                 Usage missing or incomplete for {usage.unreportedTurns} completed{' '}
                 {usage.unreportedTurns === 1 ? 'turn' : 'turns'}.

@@ -1,15 +1,16 @@
 import { WiredGlyphCodeBlock } from '#code-oss/ui/GlyphCodeBlock/GlyphCodeBlock.wired.tsx';
 import { useMemo } from 'preact/hooks';
 import { Marked } from 'marked';
-import { GlyphMarkdown } from '#code-oss/ui/GlyphMarkdown/GlyphMarkdown.presentational.tsx';
+import { GlyphMarkdown, type GlyphContextToken } from '#code-oss/ui/GlyphMarkdown/GlyphMarkdown.presentational.tsx';
 import { WiredGlyphDiagram } from '#code-oss/ui/GlyphDiagram/GlyphDiagram.wired.tsx';
 import { GlyphContextBadge } from '#code-oss/ui/GlyphContextBadge/GlyphContextBadge.presentational.tsx';
 import type { GlyphMessageState } from '#code-oss/ui/GlyphAgentMessage/useGlyphMessageState.ts';
+import { GlyphTranscriptRole } from '#src/desktop/workbench/GlyphTranscriptEntry.js';
 
 export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMessageState['entries'][number] }) {
   const { items, prefix } = useMemo(() => {
     const prefix = `GLYPH${Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16)).join('')}CONTEXT`;
-    const expression = new RegExp(`^${prefix}(\\d+)END`);
+    const expression = new RegExp(`^${prefix}(\\d+)END`, 'u');
     const parser = new Marked({
       extensions: [
         {
@@ -18,7 +19,9 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
           start: source => source.indexOf(prefix),
           tokenizer(source) {
             const match = expression.exec(source);
-            if (match) return { type: 'glyph_context', raw: match[0], index: Number(match[1]) };
+            if (match)
+              return { type: 'glyph_context', raw: match[0], index: Number(match[1]) } satisfies GlyphContextToken;
+            return undefined;
           },
         },
       ],
@@ -29,8 +32,10 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
         entry.parts
           .map((part, index) =>
             part.type === 'text'
-              ? entry.role === 'assistant' && entry.options?.agentReviewId
-                ? part.text.replace(/<glyph_review>[\s\S]*?(?:<\/glyph_review>|$)/g, '')
+              ? entry.role === GlyphTranscriptRole.ASSISTANT &&
+                entry.options?.agentReviewId !== undefined &&
+                entry.options?.agentReviewId !== ''
+                ? part.text.replaceAll(/<glyph_review>[\s\S]*?(?:<\/glyph_review>|$)/gu, '')
                 : part.text
               : `${prefix}${index}END`,
           )
@@ -45,11 +50,13 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
         label={part.label}
         title={part.title}
         actionLabel="Open"
-        onClick={() => entry.openAttachment(part.attachment)}
+        onClick={() => {
+          entry.openAttachment(part.attachment);
+        }}
       />
     ) : null;
   };
-  const pattern = new RegExp(`${prefix}(\\d+)END`, 'g');
+  const pattern = new RegExp(`${prefix}(\\d+)END`, 'gu');
   const renderText = (value: string) => {
     const fragments = [];
     let offset = 0;
@@ -85,7 +92,7 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
           })}
         />
       )}
-      inline={token => ('index' in token ? badge(token.index) : null)}
+      inline={token => badge(token.index)}
     />
   );
 }

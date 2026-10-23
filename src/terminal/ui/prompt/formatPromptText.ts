@@ -96,5 +96,5 @@ function appendTextSegment(segments: PromptTextSegment[], value: string): void {
 }
 
 function fileName(path: string): string {
-  return path.split(/[\\/]/u).at(-1) || path;
+  return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1) || path;
 }

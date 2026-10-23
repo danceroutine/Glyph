@@ -79,7 +79,7 @@ for (let agent = 0; agent < agentCount; agent++) {
   );
 }
 
-const sorted = [...transformMilliseconds].sort((left, right) => left - right);
+const sorted = transformMilliseconds.toSorted((left, right) => left - right);
 const memory = process.memoryUsage();
 process.stdout.write(
   `${JSON.stringify({
@@ -112,7 +112,7 @@ function distributedIndex(index: number, total: number, count: number): number {
 
 function applyEdits(text: string, edits: readonly Edit[]): string {
   let result = text;
-  for (const edit of [...edits].sort((left, right) => right.sourceStart - left.sourceStart)) {
+  for (const edit of edits.toSorted((left, right) => right.sourceStart - left.sourceStart)) {
     if (result.slice(edit.sourceStart, edit.sourceEnd) !== edit.removedText) {
       throw new Error(`Expected text mismatch at ${edit.sourceStart}..${edit.sourceEnd}.`);
     }

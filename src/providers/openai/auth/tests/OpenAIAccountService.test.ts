@@ -22,14 +22,14 @@ describe(OpenAIAccountService, () => {
     await service.dispose();
     await service.dispose();
     expect(store.release).toHaveBeenCalledTimes(1);
-    expect(() => service.borrowStore()).toThrowError(/not initialized/);
+    expect(() => service.borrowStore()).toThrow(/not initialized/u);
   });
 
   it('releases the lock when loading fails and reports cleanup failures', async () => {
     const store = fixtureStore();
     vi.mocked(store.load).mockRejectedValueOnce(new Error('load'));
     const service = new OpenAIAccountService(store);
-    await expect(service.initialize()).rejects.toThrowError('load');
+    await expect(service.initialize()).rejects.toThrow('load');
     expect(store.release).toHaveBeenCalledTimes(1);
 
     vi.mocked(store.load).mockRejectedValueOnce(new Error('load again'));

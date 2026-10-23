@@ -1,4 +1,4 @@
-import { AgentModeID } from "#src/chat/AgentMode.js";
+import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
@@ -9,6 +9,9 @@ import type { QuestionForm } from './QuestionForm.ts';
 import type { QuestionPresenter } from './QuestionPresenter.ts';
 import { QuestionToolName } from './QuestionToolName.ts';
 import { QuestionToolNamespace } from './QuestionToolNamespace.ts';
+import { isRecord } from '#src/shared/validators/isRecord.js';
+import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
+import { createNullPrototypeRecord } from '#src/shared/mappers/createNullPrototypeRecord.js';
 
 const identifierSchema = z.string().min(1).max(80);
 const questionOptionSchema = z
@@ -52,8 +55,9 @@ const proposeQuestionArgumentsSchema = z
   });
 const executableProposeQuestionArgumentsSchema = z.preprocess(value => {
   if (!isRecord(value)) return value;
-  const questions = Array.isArray(value.questions)
-    ? value.questions.map(question =>
+  const entries: unknown = value.questions;
+  const questions = Array.isArray(entries)
+    ? (entries satisfies unknown[]).map((question: unknown) =>
         isRecord(question) && !('allow_multiple' in question) ? { ...question, allow_multiple: null } : question,
       )
     : value.questions;
@@ -81,7 +85,8 @@ export class ProposeQuestionToolRuntime implements ToolSource {
   constructor(private readonly presenter: QuestionPresenter) {}
 
   async execute(name: string, input: string, signal = new AbortController().signal): Promise<string> {
-    if (name !== QuestionToolName.PROPOSE_QUESTION) throw new Error(`Unknown interaction tool: ${name}`);
+    if (!isEnumValue(QuestionToolName, name) || name !== QuestionToolName.PROPOSE_QUESTION)
+      throw new Error(`Unknown interaction tool: ${name}`);
     try {
       const form = toQuestionForm(executableProposeQuestionArgumentsSchema.parse(JSON.parse(input)));
       const result = await this.presenter.present(form, signal);
@@ -114,7 +119,7 @@ function serializeAnswers(
 ): Record<string, string | readonly string[]> {
   const byQuestion = new Map(answers.map(answer => [answer.questionId, answer]));
   if (byQuestion.size !== answers.length) throw new Error('The question presenter returned duplicate answers.');
-  const serialized = Object.create(null) as Record<string, string | readonly string[]>;
+  const serialized = createNullPrototypeRecord<string | readonly string[]>();
   for (const question of form.questions) {
     const answer = byQuestion.get(question.id);
     if (!answer) throw new Error(`The question presenter did not answer ${question.id}.`);
@@ -147,10 +152,6 @@ function addDuplicateIssues(
 ): void {
   if (new Set(values).size === values.length) return;
   context.addIssue({ code: 'custom', path, message });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function jsonSchema(schema: z.ZodType): Record<string, unknown> {

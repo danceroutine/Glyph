@@ -22,7 +22,7 @@ export function WiredGlyphModeSwapCard({
   const [now, setNow] = useState(Date.now);
   const { pending, error, submit } = useGlyphDecision();
   useEffect(() => {
-    if (swap.status !== GlyphModeSwapStatus.PENDING) return;
+    if (swap.status !== GlyphModeSwapStatus.PENDING) return undefined;
     setNow(Date.now());
     let frame: number;
     const tick = () => {
@@ -30,7 +30,9 @@ export function WiredGlyphModeSwapCard({
       if (Date.now() < Date.parse(swap.expiresAt)) frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+    };
   }, [swap.id, swap.status, swap.expiresAt]);
   const decide = (decision: GlyphApprovalDecision) => {
     if (!disabled && swap.status === GlyphModeSwapStatus.PENDING)
@@ -48,8 +50,12 @@ export function WiredGlyphModeSwapCard({
       disabled={disabled}
       pending={pending}
       error={error}
-      approve={() => decide(GlyphApprovalDecision.ALLOW_ONCE)}
-      deny={() => decide(GlyphApprovalDecision.DENY)}
+      approve={() => {
+        decide(GlyphApprovalDecision.ALLOW_ONCE);
+      }}
+      deny={() => {
+        decide(GlyphApprovalDecision.DENY);
+      }}
     />
   );
 }

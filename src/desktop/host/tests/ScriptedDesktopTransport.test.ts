@@ -15,7 +15,7 @@ describe(ScriptedDesktopTransport, () => {
         headers: { authorization: 'Bearer fixture', cookie: 'session=fixture', accept: 'text/html' },
       });
     }
-    expect(network.mock.calls.map(([url]) => String(url))).toEqual([
+    expect(network.mock.calls.map(([url]) => (url instanceof Request ? url.url : url.toString()))).toEqual([
       'http://127.0.0.1:1234/web/search?q=octopus',
       'http://127.0.0.1:1234/web/article',
     ]);
@@ -25,6 +25,15 @@ describe(ScriptedDesktopTransport, () => {
       expect(options?.headers).toEqual({ Accept: 'text/html' });
       expect(options?.signal?.aborted).toBe(true);
     }
+  });
+
+  it('asks web fixtures for HTML when the caller states no preference', async () => {
+    const network = vi.fn<typeof fetch>().mockResolvedValue(new Response('page'));
+    vi.stubGlobal('fetch', network);
+    const transport = new ScriptedDesktopTransport('http://127.0.0.1:1234');
+    await transport.fetch('http://127.0.0.1:1234/web/article?id=1');
+    expect(requestUrl(network.mock.calls[0]![0])).toBe('http://127.0.0.1:1234/web/article?id=1');
+    expect(network.mock.calls[0]![1]?.headers).toEqual({ Accept: 'text/html' });
   });
 
   it.each([
@@ -37,7 +46,7 @@ describe(ScriptedDesktopTransport, () => {
     'http://127.0.0.1:1234/?query=1',
     'http://127.0.0.1:1234/#fragment',
   ])('rejects a non-fixture endpoint: %s', endpoint => {
-    expect(() => new ScriptedDesktopTransport(endpoint)).toThrow(/explicit http/);
+    expect(() => new ScriptedDesktopTransport(endpoint)).toThrow(/explicit http/u);
   });
 
   it('routes the catalog and Responses body to loopback while preserving cancellation and blocking redirects', async () => {
@@ -54,8 +63,8 @@ describe(ScriptedDesktopTransport, () => {
         signal: controller.signal,
       }),
     );
-    expect(String(network.mock.calls[0]![0])).toBe('http://127.0.0.1:1234/v1/models');
-    expect(String(network.mock.calls[1]![0])).toBe('http://127.0.0.1:1234/v1/responses');
+    expect(requestUrl(network.mock.calls[0]![0])).toBe('http://127.0.0.1:1234/v1/models');
+    expect(requestUrl(network.mock.calls[1]![0])).toBe('http://127.0.0.1:1234/v1/responses');
     const options = network.mock.calls[1]![1]!;
     expect(options).toMatchObject({ method: 'POST', body: '{"stream":true}', redirect: 'error' });
     expect(new Headers(options.headers).get('authorization')).toBe('Bearer fixture');
@@ -75,8 +84,12 @@ describe(ScriptedDesktopTransport, () => {
     const network = vi.fn<typeof fetch>();
     vi.stubGlobal('fetch', network);
     await expect(new ScriptedDesktopTransport('http://127.0.0.1:1234').fetch(url, { method })).rejects.toThrow(
-      /fallback is disabled/,
+      /fallback is disabled/u,
     );
     expect(network).not.toHaveBeenCalled();
   });
 });
+
+function requestUrl(input: string | URL | Request): string {
+  return input instanceof Request ? input.url : input.toString();
+}

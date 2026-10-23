@@ -1,4 +1,4 @@
-import type { ComponentChildren, ButtonHTMLAttributes, CSSProperties, Ref } from 'preact';
+import type { ComponentChildren, ButtonHTMLAttributes, CSSProperties, Ref, Signalish } from 'preact';
 import { LoaderCircle } from 'lucide-preact';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { AGENT_MODE_PRESENTATION } from '#code-oss/ui/AgentMode/AgentModePresentation.tsx';
@@ -100,7 +100,11 @@ const spinner = css({
   '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
 });
 
-export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'size' | 'ref' | 'style'> {
+export function isOn(value: Signalish<boolean | undefined>): boolean {
+  return (typeof value === 'object' ? value.value : value) === true;
+}
+
+export interface ButtonProps extends Omit<ButtonHTMLAttributes, 'size' | 'ref' | 'style'> {
   readonly buttonRef?: Ref<HTMLButtonElement>;
   readonly style?: CSSProperties;
   readonly variant?: ButtonVariant;
@@ -163,8 +167,8 @@ export function Button({
       {...props}
       ref={buttonRef ?? null}
       type={type}
-      class={`${base} ${className ?? ''}`}
-      disabled={disabled || loading}
+      class={`${base} ${(typeof className === 'object' ? className.value : className) ?? ''}`}
+      disabled={isOn(disabled) || loading}
       aria-busy={loading || undefined}
       data-variant={variant}
       data-appearance={appearance}
@@ -182,16 +186,16 @@ export function Button({
     >
       {leading
         ? spinnerSlot
-        : leadingIcon && (
+        : Boolean(leadingIcon) && (
             <span class={iconSlot} aria-hidden="true">
               {leadingIcon}
             </span>
           )}
       {children}
-      {shortcut && <kbd class={shortcutStyle}>{shortcut}</kbd>}
+      {Boolean(shortcut) && <kbd class={shortcutStyle}>{shortcut}</kbd>}
       {trailing
         ? spinnerSlot
-        : trailingIcon && (
+        : Boolean(trailingIcon) && (
             <span class={iconSlot} aria-hidden="true">
               {trailingIcon}
             </span>
@@ -211,7 +215,7 @@ export function IconButton({
   children,
   loading = false,
   iconSize,
-  style,
+  style = {},
   ...props
 }: IconButtonProps) {
   return (
@@ -221,7 +225,10 @@ export function IconButton({
       appearance={appearance}
       data-icon-button
       data-shape={shape}
-      style={{ ...(iconSize === undefined ? {} : { '--button-icon-size': `${iconSize}px` }), ...style }}
+      style={{
+        ...(iconSize === undefined ? {} : { '--button-icon-size': `${iconSize}px` }),
+        ...style,
+      }}
     >
       {!loading && (
         <span class={iconSlot} aria-hidden="true">

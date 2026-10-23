@@ -98,7 +98,7 @@ export class EditProposalService {
     for (const file of proposal.files) {
       for (const path of new Set([file.sourcePath, file.targetPath])) {
         const denial = mode.getEditDenial(path) ?? mode.getEditDenial(await this.workspace.canonicalPath(path));
-        if (denial) throw new EditError(EditFailureReason.UNSUPPORTED, denial, { path });
+        if (denial !== undefined && denial !== '') throw new EditError(EditFailureReason.UNSUPPORTED, denial, { path });
       }
     }
   }
@@ -130,7 +130,7 @@ export class EditProposalService {
     for (const file of files) {
       signal?.throwIfAborted();
       if (file.operation === EditOperation.CREATE) {
-        const content = (file.content ?? '').replace(/\n/g, file.lineEnding ?? this.configuration.newFileLineEnding);
+        const content = (file.content ?? '').replaceAll('\n', file.lineEnding ?? this.configuration.newFileLineEnding);
         structured.files.push({
           operation: file.operation,
           path: file.path,
@@ -144,7 +144,7 @@ export class EditProposalService {
       }
       const base = await this.readSource(file.path);
       signal?.throwIfAborted();
-      if (!file.revision)
+      if (file.revision === undefined || file.revision === '')
         throw new EditError(
           EditFailureReason.MALFORMED,
           'Update, rename, and delete patches require a Revision directive.',
@@ -219,7 +219,7 @@ export class EditProposalService {
       // Sorting also makes overlap validation linear in the number of hunks.
       const parts: string[] = [];
       let offset = 0;
-      for (const change of replacements.sort((left, right) => left.start - right.start)) {
+      for (const change of replacements.toSorted((left, right) => left.start - right.start)) {
         if (change.start < offset) {
           throw new EditError(EditFailureReason.INCONSISTENT, 'Patch hunks overlap in the base file.', {
             path: file.path,
@@ -412,7 +412,10 @@ export class EditProposalService {
     if (file.operation === EditOperation.UPDATE && file.new_path !== null) {
       throw new EditError(EditFailureReason.MALFORMED, 'UPDATE does not accept new_path.', { path: file.path });
     }
-    if (file.operation === EditOperation.RENAME && (!file.new_path || file.new_path === file.path)) {
+    if (
+      file.operation === EditOperation.RENAME &&
+      (file.new_path === null || file.new_path === '' || file.new_path === file.path)
+    ) {
       throw new EditError(EditFailureReason.EMPTY, 'RENAME requires a distinct new_path.', { path: file.path });
     }
     if (file.content !== null && file.edits.length > 0) {
@@ -647,7 +650,7 @@ function validatePathGraph(
 }
 
 function parsePatch(patch: string): PatchFile[] {
-  const lines = patch.replace(/\r\n|\r/g, '\n').split('\n');
+  const lines = patch.replaceAll(/\r\n|\r/gu, '\n').split('\n');
   if (lines.at(-1) === '') lines.pop();
   if (lines.shift() !== '*** Begin Patch' || lines.pop() !== '*** End Patch') {
     throw new EditError(
@@ -664,7 +667,7 @@ function parsePatch(patch: string): PatchFile[] {
     hunk = undefined;
   };
   for (const line of lines) {
-    const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line);
+    const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/u.exec(line);
     if (header) {
       finish();
       current = {
@@ -845,14 +848,14 @@ function exactPatchLines(text: string): ExactPatchLine[] {
 }
 
 function dominantLineEnding(lines: readonly ExactPatchLine[]): '\n' | '\r\n' | '\r' {
-  const counts = new Map<string, number>();
+  const counts = new Map<'\n' | '\r\n' | '\r', number>();
   for (const { lineEnding } of lines) {
-    if (lineEnding) counts.set(lineEnding, (counts.get(lineEnding) ?? 0) + 1);
+    if (lineEnding !== '') counts.set(lineEnding, (counts.get(lineEnding) ?? 0) + 1);
   }
-  return ([...counts].sort((left, right) => right[1] - left[1])[0]?.[0] as '\n' | '\r\n' | '\r' | undefined) ?? '\n';
+  return [...counts].toSorted((left, right) => right[1] - left[1])[0]?.[0] ?? '\n';
 }
 
 function applyFinalNewline(text: string, absent: boolean | undefined): string {
-  if (absent) return text.replace(/(?:\r\n|\r|\n)$/, '');
+  if (absent === true) return text.replace(/(?:\r\n|\r|\n)$/u, '');
   return text;
 }

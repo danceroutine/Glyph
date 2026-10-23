@@ -4,8 +4,7 @@ import { WebHttpClient } from './web/WebHttpClient.ts';
 import { WebFetchService } from './web/WebFetchService.ts';
 import { DuckDuckGoSearch } from './web/DuckDuckGoSearch.ts';
 import { createHash } from 'node:crypto';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { GlyphService } from './application/GlyphService.ts';
 import { ChatSessionManager } from './chat/sessions/ChatSessionManager.ts';
 import { SqliteChatSessionStore } from './chat/sessions/SqliteChatSessionStore.ts';
@@ -77,7 +76,7 @@ async function main(): Promise<void> {
   const logger = new FileLogger(configuration.traceFile);
   const http = new FetchHttpClient(logger);
   const store = new FileOpenAIAccountStore(configuration.stateDirectory);
-  const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const packageRoot = resolve(import.meta.dirname, '..');
   const indexExecutable = resolve(
     packageRoot,
     'target',
@@ -166,7 +165,9 @@ async function main(): Promise<void> {
     shutdown.signal,
     {
       projectContext,
-      ...(configuration.configuredModel ? { configuredModel: configuration.configuredModel } : {}),
+      ...(configuration.configuredModel !== undefined && configuration.configuredModel !== ''
+        ? { configuredModel: configuration.configuredModel }
+        : {}),
     },
     new TerminalEditReviewer(ui, () => {
       process.exitCode = 130;
@@ -212,7 +213,7 @@ function workspaceArgument(arguments_: readonly string[]): { workspaceFile?: str
   if (index < 0) return {};
   const argument = arguments_[index]!;
   const workspaceFile = argument === '--workspace' ? arguments_[index + 1] : argument.slice('--workspace='.length);
-  if (!workspaceFile || workspaceFile.startsWith('--')) {
+  if (workspaceFile === undefined || workspaceFile === '' || workspaceFile.startsWith('--')) {
     throw new ConfigurationError('--workspace requires a .code-workspace file path.');
   }
   return { workspaceFile };
@@ -274,7 +275,9 @@ function projectRelativeExclusion(root: string, target: string): string | undefi
   return fromRoot.split(sep).join('/');
 }
 
-main().catch(error => {
+try {
+  await main();
+} catch (error) {
   process.stderr.write(`${TerminalUI.clean(describeError(error))}\n`);
   process.exitCode = 1;
-});
+}

@@ -7,7 +7,7 @@ import {
 import type { AgentReviewExecutor } from './AgentReviewExecutor.ts';
 import type { AgentReviewStore } from './AgentReviewStore.ts';
 import { agentReviewInputSchema } from './AgentReviewSchema.ts';
-import { parseAgentReviewFindings } from './parseAgentReviewFindings.ts';
+import { parseAgentReviewFindings, type AgentReviewFileLines } from './parseAgentReviewFindings.ts';
 
 /** Serializes durable transitions independently of chat sessions and renderer lifetimes. */
 export class AgentReviewService {
@@ -25,7 +25,9 @@ export class AgentReviewService {
   }
   onDidChange(listener: (review: AgentReview) => void): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
   async initialize(): Promise<void> {
     for (const review of await this.store.load()) {
@@ -66,7 +68,7 @@ export class AgentReviewService {
       const completion = Promise.resolve().then(() => this.execute(review, controller.signal));
       this.active = { id: review.id, controller, completion };
       void completion.finally(() => {
-        if (this.active?.id === review.id) this.active = undefined;
+        this.active = undefined;
       });
     });
   }
@@ -108,8 +110,15 @@ export class AgentReviewService {
   private async execute(review: AgentReview, signal: AbortSignal): Promise<void> {
     let text = '';
     let progress: Promise<unknown> = Promise.resolve();
-    const files = new Map(
-      review.files.map(file => [file.path, Math.max(1, (file.after || file.before).split('\n').length)]),
+    const files = new Map<string, AgentReviewFileLines>(
+      review.files.map(file => [
+        file.path,
+        {
+          original: file.before.split('\n').length,
+          modified: file.after.split('\n').length,
+          defaultSide: file.after ? 'modified' : 'original',
+        },
+      ]),
     );
     try {
       signal.throwIfAborted();
@@ -139,7 +148,7 @@ export class AgentReviewService {
         if (current.status !== Status.RUNNING) return;
         signal.throwIfAborted();
         const result = parseAgentReviewFindings(text, files);
-        const summary = text.replace(/<glyph_review>[\s\S]*?(?:<\/glyph_review>|$)/g, '').trim();
+        const summary = text.replaceAll(/<glyph_review>[\s\S]*?(?:<\/glyph_review>|$)/gu, '').trim();
         await this.commit({
           ...current,
           findings: result.findings,
@@ -170,7 +179,9 @@ export class AgentReviewService {
           error: 'Review results could not be saved. Check available storage before retrying.',
         };
         this.records.set(review.id, failed);
-        this.listeners.forEach(listener => listener(failed));
+        this.listeners.forEach(listener => {
+          listener(failed);
+        });
       }
     }
   }
@@ -183,7 +194,9 @@ export class AgentReviewService {
     const next = { ...review, updatedAt: new Date().toISOString() };
     await this.store.save(next);
     this.records.set(next.id, next);
-    this.listeners.forEach(listener => listener(next));
+    this.listeners.forEach(listener => {
+      listener(next);
+    });
   }
   private serial<T>(action: () => Promise<T>): Promise<T> {
     const result = this.queue.then(action, action);

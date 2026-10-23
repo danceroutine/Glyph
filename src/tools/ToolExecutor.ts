@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
 import type { AgentToolCall } from '#src/chat/runtime/AgentModelAdapter.js';
-import type { AgentModeID } from "#src/chat/AgentMode.js";
+import type { AgentModeID } from '#src/chat/AgentMode.js';
 import type { ToolExecutionContext } from './ToolExecutionContext.ts';
 import type { ToolRegistry } from './ToolRegistry.ts';
 
@@ -65,7 +65,7 @@ export class ToolExecutor {
             false,
           ),
         };
-      if (tool.requiresExclusiveRound && options.roundCallCount !== 1)
+      if (tool.requiresExclusiveRound === true && options.roundCallCount !== 1)
         return {
           phase: ToolActivityPhase.FAILED,
           output: failure(

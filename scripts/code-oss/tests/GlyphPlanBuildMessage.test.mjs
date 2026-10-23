@@ -1,9 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, it } from 'vitest';
-const require = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = require('@playwright/test');
-let browser, script;
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let script;
+/** @param {import('@playwright/test').Page} page @param {boolean} building */
 async function mount(page, building) {
   await page.route('http://localhost/**', route =>
     route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }),
@@ -91,7 +93,7 @@ describe('Plan build orders in the transcript', () => {
     const page = await browser.newPage();
     try {
       await mount(page, true);
-      const rider = page.getByRole('note', { name: /^Sent while building Queue composer messages/ });
+      const rider = page.getByRole('note', { name: /^Sent while building Queue composer messages/u });
       await expect(rider).toContainText('Send the next queued message when a run completes');
       await expect(rider).toContainText('1/4');
     } finally {

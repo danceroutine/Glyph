@@ -39,6 +39,8 @@ export function useGlyphReviewControlsState(controls: GlyphReviewControls) {
       controls.registerCommands?.(command => {
         if (busy.current || commentOpen) return;
         switch (command) {
+          case GlyphReviewCommand.ADD_TO_CHAT:
+            break;
           case GlyphReviewCommand.KEEP:
             if (!controls.keepDisabled) void perform(controls.keep);
             break;
@@ -55,13 +57,13 @@ export function useGlyphReviewControlsState(controls: GlyphReviewControls) {
             if (!controls.disabled && controls.undoFile) void perform(controls.undoFile);
             break;
           case GlyphReviewCommand.KEEP_ALL:
-            if (!controls.keepAllDisabled && controls.keepAll) void perform(controls.keepAll);
+            if (controls.keepAllDisabled !== true && controls.keepAll) void perform(controls.keepAll);
             break;
           case GlyphReviewCommand.NEXT_FILE:
-            if (!controls.navigationDisabled && controls.nextFile) void perform(controls.nextFile);
+            if (controls.navigationDisabled !== true && controls.nextFile) void perform(controls.nextFile);
             break;
           case GlyphReviewCommand.PREVIOUS_FILE:
-            if (!controls.navigationDisabled && controls.previousFile) void perform(controls.previousFile);
+            if (controls.navigationDisabled !== true && controls.previousFile) void perform(controls.previousFile);
             break;
           case GlyphReviewCommand.NEXT_CHANGE:
             if (!controls.disabled) controls.next();
@@ -95,10 +97,10 @@ export function useGlyphReviewControlsState(controls: GlyphReviewControls) {
       }),
     disabled: controls.disabled || pending || commentOpen,
     keepDisabled: controls.keepDisabled || pending || commentOpen,
-    keepAllDisabled: controls.keepAllDisabled || pending || commentOpen,
+    keepAllDisabled: controls.keepAllDisabled === true || pending || commentOpen,
     previousFile: controls.previousFile ? () => perform(controls.previousFile!) : undefined,
     nextFile: controls.nextFile ? () => perform(controls.nextFile!) : undefined,
-    navigationDisabled: controls.navigationDisabled || pending || commentOpen,
+    navigationDisabled: controls.navigationDisabled === true || pending || commentOpen,
     keep: () => perform(controls.keep),
     undo: () => perform(controls.undo),
     keepFile: controls.keepFile ? () => perform(controls.keepFile!) : undefined,

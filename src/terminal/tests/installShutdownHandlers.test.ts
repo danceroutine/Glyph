@@ -10,7 +10,13 @@ describe(installShutdownHandlers, () => {
     const active = new AbortController();
     const signals: ShutdownSignal[] = [];
     const dispose = installShutdownHandlers(
-      { active: () => active, interrupt, shutdown: signal => signals.push(signal) },
+      {
+        active: () => active,
+        interrupt,
+        shutdown: signal => {
+          signals.push(signal);
+        },
+      },
       source,
     );
 
@@ -27,7 +33,15 @@ describe(installShutdownHandlers, () => {
     const source = new EventEmitter();
     const active = new AbortController();
     const signals: ShutdownSignal[] = [];
-    const dispose = installShutdownHandlers({ active: () => active, shutdown: signal => signals.push(signal) }, source);
+    const dispose = installShutdownHandlers(
+      {
+        active: () => active,
+        shutdown: signal => {
+          signals.push(signal);
+        },
+      },
+      source,
+    );
 
     source.emit(ShutdownSignal.SIGTERM);
     expect(active.signal.aborted).toBe(true);
@@ -39,7 +53,12 @@ describe(installShutdownHandlers, () => {
     const source = new EventEmitter();
     const signals: ShutdownSignal[] = [];
     const dispose = installShutdownHandlers(
-      { active: () => undefined, shutdown: signal => signals.push(signal) },
+      {
+        active: () => undefined,
+        shutdown: signal => {
+          signals.push(signal);
+        },
+      },
       source,
     );
 

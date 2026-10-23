@@ -46,9 +46,16 @@ describe('model discovery cancellation', () => {
     });
     const running = application.run();
     try {
-      await vi.waitFor(() => expect(fixture.get).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(fixture.get).toHaveBeenCalledOnce();
+      });
       shutdown.abort(new Error('Application stopped.'));
-      await vi.waitFor(() => expect(fixture.store.release).toHaveBeenCalledOnce(), { timeout: 300 });
+      await vi.waitFor(
+        () => {
+          expect(fixture.store.release).toHaveBeenCalledOnce();
+        },
+        { timeout: 300 },
+      );
       expect(fixture.get.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
       expect(ui.chooseModel).not.toHaveBeenCalled();
       expect(ui.showError).not.toHaveBeenCalled();
@@ -65,11 +72,15 @@ describe('model discovery cancellation', () => {
     const peer = discoveryFixture();
     await fixture.backend.initialize();
     await peer.backend.initialize();
-    const pending = fixture.backend.listModels(fixture.backend.accounts[0]!).catch(error => error);
-    const other = peer.backend.listModels(peer.backend.accounts[0]!).catch(error => error);
+    const pending = fixture.backend.listModels(fixture.backend.accounts[0]!).catch((error: unknown) => error);
+    const other = peer.backend.listModels(peer.backend.accounts[0]!).catch((error: unknown) => error);
     try {
-      await vi.waitFor(() => expect(fixture.get).toHaveBeenCalledOnce());
-      await vi.waitFor(() => expect(peer.get).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(fixture.get).toHaveBeenCalledOnce();
+      });
+      await vi.waitFor(() => {
+        expect(peer.get).toHaveBeenCalledOnce();
+      });
       await fixture.backend.dispose();
       expect(fixture.get.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
       expect(peer.get.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
@@ -86,9 +97,11 @@ describe('model discovery cancellation', () => {
     const owner = new AbortController();
     const fixture = discoveryFixture(owner.signal);
     await fixture.backend.initialize();
-    const pending = fixture.backend.listModels(fixture.backend.accounts[0]!).catch(error => error);
+    const pending = fixture.backend.listModels(fixture.backend.accounts[0]!).catch((error: unknown) => error);
     try {
-      await vi.waitFor(() => expect(fixture.get).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(fixture.get).toHaveBeenCalledOnce();
+      });
       owner.abort(new Error('Credential owner stopped.'));
       expect(fixture.get.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
       expect(await pending).toBeInstanceOf(Error);
@@ -111,14 +124,21 @@ describe('model discovery cancellation', () => {
     let completed = false;
     const pending = fixture.backend
       .listModels(fixture.backend.accounts[0]!, cancellation.signal)
-      .catch(error => error)
+      .catch((error: unknown) => error)
       .finally(() => {
         completed = true;
       });
     try {
-      await vi.waitFor(() => expect(fixture.session.accessToken).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(fixture.session.accessToken).toHaveBeenCalledOnce();
+      });
       cancellation.abort(new Error('Discovery cancelled.'));
-      await vi.waitFor(() => expect(completed).toBe(true), { timeout: 300 });
+      await vi.waitFor(
+        () => {
+          expect(completed).toBe(true);
+        },
+        { timeout: 300 },
+      );
       expect(await pending).toBeInstanceOf(Error);
       expect(fixture.session.dispose).not.toHaveBeenCalled();
       release('shared-refreshed-token');
@@ -142,10 +162,12 @@ describe('model discovery cancellation', () => {
     const cancellation = new AbortController();
     const cancelled = fixture.backend
       .listModels(fixture.backend.accounts[0]!, cancellation.signal)
-      .catch(error => error);
-    const continued = fixture.backend.listModels(fixture.backend.accounts[0]!).catch(error => error);
+      .catch((error: unknown) => error);
+    const continued = fixture.backend.listModels(fixture.backend.accounts[0]!).catch((error: unknown) => error);
     try {
-      await vi.waitFor(() => expect(fixture.get).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(fixture.get).toHaveBeenCalledTimes(2);
+      });
       cancellation.abort(new Error('Only this catalog request stopped.'));
       expect(await cancelled).toBeInstanceOf(Error);
       expect(fixture.get.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
@@ -162,7 +184,9 @@ describe('model discovery cancellation', () => {
     const fixture = discoveryFixture();
     const cancellation = new AbortController();
     cancellation.abort(new Error('Discovery cancelled.'));
-    const pending = fixture.backend.listModels(fixture.backend.accounts[0]!, cancellation.signal).catch(error => error);
+    const pending = fixture.backend
+      .listModels(fixture.backend.accounts[0]!, cancellation.signal)
+      .catch((error: unknown) => error);
     try {
       await Promise.resolve();
       expect(fixture.session.accessToken).not.toHaveBeenCalled();
@@ -209,8 +233,14 @@ function discoveryFixture(lifetimeSignal?: AbortSignal) {
     (_url, options) =>
       new Promise((_resolve, reject) => {
         rejectRequests.add(reject);
-        if (options?.signal?.aborted) reject(options.signal.reason);
-        options?.signal?.addEventListener('abort', () => reject(options.signal!.reason), { once: true });
+        if (options?.signal?.aborted === true) reject(options.signal.reason);
+        options?.signal?.addEventListener(
+          'abort',
+          () => {
+            reject(options.signal!.reason);
+          },
+          { once: true },
+        );
       }),
   );
   const catalog = new OpenAIModelCatalog(configuration, { get, post: vi.fn() });

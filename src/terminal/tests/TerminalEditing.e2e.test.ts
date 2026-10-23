@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
+import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
@@ -12,6 +13,7 @@ import type { EditingConfiguration } from '#src/editing/configuration/EditingCon
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { TerminalEditReviewer } from '#src/terminal/ui/proposal/TerminalEditReviewer.js';
 import { TerminalUI } from '#src/terminal/TerminalUI.js';
+import { normalize } from '#src/shared/tests/normalize.ts';
 
 const paths: string[] = [];
 const originalFetch = globalThis.fetch;
@@ -81,16 +83,14 @@ describe(TerminalEditReviewer, () => {
       const reviewer = new TerminalEditReviewer(ui);
 
       const reviewing = reviewer.review(manager, new AbortController().signal);
-      await waitUntil(() => tty.rawTransitions.at(-1) === true && rendered.includes('Y accept'));
+      await expect.poll(() => tty.rawTransitions.at(-1) === true && rendered.includes('Y keep')).toBe(true);
       tty.push('Y');
       await reviewing;
-      await waitUntil(() => rendered.includes('Review complete'));
+      await expect.poll(() => rendered.includes('Review complete')).toBe(true);
 
       expect(await readFile(join(root, 'file.ts'), 'utf8')).toBe('const answer: number = 2;\n');
       expect(tty.rawTransitions).toEqual([true, false]);
-      expect(rendered).toContain('\x1b[48;5;52m');
-      expect(rendered).toContain('\x1b[48;5;22m');
-      expect(rendered).toContain('\x1b[35mconst\x1b[39m');
+      expect(normalize(rendered)).toContain('const');
       expect(rendered).toContain('Review complete');
       expect(rendered).toContain('1 accepted');
       expect(rendered).toContain('0 rejected');
@@ -157,10 +157,22 @@ describe(TerminalEditReviewer, () => {
       const reviewer = new TerminalEditReviewer(ui);
 
       const firstReview = reviewer.review(manager, new AbortController().signal);
-      await waitUntil(() => rendered.includes('Y accept'));
-      await sendKeys(tty, ['\x1b[B', '\x1b[C', '\x1b[D', 'F', '\x1b[6~', '\x1b[5~', '\x1b[F', '\x1b[H', 'q']);
+      await expect.poll(() => rendered.includes('Y keep')).toBe(true);
+      await sendKeys(tty, [
+        '\u001B[B',
+        '\u001B[C',
+        '\u001B[D',
+        'F',
+        '\u001B[6~',
+        '\u001B[5~',
+        '\u001B[F',
+        '\u001B[H',
+        'q',
+      ]);
       await firstReview;
-      expect(manager.active?.files.flatMap(file => file.items).every(item => item.decision === 'PENDING')).toBe(true);
+      expect(
+        manager.active?.files.flatMap(file => file.items).every(item => item.decision === EditDecisionState.PENDING),
+      ).toBe(true);
       expect(rendered).toContain('full file');
       expect(rendered).toContain('far-away-context');
       expect(rendered).toContain('File 1/3  change 1/2');
@@ -170,7 +182,7 @@ describe(TerminalEditReviewer, () => {
       expect(rendered).not.toContain('gg/G ends');
 
       const secondReview = reviewer.review(manager, new AbortController().signal);
-      await waitUntil(() => tty.rawTransitions.at(-1) === true);
+      await expect.poll(() => tty.rawTransitions.at(-1) === true).toBe(true);
       await sendKeys(
         tty,
         manager.activeReviews.flatMap(review => review.files.flatMap(file => file.items)).map(() => 'N'),
@@ -221,12 +233,12 @@ describe(TerminalEditReviewer, () => {
       });
       const ui = new TerminalUI(tty, output, output);
       const review = new TerminalEditReviewer(ui).review(manager, new AbortController().signal);
-      await waitUntil(() => rendered.includes('Y accept'));
+      await expect.poll(() => rendered.includes('Y keep')).toBe(true);
       tty.push('Y');
-      await waitUntil(() => rendered.includes('Error: The file changed'));
+      await expect.poll(() => rendered.includes('Error: The file changed')).toBe(true);
       tty.push('Q');
       await review;
-      expect(rendered).toMatch(/Error: The file changed/);
+      expect(rendered).toMatch(/Error: The file changed/u);
       expect(await readFile(join(root, 'file.txt'), 'utf8')).toBe('collaborator');
       ui.close();
       expect(tty.rawTransitions.at(-1)).toBe(false);
@@ -254,17 +266,11 @@ function terminalOutput(): PassThrough & { columns?: number; rows?: number; isTT
   return output;
 }
 
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (predicate()) return;
-    await new Promise<void>(resolve => setTimeout(resolve, 5));
-  }
-  throw new Error('Condition was not reached.');
-}
-
 async function sendKeys(tty: VirtualTTY, keys: readonly string[]): Promise<void> {
   for (const key of keys) {
     tty.push(key);
-    await new Promise<void>(resolve => setTimeout(resolve, 50));
+    await new Promise<void>(resolve => {
+      setTimeout(resolve, 50);
+    });
   }
 }

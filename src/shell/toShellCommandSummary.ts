@@ -38,11 +38,14 @@ export function toShellCommandSummary(activity: ToolActivity): ShellCommandSumma
   if (activity.namespace !== 'shell' || !name.success) return undefined;
   try {
     const input = argumentsSchema.parse(JSON.parse(activity.arguments));
-    const result = activity.output ? resultSchema.parse(JSON.parse(activity.output)) : undefined;
+    const result =
+      activity.output !== undefined && activity.output !== ''
+        ? resultSchema.parse(JSON.parse(activity.output))
+        : undefined;
     const sessionId = result?.terminal_id ?? input.terminal_id;
     const workingDirectory = result?.working_directory ?? input.working_directory;
     const output = result?.terminals
-      ? result.terminals.length
+      ? result.terminals.length > 0
         ? result.terminals
             .map(
               session =>
@@ -55,8 +58,10 @@ export function toShellCommandSummary(activity: ToolActivity): ShellCommandSumma
       command: input.command ?? labels[name.data],
       output: result?.terminals ? output : output.slice(-64 * 1024),
       background: input.background ?? false,
-      ...(sessionId ? { sessionId } : {}),
-      ...(workingDirectory ? { workingDirectory } : {}),
+      ...(sessionId !== undefined && sessionId !== null && sessionId !== '' ? { sessionId } : {}),
+      ...(workingDirectory !== undefined && workingDirectory !== null && workingDirectory !== ''
+        ? { workingDirectory }
+        : {}),
       ...(result?.exit_code === undefined ? {} : { exitCode: result.exit_code }),
       ...(result?.error ? { error: result.error.message.slice(0, 4096) } : {}),
     };

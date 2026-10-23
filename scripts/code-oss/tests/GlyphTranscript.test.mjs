@@ -1,11 +1,16 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
-import { buildGlyphDiagram } from '../build-diagram.mjs';
+import { buildGlyphDiagram } from '#scripts/code-oss/build-diagram.mjs';
 import { afterAll, beforeAll, describe, it } from 'vitest';
-const require = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = require('@playwright/test');
-let browser, script, renderer;
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
+/** @type {import('@playwright/test').Browser} */
+let browser;
+/** @type {string} */
+let renderer;
+/** @type {string} */
+let script;
+/** @param {import('@playwright/test').Page} page */
 async function mount(page) {
   await page.route('http://localhost/**', route =>
     route.fulfill({
@@ -27,9 +32,11 @@ beforeAll(async () => {
     import { MessageActions } from './code-oss/ui/GlyphTranscript/GlyphTranscript.stories.tsx';
     import { WiredGlyphTranscript } from './code-oss/ui/GlyphTranscript/GlyphTranscript.wired.tsx';
     import { WiredGlyphUsageSummary } from './code-oss/ui/GlyphUsageSummary/GlyphUsageSummary.wired.tsx';
+    import { WiredGlyphMarkdown } from './code-oss/ui/GlyphMarkdown/GlyphMarkdown.wired.tsx';
     const usage = { inputTokens: 100, cachedInputTokens: 40, outputTokens: 30, reasoningTokens: 12, totalTokens: 130 };
     window.showMessageActions = () => render(h(MessageActions.render, {}), document.getElementById('root'));
     window.actions = [];
+    window.showMarkdown = text => render(h(WiredGlyphMarkdown, { text, openLink: href => window.actions.push(['link', href]) }), document.getElementById('root'));
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: async text => window.actions.push(['copy', text]) } });
     const text = '## Result\\n\\n**Strong** and *emphasized*, with [source](src/a.ts).\\n\\n3. Three\\n4. Four\\n\\n> A quotation\\n\\n| Column | Value |\\n| --- | --- |\\n| Test | Passed |\\n\\n\`\`\`mermaid\\nflowchart LR\\n  A[Start] --> B[Done]\\n\`\`\`';
     const entries = [{ id: 'reply', checkpointTurnId: 'turn', role: 'assistant', text, usage, createdAt: '2026-10-17T15:30:00Z' },
@@ -42,6 +49,7 @@ beforeAll(async () => {
     write: false,
     format: 'iife',
     platform: 'browser',
+    ...coverageBuildOptions,
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   script = result.outputFiles[0].text;
@@ -52,8 +60,86 @@ afterAll(async () => {
 });
 
 describe('Markdown messages and usage controls', () => {
+  it('handles Escape as soon as an expanded diagram commits', async () => {
+    const page = await newCoveredPage(browser);
+    try {
+      await mount(page);
+      const expand = page.getByRole('button', { name: 'Expand diagram' });
+      await expect(page.getByRole('img', { name: 'Plan diagram' })).toBeVisible();
+      await page.evaluate(async () => {
+        const button = document.querySelector('[aria-label="Expand diagram"]');
+        if (!(button instanceof HTMLElement)) throw new TypeError('Expected the expand button.');
+        button.click();
+        await new Promise(queueMicrotask);
+        if (!document.querySelector('[aria-label="Collapse diagram"]')) throw new Error('Expansion did not commit.');
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      });
+      await expect(expand).toBeFocused();
+    } finally {
+      await page.close();
+    }
+  }, 15000);
+
+  it('decodes entities once in prose and explicit links while preserving code, escapes, and autolinks', async () => {
+    const page = await newCoveredPage(browser);
+    try {
+      await mount(page);
+      await page.evaluate(() =>
+        window.showMarkdown(
+          [
+            'Plain &amp; &lt;tag&gt; &copy; &#169; &#x1F9EA; &madeup;',
+            'Once &amp;lt;tag&amp;gt; &#38;lt;tag&#38;gt;',
+            'Escape \\&amp;',
+            '`&amp; &#38;`',
+            '```\n&amp; &#38;\n```',
+            '&lt;img src=x onerror=alert(1)&gt;',
+            '[Filtered results](https://example.test/search?first=1&amp;second=2)',
+            '[One pass](https://example.test/search?first=1&#38;amp;second=2)',
+            '<https://example.test/search?first=1&amp;second=2>',
+          ].join('\n\n'),
+        ),
+      );
+      await expect(page.locator('p').nth(0)).toHaveText('Plain & <tag> © © 🧪 &madeup;');
+      await expect(page.locator('p').nth(1)).toHaveText('Once &lt;tag&gt; &lt;tag&gt;');
+      await expect(page.locator('p').nth(2)).toHaveText('Escape &amp;');
+      await expect(page.locator('p code')).toHaveText('&amp; &#38;');
+      await expect(page.locator('pre')).toContainText('&amp; &#38;');
+      await expect(page.locator('p').filter({ hasText: '<img src=x onerror=alert(1)>' })).toHaveCount(1);
+      await expect(page.locator('#root img, #root script')).toHaveCount(0);
+      await page.getByRole('link', { name: 'Filtered results', exact: true }).click();
+      await page.getByRole('link', { name: 'One pass', exact: true }).click();
+      await page.getByRole('link', { name: 'https://example.test/search?first=1&amp;second=2', exact: true }).click();
+      expect(await page.evaluate(() => window.actions)).toEqual([
+        ['link', 'https://example.test/search?first=1&second=2'],
+        ['link', 'https://example.test/search?first=1&amp;second=2'],
+        ['link', 'https://example.test/search?first=1&amp;second=2'],
+      ]);
+    } finally {
+      await page.close();
+    }
+  }, 15000);
+
+  it('preserves completed and outstanding task states in tight and loose Markdown lists', async () => {
+    const page = await newCoveredPage(browser);
+    try {
+      await mount(page);
+      await page.evaluate(() =>
+        window.showMarkdown('- [x] Verified\n- [ ] Pending\n\n1. [x] Shipped\n\n2. [ ] Planned'),
+      );
+      const tasks = page.getByRole('checkbox');
+      await expect(tasks).toHaveCount(4);
+      for (const [index, checked] of [true, false, true, false].entries()) {
+        await expect(tasks.nth(index)).toBeDisabled();
+        await expect(tasks.nth(index)).toBeChecked({ checked });
+      }
+      await expect(page.locator('li')).toHaveText(['Verified', 'Pending', 'Shipped', 'Planned']);
+    } finally {
+      await page.close();
+    }
+  }, 15000);
+
   it('renders Markdown and Mermaid while preserving inline context and real message actions', async () => {
-    const page = await browser.newPage();
+    const page = await newCoveredPage(browser);
     try {
       await mount(page);
       await expect(page.getByRole('heading', { name: 'Result' })).toBeVisible();
@@ -91,7 +177,7 @@ describe('Markdown messages and usage controls', () => {
     }
   }, 15000);
   it('shows only icons for turn usage, reveals dates on hover, and dismisses popovers with Escape and outside clicks', async () => {
-    const page = await browser.newPage({ viewport: { width: 360, height: 1000 } });
+    const page = await newCoveredPage(browser, { viewport: { width: 360, height: 1000 } });
     try {
       await mount(page);
       const turn = page.getByRole('button', { name: 'Turn token usage' });
@@ -120,7 +206,7 @@ describe('Markdown messages and usage controls', () => {
 });
 
 it('shows a date on hover for both assistant messages in the actual Message Actions story', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await mount(page);
     await page.evaluate(() => window.showMessageActions());
@@ -131,7 +217,7 @@ it('shows a date on hover for both assistant messages in the actual Message Acti
       await expect(message.locator('time')).toHaveCSS('opacity', '0');
       await message.hover();
       await expect(message.locator('time')).toHaveCSS('opacity', '1');
-      await expect(message.locator('time')).toHaveAttribute('datetime', /2026-10-18T14:/);
+      await expect(message.locator('time')).toHaveAttribute('datetime', /2026-10-18T14:/u);
     }
   } finally {
     await page.close();

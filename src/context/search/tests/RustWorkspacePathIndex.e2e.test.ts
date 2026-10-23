@@ -5,9 +5,55 @@ import { describe, expect, it } from 'vitest';
 import { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorkspacePathIndex.js';
 
 describe(RustWorkspacePathIndex, () => {
   describe('workspace path queries', () => {
+    it('returns escaped context within the multi-root response budget through the real Rust process', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'context-index-escaped-'));
+      const native = new RustWorkspacePathIndex({
+        root,
+        binaryPath: resolve(
+          'target',
+          'release',
+          process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
+        ),
+      });
+      const index = new MultiRootWorkspacePathIndex('fixture', [{ name: 'app', index: native }]);
+      try {
+        const block = Array.from(
+          { length: 41 },
+          (_, line) => `${line === 20 ? 'needle' : ''}${'\\'.repeat(8186)}\n`,
+        ).join('');
+        await writeFile(join(root, 'escaped.txt'), block.repeat(2));
+        const locations: number[] = [];
+        let offset: number | null = 0;
+        while (offset !== null) {
+          const result = await index.searchContents('needle', {
+            patternKind: 'literal',
+            outputMode: 'content',
+            linesBefore: 20,
+            linesAfter: 20,
+            limit: 10,
+            offset,
+          });
+          expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(512 * 1024);
+          if (result.outputMode !== 'content') throw new Error('Expected content search matches.');
+          expect(result.matches.length).toBeGreaterThan(0);
+          for (const found of result.matches) {
+            expect(found).toMatchObject({ path: 'app/escaped.txt', matchedText: 'needle', column: 1, endColumn: 7 });
+            locations.push(found.line);
+          }
+          if (result.nextOffset !== null) expect(result.nextOffset).toBeGreaterThan(offset);
+          offset = result.nextOffset;
+        }
+        expect(locations).toEqual([21, 62]);
+      } finally {
+        await index.dispose();
+        await rm(root, { recursive: true, force: true });
+      }
+    }, 30_000);
+
     it('searches and refreshes a cached workspace through the real Rust process', async () => {
       const project = await mkdtemp(join(tmpdir(), 'context-index-project-'));
       const state = await mkdtemp(join(tmpdir(), 'context-index-state-'));

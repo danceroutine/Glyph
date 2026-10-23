@@ -5,9 +5,12 @@ import { resolve } from 'node:path';
 describe('Storybook live indexing', () => {
   it('reindexes a TSX story invalidated between the story and docs passes using the CSF indexer', async () => {
     const path = resolve('code-oss/ui/GlyphComposer/GlyphComposer.stories.tsx');
-    const specifier = { directory: '.', files: '**/*.stories.tsx', importPathMatcher: /\.stories\.tsx$/ };
+    const specifier = { directory: '.', files: '**/*.stories.tsx', importPathMatcher: /\.stories\.tsx$/u };
     const generator = new StoryIndexGenerator([specifier], { workingDir: process.cwd() });
-    generator.specifierToCache.set(specifier, { [path]: false });
+    /** @type {unknown} */
+    const cache = Reflect.get(generator, 'specifierToCache');
+    if (!(cache instanceof Map)) throw new TypeError('Storybook no longer exposes its specifier cache.');
+    cache.set(specifier, { [path]: false });
     let indexed = 0;
     generator.extractStories = async () => {
       indexed++;

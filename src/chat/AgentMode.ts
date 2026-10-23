@@ -28,7 +28,7 @@ export class AgentMode {
       instructions:
         'Plan Mode: use read-only tools, ask questions, and save plans. You may propose reviewed edits only to .md or .markdown files. Never execute shell commands or edit other files. To change mode, call interaction.request_mode_switch alone with the target mode and your reason; wait for approval.',
       editDenial: path =>
-        /\.(md|markdown)$/i.test(path) ? undefined : 'Plan Mode can only edit Markdown files (.md or .markdown).',
+        /\.(md|markdown)$/iu.test(path) ? undefined : 'Plan Mode can only edit Markdown files (.md or .markdown).',
     }),
   });
 

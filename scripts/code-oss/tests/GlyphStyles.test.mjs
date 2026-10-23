@@ -1,10 +1,11 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, it } from 'vitest';
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
 
-const requireUpstream = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = requireUpstream('@playwright/test');
+/** @type {import('@playwright/test').Browser} */
 let browser;
+/** @type {string} */
 let script;
 
 beforeAll(async () => {
@@ -32,7 +33,12 @@ beforeAll(async () => {
     write: false,
     format: 'iife',
     platform: 'browser',
-    define: { 'process.env.NODE_ENV': '"production"' },
+    ...coverageBuildOptions,
+    // The IIFE harness supplies the module URL that the production ESM build provides.
+    define: {
+      'process.env.NODE_ENV': '"production"',
+      'import.meta.url': '"https://glyph.test/ui/mountGlyphWorkbench.js"',
+    },
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   script = result.outputFiles[0].text;
@@ -44,7 +50,7 @@ afterAll(async () => {
 });
 
 it('uses live theme variables without styling controls outside Glyph', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<textarea id="outside"></textarea><div id="root" style="height:400px"></div>');
     const outside = page.locator('#outside');
@@ -66,7 +72,7 @@ it('uses live theme variables without styling controls outside Glyph', async () 
 });
 
 it('preserves production styles when style elements are cloned into another document', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root" style="height:400px;--vscode-input-background:rgb(49,49,49)"></div>');
     await page.addScriptTag({ content: script });
@@ -74,13 +80,15 @@ it('preserves production styles when style elements are cloned into another docu
     // not survive cloneNode, so exercise the production Emotion configuration.
     await page.evaluate(async () => {
       const frame = document.createElement('iframe');
-      const loaded = new Promise(resolve => frame.addEventListener('load', resolve, { once: true }));
+      const loaded = new Promise(resolve => {
+        frame.addEventListener('load', resolve, { once: true });
+      });
       document.body.append(frame);
       await loaded;
       for (const style of document.head.querySelectorAll('style')) {
         frame.contentDocument.head.append(style.cloneNode(true));
       }
-      frame.contentDocument.body.append(document.getElementById('root').cloneNode(true));
+      frame.contentDocument.body.append(document.querySelector('#root').cloneNode(true));
     });
     const clone = page.frameLocator('iframe');
     await expect(clone.locator('.glyph-workbench')).toHaveCSS('display', 'flex');
@@ -92,11 +100,12 @@ it('preserves production styles when style elements are cloned into another docu
 });
 
 it('themes the real controls in Storybook and honors native overrides and optional border fallbacks', async () => {
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root" style="height:600px;width:900px"></div>');
     await page.addScriptTag({ content: script });
     await page.locator('#root').evaluate(element => {
+      if (!(element instanceof HTMLElement)) throw new TypeError('Expected the story root.');
       element.className = window.glyphPreviewStage;
     });
     await page.getByRole('button', { name: 'Chat history', exact: true }).click();
@@ -137,7 +146,7 @@ it('themes the real controls in Storybook and honors native overrides and option
 });
 
 it('expands the host for side-by-side history and releases its width on close or unmount', async () => {
-  const page = await browser.newPage({ viewport: { width: 1400, height: 800 } });
+  const page = await newCoveredPage(browser, { viewport: { width: 1400, height: 800 } });
   try {
     await page.setContent('<div id="root" style="width:900px;height:600px"></div>');
     await page.addScriptTag({ content: script });
@@ -145,8 +154,8 @@ it('expands the host for side-by-side history and releases its width on close or
     const history = page.getByRole('complementary', { name: 'Chat history' });
     const conversation = page.getByRole('main', { name: 'Current conversation' });
     for (const width of [900, 320]) {
-      await page.locator('#root').evaluate((element, width) => {
-        element.style.width = width + 'px';
+      await page.locator('#root').evaluate((element, targetWidth) => {
+        element.style.width = targetWidth + 'px';
       }, width);
       const before = await conversation.boundingBox();
       await toggle.click();
@@ -156,7 +165,7 @@ it('expands the host for side-by-side history and releases its width on close or
       const chatBox = await conversation.boundingBox();
       expect(Math.abs(chatBox.width - before.width)).toBeLessThan(2);
       expect(Math.abs(chatBox.x + chatBox.width - historyBox.x)).toBeLessThan(2);
-      expect(await conversation.evaluate(element => element.inert)).toBe(false);
+      expect(await conversation.evaluate(element => element instanceof HTMLElement && element.inert)).toBe(false);
       const accountBox = await page.locator('.glyph-account-picker').boundingBox();
       expect(Math.abs(accountBox.y + accountBox.height - historyBox.y - historyBox.height)).toBeLessThan(2);
       await page.getByRole('searchbox', { name: 'Search chats' }).focus();
@@ -173,7 +182,9 @@ it('expands the host for side-by-side history and releases its width on close or
     await toggle.click();
     await expect(page.locator('#root')).toHaveCSS('width', '390px');
     await toggle.click();
-    await page.evaluate(() => window.glyphView.dispose());
+    await page.evaluate(() => {
+      window.glyphView.dispose();
+    });
     await expect(page.locator('#root')).toHaveCSS('width', '390px');
   } finally {
     await page.close();

@@ -2,6 +2,17 @@ import { expect } from './playwright.mjs';
 
 /** Drives only user-visible workbench interactions; never resolves internal services or IPC. */
 export class GlyphWorkbench {
+  workspace = '';
+  workspaceTarget = '';
+  /** @type {string[]} */
+  rootPaths = [];
+  /** @type {Promise<void> | undefined} */
+  extensionNoticeHandler;
+
+  /**
+   * @param {import('@playwright/test').Page} page
+   * @param {import('@playwright/test').ElectronApplication} application
+   */
   constructor(page, application) {
     this.page = page;
     this.application = application;
@@ -12,6 +23,7 @@ export class GlyphWorkbench {
     this.diagnostics = page.locator('.glyph-transcript .glyph-entry.diagnostic');
   }
 
+  /** @param {string} name */
   async command(name) {
     await this.page.keyboard.press('F1');
     const input = this.page.locator('.quick-input-widget input');
@@ -25,15 +37,15 @@ export class GlyphWorkbench {
     // turns. Dismiss this known fixture-only toast through its visible control
     // whenever it obstructs an action, without hiding unexpected notifications.
     this.extensionNoticeHandler ??= this.page.addLocatorHandler(
-      this.page.getByRole('dialog', { name: /All installed extensions are temporarily disabled/ }),
+      this.page.getByRole('dialog', { name: /All installed extensions are temporarily disabled/u }),
       async notice => {
         const composerWasFocused = await this.composer.and(this.page.locator(':focus')).count();
         const commandInput = this.page.locator('.quick-input-widget input');
         const command = (await commandInput.isVisible()) ? await commandInput.inputValue() : undefined;
-        await notice.getByRole('button', { name: /^Clear Notification/ }).click();
+        await notice.getByRole('button', { name: /^Clear Notification/u }).click();
         // Clicking a notification closes Quick Input. Restore the command
         // palette if this fixture-only notice interrupted a command action.
-        if (command?.startsWith('>')) {
+        if (command?.startsWith('>') === true) {
           await this.page.keyboard.press('F1');
           await commandInput.fill(command);
         } else if (composerWasFocused) await this.composer.focus();
@@ -49,8 +61,8 @@ export class GlyphWorkbench {
     await expect(this.composer).toBeVisible();
   }
 
+  /** @param {string} text */
   async send(text) {
-    await this.page.bringToFront();
     await this.composer.fill(text);
     await this.sendButton.click();
   }
@@ -75,14 +87,17 @@ export class GlyphWorkbench {
     const pid = await this.application.evaluate(({ app }) => {
       const hosts = app
         .getAppMetrics()
-        .filter(metric => metric.type === 'Utility' && metric.name?.startsWith('glyphHost-'));
+        .filter(metric => metric.type === 'Utility' && metric.name?.startsWith('glyphHost-') === true);
       if (hosts.length !== 1) throw new Error(`Expected one fixture Glyph host, found ${hosts.length}.`);
       process.kill(hosts[0].pid, 'SIGKILL');
       return hosts[0].pid;
     });
     await expect
       .poll(() =>
-        this.application.evaluate(({ app }, pid) => app.getAppMetrics().some(metric => metric.pid === pid), pid),
+        this.application.evaluate(
+          ({ app }, processId) => app.getAppMetrics().some(metric => metric.pid === processId),
+          pid,
+        ),
       )
       .toBe(false);
   }

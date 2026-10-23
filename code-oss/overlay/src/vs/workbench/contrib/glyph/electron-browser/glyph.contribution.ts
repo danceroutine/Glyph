@@ -1,11 +1,11 @@
 import { GlyphAgentReviewScope, glyphAgentReviewLabels } from '#glyph/workbench/GlyphAgentReview.js';
-import { GlyphAgentReviewPane } from '../browser/GlyphAgentReviewPane.js';
-import { GlyphBuiltinChat } from '../browser/GlyphBuiltinChat.js';
+import { GlyphAgentReviewPane } from '#vs/workbench/contrib/glyph/browser/GlyphAgentReviewPane.js';
+import { GlyphBuiltinChat } from '#vs/workbench/contrib/glyph/browser/GlyphBuiltinChat.js';
 import {
   GlyphDiagnosticHover,
   GlyphTerminalSelectionActions,
   useGlyphContext,
-} from '../browser/GlyphNativeContextActions.js';
+} from '#vs/workbench/contrib/glyph/browser/GlyphNativeContextActions.js';
 import { HoverParticipantRegistry } from '#vs/editor/contrib/hover/browser/hoverTypes.js';
 import { WorkbenchPhase, registerWorkbenchContribution2 } from '#vs/workbench/common/contributions.js';
 import { VIEWLET_ID as SCM_VIEWLET_ID } from '#vs/workbench/contrib/scm/common/scm.js';
@@ -52,12 +52,16 @@ import { URI } from '#vs/base/common/uri.js';
 import { IExplorerService } from '#vs/workbench/contrib/files/browser/files.js';
 import { ExplorerFolderContext } from '#vs/workbench/contrib/files/common/files.js';
 
+abstract class AsyncAction2 extends Action2 {
+  abstract override run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void>;
+}
+
 for (const folder of [false, true]) {
   for (const newChat of [false, true]) {
     const kind = folder ? 'Directory' : 'File';
     const id = `glyph.addExplorer${kind}To${newChat ? 'New' : ''}Chat`;
     registerAction2(
-      class extends Action2 {
+      class extends AsyncAction2 {
         constructor() {
           super({
             id,
@@ -202,7 +206,7 @@ const descriptor: IViewDescriptor = {
 views.registerViews([descriptor], container);
 
 registerAction2(
-  class extends Action2 {
+  class extends AsyncAction2 {
     constructor() {
       super({
         id: 'glyph.attachSelection',
@@ -216,16 +220,16 @@ registerAction2(
     }
     async run(accessor: ServicesAccessor): Promise<void> {
       const glyph = accessor.get(GlyphWorkbenchService);
-      const views = accessor.get(IViewsService);
+      const viewsService = accessor.get(IViewsService);
       await glyph.attachSelection();
-      await views.openView(GlyphViewPane.ID, true);
+      await viewsService.openView(GlyphViewPane.ID, true);
       glyph.composer.focus();
     }
   },
 );
 
 registerAction2(
-  class extends Action2 {
+  class extends AsyncAction2 {
     constructor() {
       super({
         id: 'glyph.attachIdeContext',
@@ -235,8 +239,9 @@ registerAction2(
     }
     async run(accessor: ServicesAccessor): Promise<void> {
       const glyph = accessor.get(GlyphWorkbenchService);
+      const viewsService = accessor.get(IViewsService);
       await glyph.attachIdeContext();
-      await accessor.get(IViewsService).openView(GlyphViewPane.ID, true);
+      await viewsService.openView(GlyphViewPane.ID, true);
       glyph.composer.focus();
     }
   },
@@ -364,9 +369,13 @@ registerWorkbenchContribution2(
   GlyphTerminalSelectionActions,
   WorkbenchPhase.AfterRestored,
 );
-const scmContainer = containers.get(SCM_VIEWLET_ID);
-if (scmContainer)
-  views.registerViews(
+export function registerGlyphAgentReviewView(
+  viewContainers: IViewContainersRegistry,
+  viewRegistry: IViewsRegistry,
+): void {
+  const scmContainer = viewContainers.get(SCM_VIEWLET_ID);
+  if (!scmContainer) return;
+  viewRegistry.registerViews(
     [
       {
         id: GlyphAgentReviewPane.ID,
@@ -383,9 +392,11 @@ if (scmContainer)
     ],
     scmContainer,
   );
+}
+registerGlyphAgentReviewView(containers, views);
 
 registerAction2(
-  class extends Action2 {
+  class extends AsyncAction2 {
     constructor() {
       super({
         id: 'glyph.attachTerminalSelection',
@@ -411,7 +422,7 @@ registerAction2(
   },
 );
 registerAction2(
-  class extends Action2 {
+  class extends AsyncAction2 {
     constructor() {
       super({
         id: 'glyph.fixTestFailure',
@@ -426,7 +437,12 @@ registerAction2(
       accessor: ServicesAccessor,
       context?: ITestMessageMenuArgs & { glyphResultId?: string; glyphTaskIndex?: number; glyphMessageIndex?: number },
     ): Promise<void> {
-      if (!context?.glyphResultId || context.glyphTaskIndex === undefined || context.glyphMessageIndex === undefined)
+      if (
+        context?.glyphResultId === undefined ||
+        context?.glyphResultId === '' ||
+        context.glyphTaskIndex === undefined ||
+        context.glyphMessageIndex === undefined
+      )
         throw new Error('Open the test failure message to fix it with Glyph.');
       const glyph = accessor.get(GlyphWorkbenchService);
       await useGlyphContext(

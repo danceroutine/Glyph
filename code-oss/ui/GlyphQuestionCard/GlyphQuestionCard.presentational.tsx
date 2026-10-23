@@ -162,16 +162,18 @@ export function GlyphQuestionCard({
                 {index + 1}. {question.prompt}
               </legend>
               {question.allowMultiple && <p class={shared.detail}>Choose one or more.</p>}
-              {question.options.map((option, index) => (
+              {question.options.map((option, optionIndex) => (
                 <label key={option.id} class={styles.choice}>
                   <input
                     {...(question.allowMultiple ? { type: 'checkbox' as const } : { type: 'radio' as const })}
                     name={inputName}
                     checked={selectedOptionIds.includes(option.id)}
-                    onChange={event => selectOption(option.id, event.currentTarget.checked)}
+                    onChange={event => {
+                      selectOption(option.id, event.currentTarget.checked);
+                    }}
                   />
                   <span class={styles.badge} aria-hidden="true">
-                    {index < 26 ? String.fromCharCode(65 + index) : index + 1}
+                    {optionIndex < 26 ? String.fromCodePoint(65 + optionIndex) : optionIndex + 1}
                   </span>
                   <span>{option.label}</span>
                 </label>
@@ -181,7 +183,7 @@ export function GlyphQuestionCard({
                   <input type="radio" name={inputName} checked={other} onChange={enterOther} />
                   <span class={styles.badge} aria-hidden="true">
                     {question.options.length < 26
-                      ? String.fromCharCode(65 + question.options.length)
+                      ? String.fromCodePoint(65 + question.options.length)
                       : question.options.length + 1}
                   </span>
                   <span>Other…</span>
@@ -193,7 +195,9 @@ export function GlyphQuestionCard({
                   aria-label="Your answer"
                   placeholder="Type your answer…"
                   value={otherText}
-                  onInput={event => updateOther(event.currentTarget.value)}
+                  onInput={event => {
+                    updateOther(event.currentTarget.value);
+                  }}
                 />
               )}
             </fieldset>
@@ -219,7 +223,7 @@ export function GlyphQuestionCard({
         </Button>
       </footer>
       {disabled && <p class={shared.error}>Answer in the window that owns this chat.</p>}
-      {error && (
+      {error !== undefined && error !== '' && (
         <div class={shared.error} role="alert">
           {error}
         </div>

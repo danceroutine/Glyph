@@ -1,8 +1,7 @@
-import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { it } from 'vitest';
-const require = createRequire(new URL('../../../.code-oss/src/package.json', import.meta.url));
-const { chromium, expect } = require('@playwright/test');
+import { coverageBuildOptions, newCoveredPage } from '#scripts/code-oss/tests/support/coverage.mjs';
+import { chromium, expect } from '#scripts/code-oss/tests/support/playwright.mjs';
 
 it('uses letter controls for choices and Other while retaining radio keyboard and free-text behavior', async () => {
   const result = await build({
@@ -19,10 +18,11 @@ it('uses letter controls for choices and Other while retaining radio keyboard an
     write: false,
     format: 'iife',
     platform: 'browser',
+    ...coverageBuildOptions,
     tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'preact' } },
   });
   const browser = await chromium.launch();
-  const page = await browser.newPage();
+  const page = await newCoveredPage(browser);
   try {
     await page.setContent('<div id="root"></div>');
     await page.addScriptTag({ content: result.outputFiles[0].text });
@@ -50,6 +50,7 @@ it('uses letter controls for choices and Other while retaining radio keyboard an
     await expect(page.getByRole('checkbox', { name: 'Speed' })).toBeChecked();
     await expect(second.getByRole('radio', { name: 'Other…' }).locator('..')).toContainText('C');
   } finally {
+    await page.close();
     await browser.close();
   }
 }, 30000);

@@ -37,18 +37,22 @@ export function GlyphCommentButton({
 }) {
   const button = useRef<HTMLButtonElement>(null);
   const [width, setWidth] = useState(0);
-  const selection = !!position && !order;
+  const selection = position !== undefined && (order ?? 0) === 0;
   useLayoutEffect(() => {
-    if (!selection || !button.current) return;
-    const measure = () => setWidth(button.current!.getBoundingClientRect().width);
+    if (!selection || !button.current) return undefined;
+    const measure = () => {
+      setWidth(button.current!.getBoundingClientRect().width);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(button.current);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+    };
   }, [selection]);
   const left =
     position && selection ? Math.max(8, Math.min(innerWidth - width - 8, position.x - width / 2)) : position?.x;
-  if (!order)
+  if ((order ?? 0) === 0)
     return (
       <Button
         buttonRef={button}
@@ -57,7 +61,9 @@ export function GlyphCommentButton({
         class={`glyph-annotation-marker ${position ? styles.positioned : ''}`}
         style={position ? { left: `${left}px`, top: `${position.y}px` } : {}}
         aria-label="Comment on selection"
-        onMouseDown={event => event.preventDefault()}
+        onMouseDown={event => {
+          event.preventDefault();
+        }}
         onClick={open}
         shortcut={shortcut}
       >
@@ -71,12 +77,14 @@ export function GlyphCommentButton({
       type="button"
       class={`glyph-annotation-marker ${styles.button} ${position ? styles.positioned : ''}`}
       style={position ? { left: `${left}px`, top: `${position.y}px` } : {}}
-      aria-label={order ? `Edit annotation ${order}` : 'Comment on selection'}
-      onMouseDown={event => event.preventDefault()}
+      aria-label={`Edit annotation ${order}`}
+      onMouseDown={event => {
+        event.preventDefault();
+      }}
       onClick={open}
     >
       <MessageCircle aria-hidden="true" strokeWidth={1.8} />
-      {order && <span>{order}</span>}
+      <span>{order}</span>
     </Button>
   );
 }

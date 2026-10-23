@@ -1,5 +1,5 @@
 import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
-import type { GlyphIdeContext } from '../browser/GlyphIdeContext.js';
+import type { GlyphIdeContext } from '#vs/workbench/contrib/glyph/browser/GlyphIdeContext.js';
 import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
 import type { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
 import { AgentModeID } from '#glyph/protocol/index.js';

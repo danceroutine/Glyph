@@ -8,6 +8,8 @@ import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
 import { isSafeShellCommand } from './isSafeShellCommand.ts';
 
 /** Resolves exact-command authorization and persists project-scoped choices. */
+const defaultAuthorizationContext: ShellAuthorizationContext = { background: false, existingTerminal: false };
+
 export class ShellCommandAuthorizer {
   private policy: ShellPermissionPolicy;
   private initialized = false;
@@ -35,7 +37,7 @@ export class ShellCommandAuthorizer {
     command: string,
     workingDirectory: string,
     signal: AbortSignal,
-    context: ShellAuthorizationContext = { background: false, existingTerminal: false },
+    context: ShellAuthorizationContext = defaultAuthorizationContext,
   ): Promise<ShellExecutionAuthorization> {
     return this.enqueue(signal, async () => {
       // Queued commands may be cancelled while a previous permission is being
@@ -93,8 +95,13 @@ export class ShellCommandAuthorizer {
 
   private enqueue<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      if (signal.aborted) return reject(signal.reason);
-      const abort = () => reject(signal.reason);
+      if (signal.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      const abort = () => {
+        reject(signal.reason);
+      };
       signal.addEventListener('abort', abort, { once: true });
       const start = () => {
         signal.removeEventListener('abort', abort);

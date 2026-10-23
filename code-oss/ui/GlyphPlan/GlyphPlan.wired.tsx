@@ -9,7 +9,7 @@ export function WiredGlyphPlan({
   readonly state: GlyphPlanViewState;
   readonly actions: GlyphPlanViewActions;
 }) {
-  const model = useGlyphPlanState(state, actions);
+  const model = useGlyphPlanState({ state, actions });
   return (
     <GlyphPlan
       {...model}

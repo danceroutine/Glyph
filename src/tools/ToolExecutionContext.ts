@@ -1,4 +1,4 @@
-import type { AgentModeID } from "#src/chat/AgentMode.js";
+import type { AgentModeID } from '#src/chat/AgentMode.js';
 /** Host-owned provenance supplied to tools independently of any model provider protocol. */
 export interface ToolExecutionContext {
   readonly executionId?: string;

@@ -30,7 +30,9 @@ export function BackgroundShells({ sessions }: BackgroundShellsProps): ReactElem
               {session.status === ShellSessionStatus.RUNNING ? '●' : failed ? '×' : '○'}
             </Text>
             {` ${session.id.slice(0, 8)}  ${compact(session.command || 'ready')}`}
-            {session.wakePattern ? <Text color="cyan">{`  wake: ${compact(session.wakePattern)}`}</Text> : null}
+            {session.wakePattern !== undefined && session.wakePattern !== '' ? (
+              <Text color="cyan">{`  wake: ${compact(session.wakePattern)}`}</Text>
+            ) : null}
             {latest ? <Text dimColor>{`  · ${sanitizeText(latest)}`}</Text> : null}
           </Text>
         );
@@ -40,7 +42,7 @@ export function BackgroundShells({ sessions }: BackgroundShellsProps): ReactElem
 }
 
 function compact(value: string): string {
-  return sanitizeText(value).replace(/\s+/gu, ' ').trim();
+  return sanitizeText(value).replaceAll(/\s+/gu, ' ').trim();
 }
 
 function latestOutputLine(output: string): string {
@@ -48,7 +50,6 @@ function latestOutputLine(output: string): string {
     output
       .split(/\r\n|\r|\n/u)
       .map(line => line.trim())
-      .filter(Boolean)
-      .at(-1) ?? ''
+      .findLast(line => line !== '') ?? ''
   );
 }

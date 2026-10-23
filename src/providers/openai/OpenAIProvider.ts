@@ -25,6 +25,7 @@ import type {
   AgentTurnContext,
   AgentTurnStep,
 } from '#src/chat/runtime/AgentModelAdapter.js';
+import { isRecord } from '#src/shared/validators/isRecord.js';
 
 interface OpenAITurn {
   readonly input: ResponseInputItem[];
@@ -139,14 +140,15 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
       reportedReasoningSummary += delta;
       context.onReasoningSummary?.(delta);
     };
-    const beginReasoningSummaryPart = (key: string): void => {
-      if (reasoningSummaryParts.has(key)) return;
+    const beginReasoningSummaryPart = (key: string): string => {
+      const part = reasoningSummaryParts.get(key);
+      if (part !== undefined) return part;
       if (reasoningSummaryParts.size > 0) reportReasoningSummary('\n\n');
       reasoningSummaryParts.set(key, '');
+      return '';
     };
     const completeReasoningSummaryPart = (key: string, text: string): void => {
-      beginReasoningSummaryPart(key);
-      const streamedPart = reasoningSummaryParts.get(key) ?? '';
+      const streamedPart = beginReasoningSummaryPart(key);
       if (!text.startsWith(streamedPart)) return;
       reasoningSummaryParts.set(key, text);
       reportReasoningSummary(text.slice(streamedPart.length));
@@ -161,8 +163,8 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
           break;
         case 'response.reasoning_summary_text.delta': {
           const key = `${event.item_id}:${event.summary_index}`;
-          beginReasoningSummaryPart(key);
-          reasoningSummaryParts.set(key, `${reasoningSummaryParts.get(key) ?? ''}${event.delta}`);
+          const streamedPart = beginReasoningSummaryPart(key);
+          reasoningSummaryParts.set(key, `${streamedPart}${event.delta}`);
           reportReasoningSummary(event.delta);
           break;
         }
@@ -184,10 +186,12 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
           );
         case 'response.failed':
           throw new ProviderError(
-            `Response failed: ${`${event.response.error?.code ?? 'unknown'}: ${event.response.error?.message ?? 'unknown error'}`}`,
+            `Response failed: ${event.response.error?.code ?? 'unknown'}: ${event.response.error?.message ?? 'unknown error'}`,
           );
         case 'error':
           throw new ProviderError(`API stream error: ${event.message}`);
+        default:
+          break;
       }
     }
     context.signal.throwIfAborted();
@@ -286,7 +290,9 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
   private awaitCredentials(signal: AbortSignal): Promise<string> {
     signal.throwIfAborted();
     return new Promise((resolve, reject) => {
-      const abort = () => reject(signal.reason);
+      const abort = () => {
+        reject(signal.reason);
+      };
       signal.addEventListener('abort', abort, { once: true });
       void Promise.resolve()
         .then(() => {
@@ -294,7 +300,9 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
           return this.token();
         })
         .then(resolve, reject)
-        .finally(() => signal.removeEventListener('abort', abort));
+        .finally(() => {
+          signal.removeEventListener('abort', abort);
+        });
     });
   }
 }
@@ -318,7 +326,7 @@ const openAIProviderStateSchema = z
   .object({
     provider: z.literal('openai-responses'),
     version: z.literal(1),
-    data: z.object({ history: z.array(z.record(z.string(), z.unknown())) }).strict(),
+    data: z.object({ history: z.array(z.custom<ResponseInputItem>(value => isRecord(value))) }).strict(),
   })
   .strict();
 
@@ -333,7 +341,7 @@ function stateFrom(history: readonly ResponseInputItem[]): ChatProviderState {
 function historyFrom(state: ChatProviderState): ResponseInputItem[] {
   const parsed = openAIProviderStateSchema.safeParse(state);
   if (!parsed.success) throw new ProviderError('Saved conversation state is not compatible with OpenAI Responses.');
-  return structuredClone(parsed.data.data.history) as unknown as ResponseInputItem[];
+  return structuredClone(parsed.data.data.history);
 }
 
 function toUserInput(request: ChatRequest): ResponseInputItem {
@@ -374,11 +382,14 @@ function contextEventId(item: ResponseInputItem): string | undefined {
   )
     return undefined;
   try {
-    const value = JSON.parse(item.content) as {
-      schema?: unknown;
-      event?: { id?: unknown; type?: unknown };
-    };
-    if (value.schema !== 'glyph.context-event.v1' || typeof value.event?.id !== 'string') return undefined;
+    const value: unknown = JSON.parse(item.content);
+    if (
+      !isRecord(value) ||
+      value.schema !== 'glyph.context-event.v1' ||
+      !isRecord(value.event) ||
+      typeof value.event.id !== 'string'
+    )
+      return undefined;
     if (item.role === 'user' && value.event.type !== 'shell_wake' && value.event.type !== 'shell_exit')
       return undefined;
     return value.event.id;
@@ -400,7 +411,7 @@ function mergeOutputItems(
 ): ResponseOutputItem[] {
   const byIndex = new Map(terminalOutput.map((item, index) => [index, item]));
   for (const [index, item] of streamedOutput) byIndex.set(index, item);
-  return [...byIndex.entries()].sort(([left], [right]) => left - right).map(([, item]) => item);
+  return [...byIndex.entries()].toSorted(([left], [right]) => left - right).map(([, item]) => item);
 }
 
 function visibleTextFrom(output: ResponseOutputItem[]): string {

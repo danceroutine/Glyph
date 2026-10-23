@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { renderGlyphDiagram } from './GlyphDiagramRenderer.ts';
 
-export function useGlyphDiagramState(source: string) {
+export function useGlyphDiagramState({ source }: { readonly source: string }) {
   const root = useRef<HTMLDivElement>(null);
   const [diagram, setDiagram] = useState<string>();
   const [expanded, setExpanded] = useState(false);
@@ -22,8 +22,8 @@ export function useGlyphDiagramState(source: string) {
       cancelled = true;
     };
   }, [source]);
-  useEffect(() => {
-    if (!expanded) return;
+  useLayoutEffect(() => {
+    if (!expanded) return undefined;
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -32,8 +32,19 @@ export function useGlyphDiagramState(source: string) {
       }
     };
     window.addEventListener('keydown', escape);
-    return () => window.removeEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('keydown', escape);
+    };
   }, [expanded]);
-  return { root, diagram, error, source, expanded, toggle: () => setExpanded(value => !value) };
+  return {
+    root,
+    diagram,
+    error,
+    source,
+    expanded,
+    toggle: () => {
+      setExpanded(value => !value);
+    },
+  };
 }
 export type GlyphDiagramState = ReturnType<typeof useGlyphDiagramState>;

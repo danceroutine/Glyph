@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { ToolInputKind } from '#src/tools/ToolInputKind.js';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 import { ShellToolName } from '#src/shell/ShellToolName.js';
 import { ShellToolNamespace } from '#src/shell/ShellToolNamespace.js';
 import { ShellToolRuntime } from '#src/shell/ShellToolRuntime.js';
@@ -19,7 +21,7 @@ describe(ShellToolRuntime, () => {
         [ShellToolNamespace.SHELL, ShellToolName.CLOSE],
         [ShellToolNamespace.SHELL, ShellToolName.LIST],
       ]);
-      expect(runtime.tools.every(definition => definition.inputKind === 'JSON')).toBe(true);
+      expect(runtime.tools.every(definition => definition.inputKind === ToolInputKind.JSON)).toBe(true);
     });
   });
 
@@ -170,6 +172,160 @@ describe(ShellToolRuntime, () => {
       await expect(runtime.execute(ShellToolName.LIST, '{', cancellation.signal, context)).rejects.toThrow('cancelled');
       await expect(runtime.execute(ShellToolName.LIST, '{}')).resolves.toContain('owning chat');
     });
+
+    it('forwards the execution ID and reports the working directory of a running command', async () => {
+      const manager = sessions();
+      manager.execute.mockResolvedValueOnce({
+        terminalId: 'terminal',
+        workingDirectory: 'packages/app',
+        status: 'running',
+        output: 'starting',
+      });
+      const runtime = new ShellToolRuntime(manager);
+
+      const result = JSON.parse(
+        await runtime.execute(
+          ShellToolName.EXECUTE,
+          JSON.stringify({
+            command: 'pnpm dev',
+            terminal_id: null,
+            working_directory: null,
+            background: true,
+            wake_on: null,
+            timeout_ms: null,
+          }),
+          undefined,
+          { ...context, executionId: 'execution-1' },
+        ),
+      ) as Record<string, unknown>;
+
+      expect(result).toEqual({
+        terminal_id: 'terminal',
+        working_directory: 'packages/app',
+        status: 'running',
+        output: 'starting',
+      });
+      expect(manager.execute).toHaveBeenCalledWith('pnpm dev', expect.objectContaining({ executionId: 'execution-1' }));
+    });
+
+    it('lists terminal ownership, exit codes, and wake conditions when known', async () => {
+      const manager = sessions();
+      vi.mocked(manager.sessionsFor).mockReturnValueOnce([
+        {
+          id: 'finished',
+          ownerChatId: 'chat-one',
+          workingDirectory: '.',
+          command: 'pnpm test',
+          status: ShellSessionStatus.EXITED,
+          background: true,
+          outputTail: 'ok',
+          startedAt: '2026-01-01T00:00:00.000Z',
+          exitCode: 0,
+          wakePattern: 'done',
+        },
+        {
+          id: 'unowned',
+          workingDirectory: '.',
+          command: 'pnpm dev',
+          status: ShellSessionStatus.RUNNING,
+          background: true,
+          outputTail: '',
+          startedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ]);
+      const runtime = new ShellToolRuntime(manager);
+
+      expect(JSON.parse(await runtime.execute(ShellToolName.LIST, '{}', undefined, context))).toEqual({
+        terminals: [
+          {
+            terminal_id: 'finished',
+            owner_chat_id: 'chat-one',
+            working_directory: '.',
+            command: 'pnpm test',
+            status: 'exited',
+            output_tail: 'ok',
+            started_at: '2026-01-01T00:00:00.000Z',
+            exit_code: 0,
+            wake_on: 'done',
+          },
+          {
+            terminal_id: 'unowned',
+            working_directory: '.',
+            command: 'pnpm dev',
+            status: 'running',
+            output_tail: '',
+            started_at: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      });
+      expect(manager.sessionsFor).toHaveBeenCalledWith('chat-one');
+    });
+
+    it('reports a generic failure message for non-error failures', async () => {
+      const manager = sessions();
+      manager.close.mockRejectedValueOnce('closed already');
+      const runtime = new ShellToolRuntime(manager);
+
+      expect(
+        JSON.parse(
+          await runtime.execute(ShellToolName.CLOSE, JSON.stringify({ terminal_id: 'terminal' }), undefined, context),
+        ),
+      ).toEqual({ error: { code: 'SHELL_FAILED', message: 'Shell operation failed.' } });
+    });
+
+    it('rethrows the failure when cancelled without a cancellation reason', async () => {
+      const manager = sessions();
+      const signal = { aborted: false, reason: undefined };
+      const failure = new Error('interrupted');
+      manager.close.mockImplementationOnce(async () => {
+        signal.aborted = true;
+        throw failure;
+      });
+      const runtime = new ShellToolRuntime(manager);
+
+      await expect(
+        runtime.execute(
+          ShellToolName.CLOSE,
+          JSON.stringify({ terminal_id: 'terminal' }),
+          signal as unknown as AbortSignal,
+          context,
+        ),
+      ).rejects.toBe(failure);
+    });
+  });
+
+  describe('tools', () => {
+    it.each([
+      [
+        ShellToolName.EXECUTE,
+        JSON.stringify({
+          command: 'ls',
+          terminal_id: null,
+          working_directory: null,
+          background: false,
+          wake_on: null,
+          timeout_ms: null,
+        }),
+        { terminal_id: 'terminal', status: 'completed', output: '', exit_code: 0 },
+      ],
+      [
+        ShellToolName.WRITE_INPUT,
+        JSON.stringify({ terminal_id: 'terminal', input: 'y', append_newline: true, wake_on: null }),
+        { terminal_id: 'terminal', status: 'input_written' },
+      ],
+      [ShellToolName.CLOSE, JSON.stringify({ terminal_id: 'terminal' }), { terminal_id: 'terminal', status: 'closed' }],
+      [ShellToolName.LIST, '{}', { terminals: [{ terminal_id: 'terminal' }] }],
+    ])('validates and executes %s through its tool definition', async (name, input, expected) => {
+      const tool = new ShellToolRuntime(sessions()).tools.find(definition => definition.name === (name as string))!;
+
+      expect(() => {
+        tool.validateInput(input);
+      }).not.toThrow();
+      expect(() => {
+        tool.validateInput('{"unexpected":true}');
+      }).toThrow();
+      expect(JSON.parse(await tool.execute(input, new AbortController().signal, context))).toEqual(expected);
+    });
   });
 });
 
@@ -180,8 +336,8 @@ function sessions() {
     writeInput: vi.fn(),
     close: vi.fn(async () => {}),
   } as unknown as ShellSessionManager & {
-    execute: ReturnType<typeof vi.fn>;
-    writeInput: ReturnType<typeof vi.fn>;
-    close: ReturnType<typeof vi.fn>;
+    execute: Mock;
+    writeInput: Mock;
+    close: Mock;
   };
 }

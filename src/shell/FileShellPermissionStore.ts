@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { ShellPermissionMode, type ShellPermissionPolicy } from './ShellPermissionPolicy.ts';
 import type { ShellPermissionStore } from './ShellPermissionStore.ts';
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 
 const shellPermissionPolicySchema = z
   .object({
@@ -37,7 +38,7 @@ export class FileShellPermissionStore implements ShellPermissionStore {
       const legacy = current.success ? undefined : legacyShellPermissionPolicySchema.safeParse(stored);
       const policy = current.success
         ? current.data
-        : legacy?.success
+        : legacy?.success === true
           ? { ...legacy.data, schemaVersion: 2 as const, allowedCommands: [] }
           : shellPermissionPolicySchema.parse(stored);
       if (policy.projectContextId !== projectContextId) {
@@ -48,7 +49,7 @@ export class FileShellPermissionStore implements ShellPermissionStore {
       }
       return policy;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      if (errorCodeOf(error) === 'ENOENT') return undefined;
       throw new Error('Could not load shell permissions.', { cause: error });
     }
   }
@@ -65,7 +66,7 @@ export class FileShellPermissionStore implements ShellPermissionStore {
       throw new Error('Could not persist shell permissions.', { cause: error });
     } finally {
       await unlink(temporary).catch(error => {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        if (errorCodeOf(error) !== 'ENOENT') throw error;
       });
     }
   }

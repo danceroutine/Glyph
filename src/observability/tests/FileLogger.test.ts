@@ -1,8 +1,11 @@
+import { execFileSync } from 'node:child_process';
+import { constants } from 'node:fs';
 import { link, mkdtemp, open, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FileLogger } from '#src/observability/FileLogger.js';
+import { FetchHttpClient } from '#src/http/FetchHttpClient.js';
 import type { Logger } from '#src/observability/Logger.js';
 
 vi.mock('node:fs/promises', async importOriginal => {
@@ -20,6 +23,51 @@ afterEach(async () => {
 
 describe(FileLogger, () => {
   describe(FileLogger.prototype.trace, () => {
+    it.skipIf(process.platform === 'win32')('rejects a FIFO without blocking logging or HTTP requests', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'glyph-log-fifo-'));
+      temporaryDirectories.push(directory);
+      const path = join(directory, 'glyph.log');
+      execFileSync('mkfifo', [path]);
+      let settled = false;
+      let failure: unknown;
+      const writing = new FileLogger(path).trace('must not block').then(
+        () => {
+          settled = true;
+        },
+        error => {
+          settled = true;
+          failure = error;
+        },
+      );
+      const transport = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
+      const client = new FetchHttpClient(new FileLogger(path), transport);
+      let responseBody: unknown;
+      const requesting = client.get('https://fixture.invalid/', { timeoutMs: 20 }).then(response => {
+        responseBody = response.body;
+      });
+      try {
+        await vi.waitFor(
+          () => {
+            expect(settled).toBe(true);
+          },
+          { timeout: 1000 },
+        );
+        expect(failure).toBeInstanceOf(Error);
+        await vi.waitFor(
+          () => {
+            expect(responseBody).toEqual({ ok: true });
+          },
+          { timeout: 1000 },
+        );
+        expect(transport).toHaveBeenCalledTimes(1);
+      } finally {
+        // Release a blocking open even when the regression fails, before removing the fixture.
+        const reader = await filesystem.open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+        await Promise.all([writing, requesting]);
+        await reader.close();
+      }
+    });
+
     it.each(['one logger', 'nested namespaces', 'independent loggers', 'relative path aliases'])(
       'keeps simultaneous large trace records valid when written through %s',
       async writers => {
@@ -34,11 +82,15 @@ describe(FileLogger, () => {
         const output = captureChunkedAppends(pair.length);
         const payload = 'x'.repeat(600 * 1024);
 
-        await Promise.all(pair.map((writer, sequence) => writer.trace('record', { sequence, payload })));
+        await Promise.all(
+          pair.map(async (writer, sequence) => {
+            await writer.trace('record', { sequence, payload });
+          }),
+        );
 
         const lines = Buffer.concat(output).toString('utf8').trimEnd().split('\n');
         expect(lines).toHaveLength(2);
-        const entries: unknown[] = lines.map(line => JSON.parse(line));
+        const entries: unknown[] = lines.map((line): unknown => JSON.parse(line));
         expect(entries).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ data: { sequence: 0, payload } }),
@@ -62,7 +114,7 @@ describe(FileLogger, () => {
         ]);
         const lines = Buffer.concat(output).toString('utf8').trimEnd().split('\n');
         expect(lines).toHaveLength(2);
-        expect(lines.map(line => JSON.parse(line))).toEqual(
+        expect(lines.map((line): unknown => JSON.parse(line))).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ message: 'first', data: 'x'.repeat(600 * 1024) }),
             expect.objectContaining({ message: 'second', data: 'y'.repeat(600 * 1024) }),
@@ -78,12 +130,18 @@ describe(FileLogger, () => {
       const payload = `line one\n${'🧪'.repeat(160 * 1024)}\nline three`;
       const records = Array.from({ length: 8 }, (_, sequence) => ({ sequence, payload }));
 
-      await Promise.all(records.map(record => new FileLogger(path).forNamespace('provider').trace('response', record)));
+      await Promise.all(
+        records.map(async record => {
+          await new FileLogger(path).forNamespace('provider').trace('response', record);
+        }),
+      );
 
       const lines = (await readFile(path, 'utf8')).trimEnd().split('\n');
       expect(lines).toHaveLength(records.length);
-      expect(lines.map(line => JSON.parse(line))).toEqual(
-        expect.arrayContaining(records.map(data => expect.objectContaining({ message: 'provider.response', data }))),
+      expect(lines.map((line): unknown => JSON.parse(line))).toEqual(
+        expect.arrayContaining(
+          records.map((data): unknown => expect.objectContaining({ message: 'provider.response', data })),
+        ),
       );
     });
 
@@ -131,14 +189,20 @@ describe(FileLogger, () => {
         const logger = new FileLogger(path);
         const first = logger.trace('first').then(
           () => undefined,
-          error => error,
+          (error: unknown) => error,
         );
         let second: Promise<void> | undefined;
         try {
-          await vi.waitFor(() => expect(entered).toBe(true));
+          await vi.waitFor(() => {
+            expect(entered).toBe(true);
+          });
           second = Promise.resolve(logger.forNamespace('another').info('second'));
-          await vi.waitFor(() => expect(successorChecked).toBe(true));
-          await new Promise<void>(resolve => setImmediate(resolve));
+          await vi.waitFor(() => {
+            expect(successorChecked).toBe(true);
+          });
+          await new Promise<void>(resolve => {
+            setImmediate(resolve);
+          });
           release();
           expect(await first).toBe(failure);
           await second;
@@ -146,8 +210,8 @@ describe(FileLogger, () => {
           const lines = (await readFile(path, 'utf8')).trimEnd().split('\n');
           const expected = ['another.second', 'third'];
           if (stage === 'close') expected.unshift('first');
-          expect(lines.map(line => JSON.parse(line))).toEqual(
-            expected.map(message => expect.objectContaining({ message })),
+          expect(lines.map((line): unknown => JSON.parse(line))).toEqual(
+            expected.map((message): unknown => expect.objectContaining({ message })),
           );
         } finally {
           release();
@@ -193,17 +257,29 @@ describe(FileLogger, () => {
       let second: Promise<void> | undefined;
       let third: Promise<void> | undefined;
       try {
-        await vi.waitFor(() => expect(entered.has(1)).toBe(true));
+        await vi.waitFor(() => {
+          expect(entered.has(1)).toBe(true);
+        });
         second = new FileLogger(path).trace('second');
-        await vi.waitFor(() => expect(checked.has(2)).toBe(true));
-        await new Promise<void>(resolve => setImmediate(resolve));
+        await vi.waitFor(() => {
+          expect(checked.has(2)).toBe(true);
+        });
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
         releaseFirst();
         await first;
-        await vi.waitFor(() => expect(entered.has(2)).toBe(true));
+        await vi.waitFor(() => {
+          expect(entered.has(2)).toBe(true);
+        });
 
         third = new FileLogger(path).trace('third');
-        await vi.waitFor(() => expect(checked.has(3)).toBe(true));
-        await new Promise<void>(resolve => setImmediate(resolve));
+        await vi.waitFor(() => {
+          expect(checked.has(3)).toBe(true);
+        });
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
         expect(entered.has(3)).toBe(false);
         releaseSecond();
         await Promise.all([second, third]);
@@ -211,8 +287,8 @@ describe(FileLogger, () => {
           (await readFile(path, 'utf8'))
             .trimEnd()
             .split('\n')
-            .map(line => JSON.parse(line)),
-        ).toEqual(['first', 'second', 'third'].map(message => expect.objectContaining({ message })));
+            .map((line): unknown => JSON.parse(line)),
+        ).toEqual(['first', 'second', 'third'].map((message): unknown => expect.objectContaining({ message })));
       } finally {
         releaseFirst();
         releaseSecond();
@@ -243,12 +319,16 @@ describe(FileLogger, () => {
       const pending = new FileLogger(path).trace('slow');
       let other: Promise<void> | undefined;
       try {
-        await vi.waitFor(() => expect(entered).toBe(true));
+        await vi.waitFor(() => {
+          expect(entered).toBe(true);
+        });
         let completed = false;
         other = new FileLogger(otherPath).trace('independent').then(() => {
           completed = true;
         });
-        await vi.waitFor(() => expect(completed).toBe(true));
+        await vi.waitFor(() => {
+          expect(completed).toBe(true);
+        });
         expect(JSON.parse((await readFile(otherPath, 'utf8')).trim())).toMatchObject({ message: 'independent' });
       } finally {
         release();
@@ -305,12 +385,16 @@ describe(FileLogger, () => {
         const first = new FileLogger(path).trace('first');
         let second: Promise<unknown> | undefined;
         try {
-          await vi.waitFor(() => expect(closing).toBe(true));
+          await vi.waitFor(() => {
+            expect(closing).toBe(true);
+          });
           second = new FileLogger(path).trace('unsafe').then(
             () => undefined,
-            error => error,
+            (error: unknown) => error,
           );
-          await vi.waitFor(() => expect(checked).toBe(true));
+          await vi.waitFor(() => {
+            expect(checked).toBe(true);
+          });
           await link(path, join(directory, 'alias.log'));
           release();
           await first;
@@ -389,7 +473,7 @@ function captureChunkedAppends(writers: number): Buffer[] {
     const file = await filesystem.open(...args);
     const identity = await file.stat();
     const bigIdentity = await file.stat({ bigint: true });
-    vi.spyOn(file, 'stat').mockImplementation(async options => (options?.bigint ? bigIdentity : identity));
+    vi.spyOn(file, 'stat').mockImplementation(async options => (options?.bigint === true ? bigIdentity : identity));
     vi.spyOn(file, 'chmod').mockResolvedValue();
     vi.spyOn(file, 'writeFile').mockImplementation(async data => {
       if (typeof data !== 'string') throw new Error('Expected a serialized log record.');

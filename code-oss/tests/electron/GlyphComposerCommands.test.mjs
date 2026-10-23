@@ -3,7 +3,9 @@ import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 for (const rebound of [false, true]) {
   it.describe(rebound ? 'Rebound composer commands' : 'Default composer commands', () => {
     const modifier = process.platform === 'darwin' ? 'cmd' : 'ctrl';
+    it.describe.configure({ mode: 'default' });
     it.use({
+      sharedLaunch: true,
       scriptedProvider: true,
       userKeybindings: [
         rebound

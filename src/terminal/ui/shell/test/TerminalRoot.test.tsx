@@ -8,236 +8,265 @@ import { createProposalReviewFixture } from '#src/terminal/ui/proposal/test/Prop
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 
 describe(TerminalRoot, () => {
-  describe('rendering', () => {
-    it('keeps an intermediate page pinned while new output arrives and resumes following at the bottom', async () => {
-      const transcript = (extra = '') => (
-        <TerminalRoot
-          pagingActive
-          height={4}
-          entries={[{ id: 1, content: <Text>{'one\ntwo\nthree\nfour\nfive\nsix\nseven' + extra}</Text> }]}
-          response={undefined}
-          interaction={<Text>prompt</Text>}
-        />
-      );
-      const view = render(transcript());
-      try {
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('seven'));
-        for (let n = 0; n < 2; n++) {
-          view.stdin.write('\x1b[5~');
-          await new Promise<void>(resolve => setImmediate(resolve));
-        }
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('one'));
-        view.stdin.write('\x1b[6~');
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('five'));
-        expect(view.lastFrame()).not.toContain('seven');
-        view.rerender(transcript('\neight'));
-        await new Promise<void>(resolve => setImmediate(resolve));
-        expect(view.lastFrame()).toContain('three');
-        expect(view.lastFrame()).not.toContain('eight');
-        for (let n = 0; n < 2; n++) {
-          view.stdin.write('\x1b[6~');
-          await new Promise<void>(resolve => setImmediate(resolve));
-        }
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('eight'));
-        view.rerender(transcript('\neight\nnine'));
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('nine'));
-      } finally {
-        view.unmount();
+  it('keeps an intermediate page pinned while new output arrives and resumes following at the bottom', async () => {
+    const transcript = (extra = '') => (
+      <TerminalRoot
+        pagingActive
+        height={4}
+        entries={[{ id: 1, content: <Text>{'one\ntwo\nthree\nfour\nfive\nsix\nseven' + extra}</Text> }]}
+        response={undefined}
+        interaction={<Text>prompt</Text>}
+      />
+    );
+    const view = render(transcript());
+    try {
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('seven');
+      });
+      for (let n = 0; n < 2; n++) {
+        view.stdin.write('\u001B[5~');
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
       }
-    });
-
-    it('opens a different conversation at its newest message instead of retaining the previous scroll offset', async () => {
-      const rows = (id: number, text: string) => (
-        <TerminalRoot
-          pagingActive
-          height={4}
-          entries={[{ id, content: <Text>{text}</Text> }]}
-          response={undefined}
-          interaction={<Text>prompt</Text>}
-        />
-      );
-      const view = render(rows(1, 'oldest\nsecond\nthird\nfourth\nlatest'));
-      try {
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('latest'));
-        view.stdin.write('\u001b[5~');
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('oldest'));
-        view.rerender(rows(2, 'other oldest\nsecond\nthird\nfourth\nother latest'));
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('other latest'));
-      } finally {
-        view.unmount();
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('one');
+      });
+      view.stdin.write('\u001B[6~');
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('five');
+      });
+      expect(view.lastFrame()).not.toContain('seven');
+      view.rerender(transcript('\neight'));
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+      expect(view.lastFrame()).toContain('three');
+      expect(view.lastFrame()).not.toContain('eight');
+      for (let n = 0; n < 2; n++) {
+        view.stdin.write('\u001B[6~');
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
       }
-    });
-    it('lets Page Up reveal older transcript rows and Page Down return to the latest response', async () => {
-      const view = render(
-        <TerminalRoot
-          entries={[{ id: 1, content: <Text>{'oldest\nsecond\nthird\nfourth\nlatest'}</Text> }]}
-          height={4}
-          pagingActive
-          response={undefined}
-          interaction={<Text>prompt</Text>}
-        />,
-      );
-      try {
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('latest'));
-        view.stdin.write('\u001b[5~');
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('oldest'), { timeout: 500 });
-        expect(view.lastFrame()).toContain('prompt');
-        view.stdin.write('\u001b[6~');
-        await vi.waitFor(() => expect(view.lastFrame()).toContain('latest'));
-      } finally {
-        view.unmount();
-      }
-    });
-
-    it('lays out transcript, response, and interaction content', () => {
-      const view = render(
-        <TerminalRoot
-          entries={[{ id: 1, content: <Text>history</Text> }]}
-          height={5}
-          response={<Text>response</Text>}
-          backgroundShells={<Text>shells</Text>}
-          interaction={<Text>prompt</Text>}
-        />,
-      );
-
-      expect(view.lastFrame()).toBe('history\nresponse\n\nshells\nprompt');
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('eight');
+      });
+      view.rerender(transcript('\neight\nnine'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('nine');
+      });
+    } finally {
       view.unmount();
-    });
+    }
+  });
 
-    it('keeps the newest transcript content visible when it exceeds the viewport', async () => {
-      const view = render(
-        <TerminalRoot
-          entries={[
-            { id: 1, content: <Text>oldest</Text> },
-            { id: 2, content: <Text>{'middle one\nmiddle two'}</Text> },
-            { id: 3, content: <Text>newest</Text> },
-          ]}
-          height={4}
-          response={<Text>response</Text>}
-          interaction={<Text>prompt</Text>}
-        />,
-      );
-
-      await new Promise<void>(resolve => setImmediate(resolve));
-      expect(view.lastFrame()).toBe('middle two\nnewest\nresponse\nprompt');
+  it('opens a different conversation at its newest message instead of retaining the previous scroll offset', async () => {
+    const rows = (id: number, text: string) => (
+      <TerminalRoot
+        pagingActive
+        height={4}
+        entries={[{ id, content: <Text>{text}</Text> }]}
+        response={undefined}
+        interaction={<Text>prompt</Text>}
+      />
+    );
+    const view = render(rows(1, 'oldest\nsecond\nthird\nfourth\nlatest'));
+    try {
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('latest');
+      });
+      view.stdin.write('\u001B[5~');
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('oldest');
+      });
+      view.rerender(rows(2, 'other oldest\nsecond\nthird\nfourth\nother latest'));
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('other latest');
+      });
+    } finally {
       view.unmount();
+    }
+  });
+  it('lets Page Up reveal older transcript rows and Page Down return to the latest response', async () => {
+    const view = render(
+      <TerminalRoot
+        entries={[{ id: 1, content: <Text>{'oldest\nsecond\nthird\nfourth\nlatest'}</Text> }]}
+        height={4}
+        pagingActive
+        response={undefined}
+        interaction={<Text>prompt</Text>}
+      />,
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('latest');
+      });
+      view.stdin.write('\u001B[5~');
+      await vi.waitFor(
+        () => {
+          expect(view.lastFrame()).toContain('oldest');
+        },
+        { timeout: 500 },
+      );
+      expect(view.lastFrame()).toContain('prompt');
+      view.stdin.write('\u001B[6~');
+      await vi.waitFor(() => {
+        expect(view.lastFrame()).toContain('latest');
+      });
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('lays out transcript, response, and interaction content', () => {
+    const view = render(
+      <TerminalRoot
+        entries={[{ id: 1, content: <Text>history</Text> }]}
+        height={5}
+        response={<Text>response</Text>}
+        backgroundShells={<Text>shells</Text>}
+        interaction={<Text>prompt</Text>}
+      />,
+    );
+
+    expect(view.lastFrame()).toBe('history\nresponse\n\nshells\nprompt');
+    view.unmount();
+  });
+
+  it('keeps the newest transcript content visible when it exceeds the viewport', async () => {
+    const view = render(
+      <TerminalRoot
+        entries={[
+          { id: 1, content: <Text>oldest</Text> },
+          { id: 2, content: <Text>{'middle one\nmiddle two'}</Text> },
+          { id: 3, content: <Text>newest</Text> },
+        ]}
+        height={4}
+        response={<Text>response</Text>}
+        interaction={<Text>prompt</Text>}
+      />,
+    );
+
+    await new Promise<void>(resolve => {
+      setImmediate(resolve);
     });
+    expect(view.lastFrame()).toBe('middle two\nnewest\nresponse\nprompt');
+    view.unmount();
   });
 });
 
 describe(WiredTerminalRoot, () => {
-  describe('rendering', () => {
-    it('renders an active response without an interaction', () => {
-      const view = render(
-        <WiredTerminalRoot
-          snapshot={{
-            entries: [],
-            backgroundShells: [],
-            responseParts: [{ type: ChatResponsePartType.TEXT, value: 'answer' }],
-            prompt: undefined,
-            review: undefined,
-            interrupt: () => {},
-          }}
-        />,
-      );
+  it('renders an active response without an interaction', () => {
+    const view = render(
+      <WiredTerminalRoot
+        snapshot={{
+          entries: [],
+          backgroundShells: [],
+          responseParts: [{ type: ChatResponsePartType.TEXT, value: 'answer' }],
+          prompt: undefined,
+          review: undefined,
+          interrupt: () => {},
+        }}
+      />,
+    );
 
-      expect(view.lastFrame()).toContain('answer');
-      view.unmount();
-    });
+    expect(view.lastFrame()).toContain('answer');
+    view.unmount();
+  });
 
-    it('prioritizes an active review over a prompt', () => {
-      const fixture = createProposalReviewFixture();
-      const view = render(
-        <WiredTerminalRoot
-          snapshot={{
-            entries: [],
-            backgroundShells: [],
-            responseParts: undefined,
-            prompt: { id: 1, label: 'you> ', acceptsSubmission: true, complete: () => {} },
-            review: { id: 2, manager: fixture.manager, complete: () => {}, interrupt: () => {} },
-            interrupt: () => {},
-          }}
-        />,
-      );
+  it('prioritizes an active review over a prompt', () => {
+    const fixture = createProposalReviewFixture();
+    const view = render(
+      <WiredTerminalRoot
+        snapshot={{
+          entries: [],
+          backgroundShells: [],
+          responseParts: undefined,
+          prompt: { id: 1, label: 'you> ', acceptsSubmission: true, complete: () => {} },
+          review: { id: 2, manager: fixture.manager, complete: () => {}, interrupt: () => {} },
+          interrupt: () => {},
+        }}
+      />,
+    );
 
-      expect(view.lastFrame()).toContain('File 1/1');
-      expect(view.lastFrame()).not.toContain('you>');
-      view.unmount();
-    });
+    expect(view.lastFrame()).toContain('File 1/1');
+    expect(view.lastFrame()).not.toContain('you>');
+    view.unmount();
+  });
 
-    it('shows an active question while keeping the prompt hidden', () => {
-      const view = render(
-        <WiredTerminalRoot
-          snapshot={{
-            entries: [],
-            backgroundShells: [],
-            responseParts: undefined,
-            prompt: { id: 1, label: 'you> ', acceptsSubmission: false },
-            question: {
-              id: 2,
-              form: {
-                questions: [
-                  {
-                    id: 'choice',
-                    prompt: 'Choose one.',
-                    options: [
-                      { id: 'one', label: 'One' },
-                      { id: 'two', label: 'Two' },
-                    ],
-                    allowMultiple: false,
-                  },
-                ],
-              },
-              complete: () => {},
-              interrupt: () => {},
+  it('shows an active question while keeping the prompt hidden', () => {
+    const view = render(
+      <WiredTerminalRoot
+        snapshot={{
+          entries: [],
+          backgroundShells: [],
+          responseParts: undefined,
+          prompt: { id: 1, label: 'you> ', acceptsSubmission: false },
+          question: {
+            id: 2,
+            form: {
+              questions: [
+                {
+                  id: 'choice',
+                  prompt: 'Choose one.',
+                  options: [
+                    { id: 'one', label: 'One' },
+                    { id: 'two', label: 'Two' },
+                  ],
+                  allowMultiple: false,
+                },
+              ],
             },
-            review: undefined,
+            complete: () => {},
             interrupt: () => {},
-          }}
-        />,
-      );
+          },
+          review: undefined,
+          interrupt: () => {},
+        }}
+      />,
+    );
 
-      expect(view.lastFrame()).toContain('Choose one.');
-      expect(view.lastFrame()).not.toContain('you>');
-      view.unmount();
-    });
+    expect(view.lastFrame()).toContain('Choose one.');
+    expect(view.lastFrame()).not.toContain('you>');
+    view.unmount();
+  });
 
-    it('shows shell approval instead of the draft prompt and renders background terminals', () => {
-      const view = render(
-        <WiredTerminalRoot
-          snapshot={{
-            entries: [],
-            responseParts: undefined,
-            prompt: { id: 1, label: 'you> ', acceptsSubmission: false },
-            shellPermission: {
-              id: 2,
-              permission: { command: 'pnpm test', workingDirectory: '/project' },
-              complete: () => {},
-              interrupt: () => {},
+  it('shows shell approval instead of the draft prompt and renders background terminals', () => {
+    const view = render(
+      <WiredTerminalRoot
+        snapshot={{
+          entries: [],
+          responseParts: undefined,
+          prompt: { id: 1, label: 'you> ', acceptsSubmission: false },
+          shellPermission: {
+            id: 2,
+            permission: { command: 'pnpm test', workingDirectory: '/project' },
+            complete: () => {},
+            interrupt: () => {},
+          },
+          backgroundShells: [
+            {
+              id: 'terminal-one',
+              workingDirectory: '/project',
+              command: 'pnpm dev',
+              status: ShellSessionStatus.RUNNING,
+              background: true,
+              outputTail: '',
+              startedAt: '2026-10-07T00:00:00.000Z',
             },
-            backgroundShells: [
-              {
-                id: 'terminal-one',
-                workingDirectory: '/project',
-                command: 'pnpm dev',
-                status: ShellSessionStatus.RUNNING,
-                background: true,
-                outputTail: '',
-                startedAt: '2026-10-07T00:00:00.000Z',
-              },
-            ],
-            review: undefined,
-            interrupt: () => {},
-          }}
-        />,
-      );
+          ],
+          review: undefined,
+          interrupt: () => {},
+        }}
+      />,
+    );
 
-      expect(view.lastFrame()).toContain('Shell permission required');
-      expect(view.lastFrame()).toContain('› 1. Allow once');
-      expect(view.lastFrame()).toContain('Esc deny');
-      expect(view.lastFrame()).not.toContain('Background terminals (1)');
-      expect(view.lastFrame()).not.toContain('you>');
-      view.unmount();
-    });
+    expect(view.lastFrame()).toContain('Shell permission required');
+    expect(view.lastFrame()).toContain('› 1. Allow once');
+    expect(view.lastFrame()).toContain('Esc deny');
+    expect(view.lastFrame()).not.toContain('Background terminals (1)');
+    expect(view.lastFrame()).not.toContain('you>');
+    view.unmount();
   });
 });

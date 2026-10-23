@@ -1,8 +1,55 @@
-import { describe, expect, it } from 'vitest';
-import { diffChars } from 'diff';
+import { describe, expect, it, vi } from 'vitest';
+import { diffChars, type ChangeObject } from 'diff';
 import { transformTextEditRanges } from '#src/editing/documents/transformTextEditRanges.js';
 
+vi.mock('diff', { spy: true });
+
 describe(transformTextEditRanges, () => {
+  it('maps a range too large to anchor through the exact intervening edits', () => {
+    const removed = 'x'.repeat(70_000);
+    const previous = `a${removed}b`;
+
+    expect(transformTextEditRanges(previous, `Z${previous}`, [range(1, 70_001, removed)])).toEqual([
+      { sourceStart: 2, sourceEnd: 70_002 },
+    ]);
+  });
+
+  it('rejects a range whose expected text changes while it is being mapped', () => {
+    let reads = 0;
+    const shifting = {
+      sourceStart: 0,
+      sourceEnd: 1,
+      get removedText() {
+        reads++;
+        return reads < 3 ? 'a' : 'b';
+      },
+    };
+
+    expect(transformTextEditRanges('abc', 'abcd', [shifting])).toBeUndefined();
+    expect(reads).toBeGreaterThanOrEqual(3);
+  });
+
+  it('treats a character diff with missing entries as reporting no further changes', () => {
+    const changes: ChangeObject<string>[] = [];
+    changes.length = 1;
+    vi.mocked(diffChars).mockReturnValueOnce(changes);
+
+    const transformed = transformTextEditRanges('cc', 'ccc', [range(0, 0, '')]);
+
+    expect(vi.mocked(diffChars).mock.results.at(-1)?.value).toBe(changes);
+    expect(transformed).toEqual([{ sourceStart: 0, sourceEnd: 0 }]);
+  });
+
+  it('rejects a mapping whose expected text is absent from the current document', () => {
+    const changes: ChangeObject<string>[] = [{ value: 'c', count: 1, added: false, removed: false }];
+    vi.mocked(diffChars).mockReturnValueOnce(changes);
+
+    const transformed = transformTextEditRanges('abc', 'abd', [range(2, 3, 'c')]);
+
+    expect(vi.mocked(diffChars).mock.results.at(-1)?.value).toBe(changes);
+    expect(transformed).toBeUndefined();
+  });
+
   it('rejects a rebase that maps separate edits onto one surviving occurrence', () => {
     const previous = 'left\ntarget\nmiddle\ntarget\nright\n';
     const ranges = [range(5, 11, 'target'), range(19, 25, 'target')];

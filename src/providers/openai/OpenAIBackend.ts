@@ -52,7 +52,9 @@ export class OpenAIBackend implements ChatBackend {
       try {
         await this.store.release();
       } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], 'Account initialization failed and cleanup was incomplete.');
+        throw new AggregateError([error, cleanupError], 'Account initialization failed and cleanup was incomplete.', {
+          cause: cleanupError,
+        });
       }
       throw error;
     }
@@ -90,7 +92,7 @@ export class OpenAIBackend implements ChatBackend {
 
   async acknowledgeNotice(account: ChatAccount): Promise<void> {
     const value = this.resolve(account);
-    if (value.planNoticeSeen) return;
+    if (value.planNoticeSeen === true) return;
     value.planNoticeSeen = true;
     await this.store.save();
   }
@@ -132,7 +134,9 @@ export class OpenAIBackend implements ChatBackend {
   private awaitDiscoveryCredentials(account: OpenAIAccount, signal: AbortSignal): Promise<string> {
     signal.throwIfAborted();
     return new Promise((resolve, reject) => {
-      const abort = () => reject(signal.reason);
+      const abort = () => {
+        reject(signal.reason);
+      };
       signal.addEventListener('abort', abort, { once: true });
       void Promise.resolve()
         .then(() => {
@@ -140,7 +144,9 @@ export class OpenAIBackend implements ChatBackend {
           return this.session.accessToken(account);
         })
         .then(resolve, reject)
-        .finally(() => signal.removeEventListener('abort', abort));
+        .finally(() => {
+          signal.removeEventListener('abort', abort);
+        });
     });
   }
 
@@ -153,7 +159,7 @@ export class OpenAIBackend implements ChatBackend {
       connected: account.tokens !== undefined,
       inferenceAccess: this.hasInferenceAccess(account),
       accessPrompt: 'Enable ChatGPT plan usage for this account?',
-      ...(account.planNoticeSeen
+      ...(account.planNoticeSeen === true
         ? {}
         : {
             notice: {

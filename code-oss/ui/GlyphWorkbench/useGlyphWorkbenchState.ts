@@ -18,6 +18,7 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
   const root = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (historyOpen) return actions.reserveHistoryWidth?.(tokens.history.columnWidth);
+    return undefined;
   }, [historyOpen, actions.reserveHistoryWidth]);
   const toggle = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(false);
@@ -49,10 +50,13 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
     historyOpen,
     tabs: (state.openChatIds ?? [state.selectedChatId ?? '']).map(id => ({
       id,
-      title: state.chats.find(chat => chat.id === id)?.title ?? 'New chat',
+      title: state.chats.find(candidate => candidate.id === id)?.title ?? 'New chat',
       selected: id === (state.selectedChatId ?? ''),
     })),
-    selectTab: (id: string) => (id ? void actions.openChat(id) : actions.newChat()),
+    selectTab: (id: string) => {
+      if (id === '') actions.newChat();
+      else void actions.openChat(id);
+    },
     closeTab: (id: string) => void actions.closeChat?.(id),
     todos: chat?.todos ?? [],
     plans: chat?.plans ?? [],
@@ -69,10 +73,14 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
       proposal =>
         proposal.chatId === state.selectedChatId && proposal.files.some(file => file.pendingItemIds.length > 0),
     ),
-    newChatDisabled: state.navigationPending || state.readOnly,
+    newChatDisabled: state.navigationPending === true || state.readOnly,
     navigationError: state.navigationError,
-    newChat: () => actions.newChat(),
-    toggleHistory: () => setHistoryOpen(!historyOpen),
+    newChat: () => {
+      actions.newChat();
+    },
+    toggleHistory: () => {
+      setHistoryOpen(!historyOpen);
+    },
     closeHistory,
     questionRun,
     approvalRun,

@@ -84,13 +84,13 @@ export class GlyphViewPane extends ViewPane {
         mount: element => {
           const scope = this.glyphContextKeys.createScoped(element);
           scope.createKey('glyph.composerFocus', true);
-          return () => scope.dispose();
+          return () => {
+            scope.dispose();
+          };
         },
         dispatch: event => {
-          const handled = this.glyphKeybindings.dispatchEvent(
-            new StandardKeyboardEvent(event),
-            event.target as HTMLElement,
-          );
+          if (!(event.target instanceof Element)) return false;
+          const handled = this.glyphKeybindings.dispatchEvent(new StandardKeyboardEvent(event), event.target);
           if (handled) event.stopPropagation();
           return handled;
         },
@@ -132,7 +132,9 @@ export class GlyphViewPane extends ViewPane {
       viewPlan: (chatId, plan) => service.viewPlan!(chatId, plan),
       selectMode: mode => service.selectMode!(mode),
       buildPlan: (chatId, plan, newChat) => service.buildPlan!(chatId, plan, newChat),
-      cancel: () => this.glyphService.cancel(),
+      cancel: () => {
+        this.glyphService.cancel();
+      },
       writeShellInput: (chatId, sessionId, input, appendNewline) =>
         this.glyphService.writeShellInput(chatId, sessionId, input, appendNewline),
       openShell: (chatId, sessionId) => this.glyphService.openShell(chatId, sessionId),
@@ -147,10 +149,14 @@ export class GlyphViewPane extends ViewPane {
         ),
       reviewProposalFile: (chatId, proposalId, fileId) => service.reviewProposalFile(chatId, proposalId, fileId),
       decideProposalItems: (chatId, items, accept) => service.decideProposalItems(chatId, items, accept),
-      newChat: () => this.glyphService.newChat(),
+      newChat: () => {
+        this.glyphService.newChat();
+      },
       closeChat: id => this.glyphService.closeChat(id),
       setChatArchived: (id, archived) => service.setChatArchived(id, archived),
-      setChatPinned: (id, pinned) => service.setChatPinned(id, pinned),
+      setChatPinned: (id, pinned) => {
+        service.setChatPinned(id, pinned);
+      },
       chatMenuActions: [
         {
           id: 'export',
@@ -176,8 +182,20 @@ export class GlyphViewPane extends ViewPane {
           label: 'Agent Settings',
           run: () => this.preferences.openSettings({ query: 'glyph' }).then(() => {}),
         },
-        { id: 'maximize', label: 'Toggle Maximized Chat', run: () => this.glyphLayout.toggleMaximizedAuxiliaryBar() },
-        { id: 'hide', label: 'Hide Chat', run: () => this.glyphLayout.setPartHidden(true, Parts.AUXILIARYBAR_PART) },
+        {
+          id: 'maximize',
+          label: 'Toggle Maximized Chat',
+          run: () => {
+            this.glyphLayout.toggleMaximizedAuxiliaryBar();
+          },
+        },
+        {
+          id: 'hide',
+          label: 'Hide Chat',
+          run: () => {
+            this.glyphLayout.setPartHidden(true, Parts.AUXILIARYBAR_PART);
+          },
+        },
       ],
       openChat: id => this.glyphService.openChat(id),
       selectAccount: (provider, id) => this.glyphService.selectAccount(provider, id),

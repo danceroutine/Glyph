@@ -87,9 +87,13 @@ export function GlyphAccountPicker({
             aria-label="Account"
             value={selectedKey}
             disabled={disabled}
-            onChange={event => selectAccount(event.currentTarget.value)}
+            onChange={event => {
+              selectAccount(event.currentTarget.value);
+            }}
           >
-            {unavailableLabel && <option value={selectedKey}>{unavailableLabel}</option>}
+            {unavailableLabel !== undefined && unavailableLabel !== '' && (
+              <option value={selectedKey}>{unavailableLabel}</option>
+            )}
             {accounts.map(account => (
               <option key={account.key} value={account.key} disabled={account.disabled}>
                 {account.label}

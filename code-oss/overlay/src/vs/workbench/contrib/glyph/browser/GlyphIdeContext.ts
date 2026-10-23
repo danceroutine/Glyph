@@ -16,6 +16,8 @@ import { IWorkspaceTrustManagementService } from '#vs/platform/workspace/common/
 import { ISCMService } from '#vs/workbench/contrib/scm/common/scm.js';
 import { ITerminalService, type ITerminalInstance } from '#vs/workbench/contrib/terminal/browser/terminal.js';
 import { ITestResultService } from '#vs/workbench/contrib/testing/common/testResultService.js';
+import type { ITestRunTaskResults } from '#vs/workbench/contrib/testing/common/testResult.js';
+import { isRecord } from '#glyph/protocol/isRecord.js';
 import type { LocationLink } from '#vs/editor/common/languages.js';
 import type { GlyphTextRange } from '#glyph/protocol/connection/GlyphTextRange.js';
 import type { GlyphEditorAdapter } from './GlyphEditorAdapter.js';
@@ -37,6 +39,13 @@ const digest = async (text: string) =>
     .join('');
 
 /** Explicit workbench captures. No repository history or language-service cache is searched implicitly. */
+enum DiffChoice {
+  STAGED = 'staged',
+  UNSTAGED = 'unstaged',
+}
+
+const splitLines = (value: string) => (value ? value.replace(/\n$/u, '').split('\n') : []);
+
 export class GlyphIdeContext {
   private readonly terminalCaptures = new Map<string, number>();
   constructor(
@@ -67,11 +76,11 @@ export class GlyphIdeContext {
           detail: 'Definitions, references, and import declarations for selected code',
           kind: Kind.SYMBOL,
         },
-        { label: 'Staged changes', detail: 'Explicit HEAD → index comparison for one file', kind: 'staged' },
+        { label: 'Staged changes', detail: 'Explicit HEAD → index comparison for one file', kind: DiffChoice.STAGED },
         {
           label: 'Unstaged changes',
           detail: 'Explicit index → working tree comparison for one file',
-          kind: 'unstaged',
+          kind: DiffChoice.UNSTAGED,
         },
         { label: 'Terminal selection', detail: 'Only selected output from the active terminal', kind: Kind.TERMINAL },
         { label: 'Test output', detail: 'Choose a test run and output task', kind: Kind.TEST },
@@ -86,9 +95,9 @@ export class GlyphIdeContext {
         return model && selection
           ? this.symbols(model, selection)
           : this.fallback('Select code in an editor first.', model ?? undefined);
-      case 'staged':
-      case 'unstaged':
-        return this.diff(choice.kind === 'staged', model ?? undefined);
+      case DiffChoice.STAGED:
+      case DiffChoice.UNSTAGED:
+        return this.diff(choice.kind === DiffChoice.STAGED, model ?? undefined);
       case Kind.TERMINAL:
         return this.terminal();
       case Kind.TEST:
@@ -101,9 +110,10 @@ export class GlyphIdeContext {
   async captureTestSelection(model: ITextModel, range: Range): Promise<GlyphContextAttachment> {
     this.assertTrusted();
     const parsed = parseTestUri(model.uri);
-    const run = parsed && this.tests.getResult(parsed.resultId);
-    const task = run && parsed && run.tasks[parsed.taskIndex];
-    if (!run || !task)
+    const run = parsed === undefined ? undefined : this.tests.getResult(parsed.resultId);
+    const task: ITestRunTaskResults | undefined =
+      run === undefined || parsed === undefined ? undefined : run.tasks[parsed.taskIndex];
+    if (run === undefined || task === undefined)
       throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'The originating test run is unavailable.');
     const version = model.getVersionId();
     const text = model.getValueInRange(range);
@@ -140,10 +150,10 @@ export class GlyphIdeContext {
         reference.object.textEditorModel.getFullModelRange(),
       );
       const location = message.location;
-      const details = `Test: ${test.item.label} (${testId})\nSource: ${location ? `${location.uri}:${location.range.startLineNumber}` : (test.item.uri?.toString() ?? 'unavailable')}\nRun state: ${run.completedAt ? 'completed' : 'running (partial)'}\n`;
+      const details = `Test: ${test.item.label} (${testId})\nSource: ${location ? `${location.uri.toString()}:${location.range.startLineNumber}` : (test.item.uri?.toString() ?? 'unavailable')}\nRun state: ${run.completedAt === undefined ? 'running (partial)' : 'completed'}\n`;
       const comparison =
         'expected' in message || 'actual' in message
-          ? `\nExpected: ${'expected' in message ? (message.expected ?? 'unavailable') : 'unavailable'}\nActual: ${'actual' in message ? (message.actual ?? 'unavailable') : 'unavailable'}\n`
+          ? `\nExpected: ${'expected' in message ? (typeof message.expected === 'string' ? message.expected : 'unavailable') : 'unavailable'}\nActual: ${'actual' in message ? (typeof message.actual === 'string' ? message.actual : 'unavailable') : 'unavailable'}\n`
           : '';
       return [await this.snapshot(Kind.TEST, source, details + comparison + '\n' + source.text)];
     } finally {
@@ -167,8 +177,10 @@ export class GlyphIdeContext {
     }
     if (uri.scheme === 'vscode-test-data') {
       const parsed = parseTestUri(uri);
-      const run = parsed && this.tests.getResult(parsed.resultId);
-      if (!run || !parsed || !run.tasks[parsed.taskIndex])
+      const run = parsed === undefined ? undefined : this.tests.getResult(parsed.resultId);
+      const task: ITestRunTaskResults | undefined =
+        run === undefined || parsed === undefined ? undefined : run.tasks[parsed.taskIndex];
+      if (run === undefined || parsed === undefined || task === undefined)
         throw new GlyphContextError(
           GlyphDesktopErrorCode.NOT_FOUND,
           'Test run unavailable. The captured output is preserved.',
@@ -192,7 +204,10 @@ export class GlyphIdeContext {
       return true;
     }
     if (uri.scheme === 'glyph-test') {
-      const [runId, taskId] = uri.path.slice(1).split('/').map(decodeURIComponent);
+      const [runId, taskId] = uri.path
+        .slice(1)
+        .split('/')
+        .map(value => decodeURIComponent(value));
       const run = this.tests.getResult(runId);
       const taskIndex = run?.tasks.findIndex(task => task.id === taskId) ?? -1;
       if (!run || taskIndex < 0)
@@ -258,12 +273,12 @@ export class GlyphIdeContext {
   ): Promise<GlyphContextAttachment> {
     this.assertTrusted();
     const path = this.adapter.contextPath(uri.with({ query: '', fragment: '' }));
-    const read = async (uri: URI | undefined) => {
-      if (!uri) return '';
-      if (!['file', 'git'].includes(uri.scheme))
+    const read = async (resource: URI | undefined) => {
+      if (!resource) return '';
+      if (!['file', 'git'].includes(resource.scheme))
         throw new GlyphContextError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE, 'Unsupported Git comparison resource.');
-      this.adapter.contextPath(uri.with({ scheme: 'file', query: '', fragment: '' }));
-      const reference = await this.resolver.createModelReference(uri);
+      this.adapter.contextPath(resource.with({ scheme: 'file', query: '', fragment: '' }));
+      const reference = await this.resolver.createModelReference(resource);
       try {
         const target = reference.object.textEditorModel;
         if (target.getValueLength() > limit / 2)
@@ -290,16 +305,17 @@ export class GlyphIdeContext {
   ): Promise<readonly GlyphContextAttachment[]> {
     this.assertTrusted();
     const text = terminal?.selection;
-    if (!terminal || !text) return this.fallback('Select terminal output before attaching it.');
+    if (!terminal || text === undefined || text === '')
+      return this.fallback('Select terminal output before attaching it.');
     // Arbitrary selections can span commands; never attribute them to the last command by guesswork.
     const selection = terminal.xterm?.raw.getSelectionPosition();
     const commands = terminal.capabilities.get(TerminalCapability.CommandDetection)?.commands ?? [];
     const origins = commands.filter(
       command =>
-        selection &&
-        command.marker &&
-        command.executedMarker &&
-        command.endMarker &&
+        selection !== undefined &&
+        command.marker !== undefined &&
+        command.executedMarker !== undefined &&
+        command.endMarker !== undefined &&
         command.executedMarker.line <= selection.start.y &&
         command.endMarker.line >= selection.end.y,
     );
@@ -334,10 +350,11 @@ export class GlyphIdeContext {
         GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
         'This context exceeds 512 KiB. Select a smaller passage or output task.',
       );
-    if (source.uri.startsWith('file:') || source.uri.startsWith('untitled:')) {
-      if (this.adapter.contextPath(URI.parse(source.uri)) !== source.path)
-        throw new GlyphContextError(GlyphDesktopErrorCode.STALE_DOCUMENT, 'The workspace changed during capture.');
-    }
+    if (
+      (source.uri.startsWith('file:') || source.uri.startsWith('untitled:')) &&
+      this.adapter.contextPath(URI.parse(source.uri)) !== source.path
+    )
+      throw new GlyphContextError(GlyphDesktopErrorCode.STALE_DOCUMENT, 'The workspace changed during capture.');
     const contentRevision = await digest(text);
     this.assertTrusted();
     return { ...source, id: generateUuid(), kind, text, contentRevision };
@@ -353,7 +370,7 @@ export class GlyphIdeContext {
         : [{ label: 'No context available', detail: message, attach: false }],
       { title: message },
     );
-    return choice?.attach && model ? [await this.adapter.captureContext(model)] : [];
+    return choice?.attach === true && model ? [await this.adapter.captureContext(model)] : [];
   }
 
   private async diagnostic(model?: ITextModel): Promise<readonly GlyphContextAttachment[]> {
@@ -372,7 +389,7 @@ export class GlyphIdeContext {
         description: `${this.adapter.contextPath(marker.resource)}:${marker.startLineNumber}`,
         marker,
       }));
-    if (!items.length)
+    if (items.length === 0)
       return this.fallback('No diagnostics are reported. Diagnostic support may be unavailable.', model);
     const chosen = await this.quick.pick(items, { title: 'Choose a diagnostic to attach', matchOnDescription: true });
     if (!chosen) return [];
@@ -397,7 +414,7 @@ export class GlyphIdeContext {
     for (const match of source.text.slice(0, 4000).matchAll(/[\p{L}_$][\p{L}\p{N}_$]*/gu)) {
       if (
         identifiers.has(match[0]) ||
-        /^(?:import|from|as|const|let|var|function|class|export|default|return|if|else|new|type|interface|async|await|def|True|False|None)$/.test(
+        /^(?:import|from|as|const|let|var|function|class|export|default|return|if|else|new|type|interface|async|await|def|True|False|None)$/u.test(
           match[0],
         )
       )
@@ -439,37 +456,30 @@ export class GlyphIdeContext {
                         cancellation.token,
                       )) ?? [],
                   );
-          const query: Promise<LocationLink[]> = Promise.allSettled(queries).then(settled =>
-            settled.flatMap(result => {
-              if (result.status === 'fulfilled') return result.value;
-              unavailable++;
-              return [];
+          const query: Promise<{ links: LocationLink[]; failures: number }> = Promise.allSettled(queries).then(
+            settled => ({
+              links: settled.flatMap(result => (result.status === 'fulfilled' ? result.value : [])),
+              failures: settled.filter(result => result.status === 'rejected').length,
             }),
           );
-          const links = await new Promise<Awaited<typeof query>>(resolve => {
+          const { links, failures } = await new Promise<Awaited<typeof query>>(resolve => {
             const listener = cancellation.token.onCancellationRequested(() => {
               listener.dispose();
-              resolve([]);
+              resolve({ links: [], failures: 0 });
             });
-            query.then(
-              value => {
-                listener.dispose();
-                resolve(value);
-              },
-              () => {
-                unavailable++;
-                listener.dispose();
-                resolve([]);
-              },
-            );
+            void query.then(value => {
+              listener.dispose();
+              resolve(value);
+            });
             if (cancellation.token.isCancellationRequested) {
               listener.dispose();
-              resolve([]);
+              resolve({ links: [], failures: 0 });
             }
           });
+          unavailable += failures;
           for (const link of links) {
             const range = link.targetSelectionRange ?? link.range;
-            const key = `${link.uri}:${JSON.stringify(range)}`;
+            const key = `${link.uri.toString()}:${JSON.stringify(range)}`;
             if (seen.has(key)) continue;
             seen.add(key);
             if (results.length >= 20) {
@@ -508,12 +518,12 @@ export class GlyphIdeContext {
       if (
         !changed &&
         !model.isDisposed() &&
-        /^(typescript|typescriptreact|javascript|javascriptreact|python)$/.test(model.getLanguageId())
+        /^(typescript|typescriptreact|javascript|javascriptreact|python)$/u.test(model.getLanguageId())
       ) {
         for (let line = 1; line <= model.getLineCount() && results.length < 24; line++) {
           const text = model.getLineContent(line);
           if (
-            !/^\s*(?:import\b|from\b|(?:const|let|var)\b.*\brequire\s*\()/.test(text) ||
+            !/^\s*(?:import\b|from\b|(?:const|let|var)\b.*\brequire\s*\()/u.test(text) ||
             ![...identifiers].some(name => text.split(/[^\p{L}\p{N}_$]+/u).includes(name))
           )
             continue;
@@ -565,7 +575,7 @@ export class GlyphIdeContext {
             })),
           ),
       );
-    if (!items.length)
+    if (items.length === 0)
       return this.fallback(
         'No matching Git changes are available. Git support or a repository may be unavailable.',
         model,
@@ -579,8 +589,10 @@ export class GlyphIdeContext {
     // Git's regular diff UI uses HEAD for some deleted/type-changed resources.
     // An explicit unstaged capture must compare the index, including staged edits.
     if (!staged && before?.scheme === 'git') {
-      const query = JSON.parse(before.query) as { path?: string; ref?: string; submoduleOf?: string };
-      if (!query.submoduleOf) before = before.with({ query: JSON.stringify({ ...query, ref: '' }) });
+      const parsed: unknown = JSON.parse(before.query);
+      const query = isRecord(parsed) ? parsed : {};
+      if (typeof query.submoduleOf !== 'string' || query.submoduleOf === '')
+        before = before.with({ query: JSON.stringify({ ...query, ref: '' }) });
     }
     const after = resource.multiDiffEditorModifiedUri;
     if (!before && !after) return this.fallback('This Git provider does not expose explicit diff resources.', model);
@@ -589,14 +601,13 @@ export class GlyphIdeContext {
   }
 
   private diffBody(before: string, after: string): string {
-    const lines = (value: string) => (value ? value.replace(/\n$/, '').split('\n') : []);
-    const oldLines = lines(before),
-      newLines = lines(after);
+    const oldLines = splitLines(before);
+    const newLines = splitLines(after);
     const body = (value: string, prefix: string) =>
-      lines(value)
+      splitLines(value)
         .map(line => `${prefix}${line}\n`)
         .join('') + (value && !value.endsWith('\n') ? '\\ No newline at end of file\n' : '');
-    return `@@ -${oldLines.length ? 1 : 0},${oldLines.length} +${newLines.length ? 1 : 0},${newLines.length} @@\n${body(before, '-')}${body(after, '+')}`;
+    return `@@ -${oldLines.length > 0 ? 1 : 0},${oldLines.length} +${newLines.length > 0 ? 1 : 0},${newLines.length} @@\n${body(before, '-')}${body(after, '+')}`;
   }
 
   private async testOutput(): Promise<readonly GlyphContextAttachment[]> {
@@ -604,12 +615,12 @@ export class GlyphIdeContext {
       run.tasks.map(task => ({
         label: task.name || run.name,
         description: run.name,
-        detail: `Run ${run.id} · ${run.completedAt ? 'completed' : 'running (partial output)'}`,
+        detail: `Run ${run.id} · ${run.completedAt === undefined ? 'running (partial output)' : 'completed'}`,
         run,
         task,
       })),
     );
-    if (!items.length)
+    if (items.length === 0)
       return this.fallback('Test output is unavailable. Run tests with a workbench test provider first.');
     const chosen = await this.quick.pick(items, { title: 'Choose test output to attach', matchOnDescription: true });
     if (!chosen) return [];
@@ -627,7 +638,7 @@ export class GlyphIdeContext {
           uri: `glyph-test:/${encodeURIComponent(run.id)}/${encodeURIComponent(task.id)}`,
           path: `Test output: ${task.name || run.name}`,
         },
-        `Test run: ${run.name}\nRun ID: ${run.id}\nTask: ${task.name} (${task.id})\nController: ${task.ctrlId}\nState: ${run.completedAt ? `completed at ${new Date(run.completedAt).toISOString()}` : 'running; partial output'}\nCaptured at: ${new Date().toISOString()}\n\n${text}`,
+        `Test run: ${run.name}\nRun ID: ${run.id}\nTask: ${task.name} (${task.id})\nController: ${task.ctrlId}\nState: ${run.completedAt === undefined ? 'running; partial output' : `completed at ${new Date(run.completedAt).toISOString()}`}\nCaptured at: ${new Date().toISOString()}\n\n${text}`,
       ),
     ];
   }

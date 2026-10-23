@@ -82,5 +82,5 @@ function diffBudgetExceeded(): EditError {
 }
 
 function tokenize(text: string): string[] {
-  return text.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/g) ?? [];
+  return text.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/gu) ?? [];
 }

@@ -1,32 +1,43 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+import catalog from './coverage.json' with { type: 'json' };
+import authority from './authority-contract.json' with { type: 'json' };
 
 // Documentation integrity only: no child processes, network, sandbox, or test execution.
-const directory = dirname(fileURLToPath(import.meta.url));
+const directory = import.meta.dirname;
 const repository = resolve(directory, '../../../..');
+/** @param {string} path */
 const read = path => readFile(path, 'utf8');
-const catalog = JSON.parse(await read(resolve(directory, 'coverage.json')));
 assert.equal(catalog.safety_policy, '../ADVERSARIAL_TESTING_SAFETY.md');
 assert.equal(catalog.source_threat_model, '../../SANDBOX_THREAT_MODEL.md');
 const policy = (await read(resolve(directory, catalog.safety_policy))).trim();
 const threatModel = await read(resolve(directory, catalog.source_threat_model));
 const allowedLanes = new Set(['unit', 'fixture_integration', 'native_canary', 'static_only']);
-const vectorIds = [...threatModel.matchAll(/^\|\s+([ALPKO]\d{2})\s*\|/gm)].map(match => match[1]);
-const cveIds = [...new Set([...threatModel.matchAll(/CVE-\d{4}-\d+/g)].map(match => match[0]))];
-const findingIds = [...threatModel.matchAll(/^### (F\d+) —/gm)].map(match => match[1]);
+const vectorIds = [...threatModel.matchAll(/^\|\s+([ALPKO]\d{2})\s*\|/gmu)].map(match => match[1]);
+const cveIds = [...new Set([...threatModel.matchAll(/CVE-\d{4}-\d+/gu)].map(match => match[0]))];
+const findingIds = [...threatModel.matchAll(/^### (F\d+) —/gmu)].map(match => match[1]);
 
+/**
+ * @param {readonly string[]} values
+ * @param {string} label
+ */
 function unique(values, label) {
   assert.equal(new Set(values).size, values.length, `${label}: duplicate ID`);
-  return [...values].sort();
+  return values.toSorted();
 }
 
+/**
+ * @param {readonly string[]} actual
+ * @param {readonly string[]} expected
+ * @param {string} label
+ */
 function sameIds(actual, expected, label) {
   assert.deepEqual(unique(actual, label), unique(expected, `source ${label}`), `${label}: omitted or unknown ID`);
 }
 
+/** @param {string} path */
 function localPath(path) {
   assert.equal(typeof path, 'string');
   assert.ok(!isAbsolute(path), `Absolute artifact path: ${path}`);
@@ -90,7 +101,6 @@ const vectorById = new Map(catalog.vectors.map(vector => [vector.id, vector]));
 const operationById = new Map(catalog.native_case_specs.map(operation => [operation.operation_id, operation]));
 const controlIds = new Set(catalog.positive_controls.map(control => control.id));
 assert.equal(catalog.authority_contract, 'authority-contract.json');
-const authority = JSON.parse(await read(resolve(directory, catalog.authority_contract)));
 assert.equal(authority.status, 'draft_requires_review');
 assert.equal(authority.execution_permission, 'none');
 const decisionIds = new Set(authority.exact_capability_decisions.map(decision => decision.id));
@@ -195,7 +205,7 @@ for (const vector of catalog.vectors) {
       const operation = operationById.get(cell.operation_id);
       assert.ok(operation && operation.vector_id === vector.id);
       assert.ok(operation.profiles.includes(cell.profile));
-      assert.ok(operation.variant_ids.includes(cell.variant_id));
+      assert.ok('variant_id' in cell && operation.variant_ids.includes(cell.variant_id));
       assert.equal(cell.expected_result, operation.expected_result);
     } else {
       assert.equal(cell.operation_id, null);
@@ -292,7 +302,7 @@ for (const base of [directory, resolve(directory, 'prompts')]) {
   for (const name of await readdir(base)) {
     if (!name.endsWith('.md')) continue;
     const document = await read(resolve(base, name));
-    for (const [, target] of document.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
+    for (const [, target] of document.matchAll(/\[[^\]]+\]\(([^)]+)\)/gu)) {
       if (target.startsWith('https://') || target.startsWith('http://') || target.startsWith('#')) continue;
       assert.ok((await stat(resolve(base, target.split('#')[0]))).isFile(), `${name}: broken local link ${target}`);
       checkedLinks += 1;

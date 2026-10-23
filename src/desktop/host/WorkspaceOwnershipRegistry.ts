@@ -2,6 +2,7 @@ import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { realpathSync } from 'node:fs';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphWorkspaceRoot } from '#src/desktop/protocol/connection/GlyphWorkspaceRoot.js';
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 
 /** Describes whether a window may mutate a workspace and where to redirect focus if not. */
 export interface WorkspaceOwnership {
@@ -95,8 +96,8 @@ export function getWorkspaceKey(identity: Pick<GlyphConnectionIdentity, 'profile
 }
 
 function areSameRoots(left: readonly string[], right: readonly string[]): boolean {
-  const sortedRight = [...right].sort();
-  return left.length === right.length && [...left].sort().every((root, index) => root === sortedRight[index]);
+  const sortedRight = right.toSorted();
+  return left.length === right.length && left.toSorted().every((root, index) => root === sortedRight[index]);
 }
 
 /** Reserve missing roots relative to their real existing ancestor, never a symlink alias. */
@@ -105,7 +106,7 @@ function canonicalRoot(path: string): string {
   try {
     return realpathSync(absolute);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(absolute) === absolute) throw error;
+    if (errorCodeOf(error) !== 'ENOENT' || dirname(absolute) === absolute) throw error;
     return resolve(canonicalRoot(dirname(absolute)), basename(absolute));
   }
 }
