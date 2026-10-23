@@ -1,0 +1,95 @@
+name: Main integration
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+# Pending pushes may coalesce. Selection includes everything since the last
+# successful integration run, not just the latest push's immediate parent.
+concurrency:
+  group: integration-main
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ELECTRON_TRASH: trash-cli
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.8.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Select unverified changes on main
+        id: selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/coverage/select-main-electron-tests.mjs
+      - name: Install native toolchain
+        if: steps.selection.outputs.mode != 'skip'
+        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Install desktop dependencies
+        if: steps.selection.outputs.mode != 'skip'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap xvfb trash-cli libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev
+      - name: Allow sandbox namespaces
+        if: steps.selection.outputs.mode != 'skip'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Prepare Code OSS
+        if: steps.selection.outputs.mode != 'skip'
+        run: pnpm test:prepare
+      - name: Recover still-valid integration passes
+        if: steps.selection.outputs.mode != 'skip'
+        id: recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INTEGRATION_BASE_SHA: ${{ steps.selection.outputs.base }}
+          GLYPH_ELECTRON_SELECTION: .artifacts/electron-selection.json
+        run: node scripts/coverage/recover-electron-tests.mjs prepare
+      - name: Run relevant Electron suites
+        if: steps.recovery.outputs.execute == 'true'
+        env:
+          GLYPH_ELECTRON_SELECTION: .artifacts/electron-selection.json
+          GLYPH_ELECTRON_RECOVERY: .artifacts/electron-recovery/last-run.json
+          PLAYWRIGHT_JSON_OUTPUT_FILE: .artifacts/electron-recovery/results.json
+          GLYPH_ELECTRON_WORKERS: '2'
+        run: |
+          pnpm code-oss:prepare-launch
+          xvfb-run -a node scripts/code-oss/test-electron.mjs
+      - name: Record recoverable evidence even after failures
+        if: always() && steps.recovery.outcome == 'success'
+        run: node scripts/coverage/recover-electron-tests.mjs finish
+      - name: Preserve reusable manifest
+        if: always() && steps.recovery.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          path: .artifacts/electron-recovery/manifest.json
+          retention-days: 7
+      - name: Preserve selection and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-evidence-${{ github.run_id }}
+          include-hidden-files: true
+          path: |
+            .artifacts/electron-selection.json
+            .artifacts/electron-recovery/plan.json
+            .artifacts/electron-recovery/results.json
+            .artifacts/code-oss-integration/results.json
+            .artifacts/code-oss-integration/report/
+            .artifacts/code-oss-integration/results/
+          retention-days: 7

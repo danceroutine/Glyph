@@ -76,7 +76,8 @@ test its own launch.
 ## Run
 
 `pnpm test` runs the local coverage gate without Electron. `pnpm test:all`
-includes this full integration suite. PR CI selects suites by feature ownership;
+includes this full integration suite. PR CI does not run Electron. A separate
+main-only integration workflow selects suites by feature ownership;
 see [test selection](test-selection.md) for the rules, conservative fallbacks,
 and commands to inspect or reproduce a decision.
 

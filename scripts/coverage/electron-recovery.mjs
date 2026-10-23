@@ -6,7 +6,7 @@ const suiteFile = z.string().regex(/^[^/\\]+\.test\.mjs$/u);
 const testIdentity = z.object({ id: z.string().min(1), file: suiteFile, titles: z.array(z.string()).min(1) });
 const context = z.object({
   repository: z.string().min(1),
-  pullRequest: z.string().regex(/^\d+$/u),
+  branch: z.literal('main'),
   head: z.string().regex(/^[a-f0-9]{40}$/u),
   base: z.string().regex(/^[a-f0-9]{40}$/u),
   platform: z.string(),
@@ -101,7 +101,7 @@ export const recoveryPlan = z.object({
 });
 
 /**
- * Previous evidence is usable only on the same PR/base/platform/toolchain and a
+ * Previous evidence is usable only on the same main baseline/platform/toolchain and a
  * verified ancestor. The caller obtains ancestry and changes from Git, not the artifact.
  * @param {{ context: z.infer<typeof context>, run: string, attempt: string, tests: TestEvidence[], previous: unknown, ancestor: boolean, changed: string[], available: string[], rules: { area: string, prefixes: string[], tests: string[] }[] }} input
  */
@@ -113,7 +113,7 @@ export function planElectronRecovery(input) {
   let sourceRun = null;
   if (previous.success) {
     const prior = previous.data;
-    const keys = /** @type {const} */ (['repository', 'pullRequest', 'base', 'platform', 'playwright']);
+    const keys = /** @type {const} */ (['repository', 'branch', 'base', 'platform', 'playwright']);
     const sameContext = keys.every(key => prior.context[key] === input.context[key]);
     if (sameContext && input.ancestor) {
       const invalidated = selectElectronTests(input.changed, input.available, input.rules);

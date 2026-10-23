@@ -31,11 +31,10 @@ const environment = z.object({
   GITHUB_REPOSITORY: z.string().min(1),
   GITHUB_RUN_ID: z.string().regex(/^\d+$/u),
   GITHUB_RUN_ATTEMPT: z.string().regex(/^\d+$/u),
-  PR_NUMBER: z.string().regex(/^\d+$/u),
-  PR_HEAD_SHA: z.string().regex(/^[a-f0-9]{40}$/u),
-  PR_BASE_SHA: z.string().regex(/^[a-f0-9]{40}$/u),
-  PR_HEAD_REPOSITORY: z.string(),
-  PR_HEAD_BRANCH: z.string(),
+  GITHUB_EVENT_NAME: z.literal('push'),
+  GITHUB_REF: z.literal('refs/heads/main'),
+  GITHUB_SHA: z.string().regex(/^[a-f0-9]{40}$/u),
+  INTEGRATION_BASE_SHA: z.string().regex(/^[a-f0-9]{40}$/u),
   RUNNER_OS: z.string(),
   RUNNER_ARCH: z.string(),
   ImageOS: z.string(),
@@ -48,35 +47,30 @@ const workflowRuns = z.object({
       run_attempt: z.number().int().positive(),
       head_sha: z.string(),
       head_repository: z.object({ full_name: z.string() }),
-      pull_requests: z.array(z.object({ number: z.number() })),
+      head_branch: z.string(),
     }),
   ),
 });
 
-/** Only download evidence from this repository's same PR and workflow, never fork artifacts.
+/** Only download evidence from this repository's main integration workflow, never PR or fork artifacts.
  * @param {z.infer<typeof environment>} env
  */
 async function restore(env) {
-  if (env.PR_HEAD_REPOSITORY !== env.GITHUB_REPOSITORY) return null;
   try {
-    const endpoint = `repos/${env.GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=${encodeURIComponent(env.PR_HEAD_BRANCH)}&per_page=20`;
+    const endpoint = `repos/${env.GITHUB_REPOSITORY}/actions/workflows/integration.yml/runs?event=push&status=completed&branch=main&per_page=20`;
     const runs = workflowRuns.parse(JSON.parse(run('gh', ['api', endpoint]))).workflow_runs;
     if (Number(env.GITHUB_RUN_ATTEMPT) > 1) {
       // A rerun keeps its run ID and is absent from the completed-runs query.
       runs.unshift({
         id: Number(env.GITHUB_RUN_ID),
         run_attempt: Number(env.GITHUB_RUN_ATTEMPT) - 1,
-        head_sha: env.PR_HEAD_SHA,
+        head_sha: env.GITHUB_SHA,
         head_repository: { full_name: env.GITHUB_REPOSITORY },
-        pull_requests: [{ number: Number(env.PR_NUMBER) }],
+        head_branch: 'main',
       });
     }
     for (const candidate of runs) {
-      if (
-        candidate.head_repository.full_name !== env.GITHUB_REPOSITORY ||
-        !candidate.pull_requests.some(pr => String(pr.number) === env.PR_NUMBER)
-      )
-        continue;
+      if (candidate.head_repository.full_name !== env.GITHUB_REPOSITORY || candidate.head_branch !== 'main') continue;
       const destination = resolve(directory, 'restored', `${candidate.id}-${candidate.run_attempt}`);
       try {
         run('gh', [
@@ -95,8 +89,7 @@ async function restore(env) {
           manifest.run === String(candidate.id) &&
           manifest.attempt === String(candidate.run_attempt) &&
           manifest.context.head === candidate.head_sha &&
-          manifest.context.repository === env.GITHUB_REPOSITORY &&
-          manifest.context.pullRequest === env.PR_NUMBER
+          manifest.context.repository === env.GITHUB_REPOSITORY
         )
           return manifest;
       } catch {
@@ -104,7 +97,7 @@ async function restore(env) {
       }
     }
   } catch {
-    // Read-only artifact access may be unavailable, especially in restricted PRs.
+    // Read-only artifact access may be unavailable.
   }
   return null;
 }
@@ -124,8 +117,8 @@ async function prepare() {
   let changed = [];
   if (previous !== null) {
     try {
-      run('git', ['merge-base', '--is-ancestor', previous.context.head, env.PR_HEAD_SHA]);
-      changed = run('git', ['diff', '--name-only', '--no-renames', '-z', previous.context.head, env.PR_HEAD_SHA, '--'])
+      run('git', ['merge-base', '--is-ancestor', previous.context.head, env.GITHUB_SHA]);
+      changed = run('git', ['diff', '--name-only', '--no-renames', '-z', previous.context.head, env.GITHUB_SHA, '--'])
         .split('\0')
         .filter(Boolean);
       ancestor = true;
@@ -142,9 +135,9 @@ async function prepare() {
   const plan = planElectronRecovery({
     context: {
       repository: env.GITHUB_REPOSITORY,
-      pullRequest: env.PR_NUMBER,
-      head: env.PR_HEAD_SHA,
-      base: env.PR_BASE_SHA,
+      branch: 'main',
+      head: env.GITHUB_SHA,
+      base: env.INTEGRATION_BASE_SHA,
       platform: `${env.RUNNER_OS}-${env.RUNNER_ARCH}-${env.ImageOS}-${env.ImageVersion}-node${process.version}`,
       playwright: inventory.playwright,
     },
