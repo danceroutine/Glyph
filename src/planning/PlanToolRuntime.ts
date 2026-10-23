@@ -16,7 +16,7 @@ export class PlanToolRuntime implements ToolSource {
       inputKind: ToolInputKind.JSON,
       parameters,
       description:
-        'Save a plan for human review. Include Markdown, a short summary and todos. For a new plan pass null id and expectedRevision; to revise use its returned id and revision. This does not execute work or authorize leaving Plan Mode.',
+        'Save a plan for human review. Include Markdown, a short summary and todos. Always include todos: break the work into concrete, independently checkable steps with short stable IDs, in the order they should be done. A plan without todos is almost always incomplete, because building a plan seeds the builder’s todo list from these todos and the build only finishes once every one is checked off. For a new plan pass null id and expectedRevision; to revise use its returned id and revision. This does not execute work or authorize leaving Plan Mode.',
       validateInput: input => {
         planUpdateSchema.parse(JSON.parse(input));
       },

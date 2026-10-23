@@ -7,7 +7,7 @@ import { IClipboardService } from '#vs/platform/clipboard/common/clipboardServic
 import { AgentModeID } from '#glyph/protocol/index.js';
 import { IConfigurationService } from '#vs/platform/configuration/common/configuration.js';
 import { toGlyphTranscriptParts } from '#glyph/workbench/toGlyphTranscriptParts.js';
-import type { GlyphPlan } from '#glyph/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#glyph/protocol/events/GlyphPlanRecord.js';
 import type { GlyphPlanProgress } from '#glyph/protocol/events/GlyphPlanProgress.js';
 import { GlyphPlanPromptIntent, toGlyphPlanPrompt } from '#glyph/workbench/GlyphPlanPrompt.js';
 import { GlyphPlanInput } from './GlyphPlanEditor.js';
@@ -91,7 +91,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private workspaceRevision = 0;
   private workspaceMessage: string | undefined;
   private readonly prompts = new Map<string, string>();
-  private readonly planBuilds = new Map<string, { runId: string; chatId: string; title: string }>();
   private readonly errors: GlyphTranscriptEntry[] = [];
   private readonly goals = new GlyphGoalReconciler({
     snapshot: chatId => this.goalSnapshot(chatId),
@@ -214,7 +213,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.client.onDidDisconnect(error => {
         editor.invalidate();
         this.pendingRunId = undefined;
-        this.planBuilds.clear();
         this.goals.reset();
         this.projection.accept({
           type: GlyphHostEventType.HOST_STATUS,
@@ -256,9 +254,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
               this.selectChat(restored);
             }
             this.pendingRunId = undefined;
-            for (const [planId, { runId }] of this.planBuilds)
-              if (!event.state.runs.some(run => run.runId === runId && isActive(run.status)))
-                this.planBuilds.delete(planId);
             break;
           case GlyphHostEventType.CHAT_UPDATED:
             if (event.chat.mode !== undefined && event.chat.mode !== previousMode)
@@ -303,9 +298,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           }
           case GlyphHostEventType.RUN_STATE:
             if (event.run.runId === this.pendingRunId) this.pendingRunId = undefined;
-            if (!isActive(event.run.status))
-              for (const [planId, { runId }] of this.planBuilds)
-                if (runId === event.run.runId) this.planBuilds.delete(planId);
             break;
           default:
             break;
@@ -403,6 +395,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     const { selectedAccount: _account, selectedModel: _model, models: _models, ...snapshot } = this.projection.state;
     const runs = snapshot.runs.filter(run => run.chatId === this.selectedChatId);
     const active = runs.find(run => isActive(run.status));
+    const builds = this.planBuilds();
     const transcript: GlyphTranscriptEntry[] = runs.flatMap(run => {
       const prompt = run.userText ?? this.prompts.get(run.runId);
       return [
@@ -473,7 +466,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       ...(this.navigationError !== undefined && this.navigationError !== ''
         ? { navigationError: this.navigationError }
         : {}),
-      ...(this.planBuilds.size > 0 ? { buildingPlanIds: [...this.planBuilds.keys()] } : {}),
+      ...(builds.length > 0 ? { buildingPlanIds: builds.map(plan => plan.id) } : {}),
       status: this.workbenchStatus(active?.status),
       transcript: [
         ...transcript,
@@ -515,7 +508,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     composer.setMode(mode);
   }
 
-  async viewPlan(chatId: string, plan: GlyphPlan): Promise<void> {
+  async viewPlan(chatId: string, plan: GlyphPlanRecord): Promise<void> {
     this.composer.registerAnnotationSource(plan.id, async () => {
       await this.viewPlan(chatId, plan);
       return undefined;
@@ -527,7 +520,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         plan: current,
         modelLabel: this.state.models.find(model => model.slug === chat?.modelSlug)?.name ?? chat?.modelSlug,
         disabled: this.state.readOnly || this.state.runs.some(run => run.chatId === chatId && isActive(run.status)),
-        building: this.planBuilds.has(current.id),
+        building: !!current.build,
         agents: current.agents.map(agent => ({
           ...agent,
           title: this.state.chats.find(candidate => candidate.id === agent.chatId)?.title ?? 'Chat unavailable',
@@ -539,7 +532,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         read,
         {
           update: value => this.request({ type: GlyphWorkbenchCommandType.UPDATE_PLAN, chatId, plan: value }),
+          setTodo: (todoId, completed) => this.setPlanTodo(chatId, plan.id, todoId, completed),
           build: newChat => this.buildPlan(chatId, read().plan, newChat),
+          stopBuild: () => this.stopPlanBuild(chatId, plan.id),
           newAgent: async () => {
             await this.linkPlanChat(chatId, read().plan);
           },
@@ -553,7 +548,15 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     );
   }
 
-  async buildPlan(chatId: string, plan: GlyphPlan, newChat = false): Promise<void> {
+  async setPlanTodo(chatId: string, planId: string, todoId: string, completed: boolean): Promise<void> {
+    await this.request({ type: GlyphWorkbenchCommandType.SET_PLAN_TODO, chatId, planId, todoId, completed });
+  }
+
+  async stopPlanBuild(chatId: string, planId: string): Promise<void> {
+    await this.request({ type: GlyphWorkbenchCommandType.STOP_PLAN_BUILD, chatId, planId });
+  }
+
+  async buildPlan(chatId: string, plan: GlyphPlanRecord, newChat = false): Promise<void> {
     const workspaceRevision = this.workspaceRevision;
     const latest = this.state.chats.find(chat => chat.id === chatId)?.plans?.findLast(value => value.id === plan.id);
     if (!latest || latest.revision !== plan.revision)
@@ -602,10 +605,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     };
     await composer.submit(async (submittedText, attachments, options) => {
       if (this.immediatePending) throw new Error('Waiting for the current response to stop.');
-      const runId = await this.sendToChat(submittedText, attachments, { ...options, planBuild }, targetChatId);
-      if (this.projection.state.runs.some(run => run.runId === runId && !isActive(run.status))) return;
-      this.planBuilds.set(plan.id, { runId, chatId: targetChatId, title: plan.title });
-      this.changeEmitter.fire(this.state);
+      await this.sendToChat(submittedText, attachments, { ...options, planBuild }, targetChatId);
     });
   }
 
@@ -1087,7 +1087,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     }
   }
 
-  private async linkPlanChat(chatId: string, plan: GlyphPlan): Promise<string> {
+  private async linkPlanChat(chatId: string, plan: GlyphPlanRecord): Promise<string> {
     const workspaceRevision = this.workspaceRevision;
     const chat = this.state.chats.find(value => value.id === chatId);
     if (!chat) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'The plan chat is unavailable.');
@@ -1108,18 +1108,24 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     return targetChatId;
   }
 
+  private planBuilds(): readonly GlyphPlanRecord[] {
+    return this.projection.state.chats.flatMap(chat =>
+      [...new Map((chat.plans ?? []).map(plan => [plan.id, plan])).values()].filter(plan => plan.build),
+    );
+  }
+
   private planProgress(chatId: string): GlyphPlanProgress | undefined {
-    const build = [...this.planBuilds].find(([, value]) => value.chatId === chatId);
-    if (!build) return undefined;
-    const [planId, { title }] = build;
-    const todos = this.state.chats.find(chat => chat.id === chatId)?.todos ?? [];
-    const current = todos.find(todo => todo.status === 'in_progress')?.text;
+    const plan = this.planBuilds().find(value => value.build?.chatId === chatId);
+    if (!plan) return undefined;
+    const tray = this.projection.state.chats.find(chat => chat.id === chatId)?.todos ?? [];
+    const current =
+      tray.find(todo => todo.status === 'in_progress')?.text ?? plan.todos.find(todo => !todo.completed)?.text;
     return {
-      planId,
-      title,
+      planId: plan.id,
+      title: plan.title,
       ...(current ? { current } : {}),
-      completed: todos.filter(todo => todo.status === 'completed').length,
-      total: todos.length,
+      completed: plan.todos.filter(todo => todo.completed).length,
+      total: plan.todos.length,
     };
   }
 
@@ -1347,7 +1353,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.sessionChanged = true;
     this.invalidationMessage = message;
     this.pendingRunId = undefined;
-    this.planBuilds.clear();
     // Profiles have separate accounts and history. Retire this port until reload.
     this.client.dispose();
     this.report(new Error(this.invalidationMessage));

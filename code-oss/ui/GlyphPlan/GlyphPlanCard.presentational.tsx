@@ -1,19 +1,21 @@
 import { Button, ButtonAppearance } from '#code-oss/ui/Button/Button.tsx';
 import { GlyphPlanBuild } from './GlyphPlanBuild.presentational.tsx';
-import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
 import { planStyles } from './GlyphPlan.styles.ts';
 export function GlyphPlanCard({
   plan,
   view,
   build,
   buildNew,
+  stop,
   disabled,
   building = false,
 }: {
-  readonly plan: GlyphPlan;
+  readonly plan: GlyphPlanRecord;
   readonly view: () => void;
   readonly build: () => void;
   readonly buildNew: () => void;
+  readonly stop?: (() => void) | undefined;
   readonly disabled: boolean;
   readonly building?: boolean;
 }) {
@@ -26,7 +28,7 @@ export function GlyphPlanCard({
         <Button appearance={ButtonAppearance.GHOST} onClick={view}>
           View Plan
         </Button>
-        <GlyphPlanBuild build={build} buildNew={buildNew} disabled={disabled} building={building} />
+        <GlyphPlanBuild build={build} buildNew={buildNew} stop={stop} disabled={disabled} building={building} />
       </footer>
     </article>
   );

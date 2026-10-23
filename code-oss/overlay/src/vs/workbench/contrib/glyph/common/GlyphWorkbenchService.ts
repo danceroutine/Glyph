@@ -4,7 +4,7 @@ import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js'
 import type { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import type { GlyphTurnOptions } from '#glyph/protocol/events/GlyphAnnotation.js';
-import type { GlyphPlan } from '#glyph/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#glyph/protocol/events/GlyphPlanRecord.js';
 import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import type { GlyphContextActions } from '#glyph/workbench/GlyphContextActions.js';
 import type { GlyphApprovalDecision } from '#glyph/protocol/GlyphApprovalDecision.js';
@@ -36,12 +36,13 @@ export interface GlyphWorkbenchService {
   ): Promise<void>;
   steer(text: string, attachments?: readonly GlyphContextAttachment[], options?: GlyphTurnOptions): Promise<void>;
   selectMode?(mode: AgentModeID): Promise<void>;
-  buildPlan?(chatId: string, plan: GlyphPlan, newChat?: boolean): Promise<void>;
+  buildPlan?(chatId: string, plan: GlyphPlanRecord, newChat?: boolean): Promise<void>;
+  stopPlanBuild?(chatId: string, planId: string): Promise<void>;
   branchChat?(chatId: string, turnId: string): Promise<void>;
   restoreCheckpoint?(chatId: string, turnId: string): Promise<void>;
   copyText(text: string): Promise<void>;
   openLink?(href: string): Promise<void>;
-  viewPlan?(chatId: string, plan: GlyphPlan): Promise<void>;
+  viewPlan?(chatId: string, plan: GlyphPlanRecord): Promise<void>;
   cancel(): void;
   startAgentReview(review: AgentReviewInput): Promise<void>;
   cancelAgentReview(reviewId: string): Promise<void>;

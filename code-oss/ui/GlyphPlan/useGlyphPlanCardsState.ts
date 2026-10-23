@@ -1,5 +1,5 @@
 import { useRef, useState } from 'preact/hooks';
-import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 export function useGlyphPlanCardsState({
   chatId,
@@ -8,7 +8,7 @@ export function useGlyphPlanCardsState({
   buildingPlanIds,
 }: {
   readonly chatId: string;
-  readonly plans: readonly GlyphPlan[];
+  readonly plans: readonly GlyphPlanRecord[];
   readonly actions: GlyphWorkbenchViewActions;
   readonly buildingPlanIds?: readonly string[] | undefined;
 }) {
@@ -34,9 +34,12 @@ export function useGlyphPlanCardsState({
     pending,
     error,
     plans: [...new Map(plans.map(plan => [plan.id, plan])).values()],
-    building: (plan: GlyphPlan) => requested === plan.id || !!buildingPlanIds?.includes(plan.id),
-    view: (plan: GlyphPlan) => perform(() => actions.viewPlan?.(chatId, plan)),
-    build: (plan: GlyphPlan, newChat = false) =>
+    building: (plan: GlyphPlanRecord) => requested === plan.id || !!buildingPlanIds?.includes(plan.id),
+    view: (plan: GlyphPlanRecord) => perform(() => actions.viewPlan?.(chatId, plan)),
+    stop: actions.stopPlanBuild
+      ? (plan: GlyphPlanRecord) => perform(() => actions.stopPlanBuild?.(chatId, plan.id))
+      : undefined,
+    build: (plan: GlyphPlanRecord, newChat = false) =>
       buildingPlanIds?.includes(plan.id)
         ? Promise.resolve()
         : perform(async () => {

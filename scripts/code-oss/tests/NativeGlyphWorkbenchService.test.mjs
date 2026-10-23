@@ -931,118 +931,58 @@ it('opens web links externally by default and uses the native browser editor whe
   }
 });
 
-it.each([false, true])('shows a plan as building until its build finishes (new chat: %s)', async newChat => {
+it('shows a plan as building for as long as the host reports its build, even after the turn ends', async () => {
   const plan = {
     id: 'plan',
     revision: 1,
     title: 'Approved work',
     summary: '',
     markdown: 'Change source',
-    todos: [],
+    todos: [{ id: 'first', text: 'First step', completed: false }],
     agents: [],
+    build: { chatId: 'beta', runId: 'build', startedAt: '2026-10-21T10:00:00Z' },
   };
-  /** @type {Record<string, unknown>} */
-  let buildRun;
-  const test = await fixture({
-    chats: [{ ...chat('alpha'), plans: [plan] }],
-    handler: async (command, { state, emit }) => {
-      if (command.type === GlyphWorkbenchCommandType.CREATE_CHAT) {
-        state.chats.push(chat('builder'));
-        emit({ type: 'chat_updated', chat: chat('builder'), creationId: command.creationId });
-      }
-      if (command.type !== GlyphWorkbenchCommandType.SEND) return;
-      buildRun = {
-        chatId: command.chatId,
-        runId: command.runId,
-        userText: command.text,
-        text: '',
+  const test = await fixture({ chats: [{ ...chat('alpha'), plans: [plan] }, chat('beta')] });
+  try {
+    expect(test.service.state.buildingPlanIds).toEqual(['plan']);
+    test.emit({
+      type: 'run_state',
+      run: {
+        chatId: 'beta',
+        runId: 'build',
+        userText: 'Build',
+        text: 'Paused',
         reasoning: '',
         tools: [],
-      };
-      emit({ type: 'run_state', run: { ...buildRun, status: 'streaming' } });
-    },
-  });
-  try {
-    expect(test.service.state.buildingPlanIds).toBeUndefined();
-    await test.service.buildPlan('alpha', plan, newChat);
-    expect(buildRun.chatId).toBe(newChat ? 'builder' : 'alpha');
+        status: 'completed',
+      },
+    });
     expect(test.service.state.buildingPlanIds).toEqual(['plan']);
-    test.emit({ type: 'run_state', run: { ...buildRun, status: 'completed' } });
+    const { build: _, ...finished } = plan;
+    test.emit({
+      type: 'chat_updated',
+      chat: { ...chat('alpha'), plans: [{ ...finished, todos: [{ ...plan.todos[0], completed: true }] }] },
+    });
     expect(test.service.state.buildingPlanIds).toBeUndefined();
   } finally {
     test.dispose();
   }
 });
 
-it('does not show a plan as building when its build finishes before the request settles', async () => {
-  const plan = {
-    id: 'plan',
-    revision: 1,
-    title: 'Approved work',
-    summary: '',
-    markdown: 'Change source',
-    todos: [],
-    agents: [],
-  };
-  const test = await fixture({
-    chats: [{ ...chat('alpha'), plans: [plan] }],
-    handler: async (command, { emit }) => {
-      if (command.type !== GlyphWorkbenchCommandType.SEND) return;
-      emit({
-        type: 'run_state',
-        run: {
-          chatId: command.chatId,
-          runId: command.runId,
-          userText: command.text,
-          text: 'Done',
-          reasoning: '',
-          tools: [],
-          status: 'completed',
-        },
-      });
-    },
-  });
+it('asks the host to tick a plan todo and to stop a build', async () => {
+  const test = await fixture();
   try {
-    await test.service.buildPlan('alpha', plan);
-    expect(test.service.state.buildingPlanIds).toBeUndefined();
-  } finally {
-    test.dispose();
-  }
-});
+    await test.service.setPlanTodo('alpha', 'plan', 'first', true);
+    await test.service.stopPlanBuild('alpha', 'plan');
 
-it('stops showing a plan as building when the host no longer reports its build', async () => {
-  const plan = {
-    id: 'plan',
-    revision: 1,
-    title: 'Approved work',
-    summary: '',
-    markdown: 'Change source',
-    todos: [],
-    agents: [],
-  };
-  const test = await fixture({
-    chats: [{ ...chat('alpha'), plans: [plan] }],
-    handler: async (command, { emit }) => {
-      if (command.type !== GlyphWorkbenchCommandType.SEND) return;
-      emit({
-        type: 'run_state',
-        run: {
-          chatId: command.chatId,
-          runId: command.runId,
-          userText: command.text,
-          text: '',
-          reasoning: '',
-          tools: [],
-          status: 'streaming',
-        },
-      });
-    },
-  });
-  try {
-    await test.service.buildPlan('alpha', plan);
-    expect(test.service.state.buildingPlanIds).toEqual(['plan']);
-    test.emit({ type: 'initial_state', state: { ...test.state, runs: [] } });
-    expect(test.service.state.buildingPlanIds).toBeUndefined();
+    expect(
+      test.request.mock.calls
+        .map(([command]) => command)
+        .filter(command => ['set_plan_todo', 'stop_plan_build'].includes(command.type)),
+    ).toEqual([
+      { type: 'set_plan_todo', chatId: 'alpha', planId: 'plan', todoId: 'first', completed: true },
+      { type: 'stop_plan_build', chatId: 'alpha', planId: 'plan' },
+    ]);
   } finally {
     test.dispose();
   }
@@ -1092,32 +1032,17 @@ it('notes build progress on messages written while a plan is building in that ch
     title: 'Approved work',
     summary: '',
     markdown: 'Change source',
-    todos: [],
+    todos: [
+      { id: 'first', text: 'First step', completed: true },
+      { id: 'second', text: 'Second step', completed: false },
+      { id: 'third', text: 'Third step', completed: false },
+    ],
     agents: [],
+    build: { chatId: 'alpha', runId: 'build', startedAt: '2026-10-21T10:00:00Z' },
   };
   const test = await fixture({
-    chats: [{ ...chat('alpha'), plans: [plan] }, chat('beta')],
-    handler: async (command, { emit }) => {
-      if (command.type !== GlyphWorkbenchCommandType.SEND) return;
-      emit({
-        type: 'run_state',
-        run: {
-          chatId: command.chatId,
-          runId: command.runId,
-          userText: command.text,
-          text: '',
-          reasoning: '',
-          tools: [],
-          status: 'streaming',
-        },
-      });
-    },
-  });
-  try {
-    await test.service.buildPlan('alpha', plan);
-    test.emit({
-      type: 'chat_updated',
-      chat: {
+    chats: [
+      {
         ...chat('alpha'),
         plans: [plan],
         todos: [
@@ -1126,7 +1051,10 @@ it('notes build progress on messages written while a plan is building in that ch
           { id: 'third', text: 'Third step', status: 'pending' },
         ],
       },
-    });
+      chat('beta'),
+    ],
+  });
+  try {
     test.service.composer.setDraft('Keep the public API unchanged');
     test.service.composer.enqueueDraft();
     const queued = test.service.composer.snapshot.queued[0];

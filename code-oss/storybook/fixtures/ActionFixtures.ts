@@ -106,6 +106,9 @@ export function previewActionsFixture(overrides: Partial<GlyphWorkbenchViewActio
     buildPlan: fn<NonNullable<GlyphWorkbenchViewActions['buildPlan']>>()
       .mockName('ActionFixtures.buildPlan')
       .mockResolvedValue(undefined),
+    stopPlanBuild: fn<NonNullable<GlyphWorkbenchViewActions['stopPlanBuild']>>()
+      .mockName('ActionFixtures.stopPlanBuild')
+      .mockResolvedValue(undefined),
     viewPlan: fn<NonNullable<GlyphWorkbenchViewActions['viewPlan']>>()
       .mockName('ActionFixtures.viewPlan')
       .mockResolvedValue(undefined),

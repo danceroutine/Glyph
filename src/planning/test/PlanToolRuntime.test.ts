@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { PlanToolRuntime } from '#src/planning/PlanToolRuntime.js';
+import { planSchema } from '#src/planning/PlanSchema.js';
 
 function planInput(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -15,6 +16,22 @@ function planInput(overrides: Record<string, unknown> = {}): string {
 }
 
 describe(PlanToolRuntime, () => {
+  it('preserves persisted plan build state', () => {
+    const build = { chatId: 'builder', runId: 'run', startedAt: '2026-10-23T10:00:00Z' };
+
+    expect(
+      planSchema.parse({
+        id: 'plan',
+        revision: 1,
+        title: 'Ship coverage',
+        summary: 'Cover every branch.',
+        markdown: '# Plan',
+        todos: [],
+        agents: [],
+        build,
+      }).build,
+    ).toEqual(build);
+  });
   it('exposes a save_plan tool available in agent and plan modes', () => {
     const runtime = new PlanToolRuntime(vi.fn());
 

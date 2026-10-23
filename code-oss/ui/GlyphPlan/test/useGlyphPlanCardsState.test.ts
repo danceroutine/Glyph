@@ -1,15 +1,17 @@
 import { act, renderHook } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
-import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { aGlyphPlan } from '#src/desktop/tests/fixtures/aGlyphPlan.ts';
 import { useGlyphPlanCardsState } from '#code-oss/ui/GlyphPlan/useGlyphPlanCardsState.ts';
 
-const plan = (overrides: Partial<GlyphPlan> = {}) => aGlyphPlan({ title: 'Ship it', summary: 'Summary', ...overrides });
+const plan = (overrides: Partial<GlyphPlanRecord> = {}) =>
+  aGlyphPlan({ title: 'Ship it', summary: 'Summary', ...overrides });
 
 const cardActions = () => ({
-  viewPlan: vi.fn(async (_chatId: string, _plan: GlyphPlan) => {}),
-  buildPlan: vi.fn(async (_chatId: string, _plan: GlyphPlan, _newChat?: boolean) => {}),
+  viewPlan: vi.fn(async (_chatId: string, _plan: GlyphPlanRecord) => {}),
+  buildPlan: vi.fn(async (_chatId: string, _plan: GlyphPlanRecord, _newChat?: boolean) => {}),
+  stopPlanBuild: vi.fn(async (_chatId: string, _planId: string) => {}),
 });
 
 describe(useGlyphPlanCardsState, () => {
@@ -59,10 +61,12 @@ describe(useGlyphPlanCardsState, () => {
     });
 
     await act(() => result.current.view(target));
+    await act(() => result.current.stop?.(target));
     await act(() => result.current.build(target));
     await act(() => result.current.build(target, true));
 
     expect(actions.viewPlan).toHaveBeenCalledWith('chat', target);
+    expect(actions.stopPlanBuild).toHaveBeenCalledWith('chat', target.id);
     expect(actions.buildPlan.mock.calls).toEqual([
       ['chat', target, false],
       ['chat', target, true],

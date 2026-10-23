@@ -47,6 +47,7 @@ import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 import { GlyphWorkbenchCommandType as Command } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 import type { GlyphWorkbenchCommand } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
+import { toSummary } from '#src/chat/sessions/ChatSession.js';
 import { GlyphRunStatus } from '#src/desktop/protocol/events/GlyphRunProjection.js';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import type { Usage } from '#src/chat/Usage.js';
@@ -327,21 +328,31 @@ describe(ProviderDesktopRuntime, () => {
     }
   });
 
-  it('puts a plan’s todos on the building chat before the agent starts and keeps the build order with the turn', async () => {
+  it('starts a build with the plan’s todos on the building chat and keeps building after the turn ends', async () => {
     let seen: unknown;
     const harness = await fixture(async () => {
       seen = harness.saved.get(harness.chatId)?.todos;
     });
     try {
+      const plan = (
+        await harness.glyph.updatePlan(toSummary(harness.saved.get(harness.chatId)!), {
+          id: null,
+          expectedRevision: null,
+          title: 'Ship it',
+          summary: 'Summary',
+          markdown: '# Ship it',
+          todos: [
+            { id: 'first', text: 'First', completed: true },
+            { id: 'second', text: 'Second', completed: false },
+          ],
+        })
+      ).plans!.at(-1)!;
       const planBuild = {
-        planId: 'plan',
-        revision: 1,
-        title: 'Ship it',
+        planId: plan.id,
+        revision: plan.revision,
+        title: plan.title,
         sourceChatId: harness.chatId,
-        todos: [
-          { id: 'first', text: 'First', completed: true },
-          { id: 'second', text: 'Second', completed: false },
-        ],
+        todos: plan.todos,
       };
       await harness.runtime.handle({
         type: Command.SEND,
@@ -354,18 +365,96 @@ describe(ProviderDesktopRuntime, () => {
       await vi.waitFor(() => {
         expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(1);
       });
+      await new Promise<void>(resolve => {
+        setTimeout(resolve);
+      });
 
       expect(seen).toEqual([
-        { id: 'first', text: 'First', status: 'completed' },
-        { id: 'second', text: 'Second', status: 'pending' },
+        { id: `plan:${plan.id}:first`, text: 'First', status: 'completed' },
+        { id: `plan:${plan.id}:second`, text: 'Second', status: 'pending' },
       ]);
-      expect(harness.events).toContainEqual(
-        expect.objectContaining({
-          type: GlyphHostEventType.CHAT_UPDATED,
-          chat: expect.objectContaining({ todos: seen }),
-        }),
-      );
       expect(harness.saved.get(harness.chatId)?.transcript[0]?.options?.planBuild).toEqual(planBuild);
+      expect(harness.saved.get(harness.chatId)?.plans?.at(-1)?.build).toMatchObject({
+        chatId: harness.chatId,
+        runId: 'run',
+      });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('finishes a build without todos when its turn ends, and ticks or stops builds on request', async () => {
+    const harness = await fixture(async () => {});
+    try {
+      const chat = toSummary(harness.saved.get(harness.chatId)!);
+      const empty = (
+        await harness.glyph.updatePlan(chat, {
+          id: null,
+          expectedRevision: null,
+          title: 'Empty',
+          summary: 'Summary',
+          markdown: '# Empty',
+          todos: [],
+        })
+      ).plans!.at(-1)!;
+      const eventCount = harness.events.length;
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'run',
+        text: 'Build this approved plan',
+        attachments: [],
+        options: {
+          planBuild: {
+            planId: empty.id,
+            revision: 1,
+            title: 'Empty',
+            sourceChatId: harness.chatId,
+            todos: [],
+          },
+        },
+      });
+      await vi.waitFor(() => {
+        expect(harness.saved.get(harness.chatId)?.plans?.find(plan => plan.id === empty.id)?.build).toBeUndefined();
+      });
+      await vi.waitFor(() => {
+        expect(
+          harness.events
+            .slice(eventCount)
+            .some(
+              event =>
+                event.type === GlyphHostEventType.CHAT_UPDATED &&
+                event.chat.plans?.findLast(plan => plan.id === empty.id)?.build === undefined,
+            ),
+        ).toBe(true);
+      });
+      const listed = (
+        await harness.glyph.updatePlan(chat, {
+          id: null,
+          expectedRevision: null,
+          title: 'Listed',
+          summary: 'Summary',
+          markdown: '# Listed',
+          todos: [{ id: 'step', text: 'Step', completed: false }],
+        })
+      ).plans!.at(-1)!;
+      await harness.glyph.startPlanBuild(harness.chatId, listed.id, harness.chatId, 'later');
+
+      await harness.runtime.handle({
+        type: Command.SET_PLAN_TODO,
+        chatId: harness.chatId,
+        planId: listed.id,
+        todoId: 'step',
+        completed: true,
+      });
+      const ticked = harness.saved.get(harness.chatId)!;
+      await harness.glyph.startPlanBuild(harness.chatId, listed.id, harness.chatId, 'again');
+      await harness.runtime.handle({ type: Command.STOP_PLAN_BUILD, chatId: harness.chatId, planId: listed.id });
+
+      expect(ticked.plans!.at(-1)).toMatchObject({ todos: [{ completed: true }] });
+      expect(ticked.plans!.at(-1)!.build).toBeUndefined();
+      expect(ticked.todos).toEqual([{ id: `plan:${listed.id}:step`, text: 'Step', status: 'completed' }]);
+      expect(harness.saved.get(harness.chatId)!.plans!.at(-1)!.build).toBeUndefined();
     } finally {
       await harness.runtime.dispose();
     }

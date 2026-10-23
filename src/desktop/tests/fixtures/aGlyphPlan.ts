@@ -1,6 +1,6 @@
-import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
 
-export const aGlyphPlan = (overrides: Partial<GlyphPlan> = {}): GlyphPlan => ({
+export const aGlyphPlan = (overrides: Partial<GlyphPlanRecord> = {}): GlyphPlanRecord => ({
   id: 'plan',
   revision: 1,
   title: 'Plan',

@@ -271,6 +271,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         new TodoToolRuntime(async (chat, update, signal) => {
           const summary = await sessions.updateTodos(chat, update, signal);
           runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+          for (const plan of await sessions.syncPlanBuild(chat.id))
+            runtime?.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: plan });
           return summary.todos ?? [];
         }),
         new GoalToolRuntime(

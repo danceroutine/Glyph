@@ -103,6 +103,36 @@ export class GlyphService {
     return this.chatSessions.updateTodos(chat, update, signal);
   }
 
+  startPlanBuild(
+    chatId: string,
+    planId: string,
+    targetChatId: string,
+    runId: string,
+  ): Promise<readonly ChatSessionSummary[]> {
+    if (!this.chatSessions) throw new PlanError('Plan storage is unavailable.');
+    return this.chatSessions.startPlanBuild(chatId, planId, targetChatId, runId);
+  }
+
+  finishPlanBuildRun(chatId: string, runId: string): Promise<readonly ChatSessionSummary[]> {
+    if (!this.chatSessions) throw new PlanError('Plan storage is unavailable.');
+    return this.chatSessions.finishPlanBuildRun(chatId, runId);
+  }
+
+  setPlanTodo(
+    chatId: string,
+    planId: string,
+    todoId: string,
+    completed: boolean,
+  ): Promise<readonly ChatSessionSummary[]> {
+    if (!this.chatSessions) throw new PlanError('Plan storage is unavailable.');
+    return this.chatSessions.setPlanTodo(chatId, planId, todoId, completed);
+  }
+
+  stopPlanBuild(chatId: string, planId: string): Promise<ChatSessionSummary> {
+    if (!this.chatSessions) throw new PlanError('Plan storage is unavailable.');
+    return this.chatSessions.stopPlanBuild(chatId, planId);
+  }
+
   get accounts(): readonly ChatAccount[] {
     return this.backend.accounts;
   }

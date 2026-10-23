@@ -28,7 +28,7 @@ describe(TodoToolRuntime, () => {
     { items: [item, item], replace: false },
     { items: [{ ...item, status: 'done' }], replace: false },
     { items: [{ ...item, text: '  ' }], replace: false },
-    { items: [{ ...item, text: 'x'.repeat(501) }], replace: false },
+    { items: [{ ...item, text: 'x'.repeat(1001) }], replace: false },
     { items: Array.from({ length: 101 }, (_, i) => ({ ...item, id: String(i) })), replace: true },
     { items: [item], replace: false, chatId: 'another-chat' },
   ])('rejects invalid updates atomically: %j', async input => {

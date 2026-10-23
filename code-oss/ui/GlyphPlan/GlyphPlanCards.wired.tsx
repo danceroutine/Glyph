@@ -1,4 +1,4 @@
-import type { GlyphPlan } from '#src/desktop/protocol/events/GlyphPlan.js';
+import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { GlyphPlanCard } from './GlyphPlanCard.presentational.tsx';
 import { useGlyphPlanCardsState } from './useGlyphPlanCardsState.ts';
@@ -10,7 +10,7 @@ export function WiredGlyphPlanCards({
   buildingPlanIds,
 }: {
   readonly chatId: string;
-  readonly plans: readonly GlyphPlan[];
+  readonly plans: readonly GlyphPlanRecord[];
   readonly actions: GlyphWorkbenchViewActions;
   readonly disabled: boolean;
   readonly buildingPlanIds?: readonly string[];
@@ -27,6 +27,7 @@ export function WiredGlyphPlanCards({
           view={() => void decision.view(plan)}
           build={() => void decision.build(plan)}
           buildNew={() => void decision.build(plan, true)}
+          stop={decision.stop && (() => void decision.stop?.(plan))}
         />
       ))}
       {decision.error !== undefined && decision.error !== '' && <p role="alert">{decision.error}</p>}

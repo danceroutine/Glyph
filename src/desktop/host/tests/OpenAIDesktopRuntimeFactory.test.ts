@@ -1033,12 +1033,15 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await fixture.create([await fixture.folder('workspace')], emit);
       const todos = [{ id: 'todo', text: 'Do it', status: TodoStatus.PENDING }];
       const updated = chatSummary({ todos });
+      const synced = chatSummary({ id: 'source' });
       vi.spyOn(ChatSessionManager.prototype, 'updateTodos')
         .mockResolvedValueOnce(updated)
         .mockResolvedValueOnce(chatSummary());
+      vi.spyOn(ChatSessionManager.prototype, 'syncPlanBuild').mockResolvedValueOnce([synced]).mockResolvedValueOnce([]);
       const chat = { id: 'chat', accountProvider: 'openai', accountId: 'account' };
       await expect(captured.todos[0]!(chat, { items: todos, replace: true })).resolves.toEqual(todos);
       expect(emit).toHaveBeenCalledWith({ type: GlyphHostEventType.CHAT_UPDATED, chat: updated });
+      expect(emit).toHaveBeenCalledWith({ type: GlyphHostEventType.CHAT_UPDATED, chat: synced });
       await expect(captured.todos[0]!(chat, { items: [], replace: true })).resolves.toEqual([]);
     });
 
