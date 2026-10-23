@@ -1,14 +1,12 @@
-import { createHash } from 'node:crypto';
 import type { Logger } from '#src/observability/Logger.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
-import { transformTextEditRanges } from '#src/editing/documents/transformTextEditRanges.js';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
-import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
 import { planTextRevert } from './AppliedTextEdit.ts';
 import { isReviewItemPending } from './isReviewItemPending.ts';
 import { EditApplicabilityState } from './EditApplicabilityState.ts';
@@ -120,7 +118,7 @@ export class ProposalReviewManager {
   }
 
   async initialize({ reconcileWorkspace = true }: { reconcileWorkspace?: boolean } = {}): Promise<void> {
-    const stored = await this.store.load(this.workspaceIdentity);
+    const stored = (await this.store.load(this.workspaceIdentity)).map(value => EditProposal.from(value));
     this.durableResults = structuredClone(stored.flatMap(value => pendingReviewResults(value)));
     this.reviews = stored.filter(review => !isSettled(review));
     this.completedReviews = stored.filter(value => isSettled(value));
@@ -159,6 +157,7 @@ export class ProposalReviewManager {
 
   stage(proposal: EditProposal): Promise<void> {
     return this.enqueue(async () => {
+      proposal = EditProposal.from(proposal);
       if (
         this.reviews.filter(review =>
           review.files.some(file => file.items.some(item => item.decision === EditDecisionState.PENDING)),
@@ -543,7 +542,7 @@ export class ProposalReviewManager {
         if (edit.state !== 'reverting') {
           const inverse = planTextRevert(edit, current);
           if (!inverse) throw this.stale(file, current.revision);
-          target = snapshotForProposal(file, current, inverse.text, inverse.byteOrderMark);
+          target = file.snapshotFor(current, inverse.text, inverse.byteOrderMark);
           edit.revertTarget = target;
           edit.state = 'reverting';
           file.current = current;
@@ -638,7 +637,7 @@ export class ProposalReviewManager {
       file.applyingItemId = null;
       throw error;
     }
-    const applyingState = captureFileState(file);
+    const applyingState = file.captureState();
     const operationId = `${review.id}:${file.id}:${item.id}`;
     const mutation = { operationId, undoGroupId: operationId, save: true };
     let applicability = EditApplicabilityState.READY;
@@ -674,13 +673,13 @@ export class ProposalReviewManager {
           if (file.currentRevision === null || file.currentRevision === '') throw this.stale(file);
           const result = await this.workspace.rename(file.currentPath, file.targetPath, file.currentRevision, mutation);
           file.currentPath = result.path;
-          updateBaseline(file, result);
+          file.updateBaseline(result);
           break;
         }
         case EditReviewItemKind.TEXT: {
           if (!file.base || !file.current || file.currentRevision === null || file.currentRevision === '')
             throw this.stale(file);
-          const textChange = planTextAcceptance(file, item);
+          const textChange = file.planTextAcceptance(item);
           if (!textChange) throw this.stale(file, file.currentRevision);
           // Keep the public receipt pending until the workspace confirms the
           // mutation; concurrent chat flushes may inspect it while we await.
@@ -694,17 +693,17 @@ export class ProposalReviewManager {
           // The mutation is complete even if editor normalization invalidates
           // another pending range. Never restore its pre-edit decision state.
           this.mutationCheckpointPending = true;
-          const previous = { ...file };
+          const previous = file.clone();
           item.decision = EditDecisionState.ACCEPTED;
           file.current = result;
           file.currentPath = result.path;
           file.currentRevision = result.revision;
           file.applyingItemId = null;
           file.applicability = EditApplicabilityState.STALE;
-          const actual = planTextAcceptance(previous, item, result.text);
+          const actual = previous.planTextAcceptance(item, result.text);
           if (actual) {
-            applyTransformedRanges(actual.transformedItems);
-            updateBaseline(file, result);
+            file.applyTransformedRanges(actual.transformedItems);
+            file.updateBaseline(result);
           } else {
             // Keep the old base/ranges as conflict evidence, but checkpoint the
             // observed current document and the completed item's acceptance.
@@ -736,12 +735,12 @@ export class ProposalReviewManager {
           /* Retried by the next queued operation. */
         }
       } else {
-        restoreFileState(file, applyingState);
+        file.restoreState(applyingState);
         try {
           await this.reconcile(review, file);
           await this.persist();
         } catch {
-          restoreFileState(file, applyingState);
+          file.restoreState(applyingState);
         }
       }
       await this.log('error', 'item.failed', {
@@ -827,13 +826,14 @@ export class ProposalReviewManager {
               path === file.currentPath &&
               path === existing.file.currentPath &&
               existing.virtual &&
-              canBatchTextChanges(existing.file, file)
+              existing.file.canBatchTextChanges() &&
+              file.canBatchTextChanges()
             ) {
-              const transformedFile = cloneFileForTransform(file);
-              if (!rebaseFileToSnapshot(transformedFile, existing.virtual)) {
+              const transformedFile = file.clone();
+              if (!transformedFile.rebaseToSnapshot(existing.virtual)) {
                 throw queuedPathConflict(review.id, file, path);
               }
-              existing.virtual = simulatePendingTextChanges(transformedFile);
+              existing.virtual = transformedFile.simulatePendingTextChanges();
               continue;
             }
             throw queuedPathConflict(review.id, file, path);
@@ -842,7 +842,7 @@ export class ProposalReviewManager {
             reviewId: review.id,
             fileId: file.id,
             file,
-            virtual: canBatchTextChanges(file) ? simulatePendingTextChanges(file) : file.current,
+            virtual: file.canBatchTextChanges() ? file.simulatePendingTextChanges() : file.current,
           });
         }
       }
@@ -907,7 +907,7 @@ export class ProposalReviewManager {
     }
     // The write did not land, or could not be proven to. Treat the disk as authoritative and try to carry the
     // pending hunks over whatever it holds, as for any concurrent edit.
-    if (this.synchronizePlanAgainstLiveSnapshot(file, current)) return;
+    if (file.synchronizeAgainst(current)) return;
     // The pending hunks no longer fit the file. Fail closed: the human can still inspect and reject, but
     // nothing will be written on outdated assumptions.
     // Follow-up: provide an explicit human recovery path for this stale state.
@@ -959,19 +959,19 @@ export class ProposalReviewManager {
           ? after?.revision === file.proposed.revision
           : item.kind === EditReviewItemKind.RENAME
             ? after?.revision === file.currentRevision && after.path === file.targetPath
-            : after?.revision === revisionOf(composeWith(file, item.id), file.proposed.byteOrderMark);
+            : after?.revision === FileEditPlan.revisionOf(file.composeWith(item.id), file.proposed.byteOrderMark);
     if (!applied) return false;
     item.decision = EditDecisionState.ACCEPTED;
     if (item.kind === EditReviewItemKind.TEXT && after) {
-      const textChange = planTextAcceptance(file, item, after.text);
+      const textChange = file.planTextAcceptance(item, after.text);
       if (!textChange) return false;
-      applyTransformedRanges(textChange.transformedItems);
-      updateBaseline(file, after);
+      file.applyTransformedRanges(textChange.transformedItems);
+      file.updateBaseline(after);
     } else {
       file.current = after;
       file.currentPath = after?.path ?? file.currentPath;
       file.currentRevision = after?.revision ?? null;
-      if (item.kind === EditReviewItemKind.RENAME && after) updateBaseline(file, after);
+      if (item.kind === EditReviewItemKind.RENAME && after) file.updateBaseline(after);
     }
     if (item.appliedText) {
       item.appliedText.after = after ? structuredClone(after) : null;
@@ -1003,7 +1003,7 @@ export class ProposalReviewManager {
       await this.persist();
       throw this.stale(file);
     }
-    if (this.synchronizePlanAgainstLiveSnapshot(file, current)) {
+    if (file.synchronizeAgainst(current)) {
       await this.persist();
       return;
     }
@@ -1026,67 +1026,7 @@ export class ProposalReviewManager {
       if (!isUnreviewableSnapshot(error)) throw error;
       return false;
     }
-    return this.synchronizePlanAgainstLiveSnapshot(file, undefined);
-  }
-
-  /**
-   * Adopts a freshly observed snapshot as the plan's new starting point, carrying the pending hunks over
-   * any edits made since the plan last looked. This is what lets a review stay useful while the user keeps
-   * working in the same file, instead of forcing the agent to re-propose after every keystroke.
-   *
-   * Returns false whenever the pending hunks cannot be placed with certainty. The caller then marks the file
-   * stale, because applying a hunk at a guessed offset would silently corrupt the user's file.
-   */
-  private synchronizePlanAgainstLiveSnapshot(
-    file: FileEditPlan,
-    current: FileEditPlan['current'] | undefined,
-  ): boolean {
-    // The plan expects no file here, so any file that now exists was put there outside the review.
-    // Creating over it would destroy that content.
-    if (file.currentRevision === null) {
-      if (current !== undefined) return false;
-      file.current = null;
-      file.applicability = EditApplicabilityState.READY;
-      file.applyingItemId = null;
-      return true;
-    }
-    // A file that vanished leaves the pending hunks nothing to apply to, and its absence must not be
-    // mistaken for an approved delete.
-    if (!current || !file.current) return false;
-
-    const previous = captureFileState(file);
-    let synchronized = false;
-    try {
-      // Hunk offsets are relative to `base`, but the last observation may already have moved past it. That
-      // happens when an accepted write landed with different bytes than predicted and the old base was kept
-      // as conflict evidence. Catch the hunks up to that observation first, so the next rebase diffs against
-      // the text their offsets actually describe.
-      if (file.base && file.base.revision !== file.current.revision) {
-        if (!rebasePendingTextItems(file, file.base.text, file.current.text)) return false;
-        updateBaseline(file, file.current);
-      }
-      // Someone edited the file since the plan last saw it. Only content-level hunks can move with those
-      // edits. A delete was approved for the exact content the human reviewed, so carrying it over different
-      // content would discard edits nobody reviewed. Any outside edit that overlaps a pending hunk also fails
-      // here rather than being merged by guesswork.
-      if (
-        current.revision !== file.currentRevision &&
-        (!canRebase(file) || !rebasePendingTextItems(file, file.current.text, current.text))
-      )
-        return false;
-      // Even with the same bytes, `proposed` must still be recomputed from only the hunks that remain pending, and
-      // the fresh read may carry newer metadata such as permissions or the editor's canonical identity.
-      updateBaseline(file, current);
-      // The plan now matches the disk exactly, so whatever write was in flight is resolved and decisions are
-      // safe to apply again.
-      file.applicability = EditApplicabilityState.READY;
-      file.applyingItemId = null;
-      synchronized = true;
-      return true;
-    } finally {
-      // Both rebases must succeed before replacing the original conflict evidence.
-      if (!synchronized) restoreFileState(file, previous);
-    }
+    return file.synchronizeAgainst(undefined);
   }
 
   private async persist(): Promise<void> {
@@ -1103,7 +1043,7 @@ export class ProposalReviewManager {
   }
 
   private async saveCheckpoint(proposals = [...this.reviews, ...this.completedReviews]): Promise<void> {
-    const checkpoint = structuredClone(proposals);
+    const checkpoint = structuredClone(proposals.map(value => value.toRecord())).map(value => EditProposal.from(value));
     await this.store.save(checkpoint, this.workspaceIdentity);
     this.durableResults = checkpoint.flatMap(value => pendingReviewResults(value));
   }
@@ -1236,31 +1176,6 @@ function pendingReviewResults(review: EditProposal): EditReviewResult[] {
   return reviewResults(review).filter(result => !acknowledged.has(result.id));
 }
 
-function composeWith(file: FileEditPlan, itemId: string): string {
-  const item = file.items.find(candidate => candidate.id === itemId);
-  if (!item || item.kind !== EditReviewItemKind.TEXT || !file.current) return file.current?.text ?? '';
-  return applyTextItem(file.current.text, item);
-}
-
-function canRebase(file: FileEditPlan): boolean {
-  return file.operation === EditOperation.UPDATE || file.operation === EditOperation.RENAME;
-}
-
-function canBatchTextChanges(...files: FileEditPlan[]): boolean {
-  return files.every(
-    file =>
-      file.operation === EditOperation.UPDATE &&
-      file.items.some(item => item.decision === EditDecisionState.PENDING) &&
-      file.items
-        .filter(item => item.decision === EditDecisionState.PENDING)
-        .every(item => item.kind === EditReviewItemKind.TEXT),
-  );
-}
-
-function cloneFileForTransform(file: FileEditPlan): FileEditPlan {
-  return { ...file, items: file.items.map(item => ({ ...item })) };
-}
-
 function queuedPathConflict(reviewId: string, file: FileEditPlan, path: string): EditError {
   return new EditError(
     EditFailureReason.DECISION_CONFLICT,
@@ -1272,201 +1187,4 @@ function queuedPathConflict(reviewId: string, file: FileEditPlan, path: string):
       retry: 'Review the conflicting proposals individually.',
     },
   );
-}
-
-function rebaseFileToSnapshot(file: FileEditPlan, current: NonNullable<FileEditPlan['current']>): boolean {
-  if (!file.current || !rebasePendingTextItems(file, file.current.text, current.text)) return false;
-  updateBaseline(file, current);
-  return true;
-}
-
-function simulatePendingTextChanges(file: FileEditPlan): NonNullable<FileEditPlan['current']> {
-  if (!file.current) throw new Error('Cannot simulate text changes without a current document.');
-  const text = composePendingText(file, file.current.text);
-  return snapshotForProposal(file, file.current, text, file.proposed.byteOrderMark);
-}
-
-/**
- * Rebases the pending text items for the given file to the new text. Mutates the file edit plan in place.
- * @param file - The file edit plan to rebase the pending text items for.
- * @param previousText - The text of the previous snapshot.
- * @param currentText - The text of the current snapshot.
- * @returns true if the pending text items were rebased successfully, false otherwise.
- */
-function rebasePendingTextItems(file: FileEditPlan, previousText: string, currentText: string): boolean {
-  const items = file.items.filter(
-    item => item.kind === EditReviewItemKind.TEXT && item.decision === EditDecisionState.PENDING,
-  );
-  const ranges = transformTextEditRanges(previousText, currentText, items);
-  if (!ranges) return false;
-  applyTransformedRanges(items.map((item, index) => ({ item, range: ranges[index]! })));
-  return true;
-}
-
-/**
- * Plans the text acceptance for the given item, non-destructively, working only in memory.
- * @param file - The file edit plan to plan the text acceptance for.
- * @param item - The item to plan the text acceptance for.
- * @param actualText - The actual text of the item.
- * @returns The text with the first pending text edit applied and the transformed items after the first pending text edit is applied.
- */
-function planTextAcceptance(
-  file: FileEditPlan,
-  item: FileEditPlan['items'][number],
-  actualText?: string,
-):
-  | {
-      readonly text: string;
-      readonly transformedItems: readonly TransformedItem[];
-    }
-  | undefined {
-  if (!file.current || item.kind !== EditReviewItemKind.TEXT) return undefined;
-  let text: string;
-  try {
-    text = applyTextItem(file.current.text, item);
-  } catch {
-    return undefined;
-  }
-  const remainingPendingTextEdits = file.items.filter(
-    candidate =>
-      candidate.id !== item.id &&
-      candidate.kind === EditReviewItemKind.TEXT &&
-      candidate.decision === EditDecisionState.PENDING,
-  );
-  // Editor-backed stores may normalize EOLs or automatic whitespace. Pending
-  // ranges must follow the observed result, never predicted replacement bytes.
-  const ranges = transformTextEditRanges(file.current.text, actualText ?? text, remainingPendingTextEdits);
-  if (!ranges) return undefined;
-  return {
-    text,
-    transformedItems: remainingPendingTextEdits.map((candidate, index) => ({ item: candidate, range: ranges[index]! })),
-  };
-}
-
-interface TransformedItem {
-  readonly item: FileEditPlan['items'][number];
-  readonly range: { readonly sourceStart: number; readonly sourceEnd: number };
-}
-
-interface FileEditPlanState {
-  readonly base: FileEditPlan['base'];
-  readonly proposed: FileEditPlan['proposed'];
-  readonly current: FileEditPlan['current'];
-  readonly applyingItemId: string | null;
-  readonly createdDirectories: readonly string[];
-  readonly applicability: EditApplicabilityState;
-  readonly currentPath: string;
-  readonly currentRevision: string | null;
-  readonly items: readonly {
-    readonly id: string;
-    readonly sourceStart: number;
-    readonly sourceEnd: number;
-    readonly decision: EditDecisionState;
-  }[];
-}
-
-function captureFileState(file: FileEditPlan): FileEditPlanState {
-  return {
-    base: file.base,
-    proposed: file.proposed,
-    current: file.current,
-    applyingItemId: file.applyingItemId,
-    createdDirectories: [...file.createdDirectories],
-    applicability: file.applicability,
-    currentPath: file.currentPath,
-    currentRevision: file.currentRevision,
-    items: file.items.map(item => ({
-      id: item.id,
-      sourceStart: item.sourceStart,
-      sourceEnd: item.sourceEnd,
-      decision: item.decision,
-    })),
-  };
-}
-
-function restoreFileState(file: FileEditPlan, state: FileEditPlanState): void {
-  file.base = state.base;
-  file.proposed = state.proposed;
-  file.current = state.current;
-  file.applyingItemId = state.applyingItemId;
-  file.createdDirectories = [...state.createdDirectories];
-  file.applicability = state.applicability;
-  file.currentPath = state.currentPath;
-  file.currentRevision = state.currentRevision;
-  for (const itemState of state.items) {
-    const item = file.items.find(candidate => candidate.id === itemState.id);
-    if (!item) continue;
-    item.sourceStart = itemState.sourceStart;
-    item.sourceEnd = itemState.sourceEnd;
-    item.decision = itemState.decision;
-  }
-}
-
-function applyTransformedRanges(items: readonly TransformedItem[]): void {
-  for (const { item, range } of items) {
-    item.sourceStart = range.sourceStart;
-    item.sourceEnd = range.sourceEnd;
-  }
-}
-
-/**
- * Attempts to apply a edit plan item to the given text, throwing an error if the transformed edit no longer matches its expected text.
- * @param text - The text to apply the edit to.
- * @param item - The edit plan item to apply.
- * @returns the transformed text
- */
-function applyTextItem(text: string, item: FileEditPlan['items'][number]): string {
-  if (text.slice(item.sourceStart, item.sourceEnd) !== item.removedText) {
-    throw new Error('The transformed edit no longer matches its expected text.');
-  }
-  return text.slice(0, item.sourceStart) + item.insertedText + text.slice(item.sourceEnd);
-}
-
-function updateBaseline(file: FileEditPlan, current: NonNullable<FileEditPlan['current']>): void {
-  const previous = file.base ?? file.current;
-  const changesByteOrderMark = previous
-    ? file.proposed.byteOrderMark !== previous.byteOrderMark
-    : file.proposed.byteOrderMark !== current.byteOrderMark;
-  const byteOrderMark = changesByteOrderMark ? file.proposed.byteOrderMark : current.byteOrderMark;
-  file.base = current;
-  file.current = current;
-  file.currentPath = current.path;
-  file.currentRevision = current.revision;
-  const proposedText = composePendingText(file, current.text);
-  file.proposed = snapshotForProposal(file, current, proposedText, byteOrderMark);
-}
-
-function composePendingText(file: FileEditPlan, baseText: string): string {
-  let text = baseText;
-  const pending = file.items
-    .filter(item => item.kind === EditReviewItemKind.TEXT && item.decision === EditDecisionState.PENDING)
-    .toSorted((left, right) => right.sourceStart - left.sourceStart);
-  for (const item of pending) text = applyTextItem(text, item);
-  return text;
-}
-
-function snapshotForProposal(
-  file: FileEditPlan,
-  current: NonNullable<FileEditPlan['current']>,
-  text: string,
-  byteOrderMark: boolean,
-): NonNullable<FileEditPlan['current']> {
-  const bytes = Buffer.from(text, 'utf8');
-  const encoded = byteOrderMark ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes]) : bytes;
-  return {
-    path: file.targetPath,
-    text,
-    byteOrderMark,
-    revision: createHash('sha256').update(encoded).digest('hex'),
-    byteLength: encoded.length,
-    mode: current.mode,
-    identity: file.proposed.identity,
-  };
-}
-
-function revisionOf(text: string, byteOrderMark: boolean): string {
-  const bytes = Buffer.from(text, 'utf8');
-  return createHash('sha256')
-    .update(byteOrderMark ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes]) : bytes)
-    .digest('hex');
 }

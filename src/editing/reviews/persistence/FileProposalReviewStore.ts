@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposal, type EditProposalRecord } from '#src/editing/proposals/EditProposal.js';
 import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
@@ -15,7 +15,7 @@ import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 interface ProposalReviewCheckpoint {
   readonly schemaVersion: 3;
   readonly workspaceIdentity: string;
-  readonly proposals: readonly EditProposal[];
+  readonly proposals: readonly EditProposalRecord[];
 }
 
 const snapshotSchema = z
@@ -163,8 +163,9 @@ export class FileProposalReviewStore implements ProposalReviewStore {
         if (importingLegacy) return [];
         throw new Error('Proposal-review checkpoint belongs to a different workspace.');
       }
-      if (importingLegacy) await this.save(checkpoint.data.proposals, workspaceIdentity);
-      return [...checkpoint.data.proposals];
+      const proposals = checkpoint.data.proposals.map(proposalRecord => EditProposal.from(proposalRecord));
+      if (importingLegacy) await this.save(proposals, workspaceIdentity);
+      return proposals;
     } catch (error) {
       if (errorCodeOf(error) === 'ENOENT') return [];
       throw new EditError(
@@ -180,7 +181,11 @@ export class FileProposalReviewStore implements ProposalReviewStore {
     this.assertScope(workspaceIdentity);
     if (proposals.length === 0 && this.options.mutationScope === undefined) return this.clear();
     const temporary = `${this.path}.${randomUUID()}.tmp`;
-    const checkpoint: ProposalReviewCheckpoint = { schemaVersion: 3, workspaceIdentity, proposals };
+    const checkpoint: ProposalReviewCheckpoint = {
+      schemaVersion: 3,
+      workspaceIdentity,
+      proposals: proposals.map(proposal => proposal.toRecord()),
+    };
     try {
       await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
       await chmod(dirname(this.path), 0o700);

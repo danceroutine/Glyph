@@ -1,6 +1,7 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it, vi } from 'vitest';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { WiredProposalReview } from '#src/terminal/ui/proposal/ProposalReview.wired.js';
 import { createProposalReviewFixture } from './ProposalReviewFixture.ts';
@@ -344,19 +345,19 @@ describe(WiredProposalReview, () => {
       await expect.poll(() => (view.lastFrame() ?? '').includes('change 2/2')).toBe(true);
 
       expect(view.lastFrame()).not.toContain('change 1/1');
-      const additionalProposal: EditProposal = {
-        ...fixture.proposal,
+      const additionalProposal = EditProposal.from({
+        ...fixture.proposal.toRecord(),
         id: 'proposal-2',
         files: [
-          {
-            ...fixture.proposal.files[0]!,
+          FileEditPlan.from({
+            ...fixture.proposal.files[0]!.toRecord(),
             id: 'file-2',
             sourcePath: 'src/Other.tsx',
             targetPath: 'src/Other.tsx',
             items: [{ ...second, id: 'item-3', fileId: 'file-2', decision: EditDecisionState.PENDING }],
-          },
+          }),
         ],
-      };
+      });
       (fixture.manager.activeReviews as EditProposal[]).push(additionalProposal);
       view.rerender(
         <WiredProposalReview request={{ id: 1, manager: fixture.manager, complete: vi.fn(), interrupt: vi.fn() }} />,

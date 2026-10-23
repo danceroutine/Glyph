@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
 import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
@@ -33,13 +34,13 @@ export function createProposalReviewFixture(): ProposalReviewFixture {
     insertedText: 'new',
     decision: EditDecisionState.PENDING,
   };
-  const proposal: EditProposal = {
+  const proposal = EditProposal.from({
     schemaVersion: 1,
     id: 'proposal',
     source: 'structured',
     createdAt: '2026-10-06T00:00:00.000Z',
     files: [
-      {
+      FileEditPlan.from({
         id: 'file',
         operation: EditOperation.UPDATE,
         sourcePath: 'src/App.tsx',
@@ -53,9 +54,9 @@ export function createProposalReviewFixture(): ProposalReviewFixture {
         applicability: EditApplicabilityState.READY,
         currentPath: 'src/App.tsx',
         currentRevision: 'base',
-      },
+      }),
     ],
-  };
+  });
   const accept = vi.fn<ProposalReviewManager['acceptInReview']>(async () => {
     item.decision = EditDecisionState.ACCEPTED;
   });

@@ -100,14 +100,11 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
       // Follow-up: decide whether ProposalService should own this mode check.
       await this.proposals.assertModeAllows(proposal, AgentMode.resolve(context?.mode ?? AgentMode.default.id));
       const stagedProposal = context?.chat
-        ? {
-            ...proposal,
-            origin: {
-              chatId: context.chat.id,
-              accountProvider: context.chat.accountProvider,
-              accountId: context.chat.accountId,
-            },
-          }
+        ? proposal.withOrigin({
+            chatId: context.chat.id,
+            accountProvider: context.chat.accountProvider,
+            accountId: context.chat.accountId,
+          })
         : proposal;
       // Compilation does not change durable state, so cancellation may still
       // discard it. Once staging starts, finish persistence and return its real

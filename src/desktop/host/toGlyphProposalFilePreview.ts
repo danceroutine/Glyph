@@ -1,4 +1,4 @@
-import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
+import type { FileEditPlanRecord } from '#src/editing/proposals/FileEditPlan.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
 import type { GlyphProposalFilePreview } from '#src/desktop/protocol/events/GlyphProposalFilePreview.js';
@@ -8,7 +8,7 @@ import { transformTextEditRanges } from '#src/editing/documents/transformTextEdi
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 
 /** Build the remaining diff from the live review baseline, including prior accepted decisions. */
-export function toGlyphProposalFilePreview(proposalId: string, file: FileEditPlan): GlyphProposalFilePreview {
+export function toGlyphProposalFilePreview(proposalId: string, file: FileEditPlanRecord): GlyphProposalFilePreview {
   if (file.items.some(item => item.appliedText?.after != null) && file.current) {
     const after = file.current.text;
     const before = { ...file.current };

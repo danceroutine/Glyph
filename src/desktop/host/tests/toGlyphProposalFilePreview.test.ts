@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { toGlyphProposalFilePreview } from '#src/desktop/host/toGlyphProposalFilePreview.js';
-import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
+import type { FileEditPlanRecord } from '#src/editing/proposals/FileEditPlan.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
@@ -15,7 +15,7 @@ const snapshot = {
   byteLength: 21,
   mode: 0o644,
 };
-function plan(): FileEditPlan {
+function plan(): FileEditPlanRecord {
   return {
     id: 'file',
     operation: EditOperation.UPDATE,
@@ -89,7 +89,7 @@ describe(toGlyphProposalFilePreview, () => {
 
   it('reverts pending immediate edits from the live file and locates them in the current text', () => {
     const text = (value: string) => ({ ...snapshot, text: value, revision: value });
-    const file: FileEditPlan = {
+    const file: FileEditPlanRecord = {
       ...plan(),
       current: text('ONE\ntwo\nthree\n'),
       items: [
@@ -169,7 +169,7 @@ describe(toGlyphProposalFilePreview, () => {
 
   it('leads with a pending automatic change and shows its original text as the baseline', () => {
     const text = (value: string) => ({ ...snapshot, text: value, revision: value });
-    const file: FileEditPlan = {
+    const file: FileEditPlanRecord = {
       ...plan(),
       operation: EditOperation.RENAME,
       current: text('body\n'),
@@ -212,7 +212,7 @@ describe(toGlyphProposalFilePreview, () => {
 
   it('omits a kept automatic change from the immediate-edit preview', () => {
     const text = (value: string) => ({ ...snapshot, text: value, revision: value });
-    const file: FileEditPlan = {
+    const file: FileEditPlanRecord = {
       ...plan(),
       current: text('body\n'),
       automatic: { itemId: 'create', before: null, state: 'kept', appliedRevision: 'text\n' },
@@ -251,7 +251,7 @@ describe(toGlyphProposalFilePreview, () => {
 
   it('previews an applied deletion as removing the original file', () => {
     const text = (value: string) => ({ ...snapshot, text: value, revision: value });
-    const file: FileEditPlan = {
+    const file: FileEditPlanRecord = {
       ...plan(),
       operation: EditOperation.DELETE,
       current: null,
@@ -280,7 +280,7 @@ describe(toGlyphProposalFilePreview, () => {
 
   it('previews an applied creation with its pending text hunks', () => {
     const text = (value: string) => ({ ...snapshot, text: value, revision: value });
-    const file: FileEditPlan = {
+    const file: FileEditPlanRecord = {
       ...plan(),
       operation: EditOperation.CREATE,
       base: null,
@@ -335,7 +335,7 @@ describe(toGlyphProposalFilePreview, () => {
 
   it('locates pending hunks against the base while an automatic change is still being applied', () => {
     const text = (value: string) => ({ ...snapshot, text: value, revision: value });
-    const file: FileEditPlan = {
+    const file: FileEditPlanRecord = {
       ...plan(),
       base: text('a\nb\n'),
       current: null,
@@ -363,7 +363,7 @@ describe(toGlyphProposalFilePreview, () => {
   });
 
   it('starts from an empty file when there is neither a current nor a base snapshot', () => {
-    const file: FileEditPlan = {
+    const file: FileEditPlanRecord = {
       ...plan(),
       base: null,
       current: null,
