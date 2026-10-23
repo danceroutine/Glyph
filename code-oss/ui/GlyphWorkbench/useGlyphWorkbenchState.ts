@@ -58,6 +58,7 @@ export function useGlyphWorkbenchState({ state, actions }: GlyphWorkbenchStateOp
       else void actions.openChat(id);
     },
     closeTab: (id: string) => void actions.closeChat?.(id),
+    goal: chat?.goal,
     todos: chat?.todos ?? [],
     plans: chat?.plans ?? [],
     plansDisabled:

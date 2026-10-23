@@ -118,6 +118,34 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     );
   }
 
+  presentGoalProposal(objective: string, signal: AbortSignal): Promise<boolean> {
+    const identity = this.requireRun();
+    const id = randomUUID();
+    return this.wait(
+      id,
+      identity,
+      'approval',
+      signal,
+      value =>
+        z.enum([GlyphApprovalDecision.ALLOW_ONCE, GlyphApprovalDecision.DENY]).parse(value) ===
+        GlyphApprovalDecision.ALLOW_ONCE,
+      () => {
+        this.emit({
+          type: GlyphHostEventType.APPROVAL,
+          chatId: identity.chatId,
+          runId: identity.runId,
+          approval: {
+            id,
+            title: 'Start a goal?',
+            detail: objective,
+            sandboxed: false,
+            goal: { objective },
+          },
+        });
+      },
+    );
+  }
+
   async presentModeSwitch(
     request: Pick<GlyphModeSwap, 'source' | 'target' | 'description'>,
     signal: AbortSignal,

@@ -119,6 +119,18 @@ updates, stable IDs, completion/cancellation, per-chat isolation, renderer reloa
 and utility-host restart. Browser coverage also checks keyboard interaction,
 literal text, long-list scrolling, and a stationary composer.
 
+`GlyphGoals.test.mjs` covers durable goals end to end through the production
+runtime and SQLite store. A `/goal` objective arms the goal row and starts
+continuation turns on its own; the scripted provider receives the objective as a
+user-role `goal_continuation` event until `goal.update_goal` completes it, and no
+further request follows. Three idle continuations pause the goal, the paused state
+survives a renderer reload, and Resume and Clear act on it from the row. Stopping a
+continuation pauses the goal without another turn. An agent proposal through
+`goal.create_goal` arms nothing until the approval card's Start goal is chosen.
+Browser component tests separately cover the row's timer, read-only and failed
+actions, and the goal approval card; unit tests cover the reconciler's idle
+conditions and the host's deferral, anti-spin, and resume rules.
+
 `GlyphShells.test.mjs` covers the fourteen rank-6 execute/input/close/list contracts
 and a direct-user input/close regression. Commands run through the real native sandbox.
 Assertions check streamed output and exit codes, collapsed and expanded cards, restored

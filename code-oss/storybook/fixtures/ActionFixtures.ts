@@ -70,6 +70,9 @@ export function previewActionsFixture(overrides: Partial<GlyphWorkbenchViewActio
     cancel: fn().mockName('ActionFixtures.cancel'),
     writeShellInput: fn<() => Promise<void>>().mockName('ActionFixtures.writeShellInput').mockResolvedValue(undefined),
     stopShell: fn<() => Promise<void>>().mockName('ActionFixtures.stopShell').mockResolvedValue(undefined),
+    pauseGoal: fn<() => Promise<void>>().mockName('ActionFixtures.pauseGoal').mockResolvedValue(undefined),
+    resumeGoal: fn<() => Promise<void>>().mockName('ActionFixtures.resumeGoal').mockResolvedValue(undefined),
+    clearGoal: fn<() => Promise<void>>().mockName('ActionFixtures.clearGoal').mockResolvedValue(undefined),
     answerQuestion: fn<() => Promise<void>>().mockName('ActionFixtures.answerQuestion').mockResolvedValue(undefined),
     decideApproval: fn<() => Promise<void>>().mockName('ActionFixtures.decideApproval').mockResolvedValue(undefined),
     reviewProposalFile: fn<() => Promise<void>>()

@@ -21,6 +21,73 @@ const form = {
   ],
 };
 describe(DesktopInteractionBroker, () => {
+  describe(DesktopInteractionBroker.prototype.presentGoalProposal, () => {
+    it('asks the human to approve the objective and resolves with their decision', async () => {
+      const events: GlyphHostEvent[] = [];
+      const broker = new DesktopInteractionBroker(event => {
+        events.push(event);
+      });
+      const identity = { chatId: 'chat', runId: 'run' };
+      const signal = new AbortController().signal;
+
+      const approved = broker.run(identity, () => broker.presentGoalProposal('Make CI green', signal));
+      const request = events[0];
+      if (request?.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected a goal approval.');
+      broker.answer({
+        ...identity,
+        id: request.approval.id,
+        kind: 'approval',
+        value: GlyphApprovalDecision.ALLOW_ONCE,
+      });
+
+      await expect(approved).resolves.toBe(true);
+      expect(request).toMatchObject({
+        chatId: 'chat',
+        runId: 'run',
+        approval: {
+          title: 'Start a goal?',
+          detail: 'Make CI green',
+          sandboxed: false,
+          goal: { objective: 'Make CI green' },
+        },
+      });
+      expect(request.approval.expiresAt).toBeUndefined();
+      expect(request.approval.canRemember).toBeUndefined();
+    });
+
+    it('treats a declined goal as not approved and refuses to remember the decision', async () => {
+      const events: GlyphHostEvent[] = [];
+      const broker = new DesktopInteractionBroker(event => {
+        events.push(event);
+      });
+      const identity = { chatId: 'chat', runId: 'run' };
+      const signal = new AbortController().signal;
+
+      const approved = broker.run(identity, () => broker.presentGoalProposal('Make CI green', signal));
+      const request = events[0];
+      if (request?.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected a goal approval.');
+      expect(() => {
+        broker.answer({
+          ...identity,
+          id: request.approval.id,
+          kind: 'approval',
+          value: GlyphApprovalDecision.ALWAYS_ALLOW,
+        });
+      }).toThrow();
+      broker.answer({ ...identity, id: request.approval.id, kind: 'approval', value: GlyphApprovalDecision.DENY });
+
+      await expect(approved).resolves.toBe(false);
+    });
+
+    it('requires an active chat run', () => {
+      const broker = new DesktopInteractionBroker(() => {});
+
+      expect(() => broker.presentGoalProposal('Make CI green', new AbortController().signal)).toThrow(
+        'Human interaction requires an active chat run.',
+      );
+    });
+  });
+
   it('cancels a queued decision without answering or bypassing the decision already displayed for its run', async () => {
     const events: GlyphHostEvent[] = [];
     const broker = new DesktopInteractionBroker(event => {

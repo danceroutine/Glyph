@@ -45,6 +45,18 @@ import type { GlyphProposalSummary } from '#src/desktop/protocol/events/GlyphPro
 import type { GlyphUsage } from '#src/desktop/protocol/events/GlyphUsage.js';
 import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 import { questionAnswersSchema } from '#src/interaction/questions/questionAnswersSchema.js';
+import type { ChatGoal } from '#src/goals/ChatGoal.js';
+import { GoalError } from '#src/goals/GoalError.js';
+import { GoalPauseReason } from '#src/goals/GoalPauseReason.js';
+import { GoalStatus } from '#src/goals/GoalStatus.js';
+import type { GoalToolStatus } from '#src/goals/GoalToolRuntime.js';
+import { Goal } from '#src/goals/Goal.js';
+
+const GOAL_CONTINUATION_TEXT = 'Continue working toward the active goal.';
+const GOAL_CONTINUATION_RUN_PREFIX = 'goal-continuation:';
+
+type RunOutcome = 'completed' | 'cancelled' | 'failed';
+type GoalChat = Parameters<GlyphService['createGoal']>[0];
 
 const TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS = {
   [ToolActivityPhase.STARTED]: GlyphToolActivityStatus.STARTED,
@@ -77,6 +89,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private readonly runs = new Map<string, GlyphRunProjection>();
   private readonly active = new Map<string, ActiveRun>();
   private readonly historyChanges = new Set<string>();
+  private readonly deferredGoals = new Map<string, string>();
   private readonly sessions = new Map<string, ChatSession>();
   private readonly proposals = new Map<string, GlyphProposalSummary>();
   private readonly usageByChat: Record<string, GlyphUsage> = {};
@@ -221,6 +234,35 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       const { approval: _approval, ...rest } = updated;
       this.setRun({ ...rest, status: GlyphRunStatus.STREAMING });
     } else this.setRun(updated);
+  }
+
+  async proposeGoal(chat: GoalChat, objective: string, signal: AbortSignal): Promise<ChatGoal | undefined> {
+    const session = this.session(chat.id);
+    const current = session.summary.goal;
+    if (current && Goal.from(current).isOpen)
+      throw new GoalError('This chat already has a goal. Ask the human to clear it before proposing another.');
+    if (!(await this.options.interactions.presentGoalProposal(objective, signal))) return undefined;
+    signal.throwIfAborted();
+    const summary = await this.options.glyph.createGoal(chat, objective, signal);
+    this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+    return summary.goal;
+  }
+
+  async updateGoalFromTool(chat: GoalChat, status: GoalToolStatus, signal?: AbortSignal): Promise<ChatGoal> {
+    const runId = this.active.get(chat.id)?.runId ?? '';
+    const now = new Date();
+    const summary = await this.options.glyph.updateGoal(
+      chat,
+      goal => {
+        if (status === GoalStatus.COMPLETE) return goal.complete(now);
+        if (runId.startsWith(GOAL_CONTINUATION_RUN_PREFIX) || runId.startsWith('shell-event:'))
+          throw new GoalError('Only the human can resume a paused goal. Ask them before resuming it.');
+        return goal.resume(now);
+      },
+      signal,
+    );
+    this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+    return summary.goal!;
   }
 
   private async dispatch(command: GlyphRuntimeCommand): Promise<void> {
@@ -426,12 +468,37 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         );
         this.active.set(command.chatId, { controller, completion, runId: command.runId, steering });
         void completion.finally(() => {
-          steering.close();
-          this.active.delete(command.chatId);
-          this.drainShellEvents();
+          this.finishRun(command.chatId, steering);
         });
         return;
       }
+      case GlyphWorkbenchCommandType.CREATE_GOAL: {
+        const session = this.session(command.chatId);
+        const chat = await glyph.createGoal(goalOwner(session), command.objective);
+        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
+        return;
+      }
+      case GlyphWorkbenchCommandType.PAUSE_GOAL:
+      case GlyphWorkbenchCommandType.RESUME_GOAL:
+      case GlyphWorkbenchCommandType.CLEAR_GOAL: {
+        const session = this.session(command.chatId);
+        if (session.summary.goal?.id !== command.goalId) throw new ProtocolError('This goal is no longer current.');
+        const now = new Date();
+        const chat =
+          command.type === GlyphWorkbenchCommandType.CLEAR_GOAL
+            ? await glyph.clearGoal(goalOwner(session))
+            : await glyph.updateGoal(goalOwner(session), goal => {
+                if (goal.id !== command.goalId) throw new ProtocolError('This goal is no longer current.');
+                return command.type === GlyphWorkbenchCommandType.PAUSE_GOAL
+                  ? goal.pause(GoalPauseReason.USER, now)
+                  : goal.resume(now);
+              });
+        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
+        return;
+      }
+      case GlyphWorkbenchCommandType.CONTINUE_GOAL:
+        this.continueGoal(command.chatId, command.goalId);
+        return;
       case GlyphWorkbenchCommandType.STEER: {
         const options = chatTurnOptionsSchema.parse(command.options ?? {});
         const active = this.active.get(command.chatId);
@@ -676,8 +743,19 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     session: ChatSession,
     signal: AbortSignal,
     steering: ChatSteeringQueue,
-    shellEvent?: { readonly context: ChatContextEvent },
+    contextEvent?: { readonly context: ChatContextEvent },
   ): Promise<void> {
+    const outcome = await this.runTurn(command, session, signal, steering, contextEvent);
+    await this.settleGoal(session, command.runId, outcome);
+  }
+
+  private async runTurn(
+    command: Extract<GlyphRuntimeCommand, { type: GlyphWorkbenchCommandType.SEND }>,
+    session: ChatSession,
+    signal: AbortSignal,
+    steering: ChatSteeringQueue,
+    shellEvent?: { readonly context: ChatContextEvent },
+  ): Promise<RunOutcome> {
     this.setRun({
       chatId: command.chatId,
       runId: command.runId,
@@ -764,6 +842,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       });
       this.publishUsage(session);
       this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
+      return signal.aborted ? 'cancelled' : 'completed';
     } catch (error) {
       if (shellEvent && this.pendingShellEvents.has(shellEvent.context.id)) {
         this.deferredShellEvents.add(shellEvent.context.id);
@@ -776,6 +855,96 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         status: signal.aborted ? GlyphRunStatus.CANCELLED : GlyphRunStatus.FAILED,
         terminalMessage: this.options.glyph.redact(error instanceof Error ? error.message : String(error)),
       });
+      return signal.aborted ? 'cancelled' : 'failed';
+    }
+  }
+
+  private async settleGoal(session: ChatSession, runId: string, outcome: RunOutcome): Promise<void> {
+    const goal = session.summary.goal;
+    if (goal?.status !== GoalStatus.ACTIVE) return;
+    const continuation = runId.startsWith(`${GOAL_CONTINUATION_RUN_PREFIX}${goal.id}:`);
+    if (outcome === 'completed' && !continuation) return;
+    const turn = session.transcript.at(-1);
+    const usedTools = turn?.options?.turnId === runId && (turn.tools?.length ?? 0) > 0;
+    const now = new Date();
+    try {
+      const chat = await this.options.glyph.updateGoal(goalOwner(session), value => {
+        if (value.id !== goal.id || value.status !== GoalStatus.ACTIVE) return value;
+        if (outcome === 'completed') return value.recordContinuation(goal.id, usedTools, now);
+        return value.pause(outcome === 'cancelled' ? GoalPauseReason.USER : GoalPauseReason.FAILED, now);
+      });
+      this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
+    } catch {
+      // A concurrently replaced or cleared goal no longer needs settling.
+    }
+  }
+
+  private continueGoal(chatId: string, goalId: string): void {
+    if (this.active.has(chatId)) {
+      this.deferredGoals.set(chatId, goalId);
+      return;
+    }
+    if (this.historyChanges.has(chatId)) return;
+    if ([...this.pendingShellEvents.values()].some(event => event.chatId === chatId)) return;
+    const session = this.session(chatId);
+    const goal = session.summary.goal;
+    if (goal?.id !== goalId || goal.status !== GoalStatus.ACTIVE) return;
+    const runId = `${GOAL_CONTINUATION_RUN_PREFIX}${goal.id}:${goal.continuationCount + 1}`;
+    if (this.runs.has(runId)) return;
+    const controller = new AbortController();
+    const steering = new ChatSteeringQueue();
+    const completion = Promise.resolve().then(async () => {
+      let started: ChatGoal;
+      try {
+        const summary = await this.options.glyph.updateGoal(
+          goalOwner(session),
+          value => value.beginContinuation(goalId),
+          controller.signal,
+        );
+        this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: summary });
+        started = summary.goal!;
+      } catch {
+        return;
+      }
+      await this.send(
+        {
+          type: GlyphWorkbenchCommandType.SEND,
+          chatId,
+          runId,
+          text: GOAL_CONTINUATION_TEXT,
+          attachments: [],
+          options: { mode: session.summary.mode },
+        },
+        session,
+        controller.signal,
+        steering,
+        {
+          context: {
+            schemaVersion: 1,
+            id: runId,
+            type: 'goal_continuation',
+            payload: { goalId, objective: started.objective, continuation: started.continuationCount },
+          },
+        },
+      );
+    });
+    this.active.set(chatId, { controller, steering, completion, runId });
+    void completion.finally(() => {
+      this.finishRun(chatId, steering);
+    });
+  }
+
+  private finishRun(chatId: string, steering: ChatSteeringQueue): void {
+    steering.close();
+    this.active.delete(chatId);
+    this.drainShellEvents();
+    const goalId = this.deferredGoals.get(chatId);
+    this.deferredGoals.delete(chatId);
+    if (goalId === undefined || this.disposed || !this.connected) return;
+    try {
+      this.continueGoal(chatId, goalId);
+    } catch {
+      // The queued continuation may have been invalidated while the run settled.
     }
   }
 
@@ -1001,9 +1170,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       );
       this.active.set(event.chatId, { controller, steering, completion, runId });
       void completion.finally(() => {
-        steering.close();
-        this.active.delete(event.chatId);
-        this.drainShellEvents();
+        this.finishRun(event.chatId, steering);
       });
     }
   }
@@ -1089,6 +1256,11 @@ function toProposal(proposal: EditProposal): GlyphProposalSummary {
       applicability: toProposalApplicability(file.applicability),
     })),
   };
+}
+
+function goalOwner(session: ChatSession): GoalChat {
+  const { accountProvider, accountId } = session.summary;
+  return { id: session.id, accountProvider, accountId };
 }
 
 function changedLines(text: string): number {

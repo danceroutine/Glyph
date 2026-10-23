@@ -748,6 +748,168 @@ it('gives restored captures local IDs so a folder can be refreshed independently
   }
 });
 
+it('arms a goal from /goal instead of sending it, then asks the host to continue it once', async () => {
+  const test = await fixture({
+    handler: async (command, { state, emit }) => {
+      if (command.type !== GlyphWorkbenchCommandType.CREATE_GOAL) return;
+      const goal = {
+        id: 'goal',
+        objective: command.objective,
+        status: 'active',
+        createdAt: '2026-10-20T14:00:00.000Z',
+        continuationCount: 0,
+        idleContinuationsWithoutToolCalls: 0,
+        activeDurationMs: 0,
+        activeSince: '2026-10-20T14:00:00.000Z',
+      };
+      const updated = { ...state.chats.find(value => value.id === command.chatId), goal };
+      state.chats = state.chats.map(value => (value.id === updated.id ? updated : value));
+      emit({ type: 'chat_updated', chat: updated });
+    },
+  });
+  try {
+    await test.service.openChat('alpha');
+
+    await test.service.send('/goal   Make CI green  ');
+    await vi.waitFor(() => {
+      expect(
+        test.request.mock.calls.some(([command]) => command.type === GlyphWorkbenchCommandType.CONTINUE_GOAL),
+      ).toBe(true);
+    });
+    test.emit({ type: 'chat_updated', chat: test.state.chats.find(value => value.id === 'alpha') });
+    await new Promise(done => {
+      setTimeout(done, 0);
+    });
+
+    const commands = test.request.mock.calls.map(([command]) => command);
+    expect(commands).toContainEqual({ type: 'create_goal', chatId: 'alpha', objective: 'Make CI green' });
+    expect(commands.filter(command => command.type === GlyphWorkbenchCommandType.CONTINUE_GOAL)).toEqual([
+      { type: 'continue_goal', chatId: 'alpha', goalId: 'goal' },
+    ]);
+    expect(commands.some(command => command.type === GlyphWorkbenchCommandType.SEND)).toBe(false);
+  } finally {
+    test.dispose();
+  }
+});
+
+it('rejects /goal without an objective before contacting the host', async () => {
+  const test = await fixture();
+  try {
+    await test.service.openChat('alpha');
+    const before = test.request.mock.calls.length;
+
+    await expect(test.service.send('/goal   ')).rejects.toThrow('Usage: /goal <objective>');
+
+    expect(test.request.mock.calls.length).toBe(before);
+  } finally {
+    test.dispose();
+  }
+});
+
+it('holds a goal continuation while the last turn is still running and when the goal is paused', async () => {
+  const goal = {
+    id: 'goal',
+    objective: 'Make CI green',
+    status: 'active',
+    createdAt: '2026-10-20T14:00:00.000Z',
+    continuationCount: 0,
+    idleContinuationsWithoutToolCalls: 0,
+    activeDurationMs: 0,
+  };
+  const test = await fixture({
+    chats: [{ ...chat('alpha'), goal: { ...goal, status: 'paused', pauseReason: 'user' } }],
+  });
+  try {
+    await test.service.openChat('alpha');
+    test.emit({
+      type: 'run_state',
+      run: {
+        chatId: 'alpha',
+        runId: 'live',
+        userText: 'Work',
+        text: '',
+        reasoning: '',
+        tools: [],
+        status: 'streaming',
+      },
+    });
+    test.emit({ type: 'chat_updated', chat: { ...chat('alpha'), goal } });
+    await new Promise(done => {
+      setTimeout(done, 0);
+    });
+
+    expect(test.request.mock.calls.some(([command]) => command.type === GlyphWorkbenchCommandType.CONTINUE_GOAL)).toBe(
+      false,
+    );
+
+    test.emit({
+      type: 'run_state',
+      run: {
+        chatId: 'alpha',
+        runId: 'live',
+        userText: 'Work',
+        text: 'Done',
+        reasoning: '',
+        tools: [],
+        status: 'completed',
+      },
+    });
+    await vi.waitFor(() => {
+      expect(
+        test.request.mock.calls.filter(([command]) => command.type === GlyphWorkbenchCommandType.CONTINUE_GOAL),
+      ).toEqual([[{ type: 'continue_goal', chatId: 'alpha', goalId: 'goal' }]]);
+    });
+  } finally {
+    test.dispose();
+  }
+});
+
+it('shows a goal continuation turn as a diagnostic entry rather than a human message', async () => {
+  const test = await fixture();
+  try {
+    await test.service.openChat('alpha');
+
+    test.emit({
+      type: 'run_state',
+      run: {
+        chatId: 'alpha',
+        runId: 'goal-continuation:goal:1',
+        userText: 'Continue working toward the active goal.',
+        text: 'Working',
+        reasoning: '',
+        tools: [],
+        status: 'completed',
+      },
+    });
+
+    expect(test.service.state.transcript.find(entry => entry.id === 'goal-continuation:goal:1:user')).toMatchObject({
+      role: 'diagnostic',
+      text: 'Continue working toward the active goal.',
+    });
+  } finally {
+    test.dispose();
+  }
+});
+
+it('routes goal controls to the host for the exact goal', async () => {
+  const test = await fixture();
+  try {
+    await test.service.pauseGoal('alpha', 'goal');
+    await test.service.resumeGoal('alpha', 'goal');
+    await test.service.clearGoal('alpha', 'goal');
+
+    expect(
+      test.request.mock.calls.map(([command]) => command).filter(command => command.type.endsWith('_goal')),
+    ).toEqual([
+      { type: 'pause_goal', chatId: 'alpha', goalId: 'goal' },
+      { type: 'resume_goal', chatId: 'alpha', goalId: 'goal' },
+      { type: 'clear_goal', chatId: 'alpha', goalId: 'goal' },
+    ]);
+  } finally {
+    test.dispose();
+  }
+});
+
 it('opens web links externally by default and uses the native browser editor when preferred', async () => {
   for (const openInGlyph of [false, true]) {
     const f = await fixture({ openInGlyph });

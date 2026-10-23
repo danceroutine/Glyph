@@ -47,6 +47,9 @@ import { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { TodoStatus } from '#src/todos/TodoStatus.js';
 import type { TodoToolRuntime } from '#src/todos/TodoToolRuntime.js';
+import type { GoalToolRuntime } from '#src/goals/GoalToolRuntime.js';
+import { Goal } from '#src/goals/Goal.js';
+import { GoalStatus } from '#src/goals/GoalStatus.js';
 
 const captured = vi.hoisted(() => ({
   editorClients: [] as EditorWorkspaceClient[],
@@ -54,6 +57,7 @@ const captured = vi.hoisted(() => ({
   modeSwitches: [] as ConstructorParameters<typeof ModeSwitchToolRuntime>[0][],
   plans: [] as ConstructorParameters<typeof PlanToolRuntime>[0][],
   todos: [] as ConstructorParameters<typeof TodoToolRuntime>[0][],
+  goals: [] as ConstructorParameters<typeof GoalToolRuntime>[],
   reviewExecutors: [] as ConstructorParameters<typeof ConversationAgentReviewExecutor>[0][],
   conversations: [] as ConstructorParameters<typeof ChatConversation>[],
   brokers: [] as { readonly broker: DesktopInteractionBroker; readonly emit: (event: GlyphHostEvent) => void }[],
@@ -120,6 +124,19 @@ vi.mock('#src/todos/TodoToolRuntime.js', async importOriginal => {
       constructor(...arguments_: ConstructorParameters<typeof actual.TodoToolRuntime>) {
         super(...arguments_);
         captured.todos.push(arguments_[0]);
+      }
+    },
+  };
+});
+
+vi.mock('#src/goals/GoalToolRuntime.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('#src/goals/GoalToolRuntime.js')>();
+  return {
+    ...actual,
+    GoalToolRuntime: class extends actual.GoalToolRuntime {
+      constructor(...arguments_: ConstructorParameters<typeof actual.GoalToolRuntime>) {
+        super(...arguments_);
+        captured.goals.push(arguments_);
       }
     },
   };
@@ -987,6 +1004,27 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(updatePlan).toHaveBeenCalledWith(chat, update, signal);
       expect(emit).toHaveBeenCalledWith({ type: GlyphHostEventType.CHAT_UPDATED, chat: updated });
       await expect(captured.plans[0]!(chat, update)).resolves.toBeUndefined();
+    });
+
+    it('binds goal tools to the live runtime and refuses execution before it is ready', async () => {
+      const fixture = await factoryFixture();
+      const chat = { id: 'chat', accountProvider: 'openai', accountId: 'account' };
+      const signal = new AbortController().signal;
+      fixture.initialize.mockImplementationOnce(async () => {
+        const [propose, update] = captured.goals[0]!;
+        expect(() => propose(chat, 'Ship', signal)).toThrow('Goals require an active desktop run.');
+        expect(() => update(chat, GoalStatus.COMPLETE, signal)).toThrow('Goals require an active desktop run.');
+      });
+      const runtime = await fixture.create([await fixture.folder('workspace')]);
+      const goal = Goal.create('goal', 'Ship', new Date()).toChatGoal();
+      const propose = vi.spyOn(runtime, 'proposeGoal').mockResolvedValue(goal);
+      const update = vi.spyOn(runtime, 'updateGoalFromTool').mockResolvedValue(goal);
+      const [proposeTool, updateTool] = captured.goals[0]!;
+      expect(() => proposeTool(chat, 'Ship')).toThrow('Goals require an active desktop run.');
+      await expect(proposeTool(chat, 'Ship', signal)).resolves.toBe(goal);
+      expect(propose).toHaveBeenCalledWith(chat, 'Ship', signal);
+      await expect(updateTool(chat, GoalStatus.COMPLETE, signal)).resolves.toBe(goal);
+      expect(update).toHaveBeenCalledWith(chat, GoalStatus.COMPLETE, signal);
     });
 
     it('saves todo updates, publishes the chat, and returns the resulting list', async () => {

@@ -28,6 +28,7 @@ import type { ChatSessionSummary } from '#src/chat/sessions/ChatSessionRecord.js
 import type { ContextAttachmentService } from '#src/context/attachments/ContextAttachmentService.js';
 import { PlanError } from '#src/planning/PlanError.js';
 import type { PlanUpdate } from '#src/planning/PlanSchema.js';
+import type { Goal } from '#src/goals/Goal.js';
 
 const account: ChatAccount = {
   provider: 'fixture',
@@ -118,6 +119,13 @@ function logger(trace: Logger['trace'] = async () => {}): Logger {
 }
 
 describe(GlyphService, () => {
+  it('refuses goal mutations when durable chat storage is unavailable', () => {
+    const service = new GlyphService(new FakeBackend(), logger());
+    const chat = chatSummary('chat');
+    expect(() => service.createGoal(chat, 'Ship')).toThrow('Goal storage is unavailable.');
+    expect(() => service.updateGoal(chat, (goal: Goal) => goal)).toThrow('Goal storage is unavailable.');
+    expect(() => service.clearGoal(chat)).toThrow('Goal storage is unavailable.');
+  });
   describe(GlyphService.prototype.initialize, () => {
     it('initializes and disposes the resident file index with the account-store lifecycle', async () => {
       const backend = new FakeBackend();

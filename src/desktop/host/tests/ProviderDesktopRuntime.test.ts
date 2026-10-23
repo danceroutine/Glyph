@@ -56,6 +56,7 @@ import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
+import { GoalStatus } from '#src/goals/GoalStatus.js';
 
 const usage = { inputTokens: 2, outputTokens: 3, cachedInputTokens: 0, reasoningTokens: 1, totalTokens: 5 };
 type SendOptions = Parameters<ChatProvider['send']>[1];
@@ -3080,17 +3081,18 @@ function deferredVoid(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+const wakeFor = (chatId: string): ShellWakeEvent => ({
+  id: 'wake-1',
+  terminalId: 'terminal',
+  ownerChatId: chatId,
+  pattern: 'READY',
+  command: 'server',
+  workingDirectory: '/project',
+  output: 'READY\n',
+  matchedAt: new Date().toISOString(),
+});
+
 describe('background shell continuation scheduling', () => {
-  const wakeFor = (chatId: string): ShellWakeEvent => ({
-    id: 'wake-1',
-    terminalId: 'terminal',
-    ownerChatId: chatId,
-    pattern: 'READY',
-    command: 'server',
-    workingDirectory: '/project',
-    output: 'READY\n',
-    matchedAt: new Date().toISOString(),
-  });
   it('persists matching output before exactly one continuation and keeps the owning chat', async () => {
     let sends = 0;
     const harness = await fixture(async () => {
@@ -3415,6 +3417,762 @@ describe('background shell continuation scheduling', () => {
       await vi.waitFor(() => {
         expect(sends).toBe(1);
       });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+});
+
+describe('goal continuation', () => {
+  const goalOf = async (runtime: ProviderDesktopRuntime, chatId: string) =>
+    (await runtime.snapshot()).chats.find(chat => chat.id === chatId)?.goal;
+
+  it('can complete an idle goal without an active provider turn', async () => {
+    const harness = await fixture(async () => {});
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Ship' });
+      const chat = harness.glyph.listChats().find(value => value.id === harness.chatId)!;
+      await expect(harness.runtime.updateGoalFromTool(chat, GoalStatus.COMPLETE)).resolves.toMatchObject({
+        status: 'complete',
+      });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('does not start a continuation until its counter is durably saved', async () => {
+    const send = vi.fn(async () => {});
+    const harness = await fixture(send);
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Ship' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      const saving = vi.spyOn(harness.glyph, 'updateGoal').mockRejectedValueOnce(new Error('Disk unavailable'));
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+      expect(saving).toHaveBeenCalledOnce();
+      expect(send).not.toHaveBeenCalled();
+      expect(await goalOf(harness.runtime, harness.chatId)).toEqual(goal);
+      saving.mockRestore();
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      await vi.waitFor(() => {
+        expect(send).toHaveBeenCalledOnce();
+      });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('does not reuse a continuation run id already claimed by a client', async () => {
+    const send = vi.fn(async () => {});
+    const harness = await fixture(send);
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Ship' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: `goal-continuation:${goal.id}:1`,
+        text: 'Work',
+        attachments: [],
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      expect(send).toHaveBeenCalledOnce();
+      expect((await goalOf(harness.runtime, harness.chatId))?.continuationCount).toBe(0);
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('holds continuations while a checkpoint is being restored', async () => {
+    const send = vi.fn(async () => {});
+    const harness = await fixture(send);
+    const gate = deferredVoid();
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Ship' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'human',
+        text: 'Work',
+        attachments: [],
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+      const restore = vi.spyOn(ChatSession.prototype, 'restoreCheckpoint').mockImplementationOnce(async () => {
+        await gate.promise;
+      });
+      const restoring = harness.runtime.handle({
+        type: Command.RESTORE_CHECKPOINT,
+        chatId: harness.chatId,
+        turnId: 'human',
+      });
+      await vi.waitFor(() => {
+        expect(restore).toHaveBeenCalledOnce();
+      });
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      expect(send).toHaveBeenCalledOnce();
+      gate.resolve();
+      await restoring;
+      restore.mockRestore();
+    } finally {
+      gate.resolve();
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('holds continuations behind a shell event whose durable context failed to save', async () => {
+    const send = vi.fn(async () => {});
+    const harness = await fixture(send);
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Ship' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      const saving = vi.spyOn(harness.store, 'save').mockRejectedValue(new Error('Disk unavailable'));
+      harness.wake(wakeFor(harness.chatId));
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.FAILED);
+      });
+      await new Promise<void>(resolve => {
+        setImmediate(resolve);
+      });
+      await harness.runtime.handle(
+        { type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id },
+        { windowId: 'peer' },
+      );
+      expect(send).not.toHaveBeenCalled();
+      expect((await goalOf(harness.runtime, harness.chatId))?.continuationCount).toBe(0);
+      saving.mockRestore();
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it.each(['paused', 'replaced'] as const)(
+    'preserves a goal %s while the previous run waits to settle',
+    async change => {
+      const gate = deferredVoid();
+      const entered = deferredVoid();
+      const harness = await fixture(async () => {});
+      try {
+        await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'First' });
+        const goal = (await goalOf(harness.runtime, harness.chatId))!;
+        const update = harness.glyph.updateGoal.bind(harness.glyph);
+        const saving = vi
+          .spyOn(harness.glyph, 'updateGoal')
+          .mockImplementationOnce(update)
+          .mockImplementationOnce(async (...args) => {
+            entered.resolve();
+            await gate.promise;
+            return update(...args);
+          });
+        await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+        await entered.promise;
+        if (change === 'paused')
+          await harness.runtime.handle({ type: Command.PAUSE_GOAL, chatId: harness.chatId, goalId: goal.id });
+        else {
+          await harness.runtime.handle({ type: Command.CLEAR_GOAL, chatId: harness.chatId, goalId: goal.id });
+          await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Second' });
+        }
+        const current = await goalOf(harness.runtime, harness.chatId);
+        gate.resolve();
+        await new Promise<void>(resolve => {
+          setImmediate(resolve);
+        });
+        expect(await goalOf(harness.runtime, harness.chatId)).toEqual(current);
+        saving.mockRestore();
+      } finally {
+        gate.resolve();
+        await harness.runtime.dispose();
+      }
+    },
+  );
+
+  it('uses the normalized chat mode and treats absent tool history as idle', async () => {
+    const transcriptGetter = Object.getOwnPropertyDescriptor(ChatSession.prototype, 'transcript')!.get!;
+    const transcript = vi.spyOn(ChatSession.prototype, 'transcript', 'get').mockImplementation(function (
+      this: ChatSession,
+    ) {
+      return (transcriptGetter.call(this) as ChatSession['transcript']).map(({ tools: _tools, ...turn }) => turn);
+    });
+    const send = vi.fn(async () => {});
+    const harness = await fixture(send);
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Ship' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      await vi.waitFor(async () => {
+        expect((await goalOf(harness.runtime, harness.chatId))?.idleContinuationsWithoutToolCalls).toBe(1);
+      });
+      expect((await harness.runtime.snapshot()).runs.at(-1)?.options?.mode).toBe(AgentModeID.AGENT);
+    } finally {
+      transcript.mockRestore();
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('arms a goal from the composer and refuses a second goal while it is open', async () => {
+    const harness = await fixture(async () => {});
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+
+      expect(harness.events.at(-1)).toMatchObject({
+        type: GlyphHostEventType.CHAT_UPDATED,
+        chat: { id: harness.chatId, goal: { objective: 'Make CI green', status: 'active', continuationCount: 0 } },
+      });
+      await expect(
+        harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Another' }),
+      ).rejects.toThrow('already has a goal');
+      expect(harness.saved.get(harness.chatId)?.goal?.objective).toBe('Make CI green');
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('starts one continuation turn that receives the objective as untrusted context', async () => {
+    const requests: string[] = [];
+    const harness = await fixture(async options => {
+      requests.push(options.toolContext?.chat?.id ?? '');
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
+
+      expect(requests).toEqual([harness.chatId]);
+      expect((await harness.runtime.snapshot()).runs.at(-1)).toMatchObject({
+        runId: `goal-continuation:${goal.id}:1`,
+        userText: 'Continue working toward the active goal.',
+      });
+      expect(harness.recorded.flat()).toEqual([
+        {
+          schemaVersion: 1,
+          id: `goal-continuation:${goal.id}:1`,
+          type: 'goal_continuation',
+          payload: { goalId: goal.id, objective: 'Make CI green', continuation: 1 },
+        },
+      ]);
+      expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({
+        status: 'active',
+        continuationCount: 1,
+        idleContinuationsWithoutToolCalls: 1,
+      });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it.each([
+    [
+      'a goal that no longer exists',
+      async (runtime: ProviderDesktopRuntime, chatId: string, goalId: string) => {
+        await runtime.handle({ type: Command.CLEAR_GOAL, chatId, goalId });
+      },
+    ],
+    [
+      'a paused goal',
+      async (runtime: ProviderDesktopRuntime, chatId: string, goalId: string) => {
+        await runtime.handle({ type: Command.PAUSE_GOAL, chatId, goalId });
+      },
+    ],
+  ])('does not continue %s', async (_, change) => {
+    let sends = 0;
+    const harness = await fixture(async () => {
+      sends++;
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      await change(harness.runtime, harness.chatId, goal.id);
+
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: 'stale' });
+
+      expect(sends).toBe(0);
+      expect((await harness.runtime.snapshot()).runs).toEqual([]);
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('waits for a running turn to finish before continuing the goal it was asked to continue', async () => {
+    const gate = deferredVoid();
+    let sends = 0;
+    const harness = await fixture(async () => {
+      if (++sends === 1) await gate.promise;
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'manual',
+        text: 'Work',
+        attachments: [],
+      });
+      await vi.waitFor(() => {
+        expect(sends).toBe(1);
+      });
+
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      expect(sends).toBe(1);
+      gate.resolve();
+
+      await vi.waitFor(() => {
+        expect(sends).toBe(2);
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)).toMatchObject({
+          runId: `goal-continuation:${goal.id}:1`,
+          status: GlyphRunStatus.COMPLETED,
+        });
+      });
+    } finally {
+      gate.resolve();
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('lets pending shell events run before a goal continuation', async () => {
+    const gate = deferredVoid();
+    const texts: string[] = [];
+    const harness = await fixture(async () => {
+      texts.push((await harness.runtime.snapshot()).runs.at(-1)?.userText ?? '');
+      if (texts.length === 1) await gate.promise;
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'manual',
+        text: 'Work',
+        attachments: [],
+      });
+      await vi.waitFor(() => {
+        expect(texts).toHaveLength(1);
+      });
+      harness.wake({
+        id: 'wake-1',
+        terminalId: 'terminal',
+        ownerChatId: harness.chatId,
+        pattern: 'READY',
+        command: 'server',
+        workingDirectory: '/project',
+        output: 'READY\n',
+        matchedAt: new Date().toISOString(),
+      });
+
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      gate.resolve();
+
+      await vi.waitFor(() => {
+        expect(texts).toEqual(['Work', 'Wake condition matched: READY', 'Continue working toward the active goal.']);
+      });
+    } finally {
+      gate.resolve();
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('pauses a goal after three continuations in a row that make no tool calls', async () => {
+    let sends = 0;
+    const harness = await fixture(async () => {
+      sends++;
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+
+      for (const continuation of [1, 2, 3]) {
+        await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+        await vi.waitFor(async () => {
+          expect((await goalOf(harness.runtime, harness.chatId))?.idleContinuationsWithoutToolCalls).toBe(continuation);
+        });
+      }
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+
+      expect(sends).toBe(3);
+      expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({
+        status: 'paused',
+        pauseReason: 'stalled',
+        continuationCount: 3,
+      });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('keeps a working goal active by clearing the idle streak whenever a continuation uses tools', async () => {
+    let sends = 0;
+    const harness = await fixture(async options => {
+      if (++sends % 2 === 0)
+        options.onToolActivity?.({
+          callId: `call-${sends}`,
+          name: 'read',
+          arguments: '{}',
+          phase: ToolActivityPhase.COMPLETED,
+          output: '{}',
+        });
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+
+      for (const idle of [1, 0, 1, 0]) {
+        const count = sends + 1;
+        await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+        await vi.waitFor(async () => {
+          expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({
+            continuationCount: count,
+            idleContinuationsWithoutToolCalls: idle,
+          });
+        });
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
+      }
+
+      expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('active');
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('pauses the goal when the human stops a running turn', async () => {
+    const harness = await fixture(async (options, interactions) => {
+      await interactions.presentShellPermission({ command: 'true', workingDirectory: '/project' }, options.signal);
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL);
+      });
+
+      await harness.runtime.handle({
+        type: Command.CANCEL_RUN,
+        chatId: harness.chatId,
+        runId: `goal-continuation:${goal.id}:1`,
+      });
+
+      await vi.waitFor(async () => {
+        expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({ status: 'paused', pauseReason: 'user' });
+      });
+      expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.CANCELLED);
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('pauses the goal when a turn fails so it cannot retry in a loop', async () => {
+    const harness = await fixture(async () => {
+      throw new Error('Provider unavailable');
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'manual',
+        text: 'Work',
+        attachments: [],
+      });
+
+      await vi.waitFor(async () => {
+        expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({
+          status: 'paused',
+          pauseReason: 'failed',
+        });
+      });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('leaves the goal untouched after an ordinary turn completes', async () => {
+    const harness = await fixture(async () => {});
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const before = await goalOf(harness.runtime, harness.chatId);
+
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'manual',
+        text: 'Work',
+        attachments: [],
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
+
+      expect(await goalOf(harness.runtime, harness.chatId)).toEqual(before);
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('stops continuing once the agent marks the goal complete', async () => {
+    let sends = 0;
+    const harness = await fixture(async options => {
+      sends++;
+      await harness.runtime.updateGoalFromTool(options.toolContext!.chat!, GoalStatus.COMPLETE);
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      await vi.waitFor(async () => {
+        expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('complete');
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
+
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+
+      expect(sends).toBe(1);
+      expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({
+        status: 'complete',
+        continuationCount: 1,
+        idleContinuationsWithoutToolCalls: 0,
+      });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('lets the agent resume a paused goal only from a turn the human started', async () => {
+    const outcomes: string[] = [];
+    const harness = await fixture(async options => {
+      try {
+        await harness.runtime.updateGoalFromTool(options.toolContext!.chat!, GoalStatus.ACTIVE);
+        outcomes.push('resumed');
+      } catch (error) {
+        outcomes.push((error as Error).message);
+      }
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'early',
+        text: 'Resume it',
+        attachments: [],
+      });
+      await vi.waitFor(() => {
+        expect(outcomes).toHaveLength(1);
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
+      await harness.runtime.handle({ type: Command.PAUSE_GOAL, chatId: harness.chatId, goalId: goal.id });
+
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'manual',
+        text: 'Resume it',
+        attachments: [],
+      });
+      await vi.waitFor(() => {
+        expect(outcomes).toHaveLength(2);
+      });
+
+      expect(outcomes).toEqual(['Only a paused goal can be resumed.', 'resumed']);
+      expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('active');
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('refuses to let a continuation turn resume a paused goal', async () => {
+    const outcomes: string[] = [];
+    const harness = await fixture(async options => {
+      const chat = options.toolContext!.chat!;
+      await harness.runtime.handle({
+        type: Command.PAUSE_GOAL,
+        chatId: chat.id,
+        goalId: (await goalOf(harness.runtime, chat.id))!.id,
+      });
+      await harness.runtime.updateGoalFromTool(chat, GoalStatus.ACTIVE).catch((error: unknown) => {
+        outcomes.push(error instanceof Error ? error.message : String(error));
+      });
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+
+      await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
+
+      await vi.waitFor(() => {
+        expect(outcomes).toEqual(['Only the human can resume a paused goal. Ask them before resuming it.']);
+      });
+      expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('paused');
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('pauses, resumes, and clears the current goal while rejecting a stale one', async () => {
+    const harness = await fixture(async () => {});
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+      const goal = (await goalOf(harness.runtime, harness.chatId))!;
+
+      await harness.runtime.handle({ type: Command.PAUSE_GOAL, chatId: harness.chatId, goalId: goal.id });
+      expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({ status: 'paused', pauseReason: 'user' });
+      await harness.runtime.handle({ type: Command.RESUME_GOAL, chatId: harness.chatId, goalId: goal.id });
+      expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('active');
+      await expect(
+        harness.runtime.handle({ type: Command.PAUSE_GOAL, chatId: harness.chatId, goalId: 'stale' }),
+      ).rejects.toThrow('no longer current');
+      await harness.runtime.handle({ type: Command.CLEAR_GOAL, chatId: harness.chatId, goalId: goal.id });
+
+      expect(await goalOf(harness.runtime, harness.chatId)).toBeUndefined();
+      expect(harness.saved.get(harness.chatId)?.goal).toBeUndefined();
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('rejects a pause for a goal replaced while the request was waiting for storage', async () => {
+    const harness = await fixture(async () => {});
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'First' });
+      const first = (await goalOf(harness.runtime, harness.chatId))!;
+      const gate = deferredVoid();
+      const save = harness.store.save.bind(harness.store);
+      const saving = vi.spyOn(harness.store, 'save').mockImplementationOnce(async record => {
+        await gate.promise;
+        await save(record);
+      });
+      const clearing = harness.runtime.handle({ type: Command.CLEAR_GOAL, chatId: harness.chatId, goalId: first.id });
+      await vi.waitFor(() => {
+        expect(saving).toHaveBeenCalled();
+      });
+      const replacing = harness.runtime.handle({
+        type: Command.CREATE_GOAL,
+        chatId: harness.chatId,
+        objective: 'Second',
+      });
+      const pausing = harness.runtime.handle({ type: Command.PAUSE_GOAL, chatId: harness.chatId, goalId: first.id });
+      gate.resolve();
+
+      await clearing;
+      await replacing;
+      await expect(pausing).rejects.toThrow('no longer current');
+      expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({ objective: 'Second', status: 'active' });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('arms an agent-proposed goal only after the human approves it', async () => {
+    const results: unknown[] = [];
+    const harness = await fixture(async options => {
+      results.push(await harness.runtime.proposeGoal(options.toolContext!.chat!, 'Make CI green', options.signal));
+    });
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'decline',
+        text: 'Keep going',
+        attachments: [],
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.approval?.goal).toEqual({ objective: 'Make CI green' });
+      });
+      const declined = (await harness.runtime.snapshot()).runs.at(-1)!.approval!;
+      await harness.runtime.handle({
+        type: Command.DECIDE_APPROVAL,
+        chatId: harness.chatId,
+        runId: 'decline',
+        approvalId: declined.id,
+        decision: GlyphApprovalDecision.DENY,
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
+      expect(await goalOf(harness.runtime, harness.chatId)).toBeUndefined();
+
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'approve',
+        text: 'Keep going',
+        attachments: [],
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL);
+      });
+      const approval = (await harness.runtime.snapshot()).runs.at(-1)!.approval!;
+      await harness.runtime.handle({
+        type: Command.DECIDE_APPROVAL,
+        chatId: harness.chatId,
+        runId: 'approve',
+        approvalId: approval.id,
+        decision: GlyphApprovalDecision.ALLOW_ONCE,
+      });
+      await vi.waitFor(() => {
+        expect(results).toHaveLength(2);
+      });
+
+      expect(results[0]).toBeUndefined();
+      expect(results[1]).toMatchObject({ objective: 'Make CI green', status: 'active' });
+      expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({ objective: 'Make CI green' });
+    } finally {
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('refuses an agent goal proposal while the chat already has a goal', async () => {
+    const outcomes: string[] = [];
+    const harness = await fixture(async options => {
+      await harness.runtime
+        .proposeGoal(options.toolContext!.chat!, 'Another', options.signal)
+        .catch((error: unknown) => {
+          outcomes.push(error instanceof Error ? error.message : String(error));
+        });
+    });
+    try {
+      await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
+
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'manual',
+        text: 'Keep going',
+        attachments: [],
+      });
+
+      await vi.waitFor(() => {
+        expect(outcomes).toEqual(['This chat already has a goal. Ask the human to clear it before proposing another.']);
+      });
+      expect((await harness.runtime.snapshot()).runs.at(-1)?.approval).toBeUndefined();
     } finally {
       await harness.runtime.dispose();
     }

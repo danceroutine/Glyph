@@ -114,6 +114,15 @@ describe(WiredGlyphWorkbench, () => {
     const state = workbench({
       chats: [
         chat({
+          goal: {
+            id: 'goal',
+            objective: 'Ship the feature',
+            status: 'complete',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            activeDurationMs: 1000,
+            continuationCount: 1,
+            idleContinuationsWithoutToolCalls: 0,
+          },
           todos: [{ id: 'todo', text: 'Ship', status: 'pending' }],
           plans: [
             { id: 'plan', revision: 1, title: 'Ship it', summary: 'Summary', markdown: '', todos: [], agents: [] },
@@ -152,6 +161,7 @@ describe(WiredGlyphWorkbench, () => {
     expect(screen.getByRole('button', { name: 'Conversation token usage' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Pending reviews' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'To-dos' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Goal', exact: true }).textContent).toContain('Ship the feature');
     expect(screen.getByRole('button', { name: '1 background terminal' })).toBeTruthy();
   });
 

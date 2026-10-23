@@ -25,6 +25,11 @@ export enum GlyphWorkbenchCommandType {
   UPDATE_PLAN = 'update_plan',
   LINK_PLAN = 'link_plan',
   SET_CHAT_MODE = 'set_chat_mode',
+  CREATE_GOAL = 'create_goal',
+  PAUSE_GOAL = 'pause_goal',
+  RESUME_GOAL = 'resume_goal',
+  CLEAR_GOAL = 'clear_goal',
+  CONTINUE_GOAL = 'continue_goal',
   CANCEL_RUN = 'cancel_run',
   ANSWER_QUESTION = 'answer_question',
   DECIDE_APPROVAL = 'decide_approval',
@@ -56,6 +61,8 @@ export type GlyphWorkbenchCommand =
   | BranchChatCommand
   | RestoreCheckpointCommand
   | SetChatModeCommand
+  | CreateGoalCommand
+  | GoalCommand
   | AttachWorkspaceCommand
   | ListChatsCommand
   | CreateChatCommand
@@ -94,6 +101,22 @@ type SetChatModeCommand = {
   readonly type: GlyphWorkbenchCommandType.SET_CHAT_MODE;
   readonly chatId: string;
   readonly mode: AgentModeID;
+};
+
+type CreateGoalCommand = {
+  readonly type: GlyphWorkbenchCommandType.CREATE_GOAL;
+  readonly chatId: string;
+  readonly objective: string;
+};
+
+type GoalCommand = {
+  readonly type:
+    | GlyphWorkbenchCommandType.PAUSE_GOAL
+    | GlyphWorkbenchCommandType.RESUME_GOAL
+    | GlyphWorkbenchCommandType.CLEAR_GOAL
+    | GlyphWorkbenchCommandType.CONTINUE_GOAL;
+  readonly chatId: string;
+  readonly goalId: string;
 };
 
 type AttachWorkspaceCommand = {

@@ -139,6 +139,9 @@ export class GlyphViewPane extends ViewPane {
         this.glyphService.writeShellInput(chatId, sessionId, input, appendNewline),
       openShell: (chatId, sessionId) => this.glyphService.openShell(chatId, sessionId),
       stopShell: (chatId, sessionId) => this.glyphService.stopShell(chatId, sessionId),
+      pauseGoal: (chatId, goalId) => this.glyphService.pauseGoal(chatId, goalId),
+      resumeGoal: (chatId, goalId) => this.glyphService.resumeGoal(chatId, goalId),
+      clearGoal: (chatId, goalId) => this.glyphService.clearGoal(chatId, goalId),
       answerQuestion: (chatId, runId, questionId, answer) =>
         this.glyphService.answerQuestion(chatId, runId, questionId, answer),
       decideApproval: (chatId, runId, approvalId, decision) =>

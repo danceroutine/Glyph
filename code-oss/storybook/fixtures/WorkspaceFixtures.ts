@@ -6,6 +6,7 @@ import {
 } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { GlyphChatSummary } from '#src/desktop/protocol/events/GlyphChatSummary.js';
 import type { GlyphTodoItem } from '#src/desktop/protocol/events/GlyphTodoItem.js';
+import type { GlyphGoal } from '#src/desktop/protocol/events/GlyphGoal.js';
 import type { GlyphPlanViewState, GlyphPlanViewActions } from '#src/desktop/workbench/GlyphPlanView.js';
 import type { GlyphProposalSummary } from '#src/desktop/protocol/events/GlyphProposalSummary.js';
 import { GlyphProposalApplicability } from '#src/desktop/protocol/events/GlyphProposalFileSummary.js';
@@ -72,6 +73,19 @@ export const todoItems: readonly GlyphTodoItem[] = [
   { id: 'implement', text: 'Implement the todo card', status: 'in_progress' },
   { id: 'verify', text: 'Verify persistence and chat isolation', status: 'pending' },
 ];
+
+export function goalFixture(overrides: Partial<GlyphGoal> = {}): GlyphGoal {
+  return {
+    id: 'goal-preview',
+    objective: 'Make every test suite pass and raise coverage to 100% without changing behavior',
+    status: 'active',
+    createdAt: fixtureCreatedAt,
+    continuationCount: 4,
+    idleContinuationsWithoutToolCalls: 0,
+    activeDurationMs: 185_000,
+    ...overrides,
+  };
+}
 
 export const planView: GlyphPlanViewState = {
   disabled: false,

@@ -6,6 +6,31 @@ import { WiredGlyphApprovalCard } from '#code-oss/ui/GlyphApprovalCard/GlyphAppr
 afterEach(cleanup);
 
 describe(WiredGlyphApprovalCard, () => {
+  it.each([
+    ['Start goal', GlyphApprovalDecision.ALLOW_ONCE],
+    ['Decline', GlyphApprovalDecision.DENY],
+  ] as const)('offers an explicit %s decision for a proposed goal', (label, decision) => {
+    const decideApproval = vi.fn(async () => {});
+    render(
+      <WiredGlyphApprovalCard
+        request={{
+          id: 'approval',
+          title: 'Start a goal?',
+          detail: 'Ship',
+          sandboxed: false,
+          goal: { objective: 'Ship' },
+        }}
+        chatId="chat"
+        runId="run"
+        actions={{ decideApproval }}
+        disabled={false}
+      />,
+    );
+    expect(screen.getByRole('region', { name: 'Goal approval' }).textContent).toContain('Ship');
+    expect(screen.queryByRole('button', { name: 'Always Run' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    expect(decideApproval).toHaveBeenCalledWith('chat', 'run', 'approval', decision);
+  });
   it('describes the command awaiting approval', () => {
     render(
       <WiredGlyphApprovalCard

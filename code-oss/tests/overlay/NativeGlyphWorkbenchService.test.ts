@@ -398,6 +398,51 @@ async function flush(): Promise<void> {
 }
 
 describe(NativeGlyphWorkbenchService, () => {
+  it('creates a goal from the slash command without sending the command as a prompt', async () => {
+    const { service, commands, types } = await workbench();
+    await expect(service.send('/goal')).rejects.toThrow('Usage:');
+    await service.send('/goal Ship the feature');
+    expect(commands()).toContainEqual({
+      type: GlyphWorkbenchCommandType.CREATE_GOAL,
+      chatId: 'alpha',
+      objective: 'Ship the feature',
+    });
+    expect(types()).not.toContain(GlyphWorkbenchCommandType.SEND);
+    await service.pauseGoal('alpha', 'goal');
+    await service.resumeGoal('alpha', 'goal');
+    await service.clearGoal('alpha', 'goal');
+    expect(commands().slice(-3)).toEqual([
+      { type: GlyphWorkbenchCommandType.PAUSE_GOAL, chatId: 'alpha', goalId: 'goal' },
+      { type: GlyphWorkbenchCommandType.RESUME_GOAL, chatId: 'alpha', goalId: 'goal' },
+      { type: GlyphWorkbenchCommandType.CLEAR_GOAL, chatId: 'alpha', goalId: 'goal' },
+    ]);
+  });
+
+  it('continues an active goal after a terminal failure and reports a rejected continuation once', async () => {
+    const goal = {
+      id: 'goal',
+      objective: 'Ship',
+      status: 'active' as const,
+      createdAt: 'now',
+      continuationCount: 0,
+      idleContinuationsWithoutToolCalls: 0,
+      activeDurationMs: 0,
+    };
+    const { service, commands } = await workbench({
+      chats: [chat('alpha', { goal })],
+      runs: [aGlyphRunProjection({ chatId: 'alpha', status: GlyphRunStatus.FAILED })],
+      handler: (command, host) => {
+        if (command.type === GlyphWorkbenchCommandType.CONTINUE_GOAL) throw new Error('Continuation unavailable');
+        host.respond(command);
+      },
+    });
+    await vi.waitFor(() => {
+      expect(service.state.transcript.some(entry => entry.text.includes('Continuation unavailable'))).toBe(true);
+    });
+    expect(commands().filter(command => command.type === GlyphWorkbenchCommandType.CONTINUE_GOAL)).toEqual([
+      { type: GlyphWorkbenchCommandType.CONTINUE_GOAL, chatId: 'alpha', goalId: 'goal' },
+    ]);
+  });
   it('wires editor and composer context callbacks into the desktop adapters', async () => {
     const { service, host, editor, context } = await workbench();
     const request = { requestId: 'read', type: 'read' };
@@ -1068,6 +1113,17 @@ describe(NativeGlyphWorkbenchService, () => {
   });
 
   describe(NativeGlyphWorkbenchService.prototype.buildPlan, () => {
+    it('builds the plan rather than interpreting a pre-existing goal draft as a slash command', async () => {
+      const approved = plan();
+      const test = await workbench({ chats: [chat('alpha', { plans: [approved] })] });
+      test.service.composer.setDraft('/goal Ship the feature');
+      await test.service.buildPlan('alpha', approved);
+      const sent = test.commands().findLast(command => command.type === GlyphWorkbenchCommandType.SEND);
+      expect(sent).toMatchObject({ options: { planBuild: { planId: approved.id } } });
+      expect(sent?.text).toContain('/goal Ship the feature');
+      expect(test.types()).not.toContain(GlyphWorkbenchCommandType.CREATE_GOAL);
+      expect(test.service.state.buildingPlanIds).toEqual([approved.id]);
+    });
     it('tracks plan progress through follow-up messages and reconciles builds against reconnect snapshots', async () => {
       const approved = plan();
       const test = await workbench({

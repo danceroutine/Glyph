@@ -10,10 +10,11 @@ export enum GlyphDesktopProtocolVersion {
   V4 = 4,
   V5 = 5,
   V6 = 6,
+  V7 = 7,
 }
 
 /** The only protocol version emitted by this build. */
-export const GLYPH_DESKTOP_PROTOCOL_VERSION = GlyphDesktopProtocolVersion.V6;
+export const GLYPH_DESKTOP_PROTOCOL_VERSION = GlyphDesktopProtocolVersion.V7;
 
 /** Rejects unknown wire values before their payload is interpreted. */
 export function isGlyphProtocolVersion(value: unknown): value is GlyphDesktopProtocolVersion {
