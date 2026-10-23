@@ -93,6 +93,24 @@ describe('Electron recovery evidence', () => {
   it('does not reuse results from a report with global errors', () => {
     expect(readElectronReport({ ...report(), errors: ['global teardown failed'] }).tests[0].clean).toBe(false);
   });
+  it.each([
+    'Testing stopped early after 10 maximum allowed failures.',
+    '\u001B[31mTesting stopped early after 10 maximum allowed failures.\u001B[39m',
+  ])('retains completed clean passes when Playwright stops at its failure limit: %s', message => {
+    expect(readElectronReport({ ...report(), errors: [{ message }] }).tests[0].clean).toBe(true);
+  });
+  it.each([
+    { errors: [{ message: 'global teardown failed' }] },
+    { errors: [{ message: 'Testing stopped early after 10 maximum allowed failures.', stack: 'unexpected error' }] },
+    {
+      errors: [
+        { message: 'Testing stopped early after 10 maximum allowed failures.' },
+        { message: 'global teardown failed' },
+      ],
+    },
+  ])('still rejects actual global errors alongside or instead of the cutoff: %j', ({ errors }) => {
+    expect(readElectronReport({ ...report(), errors }).tests[0].clean).toBe(false);
+  });
   it('rejects malformed reports, multiple projects, unsafe files, and duplicate IDs', () => {
     expect(() => readElectronReport({})).toThrow();
     expect(() => readElectronReport(report({ projectName: 'new project' }))).toThrow();

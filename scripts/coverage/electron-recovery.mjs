@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { stripVTControlCharacters } from 'node:util';
 import { selectElectronTests } from './electron-selection.mjs';
 
 const suiteFile = z.string().regex(/^[^/\\]+\.test\.mjs$/u);
@@ -39,6 +40,17 @@ export function readElectronReport(value) {
   const report = z
     .object({ config: z.object({ version: z.string() }), suites: z.array(z.unknown()), errors: z.array(z.unknown()) })
     .parse(value);
+  // Playwright's normal failure-limit stop emits onError as well as per-test
+  // failures. It does not invalidate tests that already completed cleanly.
+  const trustworthy = report.errors.every(error => {
+    const diagnostic = z.object({ message: z.string() }).strict().safeParse(error);
+    return (
+      diagnostic.success &&
+      /^Testing stopped early after [1-9]\d* maximum allowed failures\.$/u.test(
+        stripVTControlCharacters(diagnostic.data.message),
+      )
+    );
+  });
   /** @type {TestEvidence[]} */
   const tests = [];
   /** @param {unknown} node @param {string[]} parents */
@@ -53,7 +65,7 @@ export function readElectronReport(value) {
         expectedStatus: test.expectedStatus,
         status: test.status,
         clean:
-          report.errors.length === 0 &&
+          trustworthy &&
           test.expectedStatus === 'passed' &&
           test.status === 'expected' &&
           test.results.length === 1 &&
