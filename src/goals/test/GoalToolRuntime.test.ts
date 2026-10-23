@@ -20,10 +20,18 @@ describe(GoalToolRuntime, () => {
     const runtime = new GoalToolRuntime(vi.fn(), vi.fn());
     const [create, update] = runtime.tools;
 
-    expect(() => create!.validateInput(JSON.stringify({ objective: 'Ship' }))).not.toThrow();
-    expect(() => create!.validateInput(JSON.stringify({ objective: ' ' }))).toThrow();
-    expect(() => update!.validateInput(JSON.stringify({ status: 'complete' }))).not.toThrow();
-    expect(() => update!.validateInput(JSON.stringify({ status: 'paused' }))).toThrow();
+    expect(() => {
+      create!.validateInput(JSON.stringify({ objective: 'Ship' }));
+    }).not.toThrow();
+    expect(() => {
+      create!.validateInput(JSON.stringify({ objective: ' ' }));
+    }).toThrow();
+    expect(() => {
+      update!.validateInput(JSON.stringify({ status: 'complete' }));
+    }).not.toThrow();
+    expect(() => {
+      update!.validateInput(JSON.stringify({ status: 'paused' }));
+    }).toThrow();
   });
 
   describe(GoalToolRuntime.prototype.execute, () => {
@@ -91,10 +99,7 @@ describe(GoalToolRuntime, () => {
 
     it('reports a non-error refusal with a generic message', async () => {
       const chat = { id: 'chat', accountProvider: 'fixture', accountId: 'account' };
-      const runtime = new GoalToolRuntime(
-        vi.fn(),
-        vi.fn(() => Promise.reject('offline')),
-      );
+      const runtime = new GoalToolRuntime(vi.fn(), vi.fn().mockRejectedValue('offline'));
 
       const result = JSON.parse(
         await runtime.execute('update_goal', JSON.stringify({ status: 'active' }), undefined, { chat }),

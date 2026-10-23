@@ -34,6 +34,9 @@ interface Window {
   requests: unknown[];
   submits: unknown[];
   failCopy: boolean;
+  failure?: string;
+  clock: number;
+  showGoal: HarnessAction;
   injected: unknown;
   messageNode: unknown;
   opened: unknown;

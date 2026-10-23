@@ -9,6 +9,7 @@ import { goalObjectiveSchema } from './GoalSchema.ts';
 import { GoalStatus } from './GoalStatus.ts';
 import { GoalToolName } from './GoalToolName.ts';
 import { GoalToolNamespace } from './GoalToolNamespace.ts';
+import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 
 const createGoalSchema = z.object({ objective: goalObjectiveSchema }).strict();
 const updateGoalSchema = z.object({ status: z.enum([GoalStatus.COMPLETE, GoalStatus.ACTIVE]) }).strict();
@@ -59,8 +60,7 @@ export class GoalToolRuntime implements ToolSource {
   ) {}
 
   async execute(name: string, input: string, signal?: AbortSignal, context?: ToolExecutionContext): Promise<string> {
-    if (name !== GoalToolName.CREATE_GOAL && name !== GoalToolName.UPDATE_GOAL)
-      throw new Error(`Unknown goal tool: ${name}`);
+    if (!isEnumValue(GoalToolName, name)) throw new Error(`Unknown goal tool: ${name}`);
     try {
       signal?.throwIfAborted();
       if (!context?.chat) throw new Error('A host-owned chat is required to manage goals.');

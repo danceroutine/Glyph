@@ -27,7 +27,14 @@ export function goalContinuationKey(snapshot: GlyphGoalReconciliationSnapshot): 
   )
     return undefined;
   const last = runs.at(-1);
-  if (last && last.status !== GlyphRunStatus.COMPLETED) return undefined;
+  if (
+    runs.some(run =>
+      [GlyphRunStatus.STREAMING, GlyphRunStatus.WAITING_FOR_QUESTION, GlyphRunStatus.WAITING_FOR_APPROVAL].includes(
+        run.status,
+      ),
+    )
+  )
+    return undefined;
   return [goal.id, goal.continuationCount, goal.activeSince ?? '', last?.runId ?? ''].join('\0');
 }
 
@@ -50,7 +57,9 @@ export class GlyphGoalReconciler {
     this.inFlight.add(chatId);
     void this.host
       .continueGoal(chatId, snapshot.goal!.id)
-      .catch(error => this.host.onError(error))
+      .catch(error => {
+        this.host.onError(error);
+      })
       .finally(() => {
         this.inFlight.delete(chatId);
         if (this.requested.delete(chatId)) this.reconcile(chatId);

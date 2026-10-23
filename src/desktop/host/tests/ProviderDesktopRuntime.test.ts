@@ -56,7 +56,6 @@ import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
-import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import { GoalStatus } from '#src/goals/GoalStatus.js';
 
 const usage = { inputTokens: 2, outputTokens: 3, cachedInputTokens: 0, reasoningTokens: 1, totalTokens: 5 };
@@ -3455,9 +3454,9 @@ describe('goal continuation', () => {
       const goal = (await goalOf(harness.runtime, harness.chatId))!;
 
       await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
 
       expect(requests).toEqual([harness.chatId]);
       expect((await harness.runtime.snapshot()).runs.at(-1)).toMatchObject({
@@ -3531,19 +3530,23 @@ describe('goal continuation', () => {
         text: 'Work',
         attachments: [],
       });
-      await vi.waitFor(() => expect(sends).toBe(1));
+      await vi.waitFor(() => {
+        expect(sends).toBe(1);
+      });
 
       await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
       expect(sends).toBe(1);
       gate.resolve();
 
-      await vi.waitFor(() => expect(sends).toBe(2));
-      await vi.waitFor(async () =>
+      await vi.waitFor(() => {
+        expect(sends).toBe(2);
+      });
+      await vi.waitFor(async () => {
         expect((await harness.runtime.snapshot()).runs.at(-1)).toMatchObject({
           runId: `goal-continuation:${goal.id}:1`,
           status: GlyphRunStatus.COMPLETED,
-        }),
-      );
+        });
+      });
     } finally {
       gate.resolve();
       await harness.runtime.dispose();
@@ -3567,7 +3570,9 @@ describe('goal continuation', () => {
         text: 'Work',
         attachments: [],
       });
-      await vi.waitFor(() => expect(texts).toHaveLength(1));
+      await vi.waitFor(() => {
+        expect(texts).toHaveLength(1);
+      });
       harness.wake({
         id: 'wake-1',
         terminalId: 'terminal',
@@ -3582,9 +3587,9 @@ describe('goal continuation', () => {
       await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
       gate.resolve();
 
-      await vi.waitFor(() =>
-        expect(texts).toEqual(['Work', 'Wake condition matched: READY', 'Continue working toward the active goal.']),
-      );
+      await vi.waitFor(() => {
+        expect(texts).toEqual(['Work', 'Wake condition matched: READY', 'Continue working toward the active goal.']);
+      });
     } finally {
       gate.resolve();
       await harness.runtime.dispose();
@@ -3602,9 +3607,9 @@ describe('goal continuation', () => {
 
       for (const continuation of [1, 2, 3]) {
         await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
-        await vi.waitFor(async () =>
-          expect((await goalOf(harness.runtime, harness.chatId))?.idleContinuationsWithoutToolCalls).toBe(continuation),
-        );
+        await vi.waitFor(async () => {
+          expect((await goalOf(harness.runtime, harness.chatId))?.idleContinuationsWithoutToolCalls).toBe(continuation);
+        });
       }
       await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
 
@@ -3638,15 +3643,15 @@ describe('goal continuation', () => {
       for (const idle of [1, 0, 1, 0]) {
         const count = sends + 1;
         await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
-        await vi.waitFor(async () =>
+        await vi.waitFor(async () => {
           expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({
             continuationCount: count,
             idleContinuationsWithoutToolCalls: idle,
-          }),
-        );
-        await vi.waitFor(async () =>
-          expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED),
-        );
+          });
+        });
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+        });
       }
 
       expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('active');
@@ -3663,9 +3668,9 @@ describe('goal continuation', () => {
       await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
       const goal = (await goalOf(harness.runtime, harness.chatId))!;
       await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL);
+      });
 
       await harness.runtime.handle({
         type: Command.CANCEL_RUN,
@@ -3673,9 +3678,9 @@ describe('goal continuation', () => {
         runId: `goal-continuation:${goal.id}:1`,
       });
 
-      await vi.waitFor(async () =>
-        expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({ status: 'paused', pauseReason: 'user' }),
-      );
+      await vi.waitFor(async () => {
+        expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({ status: 'paused', pauseReason: 'user' });
+      });
       expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.CANCELLED);
     } finally {
       await harness.runtime.dispose();
@@ -3697,12 +3702,12 @@ describe('goal continuation', () => {
         attachments: [],
       });
 
-      await vi.waitFor(async () =>
+      await vi.waitFor(async () => {
         expect(await goalOf(harness.runtime, harness.chatId)).toMatchObject({
           status: 'paused',
           pauseReason: 'failed',
-        }),
-      );
+        });
+      });
     } finally {
       await harness.runtime.dispose();
     }
@@ -3721,9 +3726,9 @@ describe('goal continuation', () => {
         text: 'Work',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
 
       expect(await goalOf(harness.runtime, harness.chatId)).toEqual(before);
     } finally {
@@ -3741,10 +3746,12 @@ describe('goal continuation', () => {
       await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
       const goal = (await goalOf(harness.runtime, harness.chatId))!;
       await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
-      await vi.waitFor(async () => expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('complete'));
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('complete');
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
 
       await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
 
@@ -3779,10 +3786,12 @@ describe('goal continuation', () => {
         text: 'Resume it',
         attachments: [],
       });
-      await vi.waitFor(() => expect(outcomes).toHaveLength(1));
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(() => {
+        expect(outcomes).toHaveLength(1);
+      });
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       await harness.runtime.handle({ type: Command.PAUSE_GOAL, chatId: harness.chatId, goalId: goal.id });
 
       await harness.runtime.handle({
@@ -3792,7 +3801,9 @@ describe('goal continuation', () => {
         text: 'Resume it',
         attachments: [],
       });
-      await vi.waitFor(() => expect(outcomes).toHaveLength(2));
+      await vi.waitFor(() => {
+        expect(outcomes).toHaveLength(2);
+      });
 
       expect(outcomes).toEqual(['Only a paused goal can be resumed.', 'resumed']);
       expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('active');
@@ -3810,7 +3821,9 @@ describe('goal continuation', () => {
         chatId: chat.id,
         goalId: (await goalOf(harness.runtime, chat.id))!.id,
       });
-      await harness.runtime.updateGoalFromTool(chat, GoalStatus.ACTIVE).catch(error => outcomes.push(error.message));
+      await harness.runtime.updateGoalFromTool(chat, GoalStatus.ACTIVE).catch((error: unknown) => {
+        outcomes.push(error instanceof Error ? error.message : String(error));
+      });
     });
     try {
       await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
@@ -3818,9 +3831,9 @@ describe('goal continuation', () => {
 
       await harness.runtime.handle({ type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id });
 
-      await vi.waitFor(() =>
-        expect(outcomes).toEqual(['Only the human can resume a paused goal. Ask them before resuming it.']),
-      );
+      await vi.waitFor(() => {
+        expect(outcomes).toEqual(['Only the human can resume a paused goal. Ask them before resuming it.']);
+      });
       expect((await goalOf(harness.runtime, harness.chatId))?.status).toBe('paused');
     } finally {
       await harness.runtime.dispose();
@@ -3861,7 +3874,9 @@ describe('goal continuation', () => {
         await save(record);
       });
       const clearing = harness.runtime.handle({ type: Command.CLEAR_GOAL, chatId: harness.chatId, goalId: first.id });
-      await vi.waitFor(() => expect(saving).toHaveBeenCalled());
+      await vi.waitFor(() => {
+        expect(saving).toHaveBeenCalled();
+      });
       const replacing = harness.runtime.handle({
         type: Command.CREATE_GOAL,
         chatId: harness.chatId,
@@ -3892,9 +3907,9 @@ describe('goal continuation', () => {
         text: 'Keep going',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs.at(-1)?.approval?.goal).toEqual({ objective: 'Make CI green' }),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.approval?.goal).toEqual({ objective: 'Make CI green' });
+      });
       const declined = (await harness.runtime.snapshot()).runs.at(-1)!.approval!;
       await harness.runtime.handle({
         type: Command.DECIDE_APPROVAL,
@@ -3903,9 +3918,9 @@ describe('goal continuation', () => {
         approvalId: declined.id,
         decision: GlyphApprovalDecision.DENY,
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.COMPLETED);
+      });
       expect(await goalOf(harness.runtime, harness.chatId)).toBeUndefined();
 
       await harness.runtime.handle({
@@ -3915,9 +3930,9 @@ describe('goal continuation', () => {
         text: 'Keep going',
         attachments: [],
       });
-      await vi.waitFor(async () =>
-        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL),
-      );
+      await vi.waitFor(async () => {
+        expect((await harness.runtime.snapshot()).runs.at(-1)?.status).toBe(GlyphRunStatus.WAITING_FOR_APPROVAL);
+      });
       const approval = (await harness.runtime.snapshot()).runs.at(-1)!.approval!;
       await harness.runtime.handle({
         type: Command.DECIDE_APPROVAL,
@@ -3926,7 +3941,9 @@ describe('goal continuation', () => {
         approvalId: approval.id,
         decision: GlyphApprovalDecision.ALLOW_ONCE,
       });
-      await vi.waitFor(() => expect(results).toHaveLength(2));
+      await vi.waitFor(() => {
+        expect(results).toHaveLength(2);
+      });
 
       expect(results[0]).toBeUndefined();
       expect(results[1]).toMatchObject({ objective: 'Make CI green', status: 'active' });
@@ -3941,7 +3958,9 @@ describe('goal continuation', () => {
     const harness = await fixture(async options => {
       await harness.runtime
         .proposeGoal(options.toolContext!.chat!, 'Another', options.signal)
-        .catch(error => outcomes.push(error.message));
+        .catch((error: unknown) => {
+          outcomes.push(error instanceof Error ? error.message : String(error));
+        });
     });
     try {
       await harness.runtime.handle({ type: Command.CREATE_GOAL, chatId: harness.chatId, objective: 'Make CI green' });
@@ -3954,9 +3973,9 @@ describe('goal continuation', () => {
         attachments: [],
       });
 
-      await vi.waitFor(() =>
-        expect(outcomes).toEqual(['This chat already has a goal. Ask the human to clear it before proposing another.']),
-      );
+      await vi.waitFor(() => {
+        expect(outcomes).toEqual(['This chat already has a goal. Ask the human to clear it before proposing another.']);
+      });
       expect((await harness.runtime.snapshot()).runs.at(-1)?.approval).toBeUndefined();
     } finally {
       await harness.runtime.dispose();

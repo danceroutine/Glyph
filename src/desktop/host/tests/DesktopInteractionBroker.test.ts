@@ -24,7 +24,9 @@ describe(DesktopInteractionBroker, () => {
   describe(DesktopInteractionBroker.prototype.presentGoalProposal, () => {
     it('asks the human to approve the objective and resolves with their decision', async () => {
       const events: GlyphHostEvent[] = [];
-      const broker = new DesktopInteractionBroker(event => events.push(event));
+      const broker = new DesktopInteractionBroker(event => {
+        events.push(event);
+      });
       const identity = { chatId: 'chat', runId: 'run' };
       const signal = new AbortController().signal;
 
@@ -55,21 +57,23 @@ describe(DesktopInteractionBroker, () => {
 
     it('treats a declined goal as not approved and refuses to remember the decision', async () => {
       const events: GlyphHostEvent[] = [];
-      const broker = new DesktopInteractionBroker(event => events.push(event));
+      const broker = new DesktopInteractionBroker(event => {
+        events.push(event);
+      });
       const identity = { chatId: 'chat', runId: 'run' };
       const signal = new AbortController().signal;
 
       const approved = broker.run(identity, () => broker.presentGoalProposal('Make CI green', signal));
       const request = events[0];
       if (request?.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected a goal approval.');
-      expect(() =>
+      expect(() => {
         broker.answer({
           ...identity,
           id: request.approval.id,
           kind: 'approval',
           value: GlyphApprovalDecision.ALWAYS_ALLOW,
-        }),
-      ).toThrow();
+        });
+      }).toThrow();
       broker.answer({ ...identity, id: request.approval.id, kind: 'approval', value: GlyphApprovalDecision.DENY });
 
       await expect(approved).resolves.toBe(false);

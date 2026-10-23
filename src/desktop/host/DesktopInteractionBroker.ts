@@ -129,7 +129,7 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
       value =>
         z.enum([GlyphApprovalDecision.ALLOW_ONCE, GlyphApprovalDecision.DENY]).parse(value) ===
         GlyphApprovalDecision.ALLOW_ONCE,
-      () =>
+      () => {
         this.emit({
           type: GlyphHostEventType.APPROVAL,
           chatId: identity.chatId,
@@ -141,7 +141,8 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
             sandboxed: false,
             goal: { objective },
           },
-        }),
+        });
+      },
     );
   }
 

@@ -1,14 +1,18 @@
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
+import { parseJson } from './ProviderPayloads.mjs';
 
+/** @param {import('./GlyphWorkbench.mjs').GlyphWorkbench} glyph */
 const row = glyph => glyph.page.getByRole('region', { name: 'Goal', exact: true });
+/** @param {string} callId */
 const completeGoal = callId =>
   ScriptedProvider.tool('update_goal', { status: 'complete' }, { namespace: 'goal', callId });
+/** @param {ScriptedProvider} provider @param {string} callId */
 const toolOutput = (provider, callId) =>
-  JSON.parse(
+  parseJson(
     provider.requests
       .flatMap(request => request.body.input)
-      .find(value => value.type === 'function_call_output' && value.call_id === callId).output,
+      .find(value => value.type === 'function_call_output' && value.call_id === callId)?.output,
   );
 
 it.describe('Durable goals', () => {
@@ -46,7 +50,7 @@ it.describe('Durable goals', () => {
     expect(provider.requests[0].body.input).toContainEqual(
       expect.objectContaining({
         role: 'user',
-        content: expect.stringMatching(/"type":"goal_continuation".*"objective":"Make CI green"/),
+        content: expect.stringMatching(/"type":"goal_continuation".*"objective":"Make CI green"/u),
       }),
     );
     expect(toolOutput(provider, 'finish')).toMatchObject({ goal: { objective: 'Make CI green', status: 'complete' } });

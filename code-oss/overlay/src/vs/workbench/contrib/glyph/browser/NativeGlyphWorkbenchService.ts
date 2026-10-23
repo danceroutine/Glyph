@@ -96,7 +96,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private readonly goals = new GlyphGoalReconciler({
     snapshot: chatId => this.goalSnapshot(chatId),
     continueGoal: (chatId, goalId) => this.request({ type: GlyphWorkbenchCommandType.CONTINUE_GOAL, chatId, goalId }),
-    onError: error => this.report(error),
+    onError: error => {
+      this.report(error);
+    },
   });
   constructor(
     @IStorageService private readonly storageService: IStorageService,

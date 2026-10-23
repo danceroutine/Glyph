@@ -6,9 +6,9 @@ import { GoalStatus } from './GoalStatus.ts';
 
 /**
  * A goal turns a single request into a standing objective, so the agent keeps
- * working across turns without the human prompting it again. The danger with this functionality is 
- * an agent that never stops burns tokens and makes unattended changes. Every rule about when a 
- * goal may keep running, stop, or be declared done lives here, so that the host, the agent's tools, 
+ * working across turns without the human prompting it again. The danger with this functionality is
+ * an agent that never stops burns tokens and makes unattended changes. Every rule about when a
+ * goal may keep running, stop, or be declared done lives here, so that the host, the agent's tools,
  * and the human's controls all apply the same policy.
  *
  * Instances are immutable. The goal is persisted inside the chat record and

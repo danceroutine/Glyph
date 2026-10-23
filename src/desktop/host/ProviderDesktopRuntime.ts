@@ -8,7 +8,7 @@ import type { ContextAttachment } from '#src/context/attachments/ContextAttachme
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
 import { TodoStatus } from '#src/todos/TodoStatus.js';
 
-import { AgentModeID } from '#src/chat/AgentMode.js';
+import { AgentMode, AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { toToolActivityPreview } from '#src/chat/toToolActivityPreview.js';
 import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
@@ -467,7 +467,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           ),
         );
         this.active.set(command.chatId, { controller, completion, runId: command.runId, steering });
-        void completion.finally(() => this.finishRun(command.chatId, steering));
+        void completion.finally(() => {
+          this.finishRun(command.chatId, steering);
+        });
         return;
       }
       case GlyphWorkbenchCommandType.CREATE_GOAL: {
@@ -873,7 +875,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       });
       this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
     } catch {
-      return;
+      // A concurrently replaced or cleared goal no longer needs settling.
     }
   }
 
@@ -927,7 +929,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       );
     });
     this.active.set(chatId, { controller, steering, completion, runId });
-    void completion.finally(() => this.finishRun(chatId, steering));
+    void completion.finally(() => {
+      this.finishRun(chatId, steering);
+    });
   }
 
   private finishRun(chatId: string, steering: ChatSteeringQueue): void {
@@ -940,7 +944,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     try {
       this.continueGoal(chatId, goalId);
     } catch {
-      return;
+      // The queued continuation may have been invalidated while the run settled.
     }
   }
 
@@ -1165,7 +1169,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         ),
       );
       this.active.set(event.chatId, { controller, steering, completion, runId });
-      void completion.finally(() => this.finishRun(event.chatId, steering));
+      void completion.finally(() => {
+        this.finishRun(event.chatId, steering);
+      });
     }
   }
 

@@ -36,8 +36,12 @@ export function useGlyphGoalRowState({ chatId, goal, readOnly, actions, now = Da
   useEffect(() => {
     setTime(now());
     if (!active) return;
-    const timer = setInterval(() => setTime(now()), 1000);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+      setTime(now());
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
   }, [active, goal.activeSince, now]);
   const perform = async (operation: () => Promise<void>) => {
     if (busy.current) return;
@@ -69,7 +73,11 @@ export function useGlyphGoalRowState({ chatId, goal, readOnly, actions, now = Da
     disabled: readOnly || pending,
     canToggle: goal.status !== 'complete',
     toggleLabel: active ? 'Pause goal' : 'Resume goal',
-    toggle: () => perform(() => (active ? actions.pauseGoal(chatId, goal.id) : actions.resumeGoal(chatId, goal.id))),
-    clear: () => perform(() => actions.clearGoal(chatId, goal.id)),
+    toggle: () => {
+      void perform(() => (active ? actions.pauseGoal(chatId, goal.id) : actions.resumeGoal(chatId, goal.id)));
+    },
+    clear: () => {
+      void perform(() => actions.clearGoal(chatId, goal.id));
+    },
   };
 }

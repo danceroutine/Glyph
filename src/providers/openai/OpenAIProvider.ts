@@ -392,8 +392,7 @@ function contextEventId(item: ResponseInputItem): string | undefined {
       typeof value.event.id !== 'string'
     )
       return undefined;
-    if (item.role === 'user' && !USER_CONTEXT_EVENT_TYPES.has(value.event.type))
-      return undefined;
+    if (item.role === 'user' && !USER_CONTEXT_EVENT_TYPES.has(value.event.type)) return undefined;
     return value.event.id;
   } catch {
     return undefined;

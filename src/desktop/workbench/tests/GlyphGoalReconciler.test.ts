@@ -7,6 +7,29 @@ import {
 } from '#src/desktop/workbench/GlyphGoalReconciler.js';
 
 describe(goalContinuationKey, () => {
+  it.each([GlyphRunStatus.FAILED, GlyphRunStatus.CANCELLED, GlyphRunStatus.INTERRUPTED])(
+    'continues an explicitly resumed or newly armed goal after a %s run',
+    status => {
+      const snapshot: GlyphGoalReconciliationSnapshot = {
+        goal: {
+          id: 'goal',
+          objective: 'Finish',
+          status: 'active',
+          createdAt: '2026-10-20T14:00:00.000Z',
+          continuationCount: 0,
+          idleContinuationsWithoutToolCalls: 0,
+          activeDurationMs: 0,
+        },
+        runs: [{ runId: 'old', status }],
+        connected: true,
+        ownsWorkspace: true,
+        submitting: false,
+        queuedMessages: 0,
+      };
+      expect(goalContinuationKey(snapshot)).toBeDefined();
+      expect(goalContinuationKey({ ...snapshot, goal: { ...snapshot.goal!, status: 'paused' } })).toBeUndefined();
+    },
+  );
   it('identifies an idle chat with an active goal as ready to continue', () => {
     const snapshot: GlyphGoalReconciliationSnapshot = {
       goal: {
@@ -64,8 +87,6 @@ describe(goalContinuationKey, () => {
       'an approval is waiting for a decision',
       { runs: [{ runId: 'run', status: GlyphRunStatus.WAITING_FOR_APPROVAL }] },
     ],
-    ['the last turn failed', { runs: [{ runId: 'run', status: GlyphRunStatus.FAILED }] }],
-    ['the last turn was cancelled', { runs: [{ runId: 'run', status: GlyphRunStatus.CANCELLED }] }],
   ])('holds the goal while %s', (_, change) => {
     const base: GlyphGoalReconciliationSnapshot = {
       goal: {
@@ -119,7 +140,9 @@ describe(GlyphGoalReconciler, () => {
       const reconciler = new GlyphGoalReconciler({ snapshot: () => snapshot, continueGoal, onError: vi.fn() });
 
       reconciler.reconcile('chat');
-      await vi.waitFor(() => expect(continueGoal).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(continueGoal).toHaveBeenCalledOnce();
+      });
       reconciler.reconcile('chat');
 
       expect(continueGoal).toHaveBeenCalledWith('chat', 'goal');
@@ -146,7 +169,9 @@ describe(GlyphGoalReconciler, () => {
       const continueGoal = vi.fn(async () => {});
       const reconciler = new GlyphGoalReconciler({ snapshot: () => snapshot, continueGoal, onError: vi.fn() });
       reconciler.reconcile('chat');
-      await vi.waitFor(() => expect(continueGoal).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(continueGoal).toHaveBeenCalledOnce();
+      });
 
       snapshot = {
         ...snapshot,
@@ -155,7 +180,9 @@ describe(GlyphGoalReconciler, () => {
       };
       reconciler.reconcile('chat');
 
-      await vi.waitFor(() => expect(continueGoal).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(continueGoal).toHaveBeenCalledTimes(2);
+      });
     });
 
     it('never asks for a second continuation while the first request is in flight, then catches up', async () => {
@@ -190,7 +217,9 @@ describe(GlyphGoalReconciler, () => {
       expect(continueGoal).toHaveBeenCalledOnce();
       release();
 
-      await vi.waitFor(() => expect(continueGoal).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(continueGoal).toHaveBeenCalledTimes(2);
+      });
     });
 
     it('reports a failed request without retrying the same goal state', async () => {
@@ -218,7 +247,9 @@ describe(GlyphGoalReconciler, () => {
       const reconciler = new GlyphGoalReconciler({ snapshot: () => snapshot, continueGoal, onError });
 
       reconciler.reconcile('chat');
-      await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(failure));
+      await vi.waitFor(() => {
+        expect(onError).toHaveBeenCalledWith(failure);
+      });
       reconciler.reconcile('chat');
 
       expect(continueGoal).toHaveBeenCalledOnce();
@@ -255,12 +286,16 @@ describe(GlyphGoalReconciler, () => {
       const continueGoal = vi.fn(async () => {});
       const reconciler = new GlyphGoalReconciler({ snapshot: () => snapshot, continueGoal, onError: vi.fn() });
       reconciler.reconcile('chat');
-      await vi.waitFor(() => expect(continueGoal).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(continueGoal).toHaveBeenCalledOnce();
+      });
 
       reconciler.reset();
       reconciler.reconcile('chat');
 
-      await vi.waitFor(() => expect(continueGoal).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => {
+        expect(continueGoal).toHaveBeenCalledTimes(2);
+      });
     });
   });
 });
