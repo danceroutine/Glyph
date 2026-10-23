@@ -101,7 +101,9 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
         if (!token.href.startsWith(annotationScheme)) return undefined;
         const annotation = entry.annotation(token.href.slice(annotationScheme.length));
         return annotation ? (
-          <WiredGlyphAnnotationCitation annotation={annotation}>{children}</WiredGlyphAnnotationCitation>
+          <WiredGlyphAnnotationCitation annotation={annotation} revealNative={entry.revealAnnotation}>
+            {children}
+          </WiredGlyphAnnotationCitation>
         ) : (
           <span>{children}</span>
         );

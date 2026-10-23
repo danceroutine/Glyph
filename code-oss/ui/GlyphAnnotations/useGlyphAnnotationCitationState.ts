@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { GlyphAnnotation } from '#src/desktop/protocol/events/GlyphAnnotation.js';
-import { annotationRange } from './GlyphAnnotationSource.ts';
+import { annotationRange, scrollAnnotationRange } from './GlyphAnnotationSource.ts';
 
 export const annotationRevealDuration = 1600;
 const previewGap = 6;
@@ -14,7 +14,10 @@ export interface GlyphAnnotationHighlight {
   readonly height: number;
 }
 
-export function useGlyphAnnotationCitationState(annotation: GlyphAnnotation) {
+export function useGlyphAnnotationCitationState(
+  annotation: GlyphAnnotation,
+  revealNative?: (annotation: GlyphAnnotation) => void,
+) {
   const previewId = useId();
   const anchor = useRef<HTMLAnchorElement>(null);
   const preview = useRef<HTMLDivElement>(null);
@@ -86,10 +89,13 @@ export function useGlyphAnnotationCitationState(annotation: GlyphAnnotation) {
     cancelClose,
     reveal: () => {
       hide();
+      if (annotation.kind === 'proposal') {
+        revealNative?.(annotation);
+        return;
+      }
       const range = annotationRange(annotation);
       if (!range) return;
-      // annotationRange always starts in a text node of a mounted source.
-      range.startContainer.parentElement!.scrollIntoView({ block: 'center' });
+      scrollAnnotationRange(range);
       setHighlights(
         [...range.getClientRects()]
           .filter(rect => rect.width > 0 && rect.height > 0)

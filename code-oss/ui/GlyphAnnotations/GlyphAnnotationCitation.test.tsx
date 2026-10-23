@@ -99,10 +99,10 @@ it('previews captured text on hover and focus, dismisses with Escape, and keeps 
 it('reveals only the matching live passage and clears temporary highlights', async () => {
   vi.useFakeTimers();
   const node = source();
-  const scroll = vi.spyOn(node, 'scrollIntoView');
+  const scroll = vi.spyOn(window, 'scrollBy');
   render(<WiredGlyphAnnotationCitation annotation={annotation}>Annotation 1</WiredGlyphAnnotationCitation>);
   fireEvent.click(screen.getByRole('link'));
-  expect(scroll).toHaveBeenCalledWith({ block: 'center' });
+  expect(scroll).toHaveBeenCalledOnce();
   expect(document.querySelector('.glyph-annotation-reveal')).not.toBeNull();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(annotationRevealDuration);
@@ -159,4 +159,42 @@ it('refuses missing, changed, and out-of-range source text', () => {
   expect(annotationSourceRange(node, 50, 60)).toBeUndefined();
   expect(annotationSourceRange(node, 0, 60)).toBeUndefined();
   expect(annotationSourceRange(document.createElement('div'), 0, 0)).toBeUndefined();
+});
+
+it('routes proposal citations to the native source instead of looking for a DOM passage', () => {
+  const reveal = vi.fn();
+  const proposal = { ...annotation, kind: 'proposal' as const };
+  const { result } = renderHook(() => useGlyphAnnotationCitationState(proposal, reveal));
+  act(() => {
+    result.current.reveal();
+  });
+  expect(reveal).toHaveBeenCalledWith(proposal);
+  const withoutNative = renderHook(useGlyphAnnotationCitationState, { initialProps: proposal });
+  act(() => {
+    withoutNative.result.current.reveal();
+  });
+  expect(withoutNative.result.current.highlights).toEqual([]);
+});
+
+it('reveals the selected range even inside a paragraph taller than its scroll viewport', () => {
+  const node = source();
+  const prefix = 'Long passage. '.repeat(150);
+  node.textContent = prefix + 'world';
+  node.style.cssText = 'width: 200px; line-height: 20px; margin: 0';
+  const viewport = document.createElement('div');
+  viewport.style.cssText = 'height: 100px; width: 220px; overflow: auto; position: fixed; top: 100px';
+  document.body.append(viewport);
+  viewport.append(node);
+  onTestFinished(() => {
+    viewport.remove();
+  });
+  const note = { ...annotation, from: prefix.length, to: prefix.length + 5 };
+  const { result } = renderHook(useGlyphAnnotationCitationState, { initialProps: note });
+  act(() => {
+    result.current.reveal();
+  });
+  const bounds = annotationRange(note)!.getBoundingClientRect();
+  const view = viewport.getBoundingClientRect();
+  expect(bounds.top).toBeGreaterThanOrEqual(view.top);
+  expect(bounds.bottom).toBeLessThanOrEqual(view.bottom);
 });

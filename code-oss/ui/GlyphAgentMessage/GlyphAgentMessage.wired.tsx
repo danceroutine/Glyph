@@ -14,7 +14,7 @@ export type GlyphMessageActions = Pick<GlyphWorkbenchViewActions, 'decideApprova
   Partial<
     Pick<
       GlyphWorkbenchViewActions,
-      'context' | 'openLink' | 'branchChat' | 'restoreCheckpoint' | 'copyText' | 'reviewProposalFile'
+      'context' | 'composer' | 'openLink' | 'branchChat' | 'restoreCheckpoint' | 'copyText' | 'reviewProposalFile'
     >
   >;
 
@@ -37,6 +37,7 @@ export function WiredGlyphAgentMessage({
   const state = useGlyphMessageState({
     entries: [entry],
     context: actions?.context,
+    composer: actions?.composer,
     openLink: actions?.openLink,
     copyText: actions?.copyText,
     branch:

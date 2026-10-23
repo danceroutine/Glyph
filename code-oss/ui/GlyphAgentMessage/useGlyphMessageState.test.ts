@@ -17,6 +17,32 @@ function contextActions(openAttachment: GlyphContextActions['openAttachment']) {
 }
 
 describe(useGlyphMessageState, () => {
+  it.each([new Error('Unavailable source'), 'Unavailable source'])(
+    'reports native annotation reveal errors: %s',
+    async error => {
+      const composer = {
+        revealAnnotation: vi.fn(async () => {
+          throw error;
+        }),
+      };
+      const { result } = renderHook(useGlyphMessageState, { initialProps: { entries: [transcriptEntry()], composer } });
+      await act(async () => {
+        result.current.entries[0]!.revealAnnotation({
+          id: 'note',
+          order: 1,
+          kind: 'proposal',
+          sourceId: 'proposal:file',
+          revision: '1',
+          label: 'file',
+          quote: 'text',
+          from: 0,
+          to: 4,
+          comment: '',
+        });
+      });
+      expect(result.current.entries[0]!.attachmentError).toBe('Unavailable source');
+    },
+  );
   it('resolves citations only from annotations in this conversation', () => {
     const annotation = {
       id: 'note',
@@ -37,6 +63,7 @@ describe(useGlyphMessageState, () => {
     });
     expect(result.current.entries[1]!.annotation('note')).toEqual(annotation);
     expect(result.current.entries[1]!.annotation('unknown')).toBeUndefined();
+    result.current.entries[1]!.revealAnnotation(annotation);
   });
   it('labels each speaker', () => {
     const { result } = renderHook(useGlyphMessageState, {

@@ -31,3 +31,15 @@ export function annotationRange(annotation: GlyphAnnotation): Range | undefined 
   const range = source && annotationSourceRange(source, annotation.from, annotation.to);
   return range?.toString() === annotation.quote ? range : undefined;
 }
+
+/** Center the range, not a potentially viewport-sized paragraph containing it. */
+export function scrollAnnotationRange(range: Range): void {
+  for (let ancestor = range.startContainer.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    if (!['auto', 'scroll'].includes(getComputedStyle(ancestor).overflowY)) continue;
+    ancestor.scrollBy({
+      top: range.getBoundingClientRect().top - ancestor.getBoundingClientRect().top - ancestor.clientHeight / 2,
+      behavior: 'instant',
+    });
+  }
+  window.scrollBy({ top: range.getBoundingClientRect().top - innerHeight / 2, behavior: 'instant' });
+}

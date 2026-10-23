@@ -23,7 +23,7 @@ function samePosition(a: PositionedAnnotation | undefined, b: PositionedAnnotati
 }
 function position(annotation: GlyphAnnotation, selection = false): PositionedAnnotation | undefined {
   const source = findAnnotationSource(annotation);
-  const range = annotationRange(annotation);
+  const range = source && annotationRange(annotation);
   if (!range) return undefined;
   const rect = [...range.getClientRects()].findLast(rect => rect.width > 0 && rect.height > 0);
   if (!rect || rect.bottom < 0 || rect.top > innerHeight) return undefined;
