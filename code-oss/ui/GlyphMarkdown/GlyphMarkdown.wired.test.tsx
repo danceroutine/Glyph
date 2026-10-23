@@ -24,7 +24,9 @@ describe(WiredGlyphMarkdown, () => {
   it('renders Mermaid blocks as diagrams', async () => {
     render(<WiredGlyphMarkdown text={'```mermaid\ngraph TD\n```'} openLink={vi.fn()} />);
 
-    expect((await screen.findByRole('img', { name: 'Plan diagram' })).shadowRoot?.querySelector('svg')?.textContent).toBe('diagram');
+    expect(
+      (await screen.findByRole('img', { name: 'Plan diagram' })).shadowRoot?.querySelector('svg')?.textContent,
+    ).toBe('diagram');
   });
 
   it('opens links through the host', () => {

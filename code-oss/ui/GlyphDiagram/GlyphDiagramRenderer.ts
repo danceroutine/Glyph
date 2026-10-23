@@ -15,7 +15,7 @@ const colors = { bg: tokens.surface.canvas, fg: tokens.text.primary, muted: toke
 function readRendering(data: Record<string, unknown>): GlyphDiagramRendering | undefined {
   const { tree, links } = data;
   if (!isRecord(tree) || !Array.isArray(links)) return undefined;
-  return { tree, links: links.filter(isGlyphDiagramLink) };
+  return { tree, links: links.filter(value => isGlyphDiagramLink(value)) };
 }
 
 /** The native bundle and Storybook serve the same isolated Mermaid renderer. */

@@ -7,14 +7,14 @@ export interface GlyphDiagramSource {
 }
 
 const nativeHeaders = [
-  /^(?:graph|flowchart)\s+(?:td|tb|lr|bt|rl)\s*$/i,
-  /^statediagram(?:-v2)?\s*$/i,
-  /^sequencediagram\s*$/i,
-  /^classdiagram\s*$/i,
-  /^erdiagram\s*$/i,
-  /^xychart(?:-beta)?\b/i,
+  /^(?:graph|flowchart)\s+(?:td|tb|lr|bt|rl)\s*$/iu,
+  /^statediagram(?:-v2)?\s*$/iu,
+  /^sequencediagram\s*$/iu,
+  /^classdiagram\s*$/iu,
+  /^erdiagram\s*$/iu,
+  /^xychart(?:-beta)?\b/iu,
 ];
-const clickLink = /^\s*click\s+(\S+)\s+(?:href\s+)?"([^"]+)"/i;
+const clickLink = /^\s*click\s+(\S+)\s+(?:href\s+)?"([^"]+)"/iu;
 
 export function parseGlyphDiagramSource(source: string): GlyphDiagramSource {
   const links: GlyphDiagramLink[] = [];

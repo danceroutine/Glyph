@@ -34,6 +34,22 @@ describe(useGlyphDiagramState, () => {
     expect(result.current.expanded).toBe(false);
   });
 
+  it('replaces an existing isolated canvas without adding a second shadow root', async () => {
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.append(document.createElement('span'));
+    vi.mocked(renderGlyphDiagram).mockResolvedValue(rendering);
+    renderHook(() => {
+      const state = useGlyphDiagramState({ source: 'graph TD' });
+      state.canvas.current = host;
+      return state;
+    });
+    await waitFor(() => {
+      expect(shadow.querySelector('svg')?.textContent).toBe('diagram');
+    });
+    expect(shadow.querySelector('span')).toBeNull();
+  });
+
   it('reports diagrams that could not be rendered', async () => {
     vi.mocked(renderGlyphDiagram).mockRejectedValue(new Error('bad'));
 

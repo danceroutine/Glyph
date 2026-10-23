@@ -14,7 +14,13 @@ text { font-family: ${tokens.font.family.body}; }
 [role="link"]:focus-visible { outline: ${tokens.focus.ring}; outline-offset: 2px; }
 `;
 
-export function useGlyphDiagramState({ source, openLink }: { readonly source: string; readonly openLink?: ((href: string) => void) | undefined }) {
+export function useGlyphDiagramState({
+  source,
+  openLink,
+}: {
+  readonly source: string;
+  readonly openLink?: ((href: string) => void) | undefined;
+}) {
   const root = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const navigate = useRef(openLink);
@@ -52,15 +58,17 @@ export function useGlyphDiagramState({ source, openLink }: { readonly source: st
     style.textContent = shadowStyles;
     (host.shadowRoot ?? host.attachShadow({ mode: 'open' })).replaceChildren(svg, style);
     if (!navigate.current) return;
-    const nodes = new Map<string, Element>();
-    for (const node of svg.querySelectorAll('[data-id]')) nodes.set(node.getAttribute('data-id')!, node);
+    const nodes = new Map<string, SVGElement>();
+    for (const node of svg.querySelectorAll<SVGElement>('[data-id]')) nodes.set(node.dataset.id!, node);
     for (const { id, href } of rendering.links) {
       const node = nodes.get(id);
       if (!node) continue;
-      const open = () => { navigate.current?.(href); };
+      const open = () => {
+        navigate.current?.(href);
+      };
       node.setAttribute('role', 'link');
       node.setAttribute('tabindex', '0');
-      node.setAttribute('aria-label', node.getAttribute('data-label') || id);
+      node.setAttribute('aria-label', node.dataset.label || id);
       node.addEventListener('click', open);
       node.addEventListener('keydown', event => {
         if (!(event instanceof KeyboardEvent) || event.key !== 'Enter') return;
@@ -91,7 +99,9 @@ export function useGlyphDiagramState({ source, openLink }: { readonly source: st
     error,
     source,
     expanded,
-    toggle: () => { setExpanded(value => !value); },
+    toggle: () => {
+      setExpanded(value => !value);
+    },
   };
 }
 export type GlyphDiagramState = ReturnType<typeof useGlyphDiagramState>;

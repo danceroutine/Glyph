@@ -35,6 +35,8 @@ interface Window {
   submits: unknown[];
   failCopy: boolean;
   injected: unknown;
+  pwned?: unknown;
+  buildDiagram: (tree: unknown) => string;
   messageNode: unknown;
   opened: unknown;
   acknowledge: HarnessAction;

@@ -8,6 +8,8 @@ afterEach(() => {
 
 let instances = 0;
 
+const drawing = (text: string) => ({ tree: { tag: 'svg', attributes: {}, children: [text] }, links: [] });
+
 async function freshRenderer(): Promise<typeof import('#code-oss/ui/GlyphDiagram/GlyphDiagramRenderer.ts')> {
   const module = new URL('./GlyphDiagramRenderer.ts', import.meta.url);
   module.searchParams.set('instance', String(++instances));
@@ -42,7 +44,7 @@ describe(renderGlyphDiagram, () => {
     expect(frame.style.position).toBe('fixed');
   });
 
-  it('resolves rendered diagrams as SVG image data', async () => {
+  it('resolves rendered diagrams as an inert tree with validated links', async () => {
     const renderer = await freshRenderer();
     renderer.configureGlyphDiagramRenderer('about:blank');
     vi.spyOn(crypto, 'randomUUID').mockReturnValue('0-0-0-0-1');
@@ -53,9 +55,14 @@ describe(renderGlyphDiagram, () => {
     await vi.waitFor(() => {
       expect(crypto.randomUUID).toHaveBeenCalled();
     });
-    reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', svg: '<svg>A & B</svg>' });
+    reply(frame, {
+      channel: 'glyph-diagram',
+      id: '0-0-0-0-1',
+      ...drawing('A & B'),
+      links: [null, { id: 'A', href: 'https://example.com' }],
+    });
 
-    await expect(rendered).resolves.toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg>A & B</svg>')}`);
+    await expect(rendered).resolves.toEqual({ ...drawing('A & B'), links: [{ id: 'A', href: 'https://example.com' }] });
   });
 
   it('reuses one renderer for every diagram', async () => {
@@ -71,11 +78,11 @@ describe(renderGlyphDiagram, () => {
     await vi.waitFor(() => {
       expect(ids).toHaveBeenCalledTimes(2);
     });
-    reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-2', svg: '<svg>2</svg>' });
-    reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', svg: '<svg>1</svg>' });
+    reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-2', ...drawing('2') });
+    reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', ...drawing('1') });
 
-    await expect(first).resolves.toContain(encodeURIComponent('<svg>1</svg>'));
-    await expect(second).resolves.toContain(encodeURIComponent('<svg>2</svg>'));
+    await expect(first).resolves.toEqual(drawing('1'));
+    await expect(second).resolves.toEqual(drawing('2'));
     expect(document.querySelectorAll('iframe[src="about:blank"]')).toHaveLength(1);
   });
 
@@ -97,9 +104,9 @@ describe(renderGlyphDiagram, () => {
     });
     reply(frame, { channel: 'glyph-diagram', id: 7, svg: '<svg>x</svg>' });
     reply(frame, { channel: 'glyph-diagram', id: 'unknown', svg: '<svg>x</svg>' });
-    reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', svg: '<svg>ok</svg>' });
+    reply(frame, { channel: 'glyph-diagram', id: '0-0-0-0-1', ...drawing('ok') });
 
-    await expect(rendered).resolves.toContain(encodeURIComponent('<svg>ok</svg>'));
+    await expect(rendered).resolves.toEqual(drawing('ok'));
   });
 
   it('rejects diagrams the renderer could not draw', async () => {

@@ -7,10 +7,15 @@ describe(parseGlyphDiagramSource, () => {
     expect(parseGlyphDiagramSource(source)).toEqual({ text: source, links: [], native: false });
   });
   it('extracts only recognized flowchart click directives, retaining other Click text', () => {
-    const source = 'flowchart LR\n  A[Docs] --> B[Source]\n  click A "https://example.com"\n  click B href "src/app.ts"\n  click C "javascript:alert(1)"\n  Click button';
+    const source =
+      'flowchart LR\n  A[Docs] --> B[Source]\n  click A "https://example.com"\n  click B href "src/app.ts"\n  click C "javascript:alert(1)"\n  Click button';
     expect(parseGlyphDiagramSource(source)).toEqual({
       text: 'flowchart LR\n  A[Docs] --> B[Source]\n  Click button',
-      links: [{ id: 'A', href: 'https://example.com' }, { id: 'B', href: 'src/app.ts' }], native: true,
+      links: [
+        { id: 'A', href: 'https://example.com' },
+        { id: 'B', href: 'src/app.ts' },
+      ],
+      native: true,
     });
   });
   it('ignores comments and handles empty and unsupported headers', () => {

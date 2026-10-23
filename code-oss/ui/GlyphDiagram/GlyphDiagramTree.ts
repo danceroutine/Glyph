@@ -152,13 +152,14 @@ const allowedAttributes = new Set([
 ]);
 
 export function safeGlyphDiagramCss(css: string): string {
-  return css.replace(/@import[^;]*;?/gi, '').replace(/url\(\s*(['"]?)\s*(?!#)[^)]*\)/gi, 'none');
+  return css.replaceAll(/@import[^;]*;?/giu, '').replaceAll(/url\(\s*(['"]?)\s*(?!#)[^)]*\)/giu, 'none');
 }
 
 function safeAttribute(name: string, value: string): string | undefined {
-  if (!allowedAttributes.has(name) || /javascript:|expression\(/i.test(value)) return undefined;
+  if (!allowedAttributes.has(name) || /javascript:|expression\(/iu.test(value)) return undefined;
   if (name === 'style') return safeGlyphDiagramCss(value);
-  for (const match of value.matchAll(/url\(\s*(['"]?)\s*([^)'"]*)/gi)) if (!match[2]?.startsWith('#')) return undefined;
+  for (const match of value.matchAll(/url\(\s*(['"]?)\s*([^)'"]*)/giu))
+    if (!match[2]!.startsWith('#')) return undefined;
   return value;
 }
 
@@ -171,7 +172,7 @@ export function isGlyphDiagramLink(value: unknown): value is GlyphDiagramLink {
     id.length > 0 &&
     href.length > 0 &&
     href.length <= 2048 &&
-    (/^https?:\/\//i.test(href) || !/^[a-z][a-z\d+.-]*:/i.test(href))
+    (/^https?:\/\//iu.test(href) || !/^[a-z][a-z\d+.-]*:/iu.test(href))
   );
 }
 

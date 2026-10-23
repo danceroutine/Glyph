@@ -5,10 +5,10 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 const repositoryRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const modules = join(repositoryRoot, 'node_modules');
 
-/** @typedef {{ files: Record<string, string>, entries: Record<string, string>, unexported: string[] }} PackageTree */
+/** @typedef {{ files: Record<string, string>, entries: Record<string, string>, unexported: string[], paths: string[] | null }} PackageTree */
 
 /**
- * @param {{ files?: Record<string, string>, entries?: Record<string, string> }} [overrides]
+ * @param {{ files?: Record<string, string>, entries?: Record<string, string>, paths?: string[] | null }} [overrides]
  * @returns {PackageTree}
  */
 function packageTree(overrides = {}) {
@@ -24,6 +24,8 @@ function packageTree(overrides = {}) {
       [join(modules, 'mermaid/LICENSE')]: 'mermaid license',
       [join(modules, '@dagrejs/dagre/LICENSE')]: 'dagre license',
       [join(modules, 'marked/LICENSE')]: 'marked license',
+      [join(modules, 'beautiful-mermaid/package.json')]: manifest('beautiful-mermaid'),
+      [join(modules, 'beautiful-mermaid/LICENSE.md')]: 'beautiful-mermaid license',
       [join(modules, 'lowlight/package.json')]: manifest('lowlight', { devlop: '1' }),
       [join(modules, 'lowlight/LICENSE')]: 'lowlight license',
       [join(modules, 'devlop/package.json')]: manifest('devlop'),
@@ -52,13 +54,18 @@ function packageTree(overrides = {}) {
       orderedmap: join(modules, 'orderedmap/dist/index.cjs'),
       ...overrides.entries,
     },
-    unexported: ['devlop/package.json', 'orderedmap/package.json'],
+    unexported: ['beautiful-mermaid/package.json', 'devlop/package.json', 'orderedmap/package.json'],
+    paths: overrides.paths === undefined ? [join(repositoryRoot, 'missing_modules'), modules] : overrides.paths,
   };
 }
 
 /** @param {PackageTree} tree */
 async function runBuild(tree) {
   const filesystem = {
+    realpath: vi.fn(async (/** @type {string} */ path) => {
+      if (tree.files[path] === undefined) throw new Error(`missing ${path}`);
+      return path;
+    }),
     readFile: vi.fn(async (/** @type {string} */ path) => {
       if (tree.files[path] === undefined) throw Object.assign(new Error(`missing ${path}`), { code: 'ENOENT' });
       return tree.files[path];
@@ -70,14 +77,19 @@ async function runBuild(tree) {
     createRequire: vi.fn((/** @type {string} */ from) => {
       requireRoots.push(from);
       return {
-        resolve: (/** @type {string} */ specifier) => {
-          if (specifier.endsWith('/package.json')) {
-            const path = join(modules, specifier);
-            if (tree.files[path] !== undefined && !tree.unexported.includes(specifier)) return path;
-            throw new Error(`Package subpath ${specifier} is not exported`);
-          }
-          return tree.entries[specifier];
-        },
+        resolve: Object.assign(
+          (/** @type {string} */ specifier) => {
+            if (specifier.endsWith('/package.json')) {
+              const path = join(modules, specifier);
+              if (tree.files[path] !== undefined && !tree.unexported.includes(specifier)) return path;
+              throw new Error(`Package subpath ${specifier} is not exported`);
+            }
+            const entry = tree.entries[specifier];
+            if (entry === undefined) throw new Error(`No exported entry for ${specifier}`);
+            return entry;
+          },
+          { paths: () => tree.paths },
+        ),
       };
     }),
   };
@@ -136,6 +148,7 @@ describe('buildGlyphUi', () => {
         '/*! mermaid\nmermaid license\n*/',
         '/*! @dagrejs/dagre\ndagre license\n*/',
         '/*! marked\nmarked license\n*/',
+        '/*! beautiful-mermaid\nbeautiful-mermaid license\n*/',
         '/*! lowlight\nlowlight license\n*/',
         '/*! devlop\ndevlop lowercase license\n*/',
         '/*! prosemirror-model\nmodel license\n*/',
@@ -155,6 +168,7 @@ describe('buildGlyphUi', () => {
 
     expect(run.requireRoots).toEqual([
       join(repositoryRoot, 'package.json'),
+      join(modules, 'beautiful-mermaid', 'package.json'),
       join(modules, 'lowlight', 'package.json'),
       join(modules, 'devlop', 'package.json'),
       join(modules, 'prosemirror-model', 'package.json'),
@@ -178,5 +192,10 @@ describe('buildGlyphUi', () => {
     );
 
     await expect(run.result).rejects.toThrow('Missing package metadata for devlop');
+  });
+
+  it.each([null, ['/missing']])('reports unexported packages missing from the search path %j', async paths => {
+    const run = await runBuild(packageTree({ paths }));
+    await expect(run.result).rejects.toThrow('Missing package metadata for beautiful-mermaid');
   });
 });

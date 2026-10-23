@@ -42,7 +42,7 @@ async function renderSvg(id: string, text: string, native: boolean, dark: boolea
     htmlLabels: false,
     fontFamily: 'Arial, sans-serif',
     fontSize: 14,
-    flowchart: { htmlLabels: false, useMaxWidth: true, curve: 'linear' },
+    flowchart: { useMaxWidth: true, curve: 'linear' },
   });
   return (await mermaid.render(`glyph-${id}`, text)).svg;
 }
@@ -63,7 +63,7 @@ window.addEventListener('message', event => {
   if (typeof id !== 'string' || typeof source !== 'string') return;
   queue = queue.then(async () => {
     try {
-      if (source.length > 20000 || /%%\{|^---/m.test(source)) throw new Error('Unsupported diagram configuration.');
+      if (source.length > 20000 || /%%\{|^---/mu.test(source)) throw new Error('Unsupported diagram configuration.');
       const { text, links, native } = parseGlyphDiagramSource(source);
       const svg = await renderSvg(id, text, native, dark === true, readColors(data.colors));
       const tree = readGlyphDiagramTree(parseSvg(svg));

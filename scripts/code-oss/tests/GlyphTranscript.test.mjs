@@ -299,7 +299,7 @@ describe('Mermaid diagrams', () => {
             .filter(
               element =>
                 ['script', 'img', 'iframe', 'foreignObject', 'a'].includes(element.localName) ||
-                [...element.attributes].some(attribute => /^on|href$/i.test(attribute.name)),
+                [...element.attributes].some(attribute => /^on|href$/iu.test(attribute.name)),
             ).length,
       );
       expect(unsafe).toBe(0);
@@ -343,7 +343,7 @@ describe('Mermaid diagrams', () => {
         ],
       };
       const html = await page.evaluate(value => window.buildDiagram(value), tree);
-      expect(html).not.toMatch(/script|foreignObject|iframe|<a\b|onload|onclick|example\.com|@import/);
+      expect(html).not.toMatch(/script|foreignObject|iframe|<a\b|onload|onclick|example\.com|@import/u);
       expect(html).toContain('<rect width="10" style="background: none"');
       expect(html).toContain('rect { fill: url(#local) }');
       expect(html).toContain('marker-end="url(#arrow)"');
