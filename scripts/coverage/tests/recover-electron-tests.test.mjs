@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 const context = {
   repository: 'owner/repo',
-  pullRequest: '8',
+  branch: 'main',
   head: 'a'.repeat(40),
   base: 'b'.repeat(40),
   platform: `Linux-X64-ubuntu24-20261022-node${process.version}`,
@@ -47,7 +47,7 @@ const candidate = {
   run_attempt: 1,
   head_sha: context.head,
   head_repository: { full_name: context.repository },
-  pull_requests: [{ number: 8 }],
+  head_branch: 'main',
 };
 const plan = {
   version: 1,
@@ -65,7 +65,8 @@ const plan = {
 async function invoke({
   mode = 'prepare',
   attempt = '1',
-  fork = false,
+  branch = 'main',
+  event = 'push',
   outputs = true,
   runs = [candidate],
   prior = manifest,
@@ -83,11 +84,10 @@ async function invoke({
     GITHUB_REPOSITORY: context.repository,
     GITHUB_RUN_ID: '2',
     GITHUB_RUN_ATTEMPT: attempt,
-    PR_NUMBER: '8',
-    PR_HEAD_SHA: context.head,
-    PR_BASE_SHA: context.base,
-    PR_HEAD_REPOSITORY: fork ? 'fork/repo' : context.repository,
-    PR_HEAD_BRANCH: 'feature/with spaces',
+    GITHUB_EVENT_NAME: event,
+    GITHUB_REF: `refs/heads/${branch}`,
+    GITHUB_SHA: context.head,
+    INTEGRATION_BASE_SHA: context.base,
     RUNNER_OS: 'Linux',
     RUNNER_ARCH: 'X64',
     ImageOS: 'ubuntu24',
@@ -177,7 +177,7 @@ describe('Electron recovery CLI', () => {
     );
   });
 
-  it('restores same-PR evidence and emits exact-ID selection and an auditable plan', async () => {
+  it('restores main evidence and emits exact-ID selection and an auditable plan', async () => {
     const run = await invoke();
     await run.loaded;
     expect(run.json('plan.json')).toMatchObject({
@@ -194,7 +194,9 @@ describe('Electron recovery CLI', () => {
     expect(run.execFileSync.mock.calls[0][2].env.PLAYWRIGHT_JSON_OUTPUT_FILE).toMatch(
       /electron-recovery\/inventory.json$/u,
     );
-    expect(run.execFileSync.mock.calls[1][1][1]).toContain('branch=feature%2Fwith%20spaces');
+    expect(run.execFileSync.mock.calls[1][1][1]).toContain(
+      'integration.yml/runs?event=push&status=completed&branch=main',
+    );
     expect(run.filesystem.rm).toHaveBeenCalledWith(expect.stringContaining('/electron-recovery/results.json'), {
       force: true,
     });
@@ -206,23 +208,18 @@ describe('Electron recovery CLI', () => {
     expect(run.json('plan.json').execute).toBe(true);
     expect(run.json('last-run.json').failedTests).toEqual(['web']);
   });
-  it.each([
-    { fork: true },
-    { apiError: true },
-    { artifactError: true },
-    { prior: {} },
-    { gitError: true },
-    { runs: [] },
-  ])('falls back to running tests on unavailable evidence: %j', async options => {
-    const run = await invoke(options);
-    await run.loaded;
-    expect(run.json('plan.json')).toMatchObject({ reused: [], execute: true });
-  });
+  it.each([{ apiError: true }, { artifactError: true }, { prior: {} }, { gitError: true }, { runs: [] }])(
+    'falls back to running tests on unavailable evidence: %j',
+    async options => {
+      const run = await invoke(options);
+      await run.loaded;
+      expect(run.json('plan.json')).toMatchObject({ reused: [], execute: true });
+    },
+  );
   it.each([
     { ...candidate, head_repository: { full_name: 'other/repo' } },
-    { ...candidate, pull_requests: [{ number: 9 }] },
-    { ...candidate, pull_requests: [] },
-  ])('does not download another repository or PR artifact: %j', async otherRun => {
+    { ...candidate, head_branch: 'feature' },
+  ])('does not download another repository or branch artifact: %j', async otherRun => {
     const run = await invoke({ runs: [otherRun] });
     await run.loaded;
     expect(run.execFileSync.mock.calls.filter(([command, args]) => command === 'gh' && args[0] === 'run')).toEqual([]);
@@ -232,7 +229,7 @@ describe('Electron recovery CLI', () => {
     { ...manifest, attempt: '3' },
     { ...manifest, context: { ...context, head: 'c'.repeat(40) } },
     { ...manifest, context: { ...context, repository: 'other/repo' } },
-    { ...manifest, context: { ...context, pullRequest: '9' } },
+    { ...manifest, context: { ...context, branch: 'feature' } },
   ])('rejects artifacts that disagree with GitHub provenance: %j', async prior => {
     const run = await invoke({ prior });
     await run.loaded;
@@ -244,6 +241,14 @@ describe('Electron recovery CLI', () => {
     expect(run.filesystem.appendFile).not.toHaveBeenCalled();
     expect(run.json('plan.json').version).toBe(1);
   });
+  it.each([{ branch: 'feature' }, { event: 'pull_request' }, { event: 'workflow_dispatch' }])(
+    'refuses recovery outside a main push: %j',
+    async options => {
+      const run = await invoke(options);
+      await expect(run.loaded).rejects.toThrow();
+      expect(run.execFileSync).not.toHaveBeenCalled();
+    },
+  );
   it('fails closed on empty inventory', async () => {
     const run = await invoke({ inventory: { ...report, suites: [] } });
     await expect(run.loaded).rejects.toThrow('inventory is empty');

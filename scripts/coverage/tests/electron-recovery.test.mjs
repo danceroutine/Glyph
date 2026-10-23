@@ -7,7 +7,7 @@ import {
 
 const context = {
   repository: 'owner/repo',
-  pullRequest: '8',
+  branch: 'main',
   head: 'a'.repeat(40),
   base: 'b'.repeat(40),
   platform: 'Linux-X64',
@@ -158,11 +158,11 @@ describe('recovery selection', () => {
   it('preserves successes after documentation changes', () => {
     expect(planElectronRecovery(input({ changed: ['docs/test-selection.md'] })).execute).toBe(false);
   });
-  it.each(['repository', 'pullRequest', 'base', 'platform', 'playwright'])('rejects incompatible %s', key => {
+  it.each(['repository', 'base', 'platform', 'playwright'])('rejects incompatible %s', key => {
     expect(
       planElectronRecovery(
         input({
-          context: { ...context, [key]: key === 'base' ? 'c'.repeat(40) : key === 'pullRequest' ? '9' : 'different' },
+          context: { ...context, [key]: key === 'base' ? 'c'.repeat(40) : 'different' },
         }),
       ).reused,
     ).toEqual([]);
