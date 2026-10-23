@@ -16,7 +16,8 @@ import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.
 import { GlyphResponseDeltaKind } from '#src/desktop/protocol/events/GlyphResponseDelta.js';
 import { GlyphToolActivityStatus } from '#src/desktop/protocol/events/GlyphToolActivity.js';
 import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
-import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
+import { FileEditPlan, type FileEditPlanRecord } from '#src/editing/proposals/FileEditPlan.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
 import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
@@ -266,10 +267,11 @@ function reviewFixture() {
           },
         ],
       });
-      await reviews.stage({
-        ...proposal,
-        ...(withOrigin ? { origin: { chatId, accountProvider: 'fixture', accountId: 'account', ...origin } } : {}),
-      });
+      await reviews.stage(
+        withOrigin
+          ? proposal.withOrigin({ chatId, accountProvider: 'fixture', accountId: 'account', ...origin })
+          : proposal,
+      );
       return { proposalId: proposal.id, itemId: proposal.files[0]!.items[0]!.id };
     },
   };
@@ -2610,24 +2612,25 @@ describe(ProviderDesktopRuntime, () => {
           byteLength: value.length,
           mode: 0o644,
         });
-        const plan = (overrides: Partial<FileEditPlan>): FileEditPlan => ({
-          id: 'file',
-          operation: EditOperation.UPDATE,
-          sourcePath: 'file.ts',
-          targetPath: 'file.ts',
-          base: text('base'),
-          current: text('current'),
-          proposed: text('proposed'),
-          items: [],
-          applyingItemId: null,
-          createdDirectories: [],
-          applicability: EditApplicabilityState.READY,
-          currentPath: 'file.ts',
-          currentRevision: 'current',
-          ...overrides,
-        });
+        const plan = (overrides: Partial<FileEditPlanRecord>): FileEditPlan =>
+          FileEditPlan.from({
+            id: 'file',
+            operation: EditOperation.UPDATE,
+            sourcePath: 'file.ts',
+            targetPath: 'file.ts',
+            base: text('base'),
+            current: text('current'),
+            proposed: text('proposed'),
+            items: [],
+            applyingItemId: null,
+            createdDirectories: [],
+            applicability: EditApplicabilityState.READY,
+            currentPath: 'file.ts',
+            currentRevision: 'current',
+            ...overrides,
+          });
         vi.spyOn(reviews, 'retainedReviews', 'get').mockReturnValue([
-          {
+          EditProposal.from({
             schemaVersion: 1,
             id: 'proposal',
             source: 'structured',
@@ -2672,7 +2675,7 @@ describe(ProviderDesktopRuntime, () => {
                 applicability: EditApplicabilityState.FAILED_RETRYABLE,
               }),
             ],
-          },
+          }),
         ]);
         expect((await harness.runtime.snapshot()).proposals).toEqual([
           {

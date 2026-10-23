@@ -16,8 +16,8 @@ import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilitySt
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
 import { EditOperation } from './EditOperation.ts';
-import type { EditProposal } from './EditProposal.ts';
-import type { FileEditPlan } from './FileEditPlan.ts';
+import { EditProposal } from './EditProposal.ts';
+import { FileEditPlan } from './FileEditPlan.ts';
 
 const positionSchema = z
   .object({
@@ -291,13 +291,13 @@ export class EditProposalService {
         'Proposal exceeds the configured changed-byte or hunk limit.',
       );
     }
-    const proposal: EditProposal = {
+    const proposal = EditProposal.from({
       schemaVersion: 1,
       id: this.createId(),
       source,
       createdAt: this.now().toISOString(),
       files: plans,
-    };
+    });
     await this.logger.info('validated', {
       proposalId: proposal.id,
       source,
@@ -521,7 +521,7 @@ function toFileEditPlan(
   proposed: WorkspaceTextSnapshot,
   items: FileEditPlan['items'],
 ): FileEditPlan {
-  return {
+  return FileEditPlan.from({
     id,
     operation: file.operation,
     sourcePath: file.path,
@@ -535,7 +535,7 @@ function toFileEditPlan(
     applicability: EditApplicabilityState.READY,
     currentPath: file.path,
     currentRevision: base?.revision ?? null,
-  };
+  });
 }
 
 function toWorkspaceTextSnapshot(

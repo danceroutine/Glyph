@@ -4,7 +4,7 @@ import { highlight, supportsLanguage } from 'cli-highlight';
 import type { Theme } from 'cli-highlight';
 import wrapAnsi from 'wrap-ansi';
 import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
-import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
+import type { FileEditPlanRecord } from '#src/editing/proposals/FileEditPlan.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import type { EditReviewItem } from '#src/editing/reviews/EditReviewItem.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
@@ -39,7 +39,7 @@ enum DiffLineKind {
 
 export interface ReviewEntry {
   review: EditProposal;
-  file: FileEditPlan;
+  file: FileEditPlanRecord;
   item: EditReviewItem;
   fileNumber: number;
   fileCount: number;
@@ -142,7 +142,7 @@ function reviewItemKey(reviewId: string, itemId: string): string {
 }
 
 export function renderEntry(
-  file: FileEditPlan,
+  file: FileEditPlanRecord,
   item: EditReviewItem,
   mode: ReviewViewMode,
   colors: boolean,
@@ -219,7 +219,7 @@ export function renderEntry(
   return { lines, focusLine: diffStart + focusOffset };
 }
 
-function createFileDiffLines(file: FileEditPlan, selectedItem: EditReviewItem): DiffDisplayLine[] {
+function createFileDiffLines(file: FileEditPlanRecord, selectedItem: EditReviewItem): DiffDisplayLine[] {
   if (selectedItem.kind === EditReviewItemKind.CREATE) {
     return toDiffLines(selectedItem.insertedText, DiffLineKind.ADDITION, { old: 1, proposed: 1 }, selectedItem, true);
   }

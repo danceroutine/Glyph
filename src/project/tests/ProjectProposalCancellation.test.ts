@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
@@ -177,7 +177,13 @@ function snapshot(): WorkspaceTextSnapshot {
 }
 
 function proposal(): EditProposal {
-  return { id: 'proposal', schemaVersion: 1, source: 'structured', createdAt: new Date(0).toISOString(), files: [] };
+  return EditProposal.from({
+    id: 'proposal',
+    schemaVersion: 1,
+    source: 'structured',
+    createdAt: new Date(0).toISOString(),
+    files: [],
+  });
 }
 
 function proposalInput(name: ProjectToolName): string {

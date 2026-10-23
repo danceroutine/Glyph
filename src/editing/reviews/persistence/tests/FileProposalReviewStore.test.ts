@@ -3,26 +3,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
 
 describe(FileProposalReviewStore, () => {
   it('isolates mutation scopes, imports matching legacy reviews, and never resurrects a cleared checkpoint', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'glyph-scoped-reviews-'));
-    const proposal: EditProposal = {
+    const proposal = EditProposal.from({
       schemaVersion: 1,
       id: 'pending',
       source: 'structured',
       createdAt: '2026-10-12T00:00:00Z',
       files: [],
       acknowledgedResultIds: [],
-    };
+    });
     try {
       await new FileProposalReviewStore(directory).save([proposal], 'original-scope');
       const legacyPath = join(directory, 'active-proposal-review.json');
       const legacy = await readFile(legacyPath, 'utf8');
       const changed = new FileProposalReviewStore(directory, { mutationScope: 'changed-scope' });
       await expect(changed.load('changed-scope')).resolves.toEqual([]);
-      await changed.save([{ ...proposal, id: 'new-scope-review' }], 'changed-scope');
+      await changed.save([EditProposal.from({ ...proposal.toRecord(), id: 'new-scope-review' })], 'changed-scope');
       const original = new FileProposalReviewStore(directory, { mutationScope: 'original-scope' });
       await expect(original.load('original-scope')).resolves.toEqual([proposal]);
       await original.clear();
@@ -217,12 +217,12 @@ describe(FileProposalReviewStore, () => {
 });
 
 function pendingProposal(): EditProposal {
-  return {
+  return EditProposal.from({
     schemaVersion: 1,
     id: 'pending',
     source: 'structured',
     createdAt: '2026-10-12T00:00:00Z',
     files: [],
     acknowledgedResultIds: [],
-  };
+  });
 }

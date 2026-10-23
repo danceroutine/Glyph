@@ -1,8 +1,8 @@
 import { highlight } from 'cli-highlight';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
-import type { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
+import { FileEditPlan } from '#src/editing/proposals/FileEditPlan.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
 import type { EditReviewItem } from '#src/editing/reviews/EditReviewItem.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
@@ -53,17 +53,17 @@ describe('proposal review entries', () => {
     const first = fixture.proposal.files[0]!.items[0]!;
     const second = { ...first, id: 'second', decision: EditDecisionState.ACCEPTED };
     fixture.proposal.files[0]!.items.push(second);
-    const proposalTwo: EditProposal = {
-      ...fixture.proposal,
+    const proposalTwo = EditProposal.from({
+      ...fixture.proposal.toRecord(),
       id: 'proposal-two',
       files: [
-        {
-          ...fixture.proposal.files[0]!,
+        FileEditPlan.from({
+          ...fixture.proposal.files[0]!.toRecord(),
           id: 'file-two',
           items: [{ ...first, id: 'third', fileId: 'file-two' }],
-        },
+        }),
       ],
-    };
+    });
 
     const entries = reviewEntries([fixture.proposal, proposalTwo]);
     const pending = pendingEntries([fixture.proposal, proposalTwo]);
@@ -119,7 +119,7 @@ describe(renderEntry, () => {
     const { file, item } = reviewFixture();
     const rename = { ...item, kind: EditReviewItemKind.RENAME };
     const renamedFile = {
-      ...file,
+      ...file.toRecord(),
       operation: EditOperation.RENAME,
       sourcePath: 'old.ts',
       targetPath: 'new.ts',
@@ -143,7 +143,7 @@ describe(renderEntry, () => {
       insertedText: 'FROM node\t \r\nRUN echo hi\rCMD done',
     };
     const createFile = {
-      ...file,
+      ...file.toRecord(),
       operation: EditOperation.CREATE,
       sourcePath: 'Dockerfile',
       targetPath: 'Dockerfile',
@@ -152,7 +152,7 @@ describe(renderEntry, () => {
     };
     const deleted = { ...item, kind: EditReviewItemKind.DELETE, removedText: 'all gone\n' };
     const deleteFile = {
-      ...file,
+      ...file.toRecord(),
       operation: EditOperation.DELETE,
       sourcePath: 'Makefile',
       targetPath: 'Makefile',
@@ -191,7 +191,7 @@ describe(renderEntry, () => {
       insertedText: 'second change',
     };
     const textFile = {
-      ...file,
+      ...file.toRecord(),
       base: { ...file.base!, text },
       sourcePath: 'notes.unknown',
       targetPath: 'notes.unknown',
@@ -208,7 +208,7 @@ describe(renderEntry, () => {
   it('falls back when syntax highlighting fails and handles extensionless paths', () => {
     const { file, item } = reviewFixture();
     const created = { ...item, kind: EditReviewItemKind.CREATE, insertedText: 'const answer = 42;\n' };
-    const createFile = { ...file, base: null, items: [created] };
+    const createFile = { ...file.toRecord(), base: null, items: [created] };
     highlightMock.mockImplementationOnce(() => {
       throw new Error('highlight failed');
     });

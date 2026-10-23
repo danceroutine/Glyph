@@ -20,7 +20,7 @@ import {
 } from '#src/editing/reviews/ProposalReviewManager.js';
 import { EditReviewItemKind } from '#src/editing/reviews/EditReviewItemKind.js';
 import type { ProposalReviewStore } from '#src/editing/reviews/persistence/ProposalReviewStore.js';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
 import type { Logger } from '#src/observability/Logger.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
@@ -622,7 +622,13 @@ describe(ProposalReviewManager, () => {
             }),
           ),
         );
-        if (combined) await manager.stage({ ...proposals[0]!, files: proposals.flatMap(proposal => proposal.files) });
+        if (combined)
+          await manager.stage(
+            EditProposal.from({
+              ...proposals[0]!.toRecord(),
+              files: proposals.flatMap(proposal => proposal.files),
+            }),
+          );
         else for (const proposal of proposals) await manager.stage(proposal);
         const create = vi.spyOn(workspace, 'create');
         await expect(manager.acceptAll()).rejects.toMatchObject({ reason: EditFailureReason.DECISION_CONFLICT });
@@ -2055,7 +2061,7 @@ describe(ProposalReviewManager, () => {
       const { service, workspace, manager } = await reviewFixture({ 'file.txt': 'base' });
       const proposal = await proposeUpdate(service, workspace, 'file.txt', 'next');
       await manager.stage(proposal);
-      await manager.stage({ ...structuredClone(proposal), id: 'copy' });
+      await manager.stage(EditProposal.from({ ...structuredClone(proposal.toRecord()), id: 'copy' }));
 
       await expect(manager.accept(proposal.files[0]!.items[0]!.id)).rejects.toMatchObject({
         reason: EditFailureReason.AMBIGUOUS,

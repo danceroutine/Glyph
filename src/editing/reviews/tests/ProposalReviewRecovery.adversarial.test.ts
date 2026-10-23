@@ -20,7 +20,7 @@ import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
 import { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
 import { EditApplicabilityState } from '#src/editing/reviews/EditApplicabilityState.js';
 import { EditDecisionState } from '#src/editing/reviews/EditDecisionState.js';
@@ -625,10 +625,11 @@ describe(ProposalReviewManager, () => {
     it('retains accepted and rejected item receipts across restart until the host acknowledges them', async () => {
       const fixture = await createFixture();
       await writeFile(join(fixture.root, 'file.txt'), 'one\nmiddle\nthree\n');
-      const proposal = {
-        ...(await proposeTwoReplacements(fixture.service, fixture.workspace)),
+      const compiled = await proposeTwoReplacements(fixture.service, fixture.workspace);
+      const proposal = EditProposal.from({
+        ...compiled.toRecord(),
         origin: { chatId: 'chat-1', accountProvider: 'fixture', accountId: 'account-1' },
-      };
+      });
       const [first, second] = proposal.files[0]!.items;
       await fixture.manager.stage(proposal);
       await fixture.manager.accept(first!.id);

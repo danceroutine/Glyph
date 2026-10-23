@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { EditProposalService } from '#src/editing/proposals/EditProposalService.js';
-import type { EditProposal } from '#src/editing/proposals/EditProposal.js';
+import { EditProposal } from '#src/editing/proposals/EditProposal.js';
 import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import type { Logger } from '#src/observability/Logger.js';
 import { NullLogger } from '#src/observability/NullLogger.js';
@@ -12,13 +12,13 @@ import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
 describe(ProjectToolRuntime, () => {
   describe(ProjectToolRuntime.prototype.execute, () => {
     it('captures host-owned chat provenance when staging a proposal', async () => {
-      const proposal: EditProposal = {
+      const proposal = EditProposal.from({
         schemaVersion: 1,
         id: 'proposal-1',
         source: 'patch',
         createdAt: new Date(0).toISOString(),
         files: [],
-      };
+      });
       const activeReviews: EditProposal[] = [];
       const stage = vi.fn(async (staged: EditProposal) => {
         activeReviews.push(staged);
@@ -38,7 +38,7 @@ describe(ProjectToolRuntime, () => {
       });
 
       expect(stage).toHaveBeenCalledWith({
-        ...proposal,
+        ...proposal.toRecord(),
         origin: { chatId: 'chat-1', accountProvider: 'provider', accountId: 'account-1' },
       });
     });
