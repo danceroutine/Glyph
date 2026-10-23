@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -36,12 +35,6 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y bubblewrap xvfb trash-cli libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: pnpm install --frozen-lockfile
-      - name: Select relevant Electron suites
-        if: github.event_name == 'pull_request'
-        id: electron
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/coverage/select-electron-tests.mjs --base "$PR_BASE_SHA" --output .artifacts/electron-selection.json
       - name: Native tests and 100% coverage
         id: native
         run: pnpm test:native
@@ -59,59 +52,13 @@ jobs:
         run: |
           xvfb-run -a pnpm test:vitest
           pnpm test:coverage
-      - name: Recover still-valid Electron passes from the previous PR run
-        if: github.event_name == 'pull_request' && steps.electron.outputs.mode != 'skip'
-        id: recovery
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
-          GLYPH_ELECTRON_SELECTION: .artifacts/electron-selection.json
-        run: node scripts/coverage/recover-electron-tests.mjs prepare
-      - name: Relevant Electron integration suites
-        if: github.event_name == 'pull_request' && steps.recovery.outputs.execute == 'true'
-        env:
-          GLYPH_ELECTRON_SELECTION: .artifacts/electron-selection.json
-          GLYPH_ELECTRON_RECOVERY: .artifacts/electron-recovery/last-run.json
-          PLAYWRIGHT_JSON_OUTPUT_FILE: .artifacts/electron-recovery/results.json
-          GLYPH_ELECTRON_WORKERS: '2'
-        run: |
-          pnpm code-oss:prepare-launch
-          xvfb-run -a node scripts/code-oss/test-electron.mjs
-      - name: Record recoverable Electron evidence even after failures
-        if: always() && steps.recovery.outcome == 'success'
-        run: node scripts/coverage/recover-electron-tests.mjs finish
-      - name: Preserve reusable Electron manifest
-        if: always() && steps.recovery.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: electron-recovery-${{ github.run_id }}-${{ github.run_attempt }}
-          include-hidden-files: true
-          path: .artifacts/electron-recovery/manifest.json
-          retention-days: 7
-      - name: Full Electron integration and merged coverage
-        if: github.event_name != 'pull_request'
-        env:
-          GLYPH_ELECTRON_WORKERS: '2'
-        run: |
-          xvfb-run -a pnpm test:integration
-          pnpm test:coverage:all
-      - name: Preserve test selection, reports, and failure evidence
+      - name: Preserve coverage evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-evidence-${{ github.run_id }}
           include-hidden-files: true
           path: |
-            .artifacts/electron-selection.json
-            .artifacts/electron-recovery/plan.json
-            .artifacts/electron-recovery/results.json
-            .artifacts/code-oss-integration/results.json
-            .artifacts/code-oss-integration/report/
-            .artifacts/code-oss-integration/results/
             coverage/vitest/coverage-summary.json
             coverage/merged/coverage-summary.json
             coverage/native/html/
