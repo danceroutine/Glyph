@@ -1,7 +1,12 @@
 import mermaid from 'mermaid';
+import { renderMermaidSVG } from 'beautiful-mermaid';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('mermaid', () => ({ default: { initialize: vi.fn(), render: vi.fn() } }));
+vi.mock('beautiful-mermaid', async importOriginal => ({
+  ...(await importOriginal<typeof import('beautiful-mermaid')>()),
+  renderMermaidSVG: vi.fn(() => '<svg>native</svg>'),
+}));
 
 const posted = vi.spyOn(window.parent, 'postMessage');
 await import('#code-oss/ui/GlyphDiagram/GlyphDiagram.frame.ts');
@@ -16,6 +21,19 @@ function responses(id: string) {
 }
 
 describe('GlyphDiagram.frame', () => {
+  it('bounds graph complexity before invoking native layout', async () => {
+    vi.mocked(renderMermaidSVG).mockClear();
+    request({
+      channel: 'glyph-diagram',
+      id: 'dense',
+      source: 'flowchart LR\n' + Array.from({ length: 201 }, (_, i) => `A --> B${i}`).join('\n'),
+    });
+    await vi.waitFor(() => {
+      expect(responses('dense')).toHaveLength(1);
+    });
+    expect(renderMermaidSVG).not.toHaveBeenCalled();
+    expect(posted).toHaveBeenCalledWith({ channel: 'glyph-diagram', id: 'dense', error: true }, '*');
+  });
   it('announces that it is ready to render', () => {
     expect(postedOnLoad).toContainEqual([{ channel: 'glyph-diagram', ready: true }, '*']);
   });
@@ -28,14 +46,17 @@ describe('GlyphDiagram.frame', () => {
       expect(responses('dark')).toHaveLength(1);
     });
 
-    expect(posted).toHaveBeenCalledWith({ channel: 'glyph-diagram', id: 'dark', svg: '<svg>dark</svg>' }, '*');
+    expect(posted).toHaveBeenCalledWith(
+      { channel: 'glyph-diagram', id: 'dark', tree: { tag: 'svg', attributes: {}, children: ['dark'] }, links: [] },
+      '*',
+    );
     expect(mermaid.render).toHaveBeenCalledWith('glyph-dark', 'graph TD; A-->B');
     expect(mermaid.initialize).toHaveBeenLastCalledWith(
       expect.objectContaining({ securityLevel: 'strict', startOnLoad: false, theme: 'dark', htmlLabels: false }),
     );
 
     vi.mocked(mermaid.render).mockResolvedValue({ svg: '<svg>light</svg>' } as never);
-    request({ channel: 'glyph-diagram', id: 'light', source: 'graph LR', dark: false });
+    request({ channel: 'glyph-diagram', id: 'light', source: 'gantt', dark: false });
     await vi.waitFor(() => {
       expect(responses('light')).toHaveLength(1);
     });
@@ -72,6 +93,7 @@ describe('GlyphDiagram.frame', () => {
 
   it('ignores requests from other windows and malformed requests', async () => {
     vi.mocked(mermaid.render).mockClear();
+    vi.mocked(renderMermaidSVG).mockClear();
     vi.mocked(mermaid.render).mockResolvedValue({ svg: '<svg />' } as never);
 
     request({ channel: 'glyph-diagram', id: 'foreign', source: 'graph TD', dark: true }, new MessageChannel().port1);
@@ -84,9 +106,59 @@ describe('GlyphDiagram.frame', () => {
       expect(responses('valid')).toHaveLength(1);
     });
 
-    expect(mermaid.render).toHaveBeenCalledOnce();
+    expect(renderMermaidSVG).toHaveBeenCalledOnce();
     expect(responses('foreign')).toHaveLength(0);
     expect(responses('other')).toHaveLength(0);
     expect(responses('no-source')).toHaveLength(0);
+  });
+
+  it('passes supported colors to native layout and falls back when native rendering fails', async () => {
+    vi.mocked(renderMermaidSVG).mockReturnValueOnce('<svg><text>A & B</text></svg>');
+    request({
+      channel: 'glyph-diagram',
+      id: 'colors',
+      source: 'flowchart LR\nA --> B',
+      colors: { bg: '#fff', fg: 42 },
+    });
+    await vi.waitFor(() => {
+      expect(responses('colors')).toHaveLength(1);
+    });
+    expect(renderMermaidSVG).toHaveBeenLastCalledWith('flowchart LR\nA --> B', {
+      bg: '#fff',
+      font: 'system-ui',
+      transparent: true,
+    });
+    expect(posted).toHaveBeenCalledWith(
+      {
+        channel: 'glyph-diagram',
+        id: 'colors',
+        links: [],
+        tree: { tag: 'svg', attributes: {}, children: [{ tag: 'text', attributes: {}, children: ['A & B'] }] },
+      },
+      '*',
+    );
+    vi.mocked(renderMermaidSVG).mockImplementationOnce(() => {
+      throw new Error('unsupported');
+    });
+    vi.mocked(mermaid.render).mockResolvedValue({ svg: '<svg />' } as never);
+    request({ channel: 'glyph-diagram', id: 'fallback', source: 'flowchart LR\nA --> B' });
+    await vi.waitFor(() => {
+      expect(responses('fallback')).toHaveLength(1);
+    });
+    expect(mermaid.render).toHaveBeenLastCalledWith('glyph-fallback', 'flowchart LR\nA --> B');
+  });
+
+  it('rejects malformed output without preventing the next queued diagram', async () => {
+    vi.mocked(renderMermaidSVG).mockReturnValueOnce('<div>&</div>').mockReturnValueOnce('<svg />');
+    request({ channel: 'glyph-diagram', id: 'invalid-output', source: 'graph TD' });
+    request({ channel: 'glyph-diagram', id: 'next-output', source: 'graph TD' });
+    await vi.waitFor(() => {
+      expect(responses('next-output')).toHaveLength(1);
+    });
+    expect(posted).toHaveBeenCalledWith({ channel: 'glyph-diagram', id: 'invalid-output', error: true }, '*');
+    expect(posted).toHaveBeenCalledWith(
+      { channel: 'glyph-diagram', id: 'next-output', tree: { tag: 'svg', attributes: {}, children: [] }, links: [] },
+      '*',
+    );
   });
 });

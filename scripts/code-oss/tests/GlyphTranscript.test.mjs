@@ -33,6 +33,12 @@ beforeAll(async () => {
     import { WiredGlyphTranscript } from './code-oss/ui/GlyphTranscript/GlyphTranscript.wired.tsx';
     import { WiredGlyphUsageSummary } from './code-oss/ui/GlyphUsageSummary/GlyphUsageSummary.wired.tsx';
     import { WiredGlyphMarkdown } from './code-oss/ui/GlyphMarkdown/GlyphMarkdown.wired.tsx';
+    import { createGlyphDiagramElement } from './code-oss/ui/GlyphDiagram/GlyphDiagramTree.ts';
+    window.showMarkdown = text => {
+      window.actions = [];
+      render(h(WiredGlyphMarkdown, { text, openLink: href => window.actions.push(['link', href]) }), document.getElementById('root'));
+    };
+    window.buildDiagram = tree => createGlyphDiagramElement(document, tree).outerHTML;
     const usage = { inputTokens: 100, cachedInputTokens: 40, outputTokens: 30, reasoningTokens: 12, totalTokens: 130 };
     window.showMessageActions = () => render(h(MessageActions.render, {}), document.getElementById('root'));
     window.actions = [];
@@ -199,6 +205,148 @@ describe('Markdown messages and usage controls', () => {
       await conversation.click();
       await page.getByRole('heading', { name: 'Result' }).click();
       await expect(page.getByRole('dialog')).toHaveCount(0);
+    } finally {
+      await page.close();
+    }
+  }, 15000);
+});
+
+describe('Mermaid diagrams', () => {
+  it('renders each diagram in a message independently', async () => {
+    const page = await browser.newPage();
+    try {
+      await mount(page);
+      const diagram = 'flowchart LR\n  A[Plan] --> B[Build]';
+      await page.evaluate(
+        text => window.showMarkdown(text),
+        `\`\`\`mermaid\n${diagram}\n\`\`\`\n\n\`\`\`mermaid\n${diagram}\n\`\`\``,
+      );
+      const diagrams = page.getByRole('img', { name: 'Plan diagram' });
+      await expect(diagrams).toHaveCount(2);
+      for (const each of await diagrams.all()) {
+        await expect(each.locator('svg')).toBeVisible();
+        await expect(each.getByText('Build')).toBeVisible();
+      }
+    } finally {
+      await page.close();
+    }
+  }, 15000);
+
+  it('opens links attached to diagram nodes from a click or the keyboard', async () => {
+    const page = await browser.newPage();
+    try {
+      await mount(page);
+      const diagram = [
+        'flowchart LR',
+        '  A[Docs] --> B[Source]',
+        '  B --> C[Script]',
+        '  click A "https://example.com/docs"',
+        '  click B href "src/a.ts"',
+        '  click C "javascript:alert(1)"',
+      ].join('\n');
+      await page.evaluate(text => window.showMarkdown(text), `\`\`\`mermaid\n${diagram}\n\`\`\``);
+      const figure = page.getByRole('figure', { name: 'Plan diagram' });
+      await expect(figure.getByRole('link')).toHaveCount(2);
+      await expect(figure.getByText('click')).toHaveCount(0);
+      await figure.getByRole('link', { name: 'Docs' }).click();
+      await figure.getByRole('link', { name: 'Source' }).focus();
+      await page.keyboard.press('Enter');
+      expect(await page.evaluate(() => window.actions)).toEqual([
+        ['link', 'https://example.com/docs'],
+        ['link', 'src/a.ts'],
+      ]);
+    } finally {
+      await page.close();
+    }
+  }, 15000);
+
+  it('renders sequence and gantt diagrams', async () => {
+    const page = await browser.newPage();
+    try {
+      await mount(page);
+      const sequence = 'sequenceDiagram\n  Composer->>Agent: Send';
+      const gantt = 'gantt\n  dateFormat YYYY-MM-DD\n  section Build\n  Implement :a1, 2026-10-01, 3d';
+      await page.evaluate(
+        text => window.showMarkdown(text),
+        `\`\`\`mermaid\n${sequence}\n\`\`\`\n\n\`\`\`mermaid\n${gantt}\n\`\`\``,
+      );
+      const diagrams = page.getByRole('img', { name: 'Plan diagram' });
+      await expect(diagrams).toHaveCount(2);
+      await expect(diagrams.first().getByText('Composer').first()).toBeVisible();
+      await expect(diagrams.last().getByText('Implement')).toBeVisible();
+    } finally {
+      await page.close();
+    }
+  }, 15000);
+
+  it('shows hostile diagram labels without adding executable markup to the page', async () => {
+    const page = await browser.newPage();
+    try {
+      await mount(page);
+      const flowchart =
+        'flowchart LR\n  A["<img src=x onerror=window.pwned=1>"] --> B["<script>window.pwned=1</script>"]';
+      const gantt =
+        'gantt\n  title <img src=x onerror=window.pwned=1>\n  dateFormat YYYY-MM-DD\n  section Build\n  Implement :a1, 2026-10-01, 1d';
+      await page.evaluate(
+        text => window.showMarkdown(text),
+        `\`\`\`mermaid\n${flowchart}\n\`\`\`\n\n\`\`\`mermaid\n${gantt}\n\`\`\``,
+      );
+      await expect(page.getByRole('img', { name: 'Plan diagram' })).toHaveCount(2);
+      const unsafe = await page.evaluate(
+        () =>
+          [...document.querySelectorAll('[aria-label="Plan diagram"]')]
+            .flatMap(host => [...host.shadowRoot.querySelectorAll('*')])
+            .filter(
+              element =>
+                ['script', 'img', 'iframe', 'foreignObject', 'a'].includes(element.localName) ||
+                [...element.attributes].some(attribute => /^on|href$/iu.test(attribute.name)),
+            ).length,
+      );
+      expect(unsafe).toBe(0);
+      expect(await page.evaluate(() => window.pwned)).toBeUndefined();
+    } finally {
+      await page.close();
+    }
+  }, 15000);
+
+  it('drops executable markup and remote references from renderer output', async () => {
+    const page = await browser.newPage();
+    try {
+      await mount(page);
+      const tree = {
+        tag: 'svg',
+        attributes: { onload: 'window.pwned = 1', viewBox: '0 0 10 10' },
+        children: [
+          { tag: 'script', attributes: {}, children: ['window.pwned = 1'] },
+          {
+            tag: 'foreignObject',
+            attributes: {},
+            children: [{ tag: 'iframe', attributes: { src: 'https://example.com' }, children: [] }],
+          },
+          { tag: 'a', attributes: { href: 'javascript:alert(1)' }, children: ['link'] },
+          {
+            tag: 'rect',
+            attributes: {
+              width: '10',
+              fill: 'url(https://example.com/track)',
+              onclick: 'window.pwned = 1',
+              style: 'background: url(https://example.com/a)',
+            },
+            children: [],
+          },
+          {
+            tag: 'style',
+            attributes: {},
+            children: ["@import url('https://example.com/a.css'); rect { fill: url(#local) }"],
+          },
+          { tag: 'path', attributes: { d: 'M0 0', 'marker-end': 'url(#arrow)' }, children: [] },
+        ],
+      };
+      const html = await page.evaluate(value => window.buildDiagram(value), tree);
+      expect(html).not.toMatch(/script|foreignObject|iframe|<a\b|onload|onclick|example\.com|@import/u);
+      expect(html).toContain('<rect width="10" style="background: none"');
+      expect(html).toContain('rect { fill: url(#local) }');
+      expect(html).toContain('marker-end="url(#arrow)"');
     } finally {
       await page.close();
     }

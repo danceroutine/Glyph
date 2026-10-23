@@ -8,14 +8,60 @@ vi.mock('#code-oss/ui/GlyphDiagram/GlyphDiagramRenderer.ts', () => ({ renderGlyp
 afterEach(cleanup);
 
 describe(WiredGlyphDiagram, () => {
+  it('opens validated node links with click and Enter and uses the current navigation callback', async () => {
+    const tree = {
+      tag: 'svg',
+      attributes: {},
+      children: [
+        { tag: 'g', attributes: { 'data-id': 'A', 'data-label': 'Docs' }, children: [] },
+        { tag: 'g', attributes: { 'data-id': 'B' }, children: [] },
+      ],
+    };
+    vi.mocked(renderGlyphDiagram).mockResolvedValue({
+      tree,
+      links: [
+        { id: 'missing', href: 'ignored' },
+        { id: 'A', href: 'https://example.com' },
+        { id: 'B', href: 'src/a.ts' },
+      ],
+    });
+    const openLink = vi.fn();
+    const { rerender } = render(<WiredGlyphDiagram source="graph LR" openLink={openLink} />);
+    const figure = await screen.findByRole('figure');
+    const links = figure.shadowRoot!.querySelectorAll<SVGElement>('[role="link"]');
+    expect(links).toHaveLength(2);
+    expect(links[0]!.getAttribute('aria-label')).toBe('Docs');
+    expect(links[1]!.getAttribute('aria-label')).toBe('B');
+    fireEvent.click(links[0]!);
+    fireEvent(links[1]!, new Event('keydown'));
+    fireEvent.keyDown(links[1]!, { key: 'x' });
+    fireEvent.keyDown(links[1]!, { key: 'Enter' });
+    expect(openLink.mock.calls).toEqual([['https://example.com'], ['src/a.ts']]);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand diagram' }));
+    expect(figure.dataset.expanded).toBe('');
+    rerender(<WiredGlyphDiagram source="graph LR" />);
+    fireEvent.click(links[0]!);
+    expect(openLink).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to source when the returned tree is invalid', async () => {
+    vi.mocked(renderGlyphDiagram).mockResolvedValue({ tree: { tag: 'script' }, links: [] });
+    render(<WiredGlyphDiagram source="bad output" />);
+    await waitFor(() => {
+      expect(screen.getByText('Diagram source')).toBeTruthy();
+    });
+  });
   it('shows progress until the diagram image is ready', async () => {
-    vi.mocked(renderGlyphDiagram).mockResolvedValue('data:image/svg+xml,diagram');
+    vi.mocked(renderGlyphDiagram).mockResolvedValue({
+      tree: { tag: 'svg', attributes: {}, children: ['diagram'] },
+      links: [],
+    });
 
     render(<WiredGlyphDiagram source="graph TD" />);
 
     expect(screen.getByRole('status').textContent).toBe('Rendering diagram…');
     const image = await screen.findByRole<HTMLImageElement>('img', { name: 'Plan diagram' });
-    expect(image.getAttribute('src')).toBe('data:image/svg+xml,diagram');
+    expect(image.shadowRoot?.querySelector('svg')?.textContent).toBe('diagram');
     expect(renderGlyphDiagram).toHaveBeenCalledWith('graph TD', true);
   });
 

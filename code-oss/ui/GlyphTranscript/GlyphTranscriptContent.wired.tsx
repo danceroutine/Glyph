@@ -86,6 +86,7 @@ export function WiredGlyphTranscriptContent({ entry }: { readonly entry: GlyphMe
       )}
       diagram={source => (
         <WiredGlyphDiagram
+          openLink={entry.openLink}
           source={source.replace(pattern, (_, index) => {
             const part = entry.parts[Number(index)];
             return part?.type === 'attachment' ? part.label : '';

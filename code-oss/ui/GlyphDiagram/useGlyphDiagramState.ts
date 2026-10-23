@@ -1,19 +1,41 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { tokens } from '#code-oss/ui/design-system/index.ts';
 import { renderGlyphDiagram } from './GlyphDiagramRenderer.ts';
+import { createGlyphDiagramElement, type GlyphDiagramRendering } from './GlyphDiagramTree.ts';
 
-export function useGlyphDiagramState({ source }: { readonly source: string }) {
+const shadowStyles = `
+:host { display: block; }
+svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+:host([data-expanded]) { width: 100%; height: 100%; }
+:host([data-expanded]) svg { width: 100%; height: 100%; max-width: none !important; }
+text { font-family: ${tokens.font.family.body}; }
+[role="link"] { cursor: pointer; }
+[role="link"]:focus { outline: none; }
+[role="link"]:focus-visible { outline: ${tokens.focus.ring}; outline-offset: 2px; }
+`;
+
+export function useGlyphDiagramState({
+  source,
+  openLink,
+}: {
+  readonly source: string;
+  readonly openLink?: ((href: string) => void) | undefined;
+}) {
   const root = useRef<HTMLDivElement>(null);
-  const [diagram, setDiagram] = useState<string>();
+  const canvas = useRef<HTMLDivElement>(null);
+  const navigate = useRef(openLink);
+  navigate.current = openLink;
+  const [rendering, setRendering] = useState<GlyphDiagramRendering>();
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setError(false);
-    setDiagram(undefined);
+    setRendering(undefined);
     const light = !!root.current?.closest('.vs, .hc-light, [data-theme="light"]');
     void renderGlyphDiagram(source, !light)
       .then(value => {
-        if (!cancelled) setDiagram(value);
+        if (!cancelled) setRendering(value);
       })
       .catch(() => {
         if (!cancelled) setError(true);
@@ -23,7 +45,40 @@ export function useGlyphDiagramState({ source }: { readonly source: string }) {
     };
   }, [source]);
   useLayoutEffect(() => {
-    if (!expanded) return undefined;
+    const host = canvas.current;
+    if (!host || !rendering) return;
+    let svg: SVGSVGElement;
+    try {
+      svg = createGlyphDiagramElement(document, rendering.tree);
+    } catch {
+      setError(true);
+      return;
+    }
+    const style = document.createElement('style');
+    style.textContent = shadowStyles;
+    (host.shadowRoot ?? host.attachShadow({ mode: 'open' })).replaceChildren(svg, style);
+    if (!navigate.current) return;
+    const nodes = new Map<string, SVGElement>();
+    for (const node of svg.querySelectorAll<SVGElement>('[data-id]')) nodes.set(node.dataset.id!, node);
+    for (const { id, href } of rendering.links) {
+      const node = nodes.get(id);
+      if (!node) continue;
+      const open = () => {
+        navigate.current?.(href);
+      };
+      node.setAttribute('role', 'link');
+      node.setAttribute('tabindex', '0');
+      node.setAttribute('aria-label', node.dataset.label || id);
+      node.addEventListener('click', open);
+      node.addEventListener('keydown', event => {
+        if (!(event instanceof KeyboardEvent) || event.key !== 'Enter') return;
+        event.preventDefault();
+        open();
+      });
+    }
+  }, [rendering]);
+  useLayoutEffect(() => {
+    if (!expanded) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -38,7 +93,9 @@ export function useGlyphDiagramState({ source }: { readonly source: string }) {
   }, [expanded]);
   return {
     root,
-    diagram,
+    canvas,
+    rendered: !!rendering,
+    interactive: (rendering?.links.length ?? 0) > 0 && openLink !== undefined,
     error,
     source,
     expanded,

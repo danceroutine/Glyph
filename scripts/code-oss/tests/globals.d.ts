@@ -38,6 +38,8 @@ interface Window {
   clock: number;
   showGoal: HarnessAction;
   injected: unknown;
+  pwned?: unknown;
+  buildDiagram: (tree: unknown) => string;
   messageNode: unknown;
   opened: unknown;
   acknowledge: HarnessAction;

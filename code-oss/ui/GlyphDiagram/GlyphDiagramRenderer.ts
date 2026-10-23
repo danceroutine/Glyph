@@ -1,10 +1,22 @@
+import { tokens } from '#code-oss/ui/design-system/index.ts';
 import { GlyphDiagramError } from './GlyphDiagramError.ts';
 import { isRecord } from '#src/shared/validators/isRecord.js';
+import { isGlyphDiagramLink, type GlyphDiagramRendering } from './GlyphDiagramTree.ts';
 
 let rendererUrl = '/glyph-diagram.html';
 let frame: HTMLIFrameElement | undefined;
 let ready: Promise<void> | undefined;
-const pending = new Map<string, { resolve: (svg: string) => void; reject: (error: Error) => void }>();
+const pending = new Map<
+  string,
+  { resolve: (rendering: GlyphDiagramRendering) => void; reject: (error: Error) => void }
+>();
+const colors = { bg: tokens.surface.canvas, fg: tokens.text.primary, muted: tokens.text.muted };
+
+function readRendering(data: Record<string, unknown>): GlyphDiagramRendering | undefined {
+  const { tree, links } = data;
+  if (!isRecord(tree) || !Array.isArray(links)) return undefined;
+  return { tree, links: links.filter(value => isGlyphDiagramLink(value)) };
+}
 
 /** The native bundle and Storybook serve the same isolated Mermaid renderer. */
 export function configureGlyphDiagramRenderer(url: string): void {
@@ -43,7 +55,8 @@ function start(): Promise<void> {
       const job = pending.get(data.id);
       if (!job) return;
       pending.delete(data.id);
-      if (typeof data.svg === 'string') job.resolve(data.svg);
+      const rendering = readRendering(data);
+      if (rendering) job.resolve(rendering);
       else job.reject(new GlyphDiagramError('Unable to render this diagram.'));
     });
   });
@@ -51,8 +64,7 @@ function start(): Promise<void> {
   return ready;
 }
 
-/** SVG stays an image: diagram markup never enters the privileged workbench DOM. */
-export async function renderGlyphDiagram(source: string, dark: boolean): Promise<string> {
+export async function renderGlyphDiagram(source: string, dark: boolean): Promise<GlyphDiagramRendering> {
   await start();
   const id = crypto.randomUUID();
   return new Promise((resolve, reject) => {
@@ -61,15 +73,15 @@ export async function renderGlyphDiagram(source: string, dark: boolean): Promise
       reject(new GlyphDiagramError('Diagram rendering timed out.'));
     }, 15000);
     pending.set(id, {
-      resolve: svg => {
+      resolve: rendering => {
         clearTimeout(timeout);
-        resolve(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+        resolve(rendering);
       },
       reject: error => {
         clearTimeout(timeout);
         reject(error);
       },
     });
-    frame!.contentWindow!.postMessage({ channel: 'glyph-diagram', id, source, dark }, '*');
+    frame!.contentWindow!.postMessage({ channel: 'glyph-diagram', id, source, dark, colors }, '*');
   });
 }
