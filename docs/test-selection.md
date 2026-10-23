@@ -86,7 +86,7 @@ new passes, but previously validated inherited passes remain recoverable if the
 final artifact step runs. Reports are validated against the pre-run inventory;
 missing planned outcomes cannot turn an incomplete run green.
 
-CI stops an integration attempt after ten failures and preserves its report.
+CI stops an integration attempt after three failures and preserves its report.
 Unexecuted tests remain unverified and run on the next attempt. This bounds the
 cost of a widespread regression without treating the stopped run as successful.
 Exclusive `test.only` declarations are rejected in CI.

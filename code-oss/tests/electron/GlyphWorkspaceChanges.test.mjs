@@ -186,11 +186,13 @@ it.describe('managed processes', () => {
       })
       .toBe(true);
     expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
-    process.kill(pid, 0);
+    const hostPid = await hostProcessId(glyph.application.process().pid, pid);
+    expect(processExists(hostPid)).toBe(true);
     await writeFile(glyph.workspaceTarget, JSON.stringify({ folders: [{ path: glyph.rootPaths[1] }] }));
     await expect(glyph.page.getByRole('status').filter({ hasText: 'Workspace updated: other.' })).toBeVisible();
-    expect(() => process.kill(pid, 0)).toThrow();
+    await expect.poll(() => processExists(hostPid)).toBe(false);
     await expect(glyph.page.getByRole('region', { name: 'Background terminals', exact: true })).toHaveCount(0);
     expect(provider.requests).toHaveLength(2);
   });
 });
+import { hostProcessId, processExists } from './SandboxProcess.mjs';

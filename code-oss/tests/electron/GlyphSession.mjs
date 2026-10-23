@@ -210,7 +210,7 @@ export class GlyphSession {
         '--disable-updates',
         ...(options.extensionDevelopmentPath !== undefined && options.extensionDevelopmentPath !== ''
           ? [`--extensionDevelopmentPath=${options.extensionDevelopmentPath}`]
-          : ['--disable-extensions']),
+          : []),
         ...(options.trustedWorkspace ? ['--disable-workspace-trust'] : []),
         '--use-inmemory-secretstorage',
         '--force-disable-user-env',
@@ -460,6 +460,7 @@ export class GlyphSession {
    * @param {boolean} keep
    */
   async finish(testInfo, keep) {
+    const retain = testInfo.status !== testInfo.expectedStatus || testInfo.retry > 0;
     if (this.glyph) this.noticeHandler = this.glyph.extensionNoticeHandler;
     const page = this.page && !this.page.isClosed() ? this.page : undefined;
     if (this.coverage) {
@@ -467,7 +468,7 @@ export class GlyphSession {
       const result = page ? await page.coverage.stopJSCoverage().catch(() => []) : [];
       await accumulateProcessCoverage(coverageFile(testInfo.parallelIndex), [{ result }]);
     }
-    if (page) {
+    if (page && retain) {
       await page
         .screenshot({ path: testInfo.outputPath('workbench.png') })
         .then(() =>
@@ -482,13 +483,14 @@ export class GlyphSession {
       this.tracing = false;
       await this.application
         .context()
-        .tracing.stopChunk({ path: testInfo.outputPath('trace.zip') })
-        .then(() =>
-          testInfo.attach('trace', {
-            path: testInfo.outputPath('trace.zip'),
-            contentType: 'application/zip',
-          }),
-        )
+        .tracing.stopChunk(retain ? { path: testInfo.outputPath('trace.zip') } : {})
+        .then(async () => {
+          if (retain)
+            await testInfo.attach('trace', {
+              path: testInfo.outputPath('trace.zip'),
+              contentType: 'application/zip',
+            });
+        })
         .catch(() => {});
     }
     if (!keep) await this.shutdown(testInfo.parallelIndex);

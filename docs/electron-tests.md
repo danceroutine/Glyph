@@ -232,8 +232,10 @@ queue/interrupt/steer contracts describe its planned replacement.
 
 ## Failure evidence
 
-Every executed test retains a Playwright trace, final screenshot, Electron
-output, and Code OSS logs under `.artifacts/code-oss-integration/results`.
+Every executed test retains Electron output and Code OSS logs under
+`.artifacts/code-oss-integration/results`. Failures and retries also retain a
+Playwright trace and final screenshot; clean passes do not duplicate large trace
+archives in the report and evidence artifact. Explicit test screenshots remain.
 The HTML report is `.artifacts/code-oss-integration/report/index.html`, and
 `results.json` provides machine-readable passed/failed/skipped counts. These
 directories are already excluded through the repository's `.artifacts/` rule.
@@ -245,3 +247,12 @@ and one retry. First-attempt failures and retries remain in the reports.
 The fixture response delay is set to 80 ms per chunk so streaming and cancellation
 can be observed through the UI. Tests wait on visible conditions rather than
 using fixed sleeps.
+
+Each launch uses an empty, isolated extensions directory. There is no blanket
+`--disable-extensions` flag: it disables only user extensions (none are installed
+in the fixture), while introducing a delayed urgent notification that can close
+the popovers under test. Built-in extensions remain available in either case.
+Headless Linux CI installs `trash-cli` and selects Electron's supported trash
+backend so delete, Revert, and Undo exercise recoverable deletion without a
+desktop session. Sandbox lifecycle checks translate isolated Linux PIDs into
+host PIDs within the fixture application's descendant tree before observing exit.

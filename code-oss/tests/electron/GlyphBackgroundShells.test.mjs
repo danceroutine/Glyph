@@ -114,9 +114,13 @@ it.describe('Background shell wakes and native terminal drawer', () => {
         await expect(glyph.diagnostics).toContainText('Stopped trap');
         await expect(glyph.assistantEntries.last()).toContainText('The terminal was stopped');
         expect(contexts(provider).some(event => event.type === 'shell_wake')).toBe(false);
-        expect(contexts(provider).find(event => event.type === 'shell_exit')?.payload?.outputTail).toContain(
-          'READY after stop',
-        );
+        // Bubblewrap's --die-with-parent intentionally SIGKILLs its isolated
+        // descendants. Only macOS promises this fixture's TERM-trap output;
+        // both platforms must retain pre-stop output and emit one exit, no wake.
+        if (process.platform === 'darwin')
+          expect(contexts(provider).find(event => event.type === 'shell_exit')?.payload?.outputTail).toContain(
+            'READY after stop',
+          );
         expect(provider.requests).toHaveLength(3);
         expect(contexts(provider).filter(event => event.type === 'shell_exit')).toEqual([
           expect.objectContaining({

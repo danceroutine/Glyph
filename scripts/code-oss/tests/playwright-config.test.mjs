@@ -1,7 +1,7 @@
 import { expect, it, onTestFinished, vi } from 'vitest';
 
 it.each([
-  ['true', 10, true],
+  ['true', 3, true],
   ['', 0, false],
 ])('uses bounded failure recovery in CI=%s', async (ci, maxFailures, forbidOnly) => {
   vi.stubEnv('CI', ci);

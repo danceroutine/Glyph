@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { hostProcessId, processExists } from './SandboxProcess.mjs';
 import { hasErrorCode } from '#scripts/support/hasErrorCode.mjs';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { parseJson, shellToolOutput } from './ProviderPayloads.mjs';
@@ -259,19 +260,10 @@ it.describe('Shell execution, input, close, and listing', () => {
       execute('sleep 60 & echo $! > child.pid; printf "CHILD READY\\n"; wait', { background: true }),
     );
     await expect.poll(() => file(glyph, 'child.pid')).not.toBeNull();
-    const pid = Number((await file(glyph, 'child.pid')).trim());
+    const pid = await hostProcessId(glyph.application.process().pid, Number((await file(glyph, 'child.pid')).trim()));
+    expect(processExists(pid)).toBe(true);
     expect(await runTool(glyph, provider, close(id), true)).toMatchObject({ status: 'closed' });
-    await expect
-      .poll(() => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch (error) {
-          if (hasErrorCode(error, 'ESRCH')) return false;
-          throw error;
-        }
-      })
-      .toBe(false);
+    await expect.poll(() => processExists(pid)).toBe(false);
     expect((await runTool(glyph, provider, list())).terminals).toEqual([]);
     await expect(glyph.page.locator('.glyph-shell-command[data-live="true"]')).toHaveCount(0);
   });

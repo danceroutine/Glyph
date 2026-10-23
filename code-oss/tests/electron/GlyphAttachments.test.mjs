@@ -333,9 +333,22 @@ it.describe('Explicit editor and file attachments', () => {
       await glyph.page.keyboard.press('ControlOrMeta+a');
       await glyph.page.keyboard.press('ControlOrMeta+l');
       await expect(glyph.page.locator('.notifications-toasts')).toContainText('UNSUPPORTED_RESOURCE');
+      await glyph.page.getByRole('button', { name: /^Close Modal Editor/u }).click();
+      await expect(glyph.page.locator('.monaco-modal-editor-block')).toHaveCount(0);
       await writeFile(join(glyph.workspace, 'large.txt'), 'x'.repeat(512 * 1024 + 1));
-      await glyph.composer.press('ControlOrMeta+a');
-      await glyph.composer.press('ArrowRight');
+      await glyph.composer.click();
+      await glyph.composer.press('ControlOrMeta+End');
+      await expect
+        .poll(() =>
+          glyph.composer.evaluate(element => {
+            const selection = element.ownerDocument.getSelection();
+            const before = element.ownerDocument.createRange();
+            before.selectNodeContents(element);
+            before.setEnd(selection.focusNode, selection.focusOffset);
+            return selection.isCollapsed && before.toString() === 'Keep this draft';
+          }),
+        )
+        .toBe(true);
       await glyph.composer.pressSequentially(' @large.txt');
       await expect(glyph.page.getByRole('option', { name: 'large.txt', exact: true })).toBeVisible();
       await glyph.composer.press('Enter');

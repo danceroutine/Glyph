@@ -11,7 +11,7 @@ export default defineConfig({
   expect: { timeout: 30_000 },
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
-  maxFailures: process.env.CI ? 10 : 0,
+  maxFailures: process.env.CI ? 3 : 0,
   workers: Number(process.env.GLYPH_ELECTRON_WORKERS ?? Math.max(1, Math.floor(availableParallelism() / 2))),
   retries: 1,
   reporter: [

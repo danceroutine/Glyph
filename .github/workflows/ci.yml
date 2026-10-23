@@ -18,6 +18,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      ELECTRON_TRASH: trash-cli
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,7 +33,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: sudo apt-get update && sudo apt-get install -y bubblewrap xvfb libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap xvfb trash-cli libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: pnpm install --frozen-lockfile
       - name: Select relevant Electron suites
