@@ -7,6 +7,8 @@ vi.mock('#code-oss/ui/GlyphDiagram/GlyphDiagramRenderer.ts', () => ({ renderGlyp
 
 afterEach(cleanup);
 
+const rendering = { tree: { tag: 'svg', attributes: {}, children: ['diagram'] }, links: [] };
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -19,14 +21,14 @@ function deferred<T>() {
 
 describe(useGlyphDiagramState, () => {
   it('renders the source as a dark diagram outside of light themes', async () => {
-    vi.mocked(renderGlyphDiagram).mockResolvedValue('data:image/svg+xml,dark');
+    vi.mocked(renderGlyphDiagram).mockResolvedValue(rendering);
 
     const { result } = renderHook(useGlyphDiagramState, { initialProps: { source: 'graph TD' } });
 
     expect(renderGlyphDiagram).toHaveBeenCalledWith('graph TD', true);
     expect(result.current.source).toBe('graph TD');
     await waitFor(() => {
-      expect(result.current.diagram).toBe('data:image/svg+xml,dark');
+      expect(result.current.rendered).toBe(true);
     });
     expect(result.current.error).toBe(false);
     expect(result.current.expanded).toBe(false);
@@ -40,13 +42,13 @@ describe(useGlyphDiagramState, () => {
     await waitFor(() => {
       expect(result.current.error).toBe(true);
     });
-    expect(result.current.diagram).toBeUndefined();
+    expect(result.current.rendered).toBe(false);
   });
 
   it('discards results for sources that were replaced', async () => {
-    const first = deferred<string>();
-    const second = deferred<string>();
-    const third = deferred<string>();
+    const first = deferred<typeof rendering>();
+    const second = deferred<typeof rendering>();
+    const third = deferred<typeof rendering>();
     vi.mocked(renderGlyphDiagram)
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
@@ -56,18 +58,18 @@ describe(useGlyphDiagramState, () => {
     rerender({ source: 'graph B' });
     rerender({ source: 'graph C' });
     await act(async () => {
-      first.resolve('data:image/svg+xml,A');
+      first.resolve(rendering);
       second.reject(new Error('stale'));
       await Promise.allSettled([first.promise, second.promise]);
     });
-    expect(result.current.diagram).toBeUndefined();
+    expect(result.current.rendered).toBe(false);
     expect(result.current.error).toBe(false);
     await act(async () => {
-      third.resolve('data:image/svg+xml,C');
+      third.resolve(rendering);
       await third.promise;
     });
 
-    expect(result.current.diagram).toBe('data:image/svg+xml,C');
+    expect(result.current.rendered).toBe(true);
   });
 
   it('expands and collapses', () => {

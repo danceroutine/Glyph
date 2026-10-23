@@ -3,21 +3,23 @@ import { isRecord } from '#src/shared/validators/isRecord.js';
 import { renderMermaidSVG, type RenderOptions } from 'beautiful-mermaid';
 import { parseGlyphDiagramSource } from './GlyphDiagramSource.ts';
 import { readGlyphDiagramTree } from './GlyphDiagramTree.ts';
+import { assertGlyphDiagramComplexity } from './GlyphDiagramComplexity.ts';
 
 // This script runs only in the sandboxed renderer document, without native APIs.
 const colorNames = ['bg', 'fg', 'line', 'accent', 'muted', 'surface', 'border'] as const;
 
 function readColors(value: unknown): RenderOptions {
   const colors: Record<string, string> = {};
-  if (value && typeof value === 'object')
+  if (isRecord(value))
     for (const name of colorNames) {
-      const color = (value as Record<string, unknown>)[name];
+      const color = value[name];
       if (typeof color === 'string') colors[name] = color;
     }
   return colors;
 }
 
 function renderNative(text: string, colors: RenderOptions): string | undefined {
+  assertGlyphDiagramComplexity(text);
   try {
     return renderMermaidSVG(text, { ...colors, font: 'system-ui', transparent: true });
   } catch {

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WiredGlyphMarkdown } from '#code-oss/ui/GlyphMarkdown/GlyphMarkdown.wired.tsx';
 
 vi.mock('#code-oss/ui/GlyphDiagram/GlyphDiagramRenderer.ts', () => ({
-  renderGlyphDiagram: vi.fn(async () => 'data:image/svg+xml,diagram'),
+  renderGlyphDiagram: vi.fn(async () => ({ tree: { tag: 'svg', attributes: {}, children: ['diagram'] }, links: [] })),
 }));
 
 afterEach(cleanup);
@@ -24,9 +24,7 @@ describe(WiredGlyphMarkdown, () => {
   it('renders Mermaid blocks as diagrams', async () => {
     render(<WiredGlyphMarkdown text={'```mermaid\ngraph TD\n```'} openLink={vi.fn()} />);
 
-    expect((await screen.findByRole('img', { name: 'Plan diagram' })).getAttribute('src')).toBe(
-      'data:image/svg+xml,diagram',
-    );
+    expect((await screen.findByRole('img', { name: 'Plan diagram' })).shadowRoot?.querySelector('svg')?.textContent).toBe('diagram');
   });
 
   it('opens links through the host', () => {

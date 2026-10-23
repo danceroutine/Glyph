@@ -8,6 +8,10 @@ import { z } from 'zod';
 
 const packageMetadataSchema = z.object({ name: z.string(), dependencies: z.record(z.string(), z.string()).optional() });
 
+/**
+ * @param {string} name
+ * @param {NodeJS.Require} requireFrom
+ */
 async function findPackageManifest(name, requireFrom) {
   for (const path of requireFrom.resolve.paths(name) ?? []) {
     const manifest = await realpath(join(path, name, 'package.json')).catch(() => undefined);

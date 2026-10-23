@@ -18,18 +18,19 @@ const clickLink = /^\s*click\s+(\S+)\s+(?:href\s+)?"([^"]+)"/i;
 
 export function parseGlyphDiagramSource(source: string): GlyphDiagramSource {
   const links: GlyphDiagramLink[] = [];
+  const content = source.split(/\r?\n/u).filter(line => !/^\s*%%/u.test(line));
+  const header = content.find(line => line.trim() !== '')?.trim() ?? '';
+  const flowchart = /^(?:graph|flowchart)\s/iu.test(header);
   const lines: string[] = [];
-  for (const line of source.split(/\r?\n/)) {
-    if (/^\s*%%/.test(line)) continue;
-    if (/^\s*click\s/i.test(line)) {
-      const match = clickLink.exec(line);
-      const link = match ? { id: match[1], href: match[2] } : undefined;
+  for (const line of content) {
+    const match = flowchart ? clickLink.exec(line) : null;
+    if (match) {
+      const link = { id: match[1], href: match[2] };
       if (isGlyphDiagramLink(link)) links.push(link);
       continue;
     }
     lines.push(line);
   }
   const text = lines.join('\n').trim();
-  const header = text.split('\n')[0]?.trim() ?? '';
   return { text, links, native: nativeHeaders.some(pattern => pattern.test(header)) };
 }

@@ -7,5 +7,5 @@ export function WiredGlyphDiagram({
   readonly source: string;
   readonly openLink?: ((href: string) => void) | undefined;
 }) {
-  return <GlyphDiagram {...useGlyphDiagramState(source, openLink)} />;
+  return <GlyphDiagram {...useGlyphDiagramState({ source, openLink })} />;
 }

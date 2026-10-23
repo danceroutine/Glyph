@@ -14,7 +14,7 @@ text { font-family: ${tokens.font.family.body}; }
 [role="link"]:focus-visible { outline: ${tokens.focus.ring}; outline-offset: 2px; }
 `;
 
-export function useGlyphDiagramState(source: string, openLink?: (href: string) => void) {
+export function useGlyphDiagramState({ source, openLink }: { readonly source: string; readonly openLink?: ((href: string) => void) | undefined }) {
   const root = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const navigate = useRef(openLink);
@@ -57,19 +57,19 @@ export function useGlyphDiagramState(source: string, openLink?: (href: string) =
     for (const { id, href } of rendering.links) {
       const node = nodes.get(id);
       if (!node) continue;
-      const open = () => navigate.current?.(href);
+      const open = () => { navigate.current?.(href); };
       node.setAttribute('role', 'link');
       node.setAttribute('tabindex', '0');
       node.setAttribute('aria-label', node.getAttribute('data-label') || id);
       node.addEventListener('click', open);
       node.addEventListener('keydown', event => {
-        if ((event as KeyboardEvent).key !== 'Enter') return;
+        if (!(event instanceof KeyboardEvent) || event.key !== 'Enter') return;
         event.preventDefault();
         open();
       });
     }
   }, [rendering]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!expanded) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -87,11 +87,11 @@ export function useGlyphDiagramState(source: string, openLink?: (href: string) =
     root,
     canvas,
     rendered: !!rendering,
-    interactive: !!rendering?.links.length && !!openLink,
+    interactive: (rendering?.links.length ?? 0) > 0 && openLink !== undefined,
     error,
     source,
     expanded,
-    toggle: () => setExpanded(value => !value),
+    toggle: () => { setExpanded(value => !value); },
   };
 }
 export type GlyphDiagramState = ReturnType<typeof useGlyphDiagramState>;

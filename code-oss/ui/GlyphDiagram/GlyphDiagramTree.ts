@@ -1,3 +1,5 @@
+import { isRecord } from '#src/shared/validators/isRecord.js';
+
 export interface GlyphDiagramElement {
   readonly tag: string;
   readonly attributes: Readonly<Record<string, string>>;
@@ -12,7 +14,7 @@ export interface GlyphDiagramLink {
 }
 
 export interface GlyphDiagramRendering {
-  readonly tree: GlyphDiagramElement;
+  readonly tree: unknown;
   readonly links: readonly GlyphDiagramLink[];
 }
 
@@ -161,8 +163,8 @@ function safeAttribute(name: string, value: string): string | undefined {
 }
 
 export function isGlyphDiagramLink(value: unknown): value is GlyphDiagramLink {
-  if (!value || typeof value !== 'object') return false;
-  const { id, href } = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const { id, href } = value;
   return (
     typeof id === 'string' &&
     typeof href === 'string' &&
@@ -186,10 +188,10 @@ export function readGlyphDiagramTree(root: Element): GlyphDiagramElement {
     const children: GlyphDiagramNode[] = [];
     for (const child of element.childNodes) {
       if (child.nodeType === child.TEXT_NODE || child.nodeType === child.CDATA_SECTION_NODE) {
-        const text = child.textContent ?? '';
+        const text = child.textContent!;
         if (text) children.push(element.localName === 'style' ? safeGlyphDiagramCss(text) : text);
-      } else if (child.nodeType === child.ELEMENT_NODE && allowedTags.has((child as Element).localName)) {
-        children.push(read(child as Element, depth + 1));
+      } else if (child instanceof Element && allowedTags.has(child.localName)) {
+        children.push(read(child, depth + 1));
       }
     }
     return { tag: element.localName, attributes, children };
@@ -202,12 +204,12 @@ export function createGlyphDiagramElement(document: Document, tree: unknown): SV
   const create = (node: unknown, depth: number, parentTag: string): Node | undefined => {
     if (typeof node === 'string')
       return document.createTextNode(parentTag === 'style' ? safeGlyphDiagramCss(node) : node);
-    if (!node || typeof node !== 'object') return undefined;
-    const { tag, attributes, children } = node as Record<string, unknown>;
+    if (!isRecord(node)) return undefined;
+    const { tag, attributes, children } = node;
     if (typeof tag !== 'string' || !allowedTags.has(tag)) return undefined;
     if (++elements > maximumElements || depth > maximumDepth) throw new Error('Diagram output is too large.');
     const element = document.createElementNS(svgNamespace, tag);
-    if (attributes && typeof attributes === 'object')
+    if (isRecord(attributes))
       for (const [name, value] of Object.entries(attributes)) {
         const safe = typeof value === 'string' ? safeAttribute(name, value) : undefined;
         if (safe !== undefined) element.setAttribute(name, safe);

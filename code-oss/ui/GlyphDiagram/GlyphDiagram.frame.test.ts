@@ -1,7 +1,9 @@
 import mermaid from 'mermaid';
+import { renderMermaidSVG } from 'beautiful-mermaid';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('mermaid', () => ({ default: { initialize: vi.fn(), render: vi.fn() } }));
+vi.mock('beautiful-mermaid', async importOriginal => ({ ...await importOriginal<typeof import('beautiful-mermaid')>(), renderMermaidSVG: vi.fn(() => '<svg>native</svg>') }));
 
 const posted = vi.spyOn(window.parent, 'postMessage');
 await import('#code-oss/ui/GlyphDiagram/GlyphDiagram.frame.ts');
@@ -16,6 +18,13 @@ function responses(id: string) {
 }
 
 describe('GlyphDiagram.frame', () => {
+  it('bounds graph complexity before invoking native layout', async () => {
+    vi.mocked(renderMermaidSVG).mockClear();
+    request({ channel: 'glyph-diagram', id: 'dense', source: 'flowchart LR\n' + Array.from({ length: 201 }, (_, i) => `A --> B${i}`).join('\n') });
+    await vi.waitFor(() => { expect(responses('dense')).toHaveLength(1); });
+    expect(renderMermaidSVG).not.toHaveBeenCalled();
+    expect(posted).toHaveBeenCalledWith({ channel: 'glyph-diagram', id: 'dense', error: true }, '*');
+  });
   it('announces that it is ready to render', () => {
     expect(postedOnLoad).toContainEqual([{ channel: 'glyph-diagram', ready: true }, '*']);
   });

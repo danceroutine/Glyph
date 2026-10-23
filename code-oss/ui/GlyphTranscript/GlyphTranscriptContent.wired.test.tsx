@@ -7,7 +7,7 @@ import { renderGlyphDiagram } from '#code-oss/ui/GlyphDiagram/GlyphDiagramRender
 import { WiredGlyphTranscriptContent } from '#code-oss/ui/GlyphTranscript/GlyphTranscriptContent.wired.tsx';
 
 vi.mock('#code-oss/ui/GlyphDiagram/GlyphDiagramRenderer.ts', () => ({
-  renderGlyphDiagram: vi.fn(async () => 'data:image/svg+xml,diagram'),
+  renderGlyphDiagram: vi.fn(async () => ({ tree: { tag: 'svg', attributes: {}, children: ['diagram'] }, links: [] })),
 }));
 
 afterEach(cleanup);

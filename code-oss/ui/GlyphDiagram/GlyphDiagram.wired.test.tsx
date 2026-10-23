@@ -9,13 +9,13 @@ afterEach(cleanup);
 
 describe(WiredGlyphDiagram, () => {
   it('shows progress until the diagram image is ready', async () => {
-    vi.mocked(renderGlyphDiagram).mockResolvedValue('data:image/svg+xml,diagram');
+    vi.mocked(renderGlyphDiagram).mockResolvedValue({ tree: { tag: 'svg', attributes: {}, children: ['diagram'] }, links: [] });
 
     render(<WiredGlyphDiagram source="graph TD" />);
 
     expect(screen.getByRole('status').textContent).toBe('Rendering diagram…');
     const image = await screen.findByRole<HTMLImageElement>('img', { name: 'Plan diagram' });
-    expect(image.getAttribute('src')).toBe('data:image/svg+xml,diagram');
+    expect(image.shadowRoot?.querySelector('svg')?.textContent).toBe('diagram');
     expect(renderGlyphDiagram).toHaveBeenCalledWith('graph TD', true);
   });
 
