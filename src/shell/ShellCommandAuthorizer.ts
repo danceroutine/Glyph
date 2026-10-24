@@ -1,155 +1,104 @@
+import { Approval } from '#src/interaction/approvals/Approval.js';
+import { ApprovalCapability } from '#src/interaction/approvals/ApprovalCapability.js';
+import { ApprovalCoordinator } from '#src/interaction/approvals/ApprovalCoordinator.js';
+import { ApprovalQueue } from '#src/interaction/approvals/ApprovalQueue.js';
+import type { ApprovalGrantStore } from '#src/interaction/approvals/ApprovalGrant.js';
+import type { WorkspaceScope } from '#src/interaction/approvals/ApprovalRequest.js';
 import type { ShellAuthorizationContext } from './ShellAuthorizationContext.ts';
 import type { ShellExecutionAuthorization } from './ShellExecutionAuthorization.ts';
-import { ShellPermissionDecision } from './ShellPermissionDecision.ts';
-import { ShellPermissionMode, type ShellPermissionPolicy } from './ShellPermissionPolicy.ts';
+import { ShellPermissionMode } from './ShellPermissionPolicy.ts';
 import type { ShellPermissionPresenter } from './ShellPermissionPresenter.ts';
 import type { ShellPermissionStore } from './ShellPermissionStore.ts';
-import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
-import { isSafeShellCommand } from './isSafeShellCommand.ts';
+import { ShellApprovalPolicy } from './ShellApprovalPolicy.ts';
+import { LegacyShellApprovalStore } from './LegacyShellApprovalStore.ts';
 
-/** Resolves exact-command authorization and persists project-scoped choices. */
-const defaultAuthorizationContext: ShellAuthorizationContext = { background: false, existingTerminal: false };
+const defaultContext: ShellAuthorizationContext = { background: false, existingTerminal: false };
 
+/** Shell-specific authorization delegates decision lifecycle and grant admission to the domain. */
 export class ShellCommandAuthorizer {
-  private policy: ShellPermissionPolicy;
+  private readonly scope: WorkspaceScope;
+  private readonly grants: ApprovalGrantStore;
+  private readonly policy: ShellApprovalPolicy;
+  private readonly coordinator = new ApprovalCoordinator();
+  private readonly queue = new ApprovalQueue();
+  private currentMode = ShellPermissionMode.ASK;
   private initialized = false;
-  private queue: Promise<void> = Promise.resolve();
-
   constructor(
-    private readonly projectContextId: string,
-    private readonly store: ShellPermissionStore,
+    scope: WorkspaceScope | string,
+    store: ApprovalGrantStore | ShellPermissionStore,
     private readonly presenter: ShellPermissionPresenter,
   ) {
-    this.policy = emptyPolicy(projectContextId);
+    this.scope = typeof scope === 'string' ? { workspaceId: scope, mutationScope: scope } : scope;
+    this.grants = 'kind' in store ? store : new LegacyShellApprovalStore(store);
+    this.policy = new ShellApprovalPolicy(presenter.shellPermissionChoices);
   }
-
   get mode(): ShellPermissionMode {
-    return this.policy.mode;
+    return this.currentMode;
   }
-
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    this.policy = (await this.store.load(this.projectContextId)) ?? emptyPolicy(this.projectContextId);
+    await this.refreshMode();
     this.initialized = true;
   }
-
   authorize(
     command: string,
     workingDirectory: string,
     signal: AbortSignal,
-    context: ShellAuthorizationContext = defaultAuthorizationContext,
+    context: ShellAuthorizationContext = defaultContext,
   ): Promise<ShellExecutionAuthorization> {
-    return this.enqueue(signal, async () => {
-      // Queued commands may be cancelled while a previous permission is being
-      // decided. Neither a saved grant nor a later dialog answer revives them.
+    return this.queue.run(signal, async () => {
       signal.throwIfAborted();
       await this.initialize();
       signal.throwIfAborted();
-      const normalized = normalizeCommand(command);
-      if (this.policy.mode === ShellPermissionMode.ALLOW_EVERYTHING)
-        return authorization(ShellSandboxProfile.FULL_ACCESS);
-      if (
-        this.policy.allowedCommands.some(
-          grant => grant.command === normalized && grant.workingDirectory === workingDirectory,
-        )
-      )
-        return authorization(ShellSandboxProfile.WORKSPACE_WRITE);
-      if (
-        this.policy.mode === ShellPermissionMode.ALLOW_SAFE &&
-        !context.background &&
-        !context.existingTerminal &&
-        isSafeShellCommand(normalized)
-      )
-        return authorization(ShellSandboxProfile.READ_ONLY);
-      const decision = await this.presenter.presentShellPermission({ command: normalized, workingDirectory }, signal);
-      signal.throwIfAborted();
-      switch (decision) {
-        case ShellPermissionDecision.ALLOW_ONCE:
-          return authorization(ShellSandboxProfile.WORKSPACE_WRITE);
-        case ShellPermissionDecision.ALWAYS_ALLOW:
-          await this.persist({
-            ...this.policy,
-            allowedCommands: uniqueGrants([...this.policy.allowedCommands, { command: normalized, workingDirectory }]),
-          });
-          signal.throwIfAborted();
-          return authorization(ShellSandboxProfile.WORKSPACE_WRITE);
-        case ShellPermissionDecision.ALLOW_SAFE:
-          await this.persist({ ...this.policy, mode: ShellPermissionMode.ALLOW_SAFE });
-          signal.throwIfAborted();
-          return authorization(
-            !context.background && !context.existingTerminal && isSafeShellCommand(normalized)
-              ? ShellSandboxProfile.READ_ONLY
-              : ShellSandboxProfile.WORKSPACE_WRITE,
-          );
-        case ShellPermissionDecision.ALLOW_OUTSIDE_SANDBOX_ONCE:
-          return authorization(ShellSandboxProfile.FULL_ACCESS);
-        case ShellPermissionDecision.ALLOW_EVERYTHING:
-          await this.persist({ ...this.policy, mode: ShellPermissionMode.ALLOW_EVERYTHING });
-          signal.throwIfAborted();
-          return authorization(ShellSandboxProfile.FULL_ACCESS);
-        case ShellPermissionDecision.DENY:
-          throw new Error('The user denied permission to execute this shell command.');
-      }
-    });
-  }
-
-  private enqueue<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      if (signal.aborted) {
-        reject(signal.reason);
-        return;
-      }
-      const abort = () => {
-        reject(signal.reason);
-      };
-      signal.addEventListener('abort', abort, { once: true });
-      const start = () => {
-        signal.removeEventListener('abort', abort);
-        signal.throwIfAborted();
-        return operation();
-      };
-      const result = this.queue.then(start, start);
-      // A queued caller can stop waiting without releasing the preceding
-      // approval or policy save. Once started, the operation owns cancellation
-      // so an already dispatched save still drains before later grants run.
-      this.queue = result.then(
-        () => {},
-        () => {},
+      const approval = new Approval(
+        this.policy.createRequest({ workspace: this.scope, operation: { command, workingDirectory, ...context } }),
       );
-      void result.then(resolve, reject);
+      const result = await this.coordinator.resolve(
+        approval,
+        this.policy,
+        {
+          presentApproval: async (pending, cancellation, displayed) => {
+            displayed();
+            const choiceId = await this.presenter.presentShellPermission(
+              { command: pending.request.operation.command, workingDirectory, approval: pending },
+              cancellation,
+            );
+            return { approvalId: pending.id, choiceId };
+          },
+        },
+        signal,
+        this.grants,
+      );
+      if (result.grantUpdate.kind === 'saved') await this.refreshMode();
+      if (result.admission === 'denied') {
+        const message =
+          result.grantUpdate.kind === 'failed'
+            ? 'The user denied this command; the safe-command preference could not be saved.'
+            : 'The user denied permission to execute this shell command.';
+        throw new Error(message);
+      }
+      if (result.admission !== 'authorized') throw result.error;
+      signal.throwIfAborted();
+      return { sandboxProfile: result.authorization.sandbox };
     });
   }
-
-  private async persist(policy: ShellPermissionPolicy): Promise<void> {
-    await this.store.save(policy);
-    this.policy = policy;
+  private async refreshMode(): Promise<void> {
+    const snapshot = await this.grants.load(this.scope);
+    const permissions = snapshot.grants
+      .filter(
+        grant =>
+          grant.workspace.mutationScope === this.scope.mutationScope &&
+          grant.workspace.workspaceId === this.scope.workspaceId,
+      )
+      .map(grant => grant.permission);
+    this.currentMode = permissions.some(
+      permission => permission.capability === ApprovalCapability.SHELL && permission.kind === 'all_shell_commands',
+    )
+      ? ShellPermissionMode.ALLOW_EVERYTHING
+      : permissions.some(
+            permission => permission.capability === ApprovalCapability.SHELL && permission.kind === 'safe_inspection',
+          )
+        ? ShellPermissionMode.ALLOW_SAFE
+        : ShellPermissionMode.ASK;
   }
-}
-
-function authorization(sandboxProfile: ShellSandboxProfile): ShellExecutionAuthorization {
-  return { sandboxProfile };
-}
-
-function emptyPolicy(projectContextId: string): ShellPermissionPolicy {
-  return {
-    schemaVersion: 2,
-    projectContextId,
-    mode: ShellPermissionMode.ASK,
-    allowedCommands: [],
-  };
-}
-
-function uniqueGrants(grants: ShellPermissionPolicy['allowedCommands']): ShellPermissionPolicy['allowedCommands'] {
-  return grants.filter(
-    (grant, index) =>
-      grants.findIndex(
-        candidate => candidate.command === grant.command && candidate.workingDirectory === grant.workingDirectory,
-      ) === index,
-  );
-}
-
-function normalizeCommand(command: string): string {
-  const normalized = command.trim();
-  if (!normalized) throw new Error('Shell command cannot be empty.');
-  return normalized;
 }

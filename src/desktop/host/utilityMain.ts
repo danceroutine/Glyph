@@ -59,31 +59,47 @@ parentPort.on('message', event => {
   // host never accepts a renderer-authored identity as authority.
   const connectionId = payload.connectionId;
   const identity = payload.identity;
-  host.connect(connectionId, identity, message => {
-    port.postMessage(message);
-  });
-  editors.connect(connectionId, identity, message => {
-    port.postMessage(message);
-  });
-  port.on('message', message => {
-    const data = message.data;
-    if (isRecord(data) && data.type === GlyphTransportMessageType.EDITOR_RESPONSE && isEditorResponse(data.response)) {
-      editors.receive(connectionId, data.response);
-      return;
-    }
-    void host.receive(connectionId, data).catch(error => {
-      port.postMessage({
-        type: GlyphTransportMessageType.ERROR,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    });
-  });
-  port.on('close', () => {
+  let registered = false;
+  const disconnect = () => {
+    if (!registered) return;
+    registered = false;
     editors.disconnect(connectionId);
     void host.disconnect(connectionId);
-  });
-  port.start();
-  port.postMessage({ type: GlyphTransportMessageType.READY, identity, hostGeneration: host.generation });
+  };
+  try {
+    host.connect(connectionId, identity, message => {
+      port.postMessage(message);
+    });
+    registered = true;
+    editors.connect(connectionId, identity, message => {
+      port.postMessage(message);
+    });
+    port.on('message', message => {
+      const data = message.data;
+      if (
+        isRecord(data) &&
+        data.type === GlyphTransportMessageType.EDITOR_RESPONSE &&
+        isEditorResponse(data.response)
+      ) {
+        editors.receive(connectionId, data.response);
+        return;
+      }
+      void host.receive(connectionId, data).catch(error => {
+        port.postMessage({
+          type: GlyphTransportMessageType.ERROR,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
+    port.on('close', disconnect);
+    port.start();
+    port.postMessage({ type: GlyphTransportMessageType.READY, identity, hostGeneration: host.generation });
+  } catch {
+    // Duplicate setup never owns the old registration. Partial setup releases
+    // only the registration acquired above, even if close fires synchronously.
+    disconnect();
+    port.close();
+  }
 });
 
 function isIdentity(value: unknown): value is GlyphConnectionIdentity {

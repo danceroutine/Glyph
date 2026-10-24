@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 import { WebToolRuntime } from './web/WebToolRuntime.ts';
+import { AuthorizedWebTransport } from './web/AuthorizedWebTransport.ts';
+import { WebApprovalService } from './web/WebApprovalService.ts';
+import { FileApprovalStore } from './interaction/approvals/FileApprovalStore.ts';
+import { QuestionApprovalPresenter } from './interaction/approvals/QuestionApprovalPresenter.ts';
 import { WebHttpClient } from './web/WebHttpClient.ts';
 import { WebFetchService } from './web/WebFetchService.ts';
 import { DuckDuckGoSearch } from './web/DuckDuckGoSearch.ts';
@@ -44,7 +48,6 @@ import { FileSystemWorkspaceTextStore } from './workspace/FileSystemWorkspaceTex
 import { MultiRootWorkspaceTextStore } from './workspace/MultiRootWorkspaceTextStore.ts';
 import type { WorkspaceTextStore } from './workspace/WorkspaceTextStore.ts';
 import { WorkspaceAccessPolicy } from './workspace/policy/WorkspaceAccessPolicy.ts';
-import { FileShellPermissionStore } from './shell/FileShellPermissionStore.ts';
 import { NativeShellSandboxLauncher } from './shell/NativeShellSandboxLauncher.ts';
 import { ShellCommandAuthorizer } from './shell/ShellCommandAuthorizer.ts';
 import { ShellSessionManager } from './shell/ShellSessionManager.ts';
@@ -100,8 +103,8 @@ async function main(): Promise<void> {
   );
   const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, pathIndex);
   const shellAuthorizer = new ShellCommandAuthorizer(
-    projectContext.mutationIdentity,
-    new FileShellPermissionStore(join(configuration.stateDirectory, 'projects', projectContext.mutationIdentity)),
+    { workspaceId: projectContext.id, mutationScope: projectContext.mutationIdentity },
+    new FileApprovalStore(join(configuration.stateDirectory, 'projects', projectContext.mutationIdentity)),
     ui,
   );
   const shellSessions = new ShellSessionManager(
@@ -134,7 +137,14 @@ async function main(): Promise<void> {
     proposalReviews,
     logger,
   );
-  const webHttp = new WebHttpClient();
+  const webApproval = new WebApprovalService(
+    { workspaceId: projectContext.id, mutationScope: projectContext.mutationIdentity },
+    new FileApprovalStore(join(configuration.stateDirectory, 'projects', projectContext.id)),
+    new QuestionApprovalPresenter(ui),
+  );
+  const webHttp = new WebHttpClient(
+    new AuthorizedWebTransport((destination, signal) => webApproval.request(destination, signal)),
+  );
   const tools = new ToolRegistry(
     [
       projectTools,

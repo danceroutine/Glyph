@@ -1,5 +1,13 @@
+import { shellPermissionChoices } from '#src/shell/shellPermissionChoices.js';
+import { Approval } from '#src/interaction/approvals/Approval.js';
+import { ApprovalCapability } from '#src/interaction/approvals/ApprovalCapability.js';
+import { ApprovalCoordinator, type ApprovalResolution } from '#src/interaction/approvals/ApprovalCoordinator.js';
+import type { ApprovalCapabilityPolicy } from '#src/interaction/approvals/ApprovalCapabilityPolicy.js';
+import { ApprovalQueue } from '#src/interaction/approvals/ApprovalQueue.js';
+import type { WorkspaceScope } from '#src/interaction/approvals/ApprovalRequest.js';
+import { GoalApprovalPolicy } from '#src/goals/GoalApprovalPolicy.js';
+import { ModeSwitchApprovalPolicy } from '#src/interaction/modes/ModeSwitchApprovalPolicy.js';
 import { GlyphModeSwapStatus } from '#src/desktop/protocol/events/GlyphModeSwap.js';
-import { AgentMode } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap, GlyphModeSwapPolicy } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -26,13 +34,26 @@ interface PendingDecision extends RunIdentity {
   readonly kind: 'question' | 'approval';
 }
 
+const defaultWorkspace: WorkspaceScope = { workspaceId: 'desktop', mutationScope: 'desktop' };
+
 /** Routes human decisions to the originating run even when several chats execute concurrently. */
 export class DesktopInteractionBroker implements QuestionPresenter, ShellPermissionPresenter {
   private readonly scope = new AsyncLocalStorage<Required<RunIdentity>>();
   private readonly pending = new Map<string, PendingDecision>();
-  private readonly queues = new Map<string, Promise<void>>();
+  private readonly queues = new Map<string, ApprovalQueue>();
+  private readonly approvals = new ApprovalCoordinator();
+  readonly shellPermissionChoices = [
+    ShellPermissionDecision.DENY,
+    ShellPermissionDecision.ALLOW_ONCE,
+    ShellPermissionDecision.ALWAYS_ALLOW,
+    ShellPermissionDecision.ALLOW_SAFE,
+    ShellPermissionDecision.DENY_AND_ALLOW_SAFE,
+  ];
 
-  constructor(private readonly emit: (event: GlyphHostEvent) => void) {}
+  constructor(
+    private readonly emit: (event: GlyphHostEvent) => void,
+    private readonly workspace: WorkspaceScope = defaultWorkspace,
+  ) {}
 
   run<T>(identity: RunIdentity, operation: () => Promise<T>): Promise<T> {
     return this.scope.run(
@@ -90,7 +111,7 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
 
   presentShellPermission(request: ShellPermissionRequest, signal: AbortSignal): Promise<ShellPermissionDecision> {
     const identity = this.requireRun();
-    const id = randomUUID();
+    const id = request.approval?.id ?? randomUUID();
     return this.wait(
       id,
       identity,
@@ -98,6 +119,7 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
       signal,
       value => {
         const decision = z.enum(GlyphApprovalDecision).parse(value);
+        request.approval?.validateChoice(decision);
         return GLYPH_APPROVAL_TO_SHELL_PERMISSION[decision];
       },
       () => {
@@ -112,6 +134,13 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
             command: request.command,
             workingDirectory: request.workingDirectory,
             canRemember: true,
+            choices: shellPermissionChoices(request)
+              .filter(choice => this.shellPermissionChoices.includes(choice.decision))
+              .map(choice => ({
+                id: z.enum(GlyphApprovalDecision).parse(choice.decision),
+                label: choice.label,
+                description: choice.description,
+              })),
           },
         });
       },
@@ -120,30 +149,25 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
 
   presentGoalProposal(objective: string, signal: AbortSignal): Promise<boolean> {
     const identity = this.requireRun();
-    const id = randomUUID();
-    return this.wait(
-      id,
-      identity,
-      'approval',
-      signal,
-      value =>
-        z.enum([GlyphApprovalDecision.ALLOW_ONCE, GlyphApprovalDecision.DENY]).parse(value) ===
-        GlyphApprovalDecision.ALLOW_ONCE,
-      () => {
-        this.emit({
-          type: GlyphHostEventType.APPROVAL,
-          chatId: identity.chatId,
-          runId: identity.runId,
-          approval: {
-            id,
-            title: 'Start a goal?',
-            detail: objective,
-            sandboxed: false,
-            goal: { objective },
-          },
-        });
-      },
-    );
+    const policy = new GoalApprovalPolicy();
+    const approval = new Approval(policy.createRequest({ workspace: this.workspace, operation: { objective } }));
+    return this.resolveApproval(approval, policy, identity, signal, () => {
+      this.emit({
+        type: GlyphHostEventType.APPROVAL,
+        chatId: identity.chatId,
+        runId: identity.runId,
+        approval: {
+          id: approval.id,
+          title: approval.request.title,
+          detail: approval.request.detail,
+          sandboxed: false,
+          goal: { objective },
+        },
+      });
+    }).then(result => {
+      if (result.admission === 'failed' || result.admission === 'cancelled') throw result.error;
+      return result.admission === 'authorized';
+    });
   }
 
   async presentModeSwitch(
@@ -153,61 +177,54 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     settle: (id: string, status: GlyphModeSwap['status']) => void,
   ): Promise<boolean> {
     const identity = this.requireRun();
-    const policy = identity.modeSwapPolicy;
-    const id = randomUUID();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const policy = new ModeSwitchApprovalPolicy(identity.modeSwapPolicy);
+    const approval = new Approval(
+      policy.createRequest({
+        workspace: this.workspace,
+        operation: {
+          source: request.source,
+          target: request.target,
+          explanation: request.description,
+        },
+      }),
+    );
     let committed = false;
     try {
-      const approved = await this.wait(
-        id,
-        identity,
-        'approval',
-        signal,
-        value => {
-          return (
-            z.enum([GlyphApprovalDecision.ALLOW_ONCE, GlyphApprovalDecision.DENY]).parse(value) ===
-            GlyphApprovalDecision.ALLOW_ONCE
-          );
-        },
-        () => {
-          const startedAt = Date.now();
-          const modeSwap: GlyphModeSwap = {
-            ...request,
-            id,
-            status: GlyphModeSwapStatus.PENDING,
-            autoApprove: policy.autoApprove,
-            startedAt: new Date(startedAt).toISOString(),
-            expiresAt: new Date(startedAt + policy.timeoutSeconds * 1000).toISOString(),
-          };
-          this.emit({
-            type: GlyphHostEventType.APPROVAL,
-            chatId: identity.chatId,
-            runId: identity.runId,
-            approval: {
-              id,
-              title: `Switch to ${AgentMode.resolve(request.target).title}`,
-              detail: request.description,
-              sandboxed: false,
-              modeSwap,
-            },
-          });
-          timer = setTimeout(() => {
-            this.pending
-              .get(id)
-              ?.resolve(policy.autoApprove ? GlyphApprovalDecision.ALLOW_ONCE : GlyphApprovalDecision.DENY);
-          }, policy.timeoutSeconds * 1000);
-        },
-      );
+      const result = await this.resolveApproval(approval, policy, identity, signal, () => {
+        const startedAt = Date.now();
+        const modeSwap: GlyphModeSwap = {
+          ...request,
+          id: approval.id,
+          status: GlyphModeSwapStatus.PENDING,
+          autoApprove: identity.modeSwapPolicy.autoApprove,
+          startedAt: new Date(startedAt).toISOString(),
+          expiresAt: new Date(startedAt + identity.modeSwapPolicy.timeoutSeconds * 1000).toISOString(),
+        };
+        this.emit({
+          type: GlyphHostEventType.APPROVAL,
+          chatId: identity.chatId,
+          runId: identity.runId,
+          approval: {
+            id: approval.id,
+            title: approval.request.title,
+            detail: approval.request.detail,
+            sandboxed: false,
+            modeSwap,
+          },
+        });
+      });
+      if (result.admission === 'failed' || result.admission === 'cancelled') throw result.error;
+      const approved = result.admission === 'authorized';
       if (approved) {
         signal.throwIfAborted();
         await apply();
         committed = true;
       }
-      settle(id, approved ? GlyphModeSwapStatus.APPROVED : GlyphModeSwapStatus.DENIED);
+      settle(approval.id, approved ? GlyphModeSwapStatus.APPROVED : GlyphModeSwapStatus.DENIED);
       return approved;
     } catch (error) {
       settle(
-        id,
+        approval.id,
         committed
           ? GlyphModeSwapStatus.APPROVED
           : signal.aborted
@@ -215,8 +232,6 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
             : GlyphModeSwapStatus.FAILED,
       );
       throw error;
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
     }
   }
 
@@ -228,6 +243,40 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
       throw new Error('This decision is no longer pending for that run.');
     }
     pending.resolve(input.value);
+  }
+
+  private resolveApproval<C extends ApprovalCapability>(
+    approval: Approval<C>,
+    policy: ApprovalCapabilityPolicy<C>,
+    identity: RunIdentity,
+    signal: AbortSignal,
+    publish: () => void,
+  ): Promise<ApprovalResolution<C>> {
+    return this.enqueue(identity, signal, () =>
+      this.approvals.resolve(
+        approval,
+        policy,
+        {
+          presentApproval: (pending, cancellation, displayed) =>
+            this.waitNow(
+              pending.id,
+              identity,
+              'approval',
+              cancellation,
+              value => {
+                const choiceId = z.string().parse(value);
+                pending.validateChoice(choiceId);
+                return { approvalId: pending.id, choiceId };
+              },
+              () => {
+                displayed();
+                publish();
+              },
+            ),
+        },
+        signal,
+      ),
+    );
   }
 
   private requireRun(): Required<RunIdentity> {
@@ -244,36 +293,20 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     parse: (value: unknown) => T,
     publish: () => void,
   ): Promise<T> {
-    // A run exposes one human decision at a time; parallel tool calls queue
-    // here so a reconnect snapshot never loses an unanswered form.
+    return this.enqueue(identity, signal, () => this.waitNow(id, identity, kind, signal, parse, publish));
+  }
+
+  private enqueue<T>(identity: RunIdentity, signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    if (signal.aborted) return Promise.reject(signal.reason);
     const key = `${identity.chatId}\0${identity.runId}`;
-    const previous = this.queues.get(key);
-    return new Promise<T>((resolve, reject) => {
-      const abort = () => {
-        reject(signal.reason ?? new Error('Run cancelled.'));
-      };
-      if (previous) {
-        if (signal.aborted) abort();
-        else signal.addEventListener('abort', abort, { once: true });
-      }
-      const start = () => {
-        signal.removeEventListener('abort', abort);
-        return this.waitNow(id, identity, kind, signal, parse, publish);
-      };
-      const result = previous ? previous.then(start) : start();
-      // Keep the queue tied to the displayed decision, not to a queued caller
-      // cancelling its wait. Otherwise a later question could replace the
-      // still-unanswered form in the run's recoverable state.
-      const settled = result.then(
-        () => {},
-        () => {},
-      );
-      this.queues.set(key, settled);
-      void settled.then(() => {
-        if (this.queues.get(key) === settled) this.queues.delete(key);
+    let queue = this.queues.get(key);
+    if (!queue) {
+      queue = new ApprovalQueue(() => {
+        this.queues.delete(key);
       });
-      void result.then(resolve, reject);
-    });
+      this.queues.set(key, queue);
+    }
+    return queue.run(signal, operation);
   }
 
   private waitNow<T>(
@@ -320,6 +353,8 @@ const GLYPH_APPROVAL_TO_SHELL_PERMISSION: Record<GlyphApprovalDecision, ShellPer
   [GlyphApprovalDecision.DENY]: ShellPermissionDecision.DENY,
   [GlyphApprovalDecision.ALLOW_ONCE]: ShellPermissionDecision.ALLOW_ONCE,
   [GlyphApprovalDecision.ALWAYS_ALLOW]: ShellPermissionDecision.ALWAYS_ALLOW,
+  [GlyphApprovalDecision.ALLOW_SAFE]: ShellPermissionDecision.ALLOW_SAFE,
+  [GlyphApprovalDecision.DENY_AND_ALLOW_SAFE]: ShellPermissionDecision.DENY_AND_ALLOW_SAFE,
 };
 
 const modeSwapPolicySchema = z

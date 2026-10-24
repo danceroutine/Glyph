@@ -532,7 +532,7 @@ describe(OpenAISession, () => {
   });
 
   describe(OpenAISession.prototype.logout, () => {
-    it('saves and confirms logout for an already signed-out account', async () => {
+    it('saves local logout without claiming revocation for an already signed-out account', async () => {
       const saved = { clientId: 'client', subject: 'subject', email: 'developer@example.com' };
       const savedStore = store(saved);
       const session = new OpenAISession(
@@ -541,7 +541,7 @@ describe(OpenAISession, () => {
         configuration,
       );
 
-      await expect(session.logout(saved)).resolves.toBe(true);
+      await expect(session.logout(saved)).resolves.toBe(false);
       expect(savedStore.save).toHaveBeenCalledOnce();
     });
 

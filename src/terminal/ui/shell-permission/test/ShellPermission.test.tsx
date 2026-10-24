@@ -19,6 +19,7 @@ describe(WiredShellPermission, () => {
   describe('interaction', () => {
     it.each([
       { rows: 15, columns: 80 },
+      { rows: 16, columns: 80 },
       { rows: 24, columns: 39 },
     ])('blocks approval but permits denial in a $columns by $rows terminal', async size => {
       Object.assign(terminalSize, size);
@@ -222,7 +223,7 @@ describe(WiredShellPermission, () => {
       await write(view, '\u001B[B');
       await write(view, '\r');
 
-      expect(complete).toHaveBeenCalledWith(ShellPermissionDecision.DENY);
+      expect(complete).toHaveBeenCalledWith(ShellPermissionDecision.DENY_AND_ALLOW_SAFE);
       view.unmount();
     });
 
@@ -233,6 +234,7 @@ describe(WiredShellPermission, () => {
       ['4', ShellPermissionDecision.ALLOW_OUTSIDE_SANDBOX_ONCE],
       ['5', ShellPermissionDecision.ALLOW_EVERYTHING],
       ['6', ShellPermissionDecision.DENY],
+      ['7', ShellPermissionDecision.DENY_AND_ALLOW_SAFE],
     ])('selects numeric choice %s', async (input, decision) => {
       const complete = vi.fn();
       const view = render(<WiredShellPermission request={request(complete)} />);
@@ -256,7 +258,7 @@ describe(WiredShellPermission, () => {
       const active = render(<WiredShellPermission request={{ ...request(complete), interrupt }} />);
       await write(active, 'x');
       await write(active, '0');
-      await write(active, '7');
+      await write(active, '8');
       await writeEscape(active);
       expect(complete).toHaveBeenCalledWith(ShellPermissionDecision.DENY);
       active.unmount();

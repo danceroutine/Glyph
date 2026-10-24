@@ -457,13 +457,13 @@ describe(TerminalUI, () => {
         new AbortController().signal,
       );
 
-      await expect.poll(() => output.value.includes('Choice [1-6]')).toBe(true);
+      await expect.poll(() => output.value.includes('Choice [1-7]')).toBe(true);
       input.write('invalid\n');
-      await expect.poll(() => output.value.includes('Choose a number from 1 through 6')).toBe(true);
+      await expect.poll(() => output.value.includes('Choose a number from 1 through 7')).toBe(true);
       input.write('5\n');
 
       await expect(result).resolves.toBe(ShellPermissionDecision.ALLOW_EVERYTHING);
-      expect(output.value).toContain('Always allow this exact command');
+      expect(output.value).toContain('Always allow this command');
       ui.close();
     });
 

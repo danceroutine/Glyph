@@ -1,22 +1,25 @@
+import { WebRequestBudget } from './WebRequestBudget.ts';
 import { WebRequestError } from './WebRequestError.ts';
 import { webUrl } from './WebUrl.ts';
+import { AuthorizedWebTransport } from './AuthorizedWebTransport.ts';
 
 /** Anonymous, bounded requests; never forwards account tokens, cookies, or page scripts. */
 const defaultLimits = { maxBytes: 1024 * 1024, timeoutMs: 20_000, maxRedirects: 5 };
 
 export class WebHttpClient {
   constructor(
-    private readonly transport: typeof fetch = fetch,
+    private readonly transport: typeof fetch | AuthorizedWebTransport = new AuthorizedWebTransport(),
     private readonly limits = defaultLimits,
   ) {}
 
   async read(value: string, cancellation: AbortSignal): Promise<{ url: string; contentType: string; text: string }> {
-    const signal = AbortSignal.any([cancellation, AbortSignal.timeout(this.limits.timeoutMs)]);
-    let url = webUrl(value);
+    const budget = new WebRequestBudget(this.limits.timeoutMs, cancellation);
+    const signal = budget.signal;
     try {
+      let url = webUrl(value);
       for (let redirects = 0; ; redirects++) {
         signal.throwIfAborted();
-        const response = await this.transport(url, {
+        const options: RequestInit = {
           signal,
           redirect: 'manual',
           credentials: 'omit',
@@ -24,7 +27,11 @@ export class WebHttpClient {
             Accept: 'text/html, text/plain, text/markdown, application/json;q=0.8',
             'User-Agent': 'Glyph/0.2 WebTools',
           },
-        });
+        };
+        const response =
+          this.transport instanceof AuthorizedWebTransport
+            ? await this.transport.request(url, options, operation => budget.awaitConsent(operation))
+            : await this.transport(url, options);
         if ([301, 302, 303, 307, 308].includes(response.status)) {
           await response.body?.cancel();
           const location = response.headers.get('location');
@@ -88,6 +95,8 @@ export class WebHttpClient {
       if (signal.aborted) throw new WebRequestError('TIMEOUT', 'The website did not respond before the timeout.');
       if (error instanceof WebRequestError) throw error;
       throw new WebRequestError('NETWORK_ERROR', 'The website could not be reached.');
+    } finally {
+      budget.close();
     }
   }
 }
