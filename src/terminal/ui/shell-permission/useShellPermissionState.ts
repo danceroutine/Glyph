@@ -1,3 +1,4 @@
+import { shellPermissionChoices } from '#src/shell/shellPermissionChoices.js';
 import { useRef, useState } from 'react';
 import { useCursor, useInput, useWindowSize } from 'ink';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
@@ -9,39 +10,6 @@ export interface ShellPermissionChoice {
   readonly description: string;
 }
 
-const choices: readonly ShellPermissionChoice[] = [
-  {
-    decision: ShellPermissionDecision.ALLOW_ONCE,
-    label: 'Allow once',
-    description: 'Run in the project-write sandbox with a sanitized environment.',
-  },
-  {
-    decision: ShellPermissionDecision.ALWAYS_ALLOW,
-    label: 'Always allow',
-    description: 'Remember this exact command and keep it sandboxed with a sanitized environment.',
-  },
-  {
-    decision: ShellPermissionDecision.ALLOW_SAFE,
-    label: 'Allow safe',
-    description: 'Auto-run recognized inspection commands in a read-only, offline sandbox.',
-  },
-  {
-    decision: ShellPermissionDecision.ALLOW_OUTSIDE_SANDBOX_ONCE,
-    label: 'Allow outside sandbox once',
-    description: 'Run once with your login shell, full environment, and user permissions.',
-  },
-  {
-    decision: ShellPermissionDecision.ALLOW_EVERYTHING,
-    label: 'Allow everything',
-    description: 'Run future commands unsandboxed with your login shell and full environment.',
-  },
-  {
-    decision: ShellPermissionDecision.DENY,
-    label: 'Deny',
-    description: 'Do not run the command.',
-  },
-];
-
 export interface ShellPermissionState {
   readonly command: string;
   readonly workingDirectory: string;
@@ -50,11 +18,12 @@ export interface ShellPermissionState {
 }
 
 export function useShellPermissionState(request: TerminalShellPermissionRequest, active = true): ShellPermissionState {
+  const choices = shellPermissionChoices(request.permission);
   const { rows, columns } = useWindowSize();
   const settled = useRef(false);
   const choose = (decision: ShellPermissionDecision): void => {
     // The input handler checks settlement before dispatching a choice.
-    if (decision !== ShellPermissionDecision.DENY && (rows < 16 || columns < 40)) return;
+    if (decision !== ShellPermissionDecision.DENY && (rows < choices.length + 10 || columns < 40)) return;
     // Claim the interaction before its callback can trigger another input or
     // render: a request can authorize or interrupt, never both or twice.
     settled.current = true;

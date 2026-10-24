@@ -26,6 +26,7 @@ export function useGlyphApprovalCardState({
   };
   return {
     request,
+    decide,
     disabled,
     pending,
     error,

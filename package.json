@@ -77,6 +77,9 @@
     "test:e2e": "pnpm context-index:build && pnpm shell-sandbox:build && vitest run --project e2e",
     "test:transform-performance": "for size in 1 5 10 20 50; do node --expose-gc --import tsx src/editing/documents/test/TextEditTransformer.benchmark.ts $size; done",
     "test:watch": "vitest",
+    "test:security": "vitest run --project unit --project code-oss --project overlay --project ui --maxWorkers=2 security.test utilityMain.test --reporter=default --reporter=json --reporter=./scripts/security/reporter.mjs --outputFile.json=.artifacts/security/results.json",
+    "test:security:native": "cargo test --package glyph-shell-sandbox security_ && cargo test --package glyph-shell-sandbox --test sandbox_e2e -- --include-ignored",
+    "test:security:all": "run-s --continue-on-error test:security test:security:native",
     "todo:dev": "pnpm --dir examples/todo-app dev",
     "todo:build": "pnpm --dir examples/todo-app build",
     "todo:preview": "pnpm --dir examples/todo-app preview"
@@ -110,6 +113,7 @@
     "prosemirror-view": "^1.42.6",
     "react": "19.3.0",
     "string-width": "8.3.0",
+    "undici": "7.30.1",
     "wrap-ansi": "9.0.2",
     "zod": "^4.1.12"
   },

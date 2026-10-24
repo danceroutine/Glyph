@@ -3,6 +3,10 @@ import { SqliteAgentReviewStore } from '#src/reviewing/SqliteAgentReviewStore.js
 import { ConversationAgentReviewExecutor } from '#src/reviewing/ConversationAgentReviewExecutor.js';
 import { ChatConversation } from '#src/chat/ChatConversation.js';
 import { WebToolRuntime } from '#src/web/WebToolRuntime.js';
+import { AuthorizedWebTransport } from '#src/web/AuthorizedWebTransport.js';
+import { WebApprovalService } from '#src/web/WebApprovalService.js';
+import { FileApprovalStore } from '#src/interaction/approvals/FileApprovalStore.js';
+import { QuestionApprovalPresenter } from '#src/interaction/approvals/QuestionApprovalPresenter.js';
 import { WebHttpClient } from '#src/web/WebHttpClient.js';
 import { WebFetchService } from '#src/web/WebFetchService.js';
 import { DuckDuckGoSearch } from '#src/web/DuckDuckGoSearch.js';
@@ -41,7 +45,6 @@ import { OpenAIAuthenticationClient } from '#src/providers/openai/auth/OpenAIAut
 import { OpenAISession } from '#src/providers/openai/auth/OpenAISession.js';
 import { FileOpenAIAccountStore } from '#src/providers/openai/auth/FileOpenAIAccountStore.js';
 import { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.js';
-import { FileShellPermissionStore } from '#src/shell/FileShellPermissionStore.js';
 import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { ShellWorkingDirectoryResolver } from '#src/shell/ShellWorkingDirectoryResolver.js';
 import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
@@ -218,11 +221,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       { maxReadBytes: getEditingReadBudget(configuration.editing), autoApply: true },
     );
     let runtime: ProviderDesktopRuntime | undefined;
-    const interactions = new DesktopInteractionBroker(event => runtime?.publish(event));
+    const interactions = new DesktopInteractionBroker(event => runtime?.publish(event), {
+      workspaceId: context.id,
+      mutationScope: context.mutationIdentity,
+    });
     const shells = new ShellSessionManager(
       new ShellCommandAuthorizer(
-        context.mutationIdentity,
-        new FileShellPermissionStore(join(configuration.stateDirectory, 'projects', mutationStorageId)),
+        { workspaceId: context.id, mutationScope: context.mutationIdentity },
+        new FileApprovalStore(join(configuration.stateDirectory, 'projects', mutationStorageId)),
         interactions,
       ),
       new ShellWorkingDirectoryResolver(context),
@@ -240,7 +246,16 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       }),
       context,
     );
-    const webHttp = new WebHttpClient(this.transport);
+    const webApproval = new WebApprovalService(
+      { workspaceId: context.id, mutationScope: context.mutationIdentity },
+      new FileApprovalStore(join(configuration.stateDirectory, 'projects', mutationStorageId)),
+      new QuestionApprovalPresenter(interactions),
+    );
+    // The explicitly injected scripted transport owns fixture routing. Normal
+    // production traffic always resolves, authorizes and pins its destination.
+    const webHttp = new WebHttpClient(
+      this.transport ?? new AuthorizedWebTransport((destination, signal) => webApproval.request(destination, signal)),
+    );
     const tools = new ToolRegistry(
       [
         new ModeSwitchToolRuntime((target, description, toolContext, signal) =>

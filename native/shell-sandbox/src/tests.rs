@@ -2,6 +2,65 @@ use super::*;
 use std::fs::{create_dir, write};
 use tempfile::tempdir;
 
+/*
+ * A workspace can be a writable subtree of the running installation. Linux
+ * must protect the exposed intersection even when the protected install is an
+ * ancestor of the workspace; mounting the entire ancestor would grant unrelated
+ * read authority. Build the real argument plan over disposable directories and
+ * inspect the final mount for the protected intersection. This proves policy
+ * construction only, not Bubblewrap's kernel enforcement. Equal, child and
+ * disjoint layouts ensure the restriction does not become deny-all or expose
+ * a previously inaccessible installation sibling.
+ */
+#[test]
+fn security_protected_installation_covers_workspace_intersections_without_exposing_ancestors() {
+    let fixture = tempdir().unwrap();
+    let install = fixture.path().join("install");
+    let source = install.join("source");
+    let sibling = fixture.path().join("sibling");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir(&sibling).unwrap();
+    for profile in [SandboxProfile::ReadOnly, SandboxProfile::WorkspaceWrite] {
+        for root in [&source, &install, &sibling] {
+            let mut request = request(profile, root, &fixture.path().join("state"));
+            request.protected_paths.push(install.clone());
+            let arguments = linux::bubblewrap_arguments(&request, None).unwrap();
+            let last = arguments
+                .windows(3)
+                .filter(|entry| {
+                    (entry[0] == "--bind" || entry[0] == "--ro-bind")
+                        && entry[2] == root.as_os_str()
+                })
+                .next_back()
+                .unwrap();
+            if root == &sibling && profile == SandboxProfile::WorkspaceWrite {
+                assert_eq!(last[0], "--bind");
+            } else {
+                assert_eq!(
+                    last[0],
+                    "--ro-bind",
+                    "protected workspace: {}",
+                    root.display()
+                );
+            }
+            if root != &install {
+                assert!(
+                    !arguments
+                        .windows(3)
+                        .any(|entry| entry[2] == install.as_os_str()),
+                    "must not expose protected parent or disjoint sibling"
+                );
+            }
+        }
+        let mut parent = request(profile, fixture.path(), &fixture.path().join("state"));
+        parent.protected_paths.push(install.clone());
+        let arguments = linux::bubblewrap_arguments(&parent, None).unwrap();
+        assert!(arguments
+            .windows(3)
+            .any(|entry| entry[0] == "--ro-bind" && entry[2] == install.as_os_str()));
+    }
+}
+
 #[test]
 fn sensitive_file_policy_rejects_case_variants() {
     let policy = WorkspaceAccessPolicy::default();

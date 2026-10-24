@@ -11,6 +11,48 @@ use tempfile::TempDir;
 
 const MARKER: &str = "I win";
 
+/*
+ * Selecting a source subtree as the workspace must not make the protected
+ * installation writable. Launch the real platform helper against a synthetic
+ * install, prove ordinary workspace writes work, then attempt only one new
+ * uniquely named file containing exactly "I win" beneath the protected parent.
+ * No installed application, existing file, Git data or credential is modified.
+ * This records enforcement only for the current OS/backend, independently of
+ * the mount-plan test. Fixture ownership and cleanup remain with TempDir.
+ */
+#[test]
+#[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
+fn security_protected_installation_ancestor_denies_fixture_marker_creation() {
+    let mut fixture = Fixture::new();
+    let install = fixture.workspace.clone();
+    fixture.workspace = install.join("source");
+    fs::create_dir(&fixture.workspace).unwrap();
+    assert!(fs::canonicalize(&fixture.workspace)
+        .unwrap()
+        .starts_with(&fixture.root));
+    let allowed = fixture.workspace.join("allowed-control.txt");
+    let result = fixture.run(
+        "workspace-write",
+        "printf 'I win' > \"$GLYPH_TEST_TARGET\"",
+        &[("GLYPH_TEST_TARGET", &allowed)],
+    );
+    assert_success(&result, "ordinary write positive control");
+    assert_eq!(fs::read_to_string(allowed).unwrap(), MARKER);
+    let denied = fixture.workspace.join("protected-install-marker.txt");
+    assert!(!denied.exists());
+    let result = fixture.run_with_protected_paths(
+        "workspace-write",
+        "printf 'I win' > \"$GLYPH_TEST_TARGET\"",
+        &[("GLYPH_TEST_TARGET", &denied)],
+        &[&install],
+    );
+    assert!(
+        !denied.exists(),
+        "protected installation admitted a fixture marker"
+    );
+    assert_denied(&result, "protected installation ancestor");
+}
+
 /// Fixture-only torture test governed by src/shell/test/ADVERSARIAL_TESTING_SAFETY.md.
 #[test]
 #[ignore = "requires the host sandbox backend; run with pnpm shell-sandbox:torture"]
@@ -152,6 +194,16 @@ impl Fixture {
     }
 
     fn run(&self, profile: &str, script: &str, environment: &[(&str, &Path)]) -> Output {
+        self.run_with_protected_paths(profile, script, environment, &[])
+    }
+
+    fn run_with_protected_paths(
+        &self,
+        profile: &str,
+        script: &str,
+        environment: &[(&str, &Path)],
+        protected: &[&Path],
+    ) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_glyph-shell-sandbox"));
         command
             .args(["--profile", profile, "--working-directory"])
@@ -163,7 +215,12 @@ impl Fixture {
             .args([
                 "--workspace-policy",
                 r#"{"ignoredDirectories":[".git",".next","coverage","dist","node_modules","target"],"sensitiveFileNames":[".git-credentials",".netrc",".npmrc",".pypirc"],"sensitiveFilePrefixes":[".env"],"sensitiveFileExtensions":[".key",".pem",".p12",".pfx"],"allowedFileNames":[".env.example"]}"#,
-            ])
+            ]);
+        for path in protected {
+            assert!(path.starts_with(&self.root));
+            command.arg("--protected-path").arg(path);
+        }
+        command
             .args(["--", "/bin/sh", "-c", script])
             .env_clear()
             .env("HOME", &self.home)

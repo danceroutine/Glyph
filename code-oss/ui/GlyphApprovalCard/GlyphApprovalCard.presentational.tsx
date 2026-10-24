@@ -29,7 +29,16 @@ const styles = {
 
 export type GlyphApprovalCardProps = GlyphApprovalCardState;
 
-export function GlyphApprovalCard({ request, disabled, pending, error, skip, alwaysRun, run }: GlyphApprovalCardProps) {
+export function GlyphApprovalCard({
+  request,
+  disabled,
+  pending,
+  error,
+  skip,
+  alwaysRun,
+  run,
+  decide,
+}: GlyphApprovalCardProps) {
   const goal = request.goal;
   const Icon = goal ? Target : Terminal;
   return (
@@ -56,21 +65,40 @@ export function GlyphApprovalCard({ request, disabled, pending, error, skip, alw
       {request.workingDirectory !== undefined && request.workingDirectory !== '' && (
         <p class={`${shared.detail} ${styles.detail}`}>Working directory: {request.workingDirectory}</p>
       )}
-      {request.canRemember === true && (
+      {request.choices === undefined && request.canRemember === true && (
         <p class={`${shared.detail} ${styles.detail}`}>Always Run remembers this exact command in this directory.</p>
       )}
       <div class={shared.actions}>
-        <Button appearance={ButtonAppearance.GHOST} type="button" disabled={disabled || pending} onClick={skip}>
-          {goal ? 'Decline' : 'Skip'}
-        </Button>
-        {request.canRemember === true && (
-          <Button type="button" disabled={disabled || pending} onClick={alwaysRun}>
-            Always Run
-          </Button>
+        {request.choices ? (
+          request.choices.map(choice => (
+            <div key={choice.id}>
+              <Button
+                type="button"
+                disabled={disabled || pending}
+                onClick={() => {
+                  decide(choice.id);
+                }}
+              >
+                {choice.label}
+              </Button>
+              <p class={shared.detail}>{choice.description}</p>
+            </div>
+          ))
+        ) : (
+          <>
+            <Button appearance={ButtonAppearance.GHOST} type="button" disabled={disabled || pending} onClick={skip}>
+              {goal ? 'Decline' : 'Skip'}
+            </Button>
+            {request.choices === undefined && request.canRemember === true && (
+              <Button type="button" disabled={disabled || pending} onClick={alwaysRun}>
+                Always Run
+              </Button>
+            )}
+            <Button variant={ButtonVariant.PRIMARY} type="button" disabled={disabled || pending} onClick={run}>
+              {pending ? 'Submitting…' : goal ? 'Start goal' : 'Run'}
+            </Button>
+          </>
         )}
-        <Button variant={ButtonVariant.PRIMARY} type="button" disabled={disabled || pending} onClick={run}>
-          {pending ? 'Submitting…' : goal ? 'Start goal' : 'Run'}
-        </Button>
       </div>
       {disabled && <p class={shared.error}>Approve in the window that owns this chat.</p>}
       {error !== undefined && error !== '' && (

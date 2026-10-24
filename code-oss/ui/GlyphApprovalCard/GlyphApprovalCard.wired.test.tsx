@@ -133,3 +133,31 @@ describe(WiredGlyphApprovalCard, () => {
     }
   });
 });
+
+/** Policy metadata makes current denial/allowance explicit while both choices can enable future inspections. */
+it.each([
+  ['Allow & enable safe commands', GlyphApprovalDecision.ALLOW_SAFE],
+  ['Deny & enable safe commands', GlyphApprovalDecision.DENY_AND_ALLOW_SAFE],
+] as const)('submits only the advertised %s choice', (label, id) => {
+  const decideApproval = vi.fn(() => new Promise<void>(() => {}));
+  render(
+    <WiredGlyphApprovalCard
+      request={{
+        id: 'approval',
+        title: 'Shell',
+        detail: 'echo changed',
+        sandboxed: true,
+        choices: [{ id, label, description: 'Future inspections run read-only.' }],
+      }}
+      chatId="chat"
+      runId="run"
+      actions={{ decideApproval }}
+      disabled={false}
+    />,
+  );
+  expect(screen.getByText('Future inspections run read-only.')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Always Run' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  expect(decideApproval).toHaveBeenCalledExactlyOnceWith('chat', 'run', 'approval', id);
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: label }).disabled).toBe(true);
+});
