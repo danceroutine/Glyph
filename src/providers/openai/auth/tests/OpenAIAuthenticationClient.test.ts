@@ -823,7 +823,7 @@ describe(OpenAIAuthenticationClient, () => {
     it('succeeds without a request when the account is signed out', async () => {
       const client = new OpenAIAuthenticationClient(configuration, http());
 
-      await expect(client.revoke({ clientId: 'client', subject: 'subject', email: 'e' })).resolves.toBe(true);
+      await expect(client.revoke({ clientId: 'client', subject: 'subject', email: 'e' })).resolves.toBe(false);
     });
 
     it('revokes the refresh token at the discovered endpoint', async () => {

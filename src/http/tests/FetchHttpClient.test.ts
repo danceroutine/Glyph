@@ -127,7 +127,7 @@ describe(FetchHttpClient, () => {
       );
 
       await expect(client.post('https://example.test/token')).rejects.toBeInstanceOf(HttpError);
-      expect(log.error).toHaveBeenCalledWith('http.failure', expect.objectContaining({ error: 'offline' }));
+      expect(log.error).toHaveBeenCalledWith('http.failure', expect.objectContaining({ error: 'REQUEST_FAILED' }));
     });
 
     it('serializes JSON bodies with a JSON content type', async () => {
@@ -196,7 +196,7 @@ describe(FetchHttpClient, () => {
       await expect(client.post('https://example.test/items')).rejects.toBe(failure);
     });
 
-    it('records non-error transport failures as text', async () => {
+    it('records a safe category for non-error transport failures', async () => {
       const log = logger();
       const client = new FetchHttpClient(
         log.value,
@@ -208,7 +208,7 @@ describe(FetchHttpClient, () => {
       await expect(client.post('https://example.test/items')).rejects.toThrow(
         'HTTP POST https://example.test/items failed.',
       );
-      expect(log.error).toHaveBeenCalledWith('http.failure', expect.objectContaining({ error: 'connection reset' }));
+      expect(log.error).toHaveBeenCalledWith('http.failure', expect.objectContaining({ error: 'REQUEST_FAILED' }));
     });
 
     it('still completes the request when logging fails', async () => {

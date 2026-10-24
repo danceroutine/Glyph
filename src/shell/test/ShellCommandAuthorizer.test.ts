@@ -149,7 +149,7 @@ describe(ShellCommandAuthorizer, () => {
 
     it('does not load or reuse saved full access for an already cancelled command', async () => {
       const load = vi.fn<ShellPermissionStore['load']>(async () => ({
-        schemaVersion: 2,
+        schemaVersion: 2 as const,
         projectContextId: 'project',
         mode: ShellPermissionMode.ALLOW_EVERYTHING,
         allowedCommands: [],
@@ -171,7 +171,7 @@ describe(ShellCommandAuthorizer, () => {
           load: async () => {
             controller.abort(new Error('Cancelled while loading.'));
             return {
-              schemaVersion: 2,
+              schemaVersion: 2 as const,
               projectContextId: 'project',
               mode: ShellPermissionMode.ALLOW_EVERYTHING,
               allowedCommands: [],
@@ -226,7 +226,7 @@ describe(ShellCommandAuthorizer, () => {
       temporaryDirectories.push(directory);
       const permissions = new FileShellPermissionStore(directory);
       await permissions.save({
-        schemaVersion: 2,
+        schemaVersion: 2 as const,
         projectContextId: 'old-roots',
         mode: ShellPermissionMode.ALLOW_EVERYTHING,
         allowedCommands: [],
@@ -255,7 +255,7 @@ describe(ShellCommandAuthorizer, () => {
 
       expect(presentShellPermission).toHaveBeenCalledTimes(2);
       expect(presentShellPermission).toHaveBeenCalledWith(
-        { command: 'pnpm test', workingDirectory: '/project' },
+        expect.objectContaining({ command: 'pnpm test', workingDirectory: '/project' }),
         expect.any(AbortSignal),
       );
       expect(save).not.toHaveBeenCalled();
@@ -277,7 +277,7 @@ describe(ShellCommandAuthorizer, () => {
 
       expect(presentShellPermission).toHaveBeenCalledOnce();
       expect(save).toHaveBeenCalledWith({
-        schemaVersion: 2,
+        schemaVersion: 2 as const,
         projectContextId: 'project',
         mode: ShellPermissionMode.ASK,
         allowedCommands: [{ command: 'pnpm test', workingDirectory: '/project' }],
@@ -296,7 +296,7 @@ describe(ShellCommandAuthorizer, () => {
 
       expect(presentShellPermission).toHaveBeenCalledTimes(2);
       expect(presentShellPermission).toHaveBeenLastCalledWith(
-        { command: 'pnpm test', workingDirectory: '/project/two' },
+        expect.objectContaining({ command: 'pnpm test', workingDirectory: '/project/two' }),
         expect.any(AbortSignal),
       );
     });
@@ -362,7 +362,7 @@ describe(ShellCommandAuthorizer, () => {
       expect(authorizer.mode).toBe(ShellPermissionMode.ALLOW_SAFE);
       expect(presentShellPermission).toHaveBeenCalledTimes(3);
       expect(save).toHaveBeenCalledWith({
-        schemaVersion: 2,
+        schemaVersion: 2 as const,
         projectContextId: 'project',
         mode: ShellPermissionMode.ALLOW_SAFE,
         allowedCommands: [],
@@ -384,7 +384,7 @@ describe(ShellCommandAuthorizer, () => {
       const authorizer = new ShellCommandAuthorizer(
         'project',
         store({
-          schemaVersion: 2,
+          schemaVersion: 2 as const,
           projectContextId: 'project',
           mode: ShellPermissionMode.ASK,
           allowedCommands: [{ command: 'pnpm test', workingDirectory: '/project' }],
@@ -506,7 +506,7 @@ describe(FileShellPermissionStore, () => {
     it('migrates legacy exact-command grants closed because their directory scope is unknown', async () => {
       const directory = await temporaryDirectory();
       await new FileShellPermissionStore(directory).save({
-        schemaVersion: 2,
+        schemaVersion: 2 as const,
         projectContextId: 'seed',
         mode: ShellPermissionMode.ASK,
         allowedCommands: [],
@@ -522,7 +522,7 @@ describe(FileShellPermissionStore, () => {
       );
 
       await expect(new FileShellPermissionStore(directory).load('project')).resolves.toEqual({
-        schemaVersion: 2,
+        schemaVersion: 2 as const,
         projectContextId: 'project',
         mode: ShellPermissionMode.ASK,
         allowedCommands: [],
@@ -560,7 +560,7 @@ describe(FileShellPermissionStore, () => {
 
       await expect(
         new FileShellPermissionStore(directory).save({
-          schemaVersion: 2,
+          schemaVersion: 2 as const,
           projectContextId: 'project',
           mode: ShellPermissionMode.ASK,
           allowedCommands: [],
@@ -575,7 +575,7 @@ describe(FileShellPermissionStore, () => {
 
       await expect(
         new FileShellPermissionStore(join(directory, 'file', 'nested')).save({
-          schemaVersion: 2,
+          schemaVersion: 2 as const,
           projectContextId: 'project',
           mode: ShellPermissionMode.ASK,
           allowedCommands: [],

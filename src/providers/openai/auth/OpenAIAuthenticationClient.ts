@@ -267,7 +267,8 @@ export class OpenAIAuthenticationClient {
   }
 
   async revoke(account: OpenAIAccount, signal?: AbortSignal): Promise<boolean> {
-    if (!account.tokens) return true;
+    // Local absence cannot confirm issuer revocation of an earlier token copy.
+    if (!account.tokens) return false;
     try {
       const discovery = await this.http.get(`${this.configuration.issuer}/.well-known/openid-configuration`, {
         redirect: 'error',

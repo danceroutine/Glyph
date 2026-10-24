@@ -28,7 +28,9 @@ export class FetchHttpClient implements HttpClient {
   ): Promise<HttpResponse<unknown>> {
     const startedAt = performance.now();
     const target = String(url);
-    await this.safeLog('debug', 'http.request', { method, url: target });
+    // URLs and exception text can carry credentials unknown to session redaction.
+    // Keep HTTP diagnostics to metadata whose values we control.
+    await this.safeLog('debug', 'http.request', { method });
     try {
       const timeout = AbortSignal.timeout(options.timeoutMs ?? 30_000);
       const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
@@ -44,7 +46,6 @@ export class FetchHttpClient implements HttpClient {
       const responseBody = await decodeBody(response, options.responseBody ?? HttpResponseBody.JSON);
       await this.safeLog('debug', 'http.response', {
         method,
-        url: target,
         status: response.status,
         durationMs: performance.now() - startedAt,
       });
@@ -52,9 +53,8 @@ export class FetchHttpClient implements HttpClient {
     } catch (error) {
       await this.safeLog('error', 'http.failure', {
         method,
-        url: target,
         durationMs: performance.now() - startedAt,
-        error: error instanceof Error ? error.message : String(error),
+        error: 'REQUEST_FAILED',
       });
       if (error instanceof HttpError) throw error;
       throw new HttpError(`HTTP ${method} ${target} failed.`, { cause: error });
