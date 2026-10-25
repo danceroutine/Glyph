@@ -8,6 +8,18 @@ export declare const mountGlyphReview: GlyphReviewMount;
 
 import type { GlyphPlanMount } from '#glyph/workbench/GlyphPlanView.js';
 export declare const mountGlyphPlan: GlyphPlanMount;
+export declare const mountGlyphAgentInstructions: (
+  container: HTMLElement,
+  sources: readonly import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource[],
+  query: string,
+  openSource: (source: import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource) => void,
+) => {
+  update(
+    sources: readonly import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource[],
+    query: string,
+  ): void;
+  dispose(): void;
+};
 
 export declare const mountGlyphCommentButton: (
   container: HTMLElement,

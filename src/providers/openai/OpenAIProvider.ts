@@ -26,6 +26,9 @@ import type {
   AgentTurnStep,
 } from '#src/chat/runtime/AgentModelAdapter.js';
 import { isRecord } from '#src/shared/validators/isRecord.js';
+import type { AgentInstructionContextProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
+import type { AgentHistoryProjection } from '#src/chat/runtime/AgentHistoryProjection.js';
 
 interface OpenAITurn {
   readonly input: ResponseInputItem[];
@@ -39,6 +42,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     private readonly token: () => Promise<string>,
     private readonly client: OpenAI | undefined,
     private readonly tools: ToolRegistry,
+    private readonly instructionContext?: AgentInstructionContextProvider,
   ) {}
 
   emptyState(): ChatProviderState {
@@ -47,6 +51,28 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
 
   restoreState(state: ChatProviderState): ChatProviderState {
     return stateFrom(historyFrom(state));
+  }
+
+  projectHistory(state: ChatProviderState, projection: AgentHistoryProjection): ChatProviderState {
+    const history = historyFrom(state).flatMap((item): ResponseInputItem[] => {
+      switch (item.type) {
+        case 'function_call_output':
+        case 'custom_tool_call_output':
+          if (typeof item.output === 'string') return [{ ...item, output: projection.toolOutput(item.output) }];
+          break;
+        case undefined:
+        case 'message':
+          if ('role' in item && item.role === 'user' && 'content' in item && typeof item.content === 'string') {
+            const content = projection.userMessage(item.content);
+            return content === undefined ? [] : [{ ...item, content }];
+          }
+          break;
+        default:
+          return [item];
+      }
+      return [item];
+    });
+    return stateFrom(history);
   }
 
   recoverInterruptedToolCalls(state: ChatProviderState) {
@@ -89,8 +115,21 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     return stateFrom(history);
   }
 
-  async beginTurn(state: ChatProviderState, request: ChatRequest): Promise<OpenAITurn> {
-    return { input: [...historyFrom(state), toUserInput(request)] };
+  async beginTurn(state: ChatProviderState, request: ChatRequest, context: AgentTurnContext): Promise<OpenAITurn> {
+    const instructions = this.instructionContext?.beginTurn
+      ? await this.instructionContext.beginTurn(
+          context.turnId,
+          request.attachments.map(attachment => attachment.path),
+          context.signal,
+        )
+      : await this.instructionContext?.context(context.signal);
+    return {
+      input: [
+        ...historyFrom(state),
+        ...(instructions && instructions.sources.length > 0 ? [toInstructionContextInput(instructions)] : []),
+        toUserInput(request),
+      ],
+    };
   }
 
   /** HTTP transport appends user input for the next request; WebSocket delivery belongs behind this seam. */
@@ -263,7 +302,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     return { ...turn, input: [...turn.input, ...outputs] };
   }
 
-  commit(turn: OpenAITurn): ChatProviderState {
+  snapshot(turn: OpenAITurn): ChatProviderState {
     return stateFrom(turn.input);
   }
 
@@ -316,9 +355,15 @@ export class OpenAIProvider extends AgentRuntime<OpenAITurn> {
     client: OpenAI | undefined,
     tools: ToolSource,
     initialState?: ChatProviderState,
+    instructionContext?: AgentInstructionContextProvider,
   ) {
     const registry = tools instanceof ToolRegistry ? tools : new ToolRegistry(tools.tools);
-    super(new OpenAIModelAdapter(model, configuration, token, client, registry), configuration, registry, initialState);
+    super(
+      new OpenAIModelAdapter(model, configuration, token, client, registry, instructionContext),
+      configuration,
+      registry,
+      initialState,
+    );
   }
 }
 
@@ -363,6 +408,10 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
       { type: 'input_text', text: request.text },
     ],
   };
+}
+
+function toInstructionContextInput(context: AgentInstructionContext): ResponseInputItem {
+  return { role: 'user', content: JSON.stringify(context) };
 }
 
 const USER_CONTEXT_EVENT_TYPES: ReadonlySet<unknown> = new Set(['shell_wake', 'shell_exit', 'goal_continuation']);

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
+import type { AgentHistoryProjection } from '#src/chat/runtime/AgentHistoryProjection.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import { testToolSource, type TestToolHandler } from '#src/tools/test/fixtures/TestToolSource.js';
@@ -49,6 +50,26 @@ class ClaudeShapedAdapter implements AgentModelAdapter<ClaudeTurn> {
 
   restoreState(state: ChatProviderState): ChatProviderState {
     return claudeState(messagesFrom(state));
+  }
+
+  projectHistory(state: ChatProviderState, projection: AgentHistoryProjection): ChatProviderState {
+    return claudeState(
+      messagesFrom(state).flatMap((message): ClaudeMessage[] => {
+        if (typeof message.content === 'string') {
+          if (message.role !== 'user') return [message];
+          const content = projection.userMessage(message.content);
+          return content === undefined ? [] : [{ ...message, content }];
+        }
+        return [
+          {
+            ...message,
+            content: message.content.map(block =>
+              block.type === 'tool_result' ? { ...block, content: projection.toolOutput(block.content) } : block,
+            ),
+          },
+        ];
+      }),
+    );
   }
 
   recoverInterruptedToolCalls(state: ChatProviderState) {
@@ -152,7 +173,7 @@ class ClaudeShapedAdapter implements AgentModelAdapter<ClaudeTurn> {
     };
   }
 
-  commit(turn: ClaudeTurn): ChatProviderState {
+  snapshot(turn: ClaudeTurn): ChatProviderState {
     return claudeState(turn.messages);
   }
 }
@@ -189,6 +210,77 @@ class TwoToolClaudeAdapter extends ClaudeShapedAdapter {
 }
 
 describe(AgentRuntime, () => {
+  it.each([false, true])(
+    'keeps scoped tool guidance live but out of Claude-shaped checkpoints (failure: %s)',
+    async fail => {
+      const adapter = new ClaudeShapedAdapter();
+      const stream = adapter.streamStep.bind(adapter);
+      if (fail)
+        adapter.streamStep = async (turn, context) => {
+          if (turn.round > 0) {
+            adapter.requests.push(structuredClone(turn));
+            throw new Error('Model failed after tool result');
+          }
+          return stream(turn, context);
+        };
+      const output = scopedToolOutput();
+      const runtime = new AgentRuntime(
+        adapter,
+        { timeoutMs: 10_000 },
+        mockTools(async () => output),
+      );
+      const checkpoints: ChatProviderState[] = [];
+      const result = runtime.send('Read nested file', {
+        signal: new AbortController().signal,
+        onText: () => {},
+        onStateCheckpoint: async state => {
+          checkpoints.push(state);
+        },
+      });
+      if (fail) await expect(result).rejects.toThrow('Model failed after tool result');
+      else await result;
+      expect(adapter.requests[1]?.messages.at(-1)).toEqual({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: output }],
+      });
+      expect(checkpoints).toHaveLength(2);
+      expect(messagesFrom(checkpoints[1]!).at(-1)).toEqual({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: JSON.stringify({ content: 'file' }) }],
+      });
+      expect(JSON.stringify(runtime.exportState())).not.toContain('old scoped guidance');
+      // The next logical turn replays durable history, while the earlier live request stays intact.
+      adapter.streamStep = stream;
+      await runtime.send('Unrelated task', { signal: new AbortController().signal, onText: () => {} });
+      expect(JSON.stringify(adapter.requests[2])).not.toContain('old scoped guidance');
+      expect(JSON.stringify(adapter.requests[1])).toContain('old scoped guidance');
+    },
+  );
+
+  it.each(['initial', 'restore'] as const)('cleans legacy scoped guidance from Claude-shaped %s state', method => {
+    const adapter = new ClaudeShapedAdapter();
+    const source = claudeState([
+      { role: 'user', content: JSON.stringify({ schema: 'glyph.agent-instructions.v1', sources: [] }) },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'prior', content: scopedToolOutput() }] },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'opaque', signature: 'keep-signature' }] },
+    ]);
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10_000 },
+      mockTools(async () => 'unused'),
+      method === 'initial' ? source : undefined,
+    );
+    if (method === 'restore') runtime.restoreState(source);
+    expect(messagesFrom(runtime.exportState())).toEqual([
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'prior', content: JSON.stringify({ content: 'file' }) }],
+      },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'opaque', signature: 'keep-signature' }] },
+    ]);
+    expect(JSON.stringify(source)).toContain('old scoped guidance');
+  });
+
   it.each([false, true])(
     'does not inject review instructions into ordinary chat, including legacy review metadata: %s',
     async reviewing => {
@@ -978,4 +1070,11 @@ function deferredVoid(): { promise: Promise<void>; resolve: () => void } {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+function scopedToolOutput(): string {
+  return JSON.stringify({
+    content: 'file',
+    instructionContext: { schema: 'glyph.agent-instructions.v1', sources: [{ content: 'old scoped guidance' }] },
+  });
 }

@@ -150,6 +150,14 @@ function editorServices() {
     },
     textFileService: {
       isDirty: vi.fn((resource: URI) => dirty.has(resource.path)),
+      files: {
+        resolve: vi.fn(async (resource: URI) => {
+          const model = find(resource);
+          const text = disk.get(resource.path);
+          if (model && text !== undefined && model.text !== text) model.write(text);
+          return model;
+        }),
+      },
       save: vi.fn(async (resource: URI): Promise<URI | undefined> => {
         disk.set(resource.path, find(resource)!.text);
         dirty.delete(resource.path);
@@ -290,6 +298,27 @@ describe(GlyphEditorAdapter, () => {
     const reference = (await services.textModelService.createModelReference.mock.results[0].value) as { dispose: Mock };
     adapter.dispose();
     expect(reference.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('refreshes a retained clean model from disk while preserving dirty editor contents', async () => {
+    const services = editorServices();
+    const model = services.open('AGENTS.md', 'first');
+    const adapter = createAdapter(services);
+    expect(await adapter.read('AGENTS.md')).toMatchObject({ text: 'first', dirty: false });
+
+    services.disk.set('/workspace/AGENTS.md', 'second');
+    expect(await adapter.read('AGENTS.md')).toMatchObject({ text: 'second', dirty: false });
+    expect(services.textFileService.files.resolve).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scheme: 'file', path: '/workspace/AGENTS.md' }),
+      { reload: { async: false }, forceReadFromFile: true },
+    );
+
+    model.write('unsaved');
+    services.dirty.add('/workspace/AGENTS.md');
+    services.disk.set('/workspace/AGENTS.md', 'third');
+    services.textFileService.files.resolve.mockClear();
+    expect(await adapter.read('AGENTS.md')).toMatchObject({ text: 'unsaved', dirty: true });
+    expect(services.textFileService.files.resolve).not.toHaveBeenCalled();
   });
 
   describe(GlyphEditorAdapter.prototype.handle, () => {
@@ -830,6 +859,7 @@ describe(GlyphEditorAdapter, () => {
       } as const;
       await applyFile(adapter, mutation);
       services.models[0].write('typed');
+      services.dirty.add('/workspace/new.ts');
       expect(await applyFile(adapter, mutation)).toMatchObject(failure(GlyphDesktopErrorCode.STALE_DOCUMENT));
     });
 
@@ -955,6 +985,9 @@ describe(GlyphEditorAdapter, () => {
       services.open('a.ts', 'text');
       const adapter = createAdapter(services);
       const before = await adapter.read('a.ts');
+      services.textFileService.files.resolve.mockImplementation(async resource =>
+        services.modelService.getModel(resource),
+      );
       services.disk.set('/workspace/a.ts', 'other');
       expect(await applyFile(adapter, fileMutation(before, GlyphFileMutationKind.DELETE))).toMatchObject(
         failure(GlyphDesktopErrorCode.STALE_DOCUMENT),
@@ -1031,6 +1064,11 @@ describe(GlyphEditorAdapter, () => {
       const services = editorServices();
       const model = services.open('a.ts', 'text');
       const adapter = createAdapter(services);
+      if (race === 'the disk bytes change') {
+        services.textFileService.files.resolve.mockImplementation(async resource =>
+          services.modelService.getModel(resource),
+        );
+      }
       services.bulkEditService.apply.mockImplementation(async edits => {
         if (race === 'trust is revoked') services.state.trusted = false;
         if (race === 'tokens are invalidated') adapter.invalidate();

@@ -14,6 +14,7 @@ import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
+import type { AgentInstructionDisclosureProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
 
 export class ProjectToolRuntime implements ToolSource {
   private readonly logger: Logger;
@@ -23,6 +24,7 @@ export class ProjectToolRuntime implements ToolSource {
     private readonly proposals: EditProposalService,
     private readonly reviews: ProposalReviewManager,
     logger: Logger = new NullLogger(),
+    private readonly instructions?: AgentInstructionDisclosureProvider,
   ) {
     this.logger = logger.forNamespace('project.tool');
   }
@@ -84,7 +86,7 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
         case ProjectToolName.LIST_FILES:
         case ProjectToolName.READ_FILE:
         case ProjectToolName.SEARCH_CONTENTS:
-          return await this.access.execute(name, input, signal);
+          return await this.access.execute(name, input, signal, context);
         case ProjectToolName.PROPOSE_PATCH:
           proposal = await this.proposals.proposePatch(input, signal);
           break;
@@ -97,6 +99,18 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
         default:
           throw new Error(`Unknown project tool: ${name}`);
       }
+      const instructionContext = context?.turnId
+        ? this.instructions?.disclose(
+            context.turnId,
+            proposal.files.flatMap(file => [...new Set([file.sourcePath, file.targetPath])]),
+          )
+        : undefined;
+      if (instructionContext)
+        return JSON.stringify({
+          status: 'INSTRUCTION_CONTEXT_REQUIRED',
+          instructionContext,
+          message: 'Scoped repository instructions apply to this change. Regenerate the proposal with them and retry.',
+        });
       // Follow-up: decide whether ProposalService should own this mode check.
       await this.proposals.assertModeAllows(proposal, AgentMode.resolve(context?.mode ?? AgentMode.default.id));
       const stagedProposal = context?.chat

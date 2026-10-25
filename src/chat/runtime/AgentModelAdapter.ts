@@ -3,6 +3,7 @@ import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { Usage } from '#src/chat/Usage.js';
+import type { AgentHistoryProjection } from './AgentHistoryProjection.ts';
 
 export interface AgentToolCall {
   readonly id: string;
@@ -15,6 +16,7 @@ export interface AgentToolCall {
 
 export interface AgentToolResult {
   readonly call: AgentToolCall;
+  /** Live result, including transient host context. Persistence is a separate runtime-owned projection. */
   readonly output: string;
 }
 
@@ -27,6 +29,8 @@ export interface AgentTurnStep<TTurn> {
 }
 
 export interface AgentTurnContext {
+  /** Host-generated identity shared by the model turn and every tool round it produces. */
+  readonly turnId: string;
   readonly mode: AgentMode;
   readonly signal: AbortSignal;
   readonly round: number;
@@ -48,6 +52,13 @@ export interface AgentModelAdapter<TTurn> {
   readonly model: string;
   emptyState(): ChatProviderState;
   restoreState(state: ChatProviderState): ChatProviderState;
+  /**
+   * Apply the supplied runtime projection to plain user messages and serialized tool
+   * outputs in this provider's state. Preserve other protocol fields and never mutate
+   * the source state. Required for both current checkpoints and legacy restoration;
+   * adapters must not implement their own instruction-retention policy.
+   */
+  projectHistory(state: ChatProviderState, projection: AgentHistoryProjection): ChatProviderState;
   /** Settles durable tool intents that have no outcome, such as after process interruption. */
   recoverInterruptedToolCalls(state: ChatProviderState): InterruptedToolRecovery;
   recordContext(state: ChatProviderState, events: readonly ChatContextEvent[]): ChatProviderState;
@@ -58,5 +69,6 @@ export interface AgentModelAdapter<TTurn> {
   steerTurn(turn: TTurn, request: ChatRequest, context: AgentTurnContext): Promise<TTurn>;
   streamStep(turn: TTurn, context: AgentTurnContext): Promise<AgentTurnStep<TTurn>>;
   appendToolResults(turn: TTurn, results: readonly AgentToolResult[]): TTurn;
-  commit(turn: TTurn): ChatProviderState;
+  /** Snapshot live wire state. The runtime projects it into durable history before storing or publishing it. */
+  snapshot(turn: TTurn): ChatProviderState;
 }
