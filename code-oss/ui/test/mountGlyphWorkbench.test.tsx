@@ -7,6 +7,7 @@ import { aGlyphWorkbenchState } from '#src/desktop/tests/fixtures/aGlyphWorkbenc
 import {
   mountGlyphAgentReview,
   mountGlyphAgentReviewComment,
+  mountGlyphAgentInstructions,
   mountGlyphCommentButton,
   mountGlyphContextButton,
   mountGlyphEditorAnnotationMarker,
@@ -280,6 +281,37 @@ describe(mountGlyphAgentReviewComment, () => {
     expect(dismiss).toHaveBeenCalledOnce();
 
     act(() => {
+      view.dispose();
+    });
+    expect(container.innerHTML).toBe('');
+  });
+});
+
+describe(mountGlyphAgentInstructions, () => {
+  it('renders instruction sources, follows updates, and ignores work after disposal', () => {
+    const container = host();
+    const openSource = vi.fn();
+    const root = {
+      id: 'root',
+      kind: 'agents_md' as const,
+      label: 'AGENTS.md',
+      path: 'AGENTS.md',
+      scope: '.',
+      status: 'active' as const,
+    };
+    const nested = { ...root, id: 'nested', path: 'src/AGENTS.md', scope: 'src' };
+    const view = mountGlyphAgentInstructions(container, [root], '', openSource);
+
+    expect(screen.getByTitle('Open AGENTS.md')).toBeTruthy();
+    act(() => {
+      view.update([root, nested], 'src/');
+    });
+    fireEvent.click(screen.getByTitle('Open src/AGENTS.md'));
+    expect(openSource).toHaveBeenCalledWith(nested);
+
+    act(() => {
+      view.dispose();
+      view.update([root], '');
       view.dispose();
     });
     expect(container.innerHTML).toBe('');

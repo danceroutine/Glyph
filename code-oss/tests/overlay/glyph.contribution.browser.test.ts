@@ -52,6 +52,9 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphViewPane.js', () => ({
 vi.mock('#vs/workbench/contrib/glyph/browser/NativeGlyphWorkbenchService.js', () => ({
   NativeGlyphWorkbenchService: class {},
 }));
+vi.mock('#vs/workbench/contrib/glyph/browser/GlyphAgentInstructionsPreferences.js', () => ({
+  GlyphAgentInstructionsPreferences: class {},
+}));
 vi.mock('#vs/workbench/browser/parts/views/viewPaneContainer.js', () => ({ ViewPaneContainer: class {} }));
 
 function workbench({ selected = [] as URI[], attach = async () => {} } = {}) {

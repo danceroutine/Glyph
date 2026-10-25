@@ -184,7 +184,7 @@ export class GlyphViewPane extends ViewPane {
         {
           id: 'settings',
           label: 'Agent Settings',
-          run: () => this.preferences.openSettings({ query: 'glyph' }).then(() => {}),
+          run: () => this.preferences.openPreferences(),
         },
         {
           id: 'maximize',

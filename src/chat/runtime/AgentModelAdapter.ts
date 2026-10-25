@@ -27,6 +27,8 @@ export interface AgentTurnStep<TTurn> {
 }
 
 export interface AgentTurnContext {
+  /** Host-generated identity shared by the model turn and every tool round it produces. */
+  readonly turnId: string;
   readonly mode: AgentMode;
   readonly signal: AbortSignal;
   readonly round: number;

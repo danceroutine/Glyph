@@ -59,6 +59,11 @@ import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 import { GoalStatus } from '#src/goals/GoalStatus.js';
+import {
+  AgentInstructionSourceKind,
+  AgentInstructionSourceStatus,
+  type AgentInstructionSource,
+} from '#src/instructions/AgentInstructionSource.js';
 
 const usage = { inputTokens: 2, outputTokens: 3, cachedInputTokens: 0, reasoningTokens: 1, totalTokens: 5 };
 type SendOptions = Parameters<ChatProvider['send']>[1];
@@ -67,7 +72,13 @@ async function fixture(
   send: (options: SendOptions, interactions: DesktopInteractionBroker) => Promise<void | Usage | null>,
   ownerWindowId = 'owner',
   reviews?: ProposalReviewManager,
-  extras: { readonly agentReviews?: AgentReviewService; readonly records?: readonly ChatSessionRecord[] } = {},
+  extras: {
+    readonly agentReviews?: AgentReviewService;
+    readonly records?: readonly ChatSessionRecord[];
+    readonly instructionCatalog?: NonNullable<
+      ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']
+    >;
+  } = {},
 ) {
   const events: GlyphHostEvent[] = [];
   const saved = new Map<string, ChatSessionRecord>((extras.records ?? []).map(record => [record.id, record]));
@@ -187,6 +198,7 @@ async function fixture(
     },
     ownerWindowId,
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
+    ...(extras.instructionCatalog ? { instructionCatalog: extras.instructionCatalog } : {}),
   });
   await runtime.handle({ type: Command.CREATE_CHAT, accountProvider: 'fixture', accountId: 'account', model: 'model' });
   const chatId = (await runtime.snapshot()).chats.find(
@@ -212,6 +224,54 @@ async function fixture(
     },
   };
 }
+
+it('projects instruction catalog snapshots and live changes without exposing file contents', async () => {
+  let changed: ((sources: readonly AgentInstructionSource[]) => void) | undefined;
+  const unsubscribe = vi.fn();
+  const sources: readonly AgentInstructionSource[] = [
+    {
+      id: 'agents_md:AGENTS.md',
+      kind: AgentInstructionSourceKind.AGENTS_MD,
+      label: 'AGENTS.md',
+      path: 'AGENTS.md',
+      scope: '.',
+      status: AgentInstructionSourceStatus.ACTIVE,
+      content: 'private guidance',
+    },
+    {
+      id: 'agents_md:src/AGENTS.md',
+      kind: AgentInstructionSourceKind.AGENTS_MD,
+      label: 'AGENTS.md',
+      path: 'src/AGENTS.md',
+      scope: 'src',
+      status: AgentInstructionSourceStatus.ERROR,
+      message: 'Unreadable',
+    },
+  ];
+  const instructionCatalog = {
+    sources,
+    refresh: vi.fn(async () => sources),
+    onDidChange: vi.fn(listener => {
+      changed = listener;
+      return unsubscribe;
+    }),
+  };
+  const harness = await fixture(async () => {}, 'owner', undefined, { instructionCatalog });
+  try {
+    expect((await harness.runtime.snapshot()).instructionSources).toEqual([
+      expect.not.objectContaining({ content: expect.anything() }),
+      expect.objectContaining({ path: 'src/AGENTS.md', message: 'Unreadable' }),
+    ]);
+    changed?.(sources);
+    expect(harness.events.at(-1)).toEqual({
+      type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED,
+      sources: expect.arrayContaining([expect.objectContaining({ path: 'AGENTS.md' })]),
+    });
+  } finally {
+    await harness.runtime.dispose();
+  }
+  expect(unsubscribe).toHaveBeenCalledOnce();
+});
 
 function reviewFixture() {
   const unexpectedMutation = async (): Promise<never> => {

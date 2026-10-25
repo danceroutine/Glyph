@@ -6,6 +6,7 @@ import { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ProjectAgentInstructions } from '#src/project/prompts/ProjectAgentInstructions.js';
 import type { ToolSource } from '#src/tools/ToolSource.js';
 import { OpenAIProvider } from './OpenAIProvider.ts';
+import type { AgentInstructionContextProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
 
 export class OpenAIProviderFactory implements ChatProviderFactory<() => Promise<string>> {
   constructor(
@@ -13,6 +14,7 @@ export class OpenAIProviderFactory implements ChatProviderFactory<() => Promise<
     private readonly configuration: ConfigurationProvider,
     private readonly tools?: ToolSource,
     private readonly client?: OpenAI,
+    private readonly instructionContext?: AgentInstructionContextProvider,
   ) {}
 
   create(model: string, token: () => Promise<string>, state?: ChatProviderState): OpenAIProvider {
@@ -26,6 +28,7 @@ export class OpenAIProviderFactory implements ChatProviderFactory<() => Promise<
       this.client,
       this.tools ?? new ProjectAccess(this.projectRoot),
       state,
+      this.instructionContext,
     );
   }
 }
