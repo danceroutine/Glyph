@@ -25,7 +25,7 @@ export class WebToolRuntime implements ToolSource {
         namespace: 'web',
         name: WebToolName.FETCH,
         allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
-        description: `Fetch a public HTTP(S) page as bounded plain text without executing JavaScript. Reports the final URL, content type and truncation. ${evidenceGuidance}`,
+        description: `Fetch an HTTP(S) page as bounded plain text without executing JavaScript. Internal network destinations require user approval unless the user has allowed all internal web access for this workspace. Reports the final URL, content type and truncation. ${evidenceGuidance}`,
         inputKind: ToolInputKind.JSON,
         parameters: z.toJSONSchema(fetchSchema),
         validateInput: input => {

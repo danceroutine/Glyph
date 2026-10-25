@@ -14,6 +14,9 @@ export class OpenAISession implements OpenAISessionService {
   // rotation must be serialized for that account, never for unrelated accounts.
   private static readonly pending = new WeakMap<OpenAIAccount, Promise<string>>();
   private static readonly unpersisted = new WeakSet<OpenAIAccount>();
+  // Shared by workspaces borrowing this account. Removing inference authority
+  // must not discard the credential needed to retry an incomplete revocation.
+  private static readonly revocations = new WeakMap<OpenAIAccount, OpenAIAccount>();
   private disposed = false;
   private readonly saves = new Set<Promise<void>>();
 
@@ -99,12 +102,15 @@ export class OpenAISession implements OpenAISessionService {
     if (account.tokens) this.remember(account.tokens);
     // Revoke the captured credentials, but invalidate local refreshes immediately.
     // A slow revoke must not leave a window in which refresh restores the session.
-    const revoking = { ...account };
+    const revoking = OpenAISession.revocations.get(account) ?? { ...account };
+    OpenAISession.revocations.set(account, revoking);
     delete account.tokens;
     OpenAISession.unpersisted.delete(account);
     await this.save();
     this.assertOpen();
-    return this.authentication.revoke(revoking, this.signal);
+    const revoked = await this.authentication.revoke(revoking, this.signal);
+    if (revoked) OpenAISession.revocations.delete(account);
+    return revoked;
   }
 
   private remember(tokens: OpenAITokens): void {

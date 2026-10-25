@@ -5,4 +5,5 @@ export enum ShellPermissionDecision {
   ALLOW_SAFE = 'allow_safe',
   ALLOW_OUTSIDE_SANDBOX_ONCE = 'allow_outside_sandbox_once',
   ALLOW_EVERYTHING = 'allow_everything',
+  DENY_AND_ALLOW_SAFE = 'deny_and_allow_safe',
 }

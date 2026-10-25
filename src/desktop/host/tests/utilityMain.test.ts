@@ -13,7 +13,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
     constructed: vi.fn(),
     connect: vi.fn(),
     receive: vi.fn(async (_connectionId: string, _envelope: unknown) => {}),
-    disconnect: vi.fn(async () => {}),
+    disconnect: vi.fn(async (_connectionId: string) => {}),
     dispose: vi.fn(async () => {}),
   };
   const editors = { constructed: vi.fn(), connect: vi.fn(), receive: vi.fn(), disconnect: vi.fn() };
@@ -32,8 +32,8 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
       receive(connectionId: string, envelope: unknown) {
         return host.receive(connectionId, envelope);
       }
-      disconnect() {
-        return host.disconnect();
+      disconnect(connectionId: string) {
+        return host.disconnect(connectionId);
       }
       dispose() {
         return host.dispose();
@@ -115,6 +115,64 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
 const identity = { profileId: 'profile', windowId: 'window', workspaceId: 'workspace' };
 
 describe('utilityMain', () => {
+  /**
+   * A registered renderer can offer another port while its first connection is
+   * alive. The real parent listener must contain host rejection, close only the
+   * offered port and leave existing host/editor registrations intact. The host
+   * rejection is injected; no Electron crash or real renderer compromise occurs.
+   */
+  it('security: contains duplicate connection rejection without disconnecting the original', async () => {
+    const { loaded, parent, host, editors } = startUtilityHost();
+    await loaded;
+    const firstPort = messagePort();
+    const duplicate = messagePort();
+    const data = { type: GlyphTransportMessageType.CONNECTION, connectionId: 'connection', identity };
+    parent.emit('message', { data, ports: [firstPort] });
+    host.connect.mockImplementationOnce(() => {
+      throw new Error('duplicate connection');
+    });
+    expect(() => parent.emit('message', { data, ports: [duplicate] })).not.toThrow();
+    expect(duplicate.close).toHaveBeenCalledOnce();
+    expect(duplicate.start).not.toHaveBeenCalled();
+    expect(firstPort.close).not.toHaveBeenCalled();
+    expect(host.disconnect).not.toHaveBeenCalled();
+    expect(editors.disconnect).not.toHaveBeenCalled();
+    firstPort.emit('message', { data: { requestId: 'still-alive' } });
+    expect(host.receive).toHaveBeenCalledWith('connection', { requestId: 'still-alive' });
+  });
+
+  /**
+   * Setup can fail after the host reserves a connection but before READY is
+   * delivered. Release only registrations acquired by this attempt, once, and
+   * allow a subsequent clean reconnect. Recording ports model transport failures
+   * without terminating the utility process or another workspace.
+   */
+  it.each(['editor', 'start', 'ready'] as const)(
+    'security: cleans up failed %s setup and permits reconnect',
+    async phase => {
+      const { loaded, parent, host, editors } = startUtilityHost();
+      await loaded;
+      const port = messagePort();
+      port.close.mockImplementation(() => {
+        port.emit('close');
+      });
+      const fail = () => {
+        throw new Error('fixture setup failure');
+      };
+      if (phase === 'editor') editors.connect.mockImplementationOnce(fail);
+      if (phase === 'start') port.start.mockImplementationOnce(fail);
+      if (phase === 'ready') port.postMessage.mockImplementationOnce(fail);
+      const data = { type: GlyphTransportMessageType.CONNECTION, connectionId: 'connection', identity };
+      expect(() => parent.emit('message', { data, ports: [port] })).not.toThrow();
+      expect(port.close).toHaveBeenCalledOnce();
+      expect(editors.disconnect).toHaveBeenCalledExactlyOnceWith('connection');
+      expect(host.disconnect).toHaveBeenCalledExactlyOnceWith('connection');
+      const next = messagePort();
+      parent.emit('message', { data, ports: [next] });
+      expect(next.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: GlyphTransportMessageType.READY }));
+    },
+  );
+
   it('refuses to start outside an Electron utility process', async () => {
     const { loaded } = startUtilityHost({ parentPort: false });
     await expect(loaded).rejects.toThrow('The Glyph desktop host must run as an Electron utility process.');

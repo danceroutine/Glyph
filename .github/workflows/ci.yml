@@ -20,15 +20,15 @@ jobs:
     env:
       ELECTRON_TRASH: trash-cli
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - run: rustup toolchain install 1.88.0 --profile minimal --component clippy --component rustfmt --component llvm-tools
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: pnpm/action-setup@v4
+      - uses: taiki-e/install-action@c3076e6fa5aeb9a93daf1bd8eff73345250a8a9c # cargo-llvm-cov
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 12.8.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -52,9 +52,11 @@ jobs:
         run: |
           xvfb-run -a pnpm test:vitest
           pnpm test:coverage
+      - name: Security regression evidence
+        run: xvfb-run -a pnpm test:security
       - name: Preserve coverage evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-evidence-${{ github.run_id }}
           include-hidden-files: true
@@ -63,4 +65,39 @@ jobs:
             coverage/merged/coverage-summary.json
             coverage/native/html/
             coverage/native/coverage.json
+            .artifacts/security/results.json
+            .artifacts/security/source.json
+          retention-days: 7
+
+  security-native:
+    name: Native security (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: rustup toolchain install 1.88.0 --profile minimal --component clippy --component rustfmt --component llvm-tools
+      - uses: taiki-e/install-action@c3076e6fa5aeb9a93daf1bd8eff73345250a8a9c # cargo-llvm-cov
+      - name: Prepare Linux sandbox
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Native regressions, fixture canaries and 100% coverage
+        run: cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-functions 100 --html --output-dir coverage/native -- --include-ignored --skip measures_
+      - name: Record native evidence
+        if: always()
+        run: |
+          cargo llvm-cov report --json --output-path coverage/native/coverage.json
+          git rev-parse HEAD > coverage/native/source-revision.txt
+          uname -a > coverage/native/platform.txt
+          rustc --version >> coverage/native/platform.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: native-security-${{ matrix.os }}-${{ github.run_id }}
+          path: coverage/native/
           retention-days: 7

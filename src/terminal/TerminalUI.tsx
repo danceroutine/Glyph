@@ -22,7 +22,7 @@ import type { QuestionForm } from '#src/interaction/questions/QuestionForm.js';
 import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.js';
 import type { QuestionPresenter } from '#src/interaction/questions/QuestionPresenter.js';
 import type { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
-import { ShellPermissionDecision as ShellPermissionDecisionValue } from '#src/shell/ShellPermissionDecision.js';
+import { shellPermissionChoices } from '#src/shell/shellPermissionChoices.js';
 import type { ShellPermissionPresenter } from '#src/shell/ShellPermissionPresenter.js';
 import type { ShellPermissionRequest } from '#src/shell/ShellPermissionRequest.js';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
@@ -540,30 +540,13 @@ ${TERMINAL_HELP}`);
       });
     }
     this.line(`\nShell permission required\nDirectory: ${clean(request.workingDirectory)}\n${clean(request.command)}`);
-    this.line('1. Allow once in the project-write sandbox');
-    this.line('2. Always allow this exact command in the sandbox');
-    this.line('3. Allow safe inspection commands in a read-only, offline sandbox');
-    this.line('4. Allow this command outside the sandbox once');
-    this.line('5. Allow everything outside the sandbox');
-    this.line('6. Deny');
+    const choices = shellPermissionChoices(request);
+    for (const [index, choice] of choices.entries()) this.line(`${index + 1}. ${choice.label} — ${choice.description}`);
     for (;;) {
-      const choice = (await this.ask('Choice [1-6]: ', signal)).trim();
-      switch (choice) {
-        case '1':
-          return ShellPermissionDecisionValue.ALLOW_ONCE;
-        case '2':
-          return ShellPermissionDecisionValue.ALWAYS_ALLOW;
-        case '3':
-          return ShellPermissionDecisionValue.ALLOW_SAFE;
-        case '4':
-          return ShellPermissionDecisionValue.ALLOW_OUTSIDE_SANDBOX_ONCE;
-        case '5':
-          return ShellPermissionDecisionValue.ALLOW_EVERYTHING;
-        case '6':
-          return ShellPermissionDecisionValue.DENY;
-        default:
-          this.appendText('Choose a number from 1 through 6.', { color: 'yellow' });
-      }
+      const input = (await this.ask(`Choice [1-${choices.length}]: `, signal)).trim();
+      const index = Number(input) - 1;
+      if (Number.isInteger(index) && index >= 0 && index < choices.length) return choices[index]!.decision;
+      this.appendText(`Choose a number from 1 through ${choices.length}.`, { color: 'yellow' });
     }
   }
 

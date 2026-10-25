@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { QuestionAnswerType } from '#src/interaction/questions/QuestionAnswerType.js';
+import type { QuestionPresenter } from '#src/interaction/questions/QuestionPresenter.js';
 import { createHash } from 'node:crypto';
 import { join, resolve, win32 } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -98,6 +102,27 @@ describe('glyph command line', () => {
     expect(cli.run).toHaveBeenCalledOnce();
     expect(process.exitCode).toBeUndefined();
     expect(cli.closeUI).toHaveBeenCalledOnce();
+  });
+
+  /** The production CLI transport must route internal destinations through explicit consent and send no request after denial. */
+  it('requires terminal consent before sending an internal web request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'glyph-cli-consent-'));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const cli = prepareCli({ configuration: { stateDirectory: directory } });
+    const exchange = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected HTTP request.'));
+    cli.run.mockImplementation(async () => {
+      const { AuthorizedWebTransport } = await import('#src/web/AuthorizedWebTransport.js');
+      const transport = cli.instances('WebHttpClient')[0]!.args[0];
+      if (!(transport instanceof AuthorizedWebTransport)) throw new Error('CLI must use its authorized transport.');
+      await expect(transport.fetch('http://127.0.0.1/private')).rejects.toThrow('denied');
+      return 0;
+    });
+    await cli.start();
+    await cli.finished;
+    expect(process.exitCode).toBeUndefined();
+    expect(cli.presentQuestion).toHaveBeenCalledOnce();
+    expect(cli.presentQuestion.mock.calls[0]![0].questions[0]!.prompt).toContain('http://127.0.0.1/private');
+    expect(exchange).not.toHaveBeenCalled();
   });
 
   it('runs a multi-root workspace chosen on the command line with the configured model', async () => {
@@ -413,9 +438,13 @@ function prepareCli({
   const closeListeners: (() => void)[] = [];
   const closeUI = vi.fn();
   const connectShellSessions = vi.fn();
+  const presentQuestion = vi.fn<QuestionPresenter['present']>(async () => ({
+    answers: [{ questionId: 'approval', type: QuestionAnswerType.SELECTION, optionIds: ['deny'] }],
+  }));
   const TerminalUIRecord = record('TerminalUI');
   mock('#src/terminal/TerminalUI.js', () => ({
     TerminalUI: class extends TerminalUIRecord {
+      readonly present = presentQuestion;
       static readonly help = 'TERMINAL HELP';
       static clean(text: string): string {
         return text;
@@ -494,6 +523,7 @@ function prepareCli({
     closeUI,
     closeListeners,
     connectShellSessions,
+    presentQuestion,
     removeShutdownHandlers,
     resolveProject,
     assertPathIsolation,

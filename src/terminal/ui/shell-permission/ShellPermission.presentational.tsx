@@ -27,7 +27,7 @@ export function ShellPermission({
     },
     { isActive: active },
   );
-  if (rows < 16 || columns < 40)
+  if (rows < choices.length + 10 || columns < 40)
     return <Text color="yellow">Resize terminal to review command. Esc denies; approval disabled.</Text>;
   return (
     <Box

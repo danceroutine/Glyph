@@ -797,12 +797,14 @@ pub mod linux {
             }
         }
         for path in super::protected_paths(request)? {
-            if request
-                .workspace_roots
-                .iter()
-                .any(|root| path.starts_with(root))
-            {
-                push_path_mount(&mut arguments, "--ro-bind", &path, &path);
+            for root in &request.workspace_roots {
+                // Protect only the exposed intersection. Binding an ancestor
+                // installation itself would grant access to unrelated siblings.
+                if path.starts_with(root) {
+                    push_path_mount(&mut arguments, "--ro-bind", &path, &path);
+                } else if root.starts_with(&path) {
+                    push_path_mount(&mut arguments, "--ro-bind", root, root);
+                }
             }
         }
         for path in super::workspace_sensitive_paths(request)? {

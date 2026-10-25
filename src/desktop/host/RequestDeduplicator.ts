@@ -5,6 +5,7 @@
  */
 export class RequestDeduplicator<T> {
   private readonly results = new Map<string, Promise<T>>();
+  private readonly settled = new Set<string>();
 
   constructor(private readonly capacity = 512) {
     if (!Number.isInteger(capacity) || capacity < 1) throw new Error('Request cache capacity must be positive.');
@@ -14,9 +15,35 @@ export class RequestDeduplicator<T> {
   run(requestId: string, operation: () => Promise<T>): Promise<T> {
     const existing = this.results.get(requestId);
     if (existing) return existing;
-    const result = operation();
+    if (this.results.size >= this.capacity) {
+      const oldest = this.settled.values().next();
+      if (oldest.done)
+        return Promise.reject(
+          new Error('Renderer request capacity is exhausted. Retry after pending requests settle.'),
+        );
+      this.results.delete(oldest.value);
+      this.settled.delete(oldest.value);
+    }
+    // Reserve the ID before calling user code, including synchronous reentry.
+    let succeed!: (value: T) => void;
+    let fail!: (error: unknown) => void;
+    const result = new Promise<T>((resolve, reject) => {
+      succeed = resolve;
+      fail = reject;
+    });
     this.results.set(requestId, result);
-    if (this.results.size > this.capacity) this.results.delete(this.results.keys().next().value!);
+    const reject = (error: unknown) => {
+      this.settled.add(requestId);
+      fail(error);
+    };
+    try {
+      void operation().then(value => {
+        this.settled.add(requestId);
+        succeed(value);
+      }, reject);
+    } catch (error) {
+      reject(error);
+    }
     return result;
   }
 }
