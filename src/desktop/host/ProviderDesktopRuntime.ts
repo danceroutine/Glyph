@@ -49,6 +49,9 @@ import { GoalPauseReason } from '#src/goals/GoalPauseReason.js';
 import { GoalStatus } from '#src/goals/GoalStatus.js';
 import type { GoalToolStatus } from '#src/goals/GoalToolRuntime.js';
 import { Goal } from '#src/goals/Goal.js';
+import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
+import type { AgentInstructionSource } from '#src/instructions/AgentInstructionSource.js';
+import type { GlyphInstructionSource } from '#src/desktop/protocol/events/GlyphInstructionSource.js';
 
 const GOAL_CONTINUATION_TEXT = 'Continue working toward the active goal.';
 const GOAL_CONTINUATION_RUN_PREFIX = 'goal-continuation:';
@@ -101,6 +104,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   private readonly commands = new Set<Promise<void>>();
   private readonly unsubscribeShells: () => void;
   private readonly unsubscribe: (() => void) | undefined;
+  private readonly unsubscribeInstructions: (() => void) | undefined;
 
   constructor(
     private readonly options: {
@@ -118,6 +122,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         | 'takePendingWake'
         | 'peekPendingWake'
       >;
+      readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'>;
       readonly emit: (event: GlyphHostEvent) => void;
       readonly ownerWindowId: string;
     },
@@ -141,14 +146,21 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         this.publish({ type: GlyphHostEventType.PROPOSAL_CHANGED, chatId: summary.chatId ?? '', proposal: summary });
       }
     });
+    this.unsubscribeInstructions = options.instructionCatalog?.onDidChange(sources => {
+      this.publish({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: toInstructionSources(sources) });
+    });
   }
 
   /** Rebuild reconnect state from live reviews so missed notifications cannot leave stale decisions. */
   async snapshot(): Promise<GlyphRuntimeSnapshot> {
+    const instructionSources = this.options.instructionCatalog
+      ? await this.options.instructionCatalog.refresh()
+      : undefined;
     for (const proposal of this.options.glyph.proposalReviews?.retainedReviews ?? [])
       this.proposals.set(proposal.id, toProposal(proposal));
     return {
       agentReviews: this.options.agentReviews?.reviews ?? [],
+      ...(instructionSources ? { instructionSources: toInstructionSources(instructionSources) } : {}),
       accounts: this.options.glyph.accounts,
       models: this.models,
       chats: this.options.glyph.listChats(),
@@ -687,6 +699,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     await Promise.allSettled(this.commands);
     this.unsubscribeAgentReviews?.();
     this.unsubscribe?.();
+    this.unsubscribeInstructions?.();
     this.unsubscribeShells();
     this.unsubscribeWakes();
     await this.options.glyph.dispose();
@@ -1294,6 +1307,18 @@ function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): C
     },
     byteOrderMark: false,
     byteLength: Buffer.byteLength(attachment.text),
+  }));
+}
+
+function toInstructionSources(sources: readonly AgentInstructionSource[]): readonly GlyphInstructionSource[] {
+  return sources.map(({ id, kind, label, path, scope, status, message }) => ({
+    id,
+    kind,
+    label,
+    path,
+    scope,
+    status,
+    ...(message === undefined ? {} : { message }),
   }));
 }
 

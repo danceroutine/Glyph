@@ -18,6 +18,8 @@ import { OpenAISession } from '#src/providers/openai/auth/OpenAISession.js';
 import { OpenAIAuthenticationClient } from '#src/providers/openai/auth/OpenAIAuthenticationClient.js';
 import type { OpenAIAccount } from '#src/providers/openai/auth/OpenAIAccount.js';
 import type { OpenAIAccountStore } from '#src/providers/openai/auth/OpenAIAccountStore.js';
+import type { AgentInstructionContextProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
+import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
 
 const configuration: ChatConfiguration = {
   instructions: 'You are a helpful assistant.',
@@ -67,7 +69,11 @@ function sse(events: unknown[]): Response {
   );
 }
 
-function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolSource) {
+function harness(
+  replies: (() => Response | Promise<Response>)[],
+  tools?: ToolSource,
+  instructionContext?: AgentInstructionContextProvider,
+) {
   const requests: Record<string, unknown>[] = [];
   const client = new OpenAI({
     apiKey: 'test-secret',
@@ -86,6 +92,8 @@ function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolSo
       async () => 'oauth-test-token',
       client,
       tools ?? new ProjectAccess(process.cwd()),
+      undefined,
+      instructionContext,
     ),
     requests,
   };
@@ -109,6 +117,65 @@ const toolCompleted = {
 };
 
 describe(OpenAIProvider, () => {
+  it('freezes repository instructions for a tool loop, refreshes the next turn, and never persists the envelope', async () => {
+    const context = vi
+      .fn<AgentInstructionContextProvider['context']>()
+      .mockResolvedValueOnce({
+        schema: 'glyph.agent-instructions.v1',
+        sources: [
+          {
+            id: 'agents_md:AGENTS.md',
+            kind: AgentInstructionSourceKind.AGENTS_MD,
+            label: 'AGENTS.md',
+            path: 'AGENTS.md',
+            scope: '.',
+            status: AgentInstructionSourceStatus.ACTIVE,
+            content: 'first revision',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ schema: 'glyph.agent-instructions.v1', sources: [] });
+    const providerContext = { context };
+    const { provider, requests } = harness(
+      [() => sse([toolCompleted]), () => sse([completed]), () => sse([completed])],
+      waitTools(vi.fn(async () => 'finished')),
+      providerContext,
+    );
+
+    await provider.send('First turn.', options());
+    expect(context).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(requests[0]!.input)).toContain('first revision');
+    expect(JSON.stringify(requests[1]!.input)).toContain('first revision');
+    expect(JSON.stringify(provider.exportState())).not.toContain('glyph.agent-instructions.v1');
+
+    await provider.send('Second turn.', options());
+    expect(context).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(requests[2]!.input)).not.toContain('glyph.agent-instructions.v1');
+  });
+
+  it('starts scoped instruction turns with the host turn id and attached paths', async () => {
+    const beginTurn = vi.fn<NonNullable<AgentInstructionContextProvider['beginTurn']>>().mockResolvedValue({
+      schema: 'glyph.agent-instructions.v1',
+      sources: [],
+    });
+    const instructionContext: AgentInstructionContextProvider = {
+      context: vi.fn(async () => ({ schema: 'glyph.agent-instructions.v1', sources: [] })),
+      beginTurn,
+    };
+    const { provider } = harness([() => sse([completed])], undefined, instructionContext);
+
+    await provider.send(
+      {
+        text: 'Review this file.',
+        attachments: [{ kind: 'file', path: 'src/app.ts', name: 'app.ts', content: 'export {}' }],
+      },
+      options(),
+    );
+
+    expect(beginTurn).toHaveBeenCalledWith(expect.any(String), ['src/app.ts'], expect.any(AbortSignal));
+    expect(instructionContext.context).not.toHaveBeenCalled();
+  });
+
   it.each([
     [AgentModeID.PLAN, AgentModeID.AGENT],
     [AgentModeID.AGENT, AgentModeID.PLAN],

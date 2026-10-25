@@ -13,6 +13,8 @@ import { WiredGlyphReviewControls } from './GlyphReviewControls/GlyphReviewContr
 import { render } from 'preact';
 import type { GlyphWorkbenchMount } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { WiredGlyphWorkbench } from './GlyphWorkbench/GlyphWorkbench.wired.tsx';
+import { GlyphAgentInstructions } from './GlyphAgentInstructions/GlyphAgentInstructions.presentational.tsx';
+import type { GlyphInstructionSource } from '#src/desktop/protocol/events/GlyphInstructionSource.js';
 
 configureGlyphDiagramRenderer(new URL('./glyph-diagram.html', import.meta.url).href);
 
@@ -150,6 +152,28 @@ export const mountGlyphAgentReviewComment = (
   render(<GlyphAgentReviewComment finding={finding} fix={fix} dismiss={dismiss} />, container);
   return {
     dispose: () => {
+      render(null, container);
+    },
+  };
+};
+
+export const mountGlyphAgentInstructions = (
+  container: HTMLElement,
+  sources: readonly GlyphInstructionSource[],
+  query: string,
+  openSource: (source: GlyphInstructionSource) => void,
+) => {
+  let disposed = false;
+  const update = (nextSources: readonly GlyphInstructionSource[], nextQuery: string) => {
+    if (!disposed)
+      render(<GlyphAgentInstructions sources={nextSources} query={nextQuery} openSource={openSource} />, container);
+  };
+  update(sources, query);
+  return {
+    update,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
       render(null, container);
     },
   };

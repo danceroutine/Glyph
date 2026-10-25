@@ -16,6 +16,7 @@ import type { TurnResult } from '#src/chat/TurnResult.js';
 import type { Usage } from '#src/chat/Usage.js';
 import type { AgentModelAdapter, AgentToolResult, AgentTurnContext } from './AgentModelAdapter.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { randomUUID } from 'node:crypto';
 
 interface AgentRuntimeConfiguration {
   readonly timeoutMs: number;
@@ -76,6 +77,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     },
   ): Promise<TurnResult> {
     const request = toChatRequest(inputRequest);
+    const turnId = request.turnId ?? randomUUID();
     const metadata = chatTurnOptionsSchema.parse({
       ...(request.mode !== undefined ? { mode: request.mode } : {}),
       ...(request.annotations ? { annotations: request.annotations } : {}),
@@ -116,6 +118,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     };
     const context = (round: number): AgentTurnContext => ({
       signal,
+      turnId,
       round,
       mode: AgentMode.resolve(mode),
       onText: options.onText,
@@ -209,6 +212,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                   roundCallCount: step.toolCalls.length,
                   context: {
                     ...options.toolContext,
+                    turnId,
                     mode: roundMode,
                     onModeChanged: setMode,
                   },

@@ -6,9 +6,11 @@ import type { GlyphChatSummary } from './GlyphChatSummary.ts';
 import type { GlyphProposalSummary } from './GlyphProposalSummary.ts';
 import type { GlyphRunProjection } from './GlyphRunProjection.ts';
 import type { GlyphUsage } from './GlyphUsage.ts';
+import type { GlyphInstructionSource } from './GlyphInstructionSource.ts';
 
 /** Full recoverable projection used when replay is unavailable or unsafe. */
 export interface GlyphDesktopSnapshot {
+  readonly instructionSources?: readonly GlyphInstructionSource[];
   readonly agentReviews?: readonly AgentReview[];
   readonly accounts: readonly GlyphAccountSummary[];
   readonly models: readonly GlyphModelSummary[];

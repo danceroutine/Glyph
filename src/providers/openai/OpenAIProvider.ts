@@ -26,6 +26,8 @@ import type {
   AgentTurnStep,
 } from '#src/chat/runtime/AgentModelAdapter.js';
 import { isRecord } from '#src/shared/validators/isRecord.js';
+import type { AgentInstructionContextProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 
 interface OpenAITurn {
   readonly input: ResponseInputItem[];
@@ -39,6 +41,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     private readonly token: () => Promise<string>,
     private readonly client: OpenAI | undefined,
     private readonly tools: ToolRegistry,
+    private readonly instructionContext?: AgentInstructionContextProvider,
   ) {}
 
   emptyState(): ChatProviderState {
@@ -89,8 +92,21 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     return stateFrom(history);
   }
 
-  async beginTurn(state: ChatProviderState, request: ChatRequest): Promise<OpenAITurn> {
-    return { input: [...historyFrom(state), toUserInput(request)] };
+  async beginTurn(state: ChatProviderState, request: ChatRequest, context: AgentTurnContext): Promise<OpenAITurn> {
+    const instructions = this.instructionContext?.beginTurn
+      ? await this.instructionContext.beginTurn(
+          context.turnId,
+          request.attachments.map(attachment => attachment.path),
+          context.signal,
+        )
+      : await this.instructionContext?.context(context.signal);
+    return {
+      input: [
+        ...historyFrom(state),
+        ...(instructions && instructions.sources.length > 0 ? [toInstructionContextInput(instructions)] : []),
+        toUserInput(request),
+      ],
+    };
   }
 
   /** HTTP transport appends user input for the next request; WebSocket delivery belongs behind this seam. */
@@ -264,7 +280,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
   }
 
   commit(turn: OpenAITurn): ChatProviderState {
-    return stateFrom(turn.input);
+    return stateFrom(turn.input.filter(item => !isInstructionContextInput(item)));
   }
 
   /** Tool execution and human decisions can outlive a token, so authenticate every model request. */
@@ -316,9 +332,15 @@ export class OpenAIProvider extends AgentRuntime<OpenAITurn> {
     client: OpenAI | undefined,
     tools: ToolSource,
     initialState?: ChatProviderState,
+    instructionContext?: AgentInstructionContextProvider,
   ) {
     const registry = tools instanceof ToolRegistry ? tools : new ToolRegistry(tools.tools);
-    super(new OpenAIModelAdapter(model, configuration, token, client, registry), configuration, registry, initialState);
+    super(
+      new OpenAIModelAdapter(model, configuration, token, client, registry, instructionContext),
+      configuration,
+      registry,
+      initialState,
+    );
   }
 }
 
@@ -363,6 +385,27 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
       { type: 'input_text', text: request.text },
     ],
   };
+}
+
+function toInstructionContextInput(context: AgentInstructionContext): ResponseInputItem {
+  return { role: 'user', content: JSON.stringify(context) };
+}
+
+function isInstructionContextInput(item: ResponseInputItem): boolean {
+  if (
+    (item.type !== undefined && item.type !== 'message') ||
+    !('role' in item) ||
+    item.role !== 'user' ||
+    !('content' in item) ||
+    typeof item.content !== 'string'
+  )
+    return false;
+  try {
+    const value: unknown = JSON.parse(item.content);
+    return isRecord(value) && value.schema === 'glyph.agent-instructions.v1' && Array.isArray(value.sources);
+  } catch {
+    return false;
+  }
 }
 
 const USER_CONTEXT_EVENT_TYPES: ReadonlySet<unknown> = new Set(['shell_wake', 'shell_exit', 'goal_continuation']);

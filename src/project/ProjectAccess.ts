@@ -13,6 +13,8 @@ import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
+import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import type { AgentInstructionDisclosureProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
 
 interface ProjectAccessOptions {
   maxFiles?: number;
@@ -135,6 +137,7 @@ export class ProjectAccess {
     options: ProjectAccessOptions = {},
     workspace?: WorkspaceTextStore,
     private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
+    private readonly instructions?: AgentInstructionDisclosureProvider,
   ) {
     const { maxFiles, maxFileBytes, excludedPaths, accessPolicy } = projectAccessOptionsSchema.parse(options);
     this.options = { maxFiles, maxFileBytes, excludedPaths, accessPolicy };
@@ -154,7 +157,7 @@ export class ProjectAccess {
         validateInput: input => {
           listProjectFilesArguments.parse(JSON.parse(input));
         },
-        execute: (input, signal) => this.execute(ProjectToolName.LIST_FILES, input, signal),
+        execute: (input, signal, context) => this.execute(ProjectToolName.LIST_FILES, input, signal, context),
       },
       {
         namespace: ProjectToolNamespace.PROJECT,
@@ -167,7 +170,7 @@ export class ProjectAccess {
         validateInput: input => {
           readProjectFileArguments.parse(JSON.parse(input));
         },
-        execute: (input, signal) => this.execute(ProjectToolName.READ_FILE, input, signal),
+        execute: (input, signal, context) => this.execute(ProjectToolName.READ_FILE, input, signal, context),
       },
     ];
     if (this.pathIndex?.searchContents)
@@ -182,24 +185,34 @@ export class ProjectAccess {
         validateInput: input => {
           resolvedSearchProjectContentsArguments.parse(JSON.parse(input));
         },
-        execute: (input, signal) => this.execute(ProjectToolName.SEARCH_CONTENTS, input, signal),
+        execute: (input, signal, context) => this.execute(ProjectToolName.SEARCH_CONTENTS, input, signal, context),
       });
     return tools;
   }
 
-  async execute(name: string, rawArguments: string, signal?: AbortSignal): Promise<string> {
+  async execute(
+    name: string,
+    rawArguments: string,
+    signal?: AbortSignal,
+    context?: ToolExecutionContext,
+  ): Promise<string> {
     try {
       switch (isEnumValue(ProjectToolName, name) ? name : undefined) {
         case ProjectToolName.LIST_FILES:
           return JSON.stringify(
             await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments)), signal),
           );
-        case ProjectToolName.READ_FILE:
-          return JSON.stringify(await this.readFile(readProjectFileArguments.parse(JSON.parse(rawArguments))));
-        case ProjectToolName.SEARCH_CONTENTS:
-          return JSON.stringify(
-            await this.searchContents(resolvedSearchProjectContentsArguments.parse(JSON.parse(rawArguments)), signal),
+        case ProjectToolName.READ_FILE: {
+          const arguments_ = readProjectFileArguments.parse(JSON.parse(rawArguments));
+          return this.withInstructions(await this.readFile(arguments_), [arguments_.path], context);
+        }
+        case ProjectToolName.SEARCH_CONTENTS: {
+          const result = await this.searchContents(
+            resolvedSearchProjectContentsArguments.parse(JSON.parse(rawArguments)),
+            signal,
           );
+          return this.withInstructions(result, searchResultPaths(result), context);
+        }
         default:
           throw new Error(`Unknown project tool: ${name}`);
       }
@@ -221,6 +234,11 @@ export class ProjectAccess {
               },
       });
     }
+  }
+
+  private withInstructions(result: object, paths: readonly string[], context?: ToolExecutionContext): string {
+    const instructions = context?.turnId ? this.instructions?.disclose(context.turnId, paths) : undefined;
+    return JSON.stringify(instructions ? { ...result, instructionContext: instructions } : result);
   }
 
   private async searchContents(
@@ -309,6 +327,17 @@ export class ProjectAccess {
       byteOrderMark: snapshot.byteOrderMark,
       lines: selected,
     };
+  }
+}
+
+function searchResultPaths(result: Awaited<ReturnType<WorkspacePathIndex['searchContents']>>): readonly string[] {
+  switch (result.outputMode) {
+    case 'content':
+      return result.matches.map(match => match.path);
+    case 'files_with_matches':
+      return result.files;
+    case 'count':
+      return result.counts.map(count => count.path);
   }
 }
 

@@ -8,6 +8,8 @@ import type { Tool } from '#src/tools/Tool.js';
 import type { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ProjectToolName } from '#src/project/ProjectToolName.js';
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
+import { aFileEditPlan } from '#src/editing/proposals/tests/fixtures/aFileEditPlan.js';
+import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 
 describe(ProjectToolRuntime, () => {
   describe(ProjectToolRuntime.prototype.execute, () => {
@@ -56,9 +58,52 @@ describe(ProjectToolRuntime, () => {
 
         await expect(runtime.execute(name, '{}', signal)).resolves.toBe('{"result":true}');
 
-        expect(execute).toHaveBeenCalledWith(name, '{}', signal);
+        expect(execute).toHaveBeenCalledWith(name, '{}', signal, undefined);
       },
     );
+
+    it('discloses unseen scoped instructions before staging and accepts the regenerated proposal', async () => {
+      const proposal = EditProposal.from({
+        schemaVersion: 1,
+        id: 'proposal-1',
+        source: 'patch',
+        createdAt: new Date(0).toISOString(),
+        files: [
+          aFileEditPlan({
+            operation: EditOperation.CREATE,
+            sourcePath: 'src/new.ts',
+            targetPath: 'src/new.ts',
+          }),
+        ],
+      });
+      const stage = vi.fn(async () => {});
+      const disclose = vi
+        .fn()
+        .mockReturnValueOnce({
+          schema: 'glyph.agent-instructions.v1',
+          sources: [{ id: 'nested', path: 'src/AGENTS.md', scope: 'src', status: 'active' }],
+        })
+        .mockReturnValueOnce(undefined);
+      const runtime = new ProjectToolRuntime(
+        { definitions: [] } as unknown as ProjectAccess,
+        {
+          proposePatch: vi.fn(async () => proposal),
+          assertModeAllows: vi.fn(async () => {}),
+        } as unknown as EditProposalService,
+        { stage, activeReviews: [] } as unknown as ProposalReviewManager,
+        new NullLogger(),
+        { disclose },
+      );
+      const context = { turnId: 'turn-1' };
+
+      await expect(runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch', undefined, context)).resolves.toContain(
+        'INSTRUCTION_CONTEXT_REQUIRED',
+      );
+      expect(stage).not.toHaveBeenCalled();
+      await runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch', undefined, context);
+      expect(stage).toHaveBeenCalledOnce();
+      expect(disclose).toHaveBeenCalledWith('turn-1', ['src/new.ts']);
+    });
 
     it('reports an unknown tool as a failed tool call', async () => {
       const logger = recordingLogger();
