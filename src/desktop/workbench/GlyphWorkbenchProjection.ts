@@ -47,6 +47,10 @@ export class GlyphWorkbenchProjection {
         this.status = GlyphHostStatus.READY;
         return;
       }
+      case GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED: {
+        this.snapshot = { ...this.snapshot, instructionSources: event.sources };
+        return;
+      }
       case GlyphHostEventType.SHELL_SESSIONS: {
         this.snapshot = { ...this.snapshot, shells: event.shells };
         return;

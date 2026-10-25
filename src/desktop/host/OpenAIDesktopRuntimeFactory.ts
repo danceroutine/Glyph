@@ -64,6 +64,9 @@ import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/pr
 import type { GlyphDesktopWorkspaceRuntimeFactory } from './GlyphDesktopWorkspaceRuntimeFactory.ts';
 import { DesktopInteractionBroker } from './DesktopInteractionBroker.ts';
 import { ProviderDesktopRuntime } from './ProviderDesktopRuntime.ts';
+import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
+import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
+import { listInstructionFilesAcrossRoots } from '#src/instructions/listInstructionFilesAcrossRoots.js';
 
 /** Composition root for shared credentials and workspace-scoped production services. */
 export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntimeFactory {
@@ -194,7 +197,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             : response;
         },
       });
-      return { name: workspaceRoot.name, workspace, index };
+      return { name: workspaceRoot.name, workspace, disk, index };
     });
     const workspace =
       roots.length === 1
@@ -210,6 +213,13 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             context.id,
             parts.map(part => ({ name: part.name, index: part.index })),
           );
+    const instructionCatalog = input.trusted
+      ? new AgentInstructionCatalog([
+          new AgentsMdInstructionProvider(workspace, {}, async (maxFiles, globPattern) => {
+            return listInstructionFilesAcrossRoots(parts, maxFiles, globPattern);
+          }),
+        ])
+      : undefined;
     const reviews = new ProposalReviewManager(
       workspace,
       new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', mutationStorageId), {
@@ -275,10 +285,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           return summary.plans?.at(-1);
         }),
         new ProjectToolRuntime(
-          new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index),
+          new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, instructionCatalog),
           new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
           reviews,
           logger,
+          instructionCatalog,
         ),
         new WebToolRuntime(new WebFetchService(webHttp), new DuckDuckGoSearch(webHttp)),
         new ProposeQuestionToolRuntime(interactions),
@@ -326,7 +337,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       store,
       authentication,
       catalog,
-      new OpenAIProviderFactory(root.path, configuration, tools, client),
+      new OpenAIProviderFactory(root.path, configuration, tools, client, instructionCatalog),
       configuration.openAI,
     );
     const glyph = new GlyphService(
@@ -353,8 +364,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       new OpenAIProviderFactory(
         root.path,
         configuration,
-        new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index),
+        new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, instructionCatalog),
         client,
+        instructionCatalog,
       ),
       configuration.openAI,
     );
@@ -389,6 +401,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       agentReviews,
       interactions,
       shellSessions: shells,
+      ...(instructionCatalog ? { instructionCatalog } : {}),
       emit: input.emit,
       ownerWindowId: input.identity.windowId,
     });

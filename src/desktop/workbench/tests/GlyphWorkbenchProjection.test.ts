@@ -151,6 +151,22 @@ describe(GlyphWorkbenchProjection, () => {
   });
 
   describe(GlyphWorkbenchProjection.prototype.accept, () => {
+    it('replaces the active instruction source catalog', () => {
+      const projection = new GlyphWorkbenchProjection();
+      const sources = [
+        {
+          id: 'agents_md:AGENTS.md',
+          kind: 'agents_md',
+          label: 'AGENTS.md',
+          path: 'AGENTS.md',
+          scope: '.',
+          status: 'active' as const,
+        },
+      ];
+      projection.accept({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources });
+      expect(projection.state.instructionSources).toEqual(sources);
+    });
+
     it('adds new agent reviews and replaces updated ones', () => {
       const projection = new GlyphWorkbenchProjection();
       const review = {

@@ -15,6 +15,7 @@ import type { GlyphQuestionRequest } from './GlyphQuestionRequest.ts';
 import type { GlyphApprovalRequest } from './GlyphApprovalRequest.ts';
 import type { GlyphUsage } from './GlyphUsage.ts';
 import type { GlyphRunProjection } from './GlyphRunProjection.ts';
+import type { GlyphInstructionSource } from './GlyphInstructionSource.ts';
 
 /** Discriminants for host events projected into a workbench window. */
 export enum GlyphHostEventType {
@@ -33,11 +34,16 @@ export enum GlyphHostEventType {
   RUN_STATE = 'run_state',
   CHAT_RESTORED = 'chat_restored',
   HOST_STATUS = 'host_status',
+  INSTRUCTION_SOURCES_CHANGED = 'instruction_sources_changed',
   ERROR = 'error',
 }
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | {
+      readonly type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED;
+      readonly sources: readonly GlyphInstructionSource[];
+    }
   | { readonly type: GlyphHostEventType.AGENT_REVIEW_CHANGED; readonly review: AgentReview }
   | { readonly type: GlyphHostEventType.SHELL_SESSIONS; readonly shells: readonly GlyphBackgroundShell[] }
   | {

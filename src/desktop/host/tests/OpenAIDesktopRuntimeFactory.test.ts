@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { OpenAIDesktopRuntimeFactory } from '#src/desktop/host/OpenAIDesktopRuntimeFactory.js';
+import { listInstructionFilesAcrossRoots } from '#src/instructions/listInstructionFilesAcrossRoots.js';
 import { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
 import { contentRevision } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
@@ -63,6 +64,33 @@ const captured = vi.hoisted(() => ({
   brokers: [] as { readonly broker: DesktopInteractionBroker; readonly emit: (event: GlyphHostEvent) => void }[],
   providerFactories: [] as ConstructorParameters<typeof OpenAIProviderFactory>[],
 }));
+
+describe(listInstructionFilesAcrossRoots, () => {
+  it('qualifies multiple roots and reports that later roots were excluded by the limit', async () => {
+    const first = { list: vi.fn(async () => ({ files: ['AGENTS.md'], truncated: false })) };
+    const second = { list: vi.fn(async () => ({ files: ['nested/AGENTS.md'], truncated: false })) };
+
+    await expect(
+      listInstructionFilesAcrossRoots(
+        [
+          { name: 'one', disk: first },
+          { name: 'two', disk: second },
+        ],
+        1,
+        '**/AGENTS.md',
+      ),
+    ).resolves.toEqual({ files: ['one/AGENTS.md'], truncated: true });
+    expect(second.list).not.toHaveBeenCalled();
+  });
+
+  it('preserves single-root paths and provider truncation', async () => {
+    const disk = { list: vi.fn(async () => ({ files: ['AGENTS.md'], truncated: true })) };
+    await expect(listInstructionFilesAcrossRoots([{ name: 'one', disk }], 2, '**/AGENTS.md')).resolves.toEqual({
+      files: ['AGENTS.md'],
+      truncated: true,
+    });
+  });
+});
 
 vi.mock('#src/desktop/workspace/EditorWorkspaceTextStore.js', async importOriginal => {
   const actual = await importOriginal<typeof import('#src/desktop/workspace/EditorWorkspaceTextStore.js')>();

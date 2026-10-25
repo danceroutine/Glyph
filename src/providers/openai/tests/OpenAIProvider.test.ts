@@ -18,6 +18,8 @@ import { OpenAISession } from '#src/providers/openai/auth/OpenAISession.js';
 import { OpenAIAuthenticationClient } from '#src/providers/openai/auth/OpenAIAuthenticationClient.js';
 import type { OpenAIAccount } from '#src/providers/openai/auth/OpenAIAccount.js';
 import type { OpenAIAccountStore } from '#src/providers/openai/auth/OpenAIAccountStore.js';
+import type { AgentInstructionContextProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
+import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
 
 const configuration: ChatConfiguration = {
   instructions: 'You are a helpful assistant.',
@@ -67,7 +69,11 @@ function sse(events: unknown[]): Response {
   );
 }
 
-function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolSource) {
+function harness(
+  replies: (() => Response | Promise<Response>)[],
+  tools?: ToolSource,
+  instructionContext?: AgentInstructionContextProvider,
+) {
   const requests: Record<string, unknown>[] = [];
   const client = new OpenAI({
     apiKey: 'test-secret',
@@ -86,6 +92,8 @@ function harness(replies: (() => Response | Promise<Response>)[], tools?: ToolSo
       async () => 'oauth-test-token',
       client,
       tools ?? new ProjectAccess(process.cwd()),
+      undefined,
+      instructionContext,
     ),
     requests,
   };
@@ -109,6 +117,189 @@ const toolCompleted = {
 };
 
 describe(OpenAIProvider, () => {
+  it.each(['function_call', 'custom_tool_call'] as const)(
+    'keeps scoped guidance live but strips it from persisted %s outputs and subsequent turns',
+    async type => {
+      const instructionContext = {
+        schema: 'glyph.agent-instructions.v1',
+        sources: [{ path: 'src/AGENTS.md', content: 'obsolete nested guidance' }],
+      };
+      const result = { path: 'src/file.ts', content: 'file contents', revision: 'one', instructionContext };
+      const call =
+        type === 'function_call'
+          ? {
+              type,
+              id: 'call-item',
+              call_id: 'call-work',
+              namespace: 'fixture',
+              name: 'wait_for_work',
+              arguments: '{}',
+            }
+          : { type, id: 'call-item', call_id: 'call-work', namespace: 'fixture', name: 'wait_for_work', input: '{}' };
+      const tools = waitTools(async () => JSON.stringify(result));
+      const { provider, requests } = harness(
+        [
+          () => sse([{ ...completed, response: { ...completed.response, output: [call] } }]),
+          () => sse([completed]),
+          () => sse([completed]),
+        ],
+        {
+          tools: tools.tools.map(tool => ({
+            ...tool,
+            inputKind: type === 'function_call' ? ToolInputKind.JSON : ToolInputKind.TEXT,
+          })),
+        },
+      );
+      await provider.send('Read the nested file.', options());
+      const outputType = type === 'function_call' ? 'function_call_output' : 'custom_tool_call_output';
+      const liveOutputs = requests[1]!.input as Array<{ type?: string; output?: string }>;
+      expect(JSON.parse(liveOutputs.find(item => item.type === outputType)!.output!)).toEqual(result);
+      const saved = provider.exportState();
+      expect(JSON.stringify(saved)).not.toContain('obsolete nested guidance');
+      provider.restoreState(saved);
+      await provider.send('An unrelated next turn after instructions changed.', options());
+      const nextOutputs = requests[2]!.input as Array<{ type?: string; output?: string }>;
+      expect(JSON.parse(nextOutputs.find(item => item.type === outputType)!.output!)).toEqual({
+        path: 'src/file.ts',
+        content: 'file contents',
+        revision: 'one',
+      });
+      // Committing must not mutate the tool output already supplied to the live loop.
+      expect(JSON.parse(liveOutputs.find(item => item.type === outputType)!.output!)).toEqual(result);
+    },
+  );
+
+  it('cleans scoped envelopes from previously saved tool outputs while preserving ordinary tool data', async () => {
+    const { provider, requests } = harness([() => sse([completed])], new ToolRegistry([]));
+    const envelope = { schema: 'glyph.agent-instructions.v1', sources: [{ content: 'stale instructions' }] };
+    const retainedOutputs = [
+      'plain text',
+      'null',
+      '[]',
+      '42',
+      '{invalid json',
+      JSON.stringify({
+        content: 'file text containing instructionContext',
+        instructionContext: { schema: 'application.data', sources: [] },
+      }),
+      JSON.stringify({ instructionContext: { schema: 'glyph.agent-instructions.v1', sources: 'ordinary data' } }),
+      JSON.stringify({ instructionContext: null }),
+      JSON.stringify({ instructionContext: 'application value' }),
+      JSON.stringify({ nested: { instructionContext: envelope } }),
+      [{ type: 'input_text', text: 'Structured output' }],
+    ];
+    const retained = retainedOutputs.map((output, i) => ({
+      type: 'function_call_output',
+      call_id: `retained-${i}`,
+      output,
+    }));
+    provider.restoreState({
+      provider: 'openai-responses',
+      version: 1,
+      data: {
+        history: [
+          {
+            type: 'function_call_output',
+            call_id: 'read',
+            output: JSON.stringify({ content: 'file', instructionContext: envelope }),
+          },
+          {
+            type: 'custom_tool_call_output',
+            call_id: 'edit',
+            output: JSON.stringify({ error: 'INSTRUCTION_CONTEXT_REQUIRED', instructionContext: envelope }),
+          },
+          ...retained,
+        ],
+      },
+    });
+    expect(provider.exportState()).toMatchObject({
+      data: {
+        history: [
+          { type: 'function_call_output', call_id: 'read', output: JSON.stringify({ content: 'file' }) },
+          {
+            type: 'custom_tool_call_output',
+            call_id: 'edit',
+            output: JSON.stringify({ error: 'INSTRUCTION_CONTEXT_REQUIRED' }),
+          },
+          ...retained,
+        ],
+      },
+    });
+    await provider.send('Continue with current instructions.', options());
+    const input = requests[0]!.input as unknown[];
+    expect(input.slice(0, 2)).toEqual([
+      { type: 'function_call_output', call_id: 'read', output: JSON.stringify({ content: 'file' }) },
+      {
+        type: 'custom_tool_call_output',
+        call_id: 'edit',
+        output: JSON.stringify({ error: 'INSTRUCTION_CONTEXT_REQUIRED' }),
+      },
+    ]);
+    expect(input.slice(2, 2 + retained.length)).toEqual(retained);
+  });
+
+  it('freezes repository instructions for a tool loop, refreshes the next turn, and never persists the envelope', async () => {
+    const context = vi
+      .fn<AgentInstructionContextProvider['context']>()
+      .mockResolvedValueOnce({
+        schema: 'glyph.agent-instructions.v1',
+        sources: [
+          {
+            id: 'agents_md:AGENTS.md',
+            kind: AgentInstructionSourceKind.AGENTS_MD,
+            label: 'AGENTS.md',
+            path: 'AGENTS.md',
+            scope: '.',
+            status: AgentInstructionSourceStatus.ACTIVE,
+            content: 'first revision',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ schema: 'glyph.agent-instructions.v1', sources: [] });
+    const providerContext = { context };
+    const { provider, requests } = harness(
+      [() => sse([toolCompleted]), () => sse([completed]), () => sse([completed])],
+      waitTools(vi.fn(async () => 'finished')),
+      providerContext,
+    );
+
+    await provider.send('First turn.', options());
+    expect(context).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(requests[0]!.input)).toContain('first revision');
+    expect(JSON.stringify(requests[1]!.input)).toContain('first revision');
+    expect(JSON.stringify(provider.exportState())).not.toContain('glyph.agent-instructions.v1');
+
+    await provider.send('Second turn.', options());
+    expect(context).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(requests[2]!.input)).not.toContain('glyph.agent-instructions.v1');
+  });
+
+  it('starts scoped instruction turns with the host turn id and attached paths', async () => {
+    const beginTurn = vi.fn<NonNullable<AgentInstructionContextProvider['beginTurn']>>().mockResolvedValue({
+      schema: 'glyph.agent-instructions.v1',
+      sources: [],
+    });
+    const instructionContext: AgentInstructionContextProvider = {
+      context: vi.fn<AgentInstructionContextProvider['context']>(async () => ({
+        schema: 'glyph.agent-instructions.v1',
+        sources: [],
+      })),
+      beginTurn,
+    };
+    const { provider } = harness([() => sse([completed])], undefined, instructionContext);
+
+    await provider.send(
+      {
+        text: 'Review this file.',
+        attachments: [{ path: 'src/app.ts', text: 'export {}', revision: 'one', byteOrderMark: false, byteLength: 9 }],
+      },
+      options(),
+    );
+
+    expect(beginTurn).toHaveBeenCalledWith(expect.any(String), ['src/app.ts'], expect.any(AbortSignal));
+    expect(instructionContext.context).not.toHaveBeenCalled();
+  });
+
   it.each([
     [AgentModeID.PLAN, AgentModeID.AGENT],
     [AgentModeID.AGENT, AgentModeID.PLAN],

@@ -1,7 +1,10 @@
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
+import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
@@ -80,6 +83,68 @@ describe(ProjectAccess, () => {
     expect(next.lines[0]!.number).toBe(page.nextStartLine);
     expect(next.endLine).toBeGreaterThan(page.endLine);
   });
+
+  it('attaches newly applicable scoped instructions to reads only once per turn', async () => {
+    const workspace = new FileSystemWorkspaceTextStore('/fixture');
+    vi.spyOn(workspace, 'read').mockResolvedValue({
+      path: 'src/app.ts',
+      text: 'content',
+      byteOrderMark: false,
+      mode: 0o644,
+      identity: 'fixture',
+      revision: 'revision',
+      byteLength: 7,
+    });
+    const disclose = vi
+      .fn()
+      .mockReturnValueOnce({ schema: 'glyph.agent-instructions.v1', sources: [{ path: 'src/AGENTS.md' }] })
+      .mockReturnValueOnce(undefined);
+    const access = new ProjectAccess('/fixture', {}, workspace, undefined, { disclose });
+    const input = JSON.stringify({ path: 'src/app.ts', start_line: null, end_line: null });
+
+    expect(JSON.parse(await access.execute('read_project_file', input, undefined, { turnId: 'turn' }))).toMatchObject({
+      instructionContext: { sources: [{ path: 'src/AGENTS.md' }] },
+    });
+    expect(
+      JSON.parse(await access.execute('read_project_file', input, undefined, { turnId: 'turn' })),
+    ).not.toHaveProperty('instructionContext');
+    expect(disclose).toHaveBeenNthCalledWith(1, 'turn', ['src/app.ts']);
+  });
+
+  it.each([
+    { requested: 'src/file.ts', normalized: 'src/file.ts', instruction: 'src/AGENTS.md' },
+    { requested: './src/file.ts', normalized: 'src/file.ts', instruction: 'src/AGENTS.md' },
+    { requested: 'src/../docs/file.ts', normalized: 'docs/file.ts', instruction: 'docs/AGENTS.md' },
+  ])(
+    'discloses the instructions governing the returned file for $requested',
+    async ({ requested, normalized, instruction }) => {
+      const root = await mkdtemp(join(tmpdir(), 'glyph-read-instructions-'));
+      onTestFinished(() => rm(root, { recursive: true, force: true }));
+      for (const directory of ['src', 'docs']) {
+        await mkdir(join(root, directory));
+        await writeFile(join(root, directory, 'AGENTS.md'), `${directory} guidance`);
+        await writeFile(join(root, directory, 'file.ts'), 'content');
+      }
+      const workspace = new FileSystemWorkspaceTextStore(root);
+      const instructions = new AgentInstructionCatalog([new AgentsMdInstructionProvider(workspace)]);
+      await instructions.beginTurn('turn', []);
+      const access = new ProjectAccess(root, {}, workspace, undefined, instructions);
+      const result = JSON.parse(
+        await access.execute(
+          'read_project_file',
+          JSON.stringify({
+            path: requested,
+            start_line: null,
+            end_line: null,
+          }),
+          undefined,
+          { turnId: 'turn' },
+        ),
+      ) as { path: string; instructionContext?: AgentInstructionContext };
+      expect(result.path).toBe(normalized);
+      expect(result.instructionContext?.sources.map(source => source.path)).toEqual([instruction]);
+    },
+  );
 
   it('forwards listing cancellation to the native index without waiting for a worker reply', async () => {
     let release!: () => void;
@@ -272,6 +337,56 @@ describe(ProjectAccess, () => {
         offset: 0,
         signal: controller.signal,
       });
+    });
+
+    it('discloses scoped instructions for files returned by count searches', async () => {
+      const disclose = vi.fn().mockReturnValue({
+        schema: 'glyph.agent-instructions.v1',
+        sources: [{ path: 'src/AGENTS.md' }],
+      });
+      const access = new ProjectAccess(
+        tmpdir(),
+        {},
+        undefined,
+        {
+          glob: async () => ({ files: [], truncated: false }),
+          searchContents: async () => ({
+            outputMode: 'count',
+            counts: [{ path: 'src/app.ts', count: 2 }],
+            searchedFiles: 1,
+            skippedFiles: 0,
+            indexTruncated: false,
+            truncated: false,
+            nextOffset: null,
+          }),
+        },
+        { disclose },
+      );
+
+      const result = JSON.parse(
+        await access.execute(
+          'search_project_contents',
+          JSON.stringify({
+            pattern: 'needle',
+            pattern_kind: 'literal',
+            path: null,
+            file_glob: null,
+            file_type: null,
+            output_mode: 'count',
+            lines_before: 0,
+            lines_after: 0,
+            case_sensitive: true,
+            multiline: false,
+            limit: 10,
+            offset: 0,
+          }),
+          undefined,
+          { turnId: 'turn' },
+        ),
+      ) as { instructionContext: { sources: { path: string }[] } };
+
+      expect(result.instructionContext.sources).toEqual([{ path: 'src/AGENTS.md' }]);
+      expect(disclose).toHaveBeenCalledWith('turn', ['src/app.ts']);
     });
 
     it('returns malformed tool output when the native index rejects a glob pattern', async () => {
@@ -736,7 +851,7 @@ describe(ProjectAccess, () => {
         tool.validateInput(JSON.stringify(invalid));
       }).toThrow();
       await expect(tool.execute(JSON.stringify(valid), signal, {})).resolves.toBe('{"ok":true}');
-      expect(execute).toHaveBeenCalledWith(name, JSON.stringify(valid), signal);
+      expect(execute).toHaveBeenCalledWith(name, JSON.stringify(valid), signal, {});
     });
   });
 });
