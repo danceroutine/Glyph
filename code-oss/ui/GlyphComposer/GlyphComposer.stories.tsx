@@ -165,6 +165,42 @@ export const ContextPickerFolder: Story = {
   },
 };
 
+const rulePickerActions = previewActionsFixture({
+  context: {
+    ...contextActions.context,
+    searchRules: fn<typeof contextActions.context.searchRules>(async query =>
+      [
+        {
+          uri: 'glyph-rule:typescript-safety',
+          path: 'TypeScript safety',
+          name: 'TypeScript safety',
+          detail: 'Use for strict TypeScript implementation and review',
+          kind: GlyphContextCandidateKind.RULE,
+          ruleId: 'glyph_project_rule:.glyph/rules/typescript-safety.mdc',
+          revision: 'storybook-rule-v1',
+        },
+        {
+          uri: 'glyph-rule:accessibility',
+          path: 'Accessibility review',
+          name: 'Accessibility review',
+          detail: 'Check keyboard, focus, labels, and contrast',
+          kind: GlyphContextCandidateKind.RULE,
+          ruleId: 'glyph_user_rule:rules/accessibility.mdc',
+          revision: 'storybook-rule-v1',
+        },
+      ].filter(rule => `${rule.name} ${rule.detail}`.toLowerCase().includes(query.toLowerCase())),
+    ).mockName('RulePicker.searchRules'),
+  },
+});
+
+export const RulePicker: Story = {
+  ...ContextPicker,
+  args: { actions: rulePickerActions },
+  play: async ({ canvasElement }) => {
+    await userEvent.type(within(canvasElement).getByRole('textbox', { name: 'Message Glyph' }), '/');
+  },
+};
+
 const diagnosticComposer = composerFixture();
 diagnosticComposer.insertAttachments([
   {

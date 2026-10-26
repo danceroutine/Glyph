@@ -92,11 +92,11 @@ describe(ProjectAccess, () => {
       revision: 'revision',
       byteLength: 7,
     });
-    const disclose = vi
+    const disclosePaths = vi
       .fn()
       .mockReturnValueOnce({ schema: 'glyph.agent-instructions.v1', sources: [{ path: 'src/AGENTS.md' }] })
       .mockReturnValueOnce(undefined);
-    const access = new ProjectAccess('/fixture', {}, workspace, undefined, { disclose });
+    const access = new ProjectAccess('/fixture', {}, workspace, undefined, { disclosePaths });
     const input = JSON.stringify({ path: 'src/app.ts', start_line: null, end_line: null });
 
     expect(JSON.parse(await access.execute('read_project_file', input, undefined, { turnId: 'turn' }))).toMatchObject({
@@ -105,7 +105,7 @@ describe(ProjectAccess, () => {
     expect(
       JSON.parse(await access.execute('read_project_file', input, undefined, { turnId: 'turn' })),
     ).not.toHaveProperty('instructionContext');
-    expect(disclose).toHaveBeenNthCalledWith(1, 'turn', ['src/app.ts']);
+    expect(disclosePaths).toHaveBeenNthCalledWith(1, 'turn', ['src/app.ts']);
   });
 
   it('forwards listing cancellation to the native index without waiting for a worker reply', async () => {
@@ -302,7 +302,7 @@ describe(ProjectAccess, () => {
     });
 
     it('discloses scoped instructions for files returned by count searches', async () => {
-      const disclose = vi.fn().mockReturnValue({
+      const disclosePaths = vi.fn().mockReturnValue({
         schema: 'glyph.agent-instructions.v1',
         sources: [{ path: 'src/AGENTS.md' }],
       });
@@ -322,7 +322,7 @@ describe(ProjectAccess, () => {
             nextOffset: null,
           }),
         },
-        { disclose },
+        { disclosePaths },
       );
 
       const result = JSON.parse(
@@ -348,7 +348,7 @@ describe(ProjectAccess, () => {
       ) as { instructionContext: { sources: { path: string }[] } };
 
       expect(result.instructionContext.sources).toEqual([{ path: 'src/AGENTS.md' }]);
-      expect(disclose).toHaveBeenCalledWith('turn', ['src/app.ts']);
+      expect(disclosePaths).toHaveBeenCalledWith('turn', ['src/app.ts']);
     });
 
     it('returns malformed tool output when the native index rejects a glob pattern', async () => {

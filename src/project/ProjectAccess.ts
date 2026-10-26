@@ -14,7 +14,7 @@ import { ProjectToolName } from './ProjectToolName.ts';
 import { ProjectToolNamespace } from './ProjectToolNamespace.ts';
 import { isEnumValue } from '#src/shared/validators/isEnumValue.js';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
-import type { AgentInstructionDisclosureProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
+import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 
 interface ProjectAccessOptions {
   maxFiles?: number;
@@ -137,7 +137,7 @@ export class ProjectAccess {
     options: ProjectAccessOptions = {},
     workspace?: WorkspaceTextStore,
     private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
-    private readonly instructions?: AgentInstructionDisclosureProvider,
+    private readonly turnContexts?: Pick<TurnContextCoordinator, 'disclosePaths'>,
   ) {
     const { maxFiles, maxFileBytes, excludedPaths, accessPolicy } = projectAccessOptionsSchema.parse(options);
     this.options = { maxFiles, maxFileBytes, excludedPaths, accessPolicy };
@@ -237,7 +237,7 @@ export class ProjectAccess {
   }
 
   private withInstructions(result: object, paths: readonly string[], context?: ToolExecutionContext): string {
-    const instructions = context?.turnId ? this.instructions?.disclose(context.turnId, paths) : undefined;
+    const instructions = context?.turnId ? this.turnContexts?.disclosePaths(context.turnId, paths) : undefined;
     return JSON.stringify(instructions ? { ...result, instructionContext: instructions } : result);
   }
 

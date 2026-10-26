@@ -1,3 +1,4 @@
+import { fireEvent } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
 import { URI } from '#vs/base/common/uri.js';
 import { GlyphAgentInstructionsPreferences } from '#vs/workbench/contrib/glyph/browser/GlyphAgentInstructionsPreferences.js';
@@ -147,5 +148,52 @@ describe(GlyphAgentInstructionsPreferences, () => {
     unresolved.getDomNode().querySelector<HTMLButtonElement>('button.source-path')!.click();
     expect(editors.openEditor).not.toHaveBeenCalled();
     unresolved.dispose();
+  });
+
+  it('forwards user rule management and opens direct source URIs', () => {
+    const createUserRule = vi.fn(async () => {});
+    const setUserRuleEnabled = vi.fn(async () => {});
+    const deleteUserRule = vi.fn(async () => {});
+    const editors = { openEditor: vi.fn(async () => undefined) };
+    const source = {
+      id: 'user',
+      kind: 'glyph_user_rule',
+      label: 'Glyph user rule',
+      path: '~/.glyph/rules/test.mdc',
+      managementPath: 'rules/test.mdc',
+      managementRevision: 'source-one',
+      uri: URI.file('/home/user/.glyph/rules/test.mdc').toString(),
+      scope: '.',
+      status: 'active',
+      activation: 'manual',
+      revision: 'one',
+      enabled: true,
+    };
+    const page = new GlyphAgentInstructionsPreferences(
+      {
+        state: { instructionSources: [source] },
+        onDidChangeState: () => ({ dispose() {} }),
+        createUserRule,
+        setUserRuleEnabled,
+        deleteUserRule,
+      } as never,
+      { getWorkspace: () => ({ folders: [] }) } as never,
+      editors as never,
+    );
+    const root = page.getDomNode();
+    const input = root.querySelector<HTMLInputElement>('[aria-label="New user rule name"]')!;
+    fireEvent.input(input, { target: { value: 'My Rule' } });
+    const activation = root.querySelector<HTMLSelectElement>('[aria-label="Rule activation"]')!;
+    fireEvent.change(activation, { target: { value: 'always' } });
+    fireEvent.submit(root.querySelector('form')!);
+    root.querySelector<HTMLButtonElement>('button.source-path')!.click();
+    [...root.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Disable')!.click();
+    [...root.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Remove')!.click();
+
+    expect(createUserRule).toHaveBeenCalledWith('My Rule', 'manual');
+    expect(setUserRuleEnabled).toHaveBeenCalledWith(source, false);
+    expect(deleteUserRule).toHaveBeenCalledWith(source);
+    expect(editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/home/user/.glyph/rules/test.mdc') });
+    page.dispose();
   });
 });

@@ -60,6 +60,8 @@ import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 import { GoalStatus } from '#src/goals/GoalStatus.js';
 import {
+  AgentInstructionActivationMode,
+  AgentInstructionActivationReason,
   AgentInstructionSourceKind,
   AgentInstructionSourceStatus,
   type AgentInstructionSource,
@@ -78,6 +80,11 @@ async function fixture(
     readonly instructionCatalog?: NonNullable<
       ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']
     >;
+    readonly userRules?: {
+      create(name: string, activation: 'always' | 'file_pattern' | 'model' | 'manual'): Promise<void>;
+      setEnabled(path: string, revision: string, enabled: boolean): Promise<void>;
+      remove(path: string, revision: string): Promise<void>;
+    };
   } = {},
 ) {
   const events: GlyphHostEvent[] = [];
@@ -199,6 +206,7 @@ async function fixture(
     ownerWindowId,
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
     ...(extras.instructionCatalog ? { instructionCatalog: extras.instructionCatalog } : {}),
+    ...(extras.userRules ? { userRules: extras.userRules as never } : {}),
   });
   await runtime.handle({ type: Command.CREATE_CHAT, accountProvider: 'fixture', accountId: 'account', model: 'model' });
   const chatId = (await runtime.snapshot()).chats.find(
@@ -247,6 +255,32 @@ it('projects instruction catalog snapshots and live changes without exposing fil
       status: AgentInstructionSourceStatus.ERROR,
       message: 'Unreadable',
     },
+    {
+      id: 'glyph_user_rule:rules/user.mdc',
+      kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+      label: 'Glyph user rule',
+      name: 'User',
+      description: 'User description',
+      path: '~/.glyph/rules/user.mdc',
+      scope: '.',
+      status: AgentInstructionSourceStatus.ACTIVE,
+      content: 'User body',
+      revision: 'one',
+      sourceRevision: 'source-one',
+      activation: AgentInstructionActivationMode.MANUAL,
+      globs: ['**/*.ts'],
+      enabled: true,
+      references: ['style.md'],
+      uri: 'file:///home/user/.glyph/rules/user.mdc',
+    },
+    {
+      id: 'glyph_user_rule:rules/empty.mdc',
+      kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+      label: 'Glyph user rule',
+      path: '~/.glyph/rules/empty.mdc',
+      scope: '.',
+      status: AgentInstructionSourceStatus.ACTIVE,
+    },
   ];
   const instructionCatalog = {
     sources,
@@ -256,21 +290,140 @@ it('projects instruction catalog snapshots and live changes without exposing fil
       return unsubscribe;
     }),
   };
-  const harness = await fixture(async () => {}, 'owner', undefined, { instructionCatalog });
+  const historical = chatRecord({
+    transcript: [
+      {
+        userText: 'Used rules',
+        attachmentPaths: [],
+        assistantText: 'Done',
+        reasoningSummary: '',
+        createdAt: '2026-10-01T00:00:00.000Z',
+        context: {
+          schema: 'glyph.turn-context.v1',
+          turnId: 'turn',
+          sources: [sources[2]!],
+          activations: [{ sourceId: sources[2]!.id, reason: AgentInstructionActivationReason.MANUAL }],
+          candidates: [{ id: 'candidate', name: 'Candidate', description: 'When relevant', scope: '.' }],
+        },
+      },
+    ],
+  });
+  const harness = await fixture(async () => {}, 'owner', undefined, { instructionCatalog, records: [historical] });
   try {
-    expect((await harness.runtime.snapshot()).instructionSources).toEqual([
-      expect.not.objectContaining({ content: expect.anything() }),
-      expect.objectContaining({ path: 'src/AGENTS.md', message: 'Unreadable' }),
-    ]);
+    const projected = (await harness.runtime.snapshot()).instructionSources!;
+    expect(projected[0]).not.toHaveProperty('content');
+    expect(projected[1]).toMatchObject({ path: 'src/AGENTS.md', message: 'Unreadable' });
+    expect(projected[2]).toMatchObject({
+      content: 'User body',
+      managementPath: 'rules/user.mdc',
+      managementRevision: 'source-one',
+    });
+    expect(projected[3]).not.toHaveProperty('content');
     changed?.(sources);
     expect(harness.events.at(-1)).toEqual({
       type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED,
       sources: expect.arrayContaining([expect.objectContaining({ path: 'AGENTS.md' })]),
     });
+    await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: historical.id });
+    expect((await harness.runtime.snapshot()).runs.find(run => run.chatId === historical.id)?.context).toEqual({
+      sources: [expect.objectContaining({ content: 'User body', managementPath: 'rules/user.mdc' })],
+      activations: [{ sourceId: sources[2]!.id, reason: AgentInstructionActivationReason.MANUAL }],
+      candidates: [{ id: 'candidate', name: 'Candidate', description: 'When relevant' }],
+    });
   } finally {
     await harness.runtime.dispose();
   }
   expect(unsubscribe).toHaveBeenCalledOnce();
+});
+
+it('keeps a completed turn when the post-turn instruction refresh fails', async () => {
+  const refresh = vi
+    .fn<() => Promise<readonly AgentInstructionSource[]>>()
+    .mockResolvedValueOnce([])
+    .mockRejectedValueOnce(new Error('refresh failed'));
+  const harness = await fixture(
+    async options => {
+      options.onText('Done');
+    },
+    'owner',
+    undefined,
+    { instructionCatalog: { sources: [], refresh, onDidChange: () => () => {} } },
+  );
+  try {
+    await harness.runtime.handle({
+      type: Command.SEND,
+      chatId: harness.chatId,
+      runId: 'rule-refresh-failure',
+      text: 'Create a rule',
+      attachments: [],
+    });
+    await vi.waitFor(() => {
+      expect(harness.saved.get(harness.chatId)?.transcript).toHaveLength(1);
+      expect(
+        harness.events.some(
+          event =>
+            event.type === GlyphHostEventType.RUN_STATE &&
+            event.run.runId === 'rule-refresh-failure' &&
+            event.run.status === GlyphRunStatus.COMPLETED,
+        ),
+      ).toBe(true);
+    });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  } finally {
+    await harness.runtime.dispose();
+  }
+});
+
+it('dispatches user rule lifecycle commands and reports unavailable management', async () => {
+  const userRules = {
+    create: vi.fn(async () => {}),
+    setEnabled: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
+  };
+  const harness = await fixture(async () => {}, 'owner', undefined, { userRules });
+  try {
+    await harness.runtime.handle({ type: Command.CREATE_USER_RULE, name: 'Test', activation: 'manual' });
+    await harness.runtime.handle({
+      type: Command.SET_USER_RULE_ENABLED,
+      path: 'rules/test.mdc',
+      expectedRevision: 'one',
+      enabled: false,
+    });
+    await harness.runtime.handle({
+      type: Command.DELETE_USER_RULE,
+      path: 'rules/test.mdc',
+      expectedRevision: 'two',
+    });
+    expect(userRules.create).toHaveBeenCalledWith('Test', 'manual');
+    expect(userRules.setEnabled).toHaveBeenCalledWith('rules/test.mdc', 'one', false);
+    expect(userRules.remove).toHaveBeenCalledWith('rules/test.mdc', 'two');
+  } finally {
+    await harness.runtime.dispose();
+  }
+
+  const unavailable = await fixture(async () => {});
+  try {
+    await expect(
+      unavailable.runtime.handle({ type: Command.CREATE_USER_RULE, name: 'Test', activation: 'manual' }),
+    ).rejects.toThrow('User rules are unavailable');
+    await expect(
+      unavailable.runtime.handle({
+        type: Command.SET_USER_RULE_ENABLED,
+        path: 'rules/test.mdc',
+        expectedRevision: 'one',
+        enabled: true,
+      }),
+    ).rejects.toThrow('User rules are unavailable');
+    await expect(
+      unavailable.runtime.handle({
+        type: Command.DELETE_USER_RULE,
+        path: 'rules/test.mdc',
+        expectedRevision: 'one',
+      }),
+    ).rejects.toThrow('User rules are unavailable');
+  } finally {
+    await unavailable.runtime.dispose();
+  }
 });
 
 function reviewFixture() {
@@ -2365,6 +2518,13 @@ describe(ProviderDesktopRuntime, () => {
             reasoningSummary: '',
             createdAt: '2026-09-01T00:00:00.000Z',
             options: { turnId: 'legacy-run' },
+            context: {
+              schema: 'glyph.turn-context.v1',
+              turnId: 'legacy-run',
+              sources: [],
+              activations: [],
+              candidates: [],
+            },
           },
         ],
       });
@@ -2377,6 +2537,13 @@ describe(ProviderDesktopRuntime, () => {
           usage: null,
           responseId: 'response',
           durationMs: 0,
+          context: {
+            schema: 'glyph.turn-context.v1',
+            turnId: 'legacy-run',
+            sources: [],
+            activations: [],
+            candidates: [],
+          },
         });
         await harness.runtime.handle({
           type: Command.SEND,
@@ -2393,6 +2560,7 @@ describe(ProviderDesktopRuntime, () => {
         const run = (await harness.runtime.snapshot()).runs.find(value => value.runId === 'legacy-run')!;
         expect(run.createdAt).toBe('2026-09-01T00:00:00.000Z');
         expect(run).not.toHaveProperty('checkpointTurnId');
+        expect(run.context).toEqual({ sources: [], activations: [], candidates: [] });
       } finally {
         await harness.runtime.dispose();
       }

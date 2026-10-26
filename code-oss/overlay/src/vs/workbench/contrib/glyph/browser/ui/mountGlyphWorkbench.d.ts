@@ -13,6 +13,14 @@ export declare const mountGlyphAgentInstructions: (
   sources: readonly import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource[],
   query: string,
   openSource: (source: import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource) => void,
+  actions?: {
+    createUserRule?(name: string, activation: 'always' | 'file_pattern' | 'model' | 'manual'): void;
+    setUserRuleEnabled?(
+      source: import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource,
+      enabled: boolean,
+    ): void;
+    deleteUserRule?(source: import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource): void;
+  },
 ) => {
   update(
     sources: readonly import('#glyph/protocol/events/GlyphInstructionSource.js').GlyphInstructionSource[],

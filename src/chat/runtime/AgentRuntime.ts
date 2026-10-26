@@ -17,6 +17,8 @@ import type { Usage } from '#src/chat/Usage.js';
 import type { AgentModelAdapter, AgentToolResult, AgentTurnContext } from './AgentModelAdapter.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
 import { randomUUID } from 'node:crypto';
+import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 
 interface AgentRuntimeConfiguration {
   readonly timeoutMs: number;
@@ -33,6 +35,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     private readonly configuration: AgentRuntimeConfiguration,
     tools: ToolSource,
     initialState?: ChatProviderState,
+    private readonly turnContexts?: TurnContextCoordinator,
   ) {
     const registry = tools instanceof ToolRegistry ? tools : new ToolRegistry(tools.tools);
     this.executor = new ToolExecutor(registry);
@@ -84,6 +87,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       ...(request.agentReviewId !== undefined && request.agentReviewId !== ''
         ? { agentReviewId: request.agentReviewId }
         : {}),
+      ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
     });
     const modelRequest = modelInput(request);
     if (this.busy) throw new ProviderError('A response is already in progress.');
@@ -116,11 +120,13 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     const setMode = (next: AgentModeID): void => {
       mode = next;
     };
+    let boundaryInstructions: AgentInstructionContext | undefined;
     const context = (round: number): AgentTurnContext => ({
       signal,
       turnId,
       round,
       mode: AgentMode.resolve(mode),
+      ...(boundaryInstructions ? { instructionContext: boundaryInstructions } : {}),
       onText: options.onText,
       ...(options.onReasoningSummary ? { onReasoningSummary: options.onReasoningSummary } : {}),
       trace,
@@ -149,14 +155,26 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         await options.onStateCheckpoint?.(structuredClone(this.state));
         trace('tool.interrupted_recovered', { recoveredCallCount: recovery.recoveredCallCount });
       }
+      const turnContext = await this.turnContexts?.beginTurn(
+        {
+          turnId,
+          attachmentPaths: request.attachments.map(attachment => attachment.path),
+          manualRuleIds: request.manualRuleIds ?? [],
+        },
+        signal,
+      );
+      boundaryInstructions = turnContext?.initialEnvelope();
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
+      boundaryInstructions = undefined;
       let totalUsage: Usage | null = null;
       let usageIncomplete = false;
       let round = 0;
       for (;;) {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
+          boundaryInstructions = this.steeringInstructions(turnId, steering);
           turn = await this.adapter.steerTurn(turn, modelInput(steering), context(round));
+          boundaryInstructions = undefined;
           this.state = this.adapter.commit(turn);
           hasToolCheckpoint = true;
           await options.onStateCheckpoint?.(structuredClone(this.state));
@@ -169,8 +187,11 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         if (step.toolCalls.length === 0) {
           const steering = options.takeSteering?.(true) ?? [];
           if (steering.length > 0) {
-            for (const instruction of steering)
+            for (const instruction of steering) {
+              boundaryInstructions = this.steeringInstructions(turnId, instruction);
               turn = await this.adapter.steerTurn(turn, modelInput(instruction), context(round));
+              boundaryInstructions = undefined;
+            }
             this.state = this.adapter.commit(turn);
             hasToolCheckpoint = true;
             await options.onStateCheckpoint?.(structuredClone(this.state));
@@ -183,9 +204,11 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           }
           this.state = this.adapter.commit(turn);
           trace('history.committed', { state: this.state }, round);
+          const turnContextSnapshot = this.turnContexts?.completeTurn(turnId);
           return {
             responseId: step.responseId,
             usage: totalUsage && usageIncomplete ? { ...totalUsage, incomplete: true } : totalUsage,
+            ...(turnContextSnapshot ? { context: turnContextSnapshot } : {}),
           };
         }
         this.state = this.adapter.commit(turn);
@@ -247,9 +270,34 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       trace('turn.failed', errorDetails(reportedError));
       throw reportedError;
     } finally {
+      this.turnContexts?.discardTurn(turnId);
       this.busy = false;
     }
   }
+
+  private steeringInstructions(turnId: string, request: ChatRequest): AgentInstructionContext | undefined {
+    return mergeInstructionContexts(
+      this.turnContexts?.discloseAttachments(
+        turnId,
+        request.attachments.map(attachment => attachment.path),
+      ),
+      this.turnContexts?.activateManualRules(turnId, request.manualRuleIds ?? []),
+    );
+  }
+}
+
+function mergeInstructionContexts(
+  left: AgentInstructionContext | undefined,
+  right: AgentInstructionContext | undefined,
+): AgentInstructionContext | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    schema: 'glyph.agent-instructions.v1',
+    sources: [...left.sources, ...right.sources],
+    activations: [...(left.activations ?? []), ...(right.activations ?? [])],
+    candidates: [...(left.candidates ?? []), ...(right.candidates ?? [])],
+  };
 }
 
 function toolInterruptionOutput(code: string, message: string, outcomeUnknown: boolean): string {
@@ -305,6 +353,7 @@ function modelInput(request: ChatRequest): ChatRequest {
     ...(request.agentReviewId !== undefined && request.agentReviewId !== ''
       ? { agentReviewId: request.agentReviewId }
       : {}),
+    ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
   });
   return {
     ...request,

@@ -23,6 +23,16 @@ const styles = {
     minHeight: 24,
     '& time': { opacity: 0, fontSize: tokens.font.size.detail },
   }),
+  context: css({ margin: '8px 10px 0', color: tokens.text.muted, fontSize: tokens.font.size.detail }),
+  contextList: css({ display: 'grid', gap: 5, margin: '7px 0 0', padding: 0, listStyle: 'none' }),
+  contextSource: css({
+    border: 0,
+    padding: 0,
+    color: tokens.text.muted,
+    background: 'transparent',
+    cursor: 'pointer',
+    ':hover': { color: tokens.text.primary },
+  }),
 };
 
 export interface GlyphAgentMessageProps {
@@ -45,6 +55,7 @@ export function GlyphAgentMessage({
   modeSwapCards,
   changes,
 }: GlyphAgentMessageProps) {
+  const context = entry.context;
   return (
     <div class={`glyph-entry assistant ${styles.entry}`}>
       {entry.questionResponses?.map(response => (
@@ -64,6 +75,30 @@ export function GlyphAgentMessage({
       )}
       {approval}
       {shells}
+      {context && context.sources.length > 0 && (
+        <details class={styles.context}>
+          <summary>Context used ({context.sources.length})</summary>
+          <ul class={styles.contextList}>
+            {context.sources.map(source => {
+              const activation = context.activations.find(value => value.sourceId === source.id);
+              return (
+                <li key={source.id}>
+                  <button
+                    type="button"
+                    class={styles.contextSource}
+                    title={`Open ${source.path}`}
+                    onClick={() => {
+                      entry.openLink(`glyph-instruction:${encodeURIComponent(source.id)}`);
+                    }}
+                  >
+                    {source.name ?? source.path} · {activation?.reason.replaceAll('_', ' ') ?? 'active'}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      )}
       <footer class={styles.footer} aria-label="Message actions">
         <IconButton
           size={ButtonSize.SMALL}

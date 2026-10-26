@@ -17,6 +17,12 @@ import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 import type { ChatSessionRecord } from './ChatSessionRecord.ts';
 import type { ChatSessionStore } from './ChatSessionStore.ts';
 import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
+import {
+  AgentInstructionActivationMode,
+  AgentInstructionActivationReason,
+  AgentInstructionSourceKind,
+  AgentInstructionSourceStatus,
+} from '#src/instructions/AgentInstructionSource.js';
 
 const providerStateSchema = z
   .object({
@@ -34,6 +40,81 @@ const historyCheckpointSchema = z
     plans: z.array(planSchema),
     todos: todoItemsSchema,
     mode: z.enum(AgentModeID),
+  })
+  .strict();
+
+const instructionSourceSchema = z
+  .object({
+    id: z.string(),
+    kind: z.enum(AgentInstructionSourceKind),
+    label: z.string(),
+    path: z.string(),
+    scope: z.string(),
+    status: z.enum(AgentInstructionSourceStatus),
+    content: z.string().optional(),
+    revision: z.string().optional(),
+    sourceRevision: z.string().optional(),
+    message: z.string().optional(),
+    activation: z.enum(AgentInstructionActivationMode).optional(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    globs: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    references: z.array(z.string()).optional(),
+    uri: z.string().optional(),
+  })
+  .strict()
+  .transform(
+    ({
+      content,
+      revision,
+      sourceRevision,
+      message,
+      activation,
+      name,
+      description,
+      globs,
+      enabled,
+      references,
+      uri,
+      ...source
+    }) => ({
+      ...source,
+      ...(content === undefined ? {} : { content }),
+      ...(revision === undefined ? {} : { revision }),
+      ...(sourceRevision === undefined ? {} : { sourceRevision }),
+      ...(message === undefined ? {} : { message }),
+      ...(activation === undefined ? {} : { activation }),
+      ...(name === undefined ? {} : { name }),
+      ...(description === undefined ? {} : { description }),
+      ...(globs === undefined ? {} : { globs }),
+      ...(enabled === undefined ? {} : { enabled }),
+      ...(references === undefined ? {} : { references }),
+      ...(uri === undefined ? {} : { uri }),
+    }),
+  );
+
+const instructionTurnContextSchema = z
+  .object({
+    schema: z.literal('glyph.turn-context.v1'),
+    turnId: z.string(),
+    sources: z.array(instructionSourceSchema),
+    activations: z.array(
+      z
+        .object({
+          sourceId: z.string(),
+          reason: z.enum(AgentInstructionActivationReason),
+          paths: z.array(z.string()).optional(),
+        })
+        .strict()
+        .transform(({ paths, ...activation }) => ({
+          ...activation,
+          ...(paths === undefined ? {} : { paths }),
+        })),
+    ),
+    candidates: z.array(
+      z.object({ id: z.string(), name: z.string(), description: z.string(), scope: z.string() }).strict(),
+    ),
   })
   .strict();
 
@@ -144,6 +225,7 @@ const transcriptTurnSchema = z
       .strict()
       .transform(({ incomplete, ...usage }) => ({ ...usage, ...(incomplete === undefined ? {} : { incomplete }) }))
       .optional(),
+    context: instructionTurnContextSchema.optional(),
     tools: z
       .array(
         z
@@ -170,7 +252,18 @@ const transcriptTurnSchema = z
   })
   .strict()
   .transform(
-    ({ usage, tools, attachments, options, checkpoints, questionResponses, modeSwaps, steering, ...turn }) => ({
+    ({
+      usage,
+      context,
+      tools,
+      attachments,
+      options,
+      checkpoints,
+      questionResponses,
+      modeSwaps,
+      steering,
+      ...turn
+    }) => ({
       ...(checkpoints ? { checkpoints } : {}),
       ...(questionResponses ? { questionResponses } : {}),
       ...(modeSwaps ? { modeSwaps } : {}),
@@ -178,6 +271,7 @@ const transcriptTurnSchema = z
       ...(options ? { options } : {}),
       ...turn,
       ...(usage === undefined ? {} : { usage }),
+      ...(context === undefined ? {} : { context }),
       ...(tools === undefined ? {} : { tools }),
       ...(attachments === undefined
         ? {}
@@ -292,6 +386,7 @@ interface TurnRow {
   readonly reasoning_summary: string;
   readonly created_at: string;
   readonly usage: string | null;
+  readonly context: string | null;
   readonly tools: string | null;
 }
 
@@ -352,7 +447,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
         .prepare<[string], ChatRow>('SELECT * FROM chats WHERE project_context_id = ? ORDER BY updated_at DESC')
         .all(projectContextId);
       const turns = database.prepare<[string], TurnRow>(
-        'SELECT steering, mode_swaps, question_responses, checkpoints, options, user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
+        'SELECT steering, mode_swaps, question_responses, checkpoints, options, user_text, attachment_paths, attachments, assistant_text, reasoning_summary, created_at, usage, context, tools FROM chat_turns WHERE chat_id = ? ORDER BY position',
       );
       return chats.map(row => toRecord(row, turns.all(row.id)));
     } catch (error) {
@@ -470,6 +565,7 @@ export class SqliteChatSessionStore implements ChatSessionStore {
           'question_responses',
           'mode_swaps',
           'steering',
+          'context',
         ]) {
           if (!columns.some(value => value.name === column))
             database.exec(`ALTER TABLE chat_turns ADD COLUMN ${column} TEXT`);
@@ -602,8 +698,8 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
     database.prepare('DELETE FROM chat_turns WHERE chat_id = ?').run(record.id);
     const insertTurn = database.prepare(
       `INSERT INTO chat_turns(
-         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, tools, attachments, options, checkpoints, question_responses, mode_swaps, steering
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         chat_id, position, user_text, attachment_paths, assistant_text, reasoning_summary, created_at, usage, context, tools, attachments, options, checkpoints, question_responses, mode_swaps, steering
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     record.transcript.forEach((turn, position) => {
       insertTurn.run(
@@ -615,6 +711,7 @@ function saveRecord(database: Database.Database, record: ChatSessionRecord): voi
         turn.reasoningSummary,
         turn.createdAt,
         turn.usage ? JSON.stringify(turn.usage) : null,
+        turn.context ? JSON.stringify(turn.context) : null,
         turn.tools ? JSON.stringify(turn.tools) : null,
         turn.attachments ? JSON.stringify(turn.attachments) : null,
         turn.options ? JSON.stringify(turn.options) : null,
@@ -659,6 +756,7 @@ function toRecord(row: ChatRow, turns: readonly TurnRow[]): ChatSessionRecord {
       reasoningSummary: turn.reasoning_summary,
       createdAt: turn.created_at,
       ...(turn.usage === null ? {} : { usage: JSON.parse(turn.usage) as unknown }),
+      ...(turn.context === null ? {} : { context: JSON.parse(turn.context) as unknown }),
       ...(turn.tools === null ? {} : { tools: JSON.parse(turn.tools) as unknown }),
     })),
   });

@@ -1,5 +1,5 @@
 import { Dropdown } from '#code-oss/ui/Dropdown/Dropdown.tsx';
-import { File, FileCode, FileText, Folder, Info } from 'lucide-preact';
+import { File, FileCode, FileText, Folder, Info, ScrollText } from 'lucide-preact';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 import { GlyphContextCandidateKind, type GlyphContextCandidate } from '#src/desktop/workbench/GlyphContextActions.js';
 
@@ -48,6 +48,7 @@ function FileIcon({ path }: { readonly path: string }) {
 
 export interface GlyphContextPickerProps {
   readonly id: string;
+  readonly mode: 'context' | 'rules';
   readonly candidates: readonly GlyphContextCandidate[];
   readonly selected: number;
   readonly searching: boolean;
@@ -56,9 +57,10 @@ export interface GlyphContextPickerProps {
   readonly choose: (candidate: GlyphContextCandidate) => void;
 }
 
-/** File suggestions retain editor focus; the adjacent preview is informational. */
+/** Context and rule suggestions retain editor focus; the adjacent preview is informational. */
 export function GlyphContextPicker({
   id,
+  mode,
   candidates,
   selected,
   searching,
@@ -68,12 +70,13 @@ export function GlyphContextPicker({
 }: GlyphContextPickerProps) {
   const candidate = !searching ? candidates[selected] : undefined;
   const folder = candidate?.kind === GlyphContextCandidateKind.FOLDER;
+  const rule = candidate?.kind === GlyphContextCandidateKind.RULE;
   const parts = candidate?.ancestry ?? candidate?.path.split('/').filter(Boolean) ?? [];
   return (
     <Dropdown
       id={id}
-      label="Files and folders to attach"
-      heading="Files & Folders"
+      label={mode === 'rules' ? 'Rules to invoke' : 'Files and folders to attach'}
+      heading={mode === 'rules' ? 'Rules' : 'Files & Folders'}
       items={candidates}
       itemKey={item => item.uri}
       itemLabel={item => item.path}
@@ -83,8 +86,8 @@ export function GlyphContextPicker({
       choose={choose}
       disabled={disabled}
       busy={searching}
-      busyMessage="Searching files…"
-      emptyMessage="No matching files"
+      busyMessage={mode === 'rules' ? 'Searching rules…' : 'Searching files…'}
+      emptyMessage={mode === 'rules' ? 'No matching rules' : 'No matching files'}
       width={320}
       inset={12}
       offset={-8}
@@ -97,11 +100,17 @@ export function GlyphContextPicker({
         const directory = isFolder ? file.path : path.slice(0, slash + 1);
         return (
           <>
-            {isFolder ? <Folder size={16} aria-hidden="true" /> : <FileIcon path={file.path} />}
+            {file.kind === GlyphContextCandidateKind.RULE ? (
+              <ScrollText size={16} aria-hidden="true" />
+            ) : isFolder ? (
+              <Folder size={16} aria-hidden="true" />
+            ) : (
+              <FileIcon path={file.path} />
+            )}
             <span class={`${styles.name} ${styles.filename}`}>{name}</span>
-            {directory && (
+            {(file.detail || directory) && (
               <span class={styles.path}>
-                <bdi dir="ltr">{directory}</bdi>
+                <bdi dir="ltr">{file.detail ?? directory}</bdi>
               </span>
             )}
           </>
@@ -113,7 +122,9 @@ export function GlyphContextPicker({
             <div class={styles.tree}>
               {parts.map((part, index) => (
                 <div key={index} class={styles.branch} style={{ paddingLeft: Math.min(index, 6) * 16 }}>
-                  {index === parts.length - 1 && !folder ? (
+                  {rule ? (
+                    <ScrollText size={16} aria-hidden="true" />
+                  ) : index === parts.length - 1 && !folder ? (
                     <FileIcon path={candidate.path} />
                   ) : (
                     <Folder size={16} aria-hidden="true" />

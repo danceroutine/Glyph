@@ -35,6 +35,7 @@ const workbenchActions = (overrides: Partial<GlyphWorkbenchViewActions> = {}): G
     context: {
       selectFiles: vi.fn(async () => []),
       searchFiles: vi.fn(async () => []),
+      searchRules: vi.fn(async () => []),
       captureFile: vi.fn(),
       openAttachment: vi.fn(async () => {}),
       refreshAttachment: vi.fn(),

@@ -1,5 +1,8 @@
 import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
-import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import {
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 
 export type GlyphPromptPart =
   | { readonly type: 'text'; readonly text: string }
@@ -18,7 +21,7 @@ export function toGlyphPromptText(parts: readonly GlyphPromptPart[]): string {
     .map(part =>
       part.type === 'text'
         ? part.text
-        : `@${part.attachment.path}${part.attachment.range ? ` (${part.attachment.range.start.line}-${part.attachment.range.end.line})` : ''}`,
+        : `${part.attachment.kind === GlyphContextAttachmentKind.RULE ? '/' : '@'}${part.attachment.path}${part.attachment.range ? ` (${part.attachment.range.start.line}-${part.attachment.range.end.line})` : ''}`,
     )
     .join('');
 }

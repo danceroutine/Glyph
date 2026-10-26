@@ -68,6 +68,16 @@ function controllerServices() {
     stats,
     editorAdded,
     composer,
+    instructionSources: [] as {
+      id: string;
+      path: string;
+      activation?: string;
+      status: string;
+      enabled?: boolean;
+      name?: string;
+      description?: string;
+      revision?: string;
+    }[],
     codeEditorList: [] as ReturnType<typeof codeEditor>[],
     adapter: {
       contextPath,
@@ -128,6 +138,7 @@ function createController(services: ControllerServices) {
   return new GlyphContextController(
     services.adapter as never,
     () => services.composer as never,
+    () => services.instructionSources as never,
     services.editors as never,
     { listCodeEditors: () => services.codeEditorList, onCodeEditorAdd: services.editorAdded.event } as never,
     services.modelService as never,
@@ -256,7 +267,11 @@ describe(GlyphContextController, () => {
     it('refuses to search in an untrusted workspace', async () => {
       const services = controllerServices();
       services.trust.isWorkspaceTrusted.mockReturnValue(false);
-      await expect(createController(services).searchFiles('')).rejects.toMatchObject({
+      const controller = createController(services);
+      await expect(controller.searchFiles('')).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
+      });
+      await expect(controller.searchRules('')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
       });
     });
@@ -331,6 +346,50 @@ describe(GlyphContextController, () => {
         'src/Deep/a.ts',
         'src/Deep/',
       ]);
+    });
+
+    it('offers only enabled active manual rules with bounded metadata', async () => {
+      const services = controllerServices();
+      services.instructionSources.push(
+        {
+          id: 'manual',
+          path: '.glyph/rules/typescript.mdc',
+          activation: 'manual',
+          status: 'active',
+          name: 'TypeScript',
+          description: 'Strict project types',
+          revision: 'one',
+        },
+        { id: 'path-name', path: '.glyph/rules/accessibility.mdc', activation: 'manual', status: 'active' },
+        { id: 'always', path: '.glyph/rules/always.mdc', activation: 'always', status: 'active' },
+        { id: 'failed', path: '.glyph/rules/failed.mdc', activation: 'manual', status: 'error' },
+        { id: 'disabled', path: '.glyph/rules/disabled.mdc', activation: 'manual', status: 'active', enabled: false },
+      );
+
+      const controller = createController(services);
+      expect(await controller.searchRules('type')).toEqual([
+        {
+          uri: 'glyph-rule:manual',
+          path: 'TypeScript',
+          name: 'TypeScript',
+          detail: 'Strict project types',
+          kind: GlyphContextCandidateKind.RULE,
+          ruleId: 'manual',
+          revision: 'one',
+        },
+      ]);
+      expect(await controller.searchRules('access')).toEqual([
+        {
+          uri: 'glyph-rule:path-name',
+          path: 'accessibility.mdc',
+          name: 'accessibility.mdc',
+          detail: '.glyph/rules/accessibility.mdc',
+          kind: GlyphContextCandidateKind.RULE,
+          ruleId: 'path-name',
+        },
+      ]);
+      expect(await controller.searchRules('missing')).toEqual([]);
+      expect(services.search.fileSearch).not.toHaveBeenCalled();
     });
 
     it('searches only the root named by the query in a multi-root workspace', async () => {

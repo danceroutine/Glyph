@@ -3,6 +3,7 @@ import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { Usage } from '#src/chat/Usage.js';
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 
 export interface AgentToolCall {
   readonly id: string;
@@ -32,6 +33,8 @@ export interface AgentTurnContext {
   readonly mode: AgentMode;
   readonly signal: AbortSignal;
   readonly round: number;
+  /** Provider-neutral instructions prepared by the host for this boundary. */
+  readonly instructionContext?: AgentInstructionContext;
   readonly onText: (delta: string) => void;
   readonly onReasoningSummary?: (delta: string) => void;
   readonly trace: (kind: string, data: unknown, round?: number) => void;

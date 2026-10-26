@@ -15,6 +15,7 @@ function composerActions(overrides: Partial<GlyphWorkbenchViewActions> = {}): Gl
     context: {
       selectFiles: vi.fn(async () => []),
       searchFiles: vi.fn(async () => []),
+      searchRules: vi.fn(async () => []),
       captureFile: vi.fn(),
       openAttachment: vi.fn(async () => {}),
       refreshAttachment: vi.fn(),

@@ -11,6 +11,7 @@ import type { ShellCommandSummary } from '#src/shell/ShellCommandSummary.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
 import type { TodoItem } from '#src/todos/TodoItem.js';
 import type { ChatGoal } from '#src/goals/ChatGoal.js';
+import type { AgentInstructionTurnSnapshot } from '#src/instructions/AgentInstructionSource.js';
 
 /** Compact activity history with bounded shell display data; provider history owns complete tool results. */
 export type ChatToolSummary = Pick<ToolActivity, 'callId' | 'name' | 'phase'> & {
@@ -40,6 +41,8 @@ export interface ChatTranscriptTurn {
   readonly reasoningSummary: string;
   readonly usage?: TurnUsage;
   readonly tools?: readonly ChatToolSummary[];
+  /** Frozen instruction sources and activation reasons used by this turn. */
+  readonly context?: AgentInstructionTurnSnapshot;
   readonly createdAt: string;
 }
 

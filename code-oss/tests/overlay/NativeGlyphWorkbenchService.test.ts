@@ -162,6 +162,7 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => (
     constructor(
       readonly editor: unknown,
       readonly composer: () => unknown,
+      readonly instructionSources: () => unknown,
     ) {}
   },
 }));
@@ -863,6 +864,61 @@ describe(NativeGlyphWorkbenchService, () => {
   });
 
   describe(NativeGlyphWorkbenchService.prototype.openLink, () => {
+    it('opens instruction sources by direct URI, single-root path, and multi-root path', async () => {
+      const direct = {
+        id: 'direct',
+        kind: 'glyph_user_rule',
+        label: 'Glyph user rule',
+        path: '~/.glyph/rules/user.mdc',
+        scope: '.',
+        status: 'active',
+        uri: 'file:///home/user/.glyph/rules/user.mdc',
+      };
+      const single = {
+        id: 'single',
+        kind: 'agents_md',
+        label: 'AGENTS.md',
+        path: 'AGENTS.md',
+        scope: '.',
+        status: 'active',
+      };
+      const one = await workbench({ extra: { instructionSources: [direct, single] as never } });
+      await one.service.openLink('glyph-instruction:direct');
+      await one.service.openLink('glyph-instruction:single');
+      expect(one.editors.openEditor.mock.calls.map(([input]) => String((input as { resource: URI }).resource))).toEqual(
+        ['file:///home/user/.glyph/rules/user.mdc', 'file:///project/AGENTS.md'],
+      );
+
+      const multi = await workbench({
+        folders: [folder('web'), folder('api')],
+        extra: { instructionSources: [{ ...single, id: 'api', path: 'api/AGENTS.md', scope: 'api' }] as never },
+      });
+      await multi.service.openLink('glyph-instruction:api');
+      expect(multi.editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/api/AGENTS.md') });
+    });
+
+    it('rejects unavailable and unresolved instruction sources', async () => {
+      const { service } = await workbench({
+        folders: [folder('web'), folder('api')],
+        extra: {
+          instructionSources: [
+            {
+              id: 'missing-root',
+              kind: 'agents_md',
+              label: 'AGENTS.md',
+              path: 'other/AGENTS.md',
+              scope: 'other',
+              status: 'active',
+            },
+          ] as never,
+        },
+      });
+      await expect(service.openLink('glyph-instruction:unknown')).rejects.toThrow('instruction source is unavailable');
+      await expect(service.openLink('glyph-instruction:missing-root')).rejects.toThrow(
+        'instruction source is unavailable',
+      );
+    });
+
     it('opens web links externally by default', async () => {
       const { service, opener, editors } = await workbench();
 
@@ -924,6 +980,78 @@ describe(NativeGlyphWorkbenchService, () => {
 
       await expect(service.openLink('src/a.ts')).rejects.toThrow('This link is not a workspace path.');
     });
+  });
+
+  describe('user rule management', () => {
+    const managed = {
+      id: 'user',
+      kind: 'glyph_user_rule',
+      label: 'Glyph user rule',
+      path: '~/.glyph/rules/user.mdc',
+      managementPath: 'rules/user.mdc',
+      managementRevision: 'source-one',
+      scope: '.',
+      status: 'active' as const,
+      activation: 'manual' as const,
+      revision: 'one',
+    };
+
+    it('sends create, enable, and delete commands', async () => {
+      const { service, commands } = await workbench();
+      await service.createUserRule('User', 'manual');
+      await service.setUserRuleEnabled(managed, false);
+      await service.deleteUserRule(managed);
+      expect(commands().slice(-3)).toEqual([
+        { type: GlyphWorkbenchCommandType.CREATE_USER_RULE, name: 'User', activation: 'manual' },
+        {
+          type: GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED,
+          path: 'rules/user.mdc',
+          expectedRevision: 'source-one',
+          enabled: false,
+        },
+        {
+          type: GlyphWorkbenchCommandType.DELETE_USER_RULE,
+          path: 'rules/user.mdc',
+          expectedRevision: 'source-one',
+        },
+      ]);
+    });
+
+    it('rejects sources without a management path or revision', async () => {
+      const { service } = await workbench();
+      for (const source of [
+        { ...managed, managementPath: undefined },
+        { ...managed, managementRevision: undefined },
+      ]) {
+        await expect(service.setUserRuleEnabled(source as never, true)).rejects.toThrow('cannot be managed');
+        await expect(service.deleteUserRule(source as never)).rejects.toThrow('cannot be managed');
+      }
+    });
+  });
+
+  it('supplies projected instruction sources to context search and transcript entries', async () => {
+    const instruction = {
+      id: 'rule',
+      kind: 'glyph_project_rule',
+      label: 'Glyph project rule',
+      path: '.glyph/rules/rule.mdc',
+      scope: '.',
+      status: 'active',
+    };
+    const context = {
+      sources: [instruction],
+      activations: [{ sourceId: 'rule', reason: 'always' as const }],
+      candidates: [],
+    };
+    const { service } = await workbench({
+      runs: [run('alpha', 'context-run', GlyphRunStatus.COMPLETED, { context })],
+      extra: { instructionSources: [instruction] as never },
+    });
+    const controller = service.context as unknown as { instructionSources(): unknown };
+    expect(controller.instructionSources()).toEqual([instruction]);
+    expect(service.state.transcript.at(-1)?.context).toEqual(context);
+    const empty = await workbench();
+    expect((empty.service.context as unknown as { instructionSources(): unknown }).instructionSources()).toEqual([]);
   });
 
   describe(NativeGlyphWorkbenchService.prototype.selectMode, () => {

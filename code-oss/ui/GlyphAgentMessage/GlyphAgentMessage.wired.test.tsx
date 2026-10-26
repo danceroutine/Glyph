@@ -57,6 +57,44 @@ describe(WiredGlyphAgentMessage, () => {
     expect(actions.copyText).toHaveBeenCalledWith('All done.');
   });
 
+  it('shows persisted instruction provenance and opens its source', () => {
+    const openLink = vi.fn(async () => {});
+    render(
+      <WiredGlyphAgentMessage
+        entry={transcriptEntry({
+          context: {
+            sources: [
+              {
+                id: 'rule',
+                kind: 'glyph_project_rule',
+                label: 'Glyph project rule',
+                name: 'TypeScript',
+                path: '.glyph/rules/typescript.mdc',
+                scope: '.',
+                status: 'active',
+              },
+              {
+                id: 'agents',
+                kind: 'agents_md',
+                label: 'AGENTS.md',
+                path: 'AGENTS.md',
+                scope: '.',
+                status: 'active',
+              },
+            ],
+            activations: [{ sourceId: 'rule', reason: 'file_access' }],
+            candidates: [],
+          },
+        })}
+        actions={messageActions({ openLink })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /TypeScript · file access/u }));
+    expect(openLink).toHaveBeenCalledWith('glyph-instruction:rule');
+    expect(screen.getByRole('button', { name: /AGENTS.md · active/u })).toBeTruthy();
+  });
+
   it('branches the conversation from a checkpoint', async () => {
     const branchChat = vi.fn(async () => {});
     render(

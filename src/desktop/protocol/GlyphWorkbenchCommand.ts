@@ -20,6 +20,9 @@ export enum GlyphWorkbenchCommandType {
   START_AGENT_REVIEW = 'start_agent_review',
   CANCEL_AGENT_REVIEW = 'cancel_agent_review',
   DISMISS_AGENT_REVIEW_FINDING = 'dismiss_agent_review_finding',
+  CREATE_USER_RULE = 'create_user_rule',
+  SET_USER_RULE_ENABLED = 'set_user_rule_enabled',
+  DELETE_USER_RULE = 'delete_user_rule',
   SEND = 'send',
   STEER = 'steer',
   UPDATE_PLAN = 'update_plan',
@@ -49,6 +52,22 @@ export enum GlyphWorkbenchCommandType {
  * through MessagePort without coupling either process to the other's classes.
  */
 export type GlyphWorkbenchCommand =
+  | {
+      readonly type: GlyphWorkbenchCommandType.CREATE_USER_RULE;
+      readonly name: string;
+      readonly activation: 'always' | 'file_pattern' | 'model' | 'manual';
+    }
+  | {
+      readonly type: GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED;
+      readonly path: string;
+      readonly expectedRevision: string;
+      readonly enabled: boolean;
+    }
+  | {
+      readonly type: GlyphWorkbenchCommandType.DELETE_USER_RULE;
+      readonly path: string;
+      readonly expectedRevision: string;
+    }
   | {
       readonly type: GlyphWorkbenchCommandType.START_AGENT_REVIEW;
       readonly review: AgentReviewInput;

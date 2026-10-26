@@ -30,6 +30,7 @@ export * from './events/GlyphHostEvent.ts';
 export * from './events/GlyphHostEventEnvelope.ts';
 export * from './events/GlyphHostStatus.ts';
 export * from './events/GlyphInstructionSource.ts';
+export * from './events/GlyphTurnContext.ts';
 export * from './events/GlyphModelSummary.ts';
 export * from './events/GlyphProposalFileSummary.ts';
 export * from './events/GlyphProposalSummary.ts';

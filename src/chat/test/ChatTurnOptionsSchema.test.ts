@@ -24,6 +24,7 @@ describe('chatTurnOptionsSchema', () => {
         agentReviewId: '00000000-0000-4000-8000-000000000000',
         mode: AgentModeID.PLAN,
         annotations: [annotation],
+        manualRuleIds: ['rule', 'rule'],
       }),
     ).toEqual({
       attachmentSpans: [{ from: 0, to: 2 }],
@@ -31,11 +32,13 @@ describe('chatTurnOptionsSchema', () => {
       agentReviewId: '00000000-0000-4000-8000-000000000000',
       mode: AgentModeID.PLAN,
       annotations: [annotation],
+      manualRuleIds: ['rule'],
     });
   });
 
   it('omits absent options', () => {
     expect(chatTurnOptionsSchema.parse({})).toEqual({});
+    expect(chatTurnOptionsSchema.parse({ manualRuleIds: [] })).toEqual({});
   });
 
   it('rejects empty attachment spans', () => {

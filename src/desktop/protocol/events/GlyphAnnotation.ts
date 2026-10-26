@@ -24,4 +24,6 @@ export interface GlyphTurnOptions {
   readonly annotations?: readonly GlyphAnnotation[];
   readonly planBuild?: GlyphPlanBuildOrder;
   readonly planProgress?: GlyphPlanProgress;
+  /** Stable IDs of manual rules explicitly selected by the user for this turn. */
+  readonly manualRuleIds?: readonly string[];
 }

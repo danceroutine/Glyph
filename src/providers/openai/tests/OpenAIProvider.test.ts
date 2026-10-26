@@ -18,8 +18,9 @@ import { OpenAISession } from '#src/providers/openai/auth/OpenAISession.js';
 import { OpenAIAuthenticationClient } from '#src/providers/openai/auth/OpenAIAuthenticationClient.js';
 import type { OpenAIAccount } from '#src/providers/openai/auth/OpenAIAccount.js';
 import type { OpenAIAccountStore } from '#src/providers/openai/auth/OpenAIAccountStore.js';
-import type { AgentInstructionContextProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
+import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 
 const configuration: ChatConfiguration = {
   instructions: 'You are a helpful assistant.',
@@ -72,7 +73,7 @@ function sse(events: unknown[]): Response {
 function harness(
   replies: (() => Response | Promise<Response>)[],
   tools?: ToolSource,
-  instructionContext?: AgentInstructionContextProvider,
+  turnContexts?: TurnContextCoordinator,
 ) {
   const requests: Record<string, unknown>[] = [];
   const client = new OpenAI({
@@ -93,10 +94,29 @@ function harness(
       client,
       tools ?? new ProjectAccess(process.cwd()),
       undefined,
-      instructionContext,
+      turnContexts,
     ),
     requests,
   };
+}
+
+function aTurnContextCoordinator(
+  context: () => Promise<AgentInstructionContext>,
+): TurnContextCoordinator & { beginTurn: ReturnType<typeof vi.fn> } {
+  const beginTurn = vi.fn(async () => {
+    const envelope = await context();
+    return { initialEnvelope: () => envelope };
+  });
+  return {
+    beginTurn,
+    disclosePaths: vi.fn(),
+    discloseAttachments: vi.fn(),
+    activateManualRules: vi.fn(),
+    activateRule: vi.fn(),
+    snapshot: vi.fn(),
+    completeTurn: vi.fn(),
+    discardTurn: vi.fn(),
+  } as unknown as TurnContextCoordinator & { beginTurn: ReturnType<typeof vi.fn> };
 }
 const options = () => ({ signal: new AbortController().signal, onText: (_text: string): void => {} });
 const toolCompleted = {
@@ -119,7 +139,7 @@ const toolCompleted = {
 describe(OpenAIProvider, () => {
   it('freezes repository instructions for a tool loop, refreshes the next turn, and never persists the envelope', async () => {
     const context = vi
-      .fn<AgentInstructionContextProvider['context']>()
+      .fn<() => Promise<AgentInstructionContext>>()
       .mockResolvedValueOnce({
         schema: 'glyph.agent-instructions.v1',
         sources: [
@@ -135,7 +155,7 @@ describe(OpenAIProvider, () => {
         ],
       })
       .mockResolvedValueOnce({ schema: 'glyph.agent-instructions.v1', sources: [] });
-    const providerContext = { context };
+    const providerContext = aTurnContextCoordinator(context);
     const { provider, requests } = harness(
       [() => sse([toolCompleted]), () => sse([completed]), () => sse([completed])],
       waitTools(vi.fn(async () => 'finished')),
@@ -154,26 +174,115 @@ describe(OpenAIProvider, () => {
   });
 
   it('starts scoped instruction turns with the host turn id and attached paths', async () => {
-    const beginTurn = vi.fn<NonNullable<AgentInstructionContextProvider['beginTurn']>>().mockResolvedValue({
+    const instructionContext = aTurnContextCoordinator(async () => ({
       schema: 'glyph.agent-instructions.v1',
       sources: [],
-    });
-    const instructionContext: AgentInstructionContextProvider = {
-      context: vi.fn(async () => ({ schema: 'glyph.agent-instructions.v1', sources: [] })),
-      beginTurn,
-    };
+    }));
     const { provider } = harness([() => sse([completed])], undefined, instructionContext);
 
     await provider.send(
       {
         text: 'Review this file.',
-        attachments: [{ kind: 'file', path: 'src/app.ts', name: 'app.ts', content: 'export {}' }],
+        attachments: [
+          {
+            path: 'src/app.ts',
+            revision: 'one',
+            text: 'export {}',
+            byteOrderMark: false,
+            byteLength: 9,
+          },
+        ],
       },
       options(),
     );
 
-    expect(beginTurn).toHaveBeenCalledWith(expect.any(String), ['src/app.ts'], expect.any(AbortSignal));
-    expect(instructionContext.context).not.toHaveBeenCalled();
+    expect(instructionContext.beginTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ turnId: expect.any(String), attachmentPaths: ['src/app.ts'] }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('injects newly activated attachment and manual rules into provider-neutral steering', async () => {
+    const instructionContext = aTurnContextCoordinator(async () => ({
+      schema: 'glyph.agent-instructions.v1',
+      sources: [],
+    }));
+    const attachmentContext = {
+      schema: 'glyph.agent-instructions.v1' as const,
+      sources: [
+        {
+          id: 'file-rule',
+          kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+          label: 'Glyph project rule',
+          path: '.glyph/rules/files.mdc',
+          scope: '.',
+          status: AgentInstructionSourceStatus.ACTIVE,
+          content: 'FILE RULE',
+        },
+      ],
+    };
+    const manualContext = {
+      schema: 'glyph.agent-instructions.v1' as const,
+      sources: [
+        {
+          id: 'manual-rule',
+          kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+          label: 'Glyph user rule',
+          path: '~/.glyph/rules/manual.mdc',
+          scope: '.',
+          status: AgentInstructionSourceStatus.ACTIVE,
+          content: 'MANUAL RULE',
+        },
+      ],
+    };
+    vi.mocked(instructionContext.discloseAttachments)
+      .mockReturnValueOnce(attachmentContext)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(attachmentContext);
+    vi.mocked(instructionContext.activateManualRules)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(manualContext)
+      .mockReturnValueOnce(manualContext);
+    vi.mocked(instructionContext.completeTurn).mockReturnValue({
+      schema: 'glyph.turn-context.v1',
+      turnId: 'turn',
+      sources: attachmentContext.sources,
+      activations: [],
+      candidates: [],
+    });
+    const { provider, requests } = harness(
+      [() => sse([toolCompleted]), () => sse([completed])],
+      waitTools(vi.fn(async () => 'finished')),
+      instructionContext,
+    );
+    let taken = false;
+    const attachment = {
+      path: 'src/app.ts',
+      revision: 'one',
+      text: 'export {}',
+      byteOrderMark: false,
+      byteLength: 9,
+    };
+
+    const result = await provider.send(
+      { text: 'Start.', attachments: [], manualRuleIds: ['initial-manual'] },
+      {
+        ...options(),
+        takeSteering: () => {
+          if (taken) return [];
+          taken = true;
+          return [
+            { text: 'Attachment only.', attachments: [attachment] },
+            { text: 'Manual only.', attachments: [], manualRuleIds: ['manual-rule'] },
+            { text: 'Both.', attachments: [attachment], manualRuleIds: ['manual-rule'] },
+          ];
+        },
+      },
+    );
+
+    expect(JSON.stringify(requests[1]!.input)).toContain('FILE RULE');
+    expect(JSON.stringify(requests[1]!.input)).toContain('MANUAL RULE');
+    expect(result.context?.sources[0]?.id).toBe('file-rule');
   });
 
   it.each([
