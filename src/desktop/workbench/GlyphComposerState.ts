@@ -2,7 +2,10 @@ import type { GlyphComposerCommand } from './GlyphComposerCommand.ts';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphAnnotation, GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
-import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import {
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { replaceGlyphPromptRange, toGlyphPromptText, type GlyphPromptDocument } from './GlyphPromptDocument.ts';
 export interface GlyphAnnotationPosition {
   /** Optional editor-owned mount point that reserves space in the source view. */
@@ -332,12 +335,25 @@ export class GlyphComposerState {
 /** Both queued and direct sends preserve the same exact captures and UTF-16 spans. */
 async function sendDocument(document: GlyphPromptDocument, send: SendMessage): Promise<void> {
   const draft = toGlyphPromptText(document.parts);
-  const attachments = document.parts.flatMap(part => (part.type === 'attachment' ? [part.attachment] : []));
+  const ruleIds = document.parts.flatMap(part =>
+    part.type === 'attachment' && part.attachment.kind === GlyphContextAttachmentKind.RULE && part.attachment.ruleId
+      ? [part.attachment.ruleId]
+      : [],
+  );
+  const attachments = document.parts.flatMap(part =>
+    part.type === 'attachment' && part.attachment.kind !== GlyphContextAttachmentKind.RULE ? [part.attachment] : [],
+  );
   let offset = -(draft.length - draft.trimStart().length);
   const attachmentSpans = document.parts.flatMap(part => {
     const from = offset;
     offset += toGlyphPromptText([part]).length;
-    return part.type === 'attachment' ? [{ from, to: offset }] : [];
+    return part.type === 'attachment' && part.attachment.kind !== GlyphContextAttachmentKind.RULE
+      ? [{ from, to: offset }]
+      : [];
   });
-  await send(draft, attachments, { ...document.options, ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}) });
+  await send(draft, attachments, {
+    ...document.options,
+    ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}),
+    ...(ruleIds.length > 0 ? { manualRuleIds: [...new Set(ruleIds)] } : {}),
+  });
 }

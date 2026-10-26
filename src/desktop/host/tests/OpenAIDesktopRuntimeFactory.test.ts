@@ -1,11 +1,10 @@
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { GlyphService } from '#src/application/GlyphService.js';
-import { OpenAIDesktopRuntimeFactory } from '#src/desktop/host/OpenAIDesktopRuntimeFactory.js';
-import { listInstructionFilesAcrossRoots } from '#src/instructions/listInstructionFilesAcrossRoots.js';
+import { OpenAIDesktopRuntimeFactory, userRuleUri } from '#src/desktop/host/OpenAIDesktopRuntimeFactory.js';
 import { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
 import { contentRevision } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
@@ -55,6 +54,7 @@ import { GoalStatus } from '#src/goals/GoalStatus.js';
 const captured = vi.hoisted(() => ({
   editorClients: [] as EditorWorkspaceClient[],
   indexOptions: [] as RustWorkspacePathIndexConfiguration[],
+  indexes: [] as RustWorkspacePathIndex[],
   modeSwitches: [] as ConstructorParameters<typeof ModeSwitchToolRuntime>[0][],
   plans: [] as ConstructorParameters<typeof PlanToolRuntime>[0][],
   todos: [] as ConstructorParameters<typeof TodoToolRuntime>[0][],
@@ -65,31 +65,8 @@ const captured = vi.hoisted(() => ({
   providerFactories: [] as ConstructorParameters<typeof OpenAIProviderFactory>[],
 }));
 
-describe(listInstructionFilesAcrossRoots, () => {
-  it('qualifies multiple roots and reports that later roots were excluded by the limit', async () => {
-    const first = { list: vi.fn(async () => ({ files: ['AGENTS.md'], truncated: false })) };
-    const second = { list: vi.fn(async () => ({ files: ['nested/AGENTS.md'], truncated: false })) };
-
-    await expect(
-      listInstructionFilesAcrossRoots(
-        [
-          { name: 'one', disk: first },
-          { name: 'two', disk: second },
-        ],
-        1,
-        '**/AGENTS.md',
-      ),
-    ).resolves.toEqual({ files: ['one/AGENTS.md'], truncated: true });
-    expect(second.list).not.toHaveBeenCalled();
-  });
-
-  it('preserves single-root paths and provider truncation', async () => {
-    const disk = { list: vi.fn(async () => ({ files: ['AGENTS.md'], truncated: true })) };
-    await expect(listInstructionFilesAcrossRoots([{ name: 'one', disk }], 2, '**/AGENTS.md')).resolves.toEqual({
-      files: ['AGENTS.md'],
-      truncated: true,
-    });
-  });
+it('resolves user rule URIs below the dedicated user rule root', () => {
+  expect(userRuleUri('/home/user/.glyph', 'rules/test.mdc')).toBe('file:///home/user/.glyph/rules/test.mdc');
 });
 
 vi.mock('#src/desktop/workspace/EditorWorkspaceTextStore.js', async importOriginal => {
@@ -113,6 +90,7 @@ vi.mock('#src/context/search/RustWorkspacePathIndex.js', async importOriginal =>
       constructor(...arguments_: ConstructorParameters<typeof actual.RustWorkspacePathIndex>) {
         super(...arguments_);
         captured.indexOptions.push(arguments_[0]);
+        captured.indexes.push(this);
       }
     },
   };
@@ -239,6 +217,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       truncated: false,
       durationMilliseconds: 0,
     });
+    const instructionGlobs = vi
+      .spyOn(RustWorkspacePathIndex.prototype, 'glob')
+      .mockResolvedValue({ files: [], truncated: false });
     const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
     const roots = [{ name: 'workspace', path: root }];
     const context = {
@@ -337,6 +318,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       for (trusted of [true, false, true]) {
         requests.mockClear();
         indexing.mockClear();
+        instructionGlobs.mockClear();
         const input = {
           identity,
           roots: [{ name: 'workspace', canonicalPath: root, uri: `file://${root}` }],
@@ -348,6 +330,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expect((await runtime.snapshot()).proposals.map(value => value.id)).toEqual([proposal.id]);
         expect(requests).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(indexing).toHaveBeenCalledTimes(trusted ? 1 : 0);
+        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 8 : 0);
         await runtime.dispose();
         runtime = undefined;
       }
@@ -742,6 +725,32 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
 
   describe(OpenAIDesktopRuntimeFactory.prototype.create, () => {
+    it('shares a lazy user-rule index across workspaces and disposes it with the factory', async () => {
+      const fixture = await factoryFixture();
+      const first = await fixture.create([await fixture.folder('one')]);
+      await fixture.create([await fixture.folder('two')]);
+      expect(captured.indexOptions).toHaveLength(3);
+      expect(captured.indexOptions[1]).toMatchObject({
+        root: join(homedir(), '.glyph', 'rules'),
+        respectGitIgnore: false,
+      });
+      const userIndex = captured.indexes[1]!;
+      const stop = vi.spyOn(userIndex, 'dispose');
+      await first.dispose();
+      expect(stop).not.toHaveBeenCalled();
+      await fixture.factory.dispose();
+      expect(stop).toHaveBeenCalledOnce();
+    });
+
+    it('still releases accounts when the shared user-rule index fails to stop', async () => {
+      const fixture = await factoryFixture();
+      await fixture.create([await fixture.folder('workspace')]);
+      vi.spyOn(captured.indexes[1]!, 'dispose').mockRejectedValueOnce(new Error('Index shutdown failed'));
+      const accounts = vi.spyOn(OpenAIAccountService.prototype, 'dispose');
+      await expect(fixture.factory.dispose()).rejects.toThrow('Index shutdown failed');
+      expect(accounts).toHaveBeenCalledOnce();
+    });
+
     it('retries account initialization after a failed attempt', async () => {
       const fixture = await factoryFixture();
       const root = await fixture.folder('workspace');
@@ -916,6 +925,63 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await expect(client.canonicalPath('file.txt')).resolves.toBe(
         await new FileSystemWorkspaceTextStore(root).canonicalPath('file.txt'),
       );
+    });
+
+    it('discovers project instructions through the native index while reading current editor text', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const root = await fixture.folder('workspace', { 'AGENTS.md': 'Disk guidance' });
+      const glob = vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async pattern => ({
+        files: pattern === '**/AGENTS.md' ? ['AGENTS.md'] : [],
+        truncated: false,
+      }));
+      // Neither user nor project instruction discovery may use the disk listing port.
+      const diskList = vi
+        .spyOn(FileSystemWorkspaceTextStore.prototype, 'list')
+        .mockResolvedValue({ files: [], truncated: false });
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) =>
+        editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance'),
+      );
+      const runtime = await fixture.create([root]);
+      const snapshot = await runtime.snapshot();
+      expect(snapshot.instructionSources).toEqual([
+        expect.objectContaining({
+          path: 'AGENTS.md',
+          status: 'active',
+          revision: contentRevision('Unsaved editor guidance', false),
+        }),
+      ]);
+      expect(glob).toHaveBeenCalledTimes(4);
+      expect(glob.mock.calls).toEqual(
+        expect.arrayContaining([
+          ['*.mdc', { limit: 10_000 }],
+          ['**/AGENTS.md', { limit: 10_000 }],
+          ['**/.glyph/rules/*.mdc', { limit: 10_000 }],
+          ['**/.cursor/rules/*.mdc', { limit: 10_000 }],
+        ]),
+      );
+      expect(diskList).not.toHaveBeenCalled();
+    });
+
+    it('reports an unsafe user rules directory without querying its native index', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const glob = vi
+        .spyOn(RustWorkspacePathIndex.prototype, 'glob')
+        .mockResolvedValue({ files: [], truncated: false });
+      vi.spyOn(FileSystemWorkspaceTextStore.prototype, 'canonicalPath').mockRejectedValue(
+        new Error('Symlink directory is not allowed'),
+      );
+      const runtime = await fixture.create([await fixture.folder('workspace')]);
+      expect((await runtime.snapshot()).instructionSources).toEqual([
+        expect.objectContaining({
+          kind: 'glyph_user_rule',
+          status: 'error',
+          message: 'Symlink directory is not allowed',
+        }),
+      ]);
+      expect(glob).not.toHaveBeenCalledWith('*.mdc', expect.anything());
+      expect(glob).toHaveBeenCalledTimes(3);
     });
 
     it.each([
@@ -1178,6 +1244,7 @@ async function factoryFixture(options: { readonly transport?: typeof fetch } = {
     await rm(directory, { recursive: true, force: true });
   });
   return {
+    factory,
     editors,
     initialize,
     async folder(name: string, files: Readonly<Record<string, string>> = {}) {

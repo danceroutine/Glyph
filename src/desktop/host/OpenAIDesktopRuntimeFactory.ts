@@ -16,8 +16,10 @@ import { PlanToolRuntime } from '#src/planning/PlanToolRuntime.js';
 import { GoalToolRuntime } from '#src/goals/GoalToolRuntime.js';
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
-import { realpath } from 'node:fs/promises';
+import { mkdir, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join, relative, isAbsolute, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
 import { SqliteChatSessionStore } from '#src/chat/sessions/SqliteChatSessionStore.js';
@@ -67,12 +69,20 @@ import { ProviderDesktopRuntime } from './ProviderDesktopRuntime.ts';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
 import { listInstructionFilesAcrossRoots } from '#src/instructions/listInstructionFilesAcrossRoots.js';
+import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
+import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import { RuleToolRuntime } from '#src/instructions/rules/RuleToolRuntime.js';
+import { UserAgentRuleManager } from '#src/instructions/rules/UserAgentRuleManager.js';
+import { listUserRuleFiles } from '#src/instructions/rules/listUserRuleFiles.js';
 
 /** Composition root for shared credentials and workspace-scoped production services. */
 export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntimeFactory {
   private readonly configuration = new EnvironmentConfigurationProvider();
   private readonly accounts = new OpenAIAccountService(new FileOpenAIAccountStore(this.configuration.stateDirectory));
   private initialized: Promise<void> | undefined;
+  /** User rules are shared across workspaces; the factory owns this lazy index's lifetime. */
+  private userRuleIndex: RustWorkspacePathIndex | undefined;
 
   constructor(
     private readonly editors: EditorRpcRouter,
@@ -213,13 +223,53 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             context.id,
             parts.map(part => ({ name: part.name, index: part.index })),
           );
-    const instructionCatalog = input.trusted
-      ? new AgentInstructionCatalog([
-          new AgentsMdInstructionProvider(workspace, {}, async (maxFiles, globPattern) => {
-            return listInstructionFilesAcrossRoots(parts, maxFiles, globPattern);
-          }),
-        ])
-      : undefined;
+    let instructionCatalog: AgentInstructionCatalog | undefined;
+    let turnContexts: TurnContextCoordinator | undefined;
+    let userRules: UserAgentRuleManager | undefined;
+    if (input.trusted) {
+      // Reuse each root's watched native index; instruction refreshes must not rescan the workspace.
+      const listProjectInstructions = (maxFiles: number, globPattern: string) =>
+        listInstructionFilesAcrossRoots(parts, maxFiles, globPattern);
+      const userRuleRoot = join(homedir(), '.glyph');
+      await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
+      const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
+      const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
+        binaryPath: indexExecutable,
+        root: join(userRuleRoot, 'rules'),
+        caseSensitive: userRuleStore.caseSensitive,
+        // User-owned rules retain their existing behavior regardless of home-directory Git ignores.
+        respectGitIgnore: false,
+      }));
+      instructionCatalog = new AgentInstructionCatalog([
+        new AgentRuleInstructionProvider(
+          userRuleStore,
+          {
+            kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+            directory: '.',
+            displayPrefix: '~/.glyph/',
+            uriForPath: userRuleUri.bind(undefined, userRuleRoot),
+          },
+          async maxFiles => {
+            // The index root must obey the store's no-symlink rule too, not just its children.
+            await userRuleStore.canonicalPath('rules');
+            return listUserRuleFiles(userRuleIndex, maxFiles);
+          },
+        ),
+        new AgentsMdInstructionProvider(workspace, {}, listProjectInstructions),
+        new AgentRuleInstructionProvider(
+          workspace,
+          { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+          listProjectInstructions,
+        ),
+        new AgentRuleInstructionProvider(
+          workspace,
+          { kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, directory: '.cursor' },
+          listProjectInstructions,
+        ),
+      ]);
+      turnContexts = new TurnContextCoordinator(instructionCatalog);
+      userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex);
+    }
     const reviews = new ProposalReviewManager(
       workspace,
       new FileProposalReviewStore(join(configuration.stateDirectory, 'projects', mutationStorageId), {
@@ -285,12 +335,13 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           return summary.plans?.at(-1);
         }),
         new ProjectToolRuntime(
-          new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, instructionCatalog),
+          new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, turnContexts),
           new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
           reviews,
           logger,
-          instructionCatalog,
+          turnContexts,
         ),
+        ...(turnContexts ? [new RuleToolRuntime(turnContexts)] : []),
         new WebToolRuntime(new WebFetchService(webHttp), new DuckDuckGoSearch(webHttp)),
         new ProposeQuestionToolRuntime(interactions),
         new ShellToolRuntime(shells),
@@ -337,7 +388,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       store,
       authentication,
       catalog,
-      new OpenAIProviderFactory(root.path, configuration, tools, client, instructionCatalog),
+      new OpenAIProviderFactory(root.path, configuration, tools, client, turnContexts),
       configuration.openAI,
     );
     const glyph = new GlyphService(
@@ -357,17 +408,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     }
     // Share the account lifetime, but expose only project read/search tools to
     // reviews. No shell, proposal, mode-switch, or interactive tools are registered.
+    const reviewProjectAccess = new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, turnContexts);
+    const reviewTools = turnContexts
+      ? new ToolRegistry([...reviewProjectAccess.tools, ...new RuleToolRuntime(turnContexts).tools])
+      : reviewProjectAccess;
     const reviewBackend = new OpenAIBackend(
       store,
       authentication,
       catalog,
-      new OpenAIProviderFactory(
-        root.path,
-        configuration,
-        new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, instructionCatalog),
-        client,
-        instructionCatalog,
-      ),
+      new OpenAIProviderFactory(root.path, configuration, reviewTools, client, turnContexts),
       configuration.openAI,
     );
     const agentReviews = new AgentReviewService(
@@ -402,6 +451,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       interactions,
       shellSessions: shells,
       ...(instructionCatalog ? { instructionCatalog } : {}),
+      ...(userRules ? { userRules } : {}),
       emit: input.emit,
       ownerWindowId: input.identity.windowId,
     });
@@ -410,7 +460,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
 
   async dispose(): Promise<void> {
     await this.initialized;
-    await this.accounts.dispose();
+    try {
+      await this.userRuleIndex?.dispose();
+    } finally {
+      await this.accounts.dispose();
+    }
   }
 
   /** Pathless editor operations must not acquire an invented filesystem target. */
@@ -442,4 +496,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         return request;
     }
   }
+}
+
+/** Resolve one user-rule path without granting the rule provider broader filesystem authority. */
+export function userRuleUri(root: string, path: string): string {
+  return pathToFileURL(join(root, path)).toString();
 }

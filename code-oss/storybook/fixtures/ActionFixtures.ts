@@ -51,6 +51,9 @@ export function previewActionsFixture(overrides: Partial<GlyphWorkbenchViewActio
       searchFiles: fn<NonNullable<GlyphWorkbenchViewActions['context']['searchFiles']>>(async query =>
         [selectionFixture()].filter(file => file.path.includes(query)).map(({ uri, path }) => ({ uri, path })),
       ).mockName('ActionFixtures.searchFiles'),
+      searchRules: fn<NonNullable<GlyphWorkbenchViewActions['context']['searchRules']>>(async () => []).mockName(
+        'ActionFixtures.searchRules',
+      ),
       captureFile: fn<NonNullable<GlyphWorkbenchViewActions['context']['captureFile']>>(async () => {
         const { range: _range, ...file } = selectionFixture();
         return { ...file, id: crypto.randomUUID(), kind: GlyphContextAttachmentKind.FILE };

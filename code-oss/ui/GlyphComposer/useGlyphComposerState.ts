@@ -6,7 +6,10 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'preact/hook
 import { GlyphWorkbenchStatus } from '#src/desktop/workbench/GlyphWorkbenchState.js';
 import type { GlyphWorkbenchViewActions } from '#src/desktop/workbench/GlyphWorkbenchView.js';
 import { GlyphContextCandidateKind, type GlyphContextCandidate } from '#src/desktop/workbench/GlyphContextActions.js';
-import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import {
+  GlyphContextAttachmentKind,
+  type GlyphContextAttachment,
+} from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { GlyphPromptEditor, type GlyphPromptQuery } from '#code-oss/ui/GlyphPromptEditor/GlyphPromptEditor.ts';
 import { GlyphComposerError } from './GlyphComposerError.ts';
 
@@ -79,6 +82,22 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     await perform(async () => {
       const position = query;
       const document = model.snapshot.document;
+      if (candidate.kind === GlyphContextCandidateKind.RULE) {
+        if (!position || !candidate.ruleId) throw new GlyphComposerError('This rule cannot be selected.');
+        editor.current?.insert(
+          {
+            kind: GlyphContextAttachmentKind.RULE,
+            uri: candidate.uri,
+            path: candidate.name ?? candidate.path,
+            text: '',
+            contentRevision: candidate.revision ?? candidate.ruleId,
+            ruleId: candidate.ruleId,
+          },
+          position,
+        );
+        setQuery(undefined);
+        return;
+      }
       const capture =
         candidate.kind === GlyphContextCandidateKind.FOLDER
           ? actions.context.captureFolder?.bind(actions.context)
@@ -184,8 +203,9 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     }
     setSearching(true);
     const timer = setTimeout(() => {
-      void actions.context
-        .searchFiles(query.text)
+      const result =
+        query.trigger === '/' ? actions.context.searchRules(query.text) : actions.context.searchFiles(query.text);
+      void result
         .then(
           files => {
             if (!cancelled) setCandidates(files);

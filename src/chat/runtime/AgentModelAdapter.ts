@@ -34,6 +34,8 @@ export interface AgentTurnContext {
   readonly mode: AgentMode;
   readonly signal: AbortSignal;
   readonly round: number;
+  /** Provider-neutral instructions prepared by the host for this boundary. */
+  readonly instructionContext?: AgentInstructionContext;
   readonly onText: (delta: string) => void;
   readonly onReasoningSummary?: (delta: string) => void;
   readonly trace: (kind: string, data: unknown, round?: number) => void;

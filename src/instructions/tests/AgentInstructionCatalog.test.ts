@@ -32,54 +32,30 @@ async function fixture() {
 }
 
 describe(AgentInstructionCatalog, () => {
+  it('places ancestor instructions before nearer rules regardless of source family', async () => {
+    const root = instructionSource('AGENTS.md', '.');
+    const nested = {
+      ...instructionSource('src/.glyph/rules/typescript.mdc', 'src'),
+      kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+    };
+    const catalog = new AgentInstructionCatalog([{ discover: async () => [nested, root] }]);
+
+    expect(await catalog.refresh()).toEqual([root, nested]);
+    expect(catalog.resolve('src/app.ts')).toEqual([root, nested]);
+    // A caller can resolve a retained snapshot independently of the current catalog.
+    expect(catalog.resolve('src/app.ts', [root])).toEqual([root]);
+  });
+
   it('discovers Markdown instructions without frontmatter and resolves only the target ancestor chain', async () => {
     const { catalog } = await fixture();
-    const context = await catalog.context();
-
-    expect(context.schema).toBe('glyph.agent-instructions.v1');
-    expect(context.sources.map(source => [source.path, source.scope, source.content])).toEqual([
+    const sources = await catalog.refresh();
+    expect(sources.map(source => [source.path, source.scope, source.content])).toEqual([
       ['AGENTS.md', '.', 'root guidance'],
       ['docs/AGENTS.md', 'docs', 'docs guidance'],
       ['src/AGENTS.md', 'src', 'source guidance'],
     ]);
     expect(catalog.resolve('src/feature/file.ts').map(source => source.path)).toEqual(['AGENTS.md', 'src/AGENTS.md']);
     expect(catalog.resolve('docs/readme.md').map(source => source.path)).toEqual(['AGENTS.md', 'docs/AGENTS.md']);
-  });
-
-  it('freezes a turn, discloses only roots up front, and reveals nested scopes once on demand', async () => {
-    const { root, catalog } = await fixture();
-
-    await expect(catalog.beginTurn('turn-1', [])).resolves.toMatchObject({
-      sources: [{ path: 'AGENTS.md', scope: '.' }],
-    });
-    expect(catalog.disclose('turn-1', ['src/feature/file.ts'])?.sources.map(source => source.path)).toEqual([
-      'src/AGENTS.md',
-    ]);
-    expect(catalog.disclose('turn-1', ['src/other.ts'])).toBeUndefined();
-    expect(catalog.disclose('turn-1', ['docs/readme.md'])?.sources.map(source => source.path)).toEqual([
-      'docs/AGENTS.md',
-    ]);
-    expect(catalog.disclose('unknown-turn', ['src/file.ts'])).toBeUndefined();
-
-    await writeFile(join(root, 'src', 'AGENTS.md'), 'later revision');
-    expect(catalog.resolve('src/file.ts').at(-1)?.content).toBe('source guidance');
-    await catalog.beginTurn('turn-2', []);
-    expect(catalog.disclose('turn-2', ['src/file.ts'])?.sources.at(-1)?.content).toBe('later revision');
-  });
-
-  it('includes the scoped chain for attached files in initial turn context', async () => {
-    const { catalog } = await fixture();
-    const context = await catalog.beginTurn('attached', ['src/feature/file.ts']);
-    expect(context.sources.map(source => source.path)).toEqual(['AGENTS.md', 'src/AGENTS.md']);
-    expect(catalog.disclose('attached', ['src/other.ts'])).toBeUndefined();
-  });
-
-  it('bounds frozen turn snapshots and evicts the oldest turn', async () => {
-    const { catalog } = await fixture();
-    for (let index = 0; index < 33; index++) await catalog.beginTurn(`turn-${index}`, []);
-
-    expect(catalog.disclose('turn-0', ['src/file.ts'])).toBeUndefined();
-    expect(catalog.disclose('turn-32', ['src/file.ts'])?.sources.map(source => source.path)).toEqual(['src/AGENTS.md']);
   });
 
   it('refreshes created, edited, and deleted instruction files and emits only changed snapshots', async () => {
@@ -203,6 +179,39 @@ describe(AgentInstructionCatalog, () => {
     });
 
     await expect(provider.discover(controller.signal)).rejects.toBe(cancelled);
+  });
+
+  it('orders source families and suppresses a Cursor rule shadowed by a native rule', async () => {
+    const source = (kind: AgentInstructionSourceKind, path: string, name?: string): AgentInstructionSource => ({
+      id: `${kind}:${path}`,
+      kind,
+      label: kind,
+      path,
+      scope: '.',
+      status: AgentInstructionSourceStatus.ACTIVE,
+      ...(name ? { name } : {}),
+    });
+    const catalog = new AgentInstructionCatalog([
+      {
+        discover: async () => [
+          source(AgentInstructionSourceKind.AGENTS_MD, 'AGENTS.md'),
+          source(AgentInstructionSourceKind.GLYPH_PROJECT_RULE, '.glyph/rules/shared.mdc', 'Shared'),
+          source(AgentInstructionSourceKind.GLYPH_PROJECT_RULE, '.glyph/rules/native.mdc'),
+          source(AgentInstructionSourceKind.CURSOR_PROJECT_RULE, '.cursor/rules/shared.mdc', 'Shared'),
+          source(AgentInstructionSourceKind.CURSOR_PROJECT_RULE, '.cursor/rules/cursor.mdc'),
+          source(AgentInstructionSourceKind.GLYPH_USER_RULE, '~/.glyph/rules/user.mdc'),
+        ],
+      },
+    ]);
+
+    expect((await catalog.refresh()).map(value => value.kind)).toEqual([
+      AgentInstructionSourceKind.GLYPH_USER_RULE,
+      AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      AgentInstructionSourceKind.AGENTS_MD,
+    ]);
+    expect(catalog.sources.map(value => value.path)).not.toContain('.cursor/rules/shared.mdc');
   });
 });
 

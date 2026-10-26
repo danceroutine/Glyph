@@ -13,6 +13,12 @@ import type { ChatSessionRecord } from '#src/chat/sessions/ChatSessionRecord.js'
 import { SqliteChatSessionStore } from '#src/chat/sessions/SqliteChatSessionStore.js';
 import { TodoStatus } from '#src/todos/TodoStatus.js';
 import { Goal } from '#src/goals/Goal.js';
+import {
+  AgentInstructionActivationMode,
+  AgentInstructionActivationReason,
+  AgentInstructionSourceKind,
+  AgentInstructionSourceStatus,
+} from '#src/instructions/AgentInstructionSource.js';
 
 const temporaryPaths: string[] = [];
 
@@ -589,6 +595,58 @@ describe(SqliteChatSessionStore, () => {
             reasoningTokens: 0,
             totalTokens: 3,
             incomplete: true,
+          },
+          context: {
+            schema: 'glyph.turn-context.v1',
+            turnId: 'turn-with-rules',
+            sources: [
+              {
+                id: 'glyph_project_rule:.glyph/rules/typescript.mdc',
+                kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+                label: 'Glyph project rule',
+                name: 'TypeScript',
+                path: '.glyph/rules/typescript.mdc',
+                scope: '.',
+                status: AgentInstructionSourceStatus.ACTIVE,
+                activation: AgentInstructionActivationMode.FILE_PATTERN,
+                globs: ['**/*.ts'],
+                enabled: true,
+                content: 'Use strict TypeScript.',
+                revision: 'rule-r1',
+                sourceRevision: 'file-r1',
+                description: 'Use for TypeScript files.',
+                references: ['docs/typescript.md'],
+                uri: 'file:///workspace/.glyph/rules/typescript.mdc',
+              },
+              {
+                id: 'agents_md:AGENTS.md',
+                kind: AgentInstructionSourceKind.AGENTS_MD,
+                label: 'AGENTS.md',
+                path: 'AGENTS.md',
+                scope: '.',
+                status: AgentInstructionSourceStatus.ACTIVE,
+                message: 'Loaded from the workspace root.',
+              },
+            ],
+            activations: [
+              {
+                sourceId: 'glyph_project_rule:.glyph/rules/typescript.mdc',
+                reason: AgentInstructionActivationReason.FILE_ACCESS,
+                paths: ['src/App.tsx'],
+              },
+              {
+                sourceId: 'agents_md:AGENTS.md',
+                reason: AgentInstructionActivationReason.ALWAYS,
+              },
+            ],
+            candidates: [
+              {
+                id: 'glyph_project_rule:.glyph/rules/model.mdc',
+                name: 'API design',
+                description: 'Use for API changes.',
+                scope: '.',
+              },
+            ],
           },
           tools: [
             {

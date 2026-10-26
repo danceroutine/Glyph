@@ -50,7 +50,8 @@ import { GoalStatus } from '#src/goals/GoalStatus.js';
 import type { GoalToolStatus } from '#src/goals/GoalToolRuntime.js';
 import { Goal } from '#src/goals/Goal.js';
 import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
-import type { AgentInstructionSource } from '#src/instructions/AgentInstructionSource.js';
+import { AgentInstructionSourceKind, type AgentInstructionSource } from '#src/instructions/AgentInstructionSource.js';
+import type { UserAgentRuleManager } from '#src/instructions/rules/UserAgentRuleManager.js';
 import type { GlyphInstructionSource } from '#src/desktop/protocol/events/GlyphInstructionSource.js';
 
 const GOAL_CONTINUATION_TEXT = 'Continue working toward the active goal.';
@@ -123,6 +124,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         | 'peekPendingWake'
       >;
       readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'>;
+      readonly userRules?: UserAgentRuleManager;
       readonly emit: (event: GlyphHostEvent) => void;
       readonly ownerWindowId: string;
     },
@@ -279,6 +281,18 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     if (this.disposed) throw new Error('The workspace runtime has stopped.');
     const glyph = this.options.glyph;
     switch (command.type) {
+      case GlyphWorkbenchCommandType.CREATE_USER_RULE:
+        if (!this.options.userRules) throw new Error('User rules are unavailable.');
+        await this.options.userRules.create(command.name, command.activation);
+        return;
+      case GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED:
+        if (!this.options.userRules) throw new Error('User rules are unavailable.');
+        await this.options.userRules.setEnabled(command.path, command.expectedRevision, command.enabled);
+        return;
+      case GlyphWorkbenchCommandType.DELETE_USER_RULE:
+        if (!this.options.userRules) throw new Error('User rules are unavailable.');
+        await this.options.userRules.remove(command.path, command.expectedRevision);
+        return;
       case GlyphWorkbenchCommandType.START_AGENT_REVIEW: {
         if (!this.options.agentReviews) throw new Error('Agent review is unavailable.');
         const account = this.account(command.model.accountProvider, command.model.accountId);
@@ -737,6 +751,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           : {}),
         text: turn.assistantText,
         reasoning: turn.reasoningSummary,
+        ...(turn.context ? { context: toTurnContext(turn.context) } : {}),
         tools: (turn.tools ?? []).map(tool => ({
           id: tool.callId,
           name: tool.name,
@@ -853,6 +868,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           steering,
         ),
       );
+      // The turn keeps its frozen instruction snapshot, while Settings and the next turn
+      // should observe rule files that this turn may have created, renamed, or removed.
+      await this.options.instructionCatalog?.refresh().catch(() => {});
       const run = this.runs.get(command.runId)!;
       const turn = session.transcript.at(-1);
       this.setRun({
@@ -863,6 +881,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           : {}),
         ...(!signal.aborted && turn?.options?.turnId === command.runId && turn.usage
           ? { usage: { ...turn.usage, unreportedTurns: turn.usage.incomplete === true ? 1 : 0 } }
+          : {}),
+        ...(!signal.aborted && turn?.options?.turnId === command.runId && turn.context
+          ? { context: toTurnContext(turn.context) }
           : {}),
       });
       this.publishUsage(session);
@@ -1293,33 +1314,66 @@ function changedLines(text: string): number {
 }
 
 function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): ContextAttachment[] {
-  return attachments.map(attachment => ({
-    path: attachment.path,
-    text: attachment.text,
-    revision: attachment.contentRevision,
-    source: {
-      kind: attachment.kind,
-      uri: attachment.uri,
-      version: attachment.token?.version ?? attachment.sourceVersion ?? 0,
-      revision: attachment.sourceRevision ?? attachment.contentRevision,
-      ...(attachment.range ? { range: attachment.range } : {}),
-      ...(attachment.side ? { side: attachment.side } : {}),
-    },
-    byteOrderMark: false,
-    byteLength: Buffer.byteLength(attachment.text),
-  }));
+  return attachments
+    .filter(
+      (
+        attachment,
+      ): attachment is GlyphContextAttachment & {
+        readonly kind: Exclude<GlyphContextAttachmentKind, GlyphContextAttachmentKind.RULE>;
+      } => attachment.kind !== GlyphContextAttachmentKind.RULE,
+    )
+    .map(attachment => ({
+      path: attachment.path,
+      text: attachment.text,
+      revision: attachment.contentRevision,
+      source: {
+        kind: attachment.kind,
+        uri: attachment.uri,
+        version: attachment.token?.version ?? attachment.sourceVersion ?? 0,
+        revision: attachment.sourceRevision ?? attachment.contentRevision,
+        ...(attachment.range ? { range: attachment.range } : {}),
+        ...(attachment.side ? { side: attachment.side } : {}),
+      },
+      byteOrderMark: false,
+      byteLength: Buffer.byteLength(attachment.text),
+    }));
 }
 
 function toInstructionSources(sources: readonly AgentInstructionSource[]): readonly GlyphInstructionSource[] {
-  return sources.map(({ id, kind, label, path, scope, status, message }) => ({
-    id,
-    kind,
-    label,
-    path,
-    scope,
-    status,
-    ...(message === undefined ? {} : { message }),
+  return sources.map(source => ({
+    id: source.id,
+    kind: source.kind,
+    label: source.label,
+    path: source.path,
+    scope: source.scope,
+    status: source.status,
+    ...(source.name === undefined ? {} : { name: source.name }),
+    ...(source.description === undefined ? {} : { description: source.description }),
+    ...(source.activation === undefined ? {} : { activation: source.activation }),
+    ...(source.globs === undefined ? {} : { globs: source.globs }),
+    ...(source.enabled === undefined ? {} : { enabled: source.enabled }),
+    ...(source.references === undefined ? {} : { references: source.references }),
+    ...(source.revision === undefined ? {} : { revision: source.revision }),
+    ...(source.kind === AgentInstructionSourceKind.GLYPH_USER_RULE && source.content !== undefined
+      ? { content: source.content }
+      : {}),
+    ...(source.uri === undefined ? {} : { uri: source.uri }),
+    ...(source.kind === AgentInstructionSourceKind.GLYPH_USER_RULE
+      ? {
+          managementPath: source.path.replace(/^~\/\.glyph\//u, ''),
+          ...(source.sourceRevision === undefined ? {} : { managementRevision: source.sourceRevision }),
+        }
+      : {}),
+    ...(source.message === undefined ? {} : { message: source.message }),
   }));
+}
+
+function toTurnContext(context: import('#src/instructions/AgentInstructionSource.js').AgentInstructionTurnSnapshot) {
+  return {
+    sources: toInstructionSources(context.sources),
+    activations: context.activations,
+    candidates: context.candidates.map(({ id, name, description }) => ({ id, name, description })),
+  };
 }
 
 function toProposalApplicability(state: string): GlyphProposalApplicability {

@@ -11,10 +11,26 @@ import { mountGlyphAgentInstructions } from './ui/mountGlyphWorkbench.js';
 export class GlyphAgentInstructionsPreferences extends Disposable implements IPreferencesEditorPane {
   private readonly element = DOM.$('.glyph-agent-instructions-settings');
   private readonly view = this._register(
-    mountGlyphAgentInstructions(this.element, [], '', source => {
-      const resource = this.resource(source.path);
-      if (resource) void this.editors.openEditor({ resource });
-    }),
+    mountGlyphAgentInstructions(
+      this.element,
+      [],
+      '',
+      source => {
+        const resource = source.uri ? URI.parse(source.uri) : this.resource(source.path);
+        if (resource) void this.editors.openEditor({ resource });
+      },
+      {
+        createUserRule: (name, activation) => {
+          void this.glyph.createUserRule(name, activation);
+        },
+        setUserRuleEnabled: (source, enabled) => {
+          void this.glyph.setUserRuleEnabled(source, enabled);
+        },
+        deleteUserRule: source => {
+          void this.glyph.deleteUserRule(source);
+        },
+      },
+    ),
   );
   private query = '';
 

@@ -4,6 +4,7 @@ import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/Gl
 export enum GlyphContextCandidateKind {
   FILE = 'file',
   FOLDER = 'folder',
+  RULE = 'rule',
 }
 
 export interface GlyphContextCandidate {
@@ -13,11 +14,15 @@ export interface GlyphContextCandidate {
   readonly kind?: GlyphContextCandidateKind;
   readonly name?: string;
   readonly ancestry?: readonly string[];
+  readonly ruleId?: string;
+  readonly revision?: string;
 }
 export interface GlyphContextActions {
   selectIdeContext?(): Promise<readonly GlyphContextAttachment[]>;
   selectFiles(): Promise<readonly GlyphContextAttachment[]>;
   searchFiles(query: string): Promise<readonly GlyphContextCandidate[]>;
+  /** Finds enabled manual rules for the composer's slash-command picker. */
+  searchRules(query: string): Promise<readonly GlyphContextCandidate[]>;
   captureFile(uri: string): Promise<GlyphContextAttachment>;
   captureFolder?(uri: string): Promise<GlyphContextAttachment>;
   openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void>;

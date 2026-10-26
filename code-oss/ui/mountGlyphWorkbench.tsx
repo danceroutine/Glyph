@@ -162,11 +162,18 @@ export const mountGlyphAgentInstructions = (
   sources: readonly GlyphInstructionSource[],
   query: string,
   openSource: (source: GlyphInstructionSource) => void,
+  actions?: Pick<
+    import('./GlyphAgentInstructions/GlyphAgentInstructions.presentational.tsx').GlyphAgentInstructionsProps,
+    'createUserRule' | 'setUserRuleEnabled' | 'deleteUserRule'
+  >,
 ) => {
   let disposed = false;
   const update = (nextSources: readonly GlyphInstructionSource[], nextQuery: string) => {
     if (!disposed)
-      render(<GlyphAgentInstructions sources={nextSources} query={nextQuery} openSource={openSource} />, container);
+      render(
+        <GlyphAgentInstructions sources={nextSources} query={nextQuery} openSource={openSource} {...actions} />,
+        container,
+      );
   };
   update(sources, query);
   return {

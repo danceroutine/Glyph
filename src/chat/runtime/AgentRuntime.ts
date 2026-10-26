@@ -35,6 +35,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     private readonly configuration: AgentRuntimeConfiguration,
     tools: ToolSource,
     initialState?: ChatProviderState,
+    private readonly turnContexts?: TurnContextCoordinator,
   ) {
     const registry = tools instanceof ToolRegistry ? tools : new ToolRegistry(tools.tools);
     this.executor = new ToolExecutor(registry);
@@ -86,6 +87,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       ...(request.agentReviewId !== undefined && request.agentReviewId !== ''
         ? { agentReviewId: request.agentReviewId }
         : {}),
+      ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
     });
     const modelRequest = modelInput(request);
     if (this.busy) throw new ProviderError('A response is already in progress.');
@@ -118,11 +120,13 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     const setMode = (next: AgentModeID): void => {
       mode = next;
     };
+    let boundaryInstructions: AgentInstructionContext | undefined;
     const context = (round: number): AgentTurnContext => ({
       signal,
       turnId,
       round,
       mode: AgentMode.resolve(mode),
+      ...(boundaryInstructions ? { instructionContext: boundaryInstructions } : {}),
       onText: options.onText,
       ...(options.onReasoningSummary ? { onReasoningSummary: options.onReasoningSummary } : {}),
       trace,
@@ -151,13 +155,24 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         await options.onStateCheckpoint?.(structuredClone(this.state));
         trace('tool.interrupted_recovered', { recoveredCallCount: recovery.recoveredCallCount });
       }
+      const turnContext = await this.turnContexts?.beginTurn(
+        {
+          turnId,
+          attachmentPaths: request.attachments.map(attachment => attachment.path),
+          manualRuleIds: request.manualRuleIds ?? [],
+        },
+        signal,
+      );
+      boundaryInstructions = turnContext?.initialEnvelope();
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
+      boundaryInstructions = undefined;
       let totalUsage: Usage | null = null;
       let usageIncomplete = false;
       let round = 0;
       for (;;) {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
+          boundaryInstructions = this.steeringInstructions(turnId, steering);
           turn = await this.adapter.steerTurn(turn, modelInput(steering), context(round));
           this.state = this.persistentState(this.adapter.snapshot(turn));
           hasToolCheckpoint = true;
@@ -171,7 +186,8 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         if (step.toolCalls.length === 0) {
           const steering = options.takeSteering?.(true) ?? [];
           if (steering.length > 0) {
-            for (const instruction of steering)
+            for (const instruction of steering) {
+              boundaryInstructions = this.steeringInstructions(turnId, instruction);
               turn = await this.adapter.steerTurn(turn, modelInput(instruction), context(round));
             this.state = this.persistentState(this.adapter.snapshot(turn));
             hasToolCheckpoint = true;
@@ -185,9 +201,11 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           }
           this.state = this.persistentState(this.adapter.snapshot(turn));
           trace('history.committed', { state: this.state }, round);
+          const turnContextSnapshot = this.turnContexts?.completeTurn(turnId);
           return {
             responseId: step.responseId,
             usage: totalUsage && usageIncomplete ? { ...totalUsage, incomplete: true } : totalUsage,
+            ...(turnContextSnapshot ? { context: turnContextSnapshot } : {}),
           };
         }
         this.state = this.persistentState(this.adapter.snapshot(turn));
@@ -249,6 +267,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       trace('turn.failed', errorDetails(reportedError));
       throw reportedError;
     } finally {
+      this.turnContexts?.discardTurn(turnId);
       this.busy = false;
     }
   }
@@ -312,6 +331,7 @@ function modelInput(request: ChatRequest): ChatRequest {
     ...(request.agentReviewId !== undefined && request.agentReviewId !== ''
       ? { agentReviewId: request.agentReviewId }
       : {}),
+    ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
   });
   return {
     ...request,

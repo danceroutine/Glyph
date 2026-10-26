@@ -25,6 +25,24 @@ describe(toGlyphPromptText, () => {
       ]),
     ).toBe('see @a.ts and @a.ts (2-4)');
   });
+
+  it('serializes manually invoked rules with the slash-command presentation', () => {
+    expect(
+      toGlyphPromptText([
+        {
+          type: 'attachment',
+          attachment: {
+            kind: GlyphContextAttachmentKind.RULE,
+            uri: 'glyph-rule:typescript',
+            path: 'TypeScript',
+            text: '',
+            contentRevision: 'rule-id',
+            ruleId: 'rule-id',
+          },
+        },
+      ]),
+    ).toBe('/TypeScript');
+  });
 });
 
 describe(replaceGlyphPromptRange, () => {

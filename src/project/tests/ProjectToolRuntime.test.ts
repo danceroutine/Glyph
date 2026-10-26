@@ -77,7 +77,7 @@ describe(ProjectToolRuntime, () => {
         ],
       });
       const stage = vi.fn(async () => {});
-      const disclose = vi
+      const disclosePaths = vi
         .fn()
         .mockReturnValueOnce({
           schema: 'glyph.agent-instructions.v1',
@@ -92,7 +92,7 @@ describe(ProjectToolRuntime, () => {
         } as unknown as EditProposalService,
         { stage, activeReviews: [] } as unknown as ProposalReviewManager,
         new NullLogger(),
-        { disclose },
+        { disclosePaths },
       );
       const context = { turnId: 'turn-1' };
 
@@ -102,7 +102,7 @@ describe(ProjectToolRuntime, () => {
       expect(stage).not.toHaveBeenCalled();
       await runtime.execute(ProjectToolName.PROPOSE_PATCH, 'patch', undefined, context);
       expect(stage).toHaveBeenCalledOnce();
-      expect(disclose).toHaveBeenCalledWith('turn-1', ['src/new.ts']);
+      expect(disclosePaths).toHaveBeenCalledWith('turn-1', ['src/new.ts']);
     });
 
     it('reports an unknown tool as a failed tool call', async () => {

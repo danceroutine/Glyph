@@ -1,16 +1,17 @@
-import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
 
-/** A named workspace root whose policy-aware store can discover instruction files. */
+/** A named workspace root whose shared path index can discover instruction files. */
 export interface InstructionDiscoveryRoot {
   /** Workspace-root name used to qualify paths in a multi-root workspace. */
   readonly name: string;
-  /** Store that enforces filesystem exclusions and symlink policy during discovery. */
-  readonly disk: Pick<WorkspaceTextStore, 'list'>;
+  /** Resident index that enforces ignore rules, filesystem exclusions, and symlink policy. */
+  readonly index: Pick<WorkspacePathIndex, 'glob'>;
 }
 
 /**
  * Discover instruction files across workspace roots while enforcing one aggregate result limit.
  * Single-root paths stay relative; multi-root paths are qualified with their root name.
+ * Queries reuse the host's existing watched index rather than walking each root again.
  */
 export async function listInstructionFilesAcrossRoots(
   roots: readonly InstructionDiscoveryRoot[],
@@ -24,7 +25,7 @@ export async function listInstructionFilesAcrossRoots(
       truncated = true;
       break;
     }
-    const result = await root.disk.list(maxFiles - files.length, globPattern);
+    const result = await root.index.glob(globPattern, { limit: maxFiles - files.length });
     files.push(...result.files.map(path => (roots.length === 1 ? path : `${root.name}/${path}`)));
     truncated ||= result.truncated || (files.length >= maxFiles && index < roots.length - 1);
   }

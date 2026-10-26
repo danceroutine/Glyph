@@ -59,14 +59,18 @@ export const chatTurnOptionsSchema = z
     annotations: z.array(annotationSchema).max(100).optional(),
     planBuild: planBuildOrderSchema.optional(),
     planProgress: planProgressSchema.optional(),
+    manualRuleIds: z.array(z.string().min(1).max(500)).max(32).optional(),
   })
   .strict()
-  .transform(({ mode, annotations, turnId, attachmentSpans, agentReviewId, planBuild, planProgress }) => ({
-    ...(attachmentSpans ? { attachmentSpans } : {}),
-    ...(turnId !== undefined && turnId !== '' ? { turnId } : {}),
-    ...(agentReviewId !== undefined && agentReviewId !== '' ? { agentReviewId } : {}),
-    ...(mode !== undefined ? { mode } : {}),
-    ...(annotations ? { annotations } : {}),
-    ...(planBuild ? { planBuild } : {}),
-    ...(planProgress ? { planProgress } : {}),
-  }));
+  .transform(
+    ({ mode, annotations, turnId, attachmentSpans, agentReviewId, planBuild, planProgress, manualRuleIds }) => ({
+      ...(attachmentSpans ? { attachmentSpans } : {}),
+      ...(turnId !== undefined && turnId !== '' ? { turnId } : {}),
+      ...(agentReviewId !== undefined && agentReviewId !== '' ? { agentReviewId } : {}),
+      ...(mode !== undefined ? { mode } : {}),
+      ...(annotations ? { annotations } : {}),
+      ...(planBuild ? { planBuild } : {}),
+      ...(planProgress ? { planProgress } : {}),
+      ...(manualRuleIds && manualRuleIds.length > 0 ? { manualRuleIds: [...new Set(manualRuleIds)] } : {}),
+    }),
+  );
