@@ -211,7 +211,17 @@ describe(ChatSession, () => {
         send: async (_request, options) => {
           options.takeSteering?.(false);
           options.onText('Done.');
-          return { responseId: 'resp', usage };
+          return {
+            responseId: 'resp',
+            usage,
+            context: {
+              schema: 'glyph.turn-context.v1',
+              turnId: 'turn-1',
+              sources: [],
+              activations: [],
+              candidates: [],
+            },
+          };
         },
       });
       const steering = new ChatSteeringQueue();
@@ -258,6 +268,7 @@ describe(ChatSession, () => {
           agentReviewId: '00000000-0000-4000-8000-000000000000',
           mode: AgentModeID.PLAN,
           annotations: [annotation],
+          manualRuleIds: ['rule-id'],
         },
         { push: () => {} },
         new AbortController().signal,
@@ -285,9 +296,11 @@ describe(ChatSession, () => {
           agentReviewId: '00000000-0000-4000-8000-000000000000',
           mode: AgentModeID.PLAN,
           annotations: [annotation],
+          manualRuleIds: ['rule-id'],
         },
         attachmentPaths: ['a.ts'],
         attachments: [attachment],
+        context: { schema: 'glyph.turn-context.v1', turnId: 'turn-1' },
         assistantText: 'Done.',
         usage,
         tools: [],

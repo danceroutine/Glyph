@@ -51,6 +51,11 @@ import { INotificationService } from '#vs/platform/notification/common/notificat
 import { URI } from '#vs/base/common/uri.js';
 import { IExplorerService } from '#vs/workbench/contrib/files/browser/files.js';
 import { ExplorerFolderContext } from '#vs/workbench/contrib/files/common/files.js';
+import { GlyphAgentInstructionsPreferences } from '#vs/workbench/contrib/glyph/browser/GlyphAgentInstructionsPreferences.js';
+import {
+  Extensions as PreferencesExtensions,
+  type IPreferencesEditorPaneRegistry,
+} from '#vs/workbench/contrib/preferences/browser/preferencesEditorRegistry.js';
 
 abstract class AsyncAction2 extends Action2 {
   abstract override run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void>;
@@ -168,6 +173,14 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
       description: 'Seconds to wait for approval of an agent-requested mode switch.',
     },
   },
+});
+
+Registry.as<IPreferencesEditorPaneRegistry>(PreferencesExtensions.PreferencesEditorPane).registerPreferencesEditorPane({
+  id: 'glyph.agentInstructions',
+  title: localize('glyphAgentInstructionsSettings', 'Agent Instructions'),
+  icon: Codicon.book,
+  order: 10,
+  ctorDescriptor: new SyncDescriptor(GlyphAgentInstructionsPreferences),
 });
 
 const containerId = 'workbench.view.glyphContainer';

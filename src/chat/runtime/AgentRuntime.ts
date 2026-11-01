@@ -16,6 +16,8 @@ import type { TurnResult } from '#src/chat/TurnResult.js';
 import type { Usage } from '#src/chat/Usage.js';
 import type { AgentModelAdapter, AgentToolResult, AgentTurnContext } from './AgentModelAdapter.ts';
 import type { ToolExecutionContext } from '#src/tools/ToolExecutionContext.js';
+import { randomUUID } from 'node:crypto';
+import { AgentHistoryRetention } from './AgentHistoryRetention.ts';
 
 interface AgentRuntimeConfiguration {
   readonly timeoutMs: number;
@@ -23,6 +25,7 @@ interface AgentRuntimeConfiguration {
 
 /** Provider-independent turn lifecycle, tool loop, cancellation, and state transaction. */
 export class AgentRuntime<TTurn> implements ChatProvider {
+  private readonly historyRetention = new AgentHistoryRetention();
   private state: ChatProviderState;
   private busy = false;
   private readonly executor: ToolExecutor;
@@ -32,10 +35,11 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     private readonly configuration: AgentRuntimeConfiguration,
     tools: ToolSource,
     initialState?: ChatProviderState,
+    private readonly turnContexts?: TurnContextCoordinator,
   ) {
     const registry = tools instanceof ToolRegistry ? tools : new ToolRegistry(tools.tools);
     this.executor = new ToolExecutor(registry);
-    this.state = initialState ? adapter.restoreState(initialState) : adapter.emptyState();
+    this.state = this.persistentState(initialState ? adapter.restoreState(initialState) : adapter.emptyState());
   }
 
   get model(): string {
@@ -44,7 +48,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
 
   recordContext(events: readonly ChatContextEvent[]): void {
     if (this.busy) throw new ProviderError('Cannot record context during a response. Cancel it first.');
-    this.state = this.adapter.recordContext(this.state, events);
+    this.state = this.persistentState(this.adapter.recordContext(this.state, events));
   }
 
   exportState(): ChatProviderState {
@@ -53,7 +57,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
 
   restoreState(state: ChatProviderState): void {
     if (this.busy) throw new ProviderError('Cannot restore history during a response. Cancel it first.');
-    this.state = this.adapter.restoreState(state);
+    this.state = this.persistentState(this.adapter.restoreState(state));
   }
 
   reset(): void {
@@ -76,12 +80,14 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     },
   ): Promise<TurnResult> {
     const request = toChatRequest(inputRequest);
+    const turnId = request.turnId ?? randomUUID();
     const metadata = chatTurnOptionsSchema.parse({
       ...(request.mode !== undefined ? { mode: request.mode } : {}),
       ...(request.annotations ? { annotations: request.annotations } : {}),
       ...(request.agentReviewId !== undefined && request.agentReviewId !== ''
         ? { agentReviewId: request.agentReviewId }
         : {}),
+      ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
     });
     const modelRequest = modelInput(request);
     if (this.busy) throw new ProviderError('A response is already in progress.');
@@ -114,10 +120,13 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     const setMode = (next: AgentModeID): void => {
       mode = next;
     };
+    let boundaryInstructions: AgentInstructionContext | undefined;
     const context = (round: number): AgentTurnContext => ({
       signal,
+      turnId,
       round,
       mode: AgentMode.resolve(mode),
+      ...(boundaryInstructions ? { instructionContext: boundaryInstructions } : {}),
       onText: options.onText,
       ...(options.onReasoningSummary ? { onReasoningSummary: options.onReasoningSummary } : {}),
       trace,
@@ -141,20 +150,31 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     try {
       const recovery = this.adapter.recoverInterruptedToolCalls(this.state);
       if (recovery.recoveredCallCount > 0) {
-        this.state = recovery.state;
+        this.state = this.persistentState(recovery.state);
         hasToolCheckpoint = true;
         await options.onStateCheckpoint?.(structuredClone(this.state));
         trace('tool.interrupted_recovered', { recoveredCallCount: recovery.recoveredCallCount });
       }
+      const turnContext = await this.turnContexts?.beginTurn(
+        {
+          turnId,
+          attachmentPaths: request.attachments.map(attachment => attachment.path),
+          manualRuleIds: request.manualRuleIds ?? [],
+        },
+        signal,
+      );
+      boundaryInstructions = turnContext?.initialEnvelope();
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
+      boundaryInstructions = undefined;
       let totalUsage: Usage | null = null;
       let usageIncomplete = false;
       let round = 0;
       for (;;) {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
+          boundaryInstructions = this.steeringInstructions(turnId, steering);
           turn = await this.adapter.steerTurn(turn, modelInput(steering), context(round));
-          this.state = this.adapter.commit(turn);
+          this.state = this.persistentState(this.adapter.snapshot(turn));
           hasToolCheckpoint = true;
           await options.onStateCheckpoint?.(structuredClone(this.state));
         }
@@ -166,9 +186,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         if (step.toolCalls.length === 0) {
           const steering = options.takeSteering?.(true) ?? [];
           if (steering.length > 0) {
-            for (const instruction of steering)
+            for (const instruction of steering) {
+              boundaryInstructions = this.steeringInstructions(turnId, instruction);
               turn = await this.adapter.steerTurn(turn, modelInput(instruction), context(round));
-            this.state = this.adapter.commit(turn);
+            this.state = this.persistentState(this.adapter.snapshot(turn));
             hasToolCheckpoint = true;
             await options.onStateCheckpoint?.(structuredClone(this.state));
             continue;
@@ -178,14 +199,16 @@ export class AgentRuntime<TTurn> implements ChatProvider {
               `The model completed without returning text or a tool call. Response ID: ${step.responseId}`,
             );
           }
-          this.state = this.adapter.commit(turn);
+          this.state = this.persistentState(this.adapter.snapshot(turn));
           trace('history.committed', { state: this.state }, round);
+          const turnContextSnapshot = this.turnContexts?.completeTurn(turnId);
           return {
             responseId: step.responseId,
             usage: totalUsage && usageIncomplete ? { ...totalUsage, incomplete: true } : totalUsage,
+            ...(turnContextSnapshot ? { context: turnContextSnapshot } : {}),
           };
         }
-        this.state = this.adapter.commit(turn);
+        this.state = this.persistentState(this.adapter.snapshot(turn));
         hasToolCheckpoint = true;
         await options.onStateCheckpoint?.(structuredClone(this.state));
         trace('tool.intent_checkpointed', { calls: step.toolCalls }, round);
@@ -209,6 +232,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                   roundCallCount: step.toolCalls.length,
                   context: {
                     ...options.toolContext,
+                    turnId,
                     mode: roundMode,
                     onModeChanged: setMode,
                   },
@@ -223,7 +247,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
             );
         if (signal.aborted) interruptions.push(signal.reason);
         turn = this.adapter.appendToolResults(turn, results);
-        this.state = this.adapter.commit(turn);
+        this.state = this.persistentState(this.adapter.snapshot(turn));
         await options.onStateCheckpoint?.(structuredClone(this.state));
         trace('tool.outcomes_checkpointed', { callIds: results.map(result => result.call.id) }, round);
         if (interruptions.length > 0) throw interruptions[0];
@@ -243,8 +267,14 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       trace('turn.failed', errorDetails(reportedError));
       throw reportedError;
     } finally {
+      this.turnContexts?.discardTurn(turnId);
       this.busy = false;
     }
+  }
+
+  /** Every state entering durable storage passes through the same host policy. */
+  private persistentState(state: ChatProviderState): ChatProviderState {
+    return this.adapter.projectHistory(state, this.historyRetention);
   }
 }
 
@@ -301,6 +331,7 @@ function modelInput(request: ChatRequest): ChatRequest {
     ...(request.agentReviewId !== undefined && request.agentReviewId !== ''
       ? { agentReviewId: request.agentReviewId }
       : {}),
+    ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
   });
   return {
     ...request,

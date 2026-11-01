@@ -27,6 +27,7 @@ import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphCon
 import type { GlyphContextActions, GlyphContextCandidate } from '#glyph/workbench/GlyphContextActions.js';
 import type { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
 import type { GlyphEditorAdapter } from './GlyphEditorAdapter.js';
+import type { GlyphInstructionSource } from '#glyph/protocol/events/GlyphInstructionSource.js';
 
 /** Capture context only from explicit file selection, search, or selected editor text. */
 export class GlyphContextController extends Disposable implements GlyphContextActions {
@@ -35,6 +36,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   constructor(
     private readonly adapter: GlyphEditorAdapter,
     private readonly composer: () => GlyphComposerState,
+    private readonly instructionSources: () => readonly GlyphInstructionSource[],
     @IEditorService private readonly editors: IEditorService,
     @ICodeEditorService codeEditors: ICodeEditorService,
     @IModelService private readonly models: IModelService,
@@ -164,6 +166,29 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         if (child.isDirectory && !child.isSymbolicLink) add(child.resource, GlyphContextCandidateKind.FOLDER);
     }
     return candidates.slice(0, 50);
+  }
+  async searchRules(query: string): Promise<readonly GlyphContextCandidate[]> {
+    this.assertTrusted();
+    const normalized = query.toLowerCase();
+    return this.instructionSources()
+      .filter(rule => rule.activation === 'manual' && rule.status === 'active' && rule.enabled !== false)
+      .filter(rule => {
+        const name = rule.name ?? rule.path.split('/').at(-1)!;
+        return `${name} ${rule.description ?? ''} ${rule.path}`.toLowerCase().includes(normalized);
+      })
+      .slice(0, 50)
+      .map(rule => {
+        const name = rule.name ?? rule.path.split('/').at(-1)!;
+        return {
+          uri: `glyph-rule:${encodeURIComponent(rule.id)}`,
+          path: name,
+          name,
+          detail: rule.description ?? rule.path,
+          kind: GlyphContextCandidateKind.RULE,
+          ruleId: rule.id,
+          ...(rule.revision ? { revision: rule.revision } : {}),
+        };
+      });
   }
   async selectFiles(): Promise<readonly GlyphContextAttachment[]> {
     this.assertTrusted();

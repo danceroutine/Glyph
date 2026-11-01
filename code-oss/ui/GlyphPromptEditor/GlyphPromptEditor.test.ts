@@ -79,7 +79,7 @@ describe(GlyphPromptEditor, () => {
     expect(textbox.getAttribute('aria-label')).toBe('Message Glyph');
     expect(textbox.getAttribute('aria-multiline')).toBe('true');
     expect(textbox.getAttribute('aria-autocomplete')).toBe('list');
-    expect(textbox.dataset.placeholder).toBe('Plan, build, @ for context');
+    expect(textbox.dataset.placeholder).toBe('Plan, build, / for rules, @ for context');
     expect(textbox.textContent).toBe('Hello');
   });
 
@@ -97,7 +97,7 @@ describe(GlyphPromptEditor, () => {
     const { editor } = mountEditor(undefined, callbacks);
 
     type(editor, 'see @ap');
-    expect(callbacks.query).toHaveBeenLastCalledWith({ text: 'ap', from: 5, to: 8 });
+    expect(callbacks.query).toHaveBeenLastCalledWith({ trigger: '@', text: 'ap', from: 5, to: 8 });
 
     type(editor, ' ');
     expect(callbacks.query).toHaveBeenLastCalledWith(undefined);
@@ -107,13 +107,24 @@ describe(GlyphPromptEditor, () => {
     expect(callbacks.query).toHaveBeenLastCalledWith(undefined);
   });
 
+  it('reports a slash rule query without treating path separators as commands', () => {
+    const callbacks = promptCallbacks();
+    const { editor } = mountEditor(undefined, callbacks);
+
+    type(editor, '/type');
+    expect(callbacks.query).toHaveBeenLastCalledWith({ trigger: '/', text: 'type', from: 1, to: 6 });
+
+    type(editor, ' src/file');
+    expect(callbacks.query).toHaveBeenLastCalledWith(undefined);
+  });
+
   it('replaces the query with an attachment and focuses the prompt', () => {
     const callbacks = promptCallbacks();
     const { editor } = mountEditor(undefined, callbacks);
     type(editor, 'see @ap');
     const file = attachment();
 
-    editor.insert(file, { text: 'ap', from: 5, to: 8 });
+    editor.insert(file, { trigger: '@', text: 'ap', from: 5, to: 8 });
 
     expect(callbacks.change).toHaveBeenLastCalledWith({
       parts: [
@@ -150,6 +161,18 @@ describe(GlyphPromptEditor, () => {
     });
 
     expect(editor.view.dom.querySelector('button')?.getAttribute('aria-label')).toBe('Open src/app.ts');
+  });
+
+  it('renders manual rules as context badges without a source-preview action', () => {
+    const callbacks = promptCallbacks();
+    const rule = attachment({ kind: GlyphContextAttachmentKind.RULE, path: 'TypeScript', ruleId: 'rule-id' });
+    const { editor } = mountEditor({ parts: [{ type: 'attachment', attachment: rule }], from: 1, to: 1 }, callbacks);
+    const badge = editor.view.dom.querySelector('button')!;
+
+    expect(badge.getAttribute('aria-label')).toBe('Open TypeScript');
+    expect(badge.textContent).toBe('/TypeScript');
+    badge.click();
+    expect(callbacks.preview).not.toHaveBeenCalled();
   });
 
   it('marks unavailable attachments and keeps their reason in the title', async () => {
@@ -644,7 +667,7 @@ describe(GlyphPromptEditor, () => {
 
     editor.update({ parts: [{ type: 'text', text: 'new @fi' }], from: 7, to: 7 });
     expect(markdown(editor)).toBe('new @fi');
-    expect(callbacks.query).toHaveBeenLastCalledWith({ text: 'fi', from: 5, to: 8 });
+    expect(callbacks.query).toHaveBeenLastCalledWith({ trigger: '@', text: 'fi', from: 5, to: 8 });
   });
 
   it('starts over with fresh history when the host clears the prompt', () => {

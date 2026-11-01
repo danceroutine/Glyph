@@ -263,6 +263,18 @@ export class GlyphEditorAdapter extends Disposable {
         if (info.size !== undefined) this.assertReadBudget(info.size, maxBytes);
       }
     }
+    // References are retained so later mutations can prove they still target
+    // the model incarnation that was reviewed. Refresh a retained clean model
+    // before reading it again; otherwise that capability cache can hide a disk
+    // edit that arrived between agent turns. Dirty editor contents remain the
+    // authoritative version and the text-file service also guards against a
+    // concurrent edit while the reload is in flight.
+    if (this.modelService.getModel?.(resource) && !this.textFileService.isDirty(resource)) {
+      await this.textFileService.files?.resolve(resource, {
+        reload: { async: false },
+        forceReadFromFile: true,
+      });
+    }
     const reference = await this.reference(resource);
     return this.snapshot(path, reference.object.textEditorModel, maxBytes);
   }

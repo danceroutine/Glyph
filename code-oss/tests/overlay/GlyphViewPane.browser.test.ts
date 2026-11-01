@@ -100,7 +100,7 @@ const paneOf = () => {
       toggleMaximizedAuxiliaryBar: vi.fn(),
       setPartHidden: vi.fn(),
     },
-    preferences: { openSettings: vi.fn(async () => undefined) },
+    preferences: { openSettings: vi.fn(async () => undefined), openPreferences: vi.fn(async () => undefined) },
     glyph: glyphServiceOf(),
   };
   const pane = new GlyphViewPane(
@@ -373,7 +373,7 @@ describe(GlyphViewPane, () => {
     await menu.hide.run();
 
     expect(services.commands.executeCommand).toHaveBeenCalledWith(BrowserViewCommandId.Open);
-    expect(services.preferences.openSettings).toHaveBeenCalledWith({ query: 'glyph' });
+    expect(services.preferences.openPreferences).toHaveBeenCalledOnce();
     expect(services.layout.toggleMaximizedAuxiliaryBar).toHaveBeenCalled();
     expect(services.layout.setPartHidden).toHaveBeenCalledWith(true, Parts.AUXILIARYBAR_PART);
     expect(Object.values(menu).map(action => action.label)).toEqual([
