@@ -115,6 +115,9 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
             ],
           } as never;
           return;
+        case WorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
+          this.emit({ type: HostEventType.INSTRUCTION_SOURCES_CHANGED, sources: this.snapshot().instructionSources });
+          return;
         case WorkbenchCommandType.REQUEST_SNAPSHOT:
           this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
           return;
@@ -154,6 +157,8 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js', () => ({
 }));
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => ({
   GlyphContextController: class {
+    readonly setInstructionRefresh = vi.fn();
+    readonly notifyInstructionsChanged = vi.fn();
     readonly ide = { terminal: vi.fn() };
     readonly selectIdeContext = vi.fn(async () => [] as unknown[]);
     readonly attachSelection = vi.fn(async () => {});
@@ -508,6 +513,23 @@ describe(NativeGlyphWorkbenchService, () => {
       const { service } = await workbench({ chats: [chat('alpha', { mode: AgentModeID.PLAN })] });
 
       expect(service.composer.snapshot.document.options?.mode).toBe(AgentModeID.PLAN);
+    });
+
+    it('shares pending catalog refreshes, preserves the active chat, and reports failed refreshes', async () => {
+      const { service, host, context } = await workbench({ extra: { instructionWatchRoots: ['file:///user/rules'] } });
+      host.request.mockClear();
+      const activeComposer = service.composer;
+      const [refresh, roots] = context.setInstructionRefresh.mock.calls[0];
+      expect(roots()).toEqual(['file:///user/rules']);
+      await Promise.all([service.refreshInstructionSources(), refresh()]);
+      expect(host.request).toHaveBeenCalledExactlyOnceWith({
+        type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS,
+      });
+      expect(service.composer).toBe(activeComposer);
+      host.request.mockRejectedValueOnce(new Error('Refresh failed'));
+      await expect(refresh()).rejects.toThrow('Refresh failed');
+      await refresh();
+      expect(host.request).toHaveBeenCalledTimes(3);
     });
 
     it('restores a chat draft with its captures and places the caret at its end', async () => {

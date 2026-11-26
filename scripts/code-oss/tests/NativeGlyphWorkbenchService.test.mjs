@@ -335,6 +335,8 @@ async function fixture({
     },
     {
       createInstance: () => ({
+        setInstructionRefresh() {},
+        notifyInstructionsChanged() {},
         invalidate() {},
         dispose() {},
         handle() {},

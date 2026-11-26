@@ -458,6 +458,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       interactions,
       shellSessions: shells,
       ...(instructionCatalog ? { instructionCatalog } : {}),
+      refreshCatalogs: async signal => {
+        await instructionCatalog?.refresh(signal);
+      },
+      instructionWatchRoots: userRules ? [userRules.directoryUri] : [],
       ...(userRules ? { userRules } : {}),
       emit: input.emit,
       ownerWindowId: input.identity.windowId,

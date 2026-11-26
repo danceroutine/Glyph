@@ -94,6 +94,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private workspaceMessage: string | undefined;
   private readonly prompts = new Map<string, string>();
   private readonly errors: GlyphTranscriptEntry[] = [];
+  private catalogRefresh: Promise<void> | undefined;
   private readonly goals = new GlyphGoalReconciler({
     snapshot: chatId => this.goalSnapshot(chatId),
     continueGoal: (chatId, goalId) => this.request({ type: GlyphWorkbenchCommandType.CONTINUE_GOAL, chatId, goalId }),
@@ -158,6 +159,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         () => this.composer,
         () => this.state.instructionSources ?? [],
       ),
+    );
+    this.context.setInstructionRefresh(
+      () => this.refreshInstructionSources(),
+      () => this.state.instructionWatchRoots ?? [],
     );
     this.proposalEditor = this._register(
       instantiationService.createInstance(GlyphProposalEditor, {
@@ -242,6 +247,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             ? this.projection.state.chats.find(chat => chat.id === event.chat.id)?.mode
             : undefined;
         this.projection.accept(event);
+        if (
+          event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED ||
+          event.type === GlyphHostEventType.INITIAL_STATE
+        )
+          this.context.notifyInstructionsChanged();
         this.shellTerminals.update(this.projection.state.shells ?? []);
         switch (event.type) {
           case GlyphHostEventType.INITIAL_STATE:
@@ -324,6 +334,16 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       });
   }
 
+  refreshInstructionSources(): Promise<void> {
+    return (this.catalogRefresh ??= this.request({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS })
+      .catch(error => {
+        this.report(error);
+        throw error;
+      })
+      .finally(() => {
+        this.catalogRefresh = undefined;
+      }));
+  }
   createUserRule(
     name: string,
     activation: NonNullable<GlyphInstructionSource['activation']>,

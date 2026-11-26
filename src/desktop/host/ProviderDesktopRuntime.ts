@@ -123,6 +123,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         | 'takePendingWake'
         | 'peekPendingWake'
       >;
+      readonly refreshCatalogs?: (signal: AbortSignal) => Promise<void>;
+      readonly instructionWatchRoots?: readonly string[];
       readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'>;
       readonly userRules?: UserAgentRuleManager;
       readonly emit: (event: GlyphHostEvent) => void;
@@ -162,6 +164,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       this.proposals.set(proposal.id, toProposal(proposal));
     return {
       agentReviews: this.options.agentReviews?.reviews ?? [],
+      ...(this.options.instructionWatchRoots ? { instructionWatchRoots: this.options.instructionWatchRoots } : {}),
       ...(instructionSources ? { instructionSources: toInstructionSources(instructionSources) } : {}),
       ...(this.options.userRules?.directoryUri ? { userRulesDirectoryUri: this.options.userRules.directoryUri } : {}),
       accounts: this.options.glyph.accounts,
@@ -282,6 +285,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     if (this.disposed) throw new Error('The workspace runtime has stopped.');
     const glyph = this.options.glyph;
     switch (command.type) {
+      case GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
+        await this.options.refreshCatalogs?.(this.discovery.signal);
+        return;
       case GlyphWorkbenchCommandType.CREATE_USER_RULE:
         if (!this.options.userRules) throw new Error('User rules are unavailable.');
         await this.options.userRules.create(command.name, command.activation, command.condition);
