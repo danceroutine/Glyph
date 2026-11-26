@@ -663,7 +663,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             userRuleUri(canonicalUserDirectory, 'skill-state.json'),
           ]
         : [],
-      ...(skillManager ? { skillManager, skillSources: new SkillPackageSourceReader(indexExecutable) } : {}),
+      ...(skillManager
+        ? {
+            skillManager,
+            skillSources: new SkillPackageSourceReader(
+              indexExecutable,
+              roots.map(workspaceRoot => workspaceRoot.path),
+            ),
+          }
+        : {}),
       ...(userRules ? { userRules } : {}),
       emit: input.emit,
       ownerWindowId: input.identity.windowId,

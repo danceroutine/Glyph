@@ -78,8 +78,10 @@ let isolatedUserDirectory: string;
 beforeEach(async () => {
   isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
   onTestFinished(() => rm(isolatedUserDirectory, { recursive: true, force: true }));
-  vi.spyOn(NativeWorkspaceMutations, 'open').mockImplementation(async (executable, root) => {
-    const instance = await openWorkspaceMutations(executable, root);
+  vi.spyOn(NativeWorkspaceMutations, 'open').mockImplementation(async (_executable, root) => {
+    // Composition uses the deterministic filesystem port below. Bind its native
+    // client to this runner rather than requiring a packaged app installation.
+    const instance = await openWorkspaceMutations(process.execPath, root);
     const mutations = testPackageMutations(root);
     vi.spyOn(instance, 'ensureDirectory').mockImplementation(mutations.ensureDirectory);
     vi.spyOn(instance, 'renameExclusive').mockImplementation(mutations.renameExclusive);

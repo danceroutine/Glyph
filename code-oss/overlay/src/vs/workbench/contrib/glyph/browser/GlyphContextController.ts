@@ -437,7 +437,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
       this.assertTrusted();
       const source = this.referenceSkill(attachment.uri);
-      if (!source || source.status !== 'active' || source.enabled === false)
+      if (!source || source.status !== 'active' || !source.enabled)
         throw new GlyphContextError(
           GlyphDesktopErrorCode.NOT_FOUND,
           'Selected instruction is unavailable. Choose it again.',
@@ -465,7 +465,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
     if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
       const source = this.referenceSkill(attachment.uri);
-      if (!source || source.status !== 'active' || source.enabled === false)
+      if (!source || source.status !== 'active' || !source.enabled)
         return 'Selected instruction is unavailable. Remove it or choose it again.';
       return source.revision && source.revision !== attachment.contentRevision
         ? 'These instructions changed. The latest version will load when you send.'

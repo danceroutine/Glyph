@@ -69,7 +69,7 @@ describe(TurnContextCoordinator, () => {
       attachmentPaths: [],
     });
     expect(
-      session.activateRule(rule.id, AgentInstructionActivationReason.MANUAL)?.sources.map(source => source.id),
+      session.activateRule(rule.id, AgentInstructionActivationReason.MANUAL)?.sources.map(value => value.id),
     ).toEqual([rule.id]);
   });
 
