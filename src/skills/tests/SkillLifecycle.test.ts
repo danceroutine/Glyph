@@ -151,7 +151,8 @@ describe(SkillScriptRunner, () => {
     });
     expect(execute).toHaveBeenCalledOnce();
     const command = execute.mock.calls[0]![0];
-    const matched = /sh '([^']+task.sh)'/u.exec(command)!;
+    expect(command).toContain('# Interpreter: /');
+    const matched = /sh' '([^']+task.sh)'/u.exec(command)!;
     await expect(readFile(matched[1]!)).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it('rejects undeclared execution, missing resources, traversal, binary scripts, and unsupported interpreters', async () => {

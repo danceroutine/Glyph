@@ -1,5 +1,5 @@
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
-import { join, delimiter } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { it, expect, vi, onTestFinished } from 'vitest';
 import { SkillRepositoryGit } from '#src/skills/SkillRepositoryGit.js';
@@ -18,14 +18,12 @@ it.skipIf(process.platform === 'win32')(
   'terminates Git transport helpers and settles cancellation before returning',
   async () => {
     const root = await fixture();
-    const binary = await fixture();
-    await writeFile(join(binary, 'git'), '#!/bin/sh\nsleep 30 &\necho $! > helper-pid\nwait\n', { mode: 0o700 });
-    vi.stubEnv('PATH', binary + delimiter + process.env.PATH);
-    onTestFinished(() => {
-      vi.unstubAllEnvs();
-    });
     const cancel = new AbortController();
-    const result = new SkillRepositoryGit(root, cancel.signal).run(['version']);
+    const result = new SkillRepositoryGit(root, cancel.signal).run([
+      '-c',
+      'alias.wait-for-cancel=!sleep 30 & echo $! > helper-pid; wait',
+      'wait-for-cancel',
+    ]);
     let helper = 0;
     await vi.waitFor(async () => {
       helper = Number(await readFile(join(root, 'helper-pid'), 'utf8'));

@@ -130,3 +130,11 @@ fn accepts_a_trusted_filesystem_root_descriptor_without_mutating_it() {
     .unwrap();
     assert_eq!(fstat(fd).unwrap().st_ino, stat.st_ino);
 }
+
+#[test]
+fn reports_stream_write_failures() {
+    assert_eq!(
+        Failure::from(std::io::Error::other("stream failure")).code,
+        "EIO"
+    );
+}

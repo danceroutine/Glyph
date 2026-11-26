@@ -17,14 +17,19 @@ pub(super) fn mode(bits: u32) -> Result<Mode, Failure> {
 
 fn staging_root(root: &OwnedFd) -> Result<OwnedFd, Failure> {
     let staging = open_directories(dup(root)?, &[".skill-staging"], Some(Mode::RWXU))?;
-    let info = fstat(&staging)?;
+    check_private(&staging)?;
+    Ok(staging)
+}
+
+fn check_private(directory: &OwnedFd) -> Result<(), Failure> {
+    let info = fstat(directory)?;
     if info.st_uid != rustix::process::geteuid().as_raw() || info.st_mode & 0o777 != 0o700 {
         return Err(Failure::new(
             "EACCES",
             "Skill staging requires a private, current-user-owned directory.",
         ));
     }
-    Ok(staging)
+    Ok(())
 }
 
 pub(super) fn create_stage(root: &OwnedFd, relative: &str) -> Result<(), Failure> {
@@ -68,6 +73,7 @@ pub(super) fn materialize(
     }
     let staging = staging_root(root)?;
     let transaction = openat(staging, *id, DIRECTORY, Mode::empty())?;
+    check_private(&transaction)?;
     mkdirat(&transaction, "package", Mode::RWXU)?;
     let package = openat(&transaction, "package", DIRECTORY, Mode::empty())?;
     let mut sorted = directories.iter().collect::<Vec<_>>();
@@ -101,9 +107,7 @@ pub(super) fn materialize(
         let flags =
             OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::WRONLY | OFlags::CLOEXEC;
         let mut handle = std::fs::File::from(openat(parent, name, flags, Mode::RUSR | Mode::WUSR)?);
-        handle
-            .write_all(&bytes)
-            .map_err(|error| Failure::new("EIO", error.to_string()))?;
+        handle.write_all(&bytes)?;
         fchmod(&handle, permissions)?;
         fsync(handle)?;
     }

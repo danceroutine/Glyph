@@ -1,3 +1,4 @@
+import { outsideWorkspace } from '#src/shell/TrustedHostExecutable.js';
 import { SkillRepositoryGit } from './SkillRepositoryGit.ts';
 import { inventoryFiles } from './skillPackageInventory.ts';
 import { basename, join, resolve } from 'node:path';
@@ -22,7 +23,10 @@ export const skillPackageSourceSchema = z.discriminatedUnion('kind', [
 export type SkillPackageSource = z.infer<typeof skillPackageSourceSchema>;
 /** Reads selected packages without checking out repositories, following symlinks, or executing package code. */
 export class SkillPackageSourceReader {
-  constructor(private readonly binaryPath: string) {}
+  constructor(
+    private readonly binaryPath: string,
+    private readonly workspaceRoots: readonly string[] = [],
+  ) {}
   async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
     const source = skillPackageSourceSchema.parse(input);
     if (source.kind === 'local') {
@@ -77,9 +81,13 @@ export class SkillPackageSourceReader {
       throw new Error('Repository package directory must be relative.');
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/u.test(source.revision) || source.revision.includes('..'))
       throw new Error('Select a commit, branch or tag.');
-    const temporary = await mkdtemp(join(tmpdir(), 'glyph-skill-repository-'));
+    const temporary = await mkdtemp(join(outsideWorkspace(tmpdir(), this.workspaceRoots), 'glyph-skill-repository-'));
     const deadline = AbortSignal.timeout(60_000);
-    const transport = new SkillRepositoryGit(temporary, signal ? AbortSignal.any([signal, deadline]) : deadline);
+    const transport = new SkillRepositoryGit(
+      temporary,
+      signal ? AbortSignal.any([signal, deadline]) : deadline,
+      this.workspaceRoots,
+    );
     const git = async (...args: string[]) => (await transport.run(args)).toString('utf8');
     try {
       await git('init', '--bare', '--template=', 'source.git');
@@ -117,7 +125,7 @@ export class SkillPackageSourceReader {
       }
       return new SkillPackageDraft({
         name: basename(source.directory || source.url.replace(/\.git$/u, '')),
-        source: `${source.url}@${revision}${source.directory ? `:${source.directory}` : ''}`,
+        source: `Requested repository ${source.url}@${revision}${source.directory ? `:${source.directory}` : ''}`,
         files,
       });
     } finally {

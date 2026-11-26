@@ -31,7 +31,7 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
     const handle = await open(physicalRoot, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try {
       const stat = await handle.stat({ bigint: true });
-      return new NativeWorkspaceMutations(executable, physicalRoot, {
+      return new NativeWorkspaceMutations(await realpath(executable), physicalRoot, {
         device: String(stat.dev),
         inode: String(stat.ino),
       });
@@ -53,7 +53,11 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
     return this.run({
       operation: 'stage_package',
       relative,
-      files: [...files].map(([path, file]) => ({ path, mode: file.mode, content: Buffer.from(file.bytes).toString('base64') })),
+      files: [...files].map(([path, file]) => ({
+        path,
+        mode: file.mode,
+        content: Buffer.from(file.bytes).toString('base64'),
+      })),
       directories: [...directories].map(([path, mode]) => ({ path, mode })),
     });
   }
@@ -66,12 +70,13 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
   private async run(operation: Operation): Promise<void> {
     const request = JSON.stringify({ ...operation, root: this.root, rootIdentity: this.rootIdentity });
     const maxBytes = operation.operation === 'stage_package' ? 24 * 1024 * 1024 : 32 * 1024;
-    if (Buffer.byteLength(request) > maxBytes) throw new Error('Workspace mutation request exceeds ' + (maxBytes / 1024) + ' KiB.');
+    if (Buffer.byteLength(request) > maxBytes)
+      throw new Error('Workspace mutation request exceeds ' + maxBytes / 1024 + ' KiB.');
     const stdout = await new Promise<string>((resolve, reject) => {
       const child = execFile(
         this.executable,
         [],
-        { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 },
+        { env: {}, timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 },
         (error, output) => {
           if (error) reject(new Error('Workspace mutation helper failed.', { cause: error }));
           else resolve(output);

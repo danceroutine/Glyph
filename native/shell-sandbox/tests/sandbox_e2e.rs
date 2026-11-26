@@ -31,6 +31,8 @@ fn security_protected_installation_ancestor_denies_fixture_marker_creation() {
         .unwrap()
         .starts_with(&fixture.root));
     let allowed = fixture.workspace.join("allowed-control.txt");
+    #[cfg(target_os = "linux")]
+    fs::write(&allowed, "initial").unwrap();
     let result = fixture.run(
         "workspace-write",
         "printf 'I win' > \"$GLYPH_TEST_TARGET\"",
@@ -63,6 +65,15 @@ fn confines_fixture_writes_reads_network_and_symlink_traversal() {
     assert_success(&shell_probe, "shell startup");
 
     let allowed = fixture.workspace.join("allowed.txt");
+    #[cfg(target_os = "linux")]
+    {
+        fixture.assert_write_denied(
+            "workspace-write",
+            allowed.clone(),
+            "Linux workspace namespace is read-only",
+        );
+        fs::write(&allowed, "initial").unwrap();
+    }
     let result = fixture.run(
         "workspace-write",
         "printf 'I win' > \"$GLYPH_TEST_TARGET\"",
@@ -204,6 +215,18 @@ impl Fixture {
         environment: &[(&str, &Path)],
         protected: &[&Path],
     ) -> Output {
+        self.command(profile, script, environment, protected)
+            .output()
+            .expect("run native sandbox helper")
+    }
+
+    fn command(
+        &self,
+        profile: &str,
+        script: &str,
+        environment: &[(&str, &Path)],
+        protected: &[&Path],
+    ) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_glyph-shell-sandbox"));
         command
             .args(["--profile", profile, "--working-directory"])
@@ -231,7 +254,7 @@ impl Fixture {
         for (name, value) in environment {
             command.env(name, value);
         }
-        command.output().expect("run native sandbox helper")
+        command
     }
 
     fn assert_write_denied(&self, profile: &str, target: PathBuf, description: &str) {
@@ -359,6 +382,8 @@ fn security_admitted_package_is_readable_but_immutable_outside_the_workspace() {
         &run(false, "cat \"$GLYPH_RESOURCE\""),
         "unadmitted package read",
     );
+    #[cfg(target_os = "linux")]
+    fs::write(fixture.workspace.join("result.txt"), "initial").unwrap();
     let output = run(
         true,
         "cat \"$GLYPH_RESOURCE\"; printf 'I win' > \"$GLYPH_OUTPUT\"",
@@ -377,4 +402,121 @@ fn security_admitted_package_is_readable_but_immutable_outside_the_workspace() {
         "pinned package replacement",
     );
     assert_eq!(fs::read_to_string(script).unwrap(), "echo pinned");
+}
+
+#[test]
+#[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
+fn security_private_staging_and_project_package_paths_stay_reserved() {
+    let fixture = Fixture::new();
+    for namespace in [".glyph", ".CuRsOr"] {
+        let package = fixture
+            .workspace
+            .join("nested")
+            .join(namespace)
+            .join("sKiLLs/example");
+        fs::create_dir_all(&package).unwrap();
+        let file = package.join("SKILL.md");
+        fs::write(&file, "reviewed").unwrap();
+        assert_denied(
+            &fixture.run(
+                "workspace-write",
+                "printf altered > \"$FILE\"",
+                &[("FILE", &file)],
+            ),
+            "managed content",
+        );
+        assert_eq!(fs::read_to_string(file).unwrap(), "reviewed");
+    }
+    let staging = fixture.workspace.join("nested/.skill-staging");
+    fs::create_dir_all(&staging).unwrap();
+    let marker = staging.join("private");
+    fs::write(&marker, "private").unwrap();
+    for profile in ["read-only", "workspace-write"] {
+        assert_denied(
+            &fixture.run(profile, "cat \"$FILE\"", &[("FILE", &marker)]),
+            "private staging",
+        );
+    }
+    assert_denied(
+        &fixture.run(
+            "workspace-write",
+            "printf altered > \"$FILE\"",
+            &[("FILE", &marker)],
+        ),
+        "private staging write",
+    );
+    assert_eq!(fs::read_to_string(marker).unwrap(), "private");
+    for (name, op) in [
+        ("nested/.glyph/skills/future", "mkdir \"$DEST\""),
+        ("nested", ". /dev/null && mv \"$DEST\" \"$DEST-moved\""),
+    ] {
+        assert_denied(
+            &fixture.run(
+                "workspace-write",
+                op,
+                &[("DEST", &fixture.workspace.join(name))],
+            ),
+            "managed namespace or ancestor",
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
+fn security_running_shell_cannot_read_a_new_nested_private_transaction() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::process::Stdio;
+    let fixture = Fixture::new();
+    let future = fixture.workspace.join("nested/.skill-staging/transaction");
+    let mut command = fixture.command(
+        "workspace-write",
+        "echo ready; read line; cat \"$FILE\"",
+        &[("FILE", &future)],
+        &[],
+    );
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut ready = String::new();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    output.read_line(&mut ready).unwrap();
+    assert_eq!(ready.trim(), "ready");
+    fs::create_dir_all(future.parent().unwrap()).unwrap();
+    fs::write(&future, "private").unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"continue\n")
+        .unwrap();
+    let mut content = String::new();
+    output.read_to_string(&mut content).unwrap();
+    assert!(content.is_empty());
+    assert!(!child.wait().unwrap().success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
+fn admits_large_workspaces_without_per_file_arguments_or_open_descriptors() {
+    let fixture = Fixture::new();
+    let files = fixture.workspace.join("vendor");
+    fs::create_dir(&files).unwrap();
+    for index in 0..4096 {
+        fs::write(files.join(index.to_string()), b"existing").unwrap();
+    }
+    let target = files.join("4095");
+    let output = fixture.run(
+        "workspace-write",
+        "printf updated > \"$FILE\"",
+        &[("FILE", &target)],
+    );
+    assert_success(
+        &output,
+        "in-place update beyond the Bubblewrap argument limit",
+    );
+    assert_eq!(fs::read(target).unwrap(), b"updated");
 }

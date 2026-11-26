@@ -3,7 +3,9 @@ use std::fmt::{Display, Formatter};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+#[cfg(target_os = "macos")]
+use std::process::Command;
+use std::process::ExitStatus;
 
 use serde::{Deserialize, Serialize};
 
@@ -234,7 +236,12 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
     request.private_paths.sort();
     request.private_paths.dedup();
     for path in &request.read_only_paths {
-        if path.starts_with(&request.state_directory)
+        if request
+            .workspace_roots
+            .iter()
+            .any(|root| path.starts_with(root) || root.starts_with(path))
+            || private_component(path)
+            || path.starts_with(&request.state_directory)
             || request.state_directory.starts_with(path)
             || request
                 .private_paths
@@ -256,7 +263,13 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
         }
     }
     for root in &request.workspace_roots {
-        if is_unsafe_workspace_root(root, home_directory.as_deref()) {
+        if private_component(root)
+            || request
+                .private_paths
+                .iter()
+                .any(|private| root.starts_with(private))
+            || is_unsafe_workspace_root(root, home_directory.as_deref())
+        {
             return Err(SandboxError::InvalidPath(format!(
                 "workspace root is too broad to sandbox safely: {}",
                 root.display()
@@ -280,6 +293,11 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
     }
 
     Ok(request)
+}
+
+fn private_component(path: &Path) -> bool {
+    path.iter()
+        .any(|name| name.eq_ignore_ascii_case(".skill-staging"))
 }
 
 fn is_unsafe_workspace_root(root: &Path, home_directory: Option<&Path>) -> bool {
@@ -381,6 +399,7 @@ fn repository_metadata_paths(
     Ok(paths)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn workspace_sensitive_paths(request: &SandboxRequest) -> Result<Vec<PathBuf>, SandboxError> {
     let mut paths = Vec::new();
     for root in &request.workspace_roots {
@@ -555,18 +574,15 @@ pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
 #[cfg(target_os = "linux")]
 pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
     let home_directory = std::env::var_os("HOME").and_then(|path| fs::canonicalize(path).ok());
-    let arguments = linux::bubblewrap_arguments(request, home_directory.as_deref())?;
-    Command::new(linux::bubblewrap_executable()?)
+    let executable = linux::bubblewrap_executable()?;
+    let mut mounts = kernel_workspace::KernelWorkspace::open()?;
+    let arguments = linux::arguments(request, home_directory.as_deref(), &mut mounts)?;
+    Ok(std::process::Command::new(executable)
         .args(arguments)
         .args(&request.command)
         .current_dir(&request.working_directory)
         .env("TMPDIR", "/tmp")
-        .status()
-        .map_err(|error| {
-            SandboxError::Backend(format!(
-                "could not start the Linux sandbox backend `bwrap`; install Bubblewrap before running sandboxed commands: {error}"
-            ))
-        })
+        .status()?)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -617,6 +633,19 @@ pub mod macos {
         }
         policy.push_str(")\n");
         policy.push_str(&format!(
+            "(allow file-write* (literal \"/dev/null\") (literal \"/dev/tty\") (subpath {}))\n",
+            seatbelt_string(temporary_directory)
+        ));
+
+        if request.profile == SandboxProfile::WorkspaceWrite {
+            policy.push_str("(allow file-write*");
+            for root in &request.workspace_roots {
+                policy.push_str(&format!(" (subpath {})", seatbelt_string(root)));
+            }
+            policy.push_str(")\n");
+        }
+
+        policy.push_str(&format!(
             "(deny file-read* file-write* (subpath {}))\n",
             seatbelt_string(&request.state_directory)
         ));
@@ -639,19 +668,17 @@ pub mod macos {
                 seatbelt_string(&path)
             ));
         }
-        policy.push_str(&format!(
-            "(allow file-write* (literal \"/dev/null\") (literal \"/dev/tty\") (subpath {}))\n",
-            seatbelt_string(temporary_directory)
-        ));
-
-        if request.profile == SandboxProfile::WorkspaceWrite {
-            policy.push_str("(allow file-write*");
-            for root in &request.workspace_roots {
-                policy.push_str(&format!(" (subpath {})", seatbelt_string(root)));
-            }
-            policy.push_str(")\n");
+        policy.push_str(r#"(deny file-read* file-write* file-test-existence (regex #"/\.[sS][kK][iI][lL][lL]-[sS][tT][aA][gG][iI][nN][gG](/|$)"))
+(deny file-write* (regex #"/\.([gG][lL][yY][pP][hH]|[cC][uU][rR][sS][oO][rR])(/[sS][kK][iI][lL][lL][sS](/|$)|$)"))
+"#);
+        // An independently opened workspace can install a skill below any previously ordinary directory.
+        // Seatbelt evaluates rename at the directory being moved, so guard directory identities directly.
+        for root in &request.workspace_roots {
+            policy.push_str(&format!(
+                "(deny file-write-unlink (require-all (require-any (vnode-type DIRECTORY) (vnode-type SYMLINK)) (subpath {})))\n",
+                seatbelt_string(root)
+            ));
         }
-
         policy.push_str("(deny file-write* (regex #\"/\\.git(?:/|$)\"))\n");
 
         for root in &request.workspace_roots {
@@ -738,9 +765,17 @@ pub mod macos {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
+mod kernel_workspace;
+#[cfg(any(target_os = "linux", all(test, unix)))]
+mod projection;
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub mod linux {
-    use super::{SandboxError, SandboxProfile, SandboxRequest};
+    use super::{
+        projection::{Mounts, WorkspaceView},
+        SandboxError, SandboxRequest,
+    };
     use std::ffi::OsString;
     use std::path::Path;
 
@@ -787,9 +822,22 @@ pub mod linux {
         &BUBBLEWRAP_EXECUTABLES
     }
 
+    #[cfg(test)]
     pub fn bubblewrap_arguments(
         request: &SandboxRequest,
         home_directory: Option<&Path>,
+    ) -> Result<Vec<OsString>, SandboxError> {
+        arguments(
+            request,
+            home_directory,
+            super::projection::MountTrace::default(),
+        )
+    }
+
+    pub(super) fn arguments(
+        request: &SandboxRequest,
+        home_directory: Option<&Path>,
+        mounts: impl Mounts,
     ) -> Result<Vec<OsString>, SandboxError> {
         let mut arguments = strings(&[
             "--die-with-parent",
@@ -823,50 +871,45 @@ pub mod linux {
 
         for path in super::home_toolchain_paths(home_directory) {
             if path.exists() {
-                push_path_mount(&mut arguments, "--ro-bind", &path, &path);
+                let physical = std::fs::canonicalize(&path)?;
+                if request
+                    .workspace_roots
+                    .iter()
+                    .chain(&request.private_paths)
+                    .any(|root| physical.starts_with(root) || root.starts_with(&physical))
+                {
+                    continue;
+                }
+                push_path_mount(&mut arguments, "--ro-bind", &physical, &path);
             }
         }
 
+        let mut view = WorkspaceView::new(mounts);
+        let mut protected = super::protected_paths(request)?;
         for root in &request.workspace_roots {
-            let option = if request.profile == SandboxProfile::WorkspaceWrite {
-                "--bind"
-            } else {
-                "--ro-bind"
-            };
-            push_path_mount(&mut arguments, option, root, root);
+            protected.extend(super::repository_metadata_paths(
+                root,
+                &request.workspace_policy,
+            )?);
+        }
+        let mut private = super::home_sensitive_paths(home_directory);
+        private.extend(request.private_paths.iter().cloned());
+        private.push(request.state_directory.clone());
+        for root in &request.workspace_roots {
+            arguments.extend(view.workspace(root, request, &protected, &private)?);
         }
 
         for resource in &request.read_only_paths {
             push_path_mount(&mut arguments, "--ro-bind", resource, resource);
         }
-
-        for root in &request.workspace_roots {
-            for metadata in super::repository_metadata_paths(root, &request.workspace_policy)? {
-                if request
-                    .workspace_roots
-                    .iter()
-                    .any(|workspace_root| metadata.starts_with(workspace_root))
-                {
-                    push_path_mount(&mut arguments, "--ro-bind", &metadata, &metadata);
-                }
-            }
-        }
-        for path in super::protected_paths(request)? {
-            for root in &request.workspace_roots {
-                // Protect only the exposed intersection. Binding an ancestor
-                // installation itself would grant access to unrelated siblings.
-                if path.starts_with(root) {
-                    push_path_mount(&mut arguments, "--ro-bind", &path, &path);
-                } else if root.starts_with(&path) {
-                    push_path_mount(&mut arguments, "--ro-bind", root, root);
-                }
-            }
-        }
-        for path in super::workspace_sensitive_paths(request)? {
-            push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), &path);
-        }
-
         for path in &request.private_paths {
+            if request
+                .workspace_roots
+                .iter()
+                .any(|root| path.starts_with(root))
+            {
+                continue;
+            }
             if path.is_dir() {
                 arguments.push("--tmpfs".into());
                 arguments.push(path.as_os_str().to_owned());
@@ -882,21 +925,6 @@ pub mod linux {
             // Conceal host state without allowing writes to its masked pathname.
             arguments.push("--remount-ro".into());
             arguments.push(request.state_directory.as_os_str().to_owned());
-        }
-        for path in super::home_sensitive_paths(home_directory) {
-            let exposed = request
-                .workspace_roots
-                .iter()
-                .any(|root| path.starts_with(root));
-            if !exposed {
-                continue;
-            }
-            if path.is_dir() {
-                arguments.push("--tmpfs".into());
-                arguments.push(path.as_os_str().to_owned());
-            } else if path.is_file() {
-                push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), &path);
-            }
         }
         arguments.push("--chdir".into());
         arguments.push(request.working_directory.as_os_str().to_owned());
