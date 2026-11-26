@@ -127,7 +127,7 @@ export class GlyphViewPane extends ViewPane {
       send: (text, attachments, options) => this.glyphService.send(text, attachments, options),
       branchChat: (chatId, turnId) => service.branchChat!(chatId, turnId),
       restoreCheckpoint: (chatId, turnId) => service.restoreCheckpoint!(chatId, turnId),
-      openLink: href => service.openLink!(href),
+      openLink: href => service.openLink(href),
       copyText: text => service.copyText(text),
       viewPlan: (chatId, plan) => service.viewPlan!(chatId, plan),
       selectMode: mode => service.selectMode!(mode),
