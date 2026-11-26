@@ -1,4 +1,4 @@
-import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
+import type { TurnContextEnvelope } from '#src/context/turns/TurnContextEnvelope.js';
 import { mergeTurnContext, type TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import { AgentMode, type AgentModeID } from '#src/chat/AgentMode.js';
@@ -123,7 +123,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     const setMode = (next: AgentModeID): void => {
       mode = next;
     };
-    let boundaryInstructions: AgentInstructionContext | undefined;
+    let boundaryInstructions: TurnContextEnvelope | undefined;
     const context = (round: number): AgentTurnContext => ({
       signal,
       turnId,
@@ -284,14 +284,14 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     turnId: string,
     request: ChatRequest,
     signal: AbortSignal,
-  ): Promise<AgentInstructionContext | undefined> {
+  ): Promise<TurnContextEnvelope | undefined> {
     const contexts = [
       this.turnContexts?.discloseAttachments(
         turnId,
         request.attachments.map(attachment => attachment.path),
       ),
       this.turnContexts?.activateManualRules(turnId, request.manualRuleIds ?? []),
-    ].filter((value): value is AgentInstructionContext => value !== undefined);
+    ].filter((value): value is TurnContextEnvelope => value !== undefined);
     for (const id of new Set(request.skillIds ?? [])) {
       const context = await this.turnContexts?.activateSource(
         turnId,

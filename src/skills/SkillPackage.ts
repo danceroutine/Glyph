@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { packageRevision } from './skillPackageRevision.ts';
 import { posix } from 'node:path';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
@@ -22,18 +22,16 @@ export class SkillPackage {
   ) {
     this.descriptor = structuredClone(descriptor);
     this.files = new Map([...files].map(([path, file]) => [path, { ...file, bytes: Uint8Array.from(file.bytes) }]));
-    this.revision = createHash('sha256')
-      .update(
-        JSON.stringify(
-          [...this.files]
-            .toSorted(([left], [right]) => left.localeCompare(right))
-            .map(([path, file]) => [path, file.revision, file.mode]),
-        ),
-      )
-      .digest('hex');
+    this.revision = packageRevision(this.files);
   }
 
   readResource(path: string): SkillResourceUse {
+    const resource = this.inspectResource(path);
+    this.used.set(resource.path, resource);
+    return resource;
+  }
+
+  inspectResource(path: string): SkillResourceUse {
     if (!path || path.includes('\\') || path.includes('\0') || posix.isAbsolute(path) || path.split('/').includes('..'))
       throw new Error('Skill resource must remain inside its package.');
     const normalized = posix.normalize(path);
@@ -49,9 +47,7 @@ export class SkillPackage {
     }
     if (encoding === 'base64') content = Buffer.from(file.bytes).toString('base64');
     if (Buffer.byteLength(content) > 64 * 1024) throw new Error('Skill resource exceeds the 64 KiB disclosure budget.');
-    const resource = { path: normalized, revision: file.revision, content, encoding };
-    this.used.set(normalized, resource);
-    return resource;
+    return { path: normalized, revision: file.revision, content, encoding };
   }
 
   resources(): readonly SkillResourceUse[] {
@@ -89,14 +85,14 @@ export async function captureSkillPackage(
       ? {
           bytes: Buffer.from(`${snapshot.byteOrderMark ? '\uFEFF' : ''}${snapshot.text}`, 'utf8'),
           revision: snapshot.revision,
-          mode: snapshot.mode,
+          mode: raw?.mode ?? snapshot.mode,
         }
       : raw!;
     bytes += captured.bytes.byteLength;
     if (bytes > 8 * 1024 * 1024) throw new Error('Skill package exceeds 8 MiB.');
     files.set(relative, captured);
   }
-  const entry = files.get('SKILL.md');
+  const entry = files.get(posix.relative(descriptor.directory, descriptor.path));
   if (!entry) throw new Error('Skill package is missing SKILL.md.');
   if (descriptor.revision !== entry.revision) throw new Error('The skill changed. Refresh and activate it again.');
   const manifest = parseSkillManifest(new TextDecoder('utf8', { fatal: true }).decode(entry.bytes), descriptor.name);

@@ -60,6 +60,30 @@ describe('Native skills discovery and model disclosure', () => {
     expect(fixture.list).not.toHaveBeenCalled();
   });
 
+  it('advertises the case-insensitive native scope and withholds an ignored manifest beside an indexed resource', async () => {
+    const fixture = await nativeSkillFixture(false);
+    await mkdir(join(fixture.root, '.git'));
+    await fixture.write('.gitignore', 'ignored/.glyph/skills/example/SKILL.md\n');
+    await fixture.write('Src/.GLYPH/Skills/example/sKiLl.Md', entry);
+    await fixture.write('ignored/.glyph/skills/example/SKILL.md', entry);
+    await fixture.write('ignored/.glyph/skills/example/notes.md', 'Visible resource');
+    const catalog = new SkillCatalog([fixture.provider('.glyph/skills', 'glyph')]);
+    const session = await new SkillContextContributor(catalog).beginTurn({
+      turnId: 'mixed',
+      attachmentPaths: ['src/task.ts', 'ignored/file.ts'],
+    });
+    expect(catalog.skills.find(source => source.scope === 'ignored')).toMatchObject({
+      status: 'error',
+      uri: '',
+      enabled: false,
+    });
+    const candidates = session.initialEnvelope().skillCandidates;
+    expect(candidates).toHaveLength(1);
+    expect(candidates![0]?.scope).toBe('Src');
+    const activation = await session.activateSource(candidates![0]!.id, 'model', 'Task');
+    expect(activation?.skills?.[0]?.body).toContain('PINNED BODY');
+  });
+
   it('sends metadata, activated instructions, and requested resources progressively through the production provider', async () => {
     const fixture = await nativeSkillFixture();
     await fixture.write('.glyph/skills/example/SKILL.md', entry);
@@ -139,11 +163,12 @@ describe('Native skills discovery and model disclosure', () => {
   });
 });
 
-async function nativeSkillFixture() {
+async function nativeSkillFixture(caseSensitive?: boolean) {
   const root = await mkdtemp(join(tmpdir(), 'glyph-native-skills-'));
-  const store = new FileSystemWorkspaceTextStore(root);
+  const store = new FileSystemWorkspaceTextStore(root, caseSensitive !== undefined ? { caseSensitive } : {});
   const index = new RustWorkspacePathIndex({
     root,
+    caseSensitive: store.caseSensitive,
     binaryPath: resolve(
       'target/release',
       process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',

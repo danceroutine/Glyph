@@ -117,6 +117,7 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
           return;
         case WorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
           this.emit({ type: HostEventType.INSTRUCTION_SOURCES_CHANGED, sources: this.snapshot().instructionSources });
+          this.emit({ type: HostEventType.SKILLS_CHANGED, skills: this.snapshot().skills ?? [] });
           return;
         case WorkbenchCommandType.REQUEST_SNAPSHOT:
           this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
@@ -160,6 +161,7 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => (
     readonly setSkillSources = vi.fn();
     readonly setInstructionRefresh = vi.fn();
     readonly notifyInstructionsChanged = vi.fn();
+    readonly openAttachment = vi.fn();
     readonly ide = { terminal: vi.fn() };
     readonly selectIdeContext = vi.fn(async () => [] as unknown[]);
     readonly attachSelection = vi.fn(async () => {});
@@ -610,6 +612,40 @@ describe(NativeGlyphWorkbenchService, () => {
       });
     });
 
+    it('resolves an old skill selection against the skill catalog and restores a removable badge', async () => {
+      const { service, host } = await workbench({
+        extra: {
+          skills: [
+            {
+              id: 'same',
+              name: 'Review',
+              description: 'Task',
+              directory: '.glyph/skills/review',
+              path: '.glyph/skills/review/SKILL.md',
+              origin: { id: 'project', scope: 'project', label: 'Project skill', compatibility: 'glyph' },
+              scope: '.',
+              enabled: true,
+              status: 'active',
+              allowedTools: [],
+              uri: 'file:///workspace/.glyph/skills/review/SKILL.md',
+              revision: 's1',
+            },
+          ],
+        },
+      });
+      const composer = service.composer;
+      emit(host, {
+        type: GlyphHostEventType.CHAT_RESTORED,
+        chatId: 'alpha',
+        runs: [],
+        draft: { text: 'Use /Review', attachments: [], options: { skillIds: ['same'] } },
+      });
+      expect(composer.snapshot.document.parts.at(-1)).toMatchObject({
+        type: 'attachment',
+        attachment: { skillId: 'same', path: 'Review', text: '', contentRevision: 's1', uri: 'glyph-skill:same' },
+      });
+    });
+
     it('restores drafts without options and ignores drafts of chats without a composer', async () => {
       const { service, host } = await workbench();
       const composer = service.composer;
@@ -928,15 +964,14 @@ describe(NativeGlyphWorkbenchService, () => {
     });
   });
 
-  it('refreshes the catalog through a shared snapshot request and permits later refreshes', async () => {
+  it('refreshes the catalog through a shared instruction refresh and permits later refreshes', async () => {
     const { service, host, context } = await workbench();
     host.request.mockClear();
     await Promise.all([service.refreshSkills(), service.refreshSkills()]);
     expect(host.request).toHaveBeenCalledExactlyOnceWith({
-      type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
-      afterSequence: 0,
+      type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS,
     });
-    const [, refresh] = context.setSkillSources.mock.calls[0];
+    const [refresh] = context.setInstructionRefresh.mock.calls[0];
     await refresh();
     expect(host.request).toHaveBeenCalledTimes(2);
   });
@@ -944,7 +979,7 @@ describe(NativeGlyphWorkbenchService, () => {
   it('reports a failed catalog refresh and allows a later retry', async () => {
     const { service, host } = await workbench();
     host.request.mockRejectedValueOnce(new Error('Catalog unavailable'));
-    await service.refreshSkills();
+    await expect(service.refreshSkills()).rejects.toThrow('Catalog unavailable');
     expect(service.state.transcript).toEqual(
       expect.arrayContaining([expect.objectContaining({ text: 'Catalog unavailable' })]),
     );
@@ -964,27 +999,10 @@ describe(NativeGlyphWorkbenchService, () => {
   });
 
   describe(NativeGlyphWorkbenchService.prototype.openLink, () => {
-    it('opens skill links in a pinned native editor and reports missing packages', async () => {
-      const skill = {
-        id: 'skill',
-        origin: { id: 'project', label: 'Project', scope: 'project' as const, compatibility: 'glyph' },
-        path: '.glyph/skills/example/SKILL.md',
-        directory: '.glyph/skills/example',
-        scope: '.',
-        name: 'example',
-        description: 'Examples',
-        enabled: true,
-        status: 'active' as const,
-        allowedTools: [],
-        uri: 'file:///project/.glyph/skills/example/SKILL.md',
-      };
-      const test = await workbench({ extra: { skills: [skill] } });
-      await test.service.openLink('glyph-skill:skill');
-      expect(test.editors.openEditor).toHaveBeenCalledWith({
-        resource: URI.parse(skill.uri),
-        options: { pinned: true },
-      });
-      await expect(test.service.openLink('glyph-skill:missing')).rejects.toThrow('skill is unavailable');
+    it('resolves skill links through the same checked open as composer references', async () => {
+      const { service, context } = await workbench();
+      await service.openLink('glyph-skill:skill');
+      expect(context.openAttachment).toHaveBeenCalledWith({ uri: 'glyph-skill:skill', path: '' });
     });
 
     it('opens instruction sources by direct URI, single-root path, and multi-root path', async () => {

@@ -298,7 +298,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             composer?.restoreDraft(
               restoreGlyphPrompt(
                 event.draft,
-                (_kind, id) => {
+                (kind, id) => {
+                  if (kind === 'skill') return this.state.skills?.find(skill => skill.id === id);
                   const source = this.state.instructionSources?.find(rule => rule.id === id);
                   return source
                     ? {
@@ -435,10 +436,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
 
   async openLink(href: string): Promise<void> {
     if (href.startsWith('glyph-skill:')) {
-      const id = decodeURIComponent(href.slice('glyph-skill:'.length));
-      const skill = this.state.skills?.find(source => source.id === id);
-      if (!skill) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
-      await this.editors.openEditor({ resource: URI.parse(skill.uri), options: { pinned: true } });
+      await this.context.openAttachment({ uri: href, path: '' });
       return;
     }
     if (href.startsWith('glyph-instruction:')) {

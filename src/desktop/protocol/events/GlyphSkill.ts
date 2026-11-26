@@ -13,7 +13,7 @@ export interface GlyphSkill {
   readonly name: string;
   readonly description: string;
   readonly enabled: boolean;
-  readonly status: 'active' | 'error';
+  readonly status: 'active' | 'error' | 'discovery-error';
   readonly revision?: string;
   readonly compatibility?: string;
   readonly allowedTools: readonly string[];
