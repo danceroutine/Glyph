@@ -1,4 +1,8 @@
-import type { TurnContextEnvelope } from '#src/context/turns/TurnContextEnvelope.js';
+import {
+  prepareModelContext,
+  type ModelTurnContext,
+  type TurnContextEnvelope,
+} from '#src/context/turns/TurnContextEnvelope.js';
 import { type TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import { AgentMode, type AgentModeID } from '#src/chat/AgentMode.js';
@@ -124,7 +128,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     const setMode = (next: AgentModeID): void => {
       mode = next;
     };
-    let boundaryInstructions: TurnContextEnvelope | undefined;
+    let boundaryInstructions: ModelTurnContext | undefined;
     const context = (round: number): AgentTurnContext => ({
       signal,
       turnId,
@@ -170,7 +174,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         signal,
       );
       admittedContext = turnContext !== undefined;
-      boundaryInstructions = turnContext?.initialEnvelope();
+      boundaryInstructions = prepareModelContext(turnContext?.initialEnvelope());
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
       boundaryInstructions = undefined;
       let totalUsage: Usage | null = null;
@@ -178,7 +182,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       let round = 0;
       const applySteering = async (steeringRequest: ChatRequest): Promise<boolean> => {
         try {
-          boundaryInstructions = await this.steeringInstructions(turnId, steeringRequest, signal);
+          boundaryInstructions = prepareModelContext(await this.steeringInstructions(turnId, steeringRequest, signal));
         } catch (error) {
           if (signal.aborted) throw signal.reason;
           const failure = error instanceof Error ? error : new Error('Selected context is unavailable.');

@@ -41,6 +41,7 @@ describe(SkillContextContributor, () => {
         turnId: 'turn',
       }),
     ) as { instructionContext: AgentInstructionContext };
+    expect(output.instructionContext).toHaveProperty('policy', expect.stringContaining('host and user policy'));
     expect(output.instructionContext.skills?.[0]?.body).toBe('SELECTED BODY');
     expect(JSON.stringify(output)).not.toContain('REFERENCE BODY');
     expect(await coordinator.activateSource('turn', 'skills', descriptor.id, 'model', 'Again')).toBeUndefined();
@@ -49,6 +50,7 @@ describe(SkillContextContributor, () => {
         turnId: 'turn',
       }),
     ) as { instructionContext: { skillResources: readonly SkillResourceUse[] } };
+    expect(resource.instructionContext).toHaveProperty('policy', expect.stringContaining('host and user policy'));
     expect(resource.instructionContext.skillResources[0]).toMatchObject({
       content: 'REFERENCE BODY',
       encoding: 'utf8',

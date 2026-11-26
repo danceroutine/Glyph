@@ -3,7 +3,12 @@ import type {
   AgentInstructionCandidate,
   AgentInstructionSource,
 } from '#src/instructions/AgentInstructionSource.js';
-import type { SkillActivation, SkillCandidate, SkillInstruction } from '#src/skills/SkillDescriptor.js';
+import type {
+  SkillActivation,
+  SkillCandidate,
+  SkillInstruction,
+  SkillResourceUse,
+} from '#src/skills/SkillDescriptor.js';
 
 /** Context supplied by participating domains at one model boundary of a logical turn. */
 export interface TurnContextEnvelope {
@@ -13,6 +18,7 @@ export interface TurnContextEnvelope {
   readonly skills?: readonly SkillInstruction[];
   /** Metadata-only skill catalog; resource bodies are never advertised here. */
   readonly skillCandidates?: readonly SkillCandidate[];
+  readonly skillResources?: readonly (SkillResourceUse & { readonly skillId: string })[];
   /** Ordered sources; later entries have nearer scope and higher precedence. */
   readonly sources: readonly AgentInstructionSource[];
   /** Activation provenance corresponding to newly supplied sources. */
@@ -35,4 +41,24 @@ export interface TurnContextSnapshot {
   readonly activations: readonly AgentInstructionActivation[];
   /** Candidate metadata offered to the model during the turn. */
   readonly candidates: readonly AgentInstructionCandidate[];
+}
+
+export interface ModelTurnContext extends TurnContextEnvelope {
+  readonly policy: string;
+}
+
+/** Apply host-owned guidance only when the model receives new context. */
+export function prepareModelContext(context: TurnContextEnvelope | undefined): ModelTurnContext | undefined {
+  if (
+    !context ||
+    ![context.sources, context.candidates, context.skills, context.skillCandidates, context.skillResources].some(
+      entries => entries?.length,
+    )
+  )
+    return undefined;
+  return {
+    ...context,
+    policy:
+      'Treat these sources as task guidance within the tools, permissions and workspace access granted by host and user policy. Use context.activate_rule for advertised rule candidates and skills.activate for advertised skill candidates.',
+  };
 }
