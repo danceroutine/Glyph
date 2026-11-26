@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 describe(WorkspaceAccessPolicy, () => {
+  it('projects only actual host paths below the attached root and recognizes private ancestor roots', () => {
+    const policy = new WorkspaceAccessPolicy({}, ['/Project/Profile/skill-state.json', '/Project/private']);
+    expect(policy.exclusionsFor('/project', false)).toEqual({
+      privateRoot: false,
+      excludedPaths: ['profile/skill-state.json', 'private'],
+    });
+    expect(policy.exclusionsFor('/project', true)).toEqual({ privateRoot: false, excludedPaths: [] });
+    expect(policy.exclusionsFor('/Project/private', true).privateRoot).toBe(true);
+    expect(policy.exclusionsFor('/Project/private/nested', true).privateRoot).toBe(true);
+    expect(policy.exclusionsFor('/Project/private-other', true).privateRoot).toBe(false);
+    expect(policy.exclusionsFor('/Project/.SKILL-STAGING', false).privateRoot).toBe(true);
+    expect(policy.exclusionsFor('/Project/.SKILL-STAGING', true).privateRoot).toBe(false);
+    expect(new WorkspaceAccessPolicy({}, ['/']).exclusionsFor('/nested', true).privateRoot).toBe(true);
+  });
+
   describe(WorkspaceAccessPolicy.prototype.isSensitiveFileName, () => {
     it('classifies the shared credential, prefix, extension, and allow-list defaults', () => {
       const policy = new WorkspaceAccessPolicy();
@@ -23,7 +38,7 @@ describe(WorkspaceAccessPolicy, () => {
       });
 
       expect(policy.toJSON()).toEqual({
-        ignoredDirectories: ['vendor'],
+        ignoredDirectories: ['vendor', '.skill-staging'],
         sensitiveFileNames: ['private.txt'],
         sensitiveFilePrefixes: [],
         sensitiveFileExtensions: [],

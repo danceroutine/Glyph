@@ -171,6 +171,7 @@ fn params(root: &Path) -> InitializeParams {
         sensitive_file_extensions: default_sensitive_file_extensions(),
         allowed_file_names: default_allowed_file_names(),
         excluded_paths: Vec::new(),
+        exclude_root: false,
         respect_git_ignore: true,
         max_files: DEFAULT_MAX_FILES,
         case_sensitive: default_case_sensitive(),
@@ -198,6 +199,24 @@ fn scan_excludes_sensitive_names_using_filesystem_case_policy() {
     assert_eq!(result.paths, vec![".ENV.EXAMPLE", "public.txt"]);
     assert!(policy.excludes(".GIT/config"));
     assert!(policy.excludes("folder/private.PEM"));
+}
+
+#[test]
+fn private_root_does_not_scan_watch_or_admit_paths() {
+    let directory = tempdir().unwrap();
+    write(directory.path().join("record.json"), "private").unwrap();
+    let mut options = params(directory.path());
+    options.exclude_root = true;
+    let policy = IndexPolicy::from(&options);
+    assert!(policy.excludes("record.json"));
+    let mut service = ContextIndexService::new();
+    assert_eq!(service.initialize(options).unwrap().file_count, 0);
+    assert!(service.monitor.is_none());
+    assert_eq!(service.refresh().unwrap().file_count, 0);
+    assert!(service
+        .filter_paths(vec!["record.json".into()])
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

@@ -36,6 +36,10 @@ describe('glyph command line', () => {
   });
 
   it('runs a folder project with runtime paths excluded from the workspace', async () => {
+    vi.stubEnv('GLYPH_USER_DIRECTORY', '/profiles/current');
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const root = repositoryRoot;
     const stateDirectory = join(root, '.glyph', 'state');
     const traceFile = '/var/log/glyph/trace.log';
@@ -51,6 +55,11 @@ describe('glyph command line', () => {
     const [workspace] = cli.instances('FileSystemWorkspaceTextStore');
     const [accessPolicy] = cli.instances('WorkspaceAccessPolicy');
     expect(workspace?.args).toEqual([root, { excludedPaths, accessPolicy }]);
+    expect(accessPolicy?.args).toEqual([{}, ['/profiles/current/skill-state.json']]);
+    const mutationPolicy = cli.instances('ProjectToolRuntime')[0]?.args[5] as {
+      getDenial(path: string): string | undefined;
+    };
+    expect(mutationPolicy.getDenial('/profiles/current/skills/example/SKILL.md')).toContain('skills.propose_change');
     const cacheName = createHash('sha256').update(`${context.id}\0Repository\0${root}`).digest('hex');
     const [pathIndex] = cli.instances('RustWorkspacePathIndex');
     expect(pathIndex?.args).toEqual([
@@ -178,6 +187,10 @@ describe('glyph command line', () => {
   });
 
   it('accepts a workspace file written as a single argument', async () => {
+    vi.stubEnv('GLYPH_USER_DIRECTORY', undefined);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const cli = prepareCli({ argv: ['--workspace=team.code-workspace'] });
 
     await cli.start();
@@ -429,7 +442,10 @@ function prepareCli({
   }));
   mock('#src/editing/configuration/getEditingReadBudget.js', () => ({ getEditingReadBudget: () => 1024 }));
   const assertPathIsolation = vi.fn();
-  mock('#src/shell/ShellRuntimePathPolicy.js', () => ({ assertShellRuntimePathIsolation: assertPathIsolation }));
+  mock('#src/shell/ShellRuntimePathPolicy.js', () => ({
+    assertShellRuntimePathIsolation: assertPathIsolation,
+    resolveAvailableIdentity: resolve,
+  }));
   const resolveProject = vi.fn(async (_options: unknown) => context);
   mock('#src/project/context/ProjectContextResolver.js', () => ({
     ProjectContextResolver: { resolve: resolveProject },

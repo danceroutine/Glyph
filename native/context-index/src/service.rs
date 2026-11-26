@@ -49,6 +49,8 @@ pub(crate) struct InitializeParams {
     pub(crate) allowed_file_names: Vec<String>,
     #[serde(default)]
     pub(crate) excluded_paths: Vec<String>,
+    #[serde(default)]
+    pub(crate) exclude_root: bool,
     #[serde(default = "default_true")]
     pub(crate) respect_git_ignore: bool,
     #[serde(default = "default_max_files")]
@@ -68,6 +70,7 @@ struct IndexPolicy {
     sensitive_file_extensions: Vec<String>,
     allowed_file_names: Vec<String>,
     excluded_paths: Vec<String>,
+    exclude_root: bool,
     respect_git_ignore: bool,
     max_files: u32,
     case_sensitive: bool,
@@ -96,6 +99,7 @@ impl From<&InitializeParams> for IndexPolicy {
             sensitive_file_extensions: normalize(&params.sensitive_file_extensions),
             allowed_file_names: normalize(&params.allowed_file_names),
             excluded_paths: normalize(&params.excluded_paths),
+            exclude_root: params.exclude_root,
             respect_git_ignore: params.respect_git_ignore,
             max_files: params.max_files,
             case_sensitive: params.case_sensitive,
@@ -137,6 +141,9 @@ impl IndexPolicy {
     }
 
     fn excludes(&self, relative_path: &str) -> bool {
+        if self.exclude_root {
+            return true;
+        }
         let folded;
         let relative_path = if self.case_sensitive {
             relative_path
@@ -393,7 +400,11 @@ impl ContextIndexService {
             cache::policy_fingerprint(&policy).map_err(ServiceError::initialization)?;
         // Install the watcher before reading the cache or walking the tree. Events
         // that race with initial indexing are buffered and handled by the monitor.
-        let watcher = start_watcher(&root);
+        let watcher = if policy.exclude_root {
+            None
+        } else {
+            start_watcher(&root)
+        };
 
         let cached = params.cache_path.as_deref().and_then(|path| {
             match cache::load(path, &root_text, &policy_hash, policy.max_files as usize) {
@@ -451,25 +462,26 @@ impl ContextIndexService {
             && watcher
                 .as_ref()
                 .is_none_or(|watcher| watcher.started_at.elapsed() < WATCH_BACKEND_WARMUP);
-        let monitor = spawn_monitor(
-            MonitorState {
-                root,
-                root_text: root_text.clone(),
-                policy,
-                policy_hash,
-                cache_path: params.cache_path,
-                index: shared,
-                known_paths,
-                truncated: truncated_state,
-                stop: Arc::clone(&self.stop),
-                reconcile_immediately: from_cache,
-                reconcile_after_startup_delay,
-            },
-            watcher,
-            workers,
-        )?;
+        if !policy.exclude_root {
+            self.monitor = Some(spawn_monitor(
+                MonitorState {
+                    root,
+                    root_text: root_text.clone(),
+                    policy,
+                    policy_hash,
+                    cache_path: params.cache_path,
+                    index: shared,
+                    known_paths,
+                    truncated: truncated_state,
+                    stop: Arc::clone(&self.stop),
+                    reconcile_immediately: from_cache,
+                    reconcile_after_startup_delay,
+                },
+                watcher,
+                workers,
+            )?);
+        }
         self.initialized = Some(initialized);
-        self.monitor = Some(monitor);
 
         Ok(IndexStatus {
             root: root_text,
@@ -968,9 +980,16 @@ fn scan_paths(
     cache_path: Option<&Path>,
     stop: &AtomicBool,
 ) -> Result<ScanResult, ServiceError> {
+    if policy.exclude_root {
+        return Ok(ScanResult {
+            paths: Vec::new(),
+            truncated: false,
+        });
+    }
     let ignored: HashSet<_> = policy.ignored_directories.iter().cloned().collect();
     let excluded_paths = policy.excluded_paths.clone();
     let filter_root = root.to_path_buf();
+    let case_sensitive = policy.case_sensitive;
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(false)
@@ -985,17 +1004,24 @@ fn scan_paths(
             if !is_directory {
                 return true;
             }
-            if entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| ignored.contains(name))
-            {
+            if entry.file_name().to_str().is_some_and(|name| {
+                if case_sensitive {
+                    ignored.contains(name)
+                } else {
+                    ignored.contains(&name.to_lowercase())
+                }
+            }) {
                 return false;
             }
             normalize_relative_path(&filter_root, entry.path()).is_none_or(|relative| {
+                let normalized = if case_sensitive {
+                    relative
+                } else {
+                    relative.to_lowercase()
+                };
                 !excluded_paths
                     .iter()
-                    .any(|excluded| path_is_excluded(&relative, excluded))
+                    .any(|excluded| path_is_excluded(&normalized, excluded))
             })
         });
 
@@ -1090,6 +1116,7 @@ fn default_ignored_directories() -> Vec<String> {
     [
         ".git",
         ".next",
+        ".skill-staging",
         "coverage",
         "dist",
         "node_modules",

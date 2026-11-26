@@ -1,3 +1,4 @@
+import type { ProjectMutationPolicy } from '#src/editing/proposals/ProjectMutationPolicy.js';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
@@ -25,6 +26,7 @@ export class ProjectToolRuntime implements ToolSource {
     private readonly reviews: ProposalReviewManager,
     logger: Logger = new NullLogger(),
     private readonly turnContexts?: Pick<TurnContextCoordinator, 'disclosePaths'>,
+    private readonly mutationPolicy?: ProjectMutationPolicy,
   ) {
     this.logger = logger.forNamespace('project.tool');
   }
@@ -98,12 +100,13 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
         case ProjectToolName.SEARCH_CONTENTS:
           return await this.access.execute(name, input, signal, context);
         case ProjectToolName.PROPOSE_PATCH:
-          proposal = await this.proposals.proposePatch(input, signal);
+          proposal = await this.proposals.proposePatch(input, signal, this.mutationPolicy);
           break;
         case ProjectToolName.PROPOSE_EDITS:
           proposal = await this.proposals.proposeStructured(
             EditProposalService.structuredSchema.parse(JSON.parse(input)),
             signal,
+            this.mutationPolicy,
           );
           break;
         default:

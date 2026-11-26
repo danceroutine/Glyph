@@ -28,7 +28,8 @@ export async function inventoryFiles(root: string, signal?: AbortSignal): Promis
 }
 
 export async function readPackageFiles(root: string, paths: readonly string[], signal?: AbortSignal) {
-  const store = new FileSystemWorkspaceTextStore(root);
+  // The transaction owner verifies published trees and private rollback copies through the same file checks.
+  const store = new FileSystemWorkspaceTextStore(root, { allowPrivateRoot: true });
   const files = new Map<string, Awaited<ReturnType<typeof store.readBytes>>>();
   let bytes = 0;
   for (const path of paths) {

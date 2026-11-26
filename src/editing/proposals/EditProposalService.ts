@@ -1,3 +1,4 @@
+import type { ProjectMutationPolicy } from './ProjectMutationPolicy.ts';
 import type { AgentMode } from '#src/chat/AgentMode.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -103,7 +104,7 @@ export class EditProposalService {
     }
   }
 
-  async proposeStructured(raw: unknown, signal?: AbortSignal): Promise<EditProposal> {
+  async proposeStructured(raw: unknown, signal?: AbortSignal, policy?: ProjectMutationPolicy): Promise<EditProposal> {
     signal?.throwIfAborted();
     const rawBytes = Buffer.byteLength(JSON.stringify(raw));
     this.enforceRawLimit(rawBytes);
@@ -114,10 +115,10 @@ export class EditProposalService {
         `Malformed structured edit proposal:\n${z.prettifyError(parsed.error)}`,
       );
     }
-    return this.compile(parsed.data, 'structured', signal);
+    return this.compile(parsed.data, 'structured', signal, policy);
   }
 
-  async proposePatch(patch: string, signal?: AbortSignal): Promise<EditProposal> {
+  async proposePatch(patch: string, signal?: AbortSignal, policy?: ProjectMutationPolicy): Promise<EditProposal> {
     signal?.throwIfAborted();
     this.enforceRawLimit(Buffer.byteLength(patch));
     // Patch expansion loads and may retain editor models. Validate the entire
@@ -125,6 +126,7 @@ export class EditProposalService {
     const files = await this.preflightFiles(
       parsePatch(patch).map(file => ({ ...file, new_path: file.targetPath ?? null })),
       signal,
+      policy,
     );
     const structured: StructuredProposal = { files: [] };
     for (const file of files) {
@@ -240,16 +242,17 @@ export class EditProposalService {
         edits: [],
       });
     }
-    return this.compile(structured, 'patch', signal);
+    return this.compile(structured, 'patch', signal, policy);
   }
 
   private async compile(
     input: StructuredProposal,
     source: EditProposal['source'],
     signal?: AbortSignal,
+    policy?: ProjectMutationPolicy,
   ): Promise<EditProposal> {
     signal?.throwIfAborted();
-    const normalized = await this.preflightFiles(input.files, signal);
+    const normalized = await this.preflightFiles(input.files, signal, policy);
 
     const plans: FileEditPlan[] = [];
     const identities = new Set<string>();
@@ -482,6 +485,7 @@ export class EditProposalService {
   private async preflightFiles<T extends Pick<StructuredFile, 'operation' | 'path' | 'new_path'>>(
     files: readonly T[],
     signal?: AbortSignal,
+    policy?: ProjectMutationPolicy,
   ): Promise<T[]> {
     if (files.length === 0)
       throw new EditError(EditFailureReason.EMPTY, 'An edit proposal must contain at least one file.');
@@ -502,8 +506,8 @@ export class EditProposalService {
       signal?.throwIfAborted();
       canonical.push({
         operation: file.operation,
-        path: await this.workspace.canonicalPath(file.path),
-        new_path: file.new_path === null ? null : await this.workspace.canonicalPath(file.new_path),
+        path: await this.checkedPath(file.path, policy),
+        new_path: file.new_path === null ? null : await this.checkedPath(file.new_path, policy),
       });
     }
     signal?.throwIfAborted();
@@ -511,6 +515,13 @@ export class EditProposalService {
     // user-facing namespace are aliases, not distinct mutation resources.
     validatePathGraph(canonical, true);
     return normalized;
+  }
+
+  private async checkedPath(path: string, policy?: ProjectMutationPolicy): Promise<string> {
+    const canonical = await this.workspace.canonicalPath(path);
+    const denial = policy?.getDenial(canonical);
+    if (denial) throw new EditError(EditFailureReason.UNSUPPORTED, denial, { path });
+    return canonical;
   }
 }
 

@@ -1,3 +1,4 @@
+import { SkillProjectMutationPolicy } from './SkillProjectMutationPolicy.ts';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rename, rm, open } from 'node:fs/promises';
@@ -100,6 +101,7 @@ async function stagePackage(directory: string, files: PackageFiles, signal?: Abo
 
 /** Stages immutable packages, serializes each destination and recovers interrupted publication before discovery. */
 export class SkillPackageManager {
+  readonly projectMutationPolicy: SkillProjectMutationPolicy;
   private readonly pending = new Map<string, Pending>();
   private readonly journal: SkillTransactionJournal;
   constructor(
@@ -109,6 +111,7 @@ export class SkillPackageManager {
     private readonly ensureReady?: () => Promise<void>,
   ) {
     this.journal = new SkillTransactionJournal(state.userDirectory);
+    this.projectMutationPolicy = new SkillProjectMutationPolicy(locations, catalog);
   }
   get targets() {
     return this.locations.map(location => ({

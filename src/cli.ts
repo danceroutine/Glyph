@@ -8,6 +8,8 @@ import { WebHttpClient } from './web/WebHttpClient.ts';
 import { WebFetchService } from './web/WebFetchService.ts';
 import { DuckDuckGoSearch } from './web/DuckDuckGoSearch.ts';
 import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
+import { SkillProjectMutationPolicy } from './skills/SkillProjectMutationPolicy.ts';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { GlyphService } from './application/GlyphService.ts';
 import { ChatSessionManager } from './chat/sessions/ChatSessionManager.ts';
@@ -51,7 +53,7 @@ import { WorkspaceAccessPolicy } from './workspace/policy/WorkspaceAccessPolicy.
 import { NativeShellSandboxLauncher } from './shell/NativeShellSandboxLauncher.ts';
 import { ShellCommandAuthorizer } from './shell/ShellCommandAuthorizer.ts';
 import { ShellSessionManager } from './shell/ShellSessionManager.ts';
-import { assertShellRuntimePathIsolation } from './shell/ShellRuntimePathPolicy.ts';
+import { assertShellRuntimePathIsolation, resolveAvailableIdentity } from './shell/ShellRuntimePathPolicy.ts';
 import { ShellToolRuntime } from './shell/ShellToolRuntime.ts';
 import { ShellWorkingDirectoryResolver } from './shell/ShellWorkingDirectoryResolver.ts';
 
@@ -92,7 +94,8 @@ async function main(): Promise<void> {
     'release',
     process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
   );
-  const accessPolicy = new WorkspaceAccessPolicy();
+  const userDirectory = resolveAvailableIdentity(process.env.GLYPH_USER_DIRECTORY ?? join(homedir(), '.glyph'));
+  const accessPolicy = new WorkspaceAccessPolicy({}, [join(userDirectory, 'skill-state.json')]);
   const { workspace, pathIndex } = createProjectRuntime(
     projectContext,
     configuration.stateDirectory,
@@ -136,6 +139,10 @@ async function main(): Promise<void> {
     new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
     proposalReviews,
     logger,
+    undefined,
+    new SkillProjectMutationPolicy([
+      { store: { root: userDirectory, caseSensitive: workspace.caseSensitive }, directory: 'skills' },
+    ]),
   );
   const webApproval = new WebApprovalService(
     { workspaceId: projectContext.id, mutationScope: projectContext.mutationIdentity },

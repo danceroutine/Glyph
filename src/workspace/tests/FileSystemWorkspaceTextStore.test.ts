@@ -339,6 +339,21 @@ describe(FileSystemWorkspaceTextStore, () => {
   });
 
   describe(FileSystemWorkspaceTextStore.prototype.list, () => {
+    it('hides reserved entries and a separately attached private root while permitting owner recovery', async () => {
+      const root = await workspaceRoot('workspace-private-root-');
+      const nested = join(root, '.skill-staging');
+      await mkdir(nested);
+      await writeFile(join(nested, 'old.txt'), 'saved');
+      await mkdir(join(root, 'sub'));
+      await writeFile(join(root, 'sub/.skill-staging'), 'reserved');
+      const privateRoot = new FileSystemWorkspaceTextStore(nested);
+      await expect(privateRoot.list(2)).resolves.toEqual({ files: [], truncated: false });
+      await expect(privateRoot.read('old.txt')).rejects.toThrow('excluded');
+      await expect(new FileSystemWorkspaceTextStore(root).list(2)).resolves.toEqual({ files: [], truncated: false });
+      await expect(
+        new FileSystemWorkspaceTextStore(nested, { allowPrivateRoot: true }).read('old.txt'),
+      ).resolves.toMatchObject({ text: 'saved' });
+    });
     it.each([true, false])('finds matching files with explicit caseSensitive=%s', async caseSensitive => {
       const root = await workspaceRoot('workspace-list-glob-case-');
       await mkdir(join(root, 'Nested'));
