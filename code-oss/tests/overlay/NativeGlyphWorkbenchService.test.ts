@@ -1,3 +1,4 @@
+import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
@@ -919,6 +920,32 @@ describe(NativeGlyphWorkbenchService, () => {
       });
       await multi.service.openLink('glyph-instruction:api');
       expect(multi.editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/api/AGENTS.md') });
+    });
+
+    it('routes instruction links to the correct duplicate-named workspace root', async () => {
+      const folders = [
+        { ...folder('api'), uri: URI.file('/first/api') },
+        { ...folder('api'), uri: URI.file('/second/api') },
+      ];
+      const roots = folders.map(root => ({ name: root.name, uri: root.uri.toString() }));
+      const rootId = getGlyphWorkspaceRootId(roots[1], roots);
+      const { service, editors } = await workbench({
+        folders,
+        extra: {
+          instructionSources: [
+            {
+              id: 'second',
+              kind: 'agents_md',
+              label: 'AGENTS.md',
+              path: `${rootId}/src/AGENTS.md`,
+              scope: `${rootId}/src`,
+              status: 'active',
+            },
+          ] as never,
+        },
+      });
+      await service.openLink('glyph-instruction:second');
+      expect(editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/second/api/src/AGENTS.md') });
     });
 
     it('rejects unavailable and unresolved instruction sources', async () => {

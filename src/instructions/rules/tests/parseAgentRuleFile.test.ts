@@ -28,6 +28,29 @@ Use strict types.
     });
   });
 
+  it('treats empty optional scalars as absent while retaining multiline lists', () => {
+    expect(
+      parseAgentRuleFile(`---
+name:
+description:
+activation:
+alwaysApply: true
+enabled:
+globs:
+references:
+  - docs/style.md
+---
+Apply this guidance.`),
+    ).toEqual({
+      alwaysApply: true,
+      enabled: true,
+      globs: [],
+      references: ['docs/style.md'],
+      body: 'Apply this guidance.',
+    });
+    expect(() => parseAgentRuleFile('---\ndescription: []\n---\nBody')).toThrow('must be a string');
+  });
+
   it('accepts Markdown without frontmatter as a manual-compatible rule body', () => {
     expect(parseAgentRuleFile('Review accessibility.')).toEqual({
       globs: [],

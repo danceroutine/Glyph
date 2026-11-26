@@ -41,11 +41,12 @@ export function parseAgentRuleFile(text: string): AgentRuleFile {
   };
 }
 
-type MetadataValue = string | boolean | readonly string[];
+type MetadataValue = string | boolean | null | readonly string[];
 
 function parseMetadata(frontmatter: string): Readonly<Record<string, MetadataValue>> {
   const result: Record<string, MetadataValue> = {};
   let activeList: string[] | undefined;
+  let activeListKey: string | undefined;
   for (const rawLine of frontmatter.split('\n')) {
     if (rawLine.trim() === '' || rawLine.trimStart().startsWith('#')) continue;
     const item = /^\s+-\s+(.+)$/u.exec(rawLine);
@@ -53,6 +54,7 @@ function parseMetadata(frontmatter: string): Readonly<Record<string, MetadataVal
       if (!activeList) throw new Error('Rule frontmatter list item has no property.');
       const value = item[1]!;
       activeList.push(scalarString(value));
+      result[activeListKey!] = activeList;
       continue;
     }
     const property = /^([A-Za-z][A-Za-z0-9]*):(?:\s*(.*))$/u.exec(rawLine);
@@ -61,11 +63,13 @@ function parseMetadata(frontmatter: string): Readonly<Record<string, MetadataVal
     const rawValue = property[2]!;
     if (Object.hasOwn(result, key)) throw new Error(`Duplicate rule frontmatter property: ${key}`);
     activeList = undefined;
+    activeListKey = undefined;
     const value = rawValue.trim();
     if (value === '') {
       const values: string[] = [];
-      result[key] = values;
+      result[key] = null;
       activeList = values;
+      activeListKey = key;
     } else if (value.startsWith('[')) result[key] = inlineList(value);
     else if (value === 'true' || value === 'false') result[key] = value === 'true';
     else result[key] = scalarString(value);
@@ -87,19 +91,19 @@ function scalarString(value: string): string {
 }
 
 function optionalString(value: MetadataValue | undefined, key: string): string | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string') throw new Error(`Rule frontmatter property ${key} must be a string.`);
   return value.trim() || undefined;
 }
 
 function optionalBoolean(value: MetadataValue | undefined, key: string): boolean | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== 'boolean') throw new Error(`Rule frontmatter property ${key} must be true or false.`);
   return value;
 }
 
 function stringList(value: MetadataValue | undefined, key: string): readonly string[] {
-  if (value === undefined) return [];
+  if (value === undefined || value === null) return [];
   if (typeof value === 'string') return value === '' ? [] : [value];
   if (!isStringArray(value)) throw new Error(`Rule frontmatter property ${key} must be a string or list.`);
   return value;

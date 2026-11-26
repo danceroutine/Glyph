@@ -1,3 +1,4 @@
+import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { fireEvent } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
 import { URI } from '#vs/base/common/uri.js';
@@ -92,6 +93,38 @@ describe(GlyphAgentInstructionsPreferences, () => {
 
     page.getDomNode().querySelector<HTMLButtonElement>('button.source-path')!.click();
     expect(editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/api/AGENTS.md') });
+    page.dispose();
+  });
+
+  it('opens instruction files in duplicate-named workspace roots', () => {
+    const folders = [
+      { name: 'api', uri: URI.file('/first/api') },
+      { name: 'api', uri: URI.file('/second/api') },
+    ];
+    const roots = folders.map(root => ({ name: root.name, uri: root.uri.toString() }));
+    const rootId = getGlyphWorkspaceRootId(roots[1], roots);
+    const editors = { openEditor: vi.fn(async () => undefined) };
+    const page = new GlyphAgentInstructionsPreferences(
+      {
+        state: {
+          instructionSources: [
+            {
+              id: 'second',
+              kind: 'agents_md',
+              label: 'AGENTS.md',
+              path: `${rootId}/AGENTS.md`,
+              scope: rootId,
+              status: 'active',
+            },
+          ],
+        },
+        onDidChangeState: () => ({ dispose() {} }),
+      } as never,
+      { getWorkspace: () => ({ folders }) } as never,
+      editors as never,
+    );
+    page.getDomNode().querySelector<HTMLButtonElement>('button.source-path')!.click();
+    expect(editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/second/api/AGENTS.md') });
     page.dispose();
   });
 

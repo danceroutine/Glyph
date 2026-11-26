@@ -59,7 +59,7 @@ describe(AgentRuleInstructionProvider, () => {
     const { root, workspace } = await fixture();
     const directory = join(root, 'packages', 'api', '.cursor', 'rules');
     await Promise.all([
-      writeFile(join(directory, 'always.mdc'), '---\nalwaysApply: true\n---\nAlways.'),
+      writeFile(join(directory, 'always.mdc'), '---\ndescription:\nglobs:\nalwaysApply: true\n---\nAlways.'),
       writeFile(join(directory, 'files.mdc'), '---\nglobs: "**/*.ts"\n---\nFiles.'),
       writeFile(join(directory, 'model.mdc'), '---\ndescription: Relevant APIs\n---\nModel.'),
       writeFile(join(directory, 'manual.mdc'), 'Manual.'),

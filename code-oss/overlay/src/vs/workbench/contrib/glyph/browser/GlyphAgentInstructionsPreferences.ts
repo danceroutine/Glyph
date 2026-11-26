@@ -1,3 +1,4 @@
+import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import * as DOM from '#vs/base/browser/dom.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
 import { URI } from '#vs/base/common/uri.js';
@@ -70,7 +71,8 @@ export class GlyphAgentInstructionsPreferences extends Disposable implements IPr
     if (folders.length === 0) return undefined;
     if (folders.length === 1) return URI.joinPath(folders[0].uri, path);
     const [rootName, ...relative] = path.split('/');
-    const folder = folders.find(candidate => candidate.name === rootName);
+    const roots = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
+    const folder = folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootName);
     return folder ? URI.joinPath(folder.uri, ...relative) : undefined;
   }
 }
