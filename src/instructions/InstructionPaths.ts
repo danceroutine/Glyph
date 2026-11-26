@@ -26,6 +26,11 @@ export class InstructionPaths {
     return target === key || target.startsWith(`${key}/`);
   }
 
+  relativeToScope(scope: string, path: string): string {
+    if (scope !== '.') return path.split('/').slice(scope.split('/').length).join('/');
+    return typeof this.casing === 'boolean' ? path : path.split('/').slice(1).join('/');
+  }
+
   reference(scope: string, reference: string): string {
     if (
       !reference ||

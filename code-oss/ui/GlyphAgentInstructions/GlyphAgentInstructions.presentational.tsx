@@ -243,6 +243,7 @@ export function GlyphAgentInstructions({
               <button
                 class={`source-path ${styles.path} ${source.status === 'error' ? styles.errorPath : ''}`}
                 type="button"
+                disabled={source.status === 'error' && !source.revision && !source.managementRevision}
                 title={`Open ${source.path}`}
                 onClick={() => {
                   void run(() => openSource(source));

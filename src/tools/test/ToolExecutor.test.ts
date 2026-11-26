@@ -189,7 +189,8 @@ it.each(['internal', 'visible', 'failed'])(
         ToolActivityPhase.STARTED,
         kind === 'failed' ? ToolActivityPhase.FAILED : ToolActivityPhase.COMPLETED,
       ]);
-    if (kind === 'failed') expect(JSON.parse(result.output)).toMatchObject({ error: { code: 'TOOL_EXECUTION_FAILED' } });
+    if (kind === 'failed')
+      expect(JSON.parse(result.output)).toMatchObject({ error: { code: 'TOOL_EXECUTION_FAILED' } });
     else expect(result.output).toBe(kind);
     expect(f.options.trace).toHaveBeenCalledWith('tool.result', expect.objectContaining({ output: result.output }));
   },

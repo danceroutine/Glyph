@@ -20,14 +20,25 @@ export async function listInstructionFilesAcrossRoots(
 ): Promise<{ files: string[]; truncated: boolean }> {
   const files: string[] = [];
   let truncated = false;
-  for (const [index, root] of roots.entries()) {
+  const qualify = (root: InstructionDiscoveryRoot, path: string) =>
+    roots.length === 1 ? path : `${root.name}/${path}`;
+  const agents = globPattern === '**/AGENTS.md';
+  if (agents) {
+    // Reserve mandatory guidance across every root before spending the shared allowance on nested files.
+    for (const root of roots) {
+      const result = await root.index.glob('AGENTS.md', { limit: 1, rootFilesOnly: true });
+      files.push(...result.files.map(path => qualify(root, path)));
+      truncated ||= result.truncated;
+    }
+  }
+  for (const root of roots) {
     if (files.length >= maxFiles) {
       truncated = true;
       break;
     }
-    const result = await root.index.glob(globPattern, { limit: maxFiles - files.length });
-    files.push(...result.files.map(path => (roots.length === 1 ? path : `${root.name}/${path}`)));
-    truncated ||= result.truncated || (files.length >= maxFiles && index < roots.length - 1);
+    const result = await root.index.glob(agents ? '**/?*/AGENTS.md' : globPattern, { limit: maxFiles - files.length });
+    files.push(...result.files.map(path => qualify(root, path)));
+    truncated ||= result.truncated;
   }
   return { files, truncated };
 }

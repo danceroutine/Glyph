@@ -57,6 +57,7 @@ describe(AgentRuleInstructionProvider, () => {
         name: 'Selected',
         sourceRevision: 'current',
         uri: 'file:///profile/' + source.path,
+        references: ['missing.md'],
         message: expect.stringContaining('Missing rule reference'),
       });
   });
@@ -284,9 +285,9 @@ describe(AgentRuleInstructionProvider, () => {
       },
       async () => ({ files: ['rules/direct.mdc'], truncated: false }),
     );
-    await expect(withUri.discover()).resolves.toEqual([
-      expect.objectContaining({ uri: 'file:///rules/rules/direct.mdc' }),
-    ]);
+    const [unreadable] = await withUri.discover();
+    expect(unreadable?.status).toBe(AgentInstructionSourceStatus.ERROR);
+    expect(unreadable).not.toHaveProperty('uri');
   });
 
   it('propagates cancellation while reading and expanding references', async () => {

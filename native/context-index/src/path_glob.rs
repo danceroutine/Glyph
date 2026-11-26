@@ -17,6 +17,7 @@ pub(crate) fn find_matches(
     paths: &BTreeSet<String>,
     pattern: &str,
     target_directory: Option<&str>,
+    root_files_only: bool,
     limit: usize,
     case_sensitive: bool,
     index_truncated: bool,
@@ -73,7 +74,7 @@ pub(crate) fn find_matches(
             }
             None => Cow::Borrowed(path.as_str()),
         };
-        if !matcher.is_match(candidate.as_ref()) {
+        if (root_files_only && candidate.contains('/')) || !matcher.is_match(candidate.as_ref()) {
             continue;
         }
         if files.len() == limit {

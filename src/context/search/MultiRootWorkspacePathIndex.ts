@@ -66,7 +66,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
 
   async glob(
     pattern: string,
-    options: { targetDirectory?: string; limit: number; signal?: AbortSignal },
+    options: { targetDirectory?: string; rootFilesOnly?: boolean; limit: number; signal?: AbortSignal },
   ): Promise<WorkspacePathGlobResult> {
     const target =
       options.targetDirectory !== undefined && options.targetDirectory !== ''
@@ -85,6 +85,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
       }
       const result = await index.glob(routedPattern?.pattern ?? pattern, {
         limit: options.limit - files.length,
+        ...(options.rootFilesOnly ? { rootFilesOnly: true } : {}),
         ...(target?.path !== undefined && target?.path !== '' ? { targetDirectory: target.path } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
       });

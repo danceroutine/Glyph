@@ -11,7 +11,7 @@ import {
 } from '#src/instructions/AgentInstructionSource.js';
 import { AgentInstructionSet } from '#src/instructions/AgentInstructionSet.js';
 import { defaultInstructionPaths, type InstructionPaths } from '#src/instructions/InstructionPaths.js';
-import { matchesAgentRulePath } from '#src/instructions/rules/matchesAgentRulePath.js';
+import { matchesAgentRulePath, RuleGlobBudget } from '#src/instructions/rules/matchesAgentRulePath.js';
 
 /** Immutable inputs used to create one frozen logical-turn context. */
 export interface TurnContextSessionInput {
@@ -39,6 +39,18 @@ export class TurnContextSession {
     this.paths = input.paths ?? defaultInstructionPaths;
     this.scopeIndex = input.scopeIndex ?? new AgentInstructionSet(input.sources, this.paths);
     this.precedence = new Map(input.sources.map((source, index) => [source, index]));
+    const unreadable = input.sources.find(
+      source =>
+        source.kind === AgentInstructionSourceKind.AGENTS_MD &&
+        source.status === AgentInstructionSourceStatus.ERROR &&
+        this.paths.isWorkspaceRoot(source.scope) &&
+        source.id === `agents_md:${source.path}`,
+    );
+    if (unreadable)
+      throw new Error(
+        `Required root instruction ${unreadable.path} could not be loaded. ${unreadable.message ?? ''}`.trimEnd(),
+      );
+    const budget = new RuleGlobBudget();
     const attachments = unique(input.attachmentPaths);
     const applicable = this.sourcesFor(attachments, this.scopeIndex.rootGuidance);
     const candidates = this.advertiseCandidates(applicable);
@@ -55,11 +67,11 @@ export class TurnContextSession {
       if (source.activation === AgentInstructionActivationMode.ALWAYS)
         this.activate(source, AgentInstructionActivationReason.ALWAYS);
       if (source.activation === AgentInstructionActivationMode.FILE_PATTERN) {
-        const paths = attachments.filter(path => matchesAgentRulePath(source, path, this.paths));
+        const paths = attachments.filter(path => matchesAgentRulePath(source, path, this.paths, budget));
         if (paths.length > 0) this.activate(source, AgentInstructionActivationReason.ATTACHMENT, paths);
       }
     }
-    for (const id of unique(input.manualRuleIds)) this.activateById(id, AgentInstructionActivationReason.MANUAL);
+    this.stageManualRules(input.manualRuleIds);
     this.initial = this.undisclosedContext(candidates) ?? emptyContext();
   }
 
@@ -80,7 +92,7 @@ export class TurnContextSession {
 
   /** Explicitly activate manual rules selected after the turn begins. */
   activateManualRules(ruleIds: readonly string[]): AgentInstructionContext | undefined {
-    for (const id of unique(ruleIds)) this.activateById(id, AgentInstructionActivationReason.MANUAL);
+    this.stageManualRules(ruleIds);
     return this.undisclosedContext([]);
   }
 
@@ -89,7 +101,15 @@ export class TurnContextSession {
     ruleId: string,
     reason: AgentInstructionActivationReason.MANUAL | AgentInstructionActivationReason.MODEL,
   ): AgentInstructionContext | undefined {
-    this.activateById(ruleId, reason);
+    if (reason === AgentInstructionActivationReason.MANUAL) return this.activateManualRules([ruleId]);
+    const source = this.input.sources.find(candidate => candidate.id === ruleId);
+    if (
+      source &&
+      eligible(source) &&
+      source.activation === AgentInstructionActivationMode.MODEL &&
+      this.advertisedCandidates.has(source.id)
+    )
+      this.activate(source, reason);
     return this.undisclosedContext([]);
   }
 
@@ -110,9 +130,11 @@ export class TurnContextSession {
     paths: readonly string[],
     reason: AgentInstructionActivationReason.ATTACHMENT | AgentInstructionActivationReason.FILE_ACCESS,
   ): AgentInstructionContext | undefined {
+    const budget = new RuleGlobBudget();
     const normalized = unique(paths);
     const applicable = this.sourcesFor(normalized);
     const candidates = this.advertiseCandidates(applicable);
+    const matched = new Map<AgentInstructionSource, readonly string[]>();
     for (const source of applicable) {
       if (!eligible(source) || this.activated.has(source.id)) continue;
       const matching = normalized.filter(path =>
@@ -120,27 +142,26 @@ export class TurnContextSession {
         source.activation === AgentInstructionActivationMode.ALWAYS
           ? this.paths.contains(source.scope, path)
           : source.activation === AgentInstructionActivationMode.FILE_PATTERN &&
-            matchesAgentRulePath(source, path, this.paths),
+            matchesAgentRulePath(source, path, this.paths, budget),
       );
-      if (matching.length > 0) this.activate(source, reason, matching);
+      if (matching.length > 0) matched.set(source, matching);
     }
+    for (const [source, matching] of matched) this.activate(source, reason, matching);
     return this.undisclosedContext(candidates);
   }
 
-  private activateById(
-    id: string,
-    reason: AgentInstructionActivationReason.MANUAL | AgentInstructionActivationReason.MODEL,
-  ): void {
-    const source = this.input.sources.find(candidate => candidate.id === id);
-    if (!source || !eligible(source)) return;
-    if (
-      (reason === AgentInstructionActivationReason.MANUAL &&
-        source.activation !== AgentInstructionActivationMode.MANUAL) ||
-      (reason === AgentInstructionActivationReason.MODEL &&
-        (source.activation !== AgentInstructionActivationMode.MODEL || !this.advertisedCandidates.has(source.id)))
-    )
-      return;
-    this.activate(source, reason);
+  private stageManualRules(ids: readonly string[]): void {
+    const selected: AgentInstructionSource[] = [];
+    for (const id of unique(ids)) {
+      const source = this.input.sources.find(candidate => candidate.id === id);
+      if (!source) continue;
+      if (!eligible(source) || source.activation !== AgentInstructionActivationMode.MANUAL)
+        throw new Error(
+          `Selected rule ${source.path} is no longer available for manual activation. Remove it or choose another rule.`,
+        );
+      selected.push(source);
+    }
+    for (const source of selected) this.activate(source, AgentInstructionActivationReason.MANUAL);
   }
 
   private activate(

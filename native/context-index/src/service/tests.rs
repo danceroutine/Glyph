@@ -456,6 +456,7 @@ fn service_glob_uses_the_shared_filtered_path_catalog() {
 
     let result = service
         .glob(GlobParams {
+            root_files_only: false,
             pattern: "*.tsx".to_owned(),
             target_directory: Some("src".to_owned()),
             limit: 20,
@@ -463,6 +464,7 @@ fn service_glob_uses_the_shared_filtered_path_catalog() {
         .expect("glob should work");
     let secrets = service
         .glob(GlobParams {
+            root_files_only: false,
             pattern: ".env*".to_owned(),
             target_directory: None,
             limit: 20,
@@ -488,11 +490,13 @@ fn service_glob_rejects_unsafe_target_directories_and_limits() {
 
     for params in [
         GlobParams {
+            root_files_only: false,
             pattern: "*.ts".to_owned(),
             target_directory: Some("../outside".to_owned()),
             limit: 20,
         },
         GlobParams {
+            root_files_only: false,
             pattern: "*.ts".to_owned(),
             target_directory: None,
             limit: 0,
@@ -981,6 +985,7 @@ fn poisoned_shared_state_is_reported_as_an_internal_error() {
         .expect_err("filtering should fail");
     let glob = paths_service
         .glob(GlobParams {
+            root_files_only: false,
             pattern: "*.ts".to_owned(),
             target_directory: None,
             limit: 20,

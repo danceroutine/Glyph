@@ -24,7 +24,7 @@ export interface WorkspacePathIndex {
   /** Finds exact glob matches without walking the filesystem again. */
   glob(
     pattern: string,
-    options: { targetDirectory?: string; limit: number; signal?: AbortSignal },
+    options: { targetDirectory?: string; rootFilesOnly?: boolean; limit: number; signal?: AbortSignal },
   ): Promise<WorkspacePathGlobResult>;
   /** Searches current file contents across paths selected from the resident catalog. */
   searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult>;
