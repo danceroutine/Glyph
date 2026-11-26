@@ -366,13 +366,14 @@ async function sendDocument(document: GlyphPromptDocument, send: SendMessage): P
       attachmentSpans.push({ from, to: offset });
     }
   }
+  // Both direct and queued submissions carry options from stamp().
   const {
     manualRuleIds: _ruleIds,
     skillIds: _skillIds,
     referenceSpans: _references,
     attachmentSpans: _spans,
     ...options
-  } = document.options ?? {};
+  } = document.options!;
   await send(draft, attachments, {
     ...options,
     ...(skillIds.size > 0 ? { skillIds: [...skillIds] } : {}),
