@@ -29,6 +29,38 @@ async function fixture() {
 }
 
 describe(AgentRuleInstructionProvider, () => {
+  it.each([true, false])('matches the user rules directory using its filesystem case policy (%s)', async sensitive => {
+    const workspace = {
+      caseSensitive: sensitive,
+      normalizePath: (path: string) => path,
+      read: async () => ({
+        text: '---\nname: Selected\ndescription: Fixture\nreferences: [missing.md]\n---\nBody',
+        revision: 'current',
+      }),
+      readOptional: async () => null,
+    } as never;
+    const provider = new AgentRuleInstructionProvider(
+      workspace,
+      {
+        kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+        directory: '.',
+        uriForPath: path => 'file:///profile/' + path,
+      },
+      async () => ({ files: ['RULES/UPPER.MDC', 'rules/lower.mdc'], truncated: false }),
+    );
+    const sources = await provider.discover();
+    expect(sources.map(source => source.path)).toEqual(
+      sensitive ? ['rules/lower.mdc'] : ['RULES/UPPER.MDC', 'rules/lower.mdc'],
+    );
+    for (const source of sources)
+      expect(source).toMatchObject({
+        name: 'Selected',
+        sourceRevision: 'current',
+        uri: 'file:///profile/' + source.path,
+        message: expect.stringContaining('Missing rule reference'),
+      });
+  });
+
   it('retains parsed identity and prevents another root from supplying a referenced file', async () => {
     const readOptional = vi.fn();
     const provider = new AgentRuleInstructionProvider(
