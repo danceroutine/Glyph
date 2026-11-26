@@ -75,7 +75,7 @@ function editorServices() {
   const dirty = new Set<string>();
   const find = (resource: URI) => models.find(model => model.uri.toString() === resource.toString());
   const inside = (resource: URI) =>
-    workspace.folders.find(folder => resource.path.startsWith(`${folder.uri.path}/`)) ?? null;
+    workspace.folders.find(folder => extUri.isEqualOrParent(resource, folder.uri)) ?? null;
   const writeText = (edit: ResourceTextEdit, reason: unknown) => {
     const model = find(edit.resource)!;
     const { range, text, eol } = edit.textEdit;
@@ -1624,6 +1624,38 @@ describe('skill package working-copy checks', () => {
       ok: true,
       packageClean: false,
     });
+    expect(services.fileService.readFile).not.toHaveBeenCalled();
+    expect(services.textModelService.createModelReference).not.toHaveBeenCalled();
+  });
+  it('checks host-mapped peer package intersections only inside the current trusted workspace', async () => {
+    const services = editorServices();
+    services.workspace.folders = [
+      { name: 'references', uri: URI.file('/reference-alias') },
+      { name: 'skill store', uri: URI.file('/store-alias') },
+    ];
+    const adapter = createAdapter(services);
+    const intersection = (directory: string) =>
+      adapter.handle({
+        type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+        operationId: 'peer',
+        scope: 'project',
+        directoryUri: URI.file(directory).toString(),
+        peerWorkspaceIntersection: true,
+      });
+    services.pendingCopies.push({ resource: URI.file('/store-alias/other/notes.md') });
+    for (const path of ['/reference-alias', '/store-alias/example']) {
+      await expect(intersection(path)).resolves.toEqual({ operationId: 'peer', ok: true, packageClean: true });
+      await expect(check(adapter, 'project', path)).resolves.toMatchObject(failure(GlyphDesktopErrorCode.UNAUTHORIZED));
+      services.pendingCopies.push({ resource: URI.file(path + '/unsaved.md') });
+      await expect(intersection(path)).resolves.toEqual({ operationId: 'peer', ok: true, packageClean: false });
+    }
+    await expect(intersection('/reference-alias-other')).resolves.toMatchObject(
+      failure(GlyphDesktopErrorCode.UNAUTHORIZED),
+    );
+    services.state.trusted = false;
+    await expect(intersection('/reference-alias')).resolves.toMatchObject(
+      failure(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE),
+    );
     expect(services.fileService.readFile).not.toHaveBeenCalled();
     expect(services.textModelService.createModelReference).not.toHaveBeenCalled();
   });
