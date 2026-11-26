@@ -1,3 +1,4 @@
+import type { TurnContextEnvelope } from '#src/context/turns/TurnContextEnvelope.js';
 import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { ToolRegistry } from '#src/tools/ToolRegistry.js';
 import OpenAI from 'openai';
@@ -27,7 +28,6 @@ import type {
   AgentTurnStep,
 } from '#src/chat/runtime/AgentModelAdapter.js';
 import { isRecord } from '#src/shared/validators/isRecord.js';
-import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 import type { AgentHistoryProjection } from '#src/chat/runtime/AgentHistoryProjection.js';
 
 interface OpenAITurn {
@@ -417,7 +417,7 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
   };
 }
 
-function toInstructionContextInput(context: AgentInstructionContext): ResponseInputItem {
+function toInstructionContextInput(context: TurnContextEnvelope): ResponseInputItem {
   return {
     role: 'user',
     content: JSON.stringify({

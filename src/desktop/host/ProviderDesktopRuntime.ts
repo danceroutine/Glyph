@@ -3,6 +3,7 @@ import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { skillPackageSourceSchema, type SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import type { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import type { SkillPreview } from '#src/skills/SkillLifecycle.js';
+import type { TurnContextSnapshot } from '#src/context/turns/TurnContextEnvelope.js';
 import type { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
@@ -1471,7 +1472,7 @@ function toInstructionSources(
   }));
 }
 
-function toTurnContext(context: import('#src/instructions/AgentInstructionSource.js').AgentInstructionTurnSnapshot) {
+function toTurnContext(context: TurnContextSnapshot) {
   return {
     ...(context.skills?.length ? { skills: context.skills } : {}),
     sources: toInstructionSources(context.sources, true),

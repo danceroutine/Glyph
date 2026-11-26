@@ -1,4 +1,4 @@
-import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
+import type { TurnContextEnvelope } from '#src/context/turns/TurnContextEnvelope.js';
 import { type TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import { AgentMode, type AgentModeID } from '#src/chat/AgentMode.js';
@@ -124,7 +124,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     const setMode = (next: AgentModeID): void => {
       mode = next;
     };
-    let boundaryInstructions: AgentInstructionContext | undefined;
+    let boundaryInstructions: TurnContextEnvelope | undefined;
     const context = (round: number): AgentTurnContext => ({
       signal,
       turnId,
@@ -299,7 +299,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     turnId: string,
     request: ChatRequest,
     signal: AbortSignal,
-  ): Promise<AgentInstructionContext | undefined> {
+  ): Promise<TurnContextEnvelope | undefined> {
     return this.turnContexts?.steer(
       {
         turnId,

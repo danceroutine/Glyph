@@ -1,8 +1,5 @@
+import type { TurnContextEnvelope, TurnContextSnapshot } from './TurnContextEnvelope.ts';
 import type { AgentInstructionActivationReason } from '#src/instructions/AgentInstructionSource.js';
-import type {
-  AgentInstructionContext,
-  AgentInstructionTurnSnapshot,
-} from '#src/instructions/AgentInstructionSource.js';
 
 /** Inputs common to all context domains prepared for a logical turn. */
 export interface TurnContextInput {
@@ -14,23 +11,23 @@ export interface TurnContextInput {
 
 /** Frozen contribution. A domain owns activation semantics; the coordinator owns turn lifetime and composition. */
 export interface TurnContextContribution {
-  initialEnvelope(): AgentInstructionContext;
-  snapshot(): AgentInstructionTurnSnapshot;
-  disclosePaths?(paths: readonly string[]): AgentInstructionContext | undefined;
-  discloseAttachments?(paths: readonly string[]): AgentInstructionContext | undefined;
-  activateManualRules?(ids: readonly string[]): AgentInstructionContext | undefined;
+  initialEnvelope(): TurnContextEnvelope;
+  snapshot(): TurnContextSnapshot;
+  disclosePaths?(paths: readonly string[]): TurnContextEnvelope | undefined;
+  discloseAttachments?(paths: readonly string[]): TurnContextEnvelope | undefined;
+  activateManualRules?(ids: readonly string[]): TurnContextEnvelope | undefined;
   activateRule?(
     id: string,
     reason: AgentInstructionActivationReason.MODEL | AgentInstructionActivationReason.MANUAL,
-  ): AgentInstructionContext | undefined;
+  ): TurnContextEnvelope | undefined;
   activateSource?(
     id: string,
     reason: 'manual' | 'model',
     explanation: string,
     signal?: AbortSignal,
-  ): Promise<AgentInstructionContext | undefined>;
+  ): Promise<TurnContextEnvelope | undefined>;
   /** Validate and prepare domain selections for an in-flight user instruction. */
-  steer?(input: TurnContextInput, signal?: AbortSignal): Promise<AgentInstructionContext | undefined>;
+  steer?(input: TurnContextInput, signal?: AbortSignal): Promise<TurnContextEnvelope | undefined>;
   release?(): void;
 }
 
