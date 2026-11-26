@@ -1,11 +1,12 @@
 use super::{Failure, Identity, Operation, Request};
 use rustix::fd::OwnedFd;
 use rustix::fs::{
-    fstat, fsync, mkdirat, open, openat, renameat_with, statat, unlinkat, AtFlags, Dir, Mode,
-    OFlags, RenameFlags, Stat,
+    fchmod, fstat, fsync, mkdirat, open, openat, renameat_with, statat, unlinkat, AtFlags, Dir,
+    Mode, OFlags, RenameFlags, Stat,
 };
 use rustix::io::Errno;
 use std::ffi::{CStr, CString};
+mod staging;
 
 #[cfg(test)]
 #[path = "tests/filesystem.rs"]
@@ -39,9 +40,23 @@ impl From<Errno> for Failure {
 pub(super) fn execute(request: &Request) -> Result<(), Failure> {
     let root = open_root(&request.root, &request.root_identity)?;
     match &request.operation {
-        Operation::EnsureDirectory { relative } => {
+        Operation::EnsureDirectory { relative, mode } => {
             let components = relative_components(relative)?;
-            open_directories(root, &components, true)?;
+            open_directories(
+                root,
+                &components,
+                Some(staging::mode(mode.unwrap_or(0o700))?),
+            )?;
+        }
+        Operation::CreateStage { relative } => {
+            staging::create_stage(&root, relative)?;
+        }
+        Operation::StagePackage {
+            relative,
+            directories,
+            files,
+        } => {
+            staging::materialize(&root, relative, directories, files)?;
         }
         Operation::RenameExclusive {
             source_relative,
@@ -75,7 +90,7 @@ fn open_root(root: &str, expected: &Identity) -> Result<OwnedFd, Failure> {
     let mut fd = open("/", DIRECTORY, Mode::empty())?;
     if !relative.is_empty() {
         let components = components(relative)?;
-        fd = open_directories(fd, &components, false)?;
+        fd = open_directories(fd, &components, None)?;
     }
     let stat = fstat(&fd)?;
     if stat.st_dev.to_string() != expected.device || stat.st_ino.to_string() != expected.inode {
@@ -108,12 +123,16 @@ fn relative_components(path: &str) -> Result<Vec<&str>, Failure> {
     components(path)
 }
 
-fn open_directories(mut parent: OwnedFd, path: &[&str], create: bool) -> Result<OwnedFd, Failure> {
+fn open_directories(
+    mut parent: OwnedFd,
+    path: &[&str],
+    create: Option<Mode>,
+) -> Result<OwnedFd, Failure> {
     for name in path {
         parent = match openat(&parent, *name, DIRECTORY, Mode::empty()) {
-            Err(Errno::NOENT) if create => {
+            Err(Errno::NOENT) if create.is_some() => {
                 // Another initializer can publish the same directory. Re-open and verify its actual type in both cases.
-                match mkdirat(&parent, *name, Mode::RWXU) {
+                match mkdirat(&parent, *name, create.expect("requested creation")) {
                     Ok(()) | Err(Errno::EXIST) => {}
                     Err(error) => return Err(error.into()),
                 }
@@ -130,7 +149,7 @@ fn open_parent<'a>(root: &OwnedFd, components: &[&'a str]) -> Result<(OwnedFd, &
     // Validated paths contain a final non-empty name; the parent walk never includes that name.
     let (name, ancestors) = components.split_last().expect("validated relative path");
     Ok((
-        open_directories(rustix::io::dup(root)?, ancestors, false)?,
+        open_directories(rustix::io::dup(root)?, ancestors, None)?,
         name,
     ))
 }
@@ -190,6 +209,12 @@ fn remove_entry(
         Ok(directory) => {
             let opened = fstat(&directory)?;
             check_cleanup_device(&opened, &fstat(parent)?)?;
+            if opened.st_uid == rustix::process::geteuid().as_raw()
+                && opened.st_mode & 0o700 != 0o700
+            {
+                let permissions = Mode::from_raw_mode(opened.st_mode) | Mode::RWXU;
+                fchmod(&directory, permissions)?;
+            }
             for entry in Dir::read_from(&directory)? {
                 let entry = entry?;
                 let child = entry.file_name();

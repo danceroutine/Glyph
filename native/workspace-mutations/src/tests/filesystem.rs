@@ -68,7 +68,9 @@ fn reports_exhausted_cleanup_limits_removed_parents_and_non_directory_failures()
     let removed = openat(&fd, "vanishing", DIRECTORY, Mode::empty()).unwrap();
     fs::remove_dir(root.join("vanishing")).unwrap();
     assert_eq!(
-        open_directories(removed, &["new"], true).unwrap_err().code,
+        open_directories(removed, &["new"], Some(Mode::RWXU))
+            .unwrap_err()
+            .code,
         "ENOENT"
     );
 }

@@ -8,6 +8,22 @@ mod filesystem;
 mod tests;
 
 const MAX_REQUEST_BYTES: u64 = 32 * 1024;
+const MAX_PACKAGE_REQUEST_BYTES: u64 = 24 * 1024 * 1024;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StagedDirectory {
+    path: String,
+    mode: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StagedFile {
+    path: String,
+    mode: u32,
+    content: String,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +51,15 @@ struct Identity {
 enum Operation {
     EnsureDirectory {
         relative: String,
+        mode: Option<u32>,
+    },
+    CreateStage {
+        relative: String,
+    },
+    StagePackage {
+        relative: String,
+        directories: Vec<StagedDirectory>,
+        files: Vec<StagedFile>,
     },
     RenameExclusive {
         source_relative: String,
@@ -70,15 +95,20 @@ impl Failure {
 pub fn serve(input: impl Read, mut output: impl Write) -> io::Result<()> {
     let mut bytes = Vec::new();
     let result = input
-        .take(MAX_REQUEST_BYTES + 1)
+        .take(MAX_PACKAGE_REQUEST_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| Failure::invalid())
         .and_then(|_| {
-            if bytes.len() as u64 > MAX_REQUEST_BYTES {
+            if bytes.len() as u64 > MAX_PACKAGE_REQUEST_BYTES {
                 return Err(Failure::invalid());
             }
             let request =
                 serde_json::from_slice::<Request>(&bytes).map_err(|_| Failure::invalid())?;
+            if bytes.len() as u64 > MAX_REQUEST_BYTES
+                && !matches!(request.operation, Operation::StagePackage { .. })
+            {
+                return Err(Failure::invalid());
+            }
             execute(&request)
         });
     let reply = match result {

@@ -136,6 +136,110 @@ mod supported {
     }
 
     #[test]
+    fn stages_immutable_files_and_empty_directories_and_requires_private_transaction_storage() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let op = |op| run(&request(&root, op));
+        let stage = || json!({"operation":"create_stage", "relative":".skill-staging/id"});
+        let package = || {
+            json!({"operation":"stage_package","relative":".skill-staging/id/package",
+            "directories":[{"path":"empty","mode":0o555},{"path":"","mode":0o755}],
+            "files":[{"path":"SKILL.md","mode":0o640,"content":"YWJj"}]})
+        };
+        assert_eq!(op(stage())["ok"], true);
+        assert_eq!(op(stage())["code"], "EEXIST");
+        assert_eq!(op(package())["ok"], true);
+        assert_eq!(op(package())["code"], "EEXIST");
+        let installed = root.join(".skill-staging/id/package");
+        assert_eq!(fs::read(installed.join("SKILL.md")).unwrap(), b"abc");
+        for (path, expected) in [
+            (installed.clone(), 0o755),
+            (installed.join("empty"), 0o555),
+            (installed.join("SKILL.md"), 0o640),
+        ] {
+            assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, expected);
+        }
+        assert_eq!(op(remove(".skill-staging/id"))["ok"], true);
+        let mut invalid = stage();
+        invalid["relative"] = json!("other/id");
+        assert_eq!(op(invalid)["code"], "INVALID_INPUT");
+        let mut invalid = package();
+        invalid["relative"] = json!("other/id/package");
+        assert_eq!(op(invalid)["code"], "INVALID_INPUT");
+        fs::set_permissions(
+            root.join(".skill-staging"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert_eq!(op(stage())["code"], "EACCES");
+    }
+
+    #[test]
+    fn refuses_unreadable_ambiguous_and_oversize_staged_entries() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let op = |op| run(&request(&root, op));
+        let directory = json!({"path":"","mode":0o755});
+        let file = json!({"path":"SKILL.md","mode":0o644,"content":"YQ=="});
+        assert_eq!(
+            op(json!({"operation":"create_stage","relative":".skill-staging/id"}))["ok"],
+            true
+        );
+        for (directories, files, code) in [
+            (json!([]), json!([file]), "INVALID_INPUT"),
+            (
+                json!([directory, directory]),
+                json!([file]),
+                "INVALID_INPUT",
+            ),
+            (json!([directory]), json!([]), "INVALID_INPUT"),
+            (json!([{"path":"","mode":0o200}]), json!([file]), "EACCES"),
+            (
+                json!([{"path":"","mode":0o4755}]),
+                json!([file]),
+                "INVALID_INPUT",
+            ),
+            (
+                json!([directory]),
+                json!([{"path":"a","mode":0o200,"content":""}]),
+                "EACCES",
+            ),
+            (
+                json!([directory]),
+                json!([{"path":"a","mode":0o644,"content":"#"}]),
+                "INVALID_INPUT",
+            ),
+            (
+                json!([directory]),
+                json!([{"path":"a","mode":0o644,"content":"A".repeat(1_398_105)}]),
+                "INVALID_INPUT",
+            ),
+            (
+                json!([directory]),
+                json!([{"path":"a","mode":0o644,"content":"A".repeat(1_398_104)}]),
+                "INVALID_INPUT",
+            ),
+            (json!([directory]), json!([file, file]), "EEXIST"),
+            (
+                json!([directory]),
+                json!([{"path":"../a","mode":0o644,"content":""}]),
+                "INVALID_INPUT",
+            ),
+        ] {
+            let result = op(
+                json!({"operation":"stage_package","relative":".skill-staging/id/package","directories":directories,"files":files}),
+            );
+            assert_eq!(result["code"], code);
+            assert_eq!(op(remove(".skill-staging/id/package"))["ok"], true);
+        }
+        let mut oversized = serde_json::to_vec(&request(&root, ensure("regular"))).unwrap();
+        oversized.resize(MAX_REQUEST_BYTES as usize + 1, b' ');
+        assert_eq!(reply(&oversized[..])["code"], "INVALID_INPUT");
+        oversized.resize(MAX_PACKAGE_REQUEST_BYTES as usize + 1, b' ');
+        assert_eq!(reply(&oversized[..])["code"], "INVALID_INPUT");
+    }
+
+    #[test]
     fn refuses_symlink_ancestors_and_unlinks_only_the_selected_leaf() {
         let dir = tempdir().unwrap();
         let base = dir.path().canonicalize().unwrap();
@@ -191,6 +295,12 @@ mod supported {
         #[cfg(target_os = "macos")]
         let raw = "雪";
         fs::write(root.join("stage/old/deeper").join(raw), "old").unwrap();
+        fs::set_permissions(
+            root.join("stage/old/deeper"),
+            fs::Permissions::from_mode(0o555),
+        )
+        .unwrap();
+        fs::set_permissions(root.join("stage/old"), fs::Permissions::from_mode(0o500)).unwrap();
         for path in ["stage/old", "stage/old", "stage/missing/child"] {
             assert_eq!(run(&request(&root, remove(path)))["ok"], true);
         }

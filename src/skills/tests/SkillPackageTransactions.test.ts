@@ -8,6 +8,7 @@ vi.mock('node:fs/promises', async importOriginal => {
   return {
     ...actual,
     rename: vi.fn(actual.rename),
+    link: vi.fn(actual.link),
     mkdir: vi.fn(actual.mkdir),
     lstat: vi.fn(actual.lstat),
     opendir: vi.fn(actual.opendir),
@@ -16,6 +17,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
 afterEach(() => {
   vi.mocked(fs.rename).mockImplementation(actual.rename);
+  vi.mocked(fs.link).mockImplementation(actual.link);
   vi.mocked(fs.mkdir).mockImplementation(actual.mkdir);
   vi.mocked(fs.lstat).mockImplementation(actual.lstat);
   vi.mocked(fs.opendir).mockImplementation(actual.opendir);
@@ -201,4 +203,60 @@ it('preserves the previous package and rejects provenance when published bytes d
     'Pinned notes',
   );
   await expect(manager.recover()).rejects.toThrow('recovery is required');
+});
+
+it('publishes a replacement preference through a temporary inside the protected profile directory', async () => {
+  const { root, state, store } = await aSkillLifecycle();
+  await state.setEnabled('user-skill', false);
+  const renamed: string[] = [];
+  vi.mocked(fs.rename).mockImplementation(async (before, after) => {
+    if (String(after) === join(root, 'skill-state.json')) renamed.push(String(before));
+    await actual.rename(before, after);
+  });
+  await state.setEnabled('user-skill', true);
+  const latest = await store.read('skill-state.json');
+  await expect(
+    store.replace('skill-state.json', latest.revision, 'other', false, { temporaryDirectory: join(root, '..') }),
+  ).rejects.toThrow('escapes');
+  expect(renamed).toHaveLength(1);
+  expect(renamed[0]).toMatch(/\/\.skill-staging\/\.[^/]+\.glyph\.tmp$/u);
+});
+
+it('propagates directory-mode inspection failures before moving the original', async () => {
+  const { root, location, manager, install } = await aSkillLifecycle();
+  const skill = await install();
+  const { SkillPackageDraft } = await import('#src/skills/SkillPackageDraft.js');
+  const input = aSkillDraft().toJSON();
+  const update = await manager.prepare(
+    location.id,
+    new SkillPackageDraft({
+      ...input,
+      files: [...input.files, { path: 'new-branch/notes', encoding: 'utf8', content: 'Updated' }],
+    }),
+    skill.id,
+  );
+  vi.mocked(fs.lstat).mockImplementation((path, options) => {
+    if (String(path) === join(root, skill.directory, 'new-branch'))
+      return Promise.reject(Object.assign(new Error('Mode unavailable'), { code: 'EACCES' }));
+    return actual.lstat(path, options);
+  });
+  const moves = vi.spyOn(location.mutations, 'renameExclusive');
+  await expect(manager.apply(update.id)).rejects.toThrow('Mode unavailable');
+  expect(moves).not.toHaveBeenCalled();
+});
+
+it('publishes the self-ignore marker exclusively and propagates a failed marker write before locking', async () => {
+  const { root } = await aSkillLifecycle();
+  const { privateSkillDirectory } = await import('#src/skills/SkillPackageStorage.js');
+  const marker = join(root, '.skill-staging/.gitignore');
+  await actual.rm(marker);
+  vi.mocked(fs.link).mockImplementationOnce(async (from, to) => {
+    await actual.link(from, to);
+    throw Object.assign(new Error('Concurrent creator'), { code: 'EEXIST' });
+  });
+  await expect(privateSkillDirectory(root)).resolves.toBe(join(root, '.skill-staging'));
+  await actual.rm(marker);
+  vi.mocked(fs.link).mockRejectedValueOnce(Object.assign(new Error('Disk full'), { code: 'ENOSPC' }));
+  await expect(privateSkillDirectory(root)).rejects.toThrow('Disk full');
+  await expect(actual.stat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
 });

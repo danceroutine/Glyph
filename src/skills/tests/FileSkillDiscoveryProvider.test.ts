@@ -335,3 +335,40 @@ describe('Skill compatibility location boundaries', () => {
     expect((await provider.discover())[0]?.message).toBe('Skill metadata is unavailable.');
   });
 });
+
+it('bounds aggregate manifest reads and preserves the admitted descriptors and overflow diagnostics', async () => {
+  const fixture = await skillFixture();
+  const names = Array.from({ length: 34 }, (_, index) => 'example-' + String(index).padStart(2, '0'));
+  const reads = vi.spyOn(fixture.store, 'read').mockImplementation(async (path, options) => {
+    const name = path.split('/').at(-2)!;
+    const text = `---\nname: ${name}\ndescription: Example\n---\nBody`.padEnd(256 * 1024, ' ');
+    expect(options?.maxBytes).toBe(Buffer.byteLength(text));
+    return {
+      path,
+      text,
+      revision: 'revision',
+      byteOrderMark: false,
+      byteLength: Buffer.byteLength(text),
+      mode: 0o644,
+      identity: path,
+    };
+  });
+  const found = await fixture.provider(names.map(name => '.glyph/skills/' + name + '/SKILL.md')).discover();
+  expect(reads).toHaveBeenCalledTimes(32);
+  expect(found.filter(skill => skill.status === 'active')).toHaveLength(32);
+  expect(found.slice(-2).every(skill => skill.message?.includes('8 MiB'))).toBe(true);
+});
+
+it('checks every resource again after reconciling a concurrent publication', async () => {
+  const fixture = await skillFixture();
+  const entry = '.glyph/skills/example/SKILL.md';
+  const resource = '.glyph/skills/example/references/notes.md';
+  await fixture.write(entry, manifest());
+  await fixture.write(resource, 'old');
+  const provider = fixture.provider([entry, resource]);
+  const [skill] = await provider.discover();
+  await expect(provider.capture(skill!, undefined, () => fixture.write(resource, 'updated'))).rejects.toThrow(
+    'changed during capture',
+  );
+  expect((await provider.capture(skill!)).readResource('references/notes.md').content).toBe('updated');
+});

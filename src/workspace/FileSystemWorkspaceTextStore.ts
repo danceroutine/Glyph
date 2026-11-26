@@ -23,6 +23,7 @@ import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
 import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';
 import { WorkspaceAccessPolicy } from './policy/WorkspaceAccessPolicy.ts';
+import type { WorkspaceMutationOptions } from './WorkspaceMutationOptions.ts';
 import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import { WorkspaceReadLimitError } from './WorkspaceReadLimitError.ts';
 import { assertWellFormedWorkspacePath } from './assertWellFormedWorkspacePath.ts';
@@ -292,6 +293,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     expectedRevision: string,
     text: string,
     byteOrderMark: boolean,
+    options?: WorkspaceMutationOptions & { readonly temporaryDirectory?: string },
   ): Promise<WorkspaceTextSnapshot> {
     // POSIX filesystems do not expose compare-and-swap replacement by content
     // revision. The second check narrows, but cannot eliminate, the interval in
@@ -300,7 +302,12 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const path = this.normalizePath(input);
     const current = await this.assertRevision(path, expectedRevision);
     const absolute = resolve(this.root, path);
-    const temporary = resolve(dirname(absolute), `.${randomUUID()}.glyph.tmp`);
+    if (options?.temporaryDirectory !== undefined) {
+      const root = await realpath(this.root);
+      assertInsideRoot(root, options.temporaryDirectory, path);
+      await this.assertNoSymlinkSegments(relative(root, options.temporaryDirectory).split(sep).join('/'), false);
+    }
+    const temporary = resolve(options?.temporaryDirectory ?? dirname(absolute), `.${randomUUID()}.glyph.tmp`);
     try {
       await writeFile(temporary, toBytes(text, byteOrderMark), { flag: 'wx', mode: current.mode });
       await chmod(temporary, current.mode);
