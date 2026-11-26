@@ -40,6 +40,7 @@ interface Connection {
 interface WorkspaceRuntimeRecord {
   readonly runtime: GlyphDesktopWorkspaceRuntime;
   readonly ownerWindowId: string;
+  readonly trusted: boolean;
 }
 
 /**
@@ -229,7 +230,7 @@ export class GlyphDesktopHost {
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
   ): Promise<readonly GlyphHostEvent[]> {
     const key = getWorkspaceKey(connection.identity);
-    if (command.trusted !== connection.trusted && !connection.readOnly && connection.attached) {
+    if (command.trusted !== connection.trusted && connection.attached) {
       // Trust changes are lifecycle boundaries. Revocation drains tools; a
       // grant must reconcile deferred reviews before authorizing new mutations.
       connection.trusted = false;
@@ -256,7 +257,7 @@ export class GlyphDesktopHost {
             },
           })
           .then(runtime => {
-            const created = { runtime, ownerWindowId: ownership.ownerWindowId };
+            const created = { runtime, ownerWindowId: ownership.ownerWindowId, trusted: command.trusted };
             this.runtimes.set(key, created);
             return created;
           })
@@ -272,6 +273,13 @@ export class GlyphDesktopHost {
       record = await creating;
     }
     this.assertCurrentConnection(connection);
+    if (record.trusted !== command.trusted) {
+      connection.attached = false;
+      connection.ready = false;
+      connection.canReplay = false;
+      connection.trusted = command.trusted;
+      throw new Error('Match the owning window’s workspace trust before sharing its Glyph session.');
+    }
     if (this.runtimeStops.has(key)) throw new Error('The owning window disconnected during workspace initialization.');
     connection.attached = true;
     connection.ready = true;
