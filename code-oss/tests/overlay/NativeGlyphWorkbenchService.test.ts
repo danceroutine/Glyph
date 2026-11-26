@@ -460,7 +460,7 @@ describe(NativeGlyphWorkbenchService, () => {
 
     await (host.handleEditorRequest as (value: unknown) => Promise<unknown>)(request);
 
-    expect(editor.handle).toHaveBeenCalledWith(request);
+    expect(editor.handle).toHaveBeenCalledWith(request, undefined);
     expect((context.composer as unknown as () => unknown)()).toBe(service.composer);
     expect(service.ideContext).toBe((context as unknown as { ide: unknown }).ide);
   });

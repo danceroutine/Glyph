@@ -368,6 +368,7 @@ async function sendDocument(document: GlyphPromptDocument, send: SendMessage): P
   }
   const {
     manualRuleIds: _ruleIds,
+    skillIds: _skillIds,
     referenceSpans: _references,
     attachmentSpans: _spans,
     ...options

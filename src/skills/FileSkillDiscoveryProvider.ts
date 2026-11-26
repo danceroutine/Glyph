@@ -19,7 +19,6 @@ export interface SkillDiscoveryLocation {
     signal?: AbortSignal,
   ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   /** Optional package-scoped inventory for native indexes. */
-  readonly captureFiles?: (directory: string, signal?: AbortSignal) => ReturnType<SkillDiscoveryLocation['listFiles']>;
   readonly uriForPath: (path: string) => string;
   readonly captureFiles?: (
     directory: string,

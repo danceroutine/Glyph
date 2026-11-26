@@ -100,7 +100,7 @@ describe('Skill package inventory boundaries', () => {
       uriForPath: path => path,
       refreshIndex: async () => {},
     });
-    await expect(provider.capture(aSkillDescriptor())).rejects.toThrow('file budget');
+    await expect(provider.capture(aSkillDescriptor())).rejects.toThrow('inventory is incomplete');
     expect(read).not.toHaveBeenCalled();
   });
 });
