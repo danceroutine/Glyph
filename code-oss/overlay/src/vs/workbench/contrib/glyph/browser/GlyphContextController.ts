@@ -399,7 +399,9 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       this.assertTrusted();
       await this.refreshInstructionSources?.();
       this.assertTrusted();
-      const rule = this.instructionSources().find(source => source.id === attachment.ruleId);
+      const rule = this.instructionSources().find(
+        source => source.id === (attachment.ruleId ?? decodeURIComponent(attachment.uri.slice('glyph-rule:'.length))),
+      );
       if (!rule || !isManualRule(rule))
         throw new GlyphContextError(
           GlyphDesktopErrorCode.NOT_FOUND,
@@ -427,7 +429,9 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
     if (attachment.unavailable !== undefined && attachment.unavailable !== '') return attachment.unavailable;
     if (attachment.kind === GlyphContextAttachmentKind.RULE) {
-      const rule = this.instructionSources().find(source => source.id === attachment.ruleId);
+      const rule = this.instructionSources().find(
+        source => source.id === (attachment.ruleId ?? decodeURIComponent(attachment.uri.slice('glyph-rule:'.length))),
+      );
       if (!rule || !isManualRule(rule)) return 'Selected manual rule is unavailable. Remove it or choose it again.';
       return rule.revision && rule.revision !== attachment.contentRevision
         ? 'These instructions changed. The latest version will load when you send.'
@@ -450,8 +454,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   }
 
   rebindAttachment(attachment: GlyphContextAttachment): GlyphContextAttachment {
-    if (attachment.kind === GlyphContextAttachmentKind.RULE) return attachment;
     const { unavailable: _unavailable, token: _token, ...capture } = attachment;
+    if (attachment.kind === GlyphContextAttachmentKind.RULE) return capture;
     const uri = URI.parse(attachment.uri);
     if (uri.scheme === 'untitled') return capture;
     if (uri.scheme !== 'file')

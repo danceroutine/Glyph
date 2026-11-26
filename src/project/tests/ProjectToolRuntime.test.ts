@@ -197,6 +197,9 @@ describe(ProjectToolRuntime, () => {
       );
 
       const tools = runtime.tools;
+      const presentation = tools.find(tool => tool.name === ProjectToolName.PROPOSE_EDITS)?.activityPresentation;
+      expect(presentation?.show('{"status":"INSTRUCTION_CONTEXT_REQUIRED"}')).toBe(false);
+      expect(presentation?.show('{"status":"PROPOSED"}')).toBe(true);
 
       expect(tools.map(tool => tool.name)).toEqual([
         ProjectToolName.LIST_FILES,

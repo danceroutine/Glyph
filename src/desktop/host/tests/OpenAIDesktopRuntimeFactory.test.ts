@@ -1,3 +1,4 @@
+import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -336,6 +337,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         runtime = await factory.create(input);
         expect((await runtime.snapshot()).chats.map(chat => chat.id)).toEqual(['saved-chat']);
         expect((await runtime.snapshot()).proposals.map(value => value.id)).toEqual([proposal.id]);
+        if (!trusted) await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
         expect(requests).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(indexing).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 10 : 0);
@@ -970,6 +972,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           ['**/.cursor/rules/*.mdc', { limit: 10_000 }],
         ]),
       );
+      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      expect(glob).toHaveBeenCalledTimes(10);
       expect(diskList).not.toHaveBeenCalled();
     });
 
