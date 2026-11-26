@@ -1419,6 +1419,10 @@ describe(GlyphContextController, () => {
     await expect(controller.refreshAttachment(attachment)).rejects.toThrow('unavailable');
     services.instructionSources.push(rule);
     expect(controller.rebindAttachment(attachment)).toEqual(attachment);
+    const { ruleId: _ruleId, ...legacy } = attachment;
+    expect(await controller.checkAttachment(legacy)).toContain('instructions changed');
+    expect((await controller.refreshAttachment(legacy)).contentRevision).toBe('new');
+    expect(controller.rebindAttachment({ ...attachment, unavailable: 'previous root' })).toEqual(attachment);
     expect(await controller.checkAttachment(attachment)).toContain('instructions changed');
     const current = await controller.refreshAttachment({ ...attachment, unavailable: 'previously disabled' });
     expect(current).toMatchObject({ path: 'New name', contentRevision: 'new' });
