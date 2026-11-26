@@ -1,7 +1,8 @@
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 import { SkillProjectMutationPolicy } from './SkillProjectMutationPolicy.ts';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
@@ -14,7 +15,7 @@ import type { SkillPackageFile } from './SkillPackage.ts';
 import { packageRevision } from './skillPackageRevision.ts';
 import { skillPackageId } from './skillPackageId.ts';
 import { inventoryFiles, readPackageFiles } from './skillPackageInventory.ts';
-import { optionalStat, privateSkillDirectory, syncDirectory, withSkillLock } from './SkillPackageStorage.ts';
+import { optionalStat, privateSkillDirectory, withSkillLock } from './SkillPackageStorage.ts';
 import { SkillTransactionJournal, type SkillTransaction } from './SkillTransactionJournal.ts';
 
 export interface SkillPackageLocation {
@@ -80,25 +81,23 @@ async function diskRevision(directory: string): Promise<string | null> {
   if (!(await optionalStat(directory))) return null;
   return packageRevision(await readPackageFiles(directory, await inventoryFiles(directory)));
 }
-async function stagePackage(directory: string, files: PackageFiles, signal?: AbortSignal) {
-  await mkdir(directory, { mode: 0o700 });
-  const directories = new Set([directory]);
-  for (const [path, file] of files) {
-    signal?.throwIfAborted();
-    const destination = join(directory, path);
-    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
-    for (let current = dirname(destination); current !== directory; current = dirname(current))
-      directories.add(current);
-    const handle = await open(destination, 'wx', 0o600);
-    try {
-      await handle.writeFile(file.bytes);
-      await handle.chmod(file.mode);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
+async function packageDirectoryModes(target: string, files: PackageFiles, defaultMode: number) {
+  const names = new Set(['']);
+  for (const path of files.keys()) {
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i++) names.add(parts.slice(0, i).join('/'));
   }
-  for (const path of [...directories].toSorted((a, b) => b.length - a.length)) await syncDirectory(path);
+  const modes = new Map<string, number>();
+  for (const name of names) {
+    // A draft can legitimately replace a file with a directory or vice versa.
+    const stat = await optionalStat(join(target, name)).catch(error => {
+      if (errorCodeOf(error) !== 'ENOTDIR') throw error;
+      return undefined;
+    });
+    const parent = name.includes('/') ? posix.dirname(name) : '';
+    modes.set(name, stat?.isDirectory() ? stat.mode & 0o777 : (modes.get(parent) ?? defaultMode));
+  }
+  return modes;
 }
 
 /** Stages immutable packages, serializes each destination and recovers interrupted publication before discovery. */
@@ -123,9 +122,9 @@ export class SkillPackageManager {
       uri: pathToFileURL(join(location.store.root, location.directory)).toString(),
     }));
   }
-  async recover(): Promise<void> {
+  async recover(originId?: string): Promise<void> {
     for (const location of this.locations) {
-      await privateSkillDirectory(location.store.root);
+      if (originId !== undefined && location.id !== originId) continue;
       const root = await location.store.resolvePath(location.directory);
       if ((await this.journal.entries(root, location.id)).length > 0)
         await withSkillLock(location.store.root, 'destination', () => this.recoverLocation(location, root));
@@ -134,6 +133,7 @@ export class SkillPackageManager {
   async prepare(targetId: string, draft: SkillPackageDraft, replaceId?: string): Promise<SkillPreview> {
     if (this.ensureReady) await this.ensureReady();
     const location = this.location(targetId);
+    await this.recover(location.id);
     const existing = replaceId ? this.catalog.skills.find(skill => skill.id === replaceId) : undefined;
     if (replaceId && (!existing?.directory || existing.origin.id !== targetId || existing.name !== draft.name))
       throw new Error('The update must target the selected installed skill.');
@@ -150,6 +150,7 @@ export class SkillPackageManager {
     const descriptor = this.catalog.skills.find(skill => skill.id === id);
     if (!descriptor?.directory || !descriptor.path) throw new Error('Skill is unavailable. Refresh Settings.');
     const location = this.location(descriptor.origin.id);
+    await this.recover(location.id);
     const before = await this.read(location, descriptor.directory);
     if (before.size === 0) throw new Error('The installed skill is missing. Refresh Settings.');
     return this.remember(location, descriptor.directory, before);
@@ -166,11 +167,17 @@ export class SkillPackageManager {
     this.pending.delete(id);
     signal?.throwIfAborted();
     if (this.ensureReady) await this.ensureReady();
-    await withSkillLock(change.location.store.root, 'destination', () => this.commit(change, signal), signal);
+    const cleaned = await withSkillLock(
+      change.location.store.root,
+      'destination',
+      () => this.commit(change, signal),
+      signal,
+    );
     try {
-      await change.location.refreshIndex();
       await this.catalog.refresh();
-      return { applied: true };
+      return cleaned
+        ? { applied: true }
+        : { applied: true, refreshError: 'The package changed successfully. Backup cleanup will retry on refresh.' };
     } catch {
       return {
         applied: true,
@@ -236,14 +243,9 @@ export class SkillPackageManager {
   private async read(location: SkillPackageLocation, directory: string): Promise<PackageFiles> {
     const root = await this.target(location, directory);
     if (!(await optionalStat(root))) return new Map();
-    const listed = await location.listFiles();
-    if (listed.truncated) throw new Error('Skill catalog is incomplete.');
     const prefix = directory + '/';
-    const paths = new Set(listed.files.filter(path => path.startsWith(prefix)));
-    if (paths.size > 256) throw new Error('Skill package exceeds 256 files.');
     const inventory = await inventoryFiles(root);
-    if (inventory.length !== paths.size || inventory.some(path => !paths.has(prefix + path)))
-      throw new Error('Package contains unindexed or unauthorized files. Refresh before managing it.');
+    await this.assertIndexed(location, directory, inventory);
     const files = new Map<string, SkillPackageFile>();
     let total = 0;
     for (const path of inventory) {
@@ -257,25 +259,37 @@ export class SkillPackageManager {
     }
     return files;
   }
+  private async assertIndexed(location: SkillPackageLocation, directory: string, inventory: readonly string[]) {
+    const listed = await location.listFiles();
+    if (listed.truncated) throw new Error('Skill catalog is incomplete.');
+    const prefix = directory + '/';
+    const paths = new Set(listed.files.filter(path => path.startsWith(prefix)));
+    if (paths.size > 256) throw new Error('Skill package exceeds 256 files.');
+    if (inventory.length !== paths.size || inventory.some(path => !paths.has(prefix + path)))
+      throw new Error('Package contains unindexed or unauthorized files. Refresh before managing it.');
+  }
   private async persist(entry: SkillTransaction) {
     if (entry.replacement) await this.state.record(entry.skillId, entry.source!, entry.replacement);
     else await this.state.forget(entry.skillId);
   }
   private async recoverLocation(location: SkillPackageLocation, root: string) {
     for (const entry of await this.journal.entries(root, location.id)) {
-      const target = await this.target(location, entry.directory);
-      const stage = join(await privateSkillDirectory(location.store.root), entry.id);
       if (entry.retired) {
-        await this.finish(location, entry);
+        await this.cleanup(location, entry);
         continue;
       }
+      const target = await this.target(location, entry.directory);
+      const stage = join(await privateSkillDirectory(location.store.root), entry.id);
       await location.assertClean?.(target);
       if (entry.published) {
         if ((await diskRevision(target)) !== entry.replacement)
           throw new Error('Package recovery is required. Published files changed at ' + target);
         await this.assertBackup(entry, stage);
         await this.persist(entry);
-      } else await this.rollback(location, entry, stage, target);
+      } else {
+        await this.rollback(location, entry, stage, target);
+        await location.refreshIndex();
+      }
       await this.finish(location, entry);
     }
   }
@@ -285,9 +299,18 @@ export class SkillPackageManager {
   }
   private async finish(location: SkillPackageLocation, entry: SkillTransaction) {
     // Record the decision before cleanup so an interruption can finish deleting only our private staging.
-    if (!entry.retired) await this.journal.write({ ...entry, retired: true });
-    await location.mutations.removeTree('.skill-staging/' + entry.id);
-    await this.journal.finish(entry.id);
+    await this.journal.write({ ...entry, retired: true });
+    return this.cleanup(location, entry);
+  }
+  private async cleanup(location: SkillPackageLocation, entry: SkillTransaction) {
+    try {
+      await location.mutations.removeTree('.skill-staging/' + entry.id);
+      await this.journal.finish(entry.id);
+      return true;
+    } catch {
+      // The durable retirement already settled both the installed files and profile state.
+      return false;
+    }
   }
   private async rollback(location: SkillPackageLocation, entry: SkillTransaction, stage: string, target: string) {
     const backup = join(stage, 'previous');
@@ -335,11 +358,13 @@ export class SkillPackageManager {
       throw new Error('The skill changed after preview. Preview it again.');
     const target = await this.target(location, directory);
     if (preview.destination.path !== target) throw new Error('The skill destination changed after preview.');
-    await location.mutations.ensureDirectory(posix.dirname(directory));
+    // mkdir applies the process umask to newly created project parents. The published tree
+    // then inherits the actual parent permissions, including a checkout's deliberate sharing settings.
+    await location.mutations.ensureDirectory(posix.dirname(directory), location.scope === 'project' ? 0o777 : 0o700);
+    const directoryMode = location.scope === 'project' ? (await lstat(dirname(target))).mode & 0o777 : 0o700;
     const relativeStage = '.skill-staging/' + preview.id;
     const stage = join(await privateSkillDirectory(location.store.root), preview.id);
-    await mkdir(stage, { mode: 0o700 });
-    await syncDirectory(dirname(stage));
+    await location.mutations.createStage(relativeStage);
     const entry: SkillTransaction = {
       id: preview.id,
       root,
@@ -358,7 +383,16 @@ export class SkillPackageManager {
     try {
       await this.journal.write(entry);
       recorded = true;
-      if (files) await stagePackage(join(stage, 'package'), files, signal);
+      if (files) {
+        signal?.throwIfAborted();
+        await location.mutations.stagePackage(
+          relativeStage + '/package',
+          files,
+          await packageDirectoryModes(target, files, directoryMode),
+        );
+        if ((await diskRevision(join(stage, 'package'))) !== preview.revision)
+          throw new Error('The staged skill is unreadable or changed. Preview it again.');
+      }
       await location.assertClean?.(target);
       signal?.throwIfAborted();
       if (expected) {
@@ -369,6 +403,8 @@ export class SkillPackageManager {
       signal?.throwIfAborted();
       if (files) await location.mutations.renameExclusive(relativeStage + '/package', directory);
       if ((await diskRevision(target)) !== entry.replacement) throw new Error('The skill changed during publication.');
+      await location.refreshIndex();
+      if (files) await this.assertIndexed(location, directory, [...files.keys()]);
       await location.assertClean?.(target);
       await this.assertBackup(entry, stage);
       signal?.throwIfAborted();
@@ -387,10 +423,11 @@ export class SkillPackageManager {
           await this.journal.write(entry);
         }
         await this.rollback(location, entry, stage, target);
+        await location.refreshIndex();
         await this.finish(location, entry);
       } else await location.mutations.removeTree(relativeStage);
       throw error;
     }
-    await this.finish(location, entry);
+    return this.finish(location, entry);
   }
 }

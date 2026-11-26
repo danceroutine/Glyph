@@ -20,11 +20,19 @@ export class SkillPreferenceCommitUncertain extends Error {
 }
 /** User-owned lifecycle preferences, keyed by stable package identity across workspace reloads. */
 export class SkillStateStore {
+  private serialized?: string;
+  private readonly listeners = new Set<() => void>();
   readonly enabled = new Map<string, boolean>();
   readonly installations = new Map<string, { source: string; revision: string }>();
   constructor(private readonly workspace: FileSystemWorkspaceTextStore) {}
   get userDirectory(): string {
     return this.workspace.root;
+  }
+  onDidChange(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
   async initialize(): Promise<void> {
     await withSkillLock(this.userDirectory, 'preferences', async () => {
@@ -55,7 +63,10 @@ export class SkillStateStore {
       const text = JSON.stringify(next, null, 2);
       const destination = await this.workspace.resolvePath('skill-state.json');
       try {
-        if (previous) await this.workspace.replace('skill-state.json', previous.revision, text, false);
+        if (previous)
+          await this.workspace.replace('skill-state.json', previous.revision, text, false, {
+            temporaryDirectory: join(dirname(destination), '.skill-staging'),
+          });
         else {
           // An interrupted first write must leave either a complete JSON document or an absent preference file.
           const temporary = join(dirname(destination), '.skill-staging', randomUUID() + '.json');
@@ -97,9 +108,19 @@ export class SkillStateStore {
     });
   }
   private publish(data: Preferences): void {
+    const serialized = JSON.stringify(data);
+    if (this.serialized === serialized) return;
+    this.serialized = serialized;
     this.enabled.clear();
     this.installations.clear();
     for (const [id, enabled] of Object.entries(data.enabled)) this.enabled.set(id, enabled);
     for (const [id, installation] of Object.entries(data.installations)) this.installations.set(id, installation);
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+        // A disconnected observer cannot undo an acknowledged profile write or starve the other catalogs.
+      }
+    }
   }
 }

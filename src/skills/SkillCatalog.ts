@@ -5,16 +5,26 @@ import type { SkillDiscoveryProvider } from './SkillDiscoveryProvider.ts';
 export class SkillCatalog {
   private generation = 0;
   private published = 0;
+  private discovered: readonly SkillDescriptor[] = [];
   private current: readonly SkillDescriptor[] = [];
+  private readonly unsubscribePreferences: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
   constructor(
     private readonly providers: readonly SkillDiscoveryProvider[],
     private readonly enabled: ReadonlyMap<string, boolean> = new Map(),
     private readonly installations: ReadonlyMap<string, { source: string; revision: string }> = new Map(),
     private readonly ensureReady?: () => Promise<void>,
+    private readonly ensureLocation?: (originId: string) => Promise<void>,
+    observePreferences?: (listener: () => void) => () => void,
   ) {
     if (new Set(providers.map(provider => provider.id)).size !== providers.length)
       throw new Error('Skill provider IDs must be unique.');
+    this.unsubscribePreferences = observePreferences?.(() => {
+      this.refreshPreferences();
+    });
+  }
+  dispose(): void {
+    this.unsubscribePreferences?.();
   }
   get skills(): readonly SkillDescriptor[] {
     return this.current;
@@ -38,6 +48,7 @@ export class SkillCatalog {
         this.providers.map(async provider => {
           try {
             if (unavailable) throw unavailable.cause;
+            if (this.ensureLocation) await this.ensureLocation(provider.id);
             return await provider.discover(signal);
           } catch (error) {
             if (signal?.aborted) throw signal.reason;
@@ -62,24 +73,12 @@ export class SkillCatalog {
       )
     )
       .flat()
-      .map(skill => ({
-        ...skill,
-        ...(this.installations.has(skill.id)
-          ? {
-              installedFrom: this.installations.get(skill.id)!.source,
-              packageRevision: this.installations.get(skill.id)!.revision,
-            }
-          : {}),
-        enabled: skill.status === 'active' && (this.enabled.get(skill.id) ?? skill.enabled),
-      }))
       .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     signal?.throwIfAborted();
     if (generation < this.published) return this.current;
     this.published = generation;
-    if (JSON.stringify(discovered) !== JSON.stringify(this.current)) {
-      this.current = discovered;
-      for (const listener of this.listeners) listener();
-    }
+    this.discovered = discovered;
+    this.refreshPreferences();
     return this.current;
   }
   appliesTo(skill: SkillDescriptor, paths: readonly string[]): boolean {
@@ -98,9 +97,29 @@ export class SkillCatalog {
       throw new Error('Skill is disabled or unavailable.');
     const provider = this.providers.find(candidate => candidate.id === descriptor.origin.id);
     if (!provider) throw new Error('Skill provider is unavailable.');
-    return provider.capture(descriptor, signal);
+    const reconcile = this.ensureLocation?.bind(this, provider.id);
+    if (reconcile) await reconcile();
+    const snapshot = await provider.capture(descriptor, signal, reconcile);
+    if (this.enabled.get(descriptor.id) === false) throw new Error('Skill was disabled during capture.');
+    return snapshot;
   }
   async refreshIndexes(): Promise<void> {
     await Promise.all(this.providers.map(provider => provider.refreshIndex()));
+  }
+  private refreshPreferences(): void {
+    const projected = this.discovered.map(skill => ({
+      ...skill,
+      ...(this.installations.has(skill.id)
+        ? {
+            installedFrom: this.installations.get(skill.id)!.source,
+            packageRevision: this.installations.get(skill.id)!.revision,
+          }
+        : {}),
+      enabled: skill.status === 'active' && (this.enabled.get(skill.id) ?? skill.enabled),
+    }));
+    if (JSON.stringify(projected) !== JSON.stringify(this.current)) {
+      this.current = projected;
+      for (const listener of this.listeners) listener();
+    }
   }
 }
