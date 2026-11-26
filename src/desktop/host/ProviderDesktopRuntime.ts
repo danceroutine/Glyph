@@ -183,7 +183,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       ...(this.options.instructionWatchRoots ? { instructionWatchRoots: this.options.instructionWatchRoots } : {}),
       ...(skills ? { skills } : {}),
       ...(this.options.skillManager ? { skillTargets: this.options.skillManager.targets } : {}),
-      ...(this.skillPreview ? { skillPreview: this.skillPreview } : {}),
+      ...(this.skillPreview && this.options.skillManager?.hasPreview(this.skillPreview.id)
+        ? { skillPreview: this.skillPreview }
+        : {}),
       ...(this.skillManagementMessage ? { skillManagementMessage: this.skillManagementMessage } : {}),
       agentReviews: this.options.agentReviews?.reviews ?? [],
       ...(instructionSources ? { instructionSources: toInstructionSources(instructionSources) } : {}),
@@ -347,18 +349,25 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         const manager = this.options.skillManager;
         if (!manager || this.skillPreview?.id !== command.previewId) throw new Error('Skill preview expired.');
         let message: string | undefined;
-        if (command.type === GlyphWorkbenchCommandType.APPLY_SKILL)
-          message = (await manager.apply(command.previewId, this.discovery.signal)).refreshError;
-        else manager.discard(command.previewId);
-        // A later preview may finish while a package transaction is settling.
-        if (this.skillPreview?.id !== command.previewId) return;
-        this.skillManagementMessage = message;
-        this.skillPreview = undefined;
-        this.publish({
-          type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED,
-          targets: manager.targets,
-          ...(this.skillManagementMessage ? { message: this.skillManagementMessage } : {}),
-        });
+        try {
+          if (command.type === GlyphWorkbenchCommandType.APPLY_SKILL)
+            message = (await manager.apply(command.previewId, this.discovery.signal)).refreshError;
+          manager.discard(command.previewId);
+        } catch (error) {
+          message = error instanceof Error ? error.message : 'Skill change failed. Preview the change again.';
+          throw error;
+        } finally {
+          // Completion belongs to this token; an overlapping preview can already own the Settings panel.
+          if (this.skillPreview?.id === command.previewId && !manager.hasPreview(command.previewId)) {
+            this.skillPreview = undefined;
+            this.skillManagementMessage = message;
+            this.publish({
+              type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED,
+              targets: manager.targets,
+              ...(message ? { message } : {}),
+            });
+          }
+        }
         return;
       }
       case GlyphWorkbenchCommandType.SET_SKILL_ENABLED:
@@ -786,6 +795,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   private async stop(): Promise<void> {
     this.disposed = true;
+    if (this.skillPreview) this.options.skillManager?.discard(this.skillPreview.id);
+    this.skillPreview = undefined;
     // Revoke all workspace execution together. A provider or pending decision
     // must not keep background shells or agent review alive while it drains.
     const stopped = await Promise.allSettled([

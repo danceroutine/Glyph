@@ -1,3 +1,5 @@
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import { aSkillDraft, aSkillLifecycle } from '#src/skills/tests/fixtures/aSkillLifecycle.js';
 import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
@@ -4656,6 +4658,29 @@ describe('Skill lifecycle host commands', () => {
     settle({ applied: true });
     await pending;
     expect((await runtime.snapshot()).skillPreview?.id).toBe(current.id);
+  });
+  it('settles consumed stale previews in snapshots and change events and releases tokens on shutdown', async () => {
+    const { runtime, provider, manager, install, root, events } = await setup();
+    const skill = await install();
+    await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: provider.id, removeId: skill.id });
+    const previous = (await runtime.snapshot()).skillPreview!;
+    await writeFile(join(root, 'skills/example/SKILL.md'), 'Changed after preview.');
+    await expect(runtime.handle({ type: Command.APPLY_SKILL, previewId: previous.id })).rejects.toThrow(
+      'changed after preview',
+    );
+    expect((await runtime.snapshot()).skillPreview).toBeUndefined();
+    expect(events.findLast(event => event.type === GlyphHostEventType.SKILL_MANAGEMENT_CHANGED)).toMatchObject({
+      type: GlyphHostEventType.SKILL_MANAGEMENT_CHANGED,
+      message: expect.stringContaining('changed after preview'),
+    });
+    await runtime.handle({
+      type: Command.PREVIEW_SKILL,
+      targetId: provider.id,
+      draft: aSkillDraft('Other', 'other').toJSON(),
+    });
+    const pending = (await runtime.snapshot()).skillPreview!;
+    await runtime.dispose();
+    expect(manager.hasPreview(pending.id)).toBe(false);
   });
   it('rejects malformed enablement at the wire boundary before mutating persisted state', async () => {
     const { runtime, state } = await setup();
