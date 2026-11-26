@@ -1,6 +1,9 @@
-import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -962,6 +965,87 @@ function mockTools(execute: TestToolHandler, planningNames: readonly string[] = 
 }
 
 describe('provider-neutral steering', () => {
+  it('activates explicit skills through the initial provider-neutral turn pipeline', async () => {
+    const descriptor = aSkillDescriptor();
+    const capture = vi.fn(async () => aSkillPackage(descriptor, 'Initial skill instructions'));
+    const catalog = new SkillCatalog([
+      {
+        id: descriptor.origin.id,
+        origin: descriptor.origin,
+        discover: async () => [descriptor],
+        capture,
+        refreshIndex: async () => {},
+      },
+    ]);
+    const adapter = new ClaudeShapedAdapter();
+    const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10000 },
+      mockTools(async () => 'file'),
+      undefined,
+      turns,
+    );
+    const result = await runtime.send(
+      { text: 'Use this workflow', attachments: [], skillIds: [descriptor.id] },
+      { signal: new AbortController().signal, onText: () => {} },
+    );
+    expect(capture).toHaveBeenCalledOnce();
+    expect(result.context?.skills?.[0]?.body).toBe('Initial skill instructions');
+  });
+  it.each([true, false])(
+    'activates newly selected skills once at the steering boundary with a context coordinator: %s',
+    async coordinated => {
+      const descriptor = aSkillDescriptor();
+      const capture = vi.fn(async () => aSkillPackage(descriptor, 'Steered skill instructions'));
+      const catalog = new SkillCatalog([
+        {
+          id: descriptor.origin.id,
+          origin: descriptor.origin,
+          discover: async () => [descriptor],
+          capture,
+          refreshIndex: async () => {},
+        },
+      ]);
+      const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+      const adapter = new ClaudeShapedAdapter();
+      const stream = adapter.streamStep.bind(adapter);
+      let steps = 0;
+      let pending = false;
+      const contexts: AgentTurnContext['instructionContext'][] = [];
+      adapter.streamStep = async (turn, context) => {
+        steps++;
+        contexts.push(context.instructionContext);
+        const result = await stream({ ...turn, round: 1 }, context);
+        if (steps === 1) pending = true;
+        return result;
+      };
+      const runtime = new AgentRuntime(
+        adapter,
+        { timeoutMs: 10000 },
+        mockTools(async () => 'unused'),
+        undefined,
+        coordinated ? turns : undefined,
+      );
+      const result = await runtime.send('Start', {
+        signal: new AbortController().signal,
+        onText: () => {},
+        takeSteering: () => {
+          if (!pending) return [];
+          pending = false;
+          return [
+            { text: 'Use this workflow', attachments: [], skillIds: [descriptor.id, descriptor.id] },
+            { text: 'Continue', attachments: [], skillIds: [descriptor.id] },
+          ];
+        },
+      });
+      expect(steps).toBe(2);
+      expect(capture).toHaveBeenCalledTimes(coordinated ? 1 : 0);
+      expect(result.context?.skills?.[0]?.body).toBe(coordinated ? 'Steered skill instructions' : undefined);
+      expect(contexts).toHaveLength(2);
+      expect(contexts).toEqual([undefined, undefined]);
+    },
+  );
   const instruction = (queue: ChatSteeringQueue, text: string) => {
     queue.add(
       { text, attachments: [] },
@@ -1101,3 +1185,51 @@ function scopedToolOutput(): string {
     instructionContext: { schema: 'glyph.agent-instructions.v1', sources: [{ content: 'old scoped guidance' }] },
   });
 }
+
+it('rejects unavailable steering without aborting the active turn or replaying boundary context', async () => {
+  const adapter = new ClaudeShapedAdapter();
+  const descriptor = aSkillDescriptor();
+  const turns = new TurnContextCoordinator([
+    new SkillContextContributor(
+      new SkillCatalog([
+        {
+          id: descriptor.origin.id,
+          origin: descriptor.origin,
+          discover: async () => [descriptor],
+          capture: async () => aSkillPackage(descriptor),
+          refreshIndex: async () => {},
+        },
+      ]),
+    ),
+  ]);
+  let pending = true;
+  const reject = vi.fn();
+  const runtime = new AgentRuntime(
+    adapter,
+    { timeoutMs: 10000 },
+    mockTools(async () => 'file'),
+    undefined,
+    turns,
+  );
+  const result = await runtime.send(
+    { text: 'Start', attachments: [], skillIds: [descriptor.id] },
+    {
+      signal: new AbortController().signal,
+      onText: () => {},
+      onSteeringRejected: reject,
+      takeSteering: () => {
+        if (!pending) return [];
+        pending = false;
+        return [{ text: 'Use missing selection', attachments: [], skillIds: ['removed'] }];
+      },
+    },
+  );
+  expect(reject).toHaveBeenCalledWith(
+    expect.objectContaining({ text: 'Use missing selection' }),
+    expect.objectContaining({ message: expect.stringContaining('unavailable') }),
+  );
+  expect(result.context?.skills?.map(skill => skill.descriptor.id)).toEqual([descriptor.id]);
+  expect(
+    adapter.requests.flatMap(turn => turn.messages).some(message => message.content === 'Use missing selection'),
+  ).toBe(false);
+});
