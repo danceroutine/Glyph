@@ -36,6 +36,9 @@ it('keeps repository helpers outside writable projects and omits process-startup
     expect(() => repositoryEnvironment([project])).toThrow('outside writable workspaces');
     vi.stubEnv('GIT_CONFIG_GLOBAL', join(project, 'config'));
     expect(() => repositoryEnvironment([project])).toThrow('outside writable workspaces');
+    writeFileSync(join(home, 'explicit-config'), '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', join(home, 'explicit-config'));
+    expect(repositoryEnvironment([project]).GIT_CONFIG_GLOBAL).toBe(join(realpathSync(home), 'explicit-config'));
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

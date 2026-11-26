@@ -12,6 +12,20 @@ import { ShutdownSignal } from '#src/terminal/ShutdownSignal.js';
 const repositoryRoot = resolve(import.meta.dirname, '..', '..');
 
 describe('glyph command line', () => {
+  it('keeps an existing user profile private in the shell sandbox', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'glyph-cli-user-profile-'));
+    vi.stubEnv('GLYPH_USER_DIRECTORY', directory);
+    onTestFinished(async () => {
+      vi.unstubAllEnvs();
+      await rm(directory, { recursive: true, force: true });
+    });
+    const cli = prepareCli();
+    await cli.start();
+    await cli.finished;
+    const [launcher] = cli.instances('NativeShellSandboxLauncher');
+    const options = launcher!.args[0] as { privatePaths: () => readonly string[] };
+    expect(options.privatePaths()).toEqual([directory]);
+  });
   it('prints usage help without starting a terminal session', async () => {
     const cli = prepareCli({ argv: ['--help'] });
 
