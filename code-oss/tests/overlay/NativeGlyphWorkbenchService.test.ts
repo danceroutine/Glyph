@@ -538,6 +538,57 @@ describe(NativeGlyphWorkbenchService, () => {
       });
     });
 
+    it('restores legacy selected rules as removable badges using the catalog, including missing sources', async () => {
+      const { service, host } = await workbench({
+        extra: {
+          instructionSources: [
+            {
+              id: 'named',
+              kind: 'glyph_project_rule',
+              label: 'Project rule',
+              path: '.glyph/rules/named.mdc',
+              scope: '.',
+              status: 'active',
+              name: 'Named',
+              revision: 'revision',
+            },
+            {
+              id: 'file',
+              kind: 'glyph_project_rule',
+              label: 'Project rule',
+              path: '.glyph/rules/file.mdc',
+              scope: '.',
+              status: 'active',
+            },
+          ],
+        },
+      });
+      const composer = service.composer;
+      emit(host, {
+        type: GlyphHostEventType.CHAT_RESTORED,
+        chatId: 'alpha',
+        runs: [],
+        draft: {
+          text: 'Try /Named and /file.mdc',
+          attachments: [],
+          options: { manualRuleIds: ['named', 'file', 'missing'] },
+        },
+      });
+      const badges = composer.snapshot.document.parts.flatMap(part =>
+        part.type === 'attachment' ? [part.attachment] : [],
+      );
+      expect(badges.map(badge => [badge.ruleId, badge.path, badge.contentRevision])).toEqual([
+        ['named', 'Named', 'revision'],
+        ['file', 'file.mdc', 'file'],
+        ['missing', 'missing', 'missing'],
+      ]);
+      composer.setDraft('A replacement');
+      await composer.submit(async (_text, files, options) => {
+        expect(files).toEqual([]);
+        expect(options?.manualRuleIds).toBeUndefined();
+      });
+    });
+
     it('restores drafts without options and ignores drafts of chats without a composer', async () => {
       const { service, host } = await workbench();
       const composer = service.composer;
