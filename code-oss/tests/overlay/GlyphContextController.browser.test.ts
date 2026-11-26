@@ -234,6 +234,7 @@ describe(GlyphContextController, () => {
           id: 'new-skill',
           name: 'new-skill',
           description: 'Newly repaired workflow',
+          revision: 'repaired-r1',
           path: '.glyph/skills/new-skill/SKILL.md',
           directory: '.glyph/skills/new-skill',
           scope: '.',
@@ -246,7 +247,9 @@ describe(GlyphContextController, () => {
       ];
     });
     controller.setSkillSources(() => sources, refresh);
-    expect(await controller.searchInstructions('repaired')).toMatchObject([{ skillId: 'new-skill' }]);
+    expect(await controller.searchInstructions('repaired')).toMatchObject([
+      { skillId: 'new-skill', revision: 'repaired-r1' },
+    ]);
     expect(refresh).toHaveBeenCalledOnce();
     services.trust.isWorkspaceTrusted.mockReturnValue(false);
     await expect(controller.searchInstructions('repaired')).rejects.toThrow();
@@ -340,6 +343,9 @@ describe(GlyphContextController, () => {
     '/workspace/.cursor/rules/new.mdc',
     '/workspace/reference.md',
     '/custom/references/note.md',
+    '/workspace/pkg/.glyph/skills/new/SKILL.md',
+    '/workspace/.cursor/skills/new/SKILL.md',
+    '/custom/skills/new/SKILL.md',
   ])('refreshes instruction discovery after a relevant file or dirty-model change at %s', async path => {
     vi.useFakeTimers();
     const services = controllerServices();
@@ -366,7 +372,7 @@ describe(GlyphContextController, () => {
     const controller = createController(services);
     const refresh = vi.fn(async () => {});
     try {
-      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules']);
+      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules', 'file:///custom/skills']);
       controller.notifyInstructionsChanged();
       expect(services.files.watch).toHaveBeenCalledWith(URI.file('/custom/references/note.md'), {
         recursive: false,

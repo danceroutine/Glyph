@@ -631,8 +631,25 @@ describe(NativeGlyphWorkbenchService, () => {
       });
     });
 
+    it('restores a removable skill badge when the catalog is unavailable', async () => {
+      const { service, host, context } = await workbench();
+      const [catalog] = context.setSkillSources.mock.calls[0];
+      expect(catalog()).toEqual(service.state.skills ?? []);
+      const composer = service.composer;
+      emit(host, {
+        type: GlyphHostEventType.CHAT_RESTORED,
+        chatId: 'alpha',
+        runs: [],
+        draft: { text: '/gone', attachments: [], options: { skillIds: ['gone'] } },
+      });
+      expect(composer.snapshot.document.parts.at(-1)).toMatchObject({
+        type: 'attachment',
+        attachment: { skillId: 'gone', path: 'gone', text: '' },
+      });
+    });
+
     it('resolves an old skill selection against the skill catalog and restores a removable badge', async () => {
-      const { service, host } = await workbench({
+      const { service, host, context } = await workbench({
         extra: {
           skills: [
             {
@@ -652,6 +669,8 @@ describe(NativeGlyphWorkbenchService, () => {
           ],
         },
       });
+      const [catalog] = context.setSkillSources.mock.calls[0];
+      expect(catalog()).toEqual(service.state.skills ?? []);
       const composer = service.composer;
       emit(host, {
         type: GlyphHostEventType.CHAT_RESTORED,
