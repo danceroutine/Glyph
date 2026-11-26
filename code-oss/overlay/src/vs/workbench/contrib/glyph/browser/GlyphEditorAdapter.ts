@@ -1,3 +1,8 @@
+import { IWorkingCopyService } from '#vs/workbench/services/workingCopy/common/workingCopyService.js';
+import { IPathService } from '#vs/platform/path/common/pathService.js';
+import { env } from '#vs/base/common/process.js';
+import { dirname } from '#vs/base/common/resources.js';
+import type { GlyphSkillTarget } from '#glyph/protocol/events/GlyphSkillManagement.js';
 import { UNDO_REDO_SOURCE as EXPLORER_UNDO_REDO_SOURCE } from '#vs/workbench/contrib/files/browser/explorerService.js';
 import { VSBuffer } from '#vs/base/common/buffer.js';
 import { GlyphFileMutationKind, type GlyphFileMutation } from '#glyph/protocol/editor/GlyphFileMutation.js';
@@ -75,6 +80,8 @@ export class GlyphEditorAdapter extends Disposable {
     @IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
     @IUserDataProfileService private readonly userDataProfileService: IUserDataProfileService,
     @IInstantiationService private readonly instantiationService: IInstantiationService,
+    @IWorkingCopyService private readonly workingCopyService: IWorkingCopyService,
+    @IPathService private readonly pathService: IPathService,
   ) {
     super();
     this.workspaceBinding = this.currentWorkspaceBinding();
@@ -100,7 +107,10 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   /** Serializes failures at the process boundary while keeping typed errors inside the adapter. */
-  async handle(request: GlyphEditorRequest): Promise<GlyphEditorResponse> {
+  async handle(
+    request: GlyphEditorRequest,
+    skillTargets: readonly GlyphSkillTarget[] = [],
+  ): Promise<GlyphEditorResponse> {
     const operationId =
       request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
       request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION
@@ -115,6 +125,8 @@ export class GlyphEditorAdapter extends Disposable {
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       switch (request.type) {
+        case GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES:
+          return { operationId, ok: true, packageClean: this.skillPackageClean(request, skillTargets) };
         case GlyphEditorRequestType.EXISTS:
           return { operationId, ok: true, exists: await this.exists(request.path) };
         case GlyphEditorRequestType.READ_SNAPSHOT:
@@ -679,6 +691,52 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   /** Save only the changed resource; skip formatters that would escape the recorded edit. */
+  private skillPackageClean(
+    request: Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES }>,
+    targets: readonly GlyphSkillTarget[],
+  ): boolean {
+    const directory = URI.parse(request.directoryUri, true);
+    if (
+      directory.scheme !== 'file' ||
+      directory.query ||
+      directory.fragment ||
+      directory.path
+        .split('/')
+        .slice(1)
+        .some(part => !part || part === '.' || part === '..' || part.includes('\\') || part.includes('\0'))
+    )
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
+    const parent = dirname(directory);
+    const identity = this.uriIdentityService.extUri;
+    if (request.scope === 'user') {
+      const registered = targets.find(target => target.scope === 'user')?.uri;
+      // At first attach crash recovery can precede the host snapshot. Use the same local user setting as the utility process.
+      const configured = env['GLYPH_USER_DIRECTORY'];
+      const userRoot = registered
+        ? URI.parse(registered, true)
+        : configured
+          ? URI.joinPath(URI.file(configured), 'skills')
+          : URI.joinPath(this.pathService.userHome({ preferLocal: true }), '.glyph', 'skills');
+      if (!identity.isEqual(userRoot, parent)) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+    } else {
+      const owner = this.workspaceContextService.getWorkspaceFolder(directory);
+      const scope = dirname(dirname(parent));
+      if (
+        request.scope !== 'project' ||
+        !owner ||
+        !identity.isEqualOrParent(scope, owner.uri) ||
+        !identity.isEqual(parent, URI.joinPath(scope, '.glyph', 'skills'))
+      )
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+    }
+    return !this.workingCopyService.dirtyWorkingCopies.some(copy => {
+      const resource = copy.resource;
+      if (resource.scheme === 'untitled' && this.textFileService.untitled.isUntitledWithAssociatedResource(resource))
+        return identity.isEqualOrParent(resource.with({ scheme: 'file' }), directory);
+      return resource.scheme === 'file' && identity.isEqualOrParent(resource, directory);
+    });
+  }
+
   private async saveMutation(path: string, expectedRevision: string): Promise<GlyphEditorTextSnapshot> {
     this.assertWorkspaceBinding();
     if (!this.trustService.isWorkspaceTrusted())

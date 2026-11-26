@@ -152,7 +152,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.workspaceBinding = this.currentWorkspaceBinding();
     const editor = this._register(instantiationService.createInstance(GlyphEditorAdapter));
     this.editor = editor;
-    this.client = this._register(new GlyphDesktopClient(request => editor.handle(request)));
+    this.client = this._register(new GlyphDesktopClient(request => editor.handle(request, this.state.skillTargets)));
     this.context = this._register(
       instantiationService.createInstance(
         GlyphContextController,

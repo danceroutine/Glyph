@@ -1,3 +1,4 @@
+import { extUri } from '#vs/base/common/resources.js';
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { GlyphEditorAdapter } from '#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js';
 import { URI } from '#vs/base/common/uri.js';
@@ -99,7 +100,15 @@ function editorServices() {
     disk.delete(edit.oldResource.path);
     models.splice(models.indexOf(find(edit.oldResource)!), 1);
   };
+  const pendingCopies: { resource: URI }[] = [];
   const services = {
+    pendingCopies,
+    workingCopyService: {
+      get dirtyWorkingCopies() {
+        return pendingCopies;
+      },
+    },
+    pathService: { userHome: () => URI.file('/local-home') },
     state,
     workspace,
     models,
@@ -149,6 +158,7 @@ function editorServices() {
       getModel: vi.fn((resource: URI) => find(resource) ?? null),
     },
     textFileService: {
+      untitled: { isUntitledWithAssociatedResource: (uri: URI) => uri.path.startsWith('/') },
       isDirty: vi.fn((resource: URI) => dirty.has(resource.path)),
       files: {
         resolve: vi.fn(async (resource: URI) => {
@@ -170,7 +180,7 @@ function editorServices() {
       stat: vi.fn(async (resource: URI): Promise<{ size?: number }> => ({ size: disk.get(resource.path)?.length })),
       readFile: vi.fn(async (resource: URI) => ({ value: VSBuffer.fromString(disk.get(resource.path) ?? '') })),
     },
-    uriIdentityService: { asCanonicalUri: (resource: URI) => resource },
+    uriIdentityService: { extUri, asCanonicalUri: (resource: URI) => resource },
     userDataProfileService: {
       get currentProfile() {
         return { id: state.profile };
@@ -196,6 +206,8 @@ function createAdapter(services: EditorServices) {
     services.uriIdentityService as never,
     services.userDataProfileService as never,
     services.instantiationService as never,
+    services.workingCopyService as never,
+    services.pathService as never,
   );
   onTestFinished(() => {
     adapter.dispose();
@@ -1550,5 +1562,85 @@ describe(GlyphEditorAdapter, () => {
         failure(GlyphDesktopErrorCode.STALE_DOCUMENT),
       );
     });
+  });
+});
+
+describe('skill package working-copy checks', () => {
+  const project = '/workspace/nested/.glyph/skills/example';
+  async function check(
+    adapter: GlyphEditorAdapter,
+    scope: 'user' | 'project',
+    directory: string,
+    userRoot = '/private/approved/skills',
+  ) {
+    return adapter.handle(
+      {
+        type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+        operationId: 'check',
+        scope,
+        directoryUri: URI.file(directory).toString(),
+      },
+      [{ id: 'test-user', scope: 'user', label: 'User skills', uri: URI.file(userRoot).toString() }],
+    );
+  }
+  it('checks unsaved project resources and associated untitled files without opening any document', async () => {
+    const services = editorServices();
+    const adapter = createAdapter(services);
+    services.pendingCopies.push(
+      { resource: URI.file(project + '-other/note') },
+      { resource: URI.parse('untitled:Untitled-1') },
+    );
+    await expect(check(adapter, 'project', project)).resolves.toEqual({
+      operationId: 'check',
+      ok: true,
+      packageClean: true,
+    });
+    services.pendingCopies.push({ resource: URI.file(project + '/new.md').with({ scheme: 'untitled' }) });
+    await expect(check(adapter, 'project', project)).resolves.toEqual({
+      operationId: 'check',
+      ok: true,
+      packageClean: false,
+    });
+    expect(services.fileService.readFile).not.toHaveBeenCalled();
+    expect(services.textModelService.createModelReference).not.toHaveBeenCalled();
+  });
+  it('checks only the approved user target and rejects foreign roots, traversal, and untrusted requests', async () => {
+    const services = editorServices();
+    const adapter = createAdapter(services);
+    services.pendingCopies.push({ resource: URI.file('/private/approved/skills/example/SKILL.md') });
+    await expect(check(adapter, 'user', '/private/approved/skills/example')).resolves.toMatchObject({
+      ok: true,
+      packageClean: false,
+    });
+    for (const [scope, path] of [
+      ['user', '/foreign/skills/example'],
+      ['user', '/private/approved/skills/nested/example'],
+      ['project', '/outside/.glyph/skills/example'],
+      ['project', '/workspace/ordinary'],
+      ['project', '/workspace/.cursor/skills/example'],
+    ] as const)
+      await expect(check(adapter, scope, path)).resolves.toMatchObject({
+        ok: false,
+        error: { code: GlyphDesktopErrorCode.UNAUTHORIZED },
+      });
+    for (const directoryUri of [
+      'https://example.test/work',
+      'file:///workspace/.glyph/skills/%2E%2E',
+      'file:///workspace/.glyph/skills/example?q=x',
+    ])
+      await expect(
+        adapter.handle({
+          type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+          operationId: 'invalid',
+          scope: 'project',
+          directoryUri,
+        }),
+      ).resolves.toMatchObject({ ok: false });
+    services.state.trusted = false;
+    await expect(check(adapter, 'user', '/private/approved/skills/example')).resolves.toMatchObject({
+      ok: false,
+      error: { code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE },
+    });
+    expect(services.fileService.readFile).not.toHaveBeenCalled();
   });
 });

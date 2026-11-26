@@ -112,6 +112,7 @@ export class SkillPackageManager {
   get targets() {
     return this.locations.map(location => ({
       id: location.id,
+      scope: location.scope,
       label: location.label,
       uri: pathToFileURL(join(location.store.root, location.directory)).toString(),
     }));

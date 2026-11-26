@@ -23,6 +23,7 @@ interface GlyphSkillPreviewFileInfo {
   readonly encoding: 'utf8' | 'binary';
 }
 export interface GlyphSkillTarget {
+  readonly scope?: 'user' | 'project';
   readonly uri?: string;
   readonly id: string;
   readonly label: string;
