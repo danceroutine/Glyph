@@ -14,7 +14,7 @@ export const skillDescriptorSchema: z.ZodType<SkillDescriptor> = z
     name: z.string(),
     description: z.string(),
     enabled: z.boolean(),
-    status: z.enum(['active', 'error']),
+    status: z.enum(['active', 'error', 'discovery-error']),
     revision: z.string().optional(),
     compatibility: z.string().optional(),
     installedFrom: z.string().optional(),

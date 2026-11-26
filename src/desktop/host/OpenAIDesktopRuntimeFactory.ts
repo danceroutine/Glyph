@@ -528,11 +528,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       await shells.dispose();
       throw error;
     }
-    // Share the account lifetime, but expose only project read/search tools to
-    // reviews. No shell, proposal, mode-switch, or interactive tools are registered.
+    // Reviews can read project files and the rules and skill resources advertised in their turn.
     const reviewProjectAccess = new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, turnContexts);
     const reviewTools = turnContexts
-      ? new ToolRegistry([...reviewProjectAccess.tools, ...new RuleToolRuntime(turnContexts).tools])
+      ? new ToolRegistry([
+          ...reviewProjectAccess.tools,
+          ...new RuleToolRuntime(turnContexts).tools,
+          ...new SkillToolRuntime(turnContexts).tools,
+        ])
       : reviewProjectAccess;
     const reviewBackend = new OpenAIBackend(
       store,

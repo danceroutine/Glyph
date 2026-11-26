@@ -5,7 +5,7 @@ import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import type { Tool } from '#src/tools/Tool.js';
 import type { ToolSource } from '#src/tools/ToolSource.js';
 import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
-import { SkillTurnContext } from './SkillContextContributor.ts';
+import { activeSkillPackage } from './activeSkillPackage.ts';
 
 const activationSchema = z
   .object({ id: z.string().min(1).max(500), reason: z.string().trim().min(1).max(1000) })
@@ -62,8 +62,7 @@ export class SkillToolRuntime implements ToolSource {
           if (!context.turnId) throw new Error('Skill resources require an active turn.');
           const selected = resourceSchema.parse(JSON.parse(input));
           const session = turns.contribution(context.turnId, 'skills');
-          if (!(session instanceof SkillTurnContext)) throw new Error('Skill context is unavailable.');
-          const resource = session.readResource(selected.id, selected.path);
+          const resource = activeSkillPackage(session, selected.id).readResource(selected.path);
           return JSON.stringify({
             read: true,
             instructionContext: {

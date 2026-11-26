@@ -19,6 +19,7 @@ describe(SkillContextContributor, () => {
     );
     const provider: SkillDiscoveryProvider = {
       id: 'project',
+      origin: aSkillDescriptor().origin,
       discover: vi.fn(async () => [
         descriptor,
         aSkillDescriptor({ id: 'disabled', enabled: false }),
@@ -69,11 +70,89 @@ describe(SkillContextContributor, () => {
     expect(coordinator.contribution('turn', 'skills')).toBeUndefined();
   });
 
+  it('allowlists model fields and keeps editor and installation provenance in the local snapshot', async () => {
+    const descriptor = {
+      ...aSkillDescriptor({ uri: 'file:///private/workspace', compatibility: 'Needs SDK', allowedTools: ['Read'] }),
+      installation: { source: '/private/imported/package' },
+    };
+    const catalog = new SkillCatalog([
+      {
+        id: 'project',
+        origin: descriptor.origin,
+        discover: async () => [descriptor],
+        capture: async source => aSkillPackage(source),
+        refreshIndex: async () => {},
+      },
+    ]);
+    const session = await new SkillContextContributor(catalog).beginTurn({ turnId: 'projection', attachmentPaths: [] });
+    const candidate = {
+      id: descriptor.id,
+      name: descriptor.name,
+      description: descriptor.description,
+      scope: '.',
+      origin: { scope: 'project', compatibility: 'glyph' },
+    };
+    expect(session.initialEnvelope().skillCandidates).toEqual([candidate]);
+    const active = await session.activateSource(descriptor.id, 'model', 'Task');
+    expect(active?.skills).toEqual([
+      {
+        descriptor: candidate,
+        revision: expect.any(String),
+        reason: 'model',
+        explanation: 'Task',
+        body: 'Skill instructions',
+        compatibility: 'Needs SDK',
+        allowedTools: ['Read'],
+      },
+    ]);
+    expect(session.snapshot().skills?.[0]?.descriptor).toEqual(descriptor);
+  });
+
+  it('publishes steering selections together and leaves prior selections and advertisements intact on failure', async () => {
+    const first = aSkillDescriptor();
+    const other = aSkillDescriptor({ id: 'other' });
+    const fresh = aSkillDescriptor({ id: 'fresh', name: 'fresh', scope: 'nested' });
+    const broken = aSkillDescriptor({ id: 'broken', name: 'broken' });
+    const capture = vi.fn(async (source: typeof first) => {
+      if (source.id === 'broken') throw new Error('Changed during activation');
+      return aSkillPackage(source);
+    });
+    const catalog = new SkillCatalog([
+      {
+        id: 'project',
+        origin: first.origin,
+        discover: async () => [first, other, fresh, broken],
+        capture,
+        refreshIndex: async () => {},
+      },
+    ]);
+    const session = await new SkillContextContributor(catalog).beginTurn({
+      turnId: 'steering',
+      skillIds: [first.id],
+      attachmentPaths: [],
+    });
+    const steer = (skillIds: string[]) =>
+      session.steer({ turnId: 'steering', skillIds, attachmentPaths: ['nested/file'] });
+    await expect(steer([other.id])).rejects.toThrow('same-name');
+    await expect(steer([fresh.id, 'missing'])).rejects.toThrow('unavailable');
+    expect(capture).toHaveBeenCalledTimes(1);
+    await expect(steer([fresh.id, broken.id])).rejects.toThrow('Changed during activation');
+    expect(session.snapshot().skills?.map(skill => skill.descriptor.id)).toEqual([first.id]);
+    expect(await session.activateSource(fresh.id, 'model', 'Not advertised')).toBeUndefined();
+    const delta = await steer([first.id, fresh.id, fresh.id]);
+    expect(delta?.skills?.map(skill => skill.descriptor.id)).toEqual([fresh.id]);
+    expect(delta?.skillCandidates?.map(skill => skill.id)).toEqual([fresh.id]);
+    expect(session.initialEnvelope().skills?.map(skill => skill.descriptor.id)).toEqual([first.id]);
+    expect(await steer([fresh.id])).toBeUndefined();
+    expect(await session.steer({ turnId: 'steering', attachmentPaths: [] })).toBeUndefined();
+  });
+
   it('advertises nested candidates on file access and rejects unadvertised model choices', async () => {
     const source = aSkillDescriptor({ scope: 'packages/api' });
     const catalog = new SkillCatalog([
       {
         id: 'project',
+        origin: aSkillDescriptor().origin,
         discover: async () => [source],
         capture: async descriptor => aSkillPackage(descriptor),
         refreshIndex: async () => {},
@@ -96,7 +175,13 @@ describe(SkillContextContributor, () => {
     const source = aSkillDescriptor();
     const capture = vi.fn(async () => aSkillPackage(source, body, { 'reference.md': Buffer.from(body) }));
     const catalog = new SkillCatalog([
-      { id: 'project', discover: async () => [source], capture, refreshIndex: async () => {} },
+      {
+        id: 'project',
+        origin: aSkillDescriptor().origin,
+        discover: async () => [source],
+        capture,
+        refreshIndex: async () => {},
+      },
     ]);
     const coordinator = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
     const first = await coordinator.beginTurn({
@@ -119,6 +204,7 @@ describe(SkillContextContributor, () => {
     const catalog = new SkillCatalog([
       {
         id: 'project',
+        origin: aSkillDescriptor().origin,
         discover: async () => [aSkillDescriptor(), aSkillDescriptor({ id: 'other' })],
         capture: async descriptor => aSkillPackage(descriptor),
         refreshIndex: async () => {},
@@ -133,12 +219,43 @@ describe(SkillContextContributor, () => {
     ).rejects.toThrow('same-name');
   });
 
+  it('shares failed duplicate captures and admits an unrelated concurrent selection afterwards', async () => {
+    const source = aSkillDescriptor();
+    const next = aSkillDescriptor({ id: 'next', name: 'next' });
+    let fail!: (error: Error) => void;
+    const capture = vi.fn(async (descriptor: typeof source) =>
+      descriptor === source
+        ? new Promise<ReturnType<typeof aSkillPackage>>((_resolve, reject) => {
+            fail = reject;
+          })
+        : aSkillPackage(descriptor),
+    );
+    const catalog = new SkillCatalog([
+      {
+        id: 'project',
+        origin: source.origin,
+        discover: async () => [source, next],
+        capture,
+        refreshIndex: async () => {},
+      },
+    ]);
+    const session = new SkillTurnContext('turn', [source, next], [source, next], catalog);
+    const first = session.activateSource(source.id, 'model', 'task');
+    const duplicate = session.activateSource(source.id, 'model', 'task');
+    const other = session.activateManualSkills([next.id], 'selected');
+    fail(new Error('Read failed'));
+    await expect(Promise.all([first, duplicate])).rejects.toThrow('Read failed');
+    await expect(other).resolves.toMatchObject({ skills: [{ descriptor: { id: next.id } }] });
+    expect(capture).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects resource access before activation and prevents late activation after release', async () => {
     const source = aSkillDescriptor();
     let finish!: (value: ReturnType<typeof aSkillPackage>) => void;
     const catalog = new SkillCatalog([
       {
         id: 'project',
+        origin: aSkillDescriptor().origin,
         discover: async () => [source],
         capture: () =>
           new Promise(resolve => {

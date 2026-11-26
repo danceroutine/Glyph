@@ -16,7 +16,7 @@ export interface SkillDescriptor {
   readonly name: string;
   readonly description: string;
   readonly enabled: boolean;
-  readonly status: 'active' | 'error';
+  readonly status: 'active' | 'error' | 'discovery-error';
   readonly revision?: string;
   readonly compatibility?: string;
   readonly installedFrom?: string;
@@ -42,4 +42,24 @@ export interface SkillActivation {
   readonly explanation: string;
   readonly body: string;
   readonly resources: readonly SkillResourceUse[];
+}
+
+/** Model-visible metadata for choosing a package by its stable ID and scope. */
+export interface SkillCandidate {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly scope: string;
+  readonly origin: Pick<SkillOrigin, 'scope' | 'compatibility'>;
+}
+
+/** Activated model instructions. Storage and editor details stay in the local activation record. */
+export interface SkillInstruction {
+  readonly descriptor: SkillCandidate;
+  readonly revision: string;
+  readonly reason: SkillActivation['reason'];
+  readonly explanation: string;
+  readonly body: string;
+  readonly compatibility?: string;
+  readonly allowedTools?: readonly string[];
 }

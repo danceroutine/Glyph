@@ -20,6 +20,14 @@ describe('Skill package boundaries', () => {
     const nul = aSkillPackage(aSkillDescriptor(), 'Body', { nul: Buffer.from([0, 1]) });
     expect(nul.readResource('nul').encoding).toBe('base64');
   });
+  it('keeps resource inspection separate from recorded model disclosures', () => {
+    const snapshot = aSkillPackage(aSkillDescriptor(), 'Body', { 'script.sh': Buffer.from('exit 0') });
+    const inspected = snapshot.inspectResource('script.sh');
+    expect(inspected.content).toBe('exit 0');
+    expect(snapshot.resources()).toEqual([]);
+    expect(snapshot.readResource('script.sh')).toEqual(inspected);
+    expect(snapshot.resources()).toEqual([inspected]);
+  });
   it('checks containment before reading and enforces manifest, file-count, and aggregate limits', async () => {
     const descriptor = aSkillDescriptor();
     const read = vi.fn<WorkspaceTextStore['read']>(async path =>
@@ -86,11 +94,37 @@ describe('Skill package boundaries', () => {
     };
     expect(skillActivationSchema.parse(activation)).toMatchObject({ body: 'Body', descriptor: { name: 'example' } });
   });
+  it('keeps the newest completed refresh when an old inventory resolves late', async () => {
+    const source = aSkillDescriptor();
+    let resolveOlder!: (value: (typeof source)[]) => void;
+    const older = new Promise<(typeof source)[]>(resolve => {
+      resolveOlder = resolve;
+    });
+    const discover = vi.fn().mockReturnValueOnce(older).mockResolvedValueOnce([source]);
+    const catalog = new SkillCatalog([
+      {
+        id: 'project',
+        origin: source.origin,
+        discover,
+        capture: async () => aSkillPackage(),
+        refreshIndex: async () => {},
+      },
+    ]);
+    const change = vi.fn();
+    catalog.onDidChange(change);
+    const pending = catalog.refresh();
+    expect(await catalog.refresh()).toEqual([source]);
+    resolveOlder([]);
+    expect(await pending).toEqual([source]);
+    expect(catalog.skills).toEqual([source]);
+    expect(change).toHaveBeenCalledOnce();
+  });
   it('keeps an unavailable provider separate from valid packages and propagates cancellation', async () => {
     const descriptor = aSkillDescriptor();
     const controller = new AbortController();
     const provider = {
       id: 'project',
+      origin: aSkillDescriptor().origin,
       discover: async () => {
         controller.abort(new Error('Cancelled'));
         throw new Error('Cancelled');
@@ -105,12 +139,18 @@ describe('Skill package boundaries', () => {
     const failed = await new SkillCatalog([
       {
         ...provider,
+        origin: { ...descriptor.origin, scope: 'user', label: 'User location' },
         discover: async () => {
           throw 'Unavailable';
         },
       },
     ]).refresh();
-    expect(failed[0]?.message).toBe('Skill discovery failed.');
+    expect(failed[0]).toMatchObject({
+      status: 'discovery-error',
+      origin: { scope: 'user', label: 'User location', compatibility: 'glyph' },
+      uri: '',
+      message: 'Skill discovery failed.',
+    });
   });
 });
 
@@ -132,6 +172,7 @@ describe('Skill turn limits and tool authority', () => {
     const catalog = new SkillCatalog([
       {
         id: 'project',
+        origin: aSkillDescriptor().origin,
         discover: async () => sources,
         capture: async descriptor => aSkillPackage(descriptor, body),
         refreshIndex: async () => {},
@@ -152,6 +193,7 @@ describe('Skill turn limits and tool authority', () => {
     const catalog = new SkillCatalog([
       {
         id: 'project',
+        origin: aSkillDescriptor().origin,
         discover: async () => [descriptor],
         capture: async source => aSkillPackage(source),
         refreshIndex: async () => {},

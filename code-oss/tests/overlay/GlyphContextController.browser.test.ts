@@ -21,6 +21,7 @@ interface Folder {
 }
 
 interface Stat {
+  isFile?: boolean;
   isDirectory?: boolean;
   isSymbolicLink?: boolean;
   size?: number;
@@ -285,6 +286,10 @@ describe(GlyphContextController, () => {
         contentRevision: 'two',
       });
       expect(controller.rebindAttachment({ ...badge, unavailable: 'Old binding' }).unavailable).toBeUndefined();
+      services.files.stat.mockImplementation(async resource => ({
+        isFile: resource.path.endsWith('SKILL.md'),
+        isDirectory: !resource.path.endsWith('SKILL.md'),
+      }));
       await controller.openAttachment(badge);
       expect(services.editors.openEditor).toHaveBeenCalledWith({
         resource: URI.parse(source.uri),
@@ -367,6 +372,65 @@ describe(GlyphContextController, () => {
       (services.files.watch.mock.results[0].value as { dispose: ReturnType<typeof vi.fn> }).dispose,
     ).toHaveBeenCalledOnce();
     unsubscribe();
+    controller.dispose();
+  });
+
+  it('looks up the current skill identity and rejects unavailable, removed or linked editor targets', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    const packageA = {
+      id: 'api',
+      name: 'task',
+      description: 'Workflow',
+      scope: 'api',
+      directory: 'api/.glyph/skills/task',
+      path: 'api/.glyph/skills/task/SKILL.md',
+      uri: 'file:///workspace/api/.glyph/skills/task/SKILL.md',
+      origin: { id: 'project', label: 'Project', scope: 'project' as const, compatibility: 'glyph' },
+      status: 'active' as const,
+      enabled: true,
+      allowedTools: [],
+    };
+    const packageB = { ...packageA, id: 'web', scope: 'web', path: 'web/.glyph/skills/task/SKILL.md' };
+    let sources: readonly GlyphSkill[] = [packageA, packageB];
+    const refresh = vi.fn(async () => {});
+    controller.setSkillSources(() => sources, refresh);
+    expect(
+      (await controller.searchInstructions('api')).map(candidate => [candidate.skillId, candidate.detail]),
+    ).toEqual([['api', `${packageA.path} · Project · Workflow`]]);
+    expect((await controller.searchInstructions('task')).map(candidate => candidate.detail)).toEqual([
+      `${packageA.path} · Project · Workflow`,
+      `${packageB.path} · Project · Workflow`,
+    ]);
+    expect((await controller.searchInstructions('web'))[0]?.ancestry).toEqual(['Project', ...packageB.path.split('/')]);
+    const badge = { uri: 'glyph-skill:api', path: 'task' };
+    refresh.mockImplementationOnce(async () => {
+      sources = [{ ...packageA, uri: '', status: 'error' }];
+    });
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    expect(services.files.stat).not.toHaveBeenCalled();
+    sources = [packageA];
+    services.files.stat.mockImplementation(async uri => ({
+      isFile: uri.path.endsWith('SKILL.md'),
+      isDirectory: !uri.path.endsWith('SKILL.md'),
+      isSymbolicLink: uri.path.endsWith('/task'),
+    }));
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    sources = [{ ...packageA, uri: 'https://example.com/SKILL.md' }];
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    sources = [packageA];
+    services.files.stat.mockResolvedValueOnce({ isDirectory: true, isFile: false });
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    services.files.stat.mockImplementation(async uri => {
+      sources = [{ ...packageA, uri: 'file:///other/package/SKILL.md' }];
+      return { isFile: uri.path.endsWith('SKILL.md'), isDirectory: !uri.path.endsWith('SKILL.md') };
+    });
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    refresh.mockImplementationOnce(async () => {
+      sources = [];
+    });
+    await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+    expect(services.editors.openEditor).not.toHaveBeenCalled();
     controller.dispose();
   });
 

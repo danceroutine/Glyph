@@ -298,12 +298,17 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       });
     const skills = this.skillSources()
       .filter(skill => skill.enabled && skill.status === 'active')
-      .filter(skill => `${skill.name} ${skill.description} ${skill.origin.label}`.toLowerCase().includes(normalized))
+      .filter(skill =>
+        `${skill.name} ${skill.description} ${skill.origin.label} ${skill.scope} ${skill.path}`
+          .toLowerCase()
+          .includes(normalized),
+      )
       .map(skill => ({
         uri: `glyph-skill:${encodeURIComponent(skill.id)}`,
         path: skill.name,
         name: skill.name,
-        detail: `${skill.description} · ${skill.origin.label}`,
+        detail: `${skill.path} · ${skill.origin.label} · ${skill.description}`,
+        ancestry: [skill.origin.label, ...skill.path.split('/')],
         kind: GlyphContextCandidateKind.SKILL,
         skillId: skill.id,
         ...(skill.revision ? { revision: skill.revision } : {}),
@@ -474,7 +479,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     return { ...capture, path: this.adapter.contextPath(uri) };
   }
   async openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void> {
-    if (attachment.uri?.startsWith('glyph-skill:') || attachment.uri?.startsWith('glyph-rule:')) {
+    if (attachment.uri?.startsWith('glyph-skill:')) return this.openSkill(attachment.uri);
+    if (attachment.uri?.startsWith('glyph-rule:')) {
       const source = this.referenceSource(attachment.uri);
       if (!source) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'Selected instruction is unavailable.');
       if (source.uri) await this.editors.openEditor({ resource: URI.parse(source.uri), options: { pinned: true } });
@@ -540,6 +546,31 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       },
     });
   }
+  private async openSkill(reference: string): Promise<void> {
+    this.assertTrusted();
+    await this.refreshSkillSources?.();
+    this.assertTrusted();
+    const source = this.referenceSource(reference);
+    if (!source?.uri) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
+    const selectedUri = source.uri;
+    const resource = URI.parse(selectedUri);
+    if (resource.scheme !== 'file')
+      throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
+    // The host authorized the indexed manifest. Recheck its file and directory chain at editor-open time.
+    const depthToRoot = source.path.split('/').length;
+    let current = resource;
+    for (let depth = 0; depth <= depthToRoot; depth++) {
+      const stat = await this.files.stat(current);
+      if (stat.isSymbolicLink || (depth === 0 ? !stat.isFile : !stat.isDirectory))
+        throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
+      current = dirname(current);
+    }
+    this.assertTrusted();
+    if (this.referenceSource(reference)?.uri !== selectedUri)
+      throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
+    await this.editors.openEditor({ resource, options: { pinned: true } });
+  }
+
   private referenceSource(value: string): GlyphSkill | GlyphInstructionSource | undefined {
     const uri = URI.parse(value);
     const id = decodeURIComponent(value.slice(value.indexOf(':') + 1));
