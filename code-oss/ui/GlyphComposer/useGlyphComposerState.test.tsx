@@ -114,6 +114,24 @@ async function openPicker(actions: GlyphWorkbenchViewActions, text: string, cand
 }
 
 describe(useGlyphComposerState, () => {
+  it('repeats an open rule search when the catalog changes', async () => {
+    const actions = composerActions();
+    let refresh!: () => void;
+    const context = {
+      ...actions.context,
+      onDidChangeInstructions: (listener: () => void) => {
+        refresh = listener;
+        return () => {};
+      },
+    };
+    renderComposer({ status: GlyphWorkbenchStatus.READY, actions: { ...actions, context } });
+    typeDraft(actions.composer, '/rule');
+    await waitFor(() => expect(context.searchInstructions).toHaveBeenCalled(), patience);
+    vi.mocked(context.searchInstructions).mockClear();
+    act(() => refresh());
+    await waitFor(() => expect(context.searchInstructions).toHaveBeenCalled(), patience);
+  });
+
   it('sends the draft on Enter and clears the prompt', async () => {
     const actions = composerActions();
     renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
