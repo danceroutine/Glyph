@@ -29,6 +29,8 @@ export interface TurnContextContribution {
     explanation: string,
     signal?: AbortSignal,
   ): Promise<AgentInstructionContext | undefined>;
+  /** Validate and prepare domain selections for an in-flight user instruction. */
+  steer?(input: TurnContextInput, signal?: AbortSignal): Promise<AgentInstructionContext | undefined>;
   release?(): void;
 }
 

@@ -46,8 +46,10 @@ export class TurnContextCoordinator {
       throw new Error('Turn context contributor IDs must be unique.');
   }
   async beginTurn(input: BeginTurnContextInput, signal?: AbortSignal): Promise<PreparedTurnContext> {
-    if (this.pending.has(input.turnId) || this.sessions.has(input.turnId)) throw new Error('This turn already has an active instruction session.');
-    if (this.pending.size + this.sessions.size >= 32) throw new Error('32 turns are already active. Retry when one completes.');
+    if (this.pending.has(input.turnId) || this.sessions.has(input.turnId))
+      throw new Error('This turn already has an active instruction session.');
+    if (this.pending.size + this.sessions.size >= 32)
+      throw new Error('32 turns are already active. Retry when one completes.');
     this.pending.add(input.turnId);
     const parts = new Map<string, TurnContextContribution>();
     try {
@@ -65,6 +67,24 @@ export class TurnContextCoordinator {
     const session = new PreparedTurnContext(input.turnId, parts);
     this.sessions.set(input.turnId, session);
     return session;
+  }
+  /** Domains validate asynchronous selections before publishing synchronous path disclosures. */
+  async steer(input: TurnContextInput, signal?: AbortSignal): Promise<AgentInstructionContext | undefined> {
+    const contributions = [...(this.sessions.get(input.turnId)?.contributions.values() ?? [])];
+    const contexts: AgentInstructionContext[] = [];
+    for (const part of contributions) {
+      if (!part.steer) continue;
+      const delta = await part.steer(input, signal);
+      if (delta) contexts.push(delta);
+    }
+    for (const part of contributions) {
+      if (part.steer) continue;
+      const paths = part.discloseAttachments?.(input.attachmentPaths);
+      const manual = part.activateManualRules?.(input.manualRuleIds ?? []);
+      if (paths) contexts.push(paths);
+      if (manual) contexts.push(manual);
+    }
+    return contexts.length > 0 ? mergeTurnContext(contexts) : undefined;
   }
   disclosePaths(turnId: string, paths: readonly string[]): AgentInstructionContext | undefined {
     return this.disclose(turnId, part => part.disclosePaths?.(paths));

@@ -1,4 +1,3 @@
-import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
@@ -970,7 +969,13 @@ describe('provider-neutral steering', () => {
     const descriptor = aSkillDescriptor();
     const capture = vi.fn(async () => aSkillPackage(descriptor, 'Initial skill instructions'));
     const catalog = new SkillCatalog([
-      { id: descriptor.origin.id, discover: async () => [descriptor], capture, refreshIndex: async () => {} },
+      {
+        id: descriptor.origin.id,
+        origin: descriptor.origin,
+        discover: async () => [descriptor],
+        capture,
+        refreshIndex: async () => {},
+      },
     ]);
     const adapter = new ClaudeShapedAdapter();
     const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
@@ -994,7 +999,13 @@ describe('provider-neutral steering', () => {
       const descriptor = aSkillDescriptor();
       const capture = vi.fn(async () => aSkillPackage(descriptor, 'Steered skill instructions'));
       const catalog = new SkillCatalog([
-        { id: descriptor.origin.id, discover: async () => [descriptor], capture, refreshIndex: async () => {} },
+        {
+          id: descriptor.origin.id,
+          origin: descriptor.origin,
+          discover: async () => [descriptor],
+          capture,
+          refreshIndex: async () => {},
+        },
       ]);
       const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
       const adapter = new ClaudeShapedAdapter();
@@ -1032,6 +1043,7 @@ describe('provider-neutral steering', () => {
       expect(capture).toHaveBeenCalledTimes(coordinated ? 1 : 0);
       expect(result.context?.skills?.[0]?.body).toBe(coordinated ? 'Steered skill instructions' : undefined);
       expect(contexts).toHaveLength(2);
+      expect(contexts).toEqual([undefined, undefined]);
     },
   );
   const instruction = (queue: ChatSteeringQueue, text: string) => {
@@ -1173,3 +1185,51 @@ function scopedToolOutput(): string {
     instructionContext: { schema: 'glyph.agent-instructions.v1', sources: [{ content: 'old scoped guidance' }] },
   });
 }
+
+it('rejects unavailable steering without aborting the active turn or replaying boundary context', async () => {
+  const adapter = new ClaudeShapedAdapter();
+  const descriptor = aSkillDescriptor();
+  const turns = new TurnContextCoordinator([
+    new SkillContextContributor(
+      new SkillCatalog([
+        {
+          id: descriptor.origin.id,
+          origin: descriptor.origin,
+          discover: async () => [descriptor],
+          capture: async () => aSkillPackage(descriptor),
+          refreshIndex: async () => {},
+        },
+      ]),
+    ),
+  ]);
+  let pending = true;
+  const reject = vi.fn();
+  const runtime = new AgentRuntime(
+    adapter,
+    { timeoutMs: 10000 },
+    mockTools(async () => 'file'),
+    undefined,
+    turns,
+  );
+  const result = await runtime.send(
+    { text: 'Start', attachments: [], skillIds: [descriptor.id] },
+    {
+      signal: new AbortController().signal,
+      onText: () => {},
+      onSteeringRejected: reject,
+      takeSteering: () => {
+        if (!pending) return [];
+        pending = false;
+        return [{ text: 'Use missing selection', attachments: [], skillIds: ['removed'] }];
+      },
+    },
+  );
+  expect(reject).toHaveBeenCalledWith(
+    expect.objectContaining({ text: 'Use missing selection' }),
+    expect.objectContaining({ message: expect.stringContaining('unavailable') }),
+  );
+  expect(result.context?.skills?.map(skill => skill.descriptor.id)).toEqual([descriptor.id]);
+  expect(
+    adapter.requests.flatMap(turn => turn.messages).some(message => message.content === 'Use missing selection'),
+  ).toBe(false);
+});

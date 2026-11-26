@@ -81,6 +81,13 @@ export class ChatConversation {
         onReasoningSummary: value => {
           response.push({ type: ChatResponsePartType.REASONING_SUMMARY, value });
         },
+        onSteeringRejected: (_request, error) => {
+          response.push({
+            type: ChatResponsePartType.DIAGNOSTIC,
+            severity: DiagnosticSeverity.ERROR,
+            message: `Steering was not applied: ${this.redact(error.message)}`,
+          });
+        },
         onToolActivity: activity => {
           response.push({ type: ChatResponsePartType.TOOL, activity });
         },

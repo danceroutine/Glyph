@@ -38,19 +38,22 @@ describe('Turn context contributor lifetime', () => {
     expect(prepared.release).toHaveBeenCalledOnce();
     expect(coordinator.snapshot('turn')).toBeUndefined();
   });
-  it('releases replaced turns and evicted sessions, keeping domains optional', async () => {
+  it('retains admitted sessions and rejects duplicate or excess admissions', async () => {
     const release = vi.fn();
     const coordinator = new TurnContextCoordinator([
       { id: 'empty', beginTurn: async input => ({ ...aContribution(input.turnId), release }) },
     ]);
     await coordinator.beginTurn({ turnId: 'same', attachmentPaths: [] });
-    await coordinator.beginTurn({ turnId: 'same', attachmentPaths: [] });
+    await expect(coordinator.beginTurn({ turnId: 'same', attachmentPaths: [] })).rejects.toThrow('already');
+    for (let i = 0; i < 31; i++) await coordinator.beginTurn({ turnId: `turn-${i}`, attachmentPaths: [] });
+    await expect(coordinator.beginTurn({ turnId: 'excess', attachmentPaths: [] })).rejects.toThrow('32 turns');
+    expect(coordinator.snapshot('same')).toBeDefined();
+    expect(coordinator.snapshot('turn-0')).toBeDefined();
+    expect(release).not.toHaveBeenCalled();
+    coordinator.discardTurn('same');
+    await coordinator.beginTurn({ turnId: 'replacement', attachmentPaths: [] });
     expect(release).toHaveBeenCalledOnce();
-    for (let i = 0; i < 33; i++) await coordinator.beginTurn({ turnId: `turn-${i}`, attachmentPaths: [] });
-    expect(coordinator.snapshot('same')).toBeUndefined();
-    expect(coordinator.snapshot('turn-0')).toBeUndefined();
-    expect(release).toHaveBeenCalledTimes(3);
-    expect(coordinator.activateRule('turn-32', 'missing')).toBeUndefined();
-    expect(await coordinator.activateSource('turn-32', 'empty', 'missing', 'manual', 'Selected')).toBeUndefined();
+    expect(coordinator.activateRule('replacement', 'missing')).toBeUndefined();
+    expect(await coordinator.activateSource('replacement', 'empty', 'missing', 'manual', 'Selected')).toBeUndefined();
   });
 });
