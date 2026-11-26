@@ -1,4 +1,5 @@
 import { skillToolFailure } from './SkillToolFailure.ts';
+import { prepareModelContext } from '#src/context/turns/TurnContextEnvelope.js';
 import { z } from 'zod';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
@@ -65,11 +66,11 @@ export class SkillToolRuntime implements ToolSource {
           const resource = activeSkillPackage(session, selected.id).readResource(selected.path);
           return JSON.stringify({
             read: true,
-            instructionContext: {
+            instructionContext: prepareModelContext({
               schema: 'glyph.agent-instructions.v1',
               sources: [],
               skillResources: [{ skillId: selected.id, ...resource }],
-            },
+            }),
           });
         },
       },

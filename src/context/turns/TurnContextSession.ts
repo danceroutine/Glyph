@@ -187,7 +187,7 @@ export class TurnContextSession {
     );
     this.pending.clear();
     if (pending.length === 0 && candidates.length === 0) return undefined;
-    const envelope: AgentInstructionContext = {
+    const envelope: TurnContextEnvelope = {
       schema: 'glyph.agent-instructions.v1',
       sources: pending.map(([source]) => {
         const { uri: _editorUri, ...instruction } = source;

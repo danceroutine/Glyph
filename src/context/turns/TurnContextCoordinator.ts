@@ -1,4 +1,4 @@
-import type { TurnContextEnvelope, TurnContextSnapshot } from './TurnContextEnvelope.ts';
+import { prepareModelContext, type TurnContextEnvelope, type TurnContextSnapshot } from './TurnContextEnvelope.ts';
 import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { AgentInstructionActivationReason } from '#src/instructions/AgentInstructionSource.js';
 import { InstructionContextContributor } from './InstructionContextContributor.ts';
@@ -103,10 +103,11 @@ export class TurnContextCoordinator {
     explanation: string,
     signal?: AbortSignal,
   ): Promise<TurnContextEnvelope | undefined> {
-    return this.sessions
+    const context = await this.sessions
       .get(turnId)
       ?.contributions.get(contributorId)
       ?.activateSource?.(sourceId, reason, explanation, signal);
+    return prepareModelContext(context);
   }
   contribution(turnId: string, id: string): TurnContextContribution | undefined {
     return this.sessions.get(turnId)?.contributions.get(id);
@@ -131,7 +132,7 @@ export class TurnContextCoordinator {
       const context = operation(part);
       return context ? [context] : [];
     });
-    return parts.length > 0 ? mergeTurnContext(parts) : undefined;
+    return prepareModelContext(mergeTurnContext(parts));
   }
 }
 

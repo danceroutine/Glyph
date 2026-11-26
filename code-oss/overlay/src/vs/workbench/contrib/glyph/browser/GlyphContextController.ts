@@ -2,6 +2,9 @@ import { Emitter } from '#vs/base/common/event.js';
 import { RunOnceScheduler } from '#vs/base/common/async.js';
 import { DisposableStore, DisposableMap, MutableDisposable, type IDisposable } from '#vs/base/common/lifecycle.js';
 import type { GlyphSkill } from '#glyph/protocol/events/GlyphSkill.js';
+import { Emitter } from '#vs/base/common/event.js';
+import { RunOnceScheduler } from '#vs/base/common/async.js';
+import { DisposableStore, DisposableMap, MutableDisposable, type IDisposable } from '#vs/base/common/lifecycle.js';
 import { GlyphIdeContext } from './GlyphIdeContext.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { dirname } from '#vs/base/common/resources.js';
@@ -35,14 +38,14 @@ import type { GlyphInstructionSource } from '#glyph/protocol/events/GlyphInstruc
 
 /** Capture context only from explicit file selection, search, or selected editor text. */
 export class GlyphContextController extends Disposable implements GlyphContextActions {
-  private readonly instructionsChanged = this._register(new Emitter<void>());
-  private readonly skillWatchers = this._register(new DisposableStore());
-  private readonly rootWatches = this._register(new DisposableMap<string>());
-  private skillRoots: () => readonly string[] = () => [];
-  private watchSkillModel: ((model: ITextModel) => void) | undefined;
-  private instructionFingerprint = '';
-  private refreshSkillSources: (() => Promise<void>) | undefined;
   private skillSources: () => readonly GlyphSkill[] = () => [];
+  private readonly instructionsChanged = this._register(new Emitter<void>());
+  private readonly instructionWatchers = this._register(new DisposableStore());
+  private readonly rootWatches = this._register(new DisposableMap<string>());
+  private instructionRoots: () => readonly string[] = () => [];
+  private watchInstructionModel: ((model: ITextModel) => void) | undefined;
+  private instructionFingerprint = '';
+  private refreshInstructionSources: (() => Promise<void>) | undefined;
   readonly ide: GlyphIdeContext;
   private focused: ICodeEditor | undefined;
   constructor(
@@ -80,15 +83,21 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     this.skillRoots = roots ?? (() => []);
     this.rootWatches.clearAndDisposeAll();
     this.skillSources = source;
-    this.refreshSkillSources = refresh;
-    this.skillWatchers.clear();
+    if (refresh) this.setInstructionRefresh(refresh);
+  }
+  setInstructionRefresh(refresh?: () => Promise<void>, roots?: () => readonly string[]): void {
+    this.instructionRoots = roots ?? (() => []);
+    this.rootWatches.clearAndDisposeAll();
+    this.refreshInstructionSources = refresh;
+    this.instructionWatchers.clear();
+    this.watchInstructionModel = undefined;
     if (!refresh) return;
-    const followup = this.skillWatchers.add(
+    const followup = this.instructionWatchers.add(
       new RunOnceScheduler(() => {
         if (this.trust.isWorkspaceTrusted()) void refresh().catch(() => {});
       }, 1000),
     );
-    const changed = this.skillWatchers.add(
+    const changed = this.instructionWatchers.add(
       new RunOnceScheduler(() => {
         if (!this.trust.isWorkspaceTrusted()) return;
         void refresh().catch(() => {});
@@ -96,36 +105,30 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       }, 300),
     );
     const relevant = (uri: URI) =>
-      /\/\.(?:glyph|cursor)(?:\/(?:skills|rules)(?:\/|$)|$)/iu.test(uri.path) ||
+      /\/\.(?:glyph|cursor)(?:\/(?:rules|skills)(?:\/|$)|$)/iu.test(uri.path) ||
       /\/AGENTS\.md$/iu.test(uri.path) ||
       this.instructionSources().some(instruction => {
         if (instruction.uri === uri.toString()) return true;
         if (!instruction.references?.length) return false;
+        if (instruction.kind === 'glyph_user_rule') return false;
         try {
-          const path = this.adapter.contextPath(uri);
-          return instruction.references.includes(path);
+          return instruction.references.includes(this.adapter.contextPath(uri));
         } catch {
-          return (
-            instruction.kind === 'glyph_user_rule' &&
-            instruction.uri !== undefined &&
-            instruction.references.some(
-              path => URI.joinPath(dirname(dirname(URI.parse(instruction.uri!))), path).toString() === uri.toString(),
-            )
-          );
+          return false;
         }
       }) ||
-      this.skillRoots().some(root => {
+      [...this.rootWatches.keys()].some(root => {
         const path = URI.parse(root).path;
         return uri.path === path || uri.path.startsWith(`${path}/`);
       });
-    const providerChanges = this.skillWatchers.add(new MutableDisposable<IDisposable>());
+    const providerChanges = this.instructionWatchers.add(new MutableDisposable<IDisposable>());
     const observeProvider = () => {
       providerChanges.value = this.files.getProvider('file')?.onDidChangeFile(changes => {
         if (changes.some(change => relevant(change.resource))) changed.schedule();
       });
     };
     observeProvider();
-    this.skillWatchers.add(
+    this.instructionWatchers.add(
       this.files.onDidChangeFileSystemProviderRegistrations(event => {
         if (event.scheme === 'file') observeProvider();
       }),
@@ -134,16 +137,16 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     const watch = (model: ITextModel) => {
       if (!watched.has(model) && relevant(model.uri)) {
         watched.add(model);
-        this.skillWatchers.add(
+        this.instructionWatchers.add(
           model.onDidChangeContent(() => {
             changed.schedule();
           }),
         );
       }
     };
-    this.watchSkillModel = watch;
+    this.watchInstructionModel = watch;
     for (const model of this.models.getModels()) watch(model);
-    this.skillWatchers.add(this.models.onModelAdded(watch));
+    this.instructionWatchers.add(this.models.onModelAdded(watch));
   }
   onDidChangeInstructions(listener: () => void): () => void {
     const subscription = this.instructionsChanged.event(listener);
@@ -152,13 +155,25 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     };
   }
   notifyInstructionsChanged(): void {
-    const roots = new Set(this.skillRoots());
+    const roots = new Map<string, boolean>();
+    if (this.trust.isWorkspaceTrusted()) {
+      for (const root of this.instructionRoots()) roots.set(root, true);
+      for (const source of this.instructionSources()) {
+        if (source.kind !== 'glyph_user_rule' || !source.uri || !source.references?.length) continue;
+        // The authorized user store owns paths relative to its .glyph directory.
+        const uri = source.uri;
+        const rulesRoot = this.instructionRoots().find(root => uri.startsWith(`${root}/`));
+        if (!rulesRoot) continue;
+        for (const path of source.references)
+          roots.set(URI.joinPath(dirname(URI.parse(rulesRoot)), path).toString(), false);
+      }
+    }
     for (const root of this.rootWatches.keys()) if (!roots.has(root)) this.rootWatches.deleteAndDispose(root);
-    for (const root of roots)
+    for (const [root, recursive] of roots)
       if (!this.rootWatches.has(root))
-        this.rootWatches.set(root, this.files.watch(URI.parse(root), { recursive: true, excludes: [] }));
-    for (const model of this.models.getModels()) this.watchSkillModel?.(model);
-    const fingerprint = JSON.stringify([this.skillSources(), this.instructionSources()]);
+        this.rootWatches.set(root, this.files.watch(URI.parse(root), { recursive, excludes: [] }));
+    for (const model of this.models.getModels()) this.watchInstructionModel?.(model);
+    const fingerprint = JSON.stringify([this.instructionSources(), this.skillSources()]);
     if (fingerprint !== this.instructionFingerprint) {
       this.instructionFingerprint = fingerprint;
       this.instructionsChanged.fire();
@@ -274,7 +289,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   }
   async searchInstructions(query: string): Promise<readonly GlyphContextCandidate[]> {
     this.assertTrusted();
-    await this.refreshSkillSources?.();
+    await this.refreshInstructionSources?.();
     this.assertTrusted();
     const normalized = query.toLowerCase();
     const rules = this.instructionSources()
@@ -548,7 +563,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   }
   private async openSkill(reference: string): Promise<void> {
     this.assertTrusted();
-    await this.refreshSkillSources?.();
+    await this.refreshInstructionSources?.();
     this.assertTrusted();
     const source = this.referenceSource(reference);
     if (!source?.uri) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');

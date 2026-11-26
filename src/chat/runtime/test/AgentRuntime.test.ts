@@ -978,6 +978,7 @@ describe('provider-neutral steering', () => {
       },
     ]);
     const adapter = new ClaudeShapedAdapter();
+    const begin = vi.spyOn(adapter, 'beginTurn');
     const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
     const runtime = new AgentRuntime(
       adapter,
@@ -990,6 +991,7 @@ describe('provider-neutral steering', () => {
       { text: 'Use this workflow', attachments: [], skillIds: [descriptor.id] },
       { signal: new AbortController().signal, onText: () => {} },
     );
+    expect(begin.mock.calls[0]?.[2].instructionContext?.policy).toContain('host and user policy');
     expect(capture).toHaveBeenCalledOnce();
     expect(result.context?.skills?.[0]?.body).toBe('Initial skill instructions');
   });

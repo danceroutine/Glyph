@@ -48,6 +48,7 @@ export enum GlyphWorkbenchCommandType {
   REJECT_PROPOSAL_ITEM = 'reject_proposal_item',
   WRITE_SHELL_INPUT = 'write_shell_input',
   STOP_SHELL_SESSION = 'stop_shell_session',
+  REFRESH_CONTEXT_CATALOGS = 'refresh_context_catalogs',
   REQUEST_SNAPSHOT = 'request_snapshot',
   REFRESH_CONTEXT_CATALOGS = 'refresh_context_catalogs',
   DETACH = 'detach',

@@ -19,6 +19,9 @@ export interface GlyphDesktopSnapshot {
   readonly skillPreview?: GlyphSkillPreview;
   readonly skillManagementMessage?: string;
   readonly skills?: readonly GlyphSkill[];
+  /** Host-authorized directories to observe for instruction changes. */
+  readonly instructionWatchRoots?: readonly string[];
+  readonly userRulesDirectoryUri?: string;
   readonly instructionSources?: readonly GlyphInstructionSource[];
   readonly agentReviews?: readonly AgentReview[];
   readonly accounts: readonly GlyphAccountSummary[];

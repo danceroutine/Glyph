@@ -27,6 +27,7 @@ export interface ChatTurnOptions {
   readonly referenceSpans?: readonly ChatReferenceSpan[];
   /** Stable IDs of manual rules explicitly selected by the user for this turn. */
   readonly manualRuleIds?: readonly string[];
+  /** Stable identities of skills explicitly selected from the slash picker. */
   readonly skillIds?: readonly string[];
 }
 

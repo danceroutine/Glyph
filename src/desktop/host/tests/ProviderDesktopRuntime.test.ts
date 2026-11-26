@@ -86,6 +86,7 @@ async function fixture(
     readonly skillCatalog?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skills'];
     readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
     readonly records?: readonly ChatSessionRecord[];
+    readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
     readonly instructionCatalog?: NonNullable<
       ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']
     >;
@@ -214,6 +215,7 @@ async function fixture(
     },
     ownerWindowId,
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
+    ...(extras.refreshCatalogs ? { refreshCatalogs: extras.refreshCatalogs } : {}),
     ...(extras.instructionCatalog ? { instructionCatalog: extras.instructionCatalog } : {}),
     ...(extras.userRules ? { userRules: extras.userRules as never } : {}),
     ...(extras.skillManager ? { skillManager: extras.skillManager } : {}),
@@ -245,6 +247,18 @@ async function fixture(
     },
   };
 }
+
+it('refreshes only the instruction catalog while preserving connected chat runs', async () => {
+  const refreshCatalogs = vi.fn(async () => {});
+  const { runtime, events } = await fixture(async () => {}, 'owner', undefined, { refreshCatalogs });
+  onTestFinished(() => runtime.dispose());
+  events.length = 0;
+  await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+  expect(refreshCatalogs).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+  expect(events).toEqual([]);
+  refreshCatalogs.mockRejectedValueOnce(new Error('Discovery failed'));
+  await expect(runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS })).rejects.toThrow('Discovery failed');
+});
 
 it('projects instruction catalog snapshots and live changes without exposing file contents', async () => {
   let changed: ((sources: readonly AgentInstructionSource[]) => void) | undefined;

@@ -189,6 +189,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         : {}),
       ...(this.skillManagementMessage ? { skillManagementMessage: this.skillManagementMessage } : {}),
       agentReviews: this.options.agentReviews?.reviews ?? [],
+      ...(this.options.instructionWatchRoots ? { instructionWatchRoots: this.options.instructionWatchRoots } : {}),
       ...(instructionSources ? { instructionSources: toInstructionSources(instructionSources) } : {}),
       ...(this.options.userRules?.directoryUri ? { userRulesDirectoryUri: this.options.userRules.directoryUri } : {}),
       accounts: this.options.glyph.accounts,

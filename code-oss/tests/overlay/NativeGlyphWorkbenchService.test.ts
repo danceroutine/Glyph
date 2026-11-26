@@ -115,6 +115,10 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
             ],
           } as never;
           return;
+        case WorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
+          this.emit({ type: HostEventType.INSTRUCTION_SOURCES_CHANGED, sources: this.snapshot().instructionSources });
+          this.emit({ type: HostEventType.SKILLS_CHANGED, skills: this.snapshot().skills ?? [] });
+          return;
         case WorkbenchCommandType.REQUEST_SNAPSHOT:
           this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
           return;
@@ -161,6 +165,7 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js', () => ({
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => ({
   GlyphContextController: class {
     readonly setSkillSources = vi.fn();
+    readonly setInstructionRefresh = vi.fn();
     readonly notifyInstructionsChanged = vi.fn();
     readonly openAttachment = vi.fn();
     readonly ide = { terminal: vi.fn() };
@@ -517,6 +522,23 @@ describe(NativeGlyphWorkbenchService, () => {
       const { service } = await workbench({ chats: [chat('alpha', { mode: AgentModeID.PLAN })] });
 
       expect(service.composer.snapshot.document.options?.mode).toBe(AgentModeID.PLAN);
+    });
+
+    it('shares pending catalog refreshes, preserves the active chat, and reports failed refreshes', async () => {
+      const { service, host, context } = await workbench({ extra: { instructionWatchRoots: ['file:///user/rules'] } });
+      host.request.mockClear();
+      const activeComposer = service.composer;
+      const [refresh, roots] = context.setInstructionRefresh.mock.calls[0];
+      expect(roots()).toEqual(['file:///user/rules']);
+      await Promise.all([service.refreshInstructionSources(), refresh()]);
+      expect(host.request).toHaveBeenCalledExactlyOnceWith({
+        type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS,
+      });
+      expect(service.composer).toBe(activeComposer);
+      host.request.mockRejectedValueOnce(new Error('Refresh failed'));
+      await expect(refresh()).rejects.toThrow('Refresh failed');
+      await refresh();
+      expect(host.request).toHaveBeenCalledTimes(3);
     });
 
     it('restores a chat draft with its captures and places the caret at its end', async () => {
@@ -948,15 +970,14 @@ describe(NativeGlyphWorkbenchService, () => {
     });
   });
 
-  it('refreshes the catalogs without reconnecting or resetting active runs and coalesces requests', async () => {
+  it('refreshes the catalog through a shared instruction refresh and permits later refreshes', async () => {
     const { service, host, context } = await workbench();
     host.request.mockClear();
     await Promise.all([service.refreshSkills(), service.refreshSkills()]);
     expect(host.request).toHaveBeenCalledExactlyOnceWith({
       type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS,
     });
-    const [, refresh, roots] = context.setSkillSources.mock.calls[0];
-    expect(roots()).toEqual([]);
+    const [refresh] = context.setInstructionRefresh.mock.calls[0];
     await refresh();
     expect(host.request).toHaveBeenCalledTimes(2);
   });

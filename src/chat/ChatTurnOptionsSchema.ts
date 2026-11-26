@@ -74,8 +74,8 @@ export const chatTurnOptionsSchema = z
           .refine(span => span.to - span.from === span.label.length + 1),
       )
       .optional(),
-    manualRuleIds: z.array(z.string().min(1).max(500)).max(32).optional(),
     skillIds: z.array(z.string().min(1).max(500)).max(32).optional(),
+    manualRuleIds: z.array(z.string().min(1).max(500)).max(32).optional(),
   })
   .strict()
   .transform(
