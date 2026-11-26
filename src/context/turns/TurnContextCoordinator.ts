@@ -1,9 +1,6 @@
+import type { TurnContextEnvelope, TurnContextSnapshot } from './TurnContextEnvelope.ts';
 import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { AgentInstructionActivationReason } from '#src/instructions/AgentInstructionSource.js';
-import type {
-  AgentInstructionContext,
-  AgentInstructionTurnSnapshot,
-} from '#src/instructions/AgentInstructionSource.js';
 import { InstructionContextContributor } from './InstructionContextContributor.ts';
 import type { TurnContextContribution, TurnContextContributor, TurnContextInput } from './TurnContextContributor.ts';
 
@@ -15,10 +12,10 @@ export class PreparedTurnContext {
     readonly turnId: string,
     readonly contributions: ReadonlyMap<string, TurnContextContribution>,
   ) {}
-  initialEnvelope(): AgentInstructionContext {
+  initialEnvelope(): TurnContextEnvelope {
     return mergeTurnContext([...this.contributions.values()].map(part => part.initialEnvelope()));
   }
-  snapshot(): AgentInstructionTurnSnapshot {
+  snapshot(): TurnContextSnapshot {
     const parts = [...this.contributions.values()].map(part => part.snapshot());
     const skills = parts.flatMap(part => part.skills ?? []);
     return {
@@ -62,16 +59,16 @@ export class TurnContextCoordinator {
     while (this.sessions.size > 32) this.discardTurn(this.sessions.keys().next().value!);
     return session;
   }
-  disclosePaths(turnId: string, paths: readonly string[]): AgentInstructionContext | undefined {
+  disclosePaths(turnId: string, paths: readonly string[]): TurnContextEnvelope | undefined {
     return this.disclose(turnId, part => part.disclosePaths?.(paths));
   }
-  discloseAttachments(turnId: string, paths: readonly string[]): AgentInstructionContext | undefined {
+  discloseAttachments(turnId: string, paths: readonly string[]): TurnContextEnvelope | undefined {
     return this.disclose(turnId, part => part.discloseAttachments?.(paths));
   }
-  activateManualRules(turnId: string, ids: readonly string[]): AgentInstructionContext | undefined {
+  activateManualRules(turnId: string, ids: readonly string[]): TurnContextEnvelope | undefined {
     return this.disclose(turnId, part => part.activateManualRules?.(ids));
   }
-  activateRule(turnId: string, id: string): AgentInstructionContext | undefined {
+  activateRule(turnId: string, id: string): TurnContextEnvelope | undefined {
     return this.disclose(turnId, part => part.activateRule?.(id, AgentInstructionActivationReason.MODEL));
   }
   async activateSource(
@@ -81,7 +78,7 @@ export class TurnContextCoordinator {
     reason: 'manual' | 'model',
     explanation: string,
     signal?: AbortSignal,
-  ): Promise<AgentInstructionContext | undefined> {
+  ): Promise<TurnContextEnvelope | undefined> {
     return this.sessions
       .get(turnId)
       ?.contributions.get(contributorId)
@@ -90,10 +87,10 @@ export class TurnContextCoordinator {
   contribution(turnId: string, id: string): TurnContextContribution | undefined {
     return this.sessions.get(turnId)?.contributions.get(id);
   }
-  snapshot(turnId: string): AgentInstructionTurnSnapshot | undefined {
+  snapshot(turnId: string): TurnContextSnapshot | undefined {
     return this.sessions.get(turnId)?.snapshot();
   }
-  completeTurn(turnId: string): AgentInstructionTurnSnapshot | undefined {
+  completeTurn(turnId: string): TurnContextSnapshot | undefined {
     const snapshot = this.snapshot(turnId);
     this.discardTurn(turnId);
     return snapshot;
@@ -104,8 +101,8 @@ export class TurnContextCoordinator {
   }
   private disclose(
     turnId: string,
-    operation: (part: TurnContextContribution) => AgentInstructionContext | undefined,
-  ): AgentInstructionContext | undefined {
+    operation: (part: TurnContextContribution) => TurnContextEnvelope | undefined,
+  ): TurnContextEnvelope | undefined {
     const parts = [...(this.sessions.get(turnId)?.contributions.values() ?? [])].flatMap(part => {
       const context = operation(part);
       return context ? [context] : [];
@@ -115,7 +112,7 @@ export class TurnContextCoordinator {
 }
 
 /** Preserve separate payloads for instruction and package domains in one versioned turn envelope. */
-export function mergeTurnContext(parts: readonly AgentInstructionContext[]): AgentInstructionContext {
+export function mergeTurnContext(parts: readonly TurnContextEnvelope[]): TurnContextEnvelope {
   const candidates = parts.flatMap(part => part.candidates ?? []);
   const activations = parts.flatMap(part => part.activations ?? []);
   const skills = parts.flatMap(part => part.skills ?? []);

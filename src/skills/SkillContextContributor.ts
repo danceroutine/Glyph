@@ -1,12 +1,9 @@
+import type { TurnContextEnvelope, TurnContextSnapshot } from '#src/context/turns/TurnContextEnvelope.js';
 import type {
   TurnContextContribution,
   TurnContextContributor,
   TurnContextInput,
 } from '#src/context/turns/TurnContextContributor.js';
-import type {
-  AgentInstructionContext,
-  AgentInstructionTurnSnapshot,
-} from '#src/instructions/AgentInstructionSource.js';
 import type { SkillCatalog } from './SkillCatalog.ts';
 import type { SkillActivation, SkillCandidate, SkillDescriptor, SkillInstruction } from './SkillDescriptor.ts';
 import type { SkillPackage } from './SkillPackage.ts';
@@ -37,7 +34,7 @@ export class SkillTurnContext implements TurnContextContribution {
     string,
     { package: SkillPackage; reason: 'manual' | 'model'; explanation: string }
   >();
-  private pending: { ids: ReadonlySet<string>; result: Promise<AgentInstructionContext> } | undefined;
+  private pending: { ids: ReadonlySet<string>; result: Promise<TurnContextEnvelope> } | undefined;
   private readonly advertised = new Map<string, SkillCandidate>();
   private readonly initialCandidates: readonly SkillCandidate[];
   private initialSkills: readonly SkillInstruction[] = [];
@@ -54,7 +51,7 @@ export class SkillTurnContext implements TurnContextContribution {
     const activation = await this.activateManualSkills(ids, 'Selected by the user', signal);
     this.initialSkills = activation?.skills ?? [];
   }
-  initialEnvelope(): AgentInstructionContext {
+  initialEnvelope(): TurnContextEnvelope {
     return {
       schema: 'glyph.agent-instructions.v1',
       sources: [],
@@ -62,7 +59,7 @@ export class SkillTurnContext implements TurnContextContribution {
       ...(this.initialSkills.length > 0 ? { skills: this.initialSkills } : {}),
     };
   }
-  disclosePaths(paths: readonly string[]): AgentInstructionContext | undefined {
+  disclosePaths(paths: readonly string[]): TurnContextEnvelope | undefined {
     const candidates = this.descriptors.filter(
       skill => !this.advertised.has(skill.id) && this.catalog.appliesTo(skill, paths),
     );
@@ -71,10 +68,10 @@ export class SkillTurnContext implements TurnContextContribution {
       ? { schema: 'glyph.agent-instructions.v1', sources: [], skillCandidates: advertised }
       : undefined;
   }
-  discloseAttachments(paths: readonly string[]): AgentInstructionContext | undefined {
+  discloseAttachments(paths: readonly string[]): TurnContextEnvelope | undefined {
     return this.disclosePaths(paths);
   }
-  async steer(input: TurnContextInput, signal?: AbortSignal): Promise<AgentInstructionContext | undefined> {
+  async steer(input: TurnContextInput, signal?: AbortSignal): Promise<TurnContextEnvelope | undefined> {
     const activation = await this.activateManualSkills(
       input.skillIds ?? [],
       'Selected by the user while steering',
@@ -98,7 +95,7 @@ export class SkillTurnContext implements TurnContextContribution {
   readResource(id: string, path: string) {
     return this.activePackage(id).readResource(path);
   }
-  snapshot(): AgentInstructionTurnSnapshot {
+  snapshot(): TurnContextSnapshot {
     return {
       schema: 'glyph.turn-context.v1',
       turnId: this.turnId,
@@ -125,7 +122,7 @@ export class SkillTurnContext implements TurnContextContribution {
     reason: SkillActivation['reason'],
     explanation: string,
     signal?: AbortSignal,
-  ): Promise<AgentInstructionContext | undefined> {
+  ): Promise<TurnContextEnvelope | undefined> {
     // A batch validates against all earlier committed selections and publishes its captures together.
     while (this.pending) {
       const pending = this.pending;
@@ -186,7 +183,7 @@ export class SkillTurnContext implements TurnContextContribution {
     reason: SkillActivation['reason'],
     explanation: string,
     signal?: AbortSignal,
-  ): Promise<AgentInstructionContext> {
+  ): Promise<TurnContextEnvelope> {
     const packages: SkillPackage[] = [];
     for (const descriptor of selected) {
       const pinned = await this.catalog.capture(descriptor, signal);

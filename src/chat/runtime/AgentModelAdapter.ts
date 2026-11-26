@@ -1,4 +1,4 @@
-import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
+import type { TurnContextEnvelope } from '#src/context/turns/TurnContextEnvelope.js';
 import type { AgentMode } from '#src/chat/AgentMode.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
@@ -36,7 +36,7 @@ export interface AgentTurnContext {
   readonly signal: AbortSignal;
   readonly round: number;
   /** Provider-neutral instructions prepared by the host for this boundary. */
-  readonly instructionContext?: AgentInstructionContext;
+  readonly instructionContext?: TurnContextEnvelope;
   readonly onText: (delta: string) => void;
   readonly onReasoningSummary?: (delta: string) => void;
   readonly trace: (kind: string, data: unknown, round?: number) => void;

@@ -1,3 +1,4 @@
+import type { TurnContextSnapshot } from '#src/context/turns/TurnContextEnvelope.js';
 import type { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
@@ -1380,7 +1381,7 @@ function toInstructionSources(sources: readonly AgentInstructionSource[]): reado
   }));
 }
 
-function toTurnContext(context: import('#src/instructions/AgentInstructionSource.js').AgentInstructionTurnSnapshot) {
+function toTurnContext(context: TurnContextSnapshot) {
   return {
     ...(context.skills?.length ? { skills: context.skills } : {}),
     sources: toInstructionSources(context.sources),
