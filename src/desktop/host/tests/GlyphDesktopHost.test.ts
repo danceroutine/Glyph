@@ -94,6 +94,42 @@ describe(GlyphDesktopHost, () => {
     vi.mocked(isGlyphRequestEnvelope).mockReturnValue(true);
   });
 
+  it('selects only currently trusted same-profile peer windows and fails closed during their attachment transitions', async () => {
+    const fixture = new HostFixture();
+    const windowRoots = (id: string) => [{ name: id, uri: 'file:///' + id, canonicalPath: '/' + id }];
+    const trusted = { ...peer, workspaceId: 'other-root' };
+    const foreign = { ...trusted, profileId: 'other-profile', windowId: 'foreign' };
+    const restricted = { ...trusted, windowId: 'restricted', workspaceId: 'third-root' };
+    for (const [id, identity, trust] of [
+      ['owner', owner, true],
+      ['trusted', trusted, true],
+      ['foreign', foreign, true],
+      ['restricted', restricted, false],
+    ] as const) {
+      fixture.connect(id, identity);
+      await fixture.receive(id, identity, 'attach-' + id, {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: windowRoots(id),
+        trusted: trust,
+      });
+    }
+    expect(fixture.host.trustedUserSkillPeers(owner)).toEqual([{ identity: trusted, connectionId: 'trusted' }]);
+    const resync = fixture.receive('trusted', trusted, 'resync', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: windowRoots('trusted'),
+      trusted: true,
+    });
+    expect(() => fixture.host.trustedUserSkillPeers(owner)).toThrow('reconnecting');
+    await resync;
+    await fixture.receive('trusted', trusted, 'revoke', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: windowRoots('trusted'),
+      trusted: false,
+    });
+    expect(fixture.host.trustedUserSkillPeers(owner)).toEqual([]);
+    await fixture.host.dispose();
+  });
+
   describe(GlyphDesktopHost.prototype.receive, () => {
     it('rejects invalid request envelopes', async () => {
       vi.mocked(isGlyphRequestEnvelope).mockReturnValue(false);

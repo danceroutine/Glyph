@@ -125,6 +125,17 @@ export class GlyphEditorAdapter extends Disposable {
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       switch (request.type) {
+        case GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES: {
+          const root = skillTargets.find(target => target.scope === 'user')?.uri;
+          const name = request.packageName;
+          if (!root || !name || name === '.' || name === '..' || /[/\\\0]/u.test(name))
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+          return {
+            operationId,
+            ok: true,
+            packageClean: this.packageWorkingCopiesClean(URI.joinPath(URI.parse(root, true), name)),
+          };
+        }
         case GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES:
           return { operationId, ok: true, packageClean: this.skillPackageClean(request, skillTargets) };
         case GlyphEditorRequestType.EXISTS:
@@ -729,6 +740,11 @@ export class GlyphEditorAdapter extends Disposable {
       )
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
     }
+    return this.packageWorkingCopiesClean(directory);
+  }
+
+  private packageWorkingCopiesClean(directory: URI): boolean {
+    const identity = this.uriIdentityService.extUri;
     return !this.workingCopyService.dirtyWorkingCopies.some(copy => {
       const resource = copy.resource;
       if (resource.scheme === 'untitled' && this.textFileService.untitled.isUntitledWithAssociatedResource(resource))

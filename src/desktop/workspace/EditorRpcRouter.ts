@@ -14,6 +14,12 @@ export class EditorRpcRouter {
     { connectionId: string; resolve: (response: GlyphEditorResponse) => void; reject: (error: Error) => void }
   >();
 
+  constructor(
+    readonly trustedUserSkillPeers: (
+      owner: GlyphConnectionIdentity,
+    ) => readonly { identity: GlyphConnectionIdentity; connectionId: string }[] = () => [],
+  ) {}
+
   connect(
     connectionId: string,
     identity: GlyphConnectionIdentity,

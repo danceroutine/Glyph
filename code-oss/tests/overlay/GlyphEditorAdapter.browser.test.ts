@@ -1,3 +1,4 @@
+import { env } from '#vs/base/common/process.js';
 import { extUri } from '#vs/base/common/resources.js';
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { GlyphEditorAdapter } from '#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js';
@@ -1643,4 +1644,47 @@ describe('skill package working-copy checks', () => {
     });
     expect(services.fileService.readFile).not.toHaveBeenCalled();
   });
+});
+
+it('uses independently authorized user directories at bootstrap and resolves only a peer package basename', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const original = env['GLYPH_USER_DIRECTORY'];
+  const root = '/private/registered/skills';
+  const targets = [{ id: 'user:glyph', label: 'User skills', scope: 'user' as const, uri: URI.file(root).toString() }];
+  const peer = (packageName: string) => ({
+    type: GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES as const,
+    operationId: 'peer',
+    packageName,
+  });
+  try {
+    delete env['GLYPH_USER_DIRECTORY'];
+    for (const [configure, directory] of [
+      [false, '/local-home/.glyph/skills/example'],
+      [true, '/configured/skills/example'],
+    ] as const) {
+      if (configure) env['GLYPH_USER_DIRECTORY'] = '/configured';
+      expect(
+        await adapter.handle({
+          type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+          operationId: 'bootstrap',
+          scope: 'user',
+          directoryUri: URI.file(directory).toString(),
+        }),
+      ).toMatchObject({ ok: true, packageClean: true });
+    }
+    for (const name of ['', '.', '..', 'other/private', 'bad\\path'])
+      expect((await adapter.handle(peer(name), targets)).ok).toBe(false);
+    expect((await adapter.handle(peer('example'))).ok).toBe(false);
+    services.pendingCopies.push({ resource: URI.file(root + '/example/new.md') });
+    expect(await adapter.handle(peer('example'), targets)).toEqual({
+      operationId: 'peer',
+      ok: true,
+      packageClean: false,
+    });
+    expect(services.fileService.readFile).not.toHaveBeenCalled();
+  } finally {
+    if (original === undefined) delete env['GLYPH_USER_DIRECTORY'];
+    else env['GLYPH_USER_DIRECTORY'] = original;
+  }
 });

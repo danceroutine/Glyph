@@ -66,6 +66,21 @@ export class GlyphDesktopHost {
     this.generation = generation;
   }
 
+  /** Live trusted windows sharing the user package store. A changing peer must settle before publication. */
+  trustedUserSkillPeers(
+    owner: GlyphConnectionIdentity,
+  ): readonly { identity: GlyphConnectionIdentity; connectionId: string }[] {
+    const peers = [];
+    for (const [connectionId, peer] of this.connections) {
+      if (!peer.trusted || peer.identity.profileId !== owner.profileId || peer.identity.windowId === owner.windowId)
+        continue;
+      if (!peer.attached || !peer.ready || peer.pendingAttachments > 0)
+        throw new Error('Another trusted Glyph window is reconnecting. Retry the skill change after it reconnects.');
+      peers.push({ identity: peer.identity, connectionId });
+    }
+    return peers;
+  }
+
   connect(connectionId: string, identity: GlyphConnectionIdentity, send: Exclude<Connection['send'], undefined>): void {
     if (this.disposed) throw new Error('The Glyph desktop host has stopped.');
     if (this.connections.has(connectionId)) throw new Error(`Connection ${connectionId} is already registered.`);
