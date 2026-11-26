@@ -32,6 +32,7 @@ import type { GlyphInstructionSource } from '#glyph/protocol/events/GlyphInstruc
 
 /** Capture context only from explicit file selection, search, or selected editor text. */
 export class GlyphContextController extends Disposable implements GlyphContextActions {
+  private refreshSkillSources: (() => Promise<void>) | undefined;
   private skillSources: () => readonly GlyphSkill[] = () => [];
   readonly ide: GlyphIdeContext;
   private focused: ICodeEditor | undefined;
@@ -62,8 +63,9 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
   }
-  setSkillSources(source: () => readonly GlyphSkill[]): void {
+  setSkillSources(source: () => readonly GlyphSkill[], refresh?: () => Promise<void>): void {
     this.skillSources = source;
+    this.refreshSkillSources = refresh;
   }
 
   selectIdeContext(): Promise<readonly GlyphContextAttachment[]> {
@@ -174,6 +176,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     return candidates.slice(0, 50);
   }
   async searchInstructions(query: string): Promise<readonly GlyphContextCandidate[]> {
+    this.assertTrusted();
+    await this.refreshSkillSources?.();
     this.assertTrusted();
     const normalized = query.toLowerCase();
     const rules = this.instructionSources()

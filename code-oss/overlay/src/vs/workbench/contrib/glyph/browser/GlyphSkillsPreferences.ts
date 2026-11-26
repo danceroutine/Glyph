@@ -26,6 +26,7 @@ export class GlyphSkillsPreferences extends Disposable implements IPreferencesEd
       }),
     );
     this.update();
+    void this.glyph.refreshSkills();
   }
   getDomNode(): HTMLElement {
     return this.element;
@@ -36,6 +37,7 @@ export class GlyphSkillsPreferences extends Disposable implements IPreferencesEd
   search(text: string): void {
     this.query = text;
     this.update();
+    void this.glyph.refreshSkills();
   }
   private update(): void {
     this.view.update(this.glyph.state.skills ?? [], this.query);

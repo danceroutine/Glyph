@@ -51,6 +51,7 @@ const SYNTHETIC_RUN_PREFIXES = ['shell-event:', 'goal-continuation:'];
 
 /** Adapts the host's recoverable state and commands to the workbench interaction port. */
 export class NativeGlyphWorkbenchService extends Disposable implements GlyphWorkbenchService {
+  private skillRefresh: Promise<void> | undefined;
   private readonly composers = new Map<string, GlyphComposerState>();
   private immediatePending = false;
   declare readonly _serviceBrand: undefined;
@@ -159,7 +160,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         () => this.state.instructionSources ?? [],
       ),
     );
-    this.context.setSkillSources(() => this.state.skills ?? []);
+    this.context.setSkillSources(
+      () => this.state.skills ?? [],
+      () => this.refreshSkills(),
+    );
     this.proposalEditor = this._register(
       instantiationService.createInstance(GlyphProposalEditor, {
         state: () => this.state,
@@ -398,6 +402,15 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.composer.restoreDraft({ parts: [], from: 0, to: 0, options: {} });
     }
     this.composer.insertAttachments(attachments);
+  }
+  refreshSkills(): Promise<void> {
+    return (this.skillRefresh ??= this.request({ type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT, afterSequence: 0 })
+      .catch(error => {
+        this.report(error);
+      })
+      .finally(() => {
+        this.skillRefresh = undefined;
+      }));
   }
   copyText(text: string): Promise<void> {
     return this.clipboard.writeText(text);

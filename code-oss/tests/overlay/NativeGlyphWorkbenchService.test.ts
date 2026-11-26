@@ -855,6 +855,31 @@ describe(NativeGlyphWorkbenchService, () => {
     });
   });
 
+  it('refreshes the catalog through a shared snapshot request and permits later refreshes', async () => {
+    const { service, host, context } = await workbench();
+    host.request.mockClear();
+    await Promise.all([service.refreshSkills(), service.refreshSkills()]);
+    expect(host.request).toHaveBeenCalledExactlyOnceWith({
+      type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+      afterSequence: 0,
+    });
+    const [, refresh] = context.setSkillSources.mock.calls[0];
+    await refresh();
+    expect(host.request).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a failed catalog refresh and allows a later retry', async () => {
+    const { service, host } = await workbench();
+    host.request.mockRejectedValueOnce(new Error('Catalog unavailable'));
+    await service.refreshSkills();
+    expect(service.state.transcript).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: 'Catalog unavailable' })]),
+    );
+    host.request.mockClear();
+    await service.refreshSkills();
+    expect(host.request).toHaveBeenCalledOnce();
+  });
+
   describe(NativeGlyphWorkbenchService.prototype.copyText, () => {
     it('copies text to the clipboard', async () => {
       const { service, clipboard } = await workbench();

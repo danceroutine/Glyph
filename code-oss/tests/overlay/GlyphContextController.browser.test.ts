@@ -1,3 +1,4 @@
+import type { GlyphSkill } from '#glyph/protocol/events/GlyphSkill.js';
 import { describe, expect, it, vi, type Mock } from 'vitest';
 import { GlyphContextController } from '#vs/workbench/contrib/glyph/browser/GlyphContextController.js';
 import { URI } from '#vs/base/common/uri.js';
@@ -204,6 +205,36 @@ describe(GlyphContextController, () => {
       controller.dispose();
     },
   );
+
+  it('refreshes skill metadata before searching the slash catalog', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    let sources: readonly GlyphSkill[] = [];
+    const refresh = vi.fn(async () => {
+      sources = [
+        {
+          id: 'new-skill',
+          name: 'new-skill',
+          description: 'Newly repaired workflow',
+          path: '.glyph/skills/new-skill/SKILL.md',
+          directory: '.glyph/skills/new-skill',
+          scope: '.',
+          origin: { id: 'project', label: 'Project', scope: 'project', compatibility: 'glyph' },
+          enabled: true,
+          status: 'active',
+          allowedTools: [],
+          uri: 'file:///workspace/.glyph/skills/new-skill/SKILL.md',
+        },
+      ];
+    });
+    controller.setSkillSources(() => sources, refresh);
+    expect(await controller.searchInstructions('repaired')).toMatchObject([{ skillId: 'new-skill' }]);
+    expect(refresh).toHaveBeenCalledOnce();
+    services.trust.isWorkspaceTrusted.mockReturnValue(false);
+    await expect(controller.searchInstructions('repaired')).rejects.toThrow();
+    expect(refresh).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
 
   it('opens workspace rule references without direct URIs and refreshes an unversioned reference by ID', async () => {
     const services = controllerServices();

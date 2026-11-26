@@ -24,9 +24,11 @@ describe(GlyphSkillsPreferences, () => {
       ],
     };
     const editors = { openEditor: vi.fn(async () => undefined) };
+    const refreshSkills = vi.fn(async () => undefined);
     const page = new GlyphSkillsPreferences(
       {
         state,
+        refreshSkills,
         onDidChangeState: (listener: () => void) => {
           changed = listener;
           return { dispose: vi.fn() };
@@ -34,6 +36,7 @@ describe(GlyphSkillsPreferences, () => {
       } as never,
       editors as never,
     );
+    expect(refreshSkills).toHaveBeenCalledOnce();
     page.layout({ width: 900, height: 600 });
     expect(page.getDomNode().style.height).toBe('600px');
     page.getDomNode().querySelector<HTMLButtonElement>('button')!.click();
@@ -42,6 +45,7 @@ describe(GlyphSkillsPreferences, () => {
       options: { pinned: true },
     });
     page.search('not-found');
+    expect(refreshSkills).toHaveBeenCalledTimes(2);
     expect(page.getDomNode().textContent).toContain('No skills match your search.');
     page.search('');
     state.skills = [];

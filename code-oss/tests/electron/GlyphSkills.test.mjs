@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 import { z } from 'zod';
@@ -48,6 +50,38 @@ it.describe('Agent skill discovery and activation', () => {
     await expect(glyph.page.getByRole('tab', { name: /SKILL.md/u }).first()).toBeVisible();
     const close = glyph.page.getByRole('button', { name: /Close Modal Editor/u });
     if (await close.isVisible()) await close.click();
+  });
+  it('refreshes repaired and newly added skills in the slash picker and Settings without a model turn', async ({
+    glyph,
+    provider,
+  }) => {
+    await sendSkillText(glyph, provider, 'Discover the initial skill catalog.');
+    const requests = provider.requests.length;
+    await writeFile(
+      join(glyph.workspace, '.glyph/skills/bad/SKILL.md'),
+      '---\nname: bad\ndescription: Repaired skill workflow\n---\nRepaired guidance.',
+    );
+    await mkdir(join(glyph.workspace, '.glyph/skills/added'), { recursive: true });
+    await writeFile(
+      join(glyph.workspace, '.glyph/skills/added/SKILL.md'),
+      '---\nname: added\ndescription: Newly added skill workflow\n---\nAdded guidance.',
+    );
+    await glyph.composer.fill('/Repaired');
+    await expect(glyph.page.getByRole('option').filter({ hasText: 'Repaired skill workflow' })).toBeVisible();
+    await glyph.composer.fill('/Newly');
+    await expect(glyph.page.getByRole('option').filter({ hasText: 'Newly added skill workflow' })).toBeVisible();
+    await glyph.composer.fill('');
+    await writeFile(
+      join(glyph.workspace, '.glyph/skills/bad/SKILL.md'),
+      '---\nname: bad\ndescription: Updated skill in Settings\n---\nUpdated guidance.',
+    );
+    await glyph.page.getByRole('button', { name: 'Chat actions' }).click();
+    await glyph.page.getByRole('menuitem', { name: 'Agent Settings' }).click();
+    await glyph.page.getByText('Skills', { exact: true }).click();
+    const settings = glyph.page.getByRole('region', { name: 'Skills' });
+    await expect(settings).toContainText('Updated skill in Settings');
+    await expect(settings).toContainText('Newly added skill workflow');
+    expect(provider.requests).toHaveLength(requests);
   });
   it.fixme('resolves duplicate skill names visibly and lets the user select the intended scoped skill', async () => {});
   it('lets the user explicitly invoke an enabled skill from chat and shows which skill was activated', async ({
