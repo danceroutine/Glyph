@@ -24,11 +24,11 @@ export interface TurnContextSessionInput {
 
 /** Owns context activation and disclosure state for one logical agent turn. */
 export class TurnContextSession {
-  private readonly activated = new Map<string, AgentInstructionActivation>();
-  private readonly pending = new Map<AgentInstructionSource, AgentInstructionActivation>();
+  private activated = new Map<string, AgentInstructionActivation>();
+  private pending = new Map<AgentInstructionSource, AgentInstructionActivation>();
   private readonly scopeIndex: AgentInstructionSet;
   private readonly precedence: ReadonlyMap<AgentInstructionSource, number>;
-  private readonly advertisedCandidates = new Map<string, AgentInstructionCandidate>();
+  private advertisedCandidates = new Map<string, AgentInstructionCandidate>();
   private readonly initial: TurnContextEnvelope;
 
   private readonly paths: InstructionPaths;
@@ -63,6 +63,18 @@ export class TurnContextSession {
   }
 
   /** Initial instructions and bounded model-selectable metadata for provider turn creation. */
+  checkpointSteering(): () => void {
+    const activated = new Map(this.activated);
+    const pending = new Map(this.pending);
+    const advertised = new Map(this.advertisedCandidates);
+    const remainingBytes = this.remainingBytes;
+    return () => {
+      this.activated = activated;
+      this.pending = pending;
+      this.advertisedCandidates = advertised;
+      this.remainingBytes = remainingBytes;
+    };
+  }
   initialEnvelope(): TurnContextEnvelope {
     return structuredClone(this.initial);
   }

@@ -68,20 +68,28 @@ export class TurnContextCoordinator {
   /** Domains validate asynchronous selections before publishing synchronous path disclosures. */
   async steer(input: TurnContextInput, signal?: AbortSignal): Promise<TurnContextEnvelope | undefined> {
     const contributions = [...(this.sessions.get(input.turnId)?.contributions.values() ?? [])];
-    const contexts: TurnContextEnvelope[] = [];
-    for (const part of contributions) {
-      if (!part.steer) continue;
-      const delta = await part.steer(input, signal);
-      if (delta) contexts.push(delta);
+    signal?.throwIfAborted();
+    const checkpoints = contributions.flatMap(part => (part.checkpointSteering ? [part.checkpointSteering()] : []));
+    try {
+      const contexts: TurnContextEnvelope[] = [];
+      for (const part of contributions) {
+        if (!part.steer) continue;
+        const delta = await part.steer(input, signal);
+        signal?.throwIfAborted();
+        if (delta) contexts.push(delta);
+      }
+      for (const part of contributions) {
+        if (part.steer) continue;
+        const paths = part.discloseAttachments?.(input.attachmentPaths);
+        const manual = part.activateManualRules?.(input.manualRuleIds ?? []);
+        if (paths) contexts.push(paths);
+        if (manual) contexts.push(manual);
+      }
+      return contexts.length > 0 ? mergeTurnContext(contexts) : undefined;
+    } catch (error) {
+      for (const restore of checkpoints.toReversed()) restore();
+      throw error;
     }
-    for (const part of contributions) {
-      if (part.steer) continue;
-      const paths = part.discloseAttachments?.(input.attachmentPaths);
-      const manual = part.activateManualRules?.(input.manualRuleIds ?? []);
-      if (paths) contexts.push(paths);
-      if (manual) contexts.push(manual);
-    }
-    return contexts.length > 0 ? mergeTurnContext(contexts) : undefined;
   }
   disclosePaths(turnId: string, paths: readonly string[]): TurnContextEnvelope | undefined {
     return this.disclose(turnId, part => part.disclosePaths?.(paths));
