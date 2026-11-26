@@ -19,6 +19,12 @@ const DIRECTORY: OFlags = OFlags::RDONLY
 const MAX_REMOVE_DEPTH: usize = 64;
 const MAX_REMOVE_ENTRIES: usize = 65_536;
 
+impl From<std::io::Error> for Failure {
+    fn from(error: std::io::Error) -> Self {
+        Self::new("EIO", error.to_string())
+    }
+}
+
 impl From<Errno> for Failure {
     fn from(errno: Errno) -> Self {
         let code = match errno {

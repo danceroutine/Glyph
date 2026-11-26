@@ -13,7 +13,7 @@ async function fixture() {
   await writeFile(
     helper,
     [
-      '#!/usr/bin/env node',
+      '#!' + process.execPath,
       "import { readFileSync, writeFileSync } from 'node:fs';",
       "const input = readFileSync(0, 'utf8');",
       'writeFileSync(' + JSON.stringify(request) + ', input);',
@@ -33,6 +33,20 @@ it('sends the same pinned root identity and relative paths for every native oper
     ...context,
     operation: 'ensure_directory',
     relative: 'a/b',
+  });
+  await mutations.ensureDirectory('a/b', 0o755);
+  expect(JSON.parse(await readFile(request, 'utf8')).mode).toBe(0o755);
+  await mutations.createStage('.skill-staging/id');
+  expect(JSON.parse(await readFile(request, 'utf8')).operation).toBe('create_stage');
+  await mutations.stagePackage(
+    '.skill-staging/id/package',
+    new Map([['SKILL.md', { bytes: Uint8Array.of(97), mode: 0o644 }]]),
+    new Map([['', 0o755]]),
+  );
+  expect(JSON.parse(await readFile(request, 'utf8'))).toMatchObject({
+    operation: 'stage_package',
+    files: [{ path: 'SKILL.md', mode: 0o644, content: 'YQ==' }],
+    directories: [{ path: '', mode: 0o755 }],
   });
   await mutations.renameExclusive('a/b', 'c');
   expect(JSON.parse(await readFile(request, 'utf8'))).toEqual({
@@ -56,6 +70,13 @@ it('propagates native failures and rejects unacknowledged, oversized or malforme
     await expect(mutations.removeTree('a')).rejects.toThrow();
   }
   await expect(mutations.ensureDirectory('d'.repeat(32 * 1024))).rejects.toThrow('32 KiB');
+  await expect(
+    mutations.stagePackage(
+      '.skill-staging/id/package',
+      new Map([['oversize', { bytes: Buffer.alloc(18 * 1024 * 1024), mode: 0o600 }]]),
+      new Map([['', 0o700]]),
+    ),
+  ).rejects.toThrow('24576 KiB');
   await rm(helper);
   await expect(mutations.ensureDirectory('a')).rejects.toThrow();
   const alias = join(root, 'alias');
