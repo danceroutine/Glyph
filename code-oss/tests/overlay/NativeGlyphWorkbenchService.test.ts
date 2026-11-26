@@ -115,6 +115,9 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
             ],
           } as never;
           return;
+        case WorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
+          this.emit({ type: HostEventType.INSTRUCTION_SOURCES_CHANGED, sources: this.snapshot().instructionSources });
+          return;
         case WorkbenchCommandType.REQUEST_SNAPSHOT:
           this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
           return;
@@ -155,6 +158,8 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js', () => ({
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => ({
   GlyphContextController: class {
     readonly setSkillSources = vi.fn();
+    readonly setInstructionRefresh = vi.fn();
+    readonly notifyInstructionsChanged = vi.fn();
     readonly ide = { terminal: vi.fn() };
     readonly selectIdeContext = vi.fn(async () => [] as unknown[]);
     readonly attachSelection = vi.fn(async () => {});
@@ -511,6 +516,23 @@ describe(NativeGlyphWorkbenchService, () => {
       expect(service.composer.snapshot.document.options?.mode).toBe(AgentModeID.PLAN);
     });
 
+    it('shares pending catalog refreshes, preserves the active chat, and reports failed refreshes', async () => {
+      const { service, host, context } = await workbench({ extra: { instructionWatchRoots: ['file:///user/rules'] } });
+      host.request.mockClear();
+      const activeComposer = service.composer;
+      const [refresh, roots] = context.setInstructionRefresh.mock.calls[0];
+      expect(roots()).toEqual(['file:///user/rules']);
+      await Promise.all([service.refreshInstructionSources(), refresh()]);
+      expect(host.request).toHaveBeenCalledExactlyOnceWith({
+        type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS,
+      });
+      expect(service.composer).toBe(activeComposer);
+      host.request.mockRejectedValueOnce(new Error('Refresh failed'));
+      await expect(refresh()).rejects.toThrow('Refresh failed');
+      await refresh();
+      expect(host.request).toHaveBeenCalledTimes(3);
+    });
+
     it('restores a chat draft with its captures and places the caret at its end', async () => {
       const { service, host } = await workbench();
       const composer = service.composer;
@@ -534,6 +556,57 @@ describe(NativeGlyphWorkbenchService, () => {
         from: 11,
         to: 11,
         options: { mode: AgentModeID.PLAN },
+      });
+    });
+
+    it('restores legacy selected rules as removable badges using the catalog, including missing sources', async () => {
+      const { service, host } = await workbench({
+        extra: {
+          instructionSources: [
+            {
+              id: 'named',
+              kind: 'glyph_project_rule',
+              label: 'Project rule',
+              path: '.glyph/rules/named.mdc',
+              scope: '.',
+              status: 'active',
+              name: 'Named',
+              revision: 'revision',
+            },
+            {
+              id: 'file',
+              kind: 'glyph_project_rule',
+              label: 'Project rule',
+              path: '.glyph/rules/file.mdc',
+              scope: '.',
+              status: 'active',
+            },
+          ],
+        },
+      });
+      const composer = service.composer;
+      emit(host, {
+        type: GlyphHostEventType.CHAT_RESTORED,
+        chatId: 'alpha',
+        runs: [],
+        draft: {
+          text: 'Try /Named and /file.mdc',
+          attachments: [],
+          options: { manualRuleIds: ['named', 'file', 'missing'] },
+        },
+      });
+      const badges = composer.snapshot.document.parts.flatMap(part =>
+        part.type === 'attachment' ? [part.attachment] : [],
+      );
+      expect(badges.map(badge => [badge.ruleId, badge.path, badge.contentRevision])).toEqual([
+        ['named', 'Named', 'revision'],
+        ['file', 'file.mdc', 'file'],
+        ['missing', 'missing', 'missing'],
+      ]);
+      composer.setDraft('A replacement');
+      await composer.submit(async (_text, files, options) => {
+        expect(files).toEqual([]);
+        expect(options?.manualRuleIds).toBeUndefined();
       });
     });
 

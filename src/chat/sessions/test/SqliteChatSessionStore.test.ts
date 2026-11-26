@@ -193,6 +193,12 @@ describe(SqliteChatSessionStore, () => {
       ...source,
       transcript: source.transcript.map(turn => ({
         ...turn,
+        userText: 'See /Rule',
+        options: {
+          ...turn.options,
+          manualRuleIds: ['rule'],
+          referenceSpans: [{ kind: 'rule' as const, sourceId: 'rule', label: 'Rule', revision: 'r1', from: 4, to: 9 }],
+        },
         checkpoints: {
           before: checkpoint,
           after: { ...checkpoint, providerState: { ...source.providerState, data: { messages: ['first'] } } },

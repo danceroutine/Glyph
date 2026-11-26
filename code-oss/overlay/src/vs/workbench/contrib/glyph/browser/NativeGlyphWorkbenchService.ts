@@ -7,7 +7,7 @@ import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js
 import { IClipboardService } from '#vs/platform/clipboard/common/clipboardService.js';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import { IConfigurationService } from '#vs/platform/configuration/common/configuration.js';
-import { toGlyphTranscriptParts } from '#glyph/workbench/toGlyphTranscriptParts.js';
+import { restoreGlyphPrompt } from '#glyph/workbench/restoreGlyphPrompt.js';
 import type { GlyphPlanRecord } from '#glyph/protocol/events/GlyphPlanRecord.js';
 import type { GlyphPlanProgress } from '#glyph/protocol/events/GlyphPlanProgress.js';
 import { GlyphPlanPromptIntent, toGlyphPlanPrompt } from '#glyph/workbench/GlyphPlanPrompt.js';
@@ -51,7 +51,6 @@ const SYNTHETIC_RUN_PREFIXES = ['shell-event:', 'goal-continuation:'];
 
 /** Adapts the host's recoverable state and commands to the workbench interaction port. */
 export class NativeGlyphWorkbenchService extends Disposable implements GlyphWorkbenchService {
-  private skillRefresh: Promise<void> | undefined;
   private readonly composers = new Map<string, GlyphComposerState>();
   private immediatePending = false;
   declare readonly _serviceBrand: undefined;
@@ -95,6 +94,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private workspaceMessage: string | undefined;
   private readonly prompts = new Map<string, string>();
   private readonly errors: GlyphTranscriptEntry[] = [];
+  private catalogRefresh: Promise<void> | undefined;
   private readonly goals = new GlyphGoalReconciler({
     snapshot: chatId => this.goalSnapshot(chatId),
     continueGoal: (chatId, goalId) => this.request({ type: GlyphWorkbenchCommandType.CONTINUE_GOAL, chatId, goalId }),
@@ -160,9 +160,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         () => this.state.instructionSources ?? [],
       ),
     );
-    this.context.setSkillSources(
-      () => this.state.skills ?? [],
-      () => this.refreshSkills(),
+    this.context.setSkillSources(() => this.state.skills ?? []);
+    this.context.setInstructionRefresh(
+      () => this.refreshInstructionSources(),
+      () => this.state.instructionWatchRoots ?? [],
     );
     this.proposalEditor = this._register(
       instantiationService.createInstance(GlyphProposalEditor, {
@@ -247,6 +248,12 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             ? this.projection.state.chats.find(chat => chat.id === event.chat.id)?.mode
             : undefined;
         this.projection.accept(event);
+        if (
+          event.type === GlyphHostEventType.SKILLS_CHANGED ||
+          event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED ||
+          event.type === GlyphHostEventType.INITIAL_STATE
+        )
+          this.context.notifyInstructionsChanged();
         this.shellTerminals.update(this.projection.state.shells ?? []);
         switch (event.type) {
           case GlyphHostEventType.INITIAL_STATE:
@@ -288,24 +295,21 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             break;
           case GlyphHostEventType.CHAT_RESTORED: {
             const composer = this.composers.get(event.chatId);
-            const attachments = event.draft.attachments.map(value => ({ ...value, id: value.id ?? generateUuid() }));
-            const previews = attachments.map(value => ({ ...value, revision: value.contentRevision }));
-            const parts = toGlyphTranscriptParts({
-              id: '',
-              role: GlyphTranscriptRole.USER,
-              text: event.draft.text,
-              ...(event.draft.options ? { options: event.draft.options } : {}),
-              attachments: previews,
-            }).map(part =>
-              part.type === 'text'
-                ? part
-                : {
-                    type: 'attachment' as const,
-                    attachment: attachments[previews.findIndex(preview => preview === part.attachment)],
-                  },
+            composer?.restoreDraft(
+              restoreGlyphPrompt(
+                event.draft,
+                (_kind, id) => {
+                  const source = this.state.instructionSources?.find(rule => rule.id === id);
+                  return source
+                    ? {
+                        name: source.name ?? source.path.split('/').at(-1)!,
+                        ...(source.revision ? { revision: source.revision } : {}),
+                      }
+                    : undefined;
+                },
+                generateUuid,
+              ),
             );
-            const end = parts.reduce((size, part) => size + (part.type === 'text' ? part.text.length : 1), 0);
-            composer?.restoreDraft({ parts, from: end, to: end, options: { ...event.draft.options } });
             break;
           }
           case GlyphHostEventType.RUN_STATE:
@@ -332,8 +336,27 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       });
   }
 
-  createUserRule(name: string, activation: NonNullable<GlyphInstructionSource['activation']>): Promise<void> {
-    return this.request({ type: GlyphWorkbenchCommandType.CREATE_USER_RULE, name, activation });
+  refreshInstructionSources(): Promise<void> {
+    return (this.catalogRefresh ??= this.request({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS })
+      .catch(error => {
+        this.report(error);
+        throw error;
+      })
+      .finally(() => {
+        this.catalogRefresh = undefined;
+      }));
+  }
+  createUserRule(
+    name: string,
+    activation: NonNullable<GlyphInstructionSource['activation']>,
+    condition?: string,
+  ): Promise<void> {
+    return this.request({
+      type: GlyphWorkbenchCommandType.CREATE_USER_RULE,
+      name,
+      activation,
+      ...(condition === undefined ? {} : { condition }),
+    });
   }
 
   setUserRuleEnabled(source: GlyphInstructionSource, enabled: boolean): Promise<void> {
@@ -404,13 +427,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.composer.insertAttachments(attachments);
   }
   refreshSkills(): Promise<void> {
-    return (this.skillRefresh ??= this.request({ type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT, afterSequence: 0 })
-      .catch(error => {
-        this.report(error);
-      })
-      .finally(() => {
-        this.skillRefresh = undefined;
-      }));
+    return this.refreshInstructionSources();
   }
   copyText(text: string): Promise<void> {
     return this.clipboard.writeText(text);

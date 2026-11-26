@@ -14,7 +14,11 @@ const DEFAULT_MAX_BYTES = 64 * 1024;
 export class AgentsMdInstructionProvider implements AgentInstructionSourceProvider {
   constructor(
     private readonly workspace: WorkspaceTextStore,
-    private readonly options: { readonly maxFiles?: number; readonly maxBytes?: number } = {},
+    private readonly options: {
+      readonly maxFiles?: number;
+      readonly maxBytes?: number;
+      readonly maxDiscoveryBytes?: number;
+    } = {},
     private readonly listFiles: (
       maxFiles: number,
       globPattern: string,
@@ -42,37 +46,41 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
       ];
     }
     signal?.throwIfAborted();
-    const sources = await Promise.all(
-      listed.files.map(async (path): Promise<AgentInstructionSource> => {
-        const normalized = this.workspace.normalizePath(path);
-        const base = {
-          id: `${AgentInstructionSourceKind.AGENTS_MD}:${normalized}`,
-          kind: AgentInstructionSourceKind.AGENTS_MD,
-          label: 'AGENTS.md',
-          path: normalized,
-          scope: instructionScope(normalized),
-        } as const;
-        try {
-          const snapshot = await this.workspace.read(normalized, {
-            maxBytes: this.options.maxBytes ?? DEFAULT_MAX_BYTES,
-          });
-          signal?.throwIfAborted();
-          return {
-            ...base,
-            status: AgentInstructionSourceStatus.ACTIVE,
-            content: snapshot.text,
-            revision: snapshot.revision,
-          } satisfies AgentInstructionSource;
-        } catch (error) {
-          if (signal?.aborted === true) throw signal.reason;
-          return {
-            ...base,
-            status: AgentInstructionSourceStatus.ERROR,
-            message: error instanceof Error ? error.message : 'Instruction file could not be read.',
-          } satisfies AgentInstructionSource;
-        }
-      }),
-    );
+    const sources: AgentInstructionSource[] = [];
+    let remainingBytes = this.options.maxDiscoveryBytes ?? 8 * 1024 * 1024;
+    for (const path of listed.files) {
+      signal?.throwIfAborted();
+      let normalized = path;
+      const base = () => ({
+        id: `${AgentInstructionSourceKind.AGENTS_MD}:${normalized}`,
+        kind: AgentInstructionSourceKind.AGENTS_MD,
+        label: 'AGENTS.md',
+        path: normalized,
+        scope: instructionScope(normalized),
+      });
+      try {
+        normalized = this.workspace.normalizePath(path);
+        if (remainingBytes <= 0) throw new Error('Instruction discovery read budget exhausted.');
+        const snapshot = await this.workspace.read(normalized, {
+          maxBytes: Math.min(remainingBytes, this.options.maxBytes ?? DEFAULT_MAX_BYTES),
+        });
+        signal?.throwIfAborted();
+        remainingBytes -= snapshot.byteLength ?? Buffer.byteLength(snapshot.text);
+        sources.push({
+          ...base(),
+          status: AgentInstructionSourceStatus.ACTIVE,
+          content: snapshot.text,
+          revision: snapshot.revision,
+        });
+      } catch (error) {
+        signal?.throwIfAborted();
+        sources.push({
+          ...base(),
+          status: AgentInstructionSourceStatus.ERROR,
+          message: error instanceof Error ? error.message : 'Instruction file could not be read.',
+        });
+      }
+    }
     if (listed.truncated) {
       sources.push({
         id: `${AgentInstructionSourceKind.AGENTS_MD}:discovery-limit`,

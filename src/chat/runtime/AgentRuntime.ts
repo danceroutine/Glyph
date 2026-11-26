@@ -149,6 +149,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       },
     });
     let turn: TTurn | undefined;
+    let admittedContext = false;
     let hasToolCheckpoint = false;
     try {
       const recovery = this.adapter.recoverInterruptedToolCalls(this.state);
@@ -167,6 +168,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         },
         signal,
       );
+      admittedContext = turnContext !== undefined;
       boundaryInstructions = turnContext?.initialEnvelope();
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
       boundaryInstructions = undefined;
@@ -207,6 +209,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           this.state = this.persistentState(this.adapter.snapshot(turn));
           trace('history.committed', { state: this.state }, round);
           const turnContextSnapshot = this.turnContexts?.completeTurn(turnId);
+          admittedContext = false;
           return {
             responseId: step.responseId,
             usage: totalUsage && usageIncomplete ? { ...totalUsage, incomplete: true } : totalUsage,
@@ -272,7 +275,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       trace('turn.failed', errorDetails(reportedError));
       throw reportedError;
     } finally {
-      this.turnContexts?.discardTurn(turnId);
+      if (admittedContext) this.turnContexts?.discardTurn(turnId);
       this.busy = false;
     }
   }

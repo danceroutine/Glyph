@@ -8,6 +8,7 @@ import {
   AgentInstructionSourceKind,
   AgentInstructionSourceStatus,
 } from '#src/instructions/AgentInstructionSource.js';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
 
 const roots: string[] = [];
@@ -28,6 +29,95 @@ async function fixture() {
 }
 
 describe(AgentRuleInstructionProvider, () => {
+  it('retains parsed identity and prevents another root from supplying a referenced file', async () => {
+    const readOptional = vi.fn();
+    const provider = new AgentRuleInstructionProvider(
+      {
+        normalizePath: (path: string) => path,
+        read: async () => ({ text: '---\nname: Shared\nreferences: [../other/data.md]\n---\nBody', revision: 'one' }),
+        readOptional,
+      } as never,
+      {
+        kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+        directory: '.glyph',
+        paths: new InstructionPaths(
+          new Map([
+            ['App', false],
+            ['other', true],
+          ]),
+        ),
+      },
+      async () => ({ files: ['App/.GLYPH/RULES/a.MDC', 'other/.GLYPH/rules/a.mdc'], truncated: false }),
+    );
+    const [native, unexpected] = await provider.discover();
+    expect(native).toMatchObject({
+      name: 'Shared',
+      sourceRevision: 'one',
+      scope: 'App',
+      message: expect.stringContaining('leaves'),
+    });
+    expect(unexpected?.message).toContain('outside');
+    expect(readOptional).not.toHaveBeenCalled();
+  });
+
+  it('reuses referenced snapshots but charges each occurrence and limits total reads and expanded bytes', async () => {
+    const main = '---\nreferences: [ref.md, ref.md]\n---\nMain';
+    const readOptional = vi.fn(async () => ({ text: 'Ref', revision: 'two' }));
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: async () => ({ text: main, revision: 'one' }),
+      readOptional,
+    } as never;
+    const options = { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' } as const;
+    const list = async () => ({ files: ['.glyph/rules/a.mdc'], truncated: false });
+    const [source] = await new AgentRuleInstructionProvider(workspace, options, list).discover();
+    expect(source?.references).toEqual(['ref.md', 'ref.md']);
+    expect(readOptional).toHaveBeenCalledTimes(1);
+    for (const [budget, error] of [
+      [{ maxReferenceEdges: 1 }, 'count'],
+      [{ maxDiscoveryReferenceEdges: 1 }, 'count'],
+      [{ maxExpandedBytes: 8 }, 'expanded'],
+      [{ maxDiscoveryBytes: Buffer.byteLength(main) }, 'read budget'],
+    ] as const) {
+      expect(
+        (await new AgentRuleInstructionProvider(workspace, { ...options, ...budget }, list).discover())[0]?.message,
+      ).toContain(error);
+    }
+  });
+
+  it('allows an empty manual rule to remain empty', async () => {
+    const provider = new AgentRuleInstructionProvider(
+      {
+        normalizePath: (path: string) => path,
+        read: async () => ({ text: '', revision: 'empty', byteLength: 0 }),
+      } as never,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({ files: ['.glyph/rules/empty.mdc'], truncated: false }),
+    );
+    expect((await provider.discover())[0]?.content).toBe('');
+  });
+
+  it('uses a bounded stable selector for long paths and diagnoses unconfigured conditional rules', async () => {
+    const directory = 'long/'.repeat(110);
+    const modes = ['model', 'file_pattern'];
+    const provider = new AgentRuleInstructionProvider(
+      {
+        normalizePath: (path: string) => path,
+        read: async () => ({ text: `---\nactivation: ${modes.shift()}\n---\nBody`, revision: 'one' }),
+      } as never,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({
+        files: [`${directory}.glyph/rules/one.mdc`, `${directory}.glyph/rules/two.mdc`],
+        truncated: false,
+      }),
+    );
+    const [model, pattern] = await provider.discover();
+    expect(model?.id).toMatch(/^glyph_project_rule:sha256:[0-9a-f]{64}$/u);
+    expect(model?.id).not.toBe(pattern?.id);
+    expect(model?.message).toContain('description');
+    expect(pattern?.message).toContain('glob');
+  });
+
   it('discovers native rules, expands authorized references, and derives a composite revision', async () => {
     const { root, workspace } = await fixture();
     await writeFile(join(root, 'docs.md'), 'Shared guidance.');
@@ -197,7 +287,12 @@ describe(AgentRuleInstructionProvider, () => {
       { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
       async () => ({ files: ['outside.mdc'], truncated: false }),
     );
-    await expect(outside.discover()).rejects.toThrow('outside .glyph/rules');
+    await expect(outside.discover()).resolves.toEqual([
+      expect.objectContaining({
+        status: AgentInstructionSourceStatus.ERROR,
+        message: expect.stringContaining('outside .glyph/rules'),
+      }),
+    ]);
 
     const workspace = {
       normalizePath: (path: string) => path,
@@ -249,7 +344,12 @@ describe(AgentRuleInstructionProvider, () => {
       { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
       async () => ({ files: ['rules/not-glyph.mdc'], truncated: false }),
     );
-    await expect(invalid.discover()).rejects.toThrow('outside .glyph/rules');
+    await expect(invalid.discover()).resolves.toEqual([
+      expect.objectContaining({
+        status: AgentInstructionSourceStatus.ERROR,
+        message: expect.stringContaining('outside .glyph/rules'),
+      }),
+    ]);
   });
 
   it('uses the default discovery limit and resolves references relative to nested rule scope', async () => {

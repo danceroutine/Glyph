@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
@@ -13,6 +14,32 @@ import { listUserRuleFiles } from '#src/instructions/rules/listUserRuleFiles.js'
 import { UserAgentRuleManager } from '#src/instructions/rules/UserAgentRuleManager.js';
 
 describe('Native instruction discovery', () => {
+  it('consumes original spellings returned by a case-insensitive native index', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'glyph-rules-casing-'));
+    await mkdir(join(root, 'Src/.GLYPH/RULES'), { recursive: true });
+    await writeFile(join(root, 'Src/.GLYPH/RULES/Style.MDC'), 'Use clear names.');
+    const index = new RustWorkspacePathIndex({
+      root,
+      caseSensitive: false,
+      binaryPath: resolve(
+        'target/release',
+        process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
+      ),
+    });
+    onTestFinished(async () => {
+      await index.dispose();
+      await rm(root, { recursive: true, force: true });
+    });
+    const paths = new InstructionPaths(false);
+    const provider = new AgentRuleInstructionProvider(
+      new FileSystemWorkspaceTextStore(root),
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', paths },
+      (limit, pattern) => index.glob(pattern, { limit }),
+    );
+    const catalog = new AgentInstructionCatalog([provider], paths);
+    await catalog.refresh();
+    expect(catalog.resolve('src/app.ts')).toMatchObject([{ scope: 'Src', name: 'Style', content: 'Use clear names.' }]);
+  });
   it('indexes only the user rules directory and publishes managed changes before returning', async () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-user-rules-index-'));
     const rulesRoot = join(root, 'rules');

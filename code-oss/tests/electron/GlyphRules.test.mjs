@@ -124,6 +124,7 @@ it.describe('agent rules', () => {
       const name = `Electron Rule ${randomUUID().slice(0, 8)}`;
       await settings.getByRole('textbox', { name: 'New user rule name' }).fill(name);
       await settings.getByRole('combobox', { name: 'Rule activation' }).selectOption('model');
+      await settings.getByRole('textbox', { name: 'When should the model use this rule?' }).fill('Review the sample.');
       await settings.getByRole('button', { name: 'Create' }).click();
       const row = settings.locator('.instruction-source').filter({ hasText: name });
       await expect(row).toBeVisible();

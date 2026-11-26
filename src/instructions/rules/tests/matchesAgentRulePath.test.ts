@@ -23,6 +23,13 @@ describe(matchesAgentRulePath, () => {
     expect(matchesAgentRulePath({ ...source, scope: '.', globs: ['src**.ts'] }, 'src-main.ts')).toBe(true);
   });
 
+  it('handles overlapping wildcards in bounded work and caps metadata complexity', () => {
+    expect(globExpression('a*'.repeat(140) + 'z').test('a'.repeat(350))).toBe(false);
+    expect(globExpression('**/ß?.ts').test('a/ß🟡.ts')).toBe(true);
+    expect(globExpression('**/a').test('a')).toBe(true);
+    expect(globExpression('**/a').test('ba')).toBe(false);
+    expect(() => globExpression('a'.repeat(513))).toThrow('Invalid rule glob');
+  });
   it.each(['', '/absolute', '../outside', 'src\\file.ts', '{src,test}/**', '[ab].ts', '!secret'])(
     'rejects unsupported or unsafe glob %s',
     pattern => {

@@ -30,7 +30,13 @@ export class ToolExecutor {
       arguments: call.input,
     };
     options.trace('tool.call', { call });
-    options.onActivity({ phase: ToolActivityPhase.STARTED, ...activity });
+    let presentation;
+    try {
+      presentation = this.registry.resolve(call).activityPresentation;
+    } catch {
+      // invoke reports unknown and ambiguous tool names through the ordinary failure path.
+    }
+    if (!presentation) options.onActivity({ phase: ToolActivityPhase.STARTED, ...activity });
     const result = await this.invoke(call, options, activity.executionId);
     options.trace('tool.result', {
       namespace: call.namespace,
@@ -38,7 +44,10 @@ export class ToolExecutor {
       callId: call.id,
       output: result.output,
     });
-    options.onActivity({ phase: result.phase, ...activity, output: result.output });
+    if (!presentation || result.phase !== ToolActivityPhase.COMPLETED || presentation.show(result.output)) {
+      if (presentation) options.onActivity({ phase: ToolActivityPhase.STARTED, ...activity });
+      options.onActivity({ phase: result.phase, ...activity, output: result.output });
+    }
     return result;
   }
 

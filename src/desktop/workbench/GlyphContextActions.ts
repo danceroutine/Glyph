@@ -20,6 +20,7 @@ export interface GlyphContextCandidate {
   readonly revision?: string;
 }
 export interface GlyphContextActions {
+  onDidChangeInstructions?(listener: () => void): () => void;
   selectIdeContext?(): Promise<readonly GlyphContextAttachment[]>;
   selectFiles(): Promise<readonly GlyphContextAttachment[]>;
   searchFiles(query: string): Promise<readonly GlyphContextCandidate[]>;

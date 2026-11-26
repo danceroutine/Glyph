@@ -27,6 +27,14 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
   const [query, setQuery] = useState<GlyphPromptQuery>();
   const [candidates, setCandidates] = useState<readonly GlyphContextCandidate[]>([]);
   const [selected, setSelected] = useState(0);
+  const [instructionRevision, setInstructionRevision] = useState(0);
+  useEffect(
+    () =>
+      actions.context.onDidChangeInstructions?.(() => {
+        setInstructionRevision(value => value + 1);
+      }),
+    [actions.context],
+  );
   const [searching, setSearching] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string>();
@@ -227,7 +235,7 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query?.text, !!query, actions.context]);
+  }, [query?.text, !!query, actions.context, query?.trigger === '/' ? instructionRevision : 0]);
   useEffect(() => {
     let cancelled = false;
     if (preview)

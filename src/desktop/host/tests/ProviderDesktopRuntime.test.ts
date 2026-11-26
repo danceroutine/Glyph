@@ -77,6 +77,7 @@ async function fixture(
   extras: {
     readonly agentReviews?: AgentReviewService;
     readonly records?: readonly ChatSessionRecord[];
+    readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
     readonly instructionCatalog?: NonNullable<
       ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']
     >;
@@ -205,6 +206,7 @@ async function fixture(
     },
     ownerWindowId,
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
+    ...(extras.refreshCatalogs ? { refreshCatalogs: extras.refreshCatalogs } : {}),
     ...(extras.instructionCatalog ? { instructionCatalog: extras.instructionCatalog } : {}),
     ...(extras.userRules ? { userRules: extras.userRules as never } : {}),
   });
@@ -232,6 +234,18 @@ async function fixture(
     },
   };
 }
+
+it('refreshes only the instruction catalog while preserving connected chat runs', async () => {
+  const refreshCatalogs = vi.fn(async () => {});
+  const { runtime, events } = await fixture(async () => {}, 'owner', undefined, { refreshCatalogs });
+  onTestFinished(() => runtime.dispose());
+  events.length = 0;
+  await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+  expect(refreshCatalogs).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+  expect(events).toEqual([]);
+  refreshCatalogs.mockRejectedValueOnce(new Error('Discovery failed'));
+  await expect(runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS })).rejects.toThrow('Discovery failed');
+});
 
 it('projects instruction catalog snapshots and live changes without exposing file contents', async () => {
   let changed: ((sources: readonly AgentInstructionSource[]) => void) | undefined;
@@ -301,7 +315,7 @@ it('projects instruction catalog snapshots and live changes without exposing fil
         context: {
           schema: 'glyph.turn-context.v1',
           turnId: 'turn',
-          sources: [sources[2]!],
+          sources: [sources[0]!, sources[2]!],
           activations: [{ sourceId: sources[2]!.id, reason: AgentInstructionActivationReason.MANUAL }],
           candidates: [{ id: 'candidate', name: 'Candidate', description: 'When relevant', scope: '.' }],
         },
@@ -326,7 +340,10 @@ it('projects instruction catalog snapshots and live changes without exposing fil
     });
     await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: historical.id });
     expect((await harness.runtime.snapshot()).runs.find(run => run.chatId === historical.id)?.context).toEqual({
-      sources: [expect.objectContaining({ content: 'User body', managementPath: 'rules/user.mdc' })],
+      sources: [
+        expect.objectContaining({ content: sources[0]!.content }),
+        expect.objectContaining({ content: 'User body', managementPath: 'rules/user.mdc' }),
+      ],
       activations: [{ sourceId: sources[2]!.id, reason: AgentInstructionActivationReason.MANUAL }],
       candidates: [{ id: 'candidate', name: 'Candidate', description: 'When relevant' }],
     });
@@ -394,7 +411,7 @@ it('dispatches user rule lifecycle commands and reports unavailable management',
       path: 'rules/test.mdc',
       expectedRevision: 'two',
     });
-    expect(userRules.create).toHaveBeenCalledWith('Test', 'manual');
+    expect(userRules.create).toHaveBeenCalledWith('Test', 'manual', undefined);
     expect(userRules.setEnabled).toHaveBeenCalledWith('rules/test.mdc', 'one', false);
     expect(userRules.remove).toHaveBeenCalledWith('rules/test.mdc', 'two');
   } finally {

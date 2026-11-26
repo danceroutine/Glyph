@@ -77,7 +77,12 @@ export interface GlyphWorkbenchService {
   rejectProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void>;
   /** Reload skill metadata for Settings and slash selection without starting a model turn. */
   refreshSkills(): Promise<void>;
-  createUserRule(name: string, activation: NonNullable<GlyphInstructionSource['activation']>): Promise<void>;
+  refreshInstructionSources?(): Promise<void>;
+  createUserRule(
+    name: string,
+    activation: NonNullable<GlyphInstructionSource['activation']>,
+    condition?: string,
+  ): Promise<void>;
   setUserRuleEnabled(source: GlyphInstructionSource, enabled: boolean): Promise<void>;
   deleteUserRule(source: GlyphInstructionSource): Promise<void>;
 }

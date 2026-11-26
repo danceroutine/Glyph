@@ -204,6 +204,7 @@ describe(ProjectToolRuntime, () => {
         ProjectToolName.PROPOSE_EDITS,
       ]);
       expect(tools[0]).toBe(accessTool);
+      expect(tools.slice(1).every(tool => tool.requiresExclusiveRound)).toBe(true);
       expect(tools[2]?.parameters).toMatchObject({ type: 'object', required: ['files'] });
       expect(tools[2]?.parameters).not.toHaveProperty('$schema');
     });

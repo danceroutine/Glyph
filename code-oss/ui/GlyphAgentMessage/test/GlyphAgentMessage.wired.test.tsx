@@ -69,9 +69,20 @@ describe(WiredGlyphAgentMessage, () => {
                 kind: 'glyph_project_rule',
                 label: 'Glyph project rule',
                 name: 'TypeScript',
+                revision: 'frozen-revision',
+                content: 'Frozen instructions',
                 path: '.glyph/rules/typescript.mdc',
                 scope: '.',
                 status: 'active',
+              },
+              {
+                id: 'other',
+                kind: 'agents_md',
+                label: 'AGENTS.md',
+                path: 'src/AGENTS.md',
+                scope: 'src',
+                status: 'active',
+                content: 'Stored without an explicit revision.',
               },
               {
                 id: 'agents',
@@ -90,9 +101,12 @@ describe(WiredGlyphAgentMessage, () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /TypeScript · file access/u }));
+    expect(screen.getByText('AGENTS.md · active')).toBeTruthy();
+    expect(screen.getByText('Frozen instructions')).toBeTruthy();
+    expect(screen.getByText('frozen-revision')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Open current file · .glyph/u }));
     expect(openLink).toHaveBeenCalledWith('glyph-instruction:rule');
-    expect(screen.getByRole('button', { name: /AGENTS.md · active/u })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Open current file · AGENTS.md/u })).toBeTruthy();
   });
 
   it('branches the conversation from a checkpoint', async () => {

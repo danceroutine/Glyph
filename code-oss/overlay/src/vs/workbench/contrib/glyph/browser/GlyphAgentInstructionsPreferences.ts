@@ -16,24 +16,20 @@ export class GlyphAgentInstructionsPreferences extends Disposable implements IPr
       this.element,
       [],
       '',
-      source => {
+      async source => {
         const resource = source.uri ? URI.parse(source.uri) : this.resource(source.path);
-        if (resource) void this.editors.openEditor({ resource });
+        if (resource) await this.editors.openEditor({ resource });
       },
       {
-        createUserRule: (name, activation) => {
-          void this.glyph.createUserRule(name, activation);
-        },
-        setUserRuleEnabled: (source, enabled) => {
-          void this.glyph.setUserRuleEnabled(source, enabled);
-        },
-        deleteUserRule: source => {
-          void this.glyph.deleteUserRule(source);
-        },
+        createUserRule: (name, activation, condition) => this.glyph.createUserRule(name, activation, condition),
+        setUserRuleEnabled: (source, enabled) => this.glyph.setUserRuleEnabled(source, enabled),
+        deleteUserRule: source => this.glyph.deleteUserRule(source),
       },
     ),
   );
   private query = '';
+  private refreshError = '';
+  private refreshing = false;
 
   constructor(
     @GlyphWorkbenchService private readonly glyph: GlyphWorkbenchService,
@@ -47,6 +43,7 @@ export class GlyphAgentInstructionsPreferences extends Disposable implements IPr
       }),
     );
     this.update();
+    void this.refresh();
   }
 
   getDomNode(): HTMLElement {
@@ -60,10 +57,30 @@ export class GlyphAgentInstructionsPreferences extends Disposable implements IPr
   search(text: string): void {
     this.query = text.trim().toLocaleLowerCase();
     this.update();
+    void this.refresh();
+  }
+
+  private async refresh(): Promise<void> {
+    if (this.refreshing) return;
+    this.refreshing = true;
+    try {
+      await this.glyph.refreshInstructionSources?.();
+      this.refreshError = '';
+    } catch (error) {
+      this.refreshError = error instanceof Error ? error.message : 'Agent Instructions could not be refreshed.';
+    } finally {
+      this.refreshing = false;
+      this.update();
+    }
   }
 
   private update(): void {
-    this.view.update(this.glyph.state.instructionSources ?? [], this.query);
+    this.view.update(
+      this.glyph.state.instructionSources ?? [],
+      this.query,
+      this.glyph.state.readOnly || this.glyph.state.instructionSources === undefined,
+      this.refreshError,
+    );
   }
 
   private resource(path: string): URI | undefined {

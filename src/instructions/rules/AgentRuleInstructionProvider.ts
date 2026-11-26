@@ -8,10 +8,12 @@ import {
   type AgentInstructionSource,
 } from '#src/instructions/AgentInstructionSource.js';
 import type { AgentInstructionSourceProvider } from '#src/instructions/AgentInstructionSourceProvider.js';
-import { parseAgentRuleFile } from './parseAgentRuleFile.ts';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
+import type { WorkspaceTextSnapshot } from '#src/workspace/WorkspaceTextSnapshot.js';
+import type { AgentRuleFile } from './AgentRuleFile.ts';
+import { MAX_AGENT_RULE_BYTES, parseAgentRuleFile } from './parseAgentRuleFile.ts';
 
 const DEFAULT_MAX_FILES = 10_000;
-const DEFAULT_MAX_BYTES = 64 * 1024;
 const MAX_REFERENCE_DEPTH = 16;
 
 export interface AgentRuleInstructionProviderOptions {
@@ -20,12 +22,19 @@ export interface AgentRuleInstructionProviderOptions {
   readonly directory: '.glyph' | '.cursor' | '.';
   readonly maxFiles?: number;
   readonly maxBytes?: number;
+  readonly paths?: InstructionPaths;
+  readonly maxReferenceEdges?: number;
+  readonly maxExpandedBytes?: number;
+  readonly maxDiscoveryBytes?: number;
+  readonly maxDiscoveryReferenceEdges?: number;
   readonly displayPrefix?: string;
   readonly uriForPath?: (path: string) => string;
 }
 
 /** Discovers, parses, validates, and expands one family of file-backed rules. */
 export class AgentRuleInstructionProvider implements AgentInstructionSourceProvider {
+  private readonly paths: InstructionPaths;
+
   constructor(
     private readonly workspace: WorkspaceTextStore,
     private readonly options: AgentRuleInstructionProviderOptions,
@@ -34,7 +43,9 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
       globPattern: string,
     ) => Promise<{ files: string[]; truncated: boolean }> = (maxFiles, globPattern) =>
       workspace.list(maxFiles, globPattern),
-  ) {}
+  ) {
+    this.paths = options.paths ?? new InstructionPaths(workspace.caseSensitive);
+  }
 
   async discover(signal?: AbortSignal): Promise<readonly AgentInstructionSource[]> {
     signal?.throwIfAborted();
@@ -43,13 +54,28 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     try {
       listed = await this.listFiles(this.options.maxFiles ?? DEFAULT_MAX_FILES, pattern);
     } catch (error) {
+      signal?.throwIfAborted();
       return [
         this.errorSource(`${this.options.directory}/rules`, '.', describe(error, 'Rules could not be discovered.')),
       ];
     }
-    const paths =
-      this.options.directory === '.' ? listed.files.filter(path => /^rules\/[^/]+\.mdc$/u.test(path)) : listed.files;
-    const sources = await Promise.all(paths.map(path => this.readRule(path, signal)));
+    const sources: AgentInstructionSource[] = [];
+    const budget = {
+      readBytes: this.options.maxDiscoveryBytes ?? 8 * 1024 * 1024,
+      outputBytes: this.options.maxDiscoveryBytes ?? 8 * 1024 * 1024,
+      reads: this.options.maxFiles ?? DEFAULT_MAX_FILES,
+      edges: this.options.maxDiscoveryReferenceEdges ?? 8_192,
+    };
+    // Process one rule at a time in index order. Independent provider families can discover concurrently.
+    for (const path of listed.files) {
+      signal?.throwIfAborted();
+      if (
+        this.options.directory === '.' &&
+        !/^rules\/[^/]+\.mdc$/u.test(this.paths.caseSensitive(path) ? path : path.toLowerCase())
+      )
+        continue;
+      sources.push(await this.readRule(path, budget, signal));
+    }
     if (listed.truncated)
       sources.push(
         this.errorSource(
@@ -61,102 +87,167 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     return sources;
   }
 
-  private async readRule(path: string, signal?: AbortSignal): Promise<AgentInstructionSource> {
-    const normalized = this.workspace.normalizePath(path);
-    const scope = ruleScope(normalized, this.options.directory);
+  private async readRule(path: string, budget: DiscoveryBudget, signal?: AbortSignal): Promise<AgentInstructionSource> {
+    let normalized = path;
+    let scope = '.';
+    let name: string | undefined;
+    let sourceRevision: string | undefined;
+    let uri: string | undefined;
     try {
-      // TODO: Revisit instruction byte budgets: coordinate per-file limits with an
-      // aggregate expanded-reference and per-turn budget instead of bounding each read alone.
-      const snapshot = await this.workspace.read(normalized, { maxBytes: this.options.maxBytes ?? DEFAULT_MAX_BYTES });
+      normalized = this.workspace.normalizePath(path);
+      scope = ruleScope(normalized, this.options.directory, this.paths.caseSensitive(normalized));
+      uri = this.options.uriForPath?.(normalized);
+      const snapshot = await this.read(normalized, budget, false);
       signal?.throwIfAborted();
+      sourceRevision = snapshot.revision;
       const parsed = parseAgentRuleFile(snapshot.text);
+      name = parsed.name;
       const activation = resolveActivation(parsed.activation, parsed.alwaysApply, parsed.globs, parsed.description);
-      const expanded = await this.expandReferences(
-        parsed.body,
-        parsed.references,
+      if (activation === AgentInstructionActivationMode.MODEL && !parsed.description)
+        throw new Error('Model-selected rules require a description.');
+      if (activation === AgentInstructionActivationMode.FILE_PATTERN && parsed.globs.length === 0)
+        throw new Error('Matching-files rules require at least one glob.');
+      const { content, revision, references } = await this.expandRule(
+        parsed,
+        normalized,
         scope,
-        new Set([normalized]),
+        snapshot.revision,
+        budget,
         signal,
       );
-      const revision = createHash('sha256')
-        .update([snapshot.revision, ...expanded.revisions].join('\0'))
-        .digest('hex');
       return {
-        id: `${this.options.kind}:${normalized}`,
+        id: ruleId(this.options.kind, normalized),
         kind: this.options.kind,
         label: label(this.options.kind),
-        name: parsed.name ?? posix.basename(normalized, '.mdc'),
+        name: name ?? posix.parse(normalized).name,
         path: `${this.options.displayPrefix ?? ''}${normalized}`,
         scope,
         status: AgentInstructionSourceStatus.ACTIVE,
-        content: [parsed.body, ...expanded.contents].filter(Boolean).join('\n\n'),
+        content,
         revision,
-        sourceRevision: snapshot.revision,
+        sourceRevision,
         activation,
         ...(parsed.description ? { description: parsed.description } : {}),
         ...(parsed.globs.length > 0 ? { globs: parsed.globs } : {}),
         enabled: parsed.enabled,
-        ...(expanded.paths.length > 0 ? { references: expanded.paths } : {}),
-        ...(this.options.uriForPath ? { uri: this.options.uriForPath(normalized) } : {}),
+        ...(references.length > 0 ? { references } : {}),
+        ...(uri ? { uri } : {}),
       };
     } catch (error) {
-      if (signal?.aborted === true) throw signal.reason;
-      return this.errorSource(normalized, scope, describe(error, 'Rule could not be read.'));
+      signal?.throwIfAborted();
+      return {
+        ...this.errorSource(normalized, scope, describe(error, 'Rule could not be read.')),
+        ...(name ? { name } : {}),
+        ...(sourceRevision ? { sourceRevision } : {}),
+        ...(uri ? { uri } : {}),
+      };
     }
   }
 
-  private async expandReferences(
-    body: string,
-    references: readonly string[],
+  private async expandRule(
+    parsed: AgentRuleFile,
+    normalized: string,
     scope: string,
-    visited: Set<string>,
+    sourceRevision: string,
+    budget: DiscoveryBudget,
     signal?: AbortSignal,
-  ): Promise<{ contents: string[]; paths: string[]; revisions: string[] }> {
-    if (visited.size > MAX_REFERENCE_DEPTH) throw new Error(`Rule references exceed ${MAX_REFERENCE_DEPTH} levels.`);
-    const result = { contents: [] as string[], paths: [] as string[], revisions: [] as string[] };
-    for (const reference of references) {
-      signal?.throwIfAborted();
-      const path = this.workspace.normalizePath(scope === '.' ? reference : posix.join(scope, reference));
-      if (visited.has(path)) throw new Error(`Circular rule reference: ${[...visited, path].join(' -> ')}`);
-      const snapshot = await this.workspace.readOptional(path, {
-        maxBytes: this.options.maxBytes ?? DEFAULT_MAX_BYTES,
-      });
-      if (!snapshot) throw new Error(`Missing rule reference: ${path}`);
-      const nextVisited = new Set(visited).add(path);
-      const parsed = parseAgentRuleFile(snapshot.text);
-      const nested = await this.expandReferences(parsed.body, parsed.references, scope, nextVisited, signal);
-      result.paths.push(path, ...nested.paths);
-      result.revisions.push(snapshot.revision, ...nested.revisions);
-      result.contents.push(`Referenced source (${path}):\n${parsed.body}`, ...nested.contents);
-    }
-    return result;
+  ) {
+    const contents: string[] = [];
+    const references: string[] = [];
+    const revisions = [sourceRevision];
+    const cache = new Map<string, { parsed: AgentRuleFile; revision: string }>();
+    const ancestors = new Set([this.paths.key(normalized)]);
+    let edges = 0;
+    let remaining = Math.min(this.options.maxExpandedBytes ?? 256 * 1024, budget.outputBytes);
+    const append = (value: string) => {
+      const bytes = Buffer.byteLength(value) + (contents.length > 0 ? 2 : 0);
+      if (bytes > remaining) throw new Error('Rule exceeds the expanded instruction byte limit.');
+      remaining -= bytes;
+      budget.outputBytes -= bytes;
+      if (value) contents.push(value);
+    };
+    const expand = async (children: readonly string[]): Promise<void> => {
+      if (ancestors.size > MAX_REFERENCE_DEPTH)
+        throw new Error(`Rule references exceed ${MAX_REFERENCE_DEPTH} levels.`);
+      for (const child of children) {
+        signal?.throwIfAborted();
+        if (++edges > (this.options.maxReferenceEdges ?? 128) || --budget.edges < 0)
+          throw new Error('Rule reference count exceeds the discovery limit.');
+        const target = this.workspace.normalizePath(this.paths.reference(scope, child));
+        const key = this.paths.key(target);
+        if (ancestors.has(key)) throw new Error(`Circular rule reference: ${[...ancestors, target].join(' -> ')}`);
+        let entry = cache.get(key);
+        if (!entry) {
+          const reference = await this.read(target, budget, true);
+          signal?.throwIfAborted();
+          entry = { parsed: parseAgentRuleFile(reference.text), revision: reference.revision };
+          cache.set(key, entry);
+        }
+        append(`Referenced source (${target}):\n${entry.parsed.body}`);
+        references.push(target);
+        revisions.push(entry.revision);
+        ancestors.add(key);
+        await expand(entry.parsed.references);
+        ancestors.delete(key);
+      }
+    };
+    append(parsed.body);
+    await expand(parsed.references);
+    return {
+      content: contents.join('\n\n'),
+      references,
+      revision: createHash('sha256').update(revisions.join('\0')).digest('hex'),
+    };
+  }
+
+  private async read(path: string, budget: DiscoveryBudget, optional: boolean): Promise<WorkspaceTextSnapshot> {
+    const maxBytes = Math.min(this.options.maxBytes ?? MAX_AGENT_RULE_BYTES, budget.readBytes);
+    // Source reads consume the file allowance and referenced reads consume the separate edge allowance.
+    if (maxBytes <= 0 || (!optional && --budget.reads < 0))
+      throw new Error('Instruction discovery read budget exhausted.');
+    const snapshot = optional
+      ? await this.workspace.readOptional(path, { maxBytes })
+      : await this.workspace.read(path, { maxBytes });
+    if (!snapshot) throw new Error(`Missing rule reference: ${path}`);
+    budget.readBytes -= snapshot.byteLength ?? Buffer.byteLength(snapshot.text);
+    return snapshot;
   }
 
   private errorSource(path: string, scope: string, message: string): AgentInstructionSource {
-    const normalized = `${this.options.displayPrefix ?? ''}${path}`;
     return {
-      id: `${this.options.kind}:${normalized}:error`,
+      id: ruleId(this.options.kind, path),
       kind: this.options.kind,
       label: label(this.options.kind),
-      name: posix.basename(path, '.mdc'),
-      path: normalized,
+      name: posix.parse(path).name,
+      path: `${this.options.displayPrefix ?? ''}${path}`,
       scope,
       status: AgentInstructionSourceStatus.ERROR,
       message,
       enabled: false,
-      ...(this.options.uriForPath ? { uri: this.options.uriForPath(path) } : {}),
     };
   }
 }
 
-function ruleScope(path: string, directory: '.glyph' | '.cursor' | '.'): string {
+interface DiscoveryBudget {
+  readBytes: number;
+  outputBytes: number;
+  reads: number;
+  edges: number;
+}
+
+function ruleId(kind: AgentInstructionSourceKind, path: string): string {
+  const id = `${kind}:${path}`;
+  return id.length <= 500 ? id : `${kind}:sha256:${createHash('sha256').update(path).digest('hex')}`;
+}
+
+function ruleScope(path: string, directory: '.glyph' | '.cursor' | '.', sensitive: boolean): string {
   if (directory === '.') return '.';
-  const marker = `/${directory}/rules/`;
-  const index = path.indexOf(marker);
-  if (index >= 0) return path.slice(0, index) || '.';
-  const rootMarker = `${directory}/rules/`;
-  if (path.startsWith(rootMarker)) return '.';
-  throw new Error(`Rule path is outside ${directory}/rules: ${path}`);
+  const segments = path.split('/');
+  const location = segments.slice(-3).join('/');
+  const normalized = sensitive ? location : location.toLowerCase();
+  if (!normalized.startsWith(`${directory}/rules/`) || !normalized.endsWith('.mdc'))
+    throw new Error(`Rule path is outside ${directory}/rules: ${path}`);
+  return segments.slice(0, -3).join('/') || '.';
 }
 
 function resolveActivation(
