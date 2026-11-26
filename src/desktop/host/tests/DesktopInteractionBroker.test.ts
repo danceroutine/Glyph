@@ -31,7 +31,12 @@ describe(DesktopInteractionBroker, () => {
       source: 'Repository @ pinned',
       revision: 'revision',
       files: [
-        { path: 'SKILL.md', status: 'added' as const, after: 'Reviewed instructions' },
+        {
+          path: 'SKILL.md',
+          status: 'added' as const,
+          after: 'Reviewed instructions',
+          afterInfo: { encoding: 'utf8' as const, size: 21, digest: 'reviewed-digest', mode: 0o644 },
+        },
         { path: 'removed', status: 'removed' as const, before: 'Old contents' },
       ],
     };
@@ -49,6 +54,7 @@ describe(DesktopInteractionBroker, () => {
         expect(event.approval.skillChange).toEqual(preview);
         expect(event.approval.detail).toContain('Revision: revision');
         expect(event.approval.detail).toContain('/user/skills/example');
+        expect(event.approval.detail).toContain('reviewed-digest');
         expect(event.approval.detail).toContain('(removed)');
         expect(() => {
           broker.answer({

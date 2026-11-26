@@ -115,6 +115,28 @@ describe('Skill management', () => {
       expect(management.remove).toHaveBeenCalledWith(skill.id);
     });
   });
+  it('shows a failed discovery location without offering package mutations', () => {
+    const { revision: _, ...unversioned } = skill;
+    render(
+      <GlyphSkills
+        skills={[
+          {
+            ...unversioned,
+            enabled: false,
+            status: 'error',
+            path: '',
+            directory: '',
+            uri: '',
+            message: 'User skill location unavailable',
+          },
+        ]}
+        edit={vi.fn()}
+        management={actions()}
+      />,
+    );
+    expect(screen.getByText('User skill location unavailable')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Uninstall' })).toBeNull();
+  });
   it('shows exact preview comparisons, applies its token, and displays operation errors', async () => {
     const management = {
       ...actions(),

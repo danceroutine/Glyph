@@ -36,6 +36,7 @@ describe(WiredGlyphApprovalCard, () => {
               {
                 path: 'image.bin',
                 status: 'modified',
+                beforeInfo: { encoding: 'binary', size: 3, digest: 'original-binary-sha', mode: 0o600 },
                 afterInfo: { encoding: 'binary', size: 3, digest: 'reviewed-binary-sha', mode: 0o600 },
               },
             ],

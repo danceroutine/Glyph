@@ -4696,6 +4696,15 @@ describe('Skill lifecycle host commands', () => {
     await runtime.dispose();
     expect(manager.hasPreview(pending.id)).toBe(false);
   });
+  it('clears invalidated previews with readable feedback for an unstructured failure', async () => {
+    const { runtime, provider, manager } = await setup();
+    await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: provider.id, draft: aSkillDraft().toJSON() });
+    const id = (await runtime.snapshot()).skillPreview!.id;
+    manager.discard(id);
+    vi.spyOn(manager, 'apply').mockRejectedValueOnce('unstructured');
+    await expect(runtime.handle({ type: Command.APPLY_SKILL, previewId: id })).rejects.toBe('unstructured');
+    expect((await runtime.snapshot()).skillManagementMessage).toContain('Preview the change again');
+  });
   it('rejects malformed enablement at the wire boundary before mutating persisted state', async () => {
     const { runtime, state } = await setup();
     await expect(

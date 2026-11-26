@@ -208,3 +208,22 @@ describe(GlyphSkillsPreferences, () => {
     page.dispose();
   });
 });
+
+it('keeps the last Skills view available when background refresh fails at startup or during search', async () => {
+  const refreshSkills = vi.fn(async () => {
+    throw new Error('Host unavailable');
+  });
+  const page = new GlyphSkillsPreferences(
+    { state: { skills: [] }, refreshSkills, onDidChangeState: () => ({ dispose: () => {} }) } as never,
+    {} as never,
+    {} as never,
+  );
+  try {
+    page.search('query');
+    await Promise.resolve();
+    expect(refreshSkills).toHaveBeenCalledTimes(2);
+    expect(page.getDomNode().textContent).toContain('No skills match your search');
+  } finally {
+    page.dispose();
+  }
+});
