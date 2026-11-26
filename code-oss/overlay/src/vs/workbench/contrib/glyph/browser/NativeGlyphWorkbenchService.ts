@@ -345,21 +345,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     return (this.catalogRefresh = this.refreshCatalog());
   }
 
-  private async refreshCatalog(): Promise<void> {
-    try {
-      do {
-        this.catalogDirty = false;
-        try {
-          await this.request({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
-        } catch (error) {
-          this.report(error);
-          if (!this.catalogDirty) throw error;
-        }
-      } while (this.catalogDirty);
-    } finally {
-      this.catalogRefresh = undefined;
-    }
-  }
   createUserRule(
     name: string,
     activation: NonNullable<GlyphInstructionSource['activation']>,
@@ -1022,6 +1007,22 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   override dispose(): void {
     this.sessionChanged = true;
     super.dispose();
+  }
+
+  private async refreshCatalog(): Promise<void> {
+    try {
+      do {
+        this.catalogDirty = false;
+        try {
+          await this.request({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+        } catch (error) {
+          this.report(error);
+          if (!this.catalogDirty) throw error;
+        }
+      } while (this.catalogDirty);
+    } finally {
+      this.catalogRefresh = undefined;
+    }
   }
 
   private createComposer(): GlyphComposerState {
