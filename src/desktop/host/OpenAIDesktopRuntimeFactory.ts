@@ -1,3 +1,4 @@
+import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import { SqliteAgentReviewStore } from '#src/reviewing/SqliteAgentReviewStore.js';
 import { ConversationAgentReviewExecutor } from '#src/reviewing/ConversationAgentReviewExecutor.js';
@@ -88,6 +89,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   constructor(
     private readonly editors: EditorRpcRouter,
     private readonly transport?: typeof fetch,
+    private readonly userDirectory = join(homedir(), '.glyph'),
   ) {}
 
   async create(input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]): Promise<ProviderDesktopRuntime> {
@@ -208,7 +210,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             : response;
         },
       });
-      return { name: workspaceRoot.name, workspace, disk, index };
+      const catalog = createCatalogWorkspace(disk, workspace, async request => {
+        const path = roots.length > 1 ? `${workspaceRoot.name}/${request.path}` : request.path;
+        const response = await this.editors.request(input.identity, { ...request, path });
+        if (response.snapshot && response.snapshot.path !== path)
+          throw new Error('The editor returned a catalog snapshot for a different path.');
+        return response.snapshot ? { ...response, snapshot: { ...response.snapshot, path: request.path } } : response;
+      });
+      return { name: workspaceRoot.name, workspace, catalog, disk, index };
     });
     const workspace =
       roots.length === 1
@@ -228,11 +237,18 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     let turnContexts: TurnContextCoordinator | undefined;
     let userRules: UserAgentRuleManager | undefined;
     if (input.trusted) {
+      const catalogWorkspace =
+        parts.length === 1
+          ? parts[0]!.catalog
+          : new MultiRootWorkspaceTextStore(
+              context,
+              parts.map(part => ({ name: part.name, store: part.catalog })),
+            );
       // Reuse each root's watched native index; instruction refreshes must not rescan the workspace.
       const listProjectInstructions = (maxFiles: number, globPattern: string) =>
         listInstructionFilesAcrossRoots(parts, maxFiles, globPattern);
-      const userRuleRoot = join(homedir(), '.glyph');
-      await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
+      await mkdir(join(this.userDirectory, 'rules'), { recursive: true });
+      const userRuleRoot = await realpath(this.userDirectory);
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
       const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
@@ -260,14 +276,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               return listUserRuleFiles(userRuleIndex, maxFiles);
             },
           ),
-          new AgentsMdInstructionProvider(workspace, {}, listProjectInstructions),
+          new AgentsMdInstructionProvider(catalogWorkspace, {}, listProjectInstructions),
           new AgentRuleInstructionProvider(
-            workspace,
+            catalogWorkspace,
             { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', paths },
             listProjectInstructions,
           ),
           new AgentRuleInstructionProvider(
-            workspace,
+            catalogWorkspace,
             { kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, directory: '.cursor', paths },
             listProjectInstructions,
           ),
@@ -465,6 +481,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       ...(userRules ? { userRules } : {}),
       emit: input.emit,
       ownerWindowId: input.identity.windowId,
+      trusted: input.trusted,
     });
     return runtime;
   }

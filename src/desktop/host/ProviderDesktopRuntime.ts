@@ -129,6 +129,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       readonly userRules?: UserAgentRuleManager;
       readonly emit: (event: GlyphHostEvent) => void;
       readonly ownerWindowId: string;
+      readonly trusted?: boolean;
     },
   ) {
     this.unsubscribeAgentReviews = options.agentReviews?.onDidChange(review => {
@@ -758,15 +759,21 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           : {}),
         text: turn.assistantText,
         reasoning: turn.reasoningSummary,
-        ...(turn.context ? { context: toTurnContext(turn.context) } : {}),
+        ...(turn.context && this.options.trusted !== false ? { context: toTurnContext(turn.context) } : {}),
         tools: (turn.tools ?? []).map(tool => ({
           id: tool.callId,
           name: tool.name,
           status: TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS[tool.phase],
-          ...(tool.arguments === undefined ? {} : { arguments: this.options.glyph.redact(tool.arguments) }),
-          ...(tool.output === undefined ? {} : { summary: this.options.glyph.redact(tool.output) }),
+          ...(tool.arguments === undefined || this.options.trusted === false
+            ? {}
+            : { arguments: this.options.glyph.redact(tool.arguments) }),
+          ...(tool.output === undefined || this.options.trusted === false
+            ? {}
+            : { summary: this.options.glyph.redact(tool.output) }),
           ...(tool.textOffset === undefined ? {} : { textOffset: tool.textOffset }),
-          ...(tool.shell ? { shell: { ...this.redactShell(tool.shell), live: false, running: false } } : {}),
+          ...(tool.shell && this.options.trusted !== false
+            ? { shell: { ...this.redactShell(tool.shell), live: false, running: false } }
+            : {}),
         })),
         status: GlyphRunStatus.COMPLETED,
       });

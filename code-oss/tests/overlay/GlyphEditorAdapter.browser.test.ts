@@ -322,6 +322,24 @@ describe(GlyphEditorAdapter, () => {
   });
 
   describe(GlyphEditorAdapter.prototype.handle, () => {
+    it('reads only already open dirty catalog models without opening or retaining unopened files', async () => {
+      const services = editorServices();
+      const adapter = createAdapter(services);
+      const read = () =>
+        adapter.handle({
+          type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT,
+          operationId: 'catalog',
+          path: 'AGENTS.md',
+          maxBytes: 64,
+        });
+      services.disk.set('/workspace/AGENTS.md', 'Disk');
+      expect(await read()).toEqual({ operationId: 'catalog', ok: true });
+      services.open('AGENTS.md', 'Unsaved');
+      expect(await read()).toEqual({ operationId: 'catalog', ok: true });
+      services.dirty.add('/workspace/AGENTS.md');
+      expect(await read()).toMatchObject({ ok: true, snapshot: { text: 'Unsaved', dirty: true } });
+      expect(services.textModelService.createModelReference).not.toHaveBeenCalled();
+    });
     it('refuses editor requests in an untrusted workspace', async () => {
       const services = editorServices();
       services.open('a.ts', 'text');
@@ -340,7 +358,7 @@ describe(GlyphEditorAdapter, () => {
       expect(response).toMatchObject({ ok: true, workingCopies: [{ path: 'a.ts', text: 'alpha', dirty: false }] });
       expect(
         await adapter.handle({ type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS, operationId: 'paths' }),
-      ).toMatchObject({ ok: true, workingCopyPaths: ['a.ts'] });
+      ).toMatchObject({ ok: true, workingCopyPaths: [] });
     });
 
     it('prefixes working copy paths with their root in a multi-root workspace', async () => {
@@ -350,6 +368,7 @@ describe(GlyphEditorAdapter, () => {
         { name: 'two', uri: URI.file('/two') },
       ];
       services.models.push(textModel(URI.file('/two/b.ts'), 'beta'));
+      services.dirty.add('/two/b.ts');
       const adapter = createAdapter(services);
       expect(
         await adapter.handle({ type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS, operationId: 'paths' }),
@@ -359,7 +378,10 @@ describe(GlyphEditorAdapter, () => {
 
     it('refuses to list more than 2000 working copies', async () => {
       const services = editorServices();
-      for (let index = 0; index <= 2000; index++) services.open(`file-${index}.ts`, '');
+      for (let index = 0; index <= 2000; index++) {
+        services.open(`file-${index}.ts`, '');
+        services.dirty.add(`/workspace/file-${index}.ts`);
+      }
       const adapter = createAdapter(services);
       expect(
         await adapter.handle({ type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS, operationId: 'paths' }),
