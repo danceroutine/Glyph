@@ -30,7 +30,7 @@ function composerActions(overrides: Partial<GlyphWorkbenchViewActions> = {}): Gl
     context: {
       selectFiles: vi.fn(async () => []),
       searchFiles: vi.fn(async () => []),
-      searchRules: vi.fn(async () => []),
+      searchInstructions: vi.fn(async () => []),
       captureFile: vi.fn(async (uri: string) => fileAttachment({ uri })),
       openAttachment: vi.fn(async () => {}),
       refreshAttachment: vi.fn(async (attachment: GlyphContextAttachment) => attachment),
@@ -104,7 +104,7 @@ function picker(mode: 'context' | 'rules' = 'context') {
 
 async function openPicker(actions: GlyphWorkbenchViewActions, text: string, candidates: GlyphContextCandidate[]) {
   const rules = text.startsWith('/');
-  vi.mocked(rules ? actions.context.searchRules : actions.context.searchFiles).mockResolvedValue(candidates);
+  vi.mocked(rules ? actions.context.searchInstructions : actions.context.searchFiles).mockResolvedValue(candidates);
   typeDraft(actions.composer, text);
   if (candidates.length > 0) await screen.findAllByRole('option', {}, patience);
   else
@@ -445,7 +445,7 @@ describe(useGlyphComposerState, () => {
     });
 
     expect(actions.context.captureFile).not.toHaveBeenCalled();
-    expect(actions.context.searchRules).toHaveBeenCalledWith('typ');
+    expect(actions.context.searchInstructions).toHaveBeenCalledWith('typ');
     expect(actions.context.searchFiles).not.toHaveBeenCalled();
     expect(actions.composer.snapshot.document.parts).toEqual([
       {

@@ -1,3 +1,4 @@
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -127,8 +128,9 @@ describe(ProjectAccess, () => {
       }
       const workspace = new FileSystemWorkspaceTextStore(root);
       const instructions = new AgentInstructionCatalog([new AgentsMdInstructionProvider(workspace)]);
-      await instructions.beginTurn('turn', []);
-      const access = new ProjectAccess(root, {}, workspace, undefined, instructions);
+      const coordinator = new TurnContextCoordinator(instructions);
+      await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: [] });
+      const access = new ProjectAccess(root, {}, workspace, undefined, coordinator);
       const result = JSON.parse(
         await access.execute(
           'read_project_file',

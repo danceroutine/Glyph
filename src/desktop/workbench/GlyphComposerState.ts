@@ -340,20 +340,32 @@ async function sendDocument(document: GlyphPromptDocument, send: SendMessage): P
       ? [part.attachment.ruleId]
       : [],
   );
+  const skillIds = document.parts.flatMap(part =>
+    part.type === 'attachment' && part.attachment.kind === GlyphContextAttachmentKind.SKILL && part.attachment.skillId
+      ? [part.attachment.skillId]
+      : [],
+  );
   const attachments = document.parts.flatMap(part =>
-    part.type === 'attachment' && part.attachment.kind !== GlyphContextAttachmentKind.RULE ? [part.attachment] : [],
+    part.type === 'attachment' &&
+    part.attachment.kind !== GlyphContextAttachmentKind.RULE &&
+    part.attachment.kind !== GlyphContextAttachmentKind.SKILL
+      ? [part.attachment]
+      : [],
   );
   let offset = -(draft.length - draft.trimStart().length);
   const attachmentSpans = document.parts.flatMap(part => {
     const from = offset;
     offset += toGlyphPromptText([part]).length;
-    return part.type === 'attachment' && part.attachment.kind !== GlyphContextAttachmentKind.RULE
+    return part.type === 'attachment' &&
+      part.attachment.kind !== GlyphContextAttachmentKind.RULE &&
+      part.attachment.kind !== GlyphContextAttachmentKind.SKILL
       ? [{ from, to: offset }]
       : [];
   });
   await send(draft, attachments, {
     ...document.options,
     ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}),
+    ...(skillIds.length > 0 ? { skillIds: [...new Set(skillIds)] } : {}),
     ...(ruleIds.length > 0 ? { manualRuleIds: [...new Set(ruleIds)] } : {}),
   });
 }

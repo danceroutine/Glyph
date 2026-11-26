@@ -82,16 +82,19 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     await perform(async () => {
       const position = query;
       const document = model.snapshot.document;
-      if (candidate.kind === GlyphContextCandidateKind.RULE) {
-        if (!position || !candidate.ruleId) throw new GlyphComposerError('This rule cannot be selected.');
+      if (candidate.kind === GlyphContextCandidateKind.RULE || candidate.kind === GlyphContextCandidateKind.SKILL) {
+        const skill = candidate.kind === GlyphContextCandidateKind.SKILL;
+        const sourceId = skill ? candidate.skillId : candidate.ruleId;
+        if (!position || !sourceId)
+          throw new GlyphComposerError(skill ? 'This skill cannot be selected.' : 'This rule cannot be selected.');
         editor.current?.insert(
           {
-            kind: GlyphContextAttachmentKind.RULE,
+            kind: skill ? GlyphContextAttachmentKind.SKILL : GlyphContextAttachmentKind.RULE,
             uri: candidate.uri,
             path: candidate.name ?? candidate.path,
             text: '',
-            contentRevision: candidate.revision ?? candidate.ruleId,
-            ruleId: candidate.ruleId,
+            contentRevision: candidate.revision ?? sourceId,
+            ...(skill ? { skillId: sourceId } : { ruleId: sourceId }),
           },
           position,
         );
@@ -204,7 +207,9 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
     setSearching(true);
     const timer = setTimeout(() => {
       const result =
-        query.trigger === '/' ? actions.context.searchRules(query.text) : actions.context.searchFiles(query.text);
+        query.trigger === '/'
+          ? actions.context.searchInstructions(query.text)
+          : actions.context.searchFiles(query.text);
       void result
         .then(
           files => {

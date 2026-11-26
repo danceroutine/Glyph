@@ -158,6 +158,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         () => this.state.instructionSources ?? [],
       ),
     );
+    this.context.setSkillSources(() => this.state.skills ?? []);
     this.proposalEditor = this._register(
       instantiationService.createInstance(GlyphProposalEditor, {
         state: () => this.state,
@@ -402,6 +403,13 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   async openLink(href: string): Promise<void> {
+    if (href.startsWith('glyph-skill:')) {
+      const id = decodeURIComponent(href.slice('glyph-skill:'.length));
+      const skill = this.state.skills?.find(source => source.id === id);
+      if (!skill) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
+      await this.editors.openEditor({ resource: URI.parse(skill.uri), options: { pinned: true } });
+      return;
+    }
     if (href.startsWith('glyph-instruction:')) {
       const id = decodeURIComponent(href.slice('glyph-instruction:'.length));
       const source = this.state.instructionSources?.find(value => value.id === id);

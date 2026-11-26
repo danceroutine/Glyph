@@ -1,3 +1,4 @@
+import type { SkillActivation, SkillDescriptor } from '#src/skills/SkillDescriptor.js';
 /** Stable source families understood by the instruction catalog and settings UI. */
 export enum AgentInstructionSourceKind {
   /** Directory-scoped `AGENTS.md` repository guidance. */
@@ -108,6 +109,10 @@ export interface AgentInstructionCandidate {
 export interface AgentInstructionContext {
   /** Wire schema identifier for provider adapters and tool results. */
   readonly schema: 'glyph.agent-instructions.v1';
+  /** Skill package bodies activated at this boundary. Kept separate from file instructions. */
+  readonly skills?: readonly SkillActivation[];
+  /** Metadata-only skill catalog; resource bodies are never advertised here. */
+  readonly skillCandidates?: readonly SkillDescriptor[];
   /** Ordered sources; later entries have nearer scope and higher precedence. */
   readonly sources: readonly AgentInstructionSource[];
   /** Activation provenance corresponding to newly supplied sources. */
@@ -120,6 +125,8 @@ export interface AgentInstructionContext {
 export interface AgentInstructionTurnSnapshot {
   /** Wire schema identifier used by persistence and the workbench inspector. */
   readonly schema: 'glyph.turn-context.v1';
+  /** Package revisions and resources actually disclosed during this turn. */
+  readonly skills?: readonly SkillActivation[];
   /** Host-owned logical turn identity. */
   readonly turnId: string;
   /** Frozen revision and provenance of every source activated in the turn. */

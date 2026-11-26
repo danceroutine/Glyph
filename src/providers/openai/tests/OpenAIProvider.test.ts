@@ -298,20 +298,21 @@ describe(OpenAIProvider, () => {
     const instructionContext = aTurnContextCoordinator(async () => ({
       schema: 'glyph.agent-instructions.v1',
       sources: [],
-    });
-    const instructionContext: AgentInstructionContextProvider = {
-      context: vi.fn<AgentInstructionContextProvider['context']>(async () => ({
-        schema: 'glyph.agent-instructions.v1',
-        sources: [],
-      })),
-      beginTurn,
-    };
+    }));
     const { provider } = harness([() => sse([completed])], undefined, instructionContext);
 
     await provider.send(
       {
         text: 'Review this file.',
-        attachments: [{ path: 'src/app.ts', text: 'export {}', revision: 'one', byteOrderMark: false, byteLength: 9 }],
+        attachments: [
+          {
+            path: 'src/app.ts',
+            revision: 'one',
+            text: 'export {}',
+            byteOrderMark: false,
+            byteLength: 9,
+          },
+        ],
       },
       options(),
     );

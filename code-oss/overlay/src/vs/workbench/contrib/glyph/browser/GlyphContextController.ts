@@ -1,3 +1,4 @@
+import type { GlyphSkill } from '#glyph/protocol/events/GlyphSkill.js';
 import { GlyphIdeContext } from './GlyphIdeContext.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { dirname } from '#vs/base/common/resources.js';
@@ -31,6 +32,7 @@ import type { GlyphInstructionSource } from '#glyph/protocol/events/GlyphInstruc
 
 /** Capture context only from explicit file selection, search, or selected editor text. */
 export class GlyphContextController extends Disposable implements GlyphContextActions {
+  private skillSources: () => readonly GlyphSkill[] = () => [];
   readonly ide: GlyphIdeContext;
   private focused: ICodeEditor | undefined;
   constructor(
@@ -60,6 +62,10 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
   }
+  setSkillSources(source: () => readonly GlyphSkill[]): void {
+    this.skillSources = source;
+  }
+
   selectIdeContext(): Promise<readonly GlyphContextAttachment[]> {
     return this.ide.select(this.activeEditor());
   }
@@ -167,10 +173,10 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }
     return candidates.slice(0, 50);
   }
-  async searchRules(query: string): Promise<readonly GlyphContextCandidate[]> {
+  async searchInstructions(query: string): Promise<readonly GlyphContextCandidate[]> {
     this.assertTrusted();
     const normalized = query.toLowerCase();
-    return this.instructionSources()
+    const rules = this.instructionSources()
       .filter(rule => rule.activation === 'manual' && rule.status === 'active' && rule.enabled !== false)
       .filter(rule => {
         const name = rule.name ?? rule.path.split('/').at(-1)!;
@@ -189,6 +195,19 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
           ...(rule.revision ? { revision: rule.revision } : {}),
         };
       });
+    const skills = this.skillSources()
+      .filter(skill => skill.enabled && skill.status === 'active')
+      .filter(skill => `${skill.name} ${skill.description} ${skill.origin.label}`.toLowerCase().includes(normalized))
+      .map(skill => ({
+        uri: `glyph-skill:${encodeURIComponent(skill.id)}`,
+        path: skill.name,
+        name: skill.name,
+        detail: `${skill.description} · ${skill.origin.label}`,
+        kind: GlyphContextCandidateKind.SKILL,
+        skillId: skill.id,
+        ...(skill.revision ? { revision: skill.revision } : {}),
+      }));
+    return [...rules, ...skills].slice(0, 50);
   }
   async selectFiles(): Promise<readonly GlyphContextAttachment[]> {
     this.assertTrusted();
@@ -280,6 +299,18 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     return { id: generateUuid(), kind: GlyphContextAttachmentKind.FOLDER, uri: value, path, text, contentRevision };
   }
   async refreshAttachment(attachment: GlyphContextAttachment): Promise<GlyphContextAttachment> {
+    if (attachment.kind === GlyphContextAttachmentKind.SKILL || attachment.kind === GlyphContextAttachmentKind.RULE) {
+      this.assertTrusted();
+      const source = this.referenceSource(attachment.uri);
+      if (!source || source.status !== 'active' || source.enabled === false)
+        throw new GlyphContextError(
+          GlyphDesktopErrorCode.NOT_FOUND,
+          'Selected instruction is unavailable. Choose it again.',
+        );
+      const { unavailable: _, ...reference } = attachment;
+      return { ...reference, path: source.name ?? reference.path, contentRevision: source.revision ?? source.id };
+    }
+
     if (!['file', 'selection', 'folder'].includes(attachment.kind))
       throw new GlyphContextError(
         GlyphDesktopErrorCode.STALE_DOCUMENT,
@@ -297,6 +328,15 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }));
   }
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
+    if (attachment.kind === GlyphContextAttachmentKind.SKILL || attachment.kind === GlyphContextAttachmentKind.RULE) {
+      const source = this.referenceSource(attachment.uri);
+      if (!source || source.status !== 'active' || source.enabled === false)
+        return 'Selected instruction is unavailable. Remove it or choose it again.';
+      return source.revision && source.revision !== attachment.contentRevision
+        ? 'These instructions changed. The latest version will load when you send.'
+        : undefined;
+    }
+
     if (attachment.unavailable !== undefined && attachment.unavailable !== '') return attachment.unavailable;
     if (!['file', 'selection', 'folder'].includes(attachment.kind)) {
       const model = this.models.getModel(URI.parse(attachment.uri));
@@ -317,7 +357,12 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   rebindAttachment(attachment: GlyphContextAttachment): GlyphContextAttachment {
     const { unavailable: _unavailable, token: _token, ...capture } = attachment;
     const uri = URI.parse(attachment.uri);
-    if (uri.scheme === 'untitled') return capture;
+    if (
+      uri.scheme === 'untitled' ||
+      capture.kind === GlyphContextAttachmentKind.SKILL ||
+      capture.kind === GlyphContextAttachmentKind.RULE
+    )
+      return capture;
     if (uri.scheme !== 'file')
       return { ...capture, unavailable: 'Workspace changed. Capture this context again before sending.' };
     if (!this.workspace.isInsideWorkspace(uri))
@@ -328,6 +373,14 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     return { ...capture, path: this.adapter.contextPath(uri) };
   }
   async openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void> {
+    if (attachment.uri?.startsWith('glyph-skill:') || attachment.uri?.startsWith('glyph-rule:')) {
+      const source = this.referenceSource(attachment.uri);
+      if (!source) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'Selected instruction is unavailable.');
+      if (source.uri) await this.editors.openEditor({ resource: URI.parse(source.uri), options: { pinned: true } });
+      else await this.openAttachment({ path: source.path });
+      return;
+    }
+
     if (
       attachment.uri !== undefined &&
       attachment.uri !== '' &&
@@ -386,6 +439,16 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       },
     });
   }
+  private referenceSource(value: string): GlyphSkill | GlyphInstructionSource | undefined {
+    const uri = URI.parse(value);
+    const id = decodeURIComponent(value.slice(value.indexOf(':') + 1));
+    return uri.scheme === 'glyph-skill'
+      ? this.skillSources().find(source => source.id === id)
+      : uri.scheme === 'glyph-rule'
+        ? this.instructionSources().find(source => source.id === id)
+        : undefined;
+  }
+
   private activeEditor(): ICodeEditor | undefined {
     const control = this.editors.activeTextEditorControl;
     if (isDiffEditor(control))

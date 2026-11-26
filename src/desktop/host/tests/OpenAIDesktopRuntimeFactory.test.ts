@@ -2,7 +2,7 @@ import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMut
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { OpenAIDesktopRuntimeFactory, userRuleUri } from '#src/desktop/host/OpenAIDesktopRuntimeFactory.js';
 import { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
@@ -64,6 +64,10 @@ const captured = vi.hoisted(() => ({
   brokers: [] as { readonly broker: DesktopInteractionBroker; readonly emit: (event: GlyphHostEvent) => void }[],
   providerFactories: [] as ConstructorParameters<typeof OpenAIProviderFactory>[],
 }));
+
+beforeEach(() => {
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });
+});
 
 it('resolves user rule URIs below the dedicated user rule root', () => {
   expect(userRuleUri('/home/user/.glyph', 'rules/test.mdc')).toBe('file:///home/user/.glyph/rules/test.mdc');
@@ -330,7 +334,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expect((await runtime.snapshot()).proposals.map(value => value.id)).toEqual([proposal.id]);
         expect(requests).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(indexing).toHaveBeenCalledTimes(trusted ? 1 : 0);
-        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 8 : 0);
+        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 14 : 0);
         await runtime.dispose();
         runtime = undefined;
       }
@@ -729,7 +733,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const fixture = await factoryFixture();
       const first = await fixture.create([await fixture.folder('one')]);
       await fixture.create([await fixture.folder('two')]);
-      expect(captured.indexOptions).toHaveLength(3);
+      expect(captured.indexOptions).toHaveLength(4);
       expect(captured.indexOptions[1]).toMatchObject({
         root: join(homedir(), '.glyph', 'rules'),
         respectGitIgnore: false,
@@ -951,7 +955,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           revision: contentRevision('Unsaved editor guidance', false),
         }),
       ]);
-      expect(glob).toHaveBeenCalledTimes(4);
+      expect(glob).toHaveBeenCalledTimes(7);
       expect(glob.mock.calls).toEqual(
         expect.arrayContaining([
           ['*.mdc', { limit: 10_000 }],
@@ -981,7 +985,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         }),
       ]);
       expect(glob).not.toHaveBeenCalledWith('*.mdc', expect.anything());
-      expect(glob).toHaveBeenCalledTimes(3);
+      expect(glob).toHaveBeenCalledTimes(5);
     });
 
     it.each([

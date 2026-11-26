@@ -247,6 +247,7 @@ export class ChatSession {
           ...(request.planBuild ? { planBuild: request.planBuild } : {}),
           ...(request.planProgress ? { planProgress: request.planProgress } : {}),
           ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
+          ...(request.skillIds ? { skillIds: request.skillIds } : {}),
         },
         attachmentPaths: request.attachments.map(attachment => attachment.path),
         ...(request.attachments.length > 0 ? { attachments: request.attachments } : {}),

@@ -1,3 +1,5 @@
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
+import { mergeTurnContext, type TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import { AgentMode, type AgentModeID } from '#src/chat/AgentMode.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
@@ -88,6 +90,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         ? { agentReviewId: request.agentReviewId }
         : {}),
       ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
+      ...(request.skillIds ? { skillIds: request.skillIds } : {}),
     });
     const modelRequest = modelInput(request);
     if (this.busy) throw new ProviderError('A response is already in progress.');
@@ -160,6 +163,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           turnId,
           attachmentPaths: request.attachments.map(attachment => attachment.path),
           manualRuleIds: request.manualRuleIds ?? [],
+          ...(request.skillIds?.length ? { skillIds: request.skillIds } : {}),
         },
         signal,
       );
@@ -172,7 +176,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       for (;;) {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
-          boundaryInstructions = this.steeringInstructions(turnId, steering);
+          boundaryInstructions = await this.steeringInstructions(turnId, steering, signal);
           turn = await this.adapter.steerTurn(turn, modelInput(steering), context(round));
           this.state = this.persistentState(this.adapter.snapshot(turn));
           hasToolCheckpoint = true;
@@ -187,8 +191,9 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           const steering = options.takeSteering?.(true) ?? [];
           if (steering.length > 0) {
             for (const instruction of steering) {
-              boundaryInstructions = this.steeringInstructions(turnId, instruction);
+              boundaryInstructions = await this.steeringInstructions(turnId, instruction, signal);
               turn = await this.adapter.steerTurn(turn, modelInput(instruction), context(round));
+            }
             this.state = this.persistentState(this.adapter.snapshot(turn));
             hasToolCheckpoint = true;
             await options.onStateCheckpoint?.(structuredClone(this.state));
@@ -270,6 +275,32 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       this.turnContexts?.discardTurn(turnId);
       this.busy = false;
     }
+  }
+
+  private async steeringInstructions(
+    turnId: string,
+    request: ChatRequest,
+    signal: AbortSignal,
+  ): Promise<AgentInstructionContext | undefined> {
+    const contexts = [
+      this.turnContexts?.discloseAttachments(
+        turnId,
+        request.attachments.map(attachment => attachment.path),
+      ),
+      this.turnContexts?.activateManualRules(turnId, request.manualRuleIds ?? []),
+    ].filter((value): value is AgentInstructionContext => value !== undefined);
+    for (const id of new Set(request.skillIds ?? [])) {
+      const context = await this.turnContexts?.activateSource(
+        turnId,
+        'skills',
+        id,
+        'manual',
+        'Selected while steering',
+        signal,
+      );
+      if (context) contexts.push(context);
+    }
+    return contexts.length > 0 ? mergeTurnContext(contexts) : undefined;
   }
 
   /** Every state entering durable storage passes through the same host policy. */

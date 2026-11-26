@@ -170,6 +170,6 @@ describe(TurnContextCoordinator, () => {
     expect(session.initialEnvelope().candidates).toEqual([expect.objectContaining({ id: 'unnamed', name: 'unnamed' })]);
     expect(coordinator.activateManualRules('ineligible', ['disabled', 'missing'])).toBeUndefined();
     expect(coordinator.activateRule('ineligible', 'disabled')).toBeUndefined();
-    expect(session.activateRule('unnamed', AgentInstructionActivationReason.MANUAL)).toBeUndefined();
+    expect(coordinator.activateManualRules('ineligible', ['unnamed'])).toBeUndefined();
   });
 });

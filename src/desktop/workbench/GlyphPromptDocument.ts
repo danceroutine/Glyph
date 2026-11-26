@@ -21,7 +21,7 @@ export function toGlyphPromptText(parts: readonly GlyphPromptPart[]): string {
     .map(part =>
       part.type === 'text'
         ? part.text
-        : `${part.attachment.kind === GlyphContextAttachmentKind.RULE ? '/' : '@'}${part.attachment.path}${part.attachment.range ? ` (${part.attachment.range.start.line}-${part.attachment.range.end.line})` : ''}`,
+        : `${part.attachment.kind === GlyphContextAttachmentKind.RULE || part.attachment.kind === GlyphContextAttachmentKind.SKILL ? '/' : '@'}${part.attachment.path}${part.attachment.range ? ` (${part.attachment.range.start.line}-${part.attachment.range.end.line})` : ''}`,
     )
     .join('');
 }

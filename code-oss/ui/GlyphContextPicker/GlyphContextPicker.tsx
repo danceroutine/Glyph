@@ -70,7 +70,8 @@ export function GlyphContextPicker({
 }: GlyphContextPickerProps) {
   const candidate = !searching ? candidates[selected] : undefined;
   const folder = candidate?.kind === GlyphContextCandidateKind.FOLDER;
-  const rule = candidate?.kind === GlyphContextCandidateKind.RULE;
+  const rule =
+    candidate?.kind === GlyphContextCandidateKind.RULE || candidate?.kind === GlyphContextCandidateKind.SKILL;
   const parts = candidate?.ancestry ?? candidate?.path.split('/').filter(Boolean) ?? [];
   return (
     <Dropdown
@@ -100,7 +101,7 @@ export function GlyphContextPicker({
         const directory = isFolder ? file.path : path.slice(0, slash + 1);
         return (
           <>
-            {file.kind === GlyphContextCandidateKind.RULE ? (
+            {file.kind === GlyphContextCandidateKind.RULE || file.kind === GlyphContextCandidateKind.SKILL ? (
               <ScrollText size={16} aria-hidden="true" />
             ) : isFolder ? (
               <Folder size={16} aria-hidden="true" />

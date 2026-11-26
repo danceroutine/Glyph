@@ -76,6 +76,7 @@ function controllerServices() {
       enabled?: boolean;
       name?: string;
       description?: string;
+      uri?: string;
       revision?: string;
     }[],
     codeEditorList: [] as ReturnType<typeof codeEditor>[],
@@ -154,6 +155,77 @@ function createController(services: ControllerServices) {
 }
 
 describe(GlyphContextController, () => {
+  it.each([GlyphContextAttachmentKind.SKILL, GlyphContextAttachmentKind.RULE])(
+    'treats %s badges as live references during refresh, open, and rebind',
+    async kind => {
+      const services = controllerServices();
+      const source = {
+        id: 'reference',
+        path: '.glyph/skills/example/SKILL.md',
+        directory: '.glyph/skills/example',
+        name: 'example',
+        description: 'Examples',
+        origin: { id: 'project', label: 'Project', scope: 'project' as const, compatibility: 'glyph' },
+        scope: '.',
+        status: 'active' as 'active' | 'error',
+        enabled: true,
+        allowedTools: [],
+        revision: 'one',
+        uri: 'file:///workspace/.glyph/skills/example/SKILL.md',
+      };
+      const controller = createController(services);
+      const sources = [source];
+      controller.setSkillSources(() => sources);
+      services.instructionSources.push(source);
+      const uri = kind === GlyphContextAttachmentKind.SKILL ? 'glyph-skill:reference' : 'glyph-rule:reference';
+      const badge: GlyphContextAttachment = { kind, uri, path: 'example', text: '', contentRevision: 'one' };
+      expect(await controller.checkAttachment(badge)).toBeUndefined();
+      source.revision = 'two';
+      expect(await controller.checkAttachment(badge)).toContain('latest version');
+      expect(await controller.refreshAttachment({ ...badge, unavailable: 'Old binding' })).toMatchObject({
+        contentRevision: 'two',
+      });
+      expect(controller.rebindAttachment({ ...badge, unavailable: 'Old binding' }).unavailable).toBeUndefined();
+      await controller.openAttachment(badge);
+      expect(services.editors.openEditor).toHaveBeenCalledWith({
+        resource: URI.parse(source.uri),
+        options: { pinned: true },
+      });
+      source.enabled = false;
+      expect(await controller.checkAttachment(badge)).toContain('unavailable');
+      await expect(controller.refreshAttachment(badge)).rejects.toThrow('unavailable');
+      source.enabled = true;
+      source.status = 'error';
+      await expect(controller.refreshAttachment(badge)).rejects.toThrow('unavailable');
+      sources.splice(0);
+      services.instructionSources.splice(0);
+      await expect(controller.openAttachment(badge)).rejects.toThrow('unavailable');
+      expect(await controller.checkAttachment({ ...badge, uri: 'file:///not-a-reference' })).toContain('unavailable');
+      controller.dispose();
+    },
+  );
+
+  it('opens workspace rule references without direct URIs and refreshes an unversioned reference by ID', async () => {
+    const services = controllerServices();
+    services.instructionSources.push({ id: 'rule', path: '.glyph/rules/example.mdc', status: 'active' });
+    const controller = createController(services);
+    const badge: GlyphContextAttachment = {
+      kind: GlyphContextAttachmentKind.RULE,
+      uri: 'glyph-rule:rule',
+      path: 'Example',
+      text: '',
+      contentRevision: 'old',
+    };
+    expect(await controller.checkAttachment(badge)).toBeUndefined();
+    expect(await controller.refreshAttachment(badge)).toMatchObject({ path: 'Example', contentRevision: 'rule' });
+    await controller.openAttachment(badge);
+    expect(services.editors.openEditor).toHaveBeenCalledWith({
+      resource: URI.file('/workspace/.glyph/rules/example.mdc'),
+      options: { pinned: true },
+    });
+    controller.dispose();
+  });
+
   describe(GlyphContextController.prototype.selectIdeContext, () => {
     it('asks for IDE context from the focused side of a diff editor', async () => {
       const services = controllerServices();
@@ -271,7 +343,7 @@ describe(GlyphContextController, () => {
       await expect(controller.searchFiles('')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
       });
-      await expect(controller.searchRules('')).rejects.toMatchObject({
+      await expect(controller.searchInstructions('')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
       });
     });
@@ -367,7 +439,7 @@ describe(GlyphContextController, () => {
       );
 
       const controller = createController(services);
-      expect(await controller.searchRules('type')).toEqual([
+      expect(await controller.searchInstructions('type')).toEqual([
         {
           uri: 'glyph-rule:manual',
           path: 'TypeScript',
@@ -378,7 +450,7 @@ describe(GlyphContextController, () => {
           revision: 'one',
         },
       ]);
-      expect(await controller.searchRules('access')).toEqual([
+      expect(await controller.searchInstructions('access')).toEqual([
         {
           uri: 'glyph-rule:path-name',
           path: 'accessibility.mdc',
@@ -388,7 +460,7 @@ describe(GlyphContextController, () => {
           ruleId: 'path-name',
         },
       ]);
-      expect(await controller.searchRules('missing')).toEqual([]);
+      expect(await controller.searchInstructions('missing')).toEqual([]);
       expect(services.search.fileSearch).not.toHaveBeenCalled();
     });
 

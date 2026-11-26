@@ -153,6 +153,7 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js', () => ({
 }));
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => ({
   GlyphContextController: class {
+    readonly setSkillSources = vi.fn();
     readonly ide = { terminal: vi.fn() };
     readonly selectIdeContext = vi.fn(async () => [] as unknown[]);
     readonly attachSelection = vi.fn(async () => {});
@@ -864,6 +865,29 @@ describe(NativeGlyphWorkbenchService, () => {
   });
 
   describe(NativeGlyphWorkbenchService.prototype.openLink, () => {
+    it('opens skill links in a pinned native editor and reports missing packages', async () => {
+      const skill = {
+        id: 'skill',
+        origin: { id: 'project', label: 'Project', scope: 'project' as const, compatibility: 'glyph' },
+        path: '.glyph/skills/example/SKILL.md',
+        directory: '.glyph/skills/example',
+        scope: '.',
+        name: 'example',
+        description: 'Examples',
+        enabled: true,
+        status: 'active' as const,
+        allowedTools: [],
+        uri: 'file:///project/.glyph/skills/example/SKILL.md',
+      };
+      const test = await workbench({ extra: { skills: [skill] } });
+      await test.service.openLink('glyph-skill:skill');
+      expect(test.editors.openEditor).toHaveBeenCalledWith({
+        resource: URI.parse(skill.uri),
+        options: { pinned: true },
+      });
+      await expect(test.service.openLink('glyph-skill:missing')).rejects.toThrow('skill is unavailable');
+    });
+
     it('opens instruction sources by direct URI, single-root path, and multi-root path', async () => {
       const direct = {
         id: 'direct',

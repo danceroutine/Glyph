@@ -141,6 +141,15 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
+    const snapshot = await this.readBytes(input, options);
+    return toSnapshot(snapshot.path, snapshot.bytes, snapshot.mode, snapshot.identity, snapshot.revision);
+  }
+
+  /** Read bounded binary assets through the same policy, identity, and no-symlink checks as text. */
+  async readBytes(
+    input: string,
+    options: WorkspaceReadOptions = {},
+  ): Promise<{ path: string; bytes: Buffer; mode: number; identity: string; revision: string }> {
     const { path, resolvedFile, identity } = await this.inspectReadPath(input);
     // Inspection and open are separate operations. Do not follow a replacement
     // link or block opening a replacement FIFO before descriptor validation.
@@ -176,7 +185,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         options.maxBytes === undefined
           ? await handle.readFile()
           : await this.readBounded(handle, path, options.maxBytes, info.size);
-      return toSnapshot(path, bytes, info.mode & 0o777, identity);
+      return {
+        path,
+        bytes,
+        mode: info.mode & 0o777,
+        identity,
+        revision: createHash('sha256').update(bytes).digest('hex'),
+      };
     } finally {
       await handle.close();
     }
@@ -469,7 +484,13 @@ function classifyPathError(error: unknown, path: string): unknown {
   return new EditError(EditFailureReason.UNSUPPORTED, 'A parent path is not a directory.', { path }, { cause: error });
 }
 
-function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string): WorkspaceTextSnapshot {
+function toSnapshot(
+  path: string,
+  bytes: Buffer,
+  mode: number,
+  identity: string,
+  revision = createHash('sha256').update(bytes).digest('hex'),
+): WorkspaceTextSnapshot {
   if (bytes.includes(0))
     throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
   const byteOrderMark = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
@@ -485,7 +506,7 @@ function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string)
     path,
     text,
     byteOrderMark,
-    revision: createHash('sha256').update(bytes).digest('hex'),
+    revision,
     byteLength: bytes.length,
     mode,
     identity,

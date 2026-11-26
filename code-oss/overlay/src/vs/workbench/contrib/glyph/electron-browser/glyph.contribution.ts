@@ -1,3 +1,4 @@
+import { GlyphSkillsPreferences } from '#vs/workbench/contrib/glyph/browser/GlyphSkillsPreferences.js';
 import { GlyphAgentReviewScope, glyphAgentReviewLabels } from '#glyph/workbench/GlyphAgentReview.js';
 import { GlyphAgentReviewPane } from '#vs/workbench/contrib/glyph/browser/GlyphAgentReviewPane.js';
 import { GlyphBuiltinChat } from '#vs/workbench/contrib/glyph/browser/GlyphBuiltinChat.js';
@@ -181,6 +182,14 @@ Registry.as<IPreferencesEditorPaneRegistry>(PreferencesExtensions.PreferencesEdi
   icon: Codicon.book,
   order: 10,
   ctorDescriptor: new SyncDescriptor(GlyphAgentInstructionsPreferences),
+});
+
+Registry.as<IPreferencesEditorPaneRegistry>(PreferencesExtensions.PreferencesEditorPane).registerPreferencesEditorPane({
+  id: 'glyph.skills',
+  title: localize('glyphSkillsSettings', 'Skills'),
+  icon: Codicon.sparkle,
+  order: 11,
+  ctorDescriptor: new SyncDescriptor(GlyphSkillsPreferences),
 });
 
 const containerId = 'workbench.view.glyphContainer';

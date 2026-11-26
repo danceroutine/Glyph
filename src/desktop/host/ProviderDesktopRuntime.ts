@@ -1,3 +1,4 @@
+import type { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
@@ -76,6 +77,7 @@ interface ActiveRun {
 
 /** Adapts the existing application service to desktop commands without moving provider logic into Electron. */
 export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
+  private readonly unsubscribeSkills: (() => void) | undefined;
   private connected = true;
   private readonly unsubscribeAgentReviews: (() => void) | undefined;
   private readonly pendingShellEvents = new Map<
@@ -123,12 +125,16 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         | 'takePendingWake'
         | 'peekPendingWake'
       >;
+      readonly skills?: SkillCatalog;
       readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'>;
       readonly userRules?: UserAgentRuleManager;
       readonly emit: (event: GlyphHostEvent) => void;
       readonly ownerWindowId: string;
     },
   ) {
+    this.unsubscribeSkills = options.skills?.onDidChange(() => {
+      this.publish({ type: GlyphHostEventType.SKILLS_CHANGED, skills: options.skills!.skills });
+    });
     this.unsubscribeAgentReviews = options.agentReviews?.onDidChange(review => {
       this.publish({ type: GlyphHostEventType.AGENT_REVIEW_CHANGED, review });
     });
@@ -158,9 +164,11 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     const instructionSources = this.options.instructionCatalog
       ? await this.options.instructionCatalog.refresh()
       : undefined;
+    const skills = this.options.skills ? await this.options.skills.refresh() : undefined;
     for (const proposal of this.options.glyph.proposalReviews?.retainedReviews ?? [])
       this.proposals.set(proposal.id, toProposal(proposal));
     return {
+      ...(skills ? { skills } : {}),
       agentReviews: this.options.agentReviews?.reviews ?? [],
       ...(instructionSources ? { instructionSources: toInstructionSources(instructionSources) } : {}),
       accounts: this.options.glyph.accounts,
@@ -714,6 +722,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     this.unsubscribeAgentReviews?.();
     this.unsubscribe?.();
     this.unsubscribeInstructions?.();
+    this.unsubscribeSkills?.();
     this.unsubscribeShells();
     this.unsubscribeWakes();
     await this.options.glyph.dispose();
@@ -1319,8 +1328,11 @@ function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): C
       (
         attachment,
       ): attachment is GlyphContextAttachment & {
-        readonly kind: Exclude<GlyphContextAttachmentKind, GlyphContextAttachmentKind.RULE>;
-      } => attachment.kind !== GlyphContextAttachmentKind.RULE,
+        readonly kind: Exclude<
+          GlyphContextAttachmentKind,
+          GlyphContextAttachmentKind.RULE | GlyphContextAttachmentKind.SKILL
+        >;
+      } => attachment.kind !== GlyphContextAttachmentKind.RULE && attachment.kind !== GlyphContextAttachmentKind.SKILL,
     )
     .map(attachment => ({
       path: attachment.path,
@@ -1370,6 +1382,7 @@ function toInstructionSources(sources: readonly AgentInstructionSource[]): reado
 
 function toTurnContext(context: import('#src/instructions/AgentInstructionSource.js').AgentInstructionTurnSnapshot) {
   return {
+    ...(context.skills?.length ? { skills: context.skills } : {}),
     sources: toInstructionSources(context.sources),
     activations: context.activations,
     candidates: context.candidates.map(({ id, name, description }) => ({ id, name, description })),

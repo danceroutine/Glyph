@@ -60,10 +60,21 @@ export const chatTurnOptionsSchema = z
     planBuild: planBuildOrderSchema.optional(),
     planProgress: planProgressSchema.optional(),
     manualRuleIds: z.array(z.string().min(1).max(500)).max(32).optional(),
+    skillIds: z.array(z.string().min(1).max(500)).max(32).optional(),
   })
   .strict()
   .transform(
-    ({ mode, annotations, turnId, attachmentSpans, agentReviewId, planBuild, planProgress, manualRuleIds }) => ({
+    ({
+      mode,
+      annotations,
+      turnId,
+      attachmentSpans,
+      agentReviewId,
+      planBuild,
+      planProgress,
+      manualRuleIds,
+      skillIds,
+    }) => ({
       ...(attachmentSpans ? { attachmentSpans } : {}),
       ...(turnId !== undefined && turnId !== '' ? { turnId } : {}),
       ...(agentReviewId !== undefined && agentReviewId !== '' ? { agentReviewId } : {}),
@@ -71,6 +82,7 @@ export const chatTurnOptionsSchema = z
       ...(annotations ? { annotations } : {}),
       ...(planBuild ? { planBuild } : {}),
       ...(planProgress ? { planProgress } : {}),
+      ...(skillIds && skillIds.length > 0 ? { skillIds: [...new Set(skillIds)] } : {}),
       ...(manualRuleIds && manualRuleIds.length > 0 ? { manualRuleIds: [...new Set(manualRuleIds)] } : {}),
     }),
   );

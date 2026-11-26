@@ -1,3 +1,4 @@
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 import type { AgentMode } from '#src/chat/AgentMode.js';
 import type { ChatContextEvent } from '#src/chat/ChatContextEvent.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
