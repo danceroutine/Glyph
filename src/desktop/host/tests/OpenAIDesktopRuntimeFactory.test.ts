@@ -1146,6 +1146,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     it('runs agent reviews only through an available account with inference access', async () => {
       const fixture = await factoryFixture();
       await fixture.create([await fixture.folder('workspace')]);
+      const reviewTools = captured.providerFactories.at(-1)![2]!.tools;
+      expect(reviewTools.filter(tool => tool.namespace === 'skills').map(tool => tool.name)).toEqual([
+        'activate',
+        'read_resource',
+      ]);
       const account = (provider: string, id: string) => ({
         provider,
         id,
@@ -1238,7 +1243,7 @@ async function factoryFixture(options: { readonly transport?: typeof fetch } = {
   vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
   const initialize = vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
   const editors = new EditorRpcRouter();
-  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport);
+  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport, join(directory, 'user'));
   const runtimes: ProviderDesktopRuntime[] = [];
   onTestFinished(async () => {
     for (const runtime of runtimes) await runtime.dispose();

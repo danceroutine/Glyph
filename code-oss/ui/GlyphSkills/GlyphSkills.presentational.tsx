@@ -63,7 +63,7 @@ export function GlyphSkills({ skills, query = '', edit }: GlyphSkillsProps) {
             {visible.map(skill => (
               <li class={styles.row} key={skill.id} aria-label={`${skill.name} · ${skill.origin.label}`}>
                 <div class={styles.header}>
-                  {skill.status === 'error' ? (
+                  {skill.status !== 'active' ? (
                     <TriangleAlert size={16} aria-hidden="true" />
                   ) : (
                     <Sparkles size={16} aria-hidden="true" />
@@ -86,7 +86,7 @@ export function GlyphSkills({ skills, query = '', edit }: GlyphSkillsProps) {
                 {skill.description && <p class={styles.description}>{skill.description}</p>}
                 <p class={styles.metadata}>
                   {skill.origin.label} ·{' '}
-                  {skill.status === 'error' ? 'Unavailable' : skill.enabled ? 'Enabled' : 'Disabled'} ·{' '}
+                  {skill.status !== 'active' ? 'Unavailable' : skill.enabled ? 'Enabled' : 'Disabled'} ·{' '}
                   {skill.scope === '.' ? 'Workspace-wide' : `${skill.scope}/**`}
                 </p>
                 <p class={styles.metadata}>

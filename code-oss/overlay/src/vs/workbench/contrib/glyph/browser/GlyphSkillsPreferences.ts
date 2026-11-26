@@ -1,8 +1,8 @@
 import * as DOM from '#vs/base/browser/dom.js';
+import { toErrorMessage } from '#vs/base/common/errorMessage.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
-import { URI } from '#vs/base/common/uri.js';
 import type { IPreferencesEditorPane } from '#vs/workbench/contrib/preferences/browser/preferencesEditorRegistry.js';
-import { IEditorService } from '#vs/workbench/services/editor/common/editorService.js';
+import { INotificationService } from '#vs/platform/notification/common/notification.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
 import { mountGlyphSkills } from './ui/mountGlyphWorkbench.js';
 
@@ -11,13 +11,15 @@ export class GlyphSkillsPreferences extends Disposable implements IPreferencesEd
   private readonly element = DOM.$('.glyph-skills-settings');
   private readonly view = this._register(
     mountGlyphSkills(this.element, [], '', skill => {
-      void this.editors.openEditor({ resource: URI.parse(skill.uri), options: { pinned: true } });
+      void this.glyph.openLink(`glyph-skill:${encodeURIComponent(skill.id)}`).catch((error: unknown) => {
+        this.notifications.error(toErrorMessage(error));
+      });
     }),
   );
   private query = '';
   constructor(
     @GlyphWorkbenchService private readonly glyph: GlyphWorkbenchService,
-    @IEditorService private readonly editors: IEditorService,
+    @INotificationService private readonly notifications: INotificationService,
   ) {
     super();
     this._register(
@@ -26,7 +28,7 @@ export class GlyphSkillsPreferences extends Disposable implements IPreferencesEd
       }),
     );
     this.update();
-    void this.glyph.refreshSkills();
+    void this.glyph.refreshSkills().catch(() => undefined);
   }
   getDomNode(): HTMLElement {
     return this.element;
@@ -37,7 +39,7 @@ export class GlyphSkillsPreferences extends Disposable implements IPreferencesEd
   search(text: string): void {
     this.query = text;
     this.update();
-    void this.glyph.refreshSkills();
+    void this.glyph.refreshSkills().catch(() => undefined);
   }
   private update(): void {
     this.view.update(this.glyph.state.skills ?? [], this.query);

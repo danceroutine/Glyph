@@ -3,6 +3,8 @@ import type { SkillDiscoveryProvider } from './SkillDiscoveryProvider.ts';
 
 /** Aggregates compatibility providers without hiding same-name packages from different origins. */
 export class SkillCatalog {
+  private generation = 0;
+  private published = 0;
   private current: readonly SkillDescriptor[] = [];
   private readonly listeners = new Set<() => void>();
   constructor(
@@ -22,6 +24,7 @@ export class SkillCatalog {
     };
   }
   async refresh(signal?: AbortSignal): Promise<readonly SkillDescriptor[]> {
+    const generation = ++this.generation;
     const discovered = (
       await Promise.all(
         this.providers.map(async provider => {
@@ -32,14 +35,14 @@ export class SkillCatalog {
             return [
               {
                 id: `${provider.id}:discovery-error`,
-                origin: { id: provider.id, label: provider.id, scope: 'project' as const, compatibility: 'unknown' },
+                origin: provider.origin,
                 path: '',
                 directory: '',
                 scope: '.',
-                name: provider.id,
+                name: provider.origin.label,
                 description: '',
                 enabled: false,
-                status: 'error' as const,
+                status: 'discovery-error' as const,
                 allowedTools: [],
                 uri: '',
                 message: error instanceof Error ? error.message : 'Skill discovery failed.',
@@ -53,12 +56,24 @@ export class SkillCatalog {
       .map(skill => ({ ...skill, enabled: skill.status === 'active' && (this.enabled.get(skill.id) ?? skill.enabled) }))
       .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     signal?.throwIfAborted();
+    if (generation < this.published) return this.current;
+    this.published = generation;
     if (JSON.stringify(discovered) !== JSON.stringify(this.current)) {
       this.current = discovered;
       for (const listener of this.listeners) listener();
     }
     return this.current;
   }
+  appliesTo(skill: SkillDescriptor, paths: readonly string[]): boolean {
+    if (skill.scope === '.') return true;
+    const provider = this.providers.find(candidate => candidate.id === skill.origin.id);
+    const scope = provider?.scopePathKey?.(skill.scope) ?? skill.scope;
+    return paths.some(path => {
+      const key = provider?.scopePathKey?.(path) ?? path;
+      return key === scope || key.startsWith(`${scope}/`);
+    });
+  }
+
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal) {
     if (!descriptor.enabled || descriptor.status !== 'active') throw new Error('Skill is disabled or unavailable.');
     const provider = this.providers.find(candidate => candidate.id === descriptor.origin.id);

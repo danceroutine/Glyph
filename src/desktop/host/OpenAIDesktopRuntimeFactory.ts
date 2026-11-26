@@ -93,6 +93,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   constructor(
     private readonly editors: EditorRpcRouter,
     private readonly transport?: typeof fetch,
+    private readonly userDirectory = join(homedir(), '.glyph'),
   ) {}
 
   async create(input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]): Promise<ProviderDesktopRuntime> {
@@ -237,7 +238,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       // Reuse each root's watched native index; instruction refreshes must not rescan the workspace.
       const listProjectInstructions = (maxFiles: number, globPattern: string) =>
         listInstructionFilesAcrossRoots(parts, maxFiles, globPattern);
-      const userRuleRoot = join(homedir(), '.glyph');
+      const userRuleRoot = this.userDirectory;
       await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
       const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
@@ -465,11 +466,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       await shells.dispose();
       throw error;
     }
-    // Share the account lifetime, but expose only project read/search tools to
-    // reviews. No shell, proposal, mode-switch, or interactive tools are registered.
+    // Reviews can read project files and the rules and skill resources advertised in their turn.
     const reviewProjectAccess = new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, turnContexts);
     const reviewTools = turnContexts
-      ? new ToolRegistry([...reviewProjectAccess.tools, ...new RuleToolRuntime(turnContexts).tools])
+      ? new ToolRegistry([
+          ...reviewProjectAccess.tools,
+          ...new RuleToolRuntime(turnContexts).tools,
+          ...new SkillToolRuntime(turnContexts).tools,
+        ])
       : reviewProjectAccess;
     const reviewBackend = new OpenAIBackend(
       store,

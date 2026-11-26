@@ -5,6 +5,10 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
+import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
+import { SkillToolRuntime } from '#src/skills/SkillToolRuntime.js';
+import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
+import { packageRevision, fileRevision } from '#src/skills/skillPackageRevision.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 
 describe(FileSkillDiscoveryProvider, () => {
@@ -74,6 +78,114 @@ describe(FileSkillDiscoveryProvider, () => {
     expect(descriptors.filter(source => source.name === 'example')).toHaveLength(2);
   });
 
+  it('offers Edit only for indexed, readable manifests, including a manifest with invalid frontmatter', async () => {
+    const fixture = await skillFixture();
+    await fixture.write('.glyph/skills/ignored/SKILL.md', manifest());
+    await fixture.write('.glyph/skills/ignored/data.txt', 'ordinary resource');
+    await fixture.write('.glyph/skills/bad/SKILL.md', 'Missing frontmatter');
+    await fixture.write('.glyph/skills/linked/data.txt', 'ordinary resource');
+    await fixture.write('outside.md', manifest());
+    await symlink(join(fixture.root, 'outside.md'), join(fixture.root, '.glyph/skills/linked/SKILL.md'));
+    const read = vi.spyOn(fixture.store, 'read');
+    const results = await fixture
+      .provider(['.glyph/skills/ignored/data.txt', '.glyph/skills/bad/SKILL.md', '.glyph/skills/linked/SKILL.md'])
+      .discover();
+    expect(results.map(({ name, status, uri }) => [name, status, !!uri])).toEqual([
+      ['bad', 'error', true],
+      ['ignored', 'error', false],
+      ['linked', 'error', false],
+    ]);
+    expect(read.mock.calls.map(([path]) => path)).not.toContain('.glyph/skills/ignored/SKILL.md');
+  });
+
+  it.each([true, false])(
+    'uses owning store casing for discovery and qualified activation scope (caseSensitive=%s)',
+    async caseSensitive => {
+      const fixture = await skillFixture();
+      const path = 'Src/.GLYPH/Skills/example/skill.MD';
+      await fixture.write(path, manifest());
+      const exact = 'Exact/.glyph/skills/example/SKILL.md';
+      await fixture.write(exact, manifest());
+      const workspace = new FileSystemWorkspaceTextStore(fixture.root, { caseSensitive });
+      const provider = new FileSkillDiscoveryProvider({
+        origin: { id: 'one', label: 'One', scope: 'project', compatibility: 'glyph' },
+        directory: '.glyph/skills',
+        scopePrefix: 'Root',
+        workspace,
+        binaryStore: workspace,
+        listFiles: async () => ({ files: [path, exact], truncated: false }),
+        uriForPath: listed => listed,
+        refreshIndex: async () => {},
+      });
+      const catalog = new SkillCatalog([provider]);
+      const sources = await catalog.refresh();
+      if (caseSensitive) {
+        expect(sources.map(source => source.scope)).toEqual(['Root/Exact']);
+        const turn = await new SkillContextContributor(catalog).beginTurn({
+          turnId: 'strict',
+          attachmentPaths: ['Root/exact/task'],
+        });
+        expect(turn.initialEnvelope().skillCandidates).toEqual([]);
+        expect(turn.disclosePaths(['Root/Exact/task'])?.skillCandidates?.[0]?.id).toBe(sources[0]!.id);
+        return;
+      }
+      const nested = sources.find(source => source.path === path)!;
+      expect(nested).toMatchObject({ status: 'active', scope: 'Root/Src', path });
+      const contributor = new SkillContextContributor(catalog);
+      const turn = await contributor.beginTurn({ turnId: 'case', attachmentPaths: ['root/src/file'] });
+      expect(turn.initialEnvelope().skillCandidates).toEqual([]);
+      expect(turn.disclosePaths(['Root/sRc/file'])?.skillCandidates?.[0]?.id).toBe(nested.id);
+      expect((await turn.activateSource(nested.id, 'model', 'Task'))?.skills?.[0]?.body).toBe('BODY');
+      const initial = await contributor.beginTurn({ turnId: 'case2', attachmentPaths: ['Root/sRC'] });
+      expect(initial.initialEnvelope().skillCandidates).toHaveLength(1);
+    },
+  );
+
+  it('preserves short IDs and offers a stable bounded ID for deep packages on both selection routes', async () => {
+    const fixture = await skillFixture();
+    const path = `${'long-component/'.repeat(40)}.glyph/skills/example/SKILL.md`;
+    await fixture.write(path, manifest());
+    const provider = fixture.provider([path]);
+    const catalog = new SkillCatalog([provider]);
+    const [source] = await catalog.refresh();
+    const id = source!.id;
+    expect(id.length).toBeLessThanOrEqual(500);
+    expect((await catalog.refresh())[0]!.id).toBe(id);
+    const options = chatTurnOptionsSchema.parse({ skillIds: [id] });
+    const manual = await new SkillContextContributor(catalog).beginTurn({
+      turnId: 'long',
+      attachmentPaths: [],
+      ...options,
+    });
+    expect(manual.initialEnvelope().skills?.[0]?.body).toBe('BODY');
+    const model = await new SkillContextContributor(catalog).beginTurn({ turnId: 'model', attachmentPaths: [path] });
+    const runtime = new SkillToolRuntime({
+      activateSource: (_turnId, _contributor, sourceId, reason, explanation, signal) =>
+        model.activateSource(sourceId, reason, explanation, signal),
+      contribution: () => model,
+    });
+    const input = JSON.stringify({ id, reason: 'Task' });
+    runtime.tools[0]!.validateInput(input);
+    expect(
+      JSON.parse(await runtime.tools[0]!.execute(input, new AbortController().signal, { turnId: 'model' })),
+    ).toMatchObject({ activated: true });
+  });
+
+  it('uses disk permissions with editor-backed text and fingerprints only permission bits', async () => {
+    const fixture = await skillFixture();
+    const path = '.glyph/skills/example/SKILL.md';
+    await fixture.write(path, manifest());
+    const disk = await fixture.store.readBytes(path);
+    expect(fileRevision(disk.bytes)).toBe(disk.revision);
+    const provider = fixture.provider([path]);
+    const [source] = await provider.discover();
+    vi.spyOn(fixture.store, 'readBytes').mockResolvedValue({ ...disk, mode: 0o100755 });
+    const editor = await fixture.store.read(path);
+    vi.spyOn(fixture.store, 'read').mockResolvedValue({ ...editor, mode: 0o644 });
+    const pinned = await provider.capture(source!);
+    expect(pinned.revision).toBe(packageRevision(new Map([['SKILL.md', { revision: disk.revision, mode: 0o755 }]])));
+  });
+
   it('rejects symlink resources rather than reading outside a package', async () => {
     const fixture = await skillFixture();
     await fixture.write('.glyph/skills/example/SKILL.md', manifest());
@@ -98,7 +210,7 @@ describe(FileSkillDiscoveryProvider, () => {
     expect(sources).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: 'example', enabled: false }),
-        expect.objectContaining({ status: 'error', message: 'Index unavailable' }),
+        expect.objectContaining({ status: 'discovery-error', origin: broken.origin, message: 'Index unavailable' }),
       ]),
     );
     await catalog.refresh();
@@ -107,6 +219,27 @@ describe(FileSkillDiscoveryProvider, () => {
     unsubscribe();
     await catalog.refreshIndexes();
     expect(fixture.refreshIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses a current package-scoped index at activation and rejects an incomplete capture', async () => {
+    const fixture = await skillFixture();
+    const manifestPath = '.glyph/skills/example/SKILL.md';
+    await fixture.write(manifestPath, manifest());
+    const captureFiles = vi.fn(async () => ({ files: [manifestPath], truncated: false }));
+    const provider = new FileSkillDiscoveryProvider({
+      origin: { id: 'project', label: 'Project', scope: 'project', compatibility: 'glyph' },
+      directory: '.glyph/skills',
+      workspace: fixture.store,
+      uriForPath: path => path,
+      listFiles: async () => ({ files: ['.glyph', manifestPath], truncated: false }),
+      captureFiles,
+      refreshIndex: async () => {},
+    });
+    const [source] = await provider.discover();
+    expect((await provider.capture(source!)).body).toBe('BODY');
+    expect(captureFiles).toHaveBeenCalledWith(source!.directory, undefined);
+    captureFiles.mockResolvedValueOnce({ files: [], truncated: true });
+    await expect(provider.capture(source!)).rejects.toThrow('incomplete');
   });
 
   it('reports truncated discovery and respects cancellation', async () => {

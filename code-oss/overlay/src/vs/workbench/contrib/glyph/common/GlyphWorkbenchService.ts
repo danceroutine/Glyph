@@ -42,7 +42,7 @@ export interface GlyphWorkbenchService {
   branchChat?(chatId: string, turnId: string): Promise<void>;
   restoreCheckpoint?(chatId: string, turnId: string): Promise<void>;
   copyText(text: string): Promise<void>;
-  openLink?(href: string): Promise<void>;
+  openLink(href: string): Promise<void>;
   viewPlan?(chatId: string, plan: GlyphPlanRecord): Promise<void>;
   cancel(): void;
   startAgentReview(review: AgentReviewInput): Promise<void>;

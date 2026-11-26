@@ -1,4 +1,4 @@
-import type { SkillActivation, SkillDescriptor } from '#src/skills/SkillDescriptor.js';
+import type { SkillActivation, SkillCandidate, SkillInstruction } from '#src/skills/SkillDescriptor.js';
 /** Stable source families understood by the instruction catalog and settings UI. */
 export enum AgentInstructionSourceKind {
   /** Directory-scoped `AGENTS.md` repository guidance. */
@@ -110,9 +110,9 @@ export interface AgentInstructionContext {
   /** Wire schema identifier for provider adapters and tool results. */
   readonly schema: 'glyph.agent-instructions.v1';
   /** Skill package bodies activated at this boundary. Kept separate from file instructions. */
-  readonly skills?: readonly SkillActivation[];
+  readonly skills?: readonly SkillInstruction[];
   /** Metadata-only skill catalog; resource bodies are never advertised here. */
-  readonly skillCandidates?: readonly SkillDescriptor[];
+  readonly skillCandidates?: readonly SkillCandidate[];
   /** Ordered sources; later entries have nearer scope and higher precedence. */
   readonly sources: readonly AgentInstructionSource[];
   /** Activation provenance corresponding to newly supplied sources. */

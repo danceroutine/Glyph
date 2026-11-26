@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { URI } from '#vs/base/common/uri.js';
 import { GlyphSkillsPreferences } from '#vs/workbench/contrib/glyph/browser/GlyphSkillsPreferences.js';
 import type { GlyphSkill } from '#glyph/protocol/events/GlyphSkill.js';
 
 describe(GlyphSkillsPreferences, () => {
-  it('opens the selected skill in a pinned native editor and follows host updates and Settings search', () => {
+  it('requests the selected skill by ID and follows host updates and Settings search', async () => {
     let changed: (() => void) | undefined;
     const state: { skills: GlyphSkill[] } = {
       skills: [
@@ -23,26 +22,30 @@ describe(GlyphSkillsPreferences, () => {
         },
       ],
     };
-    const editors = { openEditor: vi.fn(async () => undefined) };
+    const openLink = vi.fn(async () => undefined);
+    const notification = { error: vi.fn() };
     const refreshSkills = vi.fn(async () => undefined);
     const page = new GlyphSkillsPreferences(
       {
         state,
         refreshSkills,
+        openLink,
         onDidChangeState: (listener: () => void) => {
           changed = listener;
           return { dispose: vi.fn() };
         },
       } as never,
-      editors as never,
+      notification as never,
     );
     expect(refreshSkills).toHaveBeenCalledOnce();
     page.layout({ width: 900, height: 600 });
     expect(page.getDomNode().style.height).toBe('600px');
     page.getDomNode().querySelector<HTMLButtonElement>('button')!.click();
-    expect(editors.openEditor).toHaveBeenCalledExactlyOnceWith({
-      resource: URI.parse(state.skills[0].uri),
-      options: { pinned: true },
+    expect(openLink).toHaveBeenCalledExactlyOnceWith('glyph-skill:project%3Aexample');
+    openLink.mockRejectedValueOnce(new Error('Skill removed.'));
+    page.getDomNode().querySelector<HTMLButtonElement>('button')!.click();
+    await vi.waitFor(() => {
+      expect(notification.error).toHaveBeenCalledWith('Skill removed.');
     });
     page.search('not-found');
     expect(refreshSkills).toHaveBeenCalledTimes(2);
