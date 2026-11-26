@@ -24,6 +24,7 @@ function pristineCheckout() {
     [join(repositoryRoot, 'src/desktop/protocol/README.md')]: 'ignored',
     [join(repositoryRoot, 'src/desktop/workbench/GlyphState.ts')]: 'export const state = 1;\n',
     [join(repositoryRoot, 'src/chat/AgentMode.ts')]: "import { x } from './x.ts';\nexport const AgentMode = x;\n",
+    [join(repositoryRoot, 'src/chat/ChatTurnOptions.ts')]: "export type { AgentModeID } from './AgentMode.ts';\n",
     [join(repositoryRoot, 'src/reviewing/AgentReview.ts')]: "export const review = 'AgentReview.ts';\n",
     [join(repositoryRoot, 'src/shared/validators/isRecord.ts')]: 'export const isRecord = () => true;\n',
     [upstream('src/vs/workbench/workbench.desktop.main.ts')]:

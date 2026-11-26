@@ -246,6 +246,7 @@ export class ChatSession {
           ...(request.annotations ? { annotations: request.annotations } : {}),
           ...(request.planBuild ? { planBuild: request.planBuild } : {}),
           ...(request.planProgress ? { planProgress: request.planProgress } : {}),
+          ...(request.referenceSpans ? { referenceSpans: request.referenceSpans } : {}),
           ...(request.manualRuleIds ? { manualRuleIds: request.manualRuleIds } : {}),
         },
         attachmentPaths: request.attachments.map(attachment => attachment.path),
