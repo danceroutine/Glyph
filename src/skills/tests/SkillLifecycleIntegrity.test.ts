@@ -2,10 +2,10 @@ import { chmod, readFile, writeFile, mkdir, rename, stat, rm } from 'node:fs/pro
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { it, expect, vi } from 'vitest';
-import { SkillPackageManager } from '../SkillPackageManager.ts';
-import { SkillPackageDraft } from '../SkillPackageDraft.ts';
-import { SkillStateStore } from '../SkillStateStore.ts';
-import { SkillTransactionJournal } from '../SkillTransactionJournal.ts';
+import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
+import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
+import { SkillStateStore } from '#src/skills/SkillStateStore.js';
+import { SkillTransactionJournal } from '#src/skills/SkillTransactionJournal.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 
@@ -152,7 +152,7 @@ it('fails closed on malformed preferences, accepts repairs, and only publishes a
 it('blocks discovery, capture, management and stale approvals while preferences are unreadable, then retries after repair', async () => {
   const { root, state, location, provider, install } = await aSkillLifecycle();
   const installed = await install();
-  const { SkillCatalog } = await import('../SkillCatalog.ts');
+  const { SkillCatalog } = await import('#src/skills/SkillCatalog.js');
   const ready = async () => state.initialize();
   const catalog = new SkillCatalog([provider], state.enabled, state.installations, ready);
   const manager = new SkillPackageManager([location], catalog, state, ready);

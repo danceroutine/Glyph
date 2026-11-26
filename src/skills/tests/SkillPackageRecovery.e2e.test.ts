@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import { it, expect, onTestFinished } from 'vitest';
-import { SkillPackageManager } from '../SkillPackageManager.ts';
+import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 
 function childTransaction(root: string, scenario: string) {

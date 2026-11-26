@@ -1,7 +1,7 @@
 import { it, expect, vi } from 'vitest';
-import { assertSkillPackageClean } from '../assertSkillPackageClean.ts';
+import { assertSkillPackageClean } from '#src/desktop/workspace/assertSkillPackageClean.js';
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
-import type { EditorRpcRouter } from '../EditorRpcRouter.ts';
+import type { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
 const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'owner' };
 it('sends only the owning window and approved directory to the working-copy guard', async () => {
   const request = vi.fn<EditorRpcRouter['request']>(async (_identity, input) => ({

@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
 import { it, expect, vi, onTestFinished } from 'vitest';
-import { SkillRepositoryGit } from '../SkillRepositoryGit.ts';
+import { SkillRepositoryGit } from '#src/skills/SkillRepositoryGit.js';
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'glyph-git-budget-'));

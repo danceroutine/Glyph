@@ -1,9 +1,9 @@
-import { FileSystemWorkspaceTextStore } from '../../../workspace/FileSystemWorkspaceTextStore.ts';
-import { FileSkillDiscoveryProvider } from '../../FileSkillDiscoveryProvider.ts';
-import { SkillPackageManager } from '../../SkillPackageManager.ts';
-import { SkillStateStore } from '../../SkillStateStore.ts';
-import { SkillCatalog } from '../../SkillCatalog.ts';
-import { SkillPackageDraft } from '../../SkillPackageDraft.ts';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
+import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
+import { SkillStateStore } from '#src/skills/SkillStateStore.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 
 const [root, scenario] = process.argv.slice(2);
 const store = new FileSystemWorkspaceTextStore(root);
