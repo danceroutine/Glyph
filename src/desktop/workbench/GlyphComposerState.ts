@@ -1,3 +1,4 @@
+import type { ChatReferenceSpan } from '#src/chat/ChatTurnOptions.js';
 import type { GlyphComposerCommand } from './GlyphComposerCommand.ts';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
@@ -335,37 +336,41 @@ export class GlyphComposerState {
 /** Both queued and direct sends preserve the same exact captures and UTF-16 spans. */
 async function sendDocument(document: GlyphPromptDocument, send: SendMessage): Promise<void> {
   const draft = toGlyphPromptText(document.parts);
-  const ruleIds = document.parts.flatMap(part =>
-    part.type === 'attachment' && part.attachment.kind === GlyphContextAttachmentKind.RULE && part.attachment.ruleId
-      ? [part.attachment.ruleId]
-      : [],
-  );
-  const skillIds = document.parts.flatMap(part =>
-    part.type === 'attachment' && part.attachment.kind === GlyphContextAttachmentKind.SKILL && part.attachment.skillId
-      ? [part.attachment.skillId]
-      : [],
-  );
-  const attachments = document.parts.flatMap(part =>
-    part.type === 'attachment' &&
-    part.attachment.kind !== GlyphContextAttachmentKind.RULE &&
-    part.attachment.kind !== GlyphContextAttachmentKind.SKILL
-      ? [part.attachment]
-      : [],
-  );
+  const attachments: GlyphContextAttachment[] = [];
+  const attachmentSpans: { from: number; to: number }[] = [];
+  const referenceSpans: ChatReferenceSpan[] = [];
   let offset = -(draft.length - draft.trimStart().length);
-  const attachmentSpans = document.parts.flatMap(part => {
+  for (const part of document.parts) {
     const from = offset;
     offset += toGlyphPromptText([part]).length;
-    return part.type === 'attachment' &&
-      part.attachment.kind !== GlyphContextAttachmentKind.RULE &&
-      part.attachment.kind !== GlyphContextAttachmentKind.SKILL
-      ? [{ from, to: offset }]
-      : [];
-  });
+    if (part.type === 'text') continue;
+    const attachment = part.attachment;
+    if (attachment.kind === GlyphContextAttachmentKind.RULE) {
+      if (attachment.ruleId)
+        referenceSpans.push({
+          kind: 'rule',
+          sourceId: attachment.ruleId,
+          label: attachment.path,
+          revision: attachment.contentRevision,
+          from,
+          to: offset,
+        });
+    } else {
+      attachments.push(attachment);
+      attachmentSpans.push({ from, to: offset });
+    }
+  }
+  const {
+    manualRuleIds: _ruleIds,
+    referenceSpans: _references,
+    attachmentSpans: _spans,
+    ...options
+  } = document.options ?? {};
   await send(draft, attachments, {
-    ...document.options,
+    ...options,
     ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}),
-    ...(skillIds.length > 0 ? { skillIds: [...new Set(skillIds)] } : {}),
-    ...(ruleIds.length > 0 ? { manualRuleIds: [...new Set(ruleIds)] } : {}),
+    ...(referenceSpans.length > 0
+      ? { referenceSpans, manualRuleIds: [...new Set(referenceSpans.map(ref => ref.sourceId))] }
+      : {}),
   });
 }

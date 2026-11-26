@@ -59,6 +59,21 @@ export const chatTurnOptionsSchema = z
     annotations: z.array(annotationSchema).max(100).optional(),
     planBuild: planBuildOrderSchema.optional(),
     planProgress: planProgressSchema.optional(),
+    referenceSpans: z
+      .array(
+        z
+          .object({
+            kind: z.literal('rule'),
+            sourceId: z.string().min(1).max(500),
+            label: z.string().min(1),
+            revision: z.string().min(1),
+            from: z.number().int().nonnegative(),
+            to: z.number().int().positive(),
+          })
+          .strict()
+          .refine(span => span.to - span.from === span.label.length + 1),
+      )
+      .optional(),
     manualRuleIds: z.array(z.string().min(1).max(500)).max(32).optional(),
     skillIds: z.array(z.string().min(1).max(500)).max(32).optional(),
   })
@@ -69,12 +84,14 @@ export const chatTurnOptionsSchema = z
       annotations,
       turnId,
       attachmentSpans,
+      referenceSpans,
       agentReviewId,
       planBuild,
       planProgress,
       manualRuleIds,
       skillIds,
     }) => ({
+      ...(referenceSpans && referenceSpans.length > 0 ? { referenceSpans } : {}),
       ...(attachmentSpans ? { attachmentSpans } : {}),
       ...(turnId !== undefined && turnId !== '' ? { turnId } : {}),
       ...(agentReviewId !== undefined && agentReviewId !== '' ? { agentReviewId } : {}),
