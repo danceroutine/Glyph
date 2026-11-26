@@ -126,6 +126,55 @@ describe(TurnContextCoordinator, () => {
     expect(coordinator.disclosePaths('roots', ['api/readme'])?.sources.map(value => value.id)).toEqual(['on-entry']);
   });
 
+  it('evaluates global user patterns relative to the accessed root and bounds aggregate matching atomically', async () => {
+    const paths = new InstructionPaths(
+      new Map([
+        ['api', false],
+        ['web', true],
+      ]),
+    );
+    const pattern = AgentInstructionActivationMode.FILE_PATTERN;
+    const user = AgentInstructionSourceKind.GLYPH_USER_RULE;
+    const rules = [
+      source('literal', user, '.', pattern, Array(64).fill('src/entry.ts')),
+      source('glob', user, '.', pattern, ['src/*.ts']),
+      source(
+        'heavy',
+        user,
+        '.',
+        pattern,
+        Array.from({ length: 64 }, (_, i) => 'a?'.repeat(190) + i + '*'),
+      ),
+    ];
+    const coordinator = new TurnContextCoordinator(
+      new AgentInstructionCatalog([{ discover: async () => rules }], paths),
+    );
+    const turn = await coordinator.beginTurn({ turnId: 'bounded', attachmentPaths: [] });
+    expect(() => coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS', 'web/' + 'a'.repeat(1000)])).toThrow(
+      'per-disclosure work limit',
+    );
+    expect(turn.snapshot().activations).toEqual([]);
+    expect(coordinator.disclosePaths('bounded', ['web/SRC/ENTRY.TS'])).toBeUndefined();
+    expect(coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS'])?.sources.map(value => value.id)).toEqual([
+      'glob',
+      'literal',
+    ]);
+  });
+
+  it('identifies unreadable required guidance before starting a turn', async () => {
+    const bad = {
+      ...source('agents_md:AGENTS.md', AgentInstructionSourceKind.AGENTS_MD, '.'),
+      path: 'AGENTS.md',
+      status: AgentInstructionSourceStatus.ERROR,
+    };
+    for (const message of [undefined, 'Root exceeds the read limit.']) {
+      const coordinator = new TurnContextCoordinator({ refresh: async () => [{ ...bad, message }] } as never);
+      await expect(coordinator.beginTurn({ turnId: 'root', attachmentPaths: [] })).rejects.toThrow(
+        'Required root instruction AGENTS.md could not be loaded',
+      );
+    }
+  });
+
   it('activates scoped always, AGENTS.md and matching rules at the first case-aliased access', async () => {
     const paths = new InstructionPaths(
       new Map([
@@ -267,7 +316,7 @@ describe(TurnContextCoordinator, () => {
     });
   });
 
-  it('ignores disabled, failed, ineligible, and unknown selections', async () => {
+  it('rejects unavailable explicit selections and omits missing or ineligible model candidates', async () => {
     const disabled = {
       ...source('disabled', AgentInstructionSourceKind.GLYPH_USER_RULE, '.', AgentInstructionActivationMode.MANUAL),
       enabled: false,
@@ -286,9 +335,14 @@ describe(TurnContextCoordinator, () => {
     const session = await coordinator.beginTurn({ turnId: 'ineligible', attachmentPaths: [] });
 
     expect(session.initialEnvelope().candidates).toEqual([expect.objectContaining({ id: 'unnamed', name: 'unnamed' })]);
-    expect(coordinator.activateManualRules('ineligible', ['disabled', 'missing'])).toBeUndefined();
+    expect(() => coordinator.activateManualRules('ineligible', ['disabled', 'missing'])).toThrow('manual activation');
+    expect(coordinator.activateManualRules('ineligible', ['missing'])).toBeUndefined();
     expect(coordinator.activateRule('ineligible', 'disabled')).toBeUndefined();
-    expect(coordinator.activateManualRules('ineligible', ['unnamed'])).toBeUndefined();
+    expect(() => coordinator.activateManualRules('ineligible', ['unnamed'])).toThrow('manual activation');
+    await expect(
+      coordinator.beginTurn({ turnId: 'queued', attachmentPaths: [], manualRuleIds: ['unnamed'] }),
+    ).rejects.toThrow('manual activation');
+    expect(coordinator.activateManualRules('ineligible', ['missing'])).toBeUndefined();
   });
 });
 

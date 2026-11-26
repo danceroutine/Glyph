@@ -1,4 +1,3 @@
-import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
@@ -159,6 +158,7 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js', () => ({
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => ({
   GlyphContextController: class {
     readonly setSkillSources = vi.fn();
+    readonly openInstruction = vi.fn(async () => {});
     readonly setInstructionRefresh = vi.fn();
     readonly notifyInstructionsChanged = vi.fn();
     readonly openAttachment = vi.fn();
@@ -535,6 +535,28 @@ describe(NativeGlyphWorkbenchService, () => {
       expect(host.request).toHaveBeenCalledTimes(3);
     });
 
+    it.each([false, true])(
+      'drains invalidations arriving during a pending catalog request (failure %s)',
+      async failed => {
+        const { service, host, context } = await workbench();
+        const [invalidate] = context.setInstructionRefresh.mock.calls[0];
+        let release!: () => void;
+        host.request.mockClear().mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              release = () => (failed ? reject(new Error('old refresh')) : resolve());
+            }),
+        );
+        const pending = service.refreshInstructionSources();
+        await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+        void invalidate(true);
+        void invalidate(true);
+        release();
+        await pending;
+        expect(host.request).toHaveBeenCalledTimes(2);
+      },
+    );
+
     it('restores an unavailable rule badge before catalog roots have been announced', async () => {
       const { service, host, context } = await workbench();
       const [, watchRoots] = context.setInstructionRefresh.mock.calls[0];
@@ -763,7 +785,10 @@ describe(NativeGlyphWorkbenchService, () => {
             checkpointTurnId: 'checkpoint',
             options: { turnId: 'turn-1' },
             attachments: [preview],
-            steering: [{ id: 'steer', text: 'Faster' }] as never,
+            steering: [
+              { id: 'steer', text: 'Faster', rejection: 'Rule unavailable' },
+              { id: 'accepted', text: 'Continue' },
+            ] as never,
             modeSwaps: modeSwaps as never,
             questionResponses: questionResponses as never,
             usage: usage as never,
@@ -788,7 +813,15 @@ describe(NativeGlyphWorkbenchService, () => {
           options: { turnId: 'turn-1' },
           attachments: [preview],
         },
-        { id: 'steer', text: 'Faster', role: GlyphTranscriptRole.USER, steering: true },
+        {
+          id: 'steer',
+          text: 'Faster',
+          rejection: 'Rule unavailable',
+          attachmentError: 'Rule unavailable',
+          role: GlyphTranscriptRole.USER,
+          steering: true,
+        },
+        { id: 'accepted', text: 'Continue', role: GlyphTranscriptRole.USER, steering: true },
         {
           id: 'turn-1',
           role: GlyphTranscriptRole.ASSISTANT,
@@ -1122,6 +1155,12 @@ describe(NativeGlyphWorkbenchService, () => {
       await expect(service.openLink('glyph-instruction:missing-root')).rejects.toThrow(
         'instruction source is unavailable',
       );
+    });
+
+    it('routes instruction links through the checked catalog navigation', async () => {
+      const { service, context } = await workbench();
+      await service.openLink('glyph-instruction:rules%3Atest');
+      expect(context.openInstruction).toHaveBeenCalledExactlyOnceWith('rules:test');
     });
 
     it('opens web links externally by default', async () => {

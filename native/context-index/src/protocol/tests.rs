@@ -527,6 +527,7 @@ fn service_loop_answers_each_request_kind_and_finishes_searches_before_shutdown(
         work(
             5,
             Request::Glob(GlobParams {
+                root_files_only: false,
                 pattern: "*.txt".to_owned(),
                 target_directory: None,
                 limit: 5,

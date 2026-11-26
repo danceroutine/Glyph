@@ -4,6 +4,16 @@ import { ProjectContextIdentity } from '#src/project/context/ProjectContextIdent
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 
 describe(getGlyphWorkspaceRootId, () => {
+  it('uses stable opaque routing identities without disclosing local URIs for duplicate names', () => {
+    const roots = [
+      { name: 'project', uri: 'file:///Users/private/a' },
+      { name: 'project', uri: 'file:///Users/private/b' },
+    ];
+    const ids = roots.map(root => getGlyphWorkspaceRootId(root, roots));
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.every(id => /^root@[a-f0-9]{32}$/u.test(id))).toBe(true);
+    expect(getGlyphWorkspaceRootId(roots[0]!, roots.toReversed())).toBe(ids[0]);
+  });
   it.each(['My Project', 'café', 'mail@project', 'root@file%3A%2F%2F%2Fworkspace%2Fproject'])(
     'preserves the existing review mutation scope for a unique %s root',
     name => {

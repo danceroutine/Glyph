@@ -24,6 +24,11 @@ export class HostEventJournal {
     return this.sequence;
   }
 
+  /** Revokes replay from the previous attachment authority while preserving monotonic sequence numbers. */
+  discard(): void {
+    this.events.length = 0;
+  }
+
   /**
    * Stamps each event with the connection's trusted identity and a monotonic
    * sequence. This gives renderers the information needed to discard duplicate

@@ -6,6 +6,7 @@ import type { GlyphWorkingCopySearchOptions } from './GlyphWorkingCopySearchOpti
 export enum GlyphEditorRequestType {
   EXISTS = 'exists',
   READ_SNAPSHOT = 'read_snapshot',
+  READ_OPEN_SNAPSHOT = 'read_open_snapshot',
   LIST_WORKING_COPIES = 'list_working_copies',
   LIST_WORKING_COPY_PATHS = 'list_working_copy_paths',
   SEARCH_WORKING_COPIES = 'search_working_copies',
@@ -18,7 +19,7 @@ export enum GlyphEditorRequestType {
 export type GlyphEditorRequest =
   | { readonly type: GlyphEditorRequestType.EXISTS; readonly operationId: string; readonly path: string }
   | {
-      readonly type: GlyphEditorRequestType.READ_SNAPSHOT;
+      readonly type: GlyphEditorRequestType.READ_SNAPSHOT | GlyphEditorRequestType.READ_OPEN_SNAPSHOT;
       readonly operationId: string;
       readonly path: string;
       readonly maxBytes?: number;

@@ -1,4 +1,3 @@
-import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import { GlyphShellTerminals } from './GlyphShellTerminals.js';
 import { BrowserViewUri } from '#vs/platform/browserView/common/browserViewUri.js';
@@ -28,7 +27,7 @@ import { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
-import { IWorkspaceContextService, type IWorkspaceFolder } from '#vs/platform/workspace/common/workspace.js';
+import { IWorkspaceContextService } from '#vs/platform/workspace/common/workspace.js';
 import { IWorkspaceTrustManagementService } from '#vs/platform/workspace/common/workspaceTrust.js';
 import { IUserDataProfileService } from '#vs/workbench/services/userDataProfile/common/userDataProfile.js';
 import { GlyphWorkbenchProjection } from '#glyph/workbench/GlyphWorkbenchProjection.js';
@@ -94,6 +93,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private workspaceMessage: string | undefined;
   private readonly prompts = new Map<string, string>();
   private readonly errors: GlyphTranscriptEntry[] = [];
+  private catalogDirty = false;
   private catalogRefresh: Promise<void> | undefined;
   private readonly goals = new GlyphGoalReconciler({
     snapshot: chatId => this.goalSnapshot(chatId),
@@ -162,7 +162,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     );
     this.context.setSkillSources(() => this.state.skills ?? []);
     this.context.setInstructionRefresh(
-      () => this.refreshInstructionSources(),
+      invalidate => this.refreshInstructionSources(invalidate),
       () => this.state.instructionWatchRoots ?? [],
     );
     this.proposalEditor = this._register(
@@ -337,15 +337,28 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       });
   }
 
-  refreshInstructionSources(): Promise<void> {
-    return (this.catalogRefresh ??= this.request({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS })
-      .catch(error => {
-        this.report(error);
-        throw error;
-      })
-      .finally(() => {
-        this.catalogRefresh = undefined;
-      }));
+  refreshInstructionSources(invalidate = false): Promise<void> {
+    if (this.catalogRefresh) {
+      this.catalogDirty ||= invalidate;
+      return this.catalogRefresh;
+    }
+    return (this.catalogRefresh = this.refreshCatalog());
+  }
+
+  private async refreshCatalog(): Promise<void> {
+    try {
+      do {
+        this.catalogDirty = false;
+        try {
+          await this.request({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+        } catch (error) {
+          this.report(error);
+          if (!this.catalogDirty) throw error;
+        }
+      } while (this.catalogDirty);
+    } finally {
+      this.catalogRefresh = undefined;
+    }
   }
   createUserRule(
     name: string,
@@ -441,15 +454,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     }
     if (href.startsWith('glyph-instruction:')) {
       const id = decodeURIComponent(href.slice('glyph-instruction:'.length));
-      const source = this.state.instructionSources?.find(value => value.id === id);
-      if (!source)
-        throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This instruction source is unavailable.');
-      const resource = source.uri
-        ? URI.parse(source.uri)
-        : instructionResource(this.workspaceContextService.getWorkspace().folders, source.path);
-      if (!resource)
-        throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This instruction source is unavailable.');
-      await this.editors.openEditor({ resource });
+      await this.context.openInstruction(id);
       return;
     }
     if (/^https?:\/\//iu.test(href)) {
@@ -499,6 +504,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
           : []),
         ...(run.steering ?? []).map(message => ({
           ...message,
+          ...(message.rejection ? { attachmentError: message.rejection } : {}),
           role: GlyphTranscriptRole.USER,
           steering: true,
         })),
@@ -1525,13 +1531,4 @@ function isActive(status: GlyphRunStatus): boolean {
     status === GlyphRunStatus.WAITING_FOR_QUESTION ||
     status === GlyphRunStatus.WAITING_FOR_APPROVAL
   );
-}
-
-function instructionResource(folders: readonly IWorkspaceFolder[], path: string): URI | undefined {
-  const only = folders.length === 1 ? folders[0] : undefined;
-  if (only) return URI.joinPath(only.uri, path);
-  const [rootName, ...relative] = path.split('/');
-  const roots = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
-  const folder = folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootName);
-  return folder ? URI.joinPath(folder.uri, ...relative) : undefined;
 }

@@ -32,6 +32,21 @@ async function fixture() {
 }
 
 describe(AgentInstructionCatalog, () => {
+  it('spends the read budget on each root before nested guidance', async () => {
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: async (path: string) => ({ text: path.includes('nested') ? 'xx' : 'x', revision: 'r' }),
+    } as WorkspaceTextStore;
+    const provider = new AgentsMdInstructionProvider(workspace, { maxDiscoveryBytes: 2 }, async () => ({
+      files: ['a/AGENTS.md', 'a/nested/AGENTS.md', 'b/AGENTS.md'],
+      truncated: false,
+    }));
+    expect((await provider.discover()).map(s => [s.path, s.status])).toEqual([
+      ['a/AGENTS.md', 'active'],
+      ['b/AGENTS.md', 'active'],
+      ['a/nested/AGENTS.md', 'error'],
+    ]);
+  });
   it('places ancestor instructions before nearer rules regardless of source family', async () => {
     const root = instructionSource('AGENTS.md', '.');
     const nested = {

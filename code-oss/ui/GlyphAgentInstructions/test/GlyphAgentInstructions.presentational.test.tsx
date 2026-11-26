@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GlyphAgentInstructions } from '../GlyphAgentInstructions.presentational.tsx';
+import { GlyphAgentInstructions } from '#code-oss/ui/GlyphAgentInstructions/GlyphAgentInstructions.presentational.tsx';
 
 afterEach(cleanup);
 

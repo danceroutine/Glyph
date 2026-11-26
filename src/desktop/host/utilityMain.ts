@@ -37,7 +37,7 @@ const transport =
   process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'scripted'
     ? new ScriptedDesktopTransport(process.env.GLYPH_DESKTOP_TEST_PROVIDER_URL ?? '').fetch
     : undefined;
-const production = new OpenAIDesktopRuntimeFactory(editors, transport);
+const production = new OpenAIDesktopRuntimeFactory(editors, transport, process.env.GLYPH_USER_DIRECTORY);
 const host = new GlyphDesktopHost(
   process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'deterministic' ? new DeterministicDesktopRuntimeFactory() : production,
 );

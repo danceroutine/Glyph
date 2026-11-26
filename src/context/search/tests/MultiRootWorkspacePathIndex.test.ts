@@ -365,9 +365,9 @@ describe(MultiRootWorkspacePathIndex, () => {
       const index = new MultiRootWorkspacePathIndex('workspace', [{ name: 'api', index: api }]);
       const signal = new AbortController().signal;
 
-      await index.glob('*.ts', { limit: 5, signal });
+      await index.glob('*.ts', { limit: 5, signal, rootFilesOnly: true });
 
-      expect(apiGlob).toHaveBeenCalledWith('*.ts', { limit: 5, signal });
+      expect(apiGlob).toHaveBeenCalledWith('*.ts', { limit: 5, signal, rootFilesOnly: true });
     });
 
     it('targets a whole folder when the target directory names only the folder', async () => {

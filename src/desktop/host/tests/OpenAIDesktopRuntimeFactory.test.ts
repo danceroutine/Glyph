@@ -204,6 +204,14 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
   };
 });
 
+let isolatedUserDirectory: string;
+beforeEach(async () => {
+  isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
+  onTestFinished(async () => {
+    await rm(isolatedUserDirectory, { recursive: true, force: true });
+  });
+});
+
 describe(OpenAIDesktopRuntimeFactory, () => {
   it('loads saved chats and reviews without project access while untrusted and reconciles after trust returns', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-untrusted-history-')));
@@ -316,7 +324,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       };
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editor);
+    const factory = new OpenAIDesktopRuntimeFactory(editor, undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       for (trusted of [true, false, true]) {
@@ -334,7 +342,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expect((await runtime.snapshot()).proposals.map(value => value.id)).toEqual([proposal.id]);
         expect(requests).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(indexing).toHaveBeenCalledTimes(trusted ? 1 : 0);
-        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 14 : 0);
+        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 16 : 0);
         await runtime.dispose();
         runtime = undefined;
       }
@@ -410,7 +418,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       },
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editors);
+    const factory = new OpenAIDesktopRuntimeFactory(editors, undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       runtime = await factory.create({
@@ -439,7 +447,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     vi.stubEnv('GLYPH_CONFIG_DIR', join(directory, 'state'));
     vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
     vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
-    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       runtime = await factory.create({
@@ -475,7 +483,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         durationMilliseconds: 0,
       });
       const store = new SqliteChatSessionStore(state);
-      const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+      const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, isolatedUserDirectory);
       let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
       try {
         for (const identity of [
@@ -600,7 +608,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       };
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editor);
+    const factory = new OpenAIDesktopRuntimeFactory(editor, undefined, isolatedUserDirectory);
     const runtimes: Awaited<ReturnType<typeof factory.create>>[] = [];
     const open = async (names: string[]) => {
       const runtime = await factory.create({
@@ -698,7 +706,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       };
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editor);
+    const factory = new OpenAIDesktopRuntimeFactory(editor, undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       runtime = await factory.create({
@@ -936,16 +944,17 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
       const root = await fixture.folder('workspace', { 'AGENTS.md': 'Disk guidance' });
       const glob = vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async pattern => ({
-        files: pattern === '**/AGENTS.md' ? ['AGENTS.md'] : [],
+        files: pattern === 'AGENTS.md' ? ['AGENTS.md'] : [],
         truncated: false,
       }));
       // Neither user nor project instruction discovery may use the disk listing port.
       const diskList = vi
         .spyOn(FileSystemWorkspaceTextStore.prototype, 'list')
         .mockResolvedValue({ files: [], truncated: false });
-      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) =>
-        editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance'),
-      );
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => ({
+        ...editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance'),
+        snapshot: { ...editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance').snapshot!, dirty: true },
+      }));
       const runtime = await fixture.create([root]);
       const snapshot = await runtime.snapshot();
       expect(snapshot.instructionSources).toEqual([
@@ -955,16 +964,48 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           revision: contentRevision('Unsaved editor guidance', false),
         }),
       ]);
-      expect(glob).toHaveBeenCalledTimes(7);
+      expect(glob).toHaveBeenCalledTimes(8);
       expect(glob.mock.calls).toEqual(
         expect.arrayContaining([
           ['*.mdc', { limit: 10_000 }],
-          ['**/AGENTS.md', { limit: 10_000 }],
+          ['AGENTS.md', { limit: 1, rootFilesOnly: true }],
+          ['**/?*/AGENTS.md', { limit: 9_999 }],
           ['**/.glyph/rules/*.mdc', { limit: 10_000 }],
           ['**/.cursor/rules/*.mdc', { limit: 10_000 }],
         ]),
       );
       expect(diskList).not.toHaveBeenCalled();
+    });
+
+    it('routes catalog reads across roots and rejects snapshots for another file', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const first = await fixture.folder('first', { 'AGENTS.md': 'First disk' });
+      const second = await fixture.folder('second', { 'AGENTS.md': 'Second disk' });
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async pattern => ({
+        files: pattern === 'AGENTS.md' ? ['AGENTS.md'] : [],
+        truncated: false,
+      }));
+      const request = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_owner, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Unexpected request');
+        return request.path === 'first/AGENTS.md'
+          ? { ok: true, operationId: request.operationId }
+          : editorResponse(request, 'wrong/file');
+      });
+      const runtime = await fixture.create([first, second]);
+      const snapshot = await runtime.snapshot();
+      expect(snapshot.instructionSources).toEqual([
+        expect.objectContaining({ path: 'first/AGENTS.md', status: 'active' }),
+        expect.objectContaining({
+          path: 'second/AGENTS.md',
+          status: 'error',
+          message: expect.stringContaining('different path'),
+        }),
+      ]);
+      expect(request.mock.calls.map(([, req]) => 'path' in req && req.path)).toEqual([
+        'first/AGENTS.md',
+        'second/AGENTS.md',
+      ]);
     });
 
     it('reports an unsafe user rules directory without querying its native index', async () => {
@@ -985,7 +1026,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         }),
       ]);
       expect(glob).not.toHaveBeenCalledWith('*.mdc', expect.anything());
-      expect(glob).toHaveBeenCalledTimes(5);
+      expect(glob).toHaveBeenCalledTimes(6);
     });
 
     it.each([
@@ -1220,7 +1261,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
 
   it('leaves workspace-wide editor requests unqualified even when given a path', () => {
-    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, isolatedUserDirectory);
     const request: GlyphEditorRequest = { type: GlyphEditorRequestType.LIST_WORKING_COPIES, operationId: 'copies' };
 
     const qualified = (

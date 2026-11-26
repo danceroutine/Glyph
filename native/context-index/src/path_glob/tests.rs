@@ -11,8 +11,8 @@ fn matches_recursively_with_directory_scoping_and_stable_ordering() {
         "tests/App.test.tsx".to_owned(),
     ]);
 
-    let result =
-        find_matches(&paths, "*.tsx", Some("src"), 20, true, false).expect("glob should compile");
+    let result = find_matches(&paths, "*.tsx", Some("src"), false, 20, true, false)
+        .expect("glob should compile");
 
     assert_eq!(
         result,
@@ -27,12 +27,12 @@ fn matches_recursively_with_directory_scoping_and_stable_ordering() {
 fn honors_case_sensitivity_and_both_truncation_sources() {
     let paths = BTreeSet::from(["Src/App.TSX".to_owned(), "src/Card.tsx".to_owned()]);
 
-    let sensitive = find_matches(&paths, "*.tsx", None, 20, true, false)
+    let sensitive = find_matches(&paths, "*.tsx", None, false, 20, true, false)
         .expect("case-sensitive glob should compile");
-    let insensitive = find_matches(&paths, "*.tsx", Some("src"), 1, false, false)
+    let insensitive = find_matches(&paths, "*.tsx", Some("src"), false, 1, false, false)
         .expect("case-insensitive glob should compile");
     let incomplete_index =
-        find_matches(&paths, "*.never", None, 20, true, true).expect("glob should compile");
+        find_matches(&paths, "*.never", None, false, 20, true, true).expect("glob should compile");
 
     assert_eq!(sensitive.files, ["src/Card.tsx"]);
     assert_eq!(insensitive.files, ["Src/App.TSX"]);
@@ -48,9 +48,9 @@ fn accepts_explicitly_recursive_patterns_and_scopes_case_insensitively() {
         "src/nested/Card.tsx".to_owned(),
     ]);
 
-    let recursive = find_matches(&paths, "**/*.md", None, 20, true, false)
+    let recursive = find_matches(&paths, "**/*.md", None, false, 20, true, false)
         .expect("recursive glob should compile");
-    let scoped = find_matches(&paths, "*.TSX", Some("Src"), 20, false, false)
+    let scoped = find_matches(&paths, "*.TSX", Some("Src"), false, 20, false, false)
         .expect("case-insensitive glob should compile");
 
     assert_eq!(recursive.files, ["Docs/Guide.md"]);
@@ -63,7 +63,7 @@ fn rejects_empty_oversized_and_malformed_patterns() {
     let paths = BTreeSet::new();
 
     for pattern in ["", &"x".repeat(MAX_PATTERN_CHARS + 1), "["] {
-        assert!(find_matches(&paths, pattern, None, 20, true, false).is_err());
+        assert!(find_matches(&paths, pattern, None, false, 20, true, false).is_err());
     }
 }
 
@@ -79,18 +79,27 @@ fn measures_glob_queries_on_half_a_million_paths() {
         })
         .collect();
     let exact_started = Instant::now();
-    let exact = find_matches(&paths, "module-499999.typescript", None, 2_000, true, false)
-        .expect("glob should compile");
+    let exact = find_matches(
+        &paths,
+        "module-499999.typescript",
+        None,
+        false,
+        2_000,
+        true,
+        false,
+    )
+    .expect("glob should compile");
     let exact_duration = exact_started.elapsed();
     let no_match_started = Instant::now();
-    let no_match =
-        find_matches(&paths, "*.never", None, 2_000, true, false).expect("glob should compile");
+    let no_match = find_matches(&paths, "*.never", None, false, 2_000, true, false)
+        .expect("glob should compile");
     let no_match_duration = no_match_started.elapsed();
     let scoped_started = Instant::now();
     let scoped = find_matches(
         &paths,
         "*.typescript",
         Some("workspaces/workspace-09999/src"),
+        false,
         2_000,
         true,
         false,
@@ -104,4 +113,18 @@ fn measures_glob_queries_on_half_a_million_paths() {
     assert_eq!(exact.files.len(), 1);
     assert!(no_match.files.is_empty());
     assert_eq!(scoped.files.len(), 50);
+}
+
+#[test]
+fn root_guidance_precedes_nested_matches_with_earlier_sort_keys() {
+    let paths = BTreeSet::from(["0/AGENTS.md".to_owned(), "agents.MD".to_owned()]);
+    let result = find_matches(&paths, "AGENTS.md", None, true, 1, false, false).unwrap();
+    assert_eq!(result.files, ["agents.MD"]);
+    assert!(!result.truncated);
+    assert_eq!(
+        find_matches(&paths, "**/?*/AGENTS.md", None, false, 1, false, false)
+            .unwrap()
+            .files,
+        ["0/AGENTS.md"]
+    );
 }

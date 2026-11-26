@@ -230,6 +230,10 @@ export class GlyphDesktopHost {
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
   ): Promise<readonly GlyphHostEvent[]> {
     const key = getWorkspaceKey(connection.identity);
+    if (command.trusted !== connection.trusted || JSON.stringify(command.roots) !== JSON.stringify(connection.roots)) {
+      connection.journal.discard();
+      connection.canReplay = false;
+    }
     if (command.trusted !== connection.trusted && connection.attached) {
       // Trust changes are lifecycle boundaries. Revocation drains tools; a
       // grant must reconcile deferred reviews before authorizing new mutations.
@@ -357,8 +361,11 @@ export class GlyphDesktopHost {
   }
 
   private async publishSnapshot(connection: Connection): Promise<void> {
+    this.assertCurrentConnection(connection);
     const record = this.runtimes.get(getWorkspaceKey(connection.identity));
     if (!record) throw new Error('The Glyph workspace runtime is unavailable.');
+    if (!connection.attached || !connection.ready || record.trusted !== connection.trusted)
+      throw new Error('Attach an authorized workspace before requesting a snapshot.');
     for (let attempt = 0; attempt < 8; attempt++) {
       const before = connection.journal.watermark;
       const state = await record.runtime.snapshot();
@@ -393,6 +400,7 @@ export class GlyphDesktopHost {
     connection.attached = false;
     connection.ready = false;
     connection.canReplay = false;
+    connection.journal.discard();
     const record = this.runtimes.get(key);
     if (!isOwner) {
       await record?.runtime.connectionLost(connection.identity.windowId);
@@ -403,6 +411,7 @@ export class GlyphDesktopHost {
       peer.attached = false;
       peer.ready = false;
       peer.canReplay = false;
+      peer.journal.discard();
       if (peer === connection && options.notifyOwner === false) continue;
       this.send(peer, {
         type: GlyphHostEventType.HOST_STATUS,
@@ -429,7 +438,9 @@ export class GlyphDesktopHost {
 
   private broadcast(key: string, event: GlyphHostEvent): void {
     for (const connection of this.sessions.values()) {
-      if (connection.attached && getWorkspaceKey(connection.identity) === key) this.send(connection, event);
+      if (!connection.attached || getWorkspaceKey(connection.identity) !== key) continue;
+      const envelope = connection.journal.append(connection.identity, event);
+      if (connection.ready) connection.send?.(envelope);
     }
   }
 

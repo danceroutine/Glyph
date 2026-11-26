@@ -1,10 +1,6 @@
-import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import * as DOM from '#vs/base/browser/dom.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
-import { URI } from '#vs/base/common/uri.js';
 import type { IPreferencesEditorPane } from '#vs/workbench/contrib/preferences/browser/preferencesEditorRegistry.js';
-import { IEditorService } from '#vs/workbench/services/editor/common/editorService.js';
-import { IWorkspaceContextService } from '#vs/platform/workspace/common/workspace.js';
 import { GlyphWorkbenchService } from '#vs/workbench/contrib/glyph/common/GlyphWorkbenchService.js';
 import { mountGlyphAgentInstructions } from './ui/mountGlyphWorkbench.js';
 
@@ -16,10 +12,7 @@ export class GlyphAgentInstructionsPreferences extends Disposable implements IPr
       this.element,
       [],
       '',
-      async source => {
-        const resource = source.uri ? URI.parse(source.uri) : this.resource(source.path);
-        if (resource) await this.editors.openEditor({ resource });
-      },
+      source => this.glyph.openLink(`glyph-instruction:${encodeURIComponent(source.id)}`),
       {
         createUserRule: (name, activation, condition) => this.glyph.createUserRule(name, activation, condition),
         setUserRuleEnabled: (source, enabled) => this.glyph.setUserRuleEnabled(source, enabled),
@@ -31,11 +24,7 @@ export class GlyphAgentInstructionsPreferences extends Disposable implements IPr
   private refreshError = '';
   private refreshing = false;
 
-  constructor(
-    @GlyphWorkbenchService private readonly glyph: GlyphWorkbenchService,
-    @IWorkspaceContextService private readonly workspace: IWorkspaceContextService,
-    @IEditorService private readonly editors: IEditorService,
-  ) {
+  constructor(@GlyphWorkbenchService private readonly glyph: GlyphWorkbenchService) {
     super();
     this._register(
       this.glyph.onDidChangeState(() => {
@@ -81,15 +70,5 @@ export class GlyphAgentInstructionsPreferences extends Disposable implements IPr
       this.glyph.state.readOnly || this.glyph.state.instructionSources === undefined,
       this.refreshError,
     );
-  }
-
-  private resource(path: string): URI | undefined {
-    const folders = this.workspace.getWorkspace().folders;
-    if (folders.length === 0) return undefined;
-    if (folders.length === 1) return URI.joinPath(folders[0].uri, path);
-    const [rootName, ...relative] = path.split('/');
-    const roots = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
-    const folder = folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootName);
-    return folder ? URI.joinPath(folder.uri, ...relative) : undefined;
   }
 }

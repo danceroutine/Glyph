@@ -58,6 +58,89 @@ describe(GlyphDesktopHost, () => {
       await fixture.host.dispose();
     },
   );
+  it('does not invoke trusted snapshot work for a rejected observer', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    await fixture.receive('owner', owner, 'attach-owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'attach-peer', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    const snapshot = vi.spyOn(fixture.runtime, 'snapshot');
+    await fixture.receive('peer', peer, 'snapshot-rejected', {
+      type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+      afterSequence: 0,
+    });
+    expect(snapshot).not.toHaveBeenCalled();
+    await fixture.host.dispose();
+  });
+
+  it('withholds live broadcasts from a replacement port until its attachment is authorized', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.host.disconnect('owner');
+    fixture.connect('replacement', owner);
+    fixture.runtime.emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+    expect(fixture.events('replacement')).toEqual([]);
+    await fixture.receive('replacement', owner, 'restricted', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    const after = fixture.events('replacement').at(-1)!.sequence;
+    await fixture.receive('replacement', owner, 'resume-restricted', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+      resumeHostGeneration: fixture.host.generation,
+      resumeAfterSequence: after - 1,
+    });
+    expect(
+      fixture.events('replacement').some(value => value.event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED),
+    ).toBe(false);
+    await fixture.host.dispose();
+  });
+  it.each([false, true])(
+    'requires peers to match the owning runtime trust (%s) before sharing snapshots or events',
+    async trusted => {
+      const fixture = new HostFixture();
+      fixture.connect('owner', owner);
+      fixture.connect('peer', peer);
+      await fixture.receive('owner', owner, 'owner-attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted,
+      });
+      await fixture.receive('peer', peer, 'peer-attach', {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots,
+        trusted: !trusted,
+      });
+      expect(fixture.events('peer').some(envelope => envelope.event.type === GlyphHostEventType.INITIAL_STATE)).toBe(
+        false,
+      );
+      fixture.runtime.emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+      expect(
+        fixture.events('peer').some(envelope => envelope.event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED),
+      ).toBe(false);
+      expect(fixture.events('peer').at(-1)?.event).toMatchObject({
+        type: GlyphHostEventType.ERROR,
+        error: { message: expect.stringContaining('workspace trust') },
+      });
+      await fixture.host.dispose();
+    },
+  );
   it('quarantines an observer immediately when it revokes trust and prevents journal replay', async () => {
     const fixture = new HostFixture();
     fixture.connect('owner', owner);
