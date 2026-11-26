@@ -1393,3 +1393,27 @@ describe(GlyphContextController, () => {
     });
   });
 });
+
+it('continues observing after both scheduled catalog refresh attempts reject', async () => {
+  vi.useFakeTimers();
+  const services = controllerServices();
+  const controller = createController(services);
+  const refresh = vi.fn(async () => {
+    throw new Error('Catalog temporarily unavailable');
+  });
+  try {
+    controller.setInstructionRefresh(refresh);
+    services.fileChanges.fire([{ resource: URI.file('/workspace/.glyph/rules/example.mdc'), type: 1 }]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    refresh.mockImplementation(async () => {});
+    services.fileChanges.fire([{ resource: URI.file('/workspace/.glyph/rules/example.mdc'), type: 1 }]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refresh).toHaveBeenCalledTimes(3);
+  } finally {
+    controller.dispose();
+    vi.useRealTimers();
+  }
+});
