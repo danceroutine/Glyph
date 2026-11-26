@@ -71,6 +71,33 @@ describe(NativeShellSandboxLauncher, () => {
       },
     );
 
+    it('forwards a trusted external content store only to the native helper', () => {
+      vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+      vi.mocked(realpathSync).mockImplementation(path => path.toString());
+      onTestFinished(() => {
+        vi.restoreAllMocks();
+      });
+      const spawn = vi.fn(() => ({}) as ChildProcess);
+      const launcher = new NativeShellSandboxLauncher(
+        {
+          binaryPath: '/helper',
+          workspaceRoots: ['/project'],
+          stateDirectory: '/state',
+          environment: { PNPM_HOME: '/tools' },
+        },
+        spawn,
+      );
+      launcher.launch('true', '/project', { sandboxProfile: ShellSandboxProfile.READ_ONLY });
+      expect(spawn).toHaveBeenCalledWith(
+        '/helper',
+        expect.arrayContaining([
+          '--content-store',
+          JSON.stringify({ root: '/tools/store/v11/files', layout: 'sha512-prefix-2', executableSuffix: '-exec' }),
+        ]),
+        expect.anything(),
+      );
+    });
+
     it('uses the configured trusted shell without loading personal startup files', () => {
       const spawn = vi.fn<(command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess>(
         () => ({}) as ChildProcess,

@@ -3,11 +3,14 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { basename, delimiter, isAbsolute, relative, sep } from 'node:path';
 import type { ShellExecutionAuthorization } from './ShellExecutionAuthorization.ts';
 import type { ShellProcessLauncher } from './ShellProcessLauncher.ts';
+import { externalShellContentStores, type ShellContentStore } from './ShellContentStore.ts';
+import { pnpmContentStore } from './pnpmContentStore.ts';
 import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 export interface NativeShellSandboxLauncherOptions {
   readonly binaryPath: string;
+  readonly contentStores?: (environment: NodeJS.ProcessEnv) => readonly ShellContentStore[];
   readonly workspaceRoots: readonly string[];
   readonly stateDirectory: string;
   readonly protectedPaths?: readonly string[];
@@ -46,6 +49,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
     const shell = sandboxShell(environment);
     const accessPolicy = this.options.accessPolicy ?? new WorkspaceAccessPolicy();
     const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
+    const stores = (this.options.contentStores ?? pnpmContentStore)(environment);
     const arguments_ = [
       '--profile',
       authorization.sandboxProfile === ShellSandboxProfile.READ_ONLY ? 'read-only' : 'workspace-write',
@@ -61,6 +65,10 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
         : (this.options.privatePaths ?? [])
       ).flatMap(path => ['--private-path', path]),
       ...(authorization.readOnlyPaths ?? []).flatMap(path => ['--read-only-path', path]),
+      ...externalShellContentStores(stores, this.options.workspaceRoots).flatMap(store => [
+        '--content-store',
+        JSON.stringify(store),
+      ]),
       '--workspace-policy',
       JSON.stringify(accessPolicy.toJSON()),
       '--',
