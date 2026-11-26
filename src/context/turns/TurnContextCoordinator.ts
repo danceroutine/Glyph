@@ -38,6 +38,7 @@ export class PreparedTurnContext {
 /** Coordinates provider-independent context preparation, disclosure, and lifecycle for a logical turn. */
 export class TurnContextCoordinator {
   private readonly sessions = new Map<string, PreparedTurnContext>();
+  private readonly pending = new Set<string>();
   private readonly contributors: readonly TurnContextContributor[];
   constructor(input: AgentInstructionCatalog | readonly TurnContextContributor[]) {
     this.contributors = 'refresh' in input ? [new InstructionContextContributor(input)] : input;
@@ -45,7 +46,9 @@ export class TurnContextCoordinator {
       throw new Error('Turn context contributor IDs must be unique.');
   }
   async beginTurn(input: BeginTurnContextInput, signal?: AbortSignal): Promise<PreparedTurnContext> {
-    this.discardTurn(input.turnId);
+    if (this.pending.has(input.turnId) || this.sessions.has(input.turnId)) throw new Error('This turn already has an active instruction session.');
+    if (this.pending.size + this.sessions.size >= 32) throw new Error('32 turns are already active. Retry when one completes.');
+    this.pending.add(input.turnId);
     const parts = new Map<string, TurnContextContribution>();
     try {
       for (const contributor of this.contributors) {
@@ -56,10 +59,11 @@ export class TurnContextCoordinator {
     } catch (error) {
       for (const part of parts.values()) part.release?.();
       throw error;
+    } finally {
+      this.pending.delete(input.turnId);
     }
     const session = new PreparedTurnContext(input.turnId, parts);
     this.sessions.set(input.turnId, session);
-    while (this.sessions.size > 32) this.discardTurn(this.sessions.keys().next().value!);
     return session;
   }
   disclosePaths(turnId: string, paths: readonly string[]): AgentInstructionContext | undefined {

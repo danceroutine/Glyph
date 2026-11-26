@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AgentInstructionActivationMode } from '#src/instructions/AgentInstructionSource.js';
+import { parseAgentRuleFile } from '#src/instructions/rules/parseAgentRuleFile.js';
 import { UserAgentRuleManager, withEnabled__TESTING_ONLY } from '#src/instructions/rules/UserAgentRuleManager.js';
 
 describe(UserAgentRuleManager, () => {
@@ -42,13 +43,15 @@ describe(UserAgentRuleManager, () => {
     index.refresh.mockRejectedValueOnce(new Error('Index unavailable'));
     await expect(manager.create('Other', AgentInstructionActivationMode.MANUAL)).rejects.toThrow('Index unavailable');
     expect(events).toEqual(['create']);
+    index.refresh.mockRejectedValueOnce('service unavailable');
+    await expect(manager.remove('rules/test.mdc', 'one')).rejects.toThrow('The rule change was saved.');
   });
 
   it('creates a safe user rule and refreshes discovery', async () => {
     const create = vi.fn(async (_path: string, _content: string, _overwrite: boolean) => ({}));
     const refresh = vi.fn(async () => []);
     const manager = new UserAgentRuleManager({ create } as never, { refresh });
-    await manager.create('TypeScript Safety', AgentInstructionActivationMode.MODEL);
+    await manager.create('TypeScript Safety', AgentInstructionActivationMode.MODEL, 'TypeScript code review');
     expect(create).toHaveBeenCalledWith(
       'rules/typescript-safety.mdc',
       expect.stringContaining('activation: model'),
@@ -57,6 +60,32 @@ describe(UserAgentRuleManager, () => {
     expect(refresh).toHaveBeenCalledOnce();
   });
 
+  it('validates and round-trips conditional metadata before creating a file', async () => {
+    const create = vi.fn(async (_path: string, _text: string) => ({}));
+    const manager = new UserAgentRuleManager({ create } as never, { refresh: vi.fn(async () => []) });
+    await expect(manager.create('Test', 'model')).rejects.toThrow('description');
+    await expect(manager.create('Test', 'file_pattern', '  ')).rejects.toThrow('glob');
+    await expect(manager.create('Test', 'file_pattern', '../outside')).rejects.toThrow('Invalid rule glob');
+    await expect(manager.create('A'.repeat(65_536), 'manual')).rejects.toThrow('64 KiB');
+    expect(create).not.toHaveBeenCalled();
+    await manager.create('A "quoted" rule', 'file_pattern', '**/*.ts\n\n*.txt');
+    expect(parseAgentRuleFile(create.mock.calls[0]![1])).toMatchObject({
+      name: 'A "quoted" rule',
+      globs: ['**/*.ts', '*.txt'],
+    });
+  });
+
+  it('preserves CRLF, the exact Markdown body, and complete delimiter lines when managing enablement', () => {
+    for (const text of [
+      'First line\r\n---more\r\nLast line\r\n',
+      '---\r\n---\r\nFirst line\r\n---more\r\nLast line\r\n',
+      '---\r\nenabled: true\r\n---\r\nFirst line\r\n---more\r\nLast line\r\n',
+    ]) {
+      const updated = withEnabled__TESTING_ONLY(text, false);
+      expect(updated).toBe('---\r\nenabled: false\r\n---\r\nFirst line\r\n---more\r\nLast line\r\n');
+      expect(parseAgentRuleFile(updated)).toMatchObject({ enabled: false, body: parseAgentRuleFile(text).body });
+    }
+  });
   it('updates an existing enabled field without replacing the rule body', () => {
     expect(withEnabled__TESTING_ONLY('---\nname: Test\nenabled: true\n---\n\nBody\n', false)).toBe(
       '---\nname: Test\nenabled: false\n---\n\nBody\n',
@@ -98,8 +127,24 @@ describe(UserAgentRuleManager, () => {
     await expect(manager.remove('../test.mdc', 'one')).rejects.toThrow('Only user rules');
   });
 
+  it('applies filesystem casing when authorizing a managed path', async () => {
+    for (const caseSensitive of [true, false]) {
+      const remove = vi.fn(async () => {});
+      const manager = new UserAgentRuleManager(
+        { caseSensitive, normalizePath: (path: string) => path, delete: remove } as never,
+        { refresh: async () => [] },
+      );
+      const operation = manager.remove('RULES/STYLE.MDC', 'one');
+      if (caseSensitive) await expect(operation).rejects.toThrow('Only user rules');
+      else {
+        await operation;
+        expect(remove).toHaveBeenCalledWith('RULES/STYLE.MDC', 'one');
+      }
+    }
+  });
+
   it('rejects enabling rules without valid frontmatter', () => {
-    expect(() => withEnabled__TESTING_ONLY('Body only', true)).toThrow('needs YAML frontmatter');
-    expect(() => withEnabled__TESTING_ONLY('---\nname: Test', true)).toThrow('invalid YAML frontmatter');
+    expect(withEnabled__TESTING_ONLY('Body only', true)).toBe('---\nenabled: true\n---\nBody only');
+    expect(() => withEnabled__TESTING_ONLY('---\nname: Test', true)).toThrow('closing --- delimiter');
   });
 });

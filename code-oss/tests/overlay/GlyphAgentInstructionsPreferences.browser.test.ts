@@ -1,6 +1,7 @@
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
-import { fireEvent } from '@testing-library/preact';
+import { fireEvent, waitFor } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
+import { Dimension } from '#vs/base/browser/dom.js';
 import { URI } from '#vs/base/common/uri.js';
 import { GlyphAgentInstructionsPreferences } from '#vs/workbench/contrib/glyph/browser/GlyphAgentInstructionsPreferences.js';
 
@@ -41,7 +42,7 @@ describe(GlyphAgentInstructionsPreferences, () => {
     const editors = { openEditor: vi.fn(async () => undefined) };
     const page = new GlyphAgentInstructionsPreferences(glyph as never, workspace as never, editors as never);
 
-    page.layout({ width: 800, height: 600 });
+    page.layout(new Dimension(800, 600));
     expect(page.getDomNode().style.height).toBe('600px');
     expect(page.getDomNode().textContent).toContain('AGENTS.md');
     expect(page.getDomNode().textContent).toContain('Applies to the workspace');
@@ -62,6 +63,33 @@ describe(GlyphAgentInstructionsPreferences, () => {
     page.dispose();
   });
 
+  it('requests fresh sources on open and on search, and reports refresh errors in the pane', async () => {
+    const refreshInstructionSources = vi.fn(async () => {}).mockRejectedValueOnce(new Error('Catalog unavailable.'));
+    const page = new GlyphAgentInstructionsPreferences(
+      {
+        state: { instructionSources: [], readOnly: true },
+        onDidChangeState: () => ({ dispose() {} }),
+        refreshInstructionSources,
+      } as never,
+      { getWorkspace: () => ({ folders: [] }) } as never,
+      {} as never,
+    );
+    await waitFor(() => {
+      expect(page.getDomNode().textContent).toContain('Catalog unavailable.');
+    });
+    expect(page.getDomNode().querySelector('form')).toBeNull();
+    page.search('root');
+    await waitFor(() => {
+      expect(page.getDomNode().textContent).not.toContain('Catalog unavailable.');
+    });
+    refreshInstructionSources.mockRejectedValueOnce('disconnected');
+    page.search('');
+    await waitFor(() => {
+      expect(page.getDomNode().textContent).toContain('Agent Instructions could not be refreshed.');
+    });
+    expect(refreshInstructionSources).toHaveBeenCalledTimes(3);
+    page.dispose();
+  });
   it('opens a source from its named workspace root', () => {
     const editors = { openEditor: vi.fn(async () => undefined) };
     const page = new GlyphAgentInstructionsPreferences(
@@ -223,7 +251,7 @@ describe(GlyphAgentInstructionsPreferences, () => {
     [...root.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Disable')!.click();
     [...root.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Remove')!.click();
 
-    expect(createUserRule).toHaveBeenCalledWith('My Rule', 'manual');
+    expect(createUserRule).toHaveBeenCalledWith('My Rule', 'manual', undefined);
     expect(setUserRuleEnabled).toHaveBeenCalledWith(source, false);
     expect(deleteUserRule).toHaveBeenCalledWith(source);
     expect(editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/home/user/.glyph/rules/test.mdc') });

@@ -7,9 +7,12 @@ export class InstructionContextContributor implements TurnContextContributor {
   readonly id = 'instructions';
   constructor(private readonly catalog: AgentInstructionCatalog) {}
   async beginTurn(input: TurnContextInput, signal?: AbortSignal): Promise<TurnContextSession> {
+    const sources = await this.catalog.refresh(signal);
     return new TurnContextSession({
       turnId: input.turnId,
-      sources: await this.catalog.refresh(signal),
+      sources,
+      paths: this.catalog.paths,
+      scopeIndex: this.catalog.scopeIndex?.(sources),
       attachmentPaths: input.attachmentPaths,
       manualRuleIds: input.manualRuleIds ?? [],
     });

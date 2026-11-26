@@ -1,3 +1,5 @@
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
@@ -214,6 +216,27 @@ class TwoToolClaudeAdapter extends ClaudeShapedAdapter {
 }
 
 describe(AgentRuntime, () => {
+  it('releases its own failed turn while preserving an already admitted turn with the same id', async () => {
+    const contexts = new TurnContextCoordinator(new AgentInstructionCatalog([]));
+    await contexts.beginTurn({ turnId: 'shared', attachmentPaths: [] });
+    const adapter = new ClaudeShapedAdapter();
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10_000 },
+      mockTools(async () => ''),
+      undefined,
+      contexts,
+    );
+    const input = { text: 'Read', attachments: [], turnId: 'shared' };
+    const options = { signal: new AbortController().signal, onText: () => {} };
+    await expect(runtime.send(input, options)).rejects.toThrow('already');
+    expect(contexts.snapshot('shared')).toBeDefined();
+    contexts.completeTurn('shared');
+    vi.spyOn(adapter, 'beginTurn').mockRejectedValueOnce(new Error('Provider unavailable'));
+    await expect(runtime.send(input, options)).rejects.toThrow('Provider unavailable');
+    expect(contexts.snapshot('shared')).toBeUndefined();
+  });
+
   it.each([false, true])(
     'keeps scoped tool guidance live but out of Claude-shaped checkpoints (failure: %s)',
     async fail => {

@@ -112,16 +112,24 @@ const styles = {
 export interface GlyphAgentInstructionsProps {
   readonly sources: readonly GlyphInstructionSource[];
   readonly query?: string;
-  readonly openSource: (source: GlyphInstructionSource) => void;
-  readonly createUserRule?: (name: string, activation: NonNullable<GlyphInstructionSource['activation']>) => void;
-  readonly setUserRuleEnabled?: (source: GlyphInstructionSource, enabled: boolean) => void;
-  readonly deleteUserRule?: (source: GlyphInstructionSource) => void;
+  readonly readOnly?: boolean;
+  readonly refreshError?: string;
+  readonly openSource: (source: GlyphInstructionSource) => void | Promise<void>;
+  readonly createUserRule?: (
+    name: string,
+    activation: NonNullable<GlyphInstructionSource['activation']>,
+    condition?: string,
+  ) => void | Promise<void>;
+  readonly setUserRuleEnabled?: (source: GlyphInstructionSource, enabled: boolean) => void | Promise<void>;
+  readonly deleteUserRule?: (source: GlyphInstructionSource) => void | Promise<void>;
 }
 
 /** Searchable, provider-neutral presentation of workspace instruction sources. */
 export function GlyphAgentInstructions({
   sources,
   query = '',
+  readOnly = false,
+  refreshError,
   openSource,
   createUserRule,
   setUserRuleEnabled,
@@ -129,6 +137,19 @@ export function GlyphAgentInstructions({
 }: GlyphAgentInstructionsProps) {
   const [name, setName] = useState('');
   const [activation, setActivation] = useState<NonNullable<GlyphInstructionSource['activation']>>('manual');
+  const [condition, setCondition] = useState('');
+  const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const conditional = activation === 'file_pattern' || activation === 'model';
+  const ready = !creating && name.trim() !== '' && (!conditional || condition.trim() !== '');
+  const run = async (operation: () => void | Promise<void>) => {
+    setError('');
+    try {
+      await operation();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'The rule operation failed.');
+    }
+  };
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visible = sources.filter(source => matches(source, normalizedQuery));
   return (
@@ -141,18 +162,31 @@ export function GlyphAgentInstructions({
           Instructions active for this workspace and account. Scoped files apply to their directory and descendants;
           nearer project rules take precedence.
         </p>
-        {createUserRule && (
+        {(error || refreshError) && (
+          <p role="alert" class={styles.message}>
+            {error || refreshError}
+          </p>
+        )}
+        {!readOnly && createUserRule && (
           <form
             class={styles.create}
             onSubmit={event => {
               event.preventDefault();
-              if (!name.trim()) return;
-              createUserRule(name, activation);
-              setName('');
+              if (!ready) return;
+              setCreating(true);
+              void run(async () => {
+                if (conditional) await createUserRule(name, activation, condition);
+                else await createUserRule(name, activation);
+                setName('');
+                setCondition('');
+              }).finally(() => {
+                setCreating(false);
+              });
             }}
           >
             <input
               class={styles.control}
+              disabled={creating}
               aria-label="New user rule name"
               placeholder="New user rule"
               value={name}
@@ -162,11 +196,15 @@ export function GlyphAgentInstructions({
             />
             <select
               class={styles.control}
+              disabled={creating}
               aria-label="Rule activation"
               value={activation}
               onChange={event => {
                 const value = event.currentTarget.value;
-                if (isRuleActivation(value)) setActivation(value);
+                if (isRuleActivation(value)) {
+                  setActivation(value);
+                  setCondition('');
+                }
               }}
             >
               <option value="always">Always</option>
@@ -174,7 +212,20 @@ export function GlyphAgentInstructions({
               <option value="model">Model selected</option>
               <option value="manual">Manual</option>
             </select>
-            <button class={styles.action} type="submit" disabled={!name.trim()}>
+            {conditional && (
+              <label>
+                {activation === 'model' ? 'When should the model use this rule?' : 'File globs (one per line)'}
+                <textarea
+                  class={styles.control}
+                  disabled={creating}
+                  value={condition}
+                  onInput={event => {
+                    setCondition(event.currentTarget.value);
+                  }}
+                />
+              </label>
+            )}
+            <button class={styles.action} type="submit" disabled={!ready}>
               Create
             </button>
           </form>
@@ -194,7 +245,7 @@ export function GlyphAgentInstructions({
                 type="button"
                 title={`Open ${source.path}`}
                 onClick={() => {
-                  openSource(source);
+                  void run(() => openSource(source));
                 }}
               >
                 {source.status === 'error' ? (
@@ -226,13 +277,13 @@ export function GlyphAgentInstructions({
                   <pre class={styles.preview}>{source.content}</pre>
                 </details>
               )}
-              {source.managementPath && source.managementRevision && (
+              {!readOnly && source.managementPath && source.managementRevision && (
                 <div class={styles.rowActions}>
                   <button
                     class={styles.secondary}
                     type="button"
                     onClick={() => {
-                      openSource(source);
+                      void run(() => openSource(source));
                     }}
                   >
                     Edit
@@ -242,7 +293,7 @@ export function GlyphAgentInstructions({
                       class={styles.secondary}
                       type="button"
                       onClick={() => {
-                        setUserRuleEnabled(source, source.enabled === false);
+                        void run(() => setUserRuleEnabled(source, source.enabled === false));
                       }}
                     >
                       {source.enabled === false ? 'Enable' : 'Disable'}
@@ -253,7 +304,7 @@ export function GlyphAgentInstructions({
                       class={styles.secondary}
                       type="button"
                       onClick={() => {
-                        deleteUserRule(source);
+                        void run(() => deleteUserRule(source));
                       }}
                     >
                       Remove

@@ -345,8 +345,17 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       });
   }
 
-  createUserRule(name: string, activation: NonNullable<GlyphInstructionSource['activation']>): Promise<void> {
-    return this.request({ type: GlyphWorkbenchCommandType.CREATE_USER_RULE, name, activation });
+  createUserRule(
+    name: string,
+    activation: NonNullable<GlyphInstructionSource['activation']>,
+    condition?: string,
+  ): Promise<void> {
+    return this.request({
+      type: GlyphWorkbenchCommandType.CREATE_USER_RULE,
+      name,
+      activation,
+      ...(condition === undefined ? {} : { condition }),
+    });
   }
 
   setUserRuleEnabled(source: GlyphInstructionSource, enabled: boolean): Promise<void> {

@@ -139,6 +139,19 @@ describe(AgentInstructionCatalog, () => {
     ]);
   });
 
+  it('bounds directory guidance reads across a discovery', async () => {
+    const read = vi.fn(async () => ({ text: 'rule', byteLength: 4, revision: 'revision' }));
+    const provider = new AgentsMdInstructionProvider(
+      { normalizePath: (path: string) => path, read } as never,
+      { maxDiscoveryBytes: 4 },
+      async () => ({ files: ['AGENTS.md', 'sub/AGENTS.md'], truncated: false }),
+    );
+    const [root, nested] = await provider.discover();
+    expect(root?.content).toBe('rule');
+    expect(nested?.message).toContain('budget');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it('uses fallback messages for non-Error discovery and read failures', async () => {
     const discovery = new AgentsMdInstructionProvider({} as WorkspaceTextStore, {}, async () => {
       throw 'untyped discovery failure';
@@ -181,6 +194,25 @@ describe(AgentInstructionCatalog, () => {
     await expect(provider.discover(controller.signal)).rejects.toBe(cancelled);
   });
 
+  it('keeps a newer published result when an earlier discovery finishes last', async () => {
+    let resolveEarlier!: (sources: readonly AgentInstructionSource[]) => void;
+    const earlier = new Promise<readonly AgentInstructionSource[]>(resolve => {
+      resolveEarlier = resolve;
+    });
+    const discover = vi
+      .fn<() => Promise<readonly AgentInstructionSource[]>>()
+      .mockReturnValueOnce(earlier)
+      .mockResolvedValueOnce([instructionSource('New/AGENTS.md', 'New')]);
+    const catalog = new AgentInstructionCatalog([{ discover }]);
+    const changed = vi.fn();
+    catalog.onDidChange(changed);
+    const old = catalog.refresh();
+    const published = await catalog.refresh();
+    resolveEarlier([instructionSource('Old/AGENTS.md', 'Old')]);
+    expect(await old).toBe(published);
+    expect(catalog.sources).toBe(published);
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
   it('orders source families and suppresses a Cursor rule shadowed by a native rule', async () => {
     const source = (kind: AgentInstructionSourceKind, path: string, name?: string): AgentInstructionSource => ({
       id: `${kind}:${path}`,
