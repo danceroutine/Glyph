@@ -120,8 +120,11 @@ it('describes the Linux workspace namespace before authorizing a write', () => {
       workspace: scope,
       operation: { command: 'make', workingDirectory: '/project', background: false, existingTerminal: false },
     });
-    expect(request.choices.find(choice => choice.id === ShellPermissionDecision.ALLOW_ONCE)?.description).toContain(
-      'in-place edits',
+    expect(request.choices).toContainEqual(
+      expect.objectContaining({
+        id: ShellPermissionDecision.ALLOW_ONCE,
+        description: expect.stringContaining('in-place edits'),
+      }),
     );
   } finally {
     Object.defineProperty(process, 'platform', descriptor);

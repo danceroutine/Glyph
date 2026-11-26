@@ -3,7 +3,6 @@ import { InstructionContextContributor } from '#src/context/turns/InstructionCon
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
-import { TurnContextSession } from '#src/context/turns/TurnContextSession.js';
 import { describe, expect, it, vi } from 'vitest';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';

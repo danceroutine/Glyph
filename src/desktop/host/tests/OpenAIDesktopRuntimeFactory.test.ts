@@ -56,7 +56,6 @@ import { Goal } from '#src/goals/Goal.js';
 import { GoalStatus } from '#src/goals/GoalStatus.js';
 import { GlyphWorkbenchCommandType as Command } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 import { aSkillDraft } from '#src/skills/tests/fixtures/aSkillLifecycle.js';
-import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { WebApprovalService } from '#src/web/WebApprovalService.js';
 
 const captured = vi.hoisted(() => ({

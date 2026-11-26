@@ -35,9 +35,9 @@ it('sends the same pinned root identity and relative paths for every native oper
     relative: 'a/b',
   });
   await mutations.ensureDirectory('a/b', 0o755);
-  expect(JSON.parse(await readFile(request, 'utf8')).mode).toBe(0o755);
+  expect(JSON.parse(await readFile(request, 'utf8'))).toMatchObject({ mode: 0o755 });
   await mutations.createStage('.skill-staging/id');
-  expect(JSON.parse(await readFile(request, 'utf8')).operation).toBe('create_stage');
+  expect(JSON.parse(await readFile(request, 'utf8'))).toMatchObject({ operation: 'create_stage' });
   await mutations.stagePackage(
     '.skill-staging/id/package',
     new Map([['SKILL.md', { bytes: Uint8Array.of(97), mode: 0o644 }]]),

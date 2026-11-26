@@ -7,7 +7,6 @@ import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import { aSkillDescriptor } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
-import { aSkillDescriptor } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ProviderDesktopRuntime } from '#src/desktop/host/ProviderDesktopRuntime.js';
