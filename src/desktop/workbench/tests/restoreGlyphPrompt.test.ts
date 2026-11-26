@@ -26,6 +26,16 @@ const file: GlyphContextAttachment = {
 };
 
 describe(restoreGlyphPrompt, () => {
+  it('excludes a malformed rule reference from selected IDs, captured bytes and spans', async () => {
+    const composer = new GlyphComposerState();
+    const { ruleId: _missing, ...malformed } = rule;
+    composer.setDocument({ parts: [{ type: 'attachment', attachment: malformed }], from: 0, to: 0 });
+    await composer.submit(async (_text, attachments, options) => {
+      expect(attachments).toEqual([]);
+      expect(options?.manualRuleIds).toBeUndefined();
+      expect(options?.referenceSpans).toBeUndefined();
+    });
+  });
   it('round-trips interleaved captures, literal mentions and repeated rule badges at trimmed UTF-16 positions', async () => {
     const composer = new GlyphComposerState();
     const parts: GlyphPromptPart[] = [

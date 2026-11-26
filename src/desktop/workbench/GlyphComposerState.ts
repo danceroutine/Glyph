@@ -360,12 +360,13 @@ async function sendDocument(document: GlyphPromptDocument, send: SendMessage): P
       attachmentSpans.push({ from, to: offset });
     }
   }
+  // Both direct and queued submissions carry options from stamp().
   const {
     manualRuleIds: _ruleIds,
     referenceSpans: _references,
     attachmentSpans: _spans,
     ...options
-  } = document.options ?? {};
+  } = document.options!;
   await send(draft, attachments, {
     ...options,
     ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}),
