@@ -189,6 +189,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "glyph-workspace-mutations"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "grep-matcher"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
