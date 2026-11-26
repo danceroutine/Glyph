@@ -301,7 +301,7 @@ it('projects instruction catalog snapshots and live changes without exposing fil
         context: {
           schema: 'glyph.turn-context.v1',
           turnId: 'turn',
-          sources: [sources[2]!],
+          sources: [sources[0]!, sources[2]!],
           activations: [{ sourceId: sources[2]!.id, reason: AgentInstructionActivationReason.MANUAL }],
           candidates: [{ id: 'candidate', name: 'Candidate', description: 'When relevant', scope: '.' }],
         },
@@ -326,7 +326,10 @@ it('projects instruction catalog snapshots and live changes without exposing fil
     });
     await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: historical.id });
     expect((await harness.runtime.snapshot()).runs.find(run => run.chatId === historical.id)?.context).toEqual({
-      sources: [expect.objectContaining({ content: 'User body', managementPath: 'rules/user.mdc' })],
+      sources: [
+        expect.objectContaining({ content: sources[0]!.content }),
+        expect.objectContaining({ content: 'User body', managementPath: 'rules/user.mdc' }),
+      ],
       activations: [{ sourceId: sources[2]!.id, reason: AgentInstructionActivationReason.MANUAL }],
       candidates: [{ id: 'candidate', name: 'Candidate', description: 'When relevant' }],
     });
@@ -394,7 +397,7 @@ it('dispatches user rule lifecycle commands and reports unavailable management',
       path: 'rules/test.mdc',
       expectedRevision: 'two',
     });
-    expect(userRules.create).toHaveBeenCalledWith('Test', 'manual');
+    expect(userRules.create).toHaveBeenCalledWith('Test', 'manual', undefined);
     expect(userRules.setEnabled).toHaveBeenCalledWith('rules/test.mdc', 'one', false);
     expect(userRules.remove).toHaveBeenCalledWith('rules/test.mdc', 'two');
   } finally {

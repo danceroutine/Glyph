@@ -17,20 +17,31 @@ export interface BeginTurnContextInput {
 export class TurnContextCoordinator {
   private readonly sessions = new Map<string, TurnContextSession>();
 
+  private readonly pending = new Set<string>();
+
   constructor(private readonly instructions: AgentInstructionCatalog) {}
 
   async beginTurn(input: BeginTurnContextInput, signal?: AbortSignal): Promise<TurnContextSession> {
-    const sources = await this.instructions.refresh(signal);
-    const session = new TurnContextSession({
-      turnId: input.turnId,
-      sources,
-      attachmentPaths: input.attachmentPaths,
-      manualRuleIds: input.manualRuleIds ?? [],
-    });
-    this.sessions.delete(input.turnId);
-    this.sessions.set(input.turnId, session);
-    while (this.sessions.size > 32) this.sessions.delete(this.sessions.keys().next().value!);
-    return session;
+    if (this.pending.has(input.turnId) || this.sessions.has(input.turnId))
+      throw new Error('This turn already has an active instruction session.');
+    if (this.pending.size + this.sessions.size >= 32)
+      throw new Error('32 turns are already active. Retry when one completes.');
+    this.pending.add(input.turnId);
+    try {
+      const sources = await this.instructions.refresh(signal);
+      const session = new TurnContextSession({
+        turnId: input.turnId,
+        sources,
+        paths: this.instructions.paths,
+        scopeIndex: this.instructions.scopeIndex?.(sources),
+        attachmentPaths: input.attachmentPaths,
+        manualRuleIds: input.manualRuleIds ?? [],
+      });
+      this.sessions.set(input.turnId, session);
+      return session;
+    } finally {
+      this.pending.delete(input.turnId);
+    }
   }
 
   /** Disclose newly applicable instructions after project paths enter context. */

@@ -75,13 +75,13 @@ sequenceDiagram
     Catalog-->>Caller: Current composed sources
 ```
 
-Refreshes occur on desktop snapshot requests, at turn start, after managed user-rule mutations, and after a run finishes. The Settings component renders the host catalog; it does not scan files independently. The Rust indexes watch project and user-rule path changes; newly created or removed instruction files become visible after its watcher reconciles them and the catalog refreshes. Existing file bodies are read again on catalog refresh, including live editor text. There is no separate instruction-catalog watcher, and ordinary catalog refresh does not force a native index rescan. Successful Settings mutations explicitly refresh the user-rule index before refreshing the catalog, so changes appear before the operation returns rather than waiting for watcher reconciliation.
+Refreshes occur on desktop snapshot requests, at turn start, after managed user-rule mutations, and after a run finishes. Opening or searching Agent Instructions requests a fresh catalog. Overlapping discoveries publish in generation order, so earlier reads cannot replace a newer published snapshot. The Rust indexes watch project and user-rule path changes; newly created or removed instruction files become visible after its watcher reconciles them and the catalog refreshes. Existing file bodies are read again on catalog refresh, including live editor text. There is no separate instruction-catalog watcher, and ordinary catalog refresh does not force a native index rescan. Successful Settings mutations explicitly refresh the user-rule index before refreshing the catalog, so changes appear before the operation returns rather than waiting for watcher reconciliation.
 
-The rule parser accepts a small YAML-compatible frontmatter subset, not arbitrary YAML. Supported fields are `name`, `description`, `activation`, `alwaysApply`, `globs`, `enabled`, and `references`. Explicit `activation` wins. Otherwise `alwaysApply: true` selects `always`, nonempty globs select `file_pattern`, a description selects `model`, and the remaining case selects `manual`. A Markdown body without frontmatter is therefore a manual rule. Description length is capped at 2,000 characters. Glob matching supports `*`, `**`, and `?`; unsupported constructs are rejected.
+The rule parser accepts a small YAML-compatible frontmatter subset, not arbitrary YAML. Supported fields are `name`, `description`, `activation`, `alwaysApply`, `globs`, `enabled`, and `references`. Explicit `activation` wins. Otherwise `alwaysApply: true` selects `always`, nonempty globs select `file_pattern`, a description selects `model`, and the remaining case selects `manual`. A Markdown body without frontmatter is therefore a manual rule. Description length is capped at 2,000 characters. A rule can specify up to 64 globs of up to 512 characters each. The matcher supports `*`, `**`, and `?` and uses the target workspace folder’s filesystem casing.
 
-References are explicit frontmatter paths resolved relative to the owning rule's scope. Nested references continue to use that same scope. The provider parses each referenced file and appends its body and nested references in traversal order. It detects cycles along the current reference chain and limits traversal depth to 16; repeated references on separate branches are not globally deduplicated. The effective `revision` hashes the rule revision together with referenced revisions. `sourceRevision` identifies only the rule file, allowing Settings to guard edits without confusing reference changes with changes to that file.
+References are explicit frontmatter paths resolved relative to the owning rule's scope. Nested references continue to use that same scope. The provider parses each referenced file and appends its body and nested references in traversal order. Resolution stays in the workspace folder that owns the rule. The provider detects cycles, caps a chain at 16 levels, and reuses parsed references within one rule. Each occurrence counts toward the edge and output limits. The effective `revision` hashes the rule revision together with referenced revisions. `sourceRevision` identifies only the rule file, allowing Settings to guard edits without confusing reference changes with changes to that file.
 
-Both providers default to 10,000 discovery results and 64 KiB per file read. An oversized or unreadable file becomes an error source, not truncated guidance. These limits do not bound the total expanded body or the total instruction tokens in a turn. A TODO at the rule read boundary calls for revisiting the per-file, expanded-reference, and per-turn budgets together.
+Each source family reads up to 10,000 listed files in index order, with a 64 KiB limit per file and an 8 MiB total read allowance. Rule discovery allows 8,192 reference edges and 8 MiB of expanded text per family. A single rule can consume up to 128 edges and 256 KiB of expanded text. A rule exceeding a limit appears in Settings with an error. A turn can disclose 512 KiB of serialized rule and AGENTS.md context, including candidate metadata. An over-budget disclosure fails before the session records those instructions as seen.
 
 ## Starting a turn
 
@@ -120,7 +120,7 @@ Initial activation follows these rules:
 | `manual` rule                    | Included when its stable ID is explicitly selected.                                                              |
 | `model` rule                     | Only name, ID, description, and scope are advertised when its scope participates. Its body waits for activation. |
 
-Inactive, disabled, or missing sources cannot activate. Later file access can activate scoped `AGENTS.md` and file-pattern rules and advertise additional model candidates. The current later-access path does not activate scoped `always` rules that missed initial participation; it should not be mistaken for an unconditional directory-entry hook.
+Later file access or a steering attachment can activate scoped `AGENTS.md`, scoped `always` rules, and matching file-pattern rules. These paths also make additional model candidates available.
 
 The session retains the source objects from the turn-start catalog. Later catalog refreshes replace the catalog view without changing this turn's bodies or revisions. The next logical turn refreshes and reevaluates its own sources. Activation records retain the first trigger and its paths; subsequent matches do not add another body or replace that first reason.
 
@@ -160,7 +160,7 @@ sequenceDiagram
     end
 ```
 
-A previous read or content search counts as exposure for that logical turn. Editing the same scope therefore normally needs no additional instruction exchange. Plain `list_files` returns paths without calling the disclosure hook. Source and destination paths are both considered for structural changes, so a move into a new scope can discover destination guidance before staging.
+The model must issue each project mutation in its own tool round. A previous read or content search counts as exposure for that logical turn. Editing the same scope therefore normally needs no additional instruction exchange. Plain `list_files` returns paths without calling the disclosure hook. Source and destination paths are both considered for structural changes, so a move into a new scope can discover destination guidance before staging.
 
 The fallback is an internal tool result, not a user approval request. It asks the model to regenerate the proposal with newly disclosed context; it does not automatically replay compiled edits. Because candidate metadata also constitutes new context, a newly advertised model rule can cause this fallback even before its body is selected. Once staging is allowed, the normal revision, mode, trust, and review safeguards still apply. Instruction activation itself authorizes no mutation.
 
@@ -250,13 +250,13 @@ sequenceDiagram
 
 For this example, the tool arguments are `{"id":"glyph_project_rule:.glyph/rules/database-migrations.mdc"}`. The model copies the ID supplied in the candidate metadata; it does not construct a path or search for the file itself. Repeated activation requests do not resend the body during that turn.
 
-The description is therefore the selection cue: describe **when the rule should be used**. Detailed requirements belong in the body. Choosing `activation: model` without a nonempty description does not produce a candidate. A description also implies model selection when activation is omitted and neither `alwaysApply: true` nor file globs selects another mode.
+The description is therefore the selection cue: describe **when the rule should be used**. Detailed requirements belong in the body. A model-selected rule requires a nonempty description. A file-pattern rule requires at least one glob. Settings reports missing conditions as source errors. A description also implies model selection when activation is omitted and neither `alwaysApply: true` nor file globs selects another mode.
 
 Directory scope still controls visibility. A workspace-root rule can be advertised immediately. A rule under `packages/api/.glyph/rules/` becomes a candidate only when an attachment or subsequent file access brings a path in `packages/api` into the turn. Glyph then includes its description in that context update; the model can choose it at that point. Merely mentioning “API” in the user's prose does not bypass this path-based scope check.
 
 Selection is discretionary: the agent may decide not to call the tool, in which case Glyph does not disclose that rule's body through activation. Use `always` for automatic inclusion when the rule's scope participates, or `file_pattern` for automatic inclusion on matching file paths. Every new turn reevaluates candidates from a fresh snapshot; prior activation is not a permanent enablement choice. The provider-history caveat under persistence below still applies to bodies returned in earlier tool results.
 
-The activation tool is available in Agent and Plan modes and requires an active turn ID. It cannot activate arbitrary files or use the model route to activate a manual-only rule. Candidate descriptions are individually bounded; the current session does not impose a separate aggregate candidate-token budget.
+The activation tool is available in Agent and Plan modes and requires an active turn ID. It cannot activate arbitrary files or use the model route to activate a manual-only rule. The turn counts advertised candidate metadata toward its instruction byte allowance.
 
 ## Settings and user-rule management
 
@@ -287,7 +287,7 @@ sequenceDiagram
     Native-->>UI: Update sources
 ```
 
-Creation derives a safe filename and writes a template beneath `~/.glyph/rules`. Enable/disable and delete use `managementPath` and `managementRevision`, derived from the user rule's original source revision. A stale edit fails instead of overwriting newer text. The manager restricts mutations to direct `rules/*.mdc` children of its user store. Project rules are opened in the editor for normal file editing; these management commands do not grant arbitrary project or home-directory writes.
+Creation collects the description or file globs required by the selected activation mode, derives a safe filename, and writes a template beneath `~/.glyph/rules`. Enable/disable and delete use `managementPath` and `managementRevision`, derived from the user rule's original source revision. A stale edit fails instead of overwriting newer text. The manager restricts mutations to direct `rules/*.mdc` children of its user store. Project rules are opened in the editor for normal file editing; these management commands do not grant arbitrary project or home-directory writes.
 
 ## Completion, provenance, and history
 
@@ -311,10 +311,10 @@ sequenceDiagram
     UI->>UI: Render Context used entries and source links
 ```
 
-The completed turn's context is persisted separately from user text. SQLite validates the stored context structure on load. This record preserves the activated source content and revisions even if the catalog changes later. The desktop projects provenance into the assistant message's “Context used” inspector. Its source link resolves through the current catalog and opens the current file; it is not a historical-content editor and can fail if that source is no longer available.
+The completed turn's context is persisted separately from user text. SQLite validates the stored context structure on load. This record preserves the activated source content and revisions even if the catalog changes later. The desktop projects provenance into the assistant message's “Context used” inspector. Expand a source in the inspector to read the instructions and revision retained for that turn, even after a file changes or is deleted. Open current file resolves through the current catalog.
 
 Provider commit removes standalone instruction-envelope messages. Instruction contexts inside tool results remain part of tool history; this filtering is not a guarantee that every old instruction body disappears from subsequent provider input. Durable provenance is also separate from provider history compaction. Activation decisions for the next turn are recomputed from a fresh catalog regardless of what older tool output remains in history.
 
-Failed or cancelled turns release their live session in `finally` and do not return a completed context snapshot. Ordinary tool intent/outcome checkpoints still retain their own provider state. The coordinator retains at most 32 live sessions, evicting the oldest entry if that bound is exceeded.
+Failed or cancelled turns release their live session in `finally` and do not return a completed context snapshot. Ordinary tool intent/outcome checkpoints still retain their own provider state. The coordinator reserves a slot before refreshing instructions. It keeps up to 32 live or starting turns and returns a retryable admission message when all slots are in use.
 
 The main behavior coverage lives in the [catalog tests](../src/instructions/tests/AgentInstructionCatalog.test.ts), [composition tests](../src/instructions/tests/AgentInstructionSet.test.ts), [turn-context tests](../src/context/turns/tests/TurnContextCoordinator.test.ts), rule provider/manager tests under `src/instructions/rules/tests`, and [desktop rule acceptance tests](../code-oss/tests/electron/GlyphRules.test.mjs). The [Rule Picker story](../code-oss/ui/GlyphComposer/GlyphComposer.stories.tsx) exercises slash selection alongside the Settings stories.

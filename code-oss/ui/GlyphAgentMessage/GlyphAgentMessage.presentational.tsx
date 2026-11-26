@@ -25,6 +25,7 @@ const styles = {
   }),
   context: css({ margin: '8px 10px 0', color: tokens.text.muted, fontSize: tokens.font.size.detail }),
   contextList: css({ display: 'grid', gap: 5, margin: '7px 0 0', padding: 0, listStyle: 'none' }),
+  instructionBody: css({ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 240, overflow: 'auto' }),
   contextSource: css({
     border: 0,
     padding: 0,
@@ -81,8 +82,18 @@ export function GlyphAgentMessage({
           <ul class={styles.contextList}>
             {context.sources.map(source => {
               const activation = context.activations.find(value => value.sourceId === source.id);
+              const label = `${source.name ?? source.path} · ${activation?.reason.replaceAll('_', ' ') ?? 'active'}`;
               return (
                 <li key={source.id}>
+                  {source.content !== undefined ? (
+                    <details>
+                      <summary>{label}</summary>
+                      {source.revision && <code>{source.revision}</code>}
+                      <pre class={styles.instructionBody}>{source.content}</pre>
+                    </details>
+                  ) : (
+                    <span>{label}</span>
+                  )}
                   <button
                     type="button"
                     class={styles.contextSource}
@@ -91,7 +102,7 @@ export function GlyphAgentMessage({
                       entry.openLink(`glyph-instruction:${encodeURIComponent(source.id)}`);
                     }}
                   >
-                    {source.name ?? source.path} · {activation?.reason.replaceAll('_', ' ') ?? 'active'}
+                    Open current file · {source.path}
                   </button>
                 </li>
               );

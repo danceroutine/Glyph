@@ -1,3 +1,4 @@
+import { defaultInstructionPaths } from './InstructionPaths.ts';
 import {
   AgentInstructionSourceKind,
   AgentInstructionSourceStatus,
@@ -22,16 +23,20 @@ export class AgentInstructionSet {
   private readonly activeByScope = new Map<string, AgentInstructionSource[]>();
 
   /** Native project rules shadow same-name Cursor rules only within the same scope. */
-  constructor(sources: readonly AgentInstructionSource[]) {
+  constructor(
+    sources: readonly AgentInstructionSource[],
+    private readonly paths = defaultInstructionPaths,
+  ) {
     const native = new Set(
       sources
         .filter(source => source.kind === AgentInstructionSourceKind.GLYPH_PROJECT_RULE)
-        .map(source => compatibilityKey(source)),
+        .map(source => compatibilityKey(source, paths.key(source.scope))),
     );
     this.sources = sources
       .filter(
         source =>
-          source.kind !== AgentInstructionSourceKind.CURSOR_PROJECT_RULE || !native.has(compatibilityKey(source)),
+          source.kind !== AgentInstructionSourceKind.CURSOR_PROJECT_RULE ||
+          !native.has(compatibilityKey(source, paths.key(source.scope))),
       )
       .toSorted(
         (left, right) =>
@@ -41,9 +46,10 @@ export class AgentInstructionSet {
       );
     for (const source of this.sources) {
       if (source.status !== AgentInstructionSourceStatus.ACTIVE) continue;
-      const bucket = this.activeByScope.get(source.scope);
+      const scope = paths.key(source.scope);
+      const bucket = this.activeByScope.get(scope);
       if (bucket) bucket.push(source);
-      else this.activeByScope.set(source.scope, [source]);
+      else this.activeByScope.set(scope, [source]);
     }
   }
 
@@ -57,7 +63,7 @@ export class AgentInstructionSet {
   forPath(path: string): readonly AgentInstructionSource[] {
     const result = [...(this.activeByScope.get('.') ?? [])];
     let scope = '';
-    for (const segment of path.split('/')) {
+    for (const segment of this.paths.key(path).split('/')) {
       scope = scope ? `${scope}/${segment}` : segment;
       if (scope === '.') continue;
       const bucket = this.activeByScope.get(scope);
@@ -67,8 +73,8 @@ export class AgentInstructionSet {
   }
 }
 
-function compatibilityKey(source: AgentInstructionSource): string {
-  return `${source.scope}\0${source.name ?? source.path}`;
+function compatibilityKey(source: AgentInstructionSource, scope: string): string {
+  return `${scope}\0${source.name ?? source.path}`;
 }
 
 function scopeDepth(scope: string): number {

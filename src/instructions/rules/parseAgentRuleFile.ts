@@ -1,7 +1,11 @@
+import { z } from 'zod';
 import { AgentInstructionActivationMode } from '#src/instructions/AgentInstructionSource.js';
 import type { AgentRuleFile } from './AgentRuleFile.ts';
+import { ruleFrontmatter } from './ruleFrontmatter.ts';
 import { globExpression } from './matchesAgentRulePath.ts';
 
+export const MAX_AGENT_RULE_BYTES = 64 * 1024;
+const quotedString = z.string();
 const MAX_DESCRIPTION_LENGTH = 2_000;
 const ACTIVATION_MODES: Readonly<Record<string, AgentInstructionActivationMode>> = {
   always: AgentInstructionActivationMode.ALWAYS,
@@ -12,16 +16,14 @@ const ACTIVATION_MODES: Readonly<Record<string, AgentInstructionActivationMode>>
 
 /** Parse the intentionally small YAML-compatible frontmatter supported by Glyph rules. */
 export function parseAgentRuleFile(text: string): AgentRuleFile {
-  if (!text.startsWith('---\n') && !text.startsWith('---\r\n'))
-    return { globs: [], enabled: true, references: [], body: text };
-  const normalized = text.replaceAll('\r\n', '\n');
-  const end = normalized.indexOf('\n---\n', 4);
-  if (end < 0) throw new Error('Rule frontmatter is missing its closing --- delimiter.');
-  const metadata = parseMetadata(normalized.slice(4, end));
+  const frontmatter = ruleFrontmatter(text);
+  if (!frontmatter) return { globs: [], enabled: true, references: [], body: text };
+  const metadata = parseMetadata(frontmatter.metadata.replaceAll('\r\n', '\n'));
   const description = optionalString(metadata.description, 'description');
   if (description && description.length > MAX_DESCRIPTION_LENGTH)
     throw new Error(`Rule description exceeds ${MAX_DESCRIPTION_LENGTH} characters.`);
   const globs = stringList(metadata.globs, 'globs');
+  if (globs.length > 64) throw new Error('A rule can specify at most 64 globs.');
   for (const glob of globs) globExpression(glob);
   const references = stringList(metadata.references, 'references');
   const activationValue = optionalString(metadata.activation, 'activation');
@@ -37,7 +39,7 @@ export function parseAgentRuleFile(text: string): AgentRuleFile {
     ...(alwaysApply === undefined ? {} : { alwaysApply }),
     enabled,
     references,
-    body: normalized.slice(end + 5),
+    body: frontmatter.body,
   };
 }
 
@@ -84,8 +86,8 @@ function inlineList(value: string): readonly string[] {
 }
 
 function scalarString(value: string): string {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
-    return value.slice(1, -1);
+  if (value.startsWith('"') && value.endsWith('"')) return quotedString.parse(JSON.parse(value));
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1);
   if (value.includes(': #')) return value.slice(0, value.indexOf(' #')).trimEnd();
   return value;
 }
@@ -111,9 +113,8 @@ function stringList(value: MetadataValue | undefined, key: string): readonly str
 
 function activationMode(value: string): AgentInstructionActivationMode {
   const normalized = value.replaceAll('-', '_');
-  const mode = ACTIVATION_MODES[normalized];
-  if (mode === undefined) throw new Error(`Unknown rule activation mode: ${value}`);
-  return mode;
+  if (!Object.hasOwn(ACTIVATION_MODES, normalized)) throw new Error(`Unknown rule activation mode: ${value}`);
+  return ACTIVATION_MODES[normalized]!;
 }
 
 function isStringArray(value: MetadataValue | undefined): value is readonly string[] {

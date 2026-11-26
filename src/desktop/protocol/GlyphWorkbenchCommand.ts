@@ -56,6 +56,7 @@ export type GlyphWorkbenchCommand =
       readonly type: GlyphWorkbenchCommandType.CREATE_USER_RULE;
       readonly name: string;
       readonly activation: 'always' | 'file_pattern' | 'model' | 'manual';
+      readonly condition?: string;
     }
   | {
       readonly type: GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED;

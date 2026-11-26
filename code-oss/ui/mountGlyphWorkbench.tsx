@@ -161,17 +161,29 @@ export const mountGlyphAgentInstructions = (
   container: HTMLElement,
   sources: readonly GlyphInstructionSource[],
   query: string,
-  openSource: (source: GlyphInstructionSource) => void,
+  openSource: (source: GlyphInstructionSource) => void | Promise<void>,
   actions?: Pick<
     import('./GlyphAgentInstructions/GlyphAgentInstructions.presentational.tsx').GlyphAgentInstructionsProps,
     'createUserRule' | 'setUserRuleEnabled' | 'deleteUserRule'
   >,
 ) => {
   let disposed = false;
-  const update = (nextSources: readonly GlyphInstructionSource[], nextQuery: string) => {
+  const update = (
+    nextSources: readonly GlyphInstructionSource[],
+    nextQuery: string,
+    readOnly = false,
+    refreshError?: string,
+  ) => {
     if (!disposed)
       render(
-        <GlyphAgentInstructions sources={nextSources} query={nextQuery} openSource={openSource} {...actions} />,
+        <GlyphAgentInstructions
+          sources={nextSources}
+          query={nextQuery}
+          readOnly={readOnly}
+          {...(refreshError ? { refreshError } : {})}
+          openSource={openSource}
+          {...actions}
+        />,
         container,
       );
   };

@@ -10,6 +10,7 @@ import type { GlyphInstructionSource } from './GlyphInstructionSource.ts';
 
 /** Full recoverable projection used when replay is unavailable or unsafe. */
 export interface GlyphDesktopSnapshot {
+  readonly userRulesDirectoryUri?: string;
   readonly instructionSources?: readonly GlyphInstructionSource[];
   readonly agentReviews?: readonly AgentReview[];
   readonly accounts: readonly GlyphAccountSummary[];

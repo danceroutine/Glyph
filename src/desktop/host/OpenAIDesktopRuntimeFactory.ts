@@ -69,6 +69,7 @@ import { ProviderDesktopRuntime } from './ProviderDesktopRuntime.ts';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
 import { listInstructionFilesAcrossRoots } from '#src/instructions/listInstructionFilesAcrossRoots.js';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
 import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
@@ -240,33 +241,39 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         // User-owned rules retain their existing behavior regardless of home-directory Git ignores.
         respectGitIgnore: false,
       }));
-      instructionCatalog = new AgentInstructionCatalog([
-        new AgentRuleInstructionProvider(
-          userRuleStore,
-          {
-            kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
-            directory: '.',
-            displayPrefix: '~/.glyph/',
-            uriForPath: userRuleUri.bind(undefined, userRuleRoot),
-          },
-          async maxFiles => {
-            // The index root must obey the store's no-symlink rule too, not just its children.
-            await userRuleStore.canonicalPath('rules');
-            return listUserRuleFiles(userRuleIndex, maxFiles);
-          },
-        ),
-        new AgentsMdInstructionProvider(workspace, {}, listProjectInstructions),
-        new AgentRuleInstructionProvider(
-          workspace,
-          { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
-          listProjectInstructions,
-        ),
-        new AgentRuleInstructionProvider(
-          workspace,
-          { kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, directory: '.cursor' },
-          listProjectInstructions,
-        ),
-      ]);
+      const paths = new InstructionPaths(
+        parts.length === 1 ? workspace.caseSensitive : new Map(parts.map(part => [part.name, part.disk.caseSensitive])),
+      );
+      instructionCatalog = new AgentInstructionCatalog(
+        [
+          new AgentRuleInstructionProvider(
+            userRuleStore,
+            {
+              kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+              directory: '.',
+              displayPrefix: '~/.glyph/',
+              uriForPath: userRuleUri.bind(undefined, userRuleRoot),
+            },
+            async maxFiles => {
+              // The index root must obey the store's no-symlink rule too, not just its children.
+              await userRuleStore.canonicalPath('rules');
+              return listUserRuleFiles(userRuleIndex, maxFiles);
+            },
+          ),
+          new AgentsMdInstructionProvider(workspace, {}, listProjectInstructions),
+          new AgentRuleInstructionProvider(
+            workspace,
+            { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', paths },
+            listProjectInstructions,
+          ),
+          new AgentRuleInstructionProvider(
+            workspace,
+            { kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, directory: '.cursor', paths },
+            listProjectInstructions,
+          ),
+        ],
+        paths,
+      );
       turnContexts = new TurnContextCoordinator(instructionCatalog);
       userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex);
     }

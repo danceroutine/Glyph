@@ -9,11 +9,15 @@ import {
   type AgentInstructionSource,
   type AgentInstructionTurnSnapshot,
 } from '#src/instructions/AgentInstructionSource.js';
+import { AgentInstructionSet } from '#src/instructions/AgentInstructionSet.js';
+import { defaultInstructionPaths, type InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { matchesAgentRulePath } from '#src/instructions/rules/matchesAgentRulePath.js';
 
 /** Immutable inputs used to create one frozen logical-turn context. */
 export interface TurnContextSessionInput {
   readonly turnId: string;
+  readonly paths?: InstructionPaths;
+  readonly scopeIndex?: AgentInstructionSet;
   readonly sources: readonly AgentInstructionSource[];
   readonly attachmentPaths: readonly string[];
   readonly manualRuleIds: readonly string[];
@@ -22,37 +26,36 @@ export interface TurnContextSessionInput {
 /** Owns context activation and disclosure state for one logical agent turn. */
 export class TurnContextSession {
   private readonly activated = new Map<string, AgentInstructionActivation>();
-  private readonly disclosed = new Set<string>();
-  private readonly candidateSources: readonly AgentInstructionSource[];
+  private readonly pending = new Map<AgentInstructionSource, AgentInstructionActivation>();
+  private readonly scopeIndex: AgentInstructionSet;
+  private readonly precedence: ReadonlyMap<AgentInstructionSource, number>;
   private readonly advertisedCandidates = new Map<string, AgentInstructionCandidate>();
   private readonly initial: AgentInstructionContext;
 
-  constructor(private readonly input: TurnContextSessionInput) {
-    this.candidateSources = input.sources.filter(
-      source =>
-        source.status === AgentInstructionSourceStatus.ACTIVE &&
-        source.enabled !== false &&
-        source.activation === AgentInstructionActivationMode.MODEL &&
-        source.description !== undefined &&
-        source.description !== '',
-    );
+  private readonly paths: InstructionPaths;
+  private remainingBytes = 512 * 1024;
 
+  constructor(private readonly input: TurnContextSessionInput) {
+    this.paths = input.paths ?? defaultInstructionPaths;
+    this.scopeIndex = input.scopeIndex ?? new AgentInstructionSet(input.sources, this.paths);
+    this.precedence = new Map(input.sources.map((source, index) => [source, index]));
     const attachments = unique(input.attachmentPaths);
-    const candidates = this.advertiseCandidates(attachments);
-    for (const source of input.sources) {
+    const applicable = this.sourcesFor(attachments);
+    const candidates = this.advertiseCandidates(applicable);
+    for (const source of applicable) {
       if (!eligible(source)) continue;
       if (source.kind === AgentInstructionSourceKind.AGENTS_MD) {
         if (source.scope === '.') this.activate(source, AgentInstructionActivationReason.ALWAYS);
         else {
-          const paths = attachments.filter(path => contains(source.scope, path));
-          if (paths.length > 0) this.activate(source, AgentInstructionActivationReason.ATTACHMENT, paths);
+          const paths = attachments.filter(path => this.paths.contains(source.scope, path));
+          this.activate(source, AgentInstructionActivationReason.ATTACHMENT, paths);
         }
         continue;
       }
-      if (source.activation === AgentInstructionActivationMode.ALWAYS && scopeParticipates(source.scope, attachments))
+      if (source.activation === AgentInstructionActivationMode.ALWAYS)
         this.activate(source, AgentInstructionActivationReason.ALWAYS);
       if (source.activation === AgentInstructionActivationMode.FILE_PATTERN) {
-        const paths = attachments.filter(path => matchesAgentRulePath(source, path));
+        const paths = attachments.filter(path => matchesAgentRulePath(source, path, this.paths));
         if (paths.length > 0) this.activate(source, AgentInstructionActivationReason.ATTACHMENT, paths);
       }
     }
@@ -108,13 +111,16 @@ export class TurnContextSession {
     reason: AgentInstructionActivationReason.ATTACHMENT | AgentInstructionActivationReason.FILE_ACCESS,
   ): AgentInstructionContext | undefined {
     const normalized = unique(paths);
-    const candidates = this.advertiseCandidates(normalized);
-    for (const source of this.input.sources) {
+    const applicable = this.sourcesFor(normalized);
+    const candidates = this.advertiseCandidates(applicable);
+    for (const source of applicable) {
       if (!eligible(source) || this.activated.has(source.id)) continue;
       const matching = normalized.filter(path =>
-        source.kind === AgentInstructionSourceKind.AGENTS_MD
-          ? contains(source.scope, path)
-          : source.activation === AgentInstructionActivationMode.FILE_PATTERN && matchesAgentRulePath(source, path),
+        source.kind === AgentInstructionSourceKind.AGENTS_MD ||
+        source.activation === AgentInstructionActivationMode.ALWAYS
+          ? this.paths.contains(source.scope, path)
+          : source.activation === AgentInstructionActivationMode.FILE_PATTERN &&
+            matchesAgentRulePath(source, path, this.paths),
       );
       if (matching.length > 0) this.activate(source, reason, matching);
     }
@@ -143,47 +149,79 @@ export class TurnContextSession {
     paths?: readonly string[],
   ) {
     if (this.activated.has(source.id)) return;
-    this.activated.set(source.id, { sourceId: source.id, reason, ...(paths ? { paths } : {}) });
+    this.pending.set(source, { sourceId: source.id, reason, ...(paths ? { paths } : {}) });
   }
 
-  private advertiseCandidates(paths: readonly string[]): readonly AgentInstructionCandidate[] {
-    const candidates = this.candidateSources
-      .filter(source => !this.advertisedCandidates.has(source.id) && scopeParticipates(source.scope, paths))
-      .map(source => ({
+  private sourcesFor(paths: readonly string[]): readonly AgentInstructionSource[] {
+    const applicable = new Set(this.scopeIndex.forPath('.'));
+    for (const path of paths) for (const source of this.scopeIndex.forPath(path)) applicable.add(source);
+    return [...applicable].toSorted((a, b) => this.precedence.get(a)! - this.precedence.get(b)!);
+  }
+
+  private advertiseCandidates(sources: readonly AgentInstructionSource[]): readonly AgentInstructionCandidate[] {
+    const candidates: AgentInstructionCandidate[] = [];
+    for (const source of sources) {
+      if (
+        !eligible(source) ||
+        source.activation !== AgentInstructionActivationMode.MODEL ||
+        !source.description ||
+        this.advertisedCandidates.has(source.id)
+      )
+        continue;
+      const candidate = {
         id: source.id,
         name: source.name ?? source.label,
-        description: source.description!,
+        description: source.description,
         scope: source.scope,
-      }));
-    for (const candidate of candidates) this.advertisedCandidates.set(candidate.id, candidate);
+      };
+      candidates.push(candidate);
+    }
     return candidates;
   }
 
   private undisclosedContext(candidates: readonly AgentInstructionCandidate[]): AgentInstructionContext | undefined {
-    const sources = this.input.sources.filter(
-      source => this.activated.has(source.id) && !this.disclosed.has(source.id),
+    const pending = [...this.pending.entries()].toSorted(
+      ([a], [b]) => this.precedence.get(a)! - this.precedence.get(b)!,
     );
-    for (const source of sources) this.disclosed.add(source.id);
-    if (sources.length === 0 && candidates.length === 0) return undefined;
-    return {
+    this.pending.clear();
+    if (pending.length === 0 && candidates.length === 0) return undefined;
+    const envelope: AgentInstructionContext = {
       schema: 'glyph.agent-instructions.v1',
-      sources,
-      activations: sources.map(source => this.activated.get(source.id)!),
+      sources: pending.map(([source]) => {
+        const { uri: _editorUri, ...instruction } = source;
+        return instruction;
+      }),
+      activations: pending.map(([, activation]) => activation),
       ...(candidates.length > 0 ? { candidates } : {}),
     };
+    // Measure one bounded source at a time. A large set of applicable rules can exceed the turn
+    // allowance before the adapter ever serializes a combined envelope.
+    let bytes = Buffer.byteLength(
+      JSON.stringify({
+        schema: envelope.schema,
+        sources: [],
+        activations: [],
+        ...(candidates.length > 0 ? { candidates: [] } : {}),
+      }),
+    );
+    for (const entries of [envelope.sources, envelope.activations!, candidates]) {
+      for (const [index, entry] of entries.entries()) {
+        bytes += Buffer.byteLength(JSON.stringify(entry)) + Number(index > 0);
+        if (bytes > this.remainingBytes)
+          throw new Error(
+            'The instruction context exceeds the 512 KiB turn limit. Reduce the applicable instructions and retry.',
+          );
+      }
+    }
+    this.remainingBytes -= bytes;
+    for (const [source, activation] of pending) this.activated.set(source.id, activation);
+    for (const candidate of candidates) this.advertisedCandidates.set(candidate.id, candidate);
+    return envelope;
   }
 }
 
 function eligible(source: AgentInstructionSource): boolean {
   return source.status === AgentInstructionSourceStatus.ACTIVE && source.enabled !== false;
-}
-
-function contains(scope: string, path: string): boolean {
-  return scope === '.' || path === scope || path.startsWith(`${scope}/`);
-}
-
-function scopeParticipates(scope: string, paths: readonly string[]): boolean {
-  return scope === '.' || paths.some(path => contains(scope, path));
 }
 
 function unique(values: readonly string[]): readonly string[] {

@@ -163,6 +163,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     return {
       agentReviews: this.options.agentReviews?.reviews ?? [],
       ...(instructionSources ? { instructionSources: toInstructionSources(instructionSources) } : {}),
+      ...(this.options.userRules?.directoryUri ? { userRulesDirectoryUri: this.options.userRules.directoryUri } : {}),
       accounts: this.options.glyph.accounts,
       models: this.models,
       chats: this.options.glyph.listChats(),
@@ -283,7 +284,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     switch (command.type) {
       case GlyphWorkbenchCommandType.CREATE_USER_RULE:
         if (!this.options.userRules) throw new Error('User rules are unavailable.');
-        await this.options.userRules.create(command.name, command.activation);
+        await this.options.userRules.create(command.name, command.activation, command.condition);
         return;
       case GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED:
         if (!this.options.userRules) throw new Error('User rules are unavailable.');
@@ -1339,7 +1340,10 @@ function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): C
     }));
 }
 
-function toInstructionSources(sources: readonly AgentInstructionSource[]): readonly GlyphInstructionSource[] {
+function toInstructionSources(
+  sources: readonly AgentInstructionSource[],
+  historical = false,
+): readonly GlyphInstructionSource[] {
   return sources.map(source => ({
     id: source.id,
     kind: source.kind,
@@ -1354,7 +1358,7 @@ function toInstructionSources(sources: readonly AgentInstructionSource[]): reado
     ...(source.enabled === undefined ? {} : { enabled: source.enabled }),
     ...(source.references === undefined ? {} : { references: source.references }),
     ...(source.revision === undefined ? {} : { revision: source.revision }),
-    ...(source.kind === AgentInstructionSourceKind.GLYPH_USER_RULE && source.content !== undefined
+    ...((historical || source.kind === AgentInstructionSourceKind.GLYPH_USER_RULE) && source.content !== undefined
       ? { content: source.content }
       : {}),
     ...(source.uri === undefined ? {} : { uri: source.uri }),
@@ -1370,7 +1374,7 @@ function toInstructionSources(sources: readonly AgentInstructionSource[]): reado
 
 function toTurnContext(context: import('#src/instructions/AgentInstructionSource.js').AgentInstructionTurnSnapshot) {
   return {
-    sources: toInstructionSources(context.sources),
+    sources: toInstructionSources(context.sources, true),
     activations: context.activations,
     candidates: context.candidates.map(({ id, name, description }) => ({ id, name, description })),
   };

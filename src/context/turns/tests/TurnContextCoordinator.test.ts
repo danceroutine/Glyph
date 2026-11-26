@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
+import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import {
   AgentInstructionActivationMode,
@@ -94,12 +96,98 @@ describe(TurnContextCoordinator, () => {
     expect(coordinator.snapshot('turn')).toBeUndefined();
   });
 
+  it('activates scoped always, AGENTS.md and matching rules at the first case-aliased access', async () => {
+    const paths = new InstructionPaths(
+      new Map([
+        ['Root', false],
+        ['root', true],
+      ]),
+    );
+    const discovered = [
+      source(
+        'always',
+        AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+        'Root/Src',
+        AgentInstructionActivationMode.ALWAYS,
+      ),
+      source('agents', AgentInstructionSourceKind.AGENTS_MD, 'Root/Src'),
+      source(
+        'files',
+        AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+        'Root/Src',
+        AgentInstructionActivationMode.FILE_PATTERN,
+        ['**/*.TS'],
+      ),
+    ];
+    const coordinator = new TurnContextCoordinator(
+      new AgentInstructionCatalog([{ discover: async () => discovered }], paths),
+    );
+    await coordinator.beginTurn({ turnId: 'case', attachmentPaths: [] });
+    expect(coordinator.disclosePaths('case', ['root/src/app.ts'])).toBeUndefined();
+    expect(coordinator.disclosePaths('case', ['Root/src/app.ts'])?.sources.map(value => value.id)).toEqual([
+      'always',
+      'files',
+      'agents',
+    ]);
+    expect(coordinator.discloseAttachments('case', ['Root/SRC/app.ts'])).toBeUndefined();
+  });
+
+  it('retains a user rule’s editor URI for inspection without sending it to the model', async () => {
+    const rule = {
+      ...source('user', AgentInstructionSourceKind.GLYPH_USER_RULE, '.', AgentInstructionActivationMode.ALWAYS),
+      uri: 'file:///private/profile/rules/user.mdc',
+    };
+    const coordinator = new TurnContextCoordinator(new AgentInstructionCatalog([{ discover: async () => [rule] }]));
+    const session = await coordinator.beginTurn({ turnId: 'uri', attachmentPaths: [] });
+    expect(session.initialEnvelope().sources[0]).not.toHaveProperty('uri');
+    expect(session.snapshot().sources[0]?.uri).toBe(rule.uri);
+  });
+
+  it('keeps over-budget disclosures out of history and demands the same guidance again on retry', async () => {
+    const large = { ...source('big', AgentInstructionSourceKind.AGENTS_MD, 'large'), content: 'x'.repeat(512 * 1024) };
+    const coordinator = new TurnContextCoordinator(new AgentInstructionCatalog([{ discover: async () => [large] }]));
+    await coordinator.beginTurn({ turnId: 'budget', attachmentPaths: [] });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(() => coordinator.disclosePaths('budget', ['large/a'])).toThrow('512 KiB');
+      expect(coordinator.snapshot('budget')?.sources).toEqual([]);
+    }
+    expect(coordinator.disclosePaths('budget', ['other/a'])).toBeUndefined();
+  });
+
+  it('reserves capacity before discovery and releases a failed admission', async () => {
+    let release!: () => void;
+    const discovery = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const refresh = vi.fn(async () => {
+      await discovery;
+      return sources;
+    });
+    const coordinator = new TurnContextCoordinator({ refresh } as never);
+    const starts = Array.from({ length: 32 }, (_, i) =>
+      coordinator.beginTurn({ turnId: String(i), attachmentPaths: [] }),
+    );
+    await expect(coordinator.beginTurn({ turnId: '0', attachmentPaths: [] })).rejects.toThrow('already');
+    await expect(coordinator.beginTurn({ turnId: 'extra', attachmentPaths: [] })).rejects.toThrow('32 turns');
+    expect(refresh).toHaveBeenCalledTimes(32);
+    release();
+    await Promise.all(starts);
+    coordinator.discardTurn('0');
+    refresh.mockRejectedValueOnce(new Error('Discovery failed'));
+    await expect(coordinator.beginTurn({ turnId: 'again', attachmentPaths: [] })).rejects.toThrow('Discovery failed');
+    await expect(coordinator.beginTurn({ turnId: 'again', attachmentPaths: [] })).resolves.toBeDefined();
+  });
+
   it('isolates and bounds live sessions', async () => {
     const coordinator = new TurnContextCoordinator(catalog() as never);
-    for (let index = 0; index < 33; index++)
+    for (let index = 0; index < 32; index++)
       await coordinator.beginTurn({ turnId: `turn-${index}`, attachmentPaths: [] });
 
-    expect(coordinator.snapshot('turn-0')).toBeUndefined();
+    await expect(coordinator.beginTurn({ turnId: 'turn-32', attachmentPaths: [] })).rejects.toThrow('32 turns');
+    await expect(coordinator.beginTurn({ turnId: 'turn-0', attachmentPaths: [] })).rejects.toThrow('already');
+    expect(coordinator.snapshot('turn-0')?.turnId).toBe('turn-0');
+    coordinator.completeTurn('turn-0');
+    await coordinator.beginTurn({ turnId: 'turn-32', attachmentPaths: [] });
     expect(coordinator.snapshot('turn-32')?.turnId).toBe('turn-32');
     expect(coordinator.disclosePaths('missing', ['src/app.ts'])).toBeUndefined();
   });

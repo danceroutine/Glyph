@@ -1,6 +1,8 @@
-import { fireEvent, render, screen, within } from '@testing-library/preact';
-import { describe, expect, it, vi } from 'vitest';
-import { GlyphAgentInstructions } from './GlyphAgentInstructions.presentational.tsx';
+import { cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/preact';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { GlyphAgentInstructions } from '../GlyphAgentInstructions.presentational.tsx';
+
+afterEach(cleanup);
 
 const sources = [
   { id: 'root', kind: 'agents_md', label: 'AGENTS.md', path: 'AGENTS.md', scope: '.', status: 'active' },
@@ -39,7 +41,38 @@ describe(GlyphAgentInstructions, () => {
     expect(container.textContent).toContain('No active instruction files were found in this workspace.');
   });
 
-  it('creates and manages user rules while presenting every activation mode and detail', () => {
+  it('reports an untyped editor failure in the pane', async () => {
+    render(<GlyphAgentInstructions sources={sources} openSource={vi.fn().mockRejectedValue('unavailable')} />);
+    fireEvent.click(screen.getByTitle('Open AGENTS.md'));
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toBe('The rule operation failed.');
+    });
+  });
+
+  it('retains a rejected conditional draft, reports the error, and hides mutations when read-only', async () => {
+    const createUserRule = vi.fn(async () => {
+      throw new Error('A rule with this name already exists.');
+    });
+    const { container, rerender } = render(
+      <GlyphAgentInstructions sources={sources} openSource={vi.fn()} createUserRule={createUserRule} />,
+    );
+    const input = screen.getByLabelText<HTMLInputElement>('New user rule name');
+    fireEvent.input(input, { target: { value: 'Style' } });
+    fireEvent.change(screen.getByLabelText('Rule activation'), { target: { value: 'file_pattern' } });
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Create' }).disabled).toBe(true);
+    fireEvent.input(screen.getByLabelText('File globs (one per line)'), { target: { value: '**/*.ts' } });
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toContain('already exists');
+    });
+    expect(input.value).toBe('Style');
+    expect(createUserRule).toHaveBeenCalledWith('Style', 'file_pattern', '**/*.ts');
+    rerender(
+      <GlyphAgentInstructions sources={sources} readOnly openSource={vi.fn()} createUserRule={createUserRule} />,
+    );
+    expect(container.querySelector('form')).toBeNull();
+  });
+  it('creates and manages user rules while presenting every activation mode and detail', async () => {
     const openSource = vi.fn();
     const createUserRule = vi.fn();
     const setUserRuleEnabled = vi.fn();
@@ -117,9 +150,14 @@ describe(GlyphAgentInstructions, () => {
     const activation = screen.getByLabelText<HTMLSelectElement>('Rule activation');
     fireEvent.change(activation, { target: { value: 'invalid' } });
     fireEvent.change(activation, { target: { value: 'model' } });
+    fireEvent.input(screen.getByLabelText('When should the model use this rule?'), {
+      target: { value: 'Review code.' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-    expect(createUserRule).toHaveBeenCalledWith('New Rule', 'model');
-    expect(screen.getByLabelText<HTMLInputElement>('New user rule name').value).toBe('');
+    expect(createUserRule).toHaveBeenCalledWith('New Rule', 'model', 'Review code.');
+    await waitFor(() => {
+      expect(screen.getByLabelText<HTMLInputElement>('New user rule name').value).toBe('');
+    });
 
     const always = container.querySelectorAll<HTMLElement>('.instruction-source')[0]!;
     fireEvent.click(within(always).getByRole('button', { name: 'Edit' }));
