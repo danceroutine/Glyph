@@ -126,10 +126,16 @@ describe(useGlyphComposerState, () => {
     };
     renderComposer({ status: GlyphWorkbenchStatus.READY, actions: { ...actions, context } });
     typeDraft(actions.composer, '/rule');
-    await waitFor(() => expect(context.searchRules).toHaveBeenCalled(), patience);
+    await waitFor(() => {
+      expect(context.searchRules).toHaveBeenCalled();
+    }, patience);
     vi.mocked(context.searchRules).mockClear();
-    act(() => refresh());
-    await waitFor(() => expect(context.searchRules).toHaveBeenCalled(), patience);
+    act(() => {
+      refresh();
+    });
+    await waitFor(() => {
+      expect(context.searchRules).toHaveBeenCalled();
+    }, patience);
   });
 
   it('sends the draft on Enter and clears the prompt', async () => {

@@ -541,11 +541,16 @@ describe(NativeGlyphWorkbenchService, () => {
         host.request.mockClear().mockImplementationOnce(
           () =>
             new Promise<void>((resolve, reject) => {
-              release = () => (failed ? reject(new Error('old refresh')) : resolve());
+              release = () => {
+                if (failed) reject(new Error('old refresh'));
+                else resolve();
+              };
             }),
         );
         const pending = service.refreshInstructionSources();
-        await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+        await vi.waitFor(() => {
+          expect(release).toBeTypeOf('function');
+        });
         void invalidate(true);
         void invalidate(true);
         release();

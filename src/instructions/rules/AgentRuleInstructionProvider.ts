@@ -141,7 +141,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         ...this.errorSource(normalized, scope, describe(error, 'Rule could not be read.')),
         ...(name ? { name } : {}),
         ...(sourceRevision ? { sourceRevision, revision: sourceRevision } : {}),
-        ...(dependencies.size ? { references: [...dependencies] } : {}),
+        ...(dependencies.size > 0 ? { references: [...dependencies] } : {}),
         ...(uri ? { uri } : {}),
       };
     }

@@ -57,14 +57,18 @@ export function globExpression(pattern: string, sensitive = true): GlobMatcher {
       },
     };
   const tokens = normalized.match(/\*\*\/|\*\*|[\s\S]/gu)!;
-  const wildcard = (token: string) => token.includes('*') || token === '?';
-  const prefix = tokens.slice(0, tokens.findIndex(wildcard)).join('');
-  const suffix = tokens.slice(tokens.findLastIndex(wildcard) + 1).join('');
+  const literalPrefix = tokens
+    .slice(
+      0,
+      tokens.findIndex(token => isWildcardToken(token)),
+    )
+    .join('');
+  const suffix = tokens.slice(tokens.findLastIndex(token => isWildcardToken(token)) + 1).join('');
   return {
     test(path, budget) {
       const normalizedPath = sensitive ? path : path.toLowerCase();
       budget?.spend(normalizedPath.length + 1);
-      if (!normalizedPath.startsWith(prefix) || !normalizedPath.endsWith(suffix)) return false;
+      if (!normalizedPath.startsWith(literalPrefix) || !normalizedPath.endsWith(suffix)) return false;
       budget?.spend(tokens.length * (normalizedPath.length + 1));
       const characters = Array.from(normalizedPath);
       let previous = new Uint8Array(characters.length + 1);
@@ -87,4 +91,8 @@ export function globExpression(pattern: string, sensitive = true): GlobMatcher {
       return previous[characters.length] === 1;
     },
   };
+}
+
+function isWildcardToken(token: string): boolean {
+  return token.includes('*') || token === '?';
 }

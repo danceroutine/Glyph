@@ -286,7 +286,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     this.assertTrusted();
     const normalized = query.toLowerCase();
     return this.instructionSources()
-      .filter(isManualRule)
+      .filter(rule => isManualRule(rule))
       .filter(rule => {
         const name = rule.name ?? rule.path.split('/').at(-1)!;
         return `${name} ${rule.description ?? ''} ${rule.path}`.toLowerCase().includes(normalized);
@@ -532,20 +532,19 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     this.assertTrusted();
     await this.refreshInstructionSources?.(true);
     this.assertTrusted();
-    const unavailable = () =>
-      new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This instruction source is unavailable.');
     const source = this.instructionSources().find(candidate => candidate.id === id);
-    if (!source || (source.status === 'error' && !source.revision && !source.managementRevision)) throw unavailable();
+    if (!source || (source.status === 'error' && !source.revision && !source.managementRevision))
+      throw unavailableInstruction();
 
     let root: URI;
     let resource: URI;
     let stillOwned: () => boolean;
     if (source.kind === 'glyph_user_rule') {
-      if (!source.uri) throw unavailable();
+      if (!source.uri) throw unavailableInstruction();
       resource = URI.parse(source.uri);
       const rules = dirname(resource);
       stillOwned = () => this.instructionRoots().includes(rules.toString());
-      if (resource.scheme !== 'file' || !stillOwned()) throw unavailable();
+      if (resource.scheme !== 'file' || !stillOwned()) throw unavailableInstruction();
       root = dirname(rules);
     } else {
       const folders = this.workspace.getWorkspace().folders.filter(folder => folder.uri.scheme === 'file');
@@ -558,10 +557,10 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
           : folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootId);
       if (
         !folder ||
-        !segments.length ||
+        segments.length === 0 ||
         segments.some(part => !part || part === '..' || part === '.' || part.includes('\\'))
       )
-        throw unavailable();
+        throw unavailableInstruction();
       root = folder.uri;
       stillOwned = () =>
         this.workspace.getWorkspace().folders.some(candidate => candidate.uri.toString() === root.toString());
@@ -570,13 +569,14 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     let current = resource;
     for (;;) {
       const stat = await this.files.stat(current);
-      if (stat.isSymbolicLink || (current === resource ? !stat.isFile : !stat.isDirectory)) throw unavailable();
+      if (stat.isSymbolicLink || (current === resource ? !stat.isFile : !stat.isDirectory))
+        throw unavailableInstruction();
       if (current.toString() === root.toString()) break;
       current = dirname(current);
     }
     this.assertTrusted();
     if (!stillOwned() || this.instructionSources().find(candidate => candidate.id === id) !== source)
-      throw unavailable();
+      throw unavailableInstruction();
     await this.editors.openEditor({ resource, options: { pinned: true } });
   }
 
@@ -620,4 +620,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
 
 function isManualRule(rule: GlyphInstructionSource): boolean {
   return rule.activation === 'manual' && rule.status === 'active' && rule.enabled !== false;
+}
+
+function unavailableInstruction(): GlyphContextError {
+  return new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This instruction source is unavailable.');
 }
