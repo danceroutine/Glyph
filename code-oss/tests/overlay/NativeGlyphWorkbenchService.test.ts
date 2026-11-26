@@ -541,6 +541,25 @@ describe(NativeGlyphWorkbenchService, () => {
       expect(host.request).toHaveBeenCalledTimes(3);
     });
 
+    it('restores an unavailable rule badge before catalog roots have been announced', async () => {
+      const { service, host, context } = await workbench();
+      const [, watchRoots] = context.setInstructionRefresh.mock.calls[0];
+      expect(watchRoots()).toEqual([]);
+      const composer = service.composer;
+      emit(host, {
+        type: GlyphHostEventType.CHAT_RESTORED,
+        chatId: 'alpha',
+        runs: [],
+        draft: { text: '/missing', attachments: [], options: { manualRuleIds: ['missing'] } },
+      });
+      expect(composer.snapshot.document.parts).toContainEqual(
+        expect.objectContaining({
+          type: 'attachment',
+          attachment: expect.objectContaining({ ruleId: 'missing', text: '' }),
+        }),
+      );
+    });
+
     it('restores a chat draft with its captures and places the caret at its end', async () => {
       const { service, host } = await workbench();
       const composer = service.composer;
@@ -618,8 +637,25 @@ describe(NativeGlyphWorkbenchService, () => {
       });
     });
 
+    it('restores a removable skill badge when the catalog is unavailable', async () => {
+      const { service, host, context } = await workbench();
+      const [catalog] = context.setSkillSources.mock.calls[0];
+      expect(catalog()).toEqual(service.state.skills ?? []);
+      const composer = service.composer;
+      emit(host, {
+        type: GlyphHostEventType.CHAT_RESTORED,
+        chatId: 'alpha',
+        runs: [],
+        draft: { text: '/gone', attachments: [], options: { skillIds: ['gone'] } },
+      });
+      expect(composer.snapshot.document.parts.at(-1)).toMatchObject({
+        type: 'attachment',
+        attachment: { skillId: 'gone', path: 'gone', text: '' },
+      });
+    });
+
     it('resolves an old skill selection against the skill catalog and restores a removable badge', async () => {
-      const { service, host } = await workbench({
+      const { service, host, context } = await workbench({
         extra: {
           skills: [
             {
@@ -639,6 +675,8 @@ describe(NativeGlyphWorkbenchService, () => {
           ],
         },
       });
+      const [catalog] = context.setSkillSources.mock.calls[0];
+      expect(catalog()).toEqual(service.state.skills ?? []);
       const composer = service.composer;
       emit(host, {
         type: GlyphHostEventType.CHAT_RESTORED,
@@ -1194,6 +1232,17 @@ describe(NativeGlyphWorkbenchService, () => {
       activation: 'manual' as const,
       revision: 'one',
     };
+
+    it('passes the selected file glob to a newly created user rule', async () => {
+      const { service, commands } = await workbench();
+      await service.createUserRule('Typescript', 'file_pattern', '**/*.ts');
+      expect(commands().at(-1)).toEqual({
+        type: GlyphWorkbenchCommandType.CREATE_USER_RULE,
+        name: 'Typescript',
+        activation: 'file_pattern',
+        condition: '**/*.ts',
+      });
+    });
 
     it('sends create, enable, and delete commands', async () => {
       const { service, commands } = await workbench();

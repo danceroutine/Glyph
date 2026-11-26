@@ -319,6 +319,7 @@ describe(GlyphContextController, () => {
           id: 'new-skill',
           name: 'new-skill',
           description: 'Newly repaired workflow',
+          revision: 'repaired-r1',
           path: '.glyph/skills/new-skill/SKILL.md',
           directory: '.glyph/skills/new-skill',
           scope: '.',
@@ -331,7 +332,9 @@ describe(GlyphContextController, () => {
       ];
     });
     controller.setSkillSources(() => sources, refresh);
-    expect(await controller.searchInstructions('repaired')).toMatchObject([{ skillId: 'new-skill' }]);
+    expect(await controller.searchInstructions('repaired')).toMatchObject([
+      { skillId: 'new-skill', revision: 'repaired-r1' },
+    ]);
     expect(refresh).toHaveBeenCalledOnce();
     sources = sources.map(source => ({ ...source, revision: 'repaired-version' }));
     controller.setSkillSources(() => sources);
@@ -428,6 +431,9 @@ describe(GlyphContextController, () => {
     '/workspace/.cursor/rules/new.mdc',
     '/workspace/reference.md',
     '/custom/references/note.md',
+    '/workspace/pkg/.glyph/skills/new/SKILL.md',
+    '/workspace/.cursor/skills/new/SKILL.md',
+    '/custom/skills/new/SKILL.md',
   ])('refreshes instruction discovery after a relevant file or dirty-model change at %s', async path => {
     vi.useFakeTimers();
     const services = controllerServices();
@@ -454,7 +460,7 @@ describe(GlyphContextController, () => {
     const controller = createController(services);
     const refresh = vi.fn(async () => {});
     try {
-      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules']);
+      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules', 'file:///custom/skills']);
       controller.notifyInstructionsChanged();
       expect(services.files.watch).toHaveBeenCalledWith(URI.file('/custom/references/note.md'), {
         recursive: false,
@@ -471,6 +477,53 @@ describe(GlyphContextController, () => {
       vi.useRealTimers();
     }
   });
+  it('reconciles trusted user watch roots and notifies slash search once per catalog change', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    const changed = vi.fn();
+    const disposeWatch = vi.fn();
+    services.files.watch.mockReturnValueOnce({ dispose: disposeWatch });
+    const unsubscribe = controller.onDidChangeInstructions(changed);
+    const source = { id: 'linked', path: 'direct.mdc', status: 'active', uri: 'file:///workspace/direct.mdc' };
+    services.instructionSources.push(source, {
+      id: 'unknown-location',
+      kind: 'glyph_user_rule',
+      path: 'user.mdc',
+      status: 'active',
+      uri: 'file:///other/rules/user.mdc',
+      references: ['references/guide.md'],
+    });
+    try {
+      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules']);
+      controller.notifyInstructionsChanged();
+      controller.notifyInstructionsChanged();
+      expect(services.files.watch).toHaveBeenCalledOnce();
+      expect(changed).toHaveBeenCalledOnce();
+      services.fileChanges.fire([{ resource: URI.file('/workspace/unrelated.ts'), type: 1 }]);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).not.toHaveBeenCalled();
+      services.fileChanges.fire([{ resource: URI.parse(source.uri), type: 1 }]);
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(refresh).toHaveBeenCalledTimes(2);
+      services.trust.isWorkspaceTrusted.mockReturnValue(false);
+      controller.notifyInstructionsChanged();
+      expect(disposeWatch).toHaveBeenCalledOnce();
+      unsubscribe();
+      services.instructionSources.splice(0);
+      controller.notifyInstructionsChanged();
+      expect(changed).toHaveBeenCalledOnce();
+      controller.setInstructionRefresh();
+      services.fileChanges.fire([{ resource: URI.file('/workspace/AGENTS.md'), type: 1 }]);
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('refreshes saved and unsaved rule metadata, reconnects provider listeners, and suppresses refresh when trust is lost', async () => {
     vi.useFakeTimers();
     const services = controllerServices();

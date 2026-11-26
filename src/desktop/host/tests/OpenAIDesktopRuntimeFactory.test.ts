@@ -1355,7 +1355,8 @@ async function factoryFixture(options: { readonly transport?: typeof fetch } = {
   vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
   const initialize = vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
   const editors = new EditorRpcRouter();
-  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport, join(directory, 'user'));
+  const userDirectory = join(directory, 'user');
+  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport, userDirectory);
   const runtimes: ProviderDesktopRuntime[] = [];
   onTestFinished(async () => {
     for (const runtime of runtimes) await runtime.dispose();
