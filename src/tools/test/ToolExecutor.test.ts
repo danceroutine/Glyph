@@ -180,3 +180,29 @@ describe(ToolExecutor, () => {
     });
   });
 });
+
+it.each(['internal', 'visible', 'failed'])(
+  'defers domain presentation and hides only internal handoffs: %s',
+  async kind => {
+    const f = fixture([AgentModeID.PLAN]);
+    f.tool.execute.mockImplementation(async () => {
+      expect(f.options.onActivity).not.toHaveBeenCalled();
+      if (kind === 'failed')
+        throw new ToolOperationError('EXIT', 'Failed process', 'unknown', '{"exitCode":3,"output":"failed"}');
+      return kind;
+    });
+    const show = vi.fn((output: string) => output !== 'internal');
+    const executor = new ToolExecutor(
+      new ToolRegistry([{ ...f.tool, activityPresentation: { afterCompletion: true, show } }]),
+    );
+    const result = await executor.execute(call, f.options);
+    if (kind === 'internal') expect(f.options.onActivity).not.toHaveBeenCalled();
+    else
+      expect(f.options.onActivity.mock.calls.map(([event]) => event.phase)).toEqual([
+        ToolActivityPhase.STARTED,
+        kind === 'failed' ? ToolActivityPhase.FAILED : ToolActivityPhase.COMPLETED,
+      ]);
+    expect(result.output).toBe(kind === 'failed' ? '{"exitCode":3,"output":"failed"}' : kind);
+    expect(f.options.trace).toHaveBeenCalledWith('tool.result', expect.objectContaining({ output: result.output }));
+  },
+);

@@ -4,6 +4,7 @@ export class ToolOperationError extends Error {
     readonly code: string,
     message: string,
     readonly outcome: 'not_started' | 'unknown',
+    readonly output?: string,
   ) {
     super(message);
     this.name = 'ToolOperationError';

@@ -37,6 +37,10 @@ export class ProjectToolRuntime implements ToolSource {
         name: ProjectToolName.PROPOSE_PATCH,
         requiresExclusiveRound: true,
         allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        activityPresentation: {
+          afterCompletion: true,
+          show: output => (JSON.parse(output) as { readonly status: string }).status !== 'INSTRUCTION_CONTEXT_REQUIRED',
+        },
         description: `Apply a strict patch immediately, retaining changes for Keep/Revert review. Prefer this for ordinary source edits. The grammar is:
 *** Begin Patch
 *** Add File: path
@@ -66,6 +70,10 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
         name: ProjectToolName.PROPOSE_EDITS,
         requiresExclusiveRound: true,
         allowedModes: [AgentModeID.AGENT, AgentModeID.PLAN],
+        activityPresentation: {
+          afterCompletion: true,
+          show: output => (JSON.parse(output) as { readonly status: string }).status !== 'INSTRUCTION_CONTEXT_REQUIRED',
+        },
         description:
           'Apply exact UTF-16 range edits immediately with Keep/Revert review. Use for whitespace, line-ending, or Unicode-sensitive changes.',
         inputKind: ToolInputKind.JSON,
