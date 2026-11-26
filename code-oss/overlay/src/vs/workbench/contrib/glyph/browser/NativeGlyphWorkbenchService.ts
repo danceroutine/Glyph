@@ -7,7 +7,7 @@ import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js
 import { IClipboardService } from '#vs/platform/clipboard/common/clipboardService.js';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import { IConfigurationService } from '#vs/platform/configuration/common/configuration.js';
-import { toGlyphTranscriptParts } from '#glyph/workbench/toGlyphTranscriptParts.js';
+import { restoreGlyphPrompt } from '#glyph/workbench/restoreGlyphPrompt.js';
 import type { GlyphPlanRecord } from '#glyph/protocol/events/GlyphPlanRecord.js';
 import type { GlyphPlanProgress } from '#glyph/protocol/events/GlyphPlanProgress.js';
 import { GlyphPlanPromptIntent, toGlyphPlanPrompt } from '#glyph/workbench/GlyphPlanPrompt.js';
@@ -283,24 +283,21 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             break;
           case GlyphHostEventType.CHAT_RESTORED: {
             const composer = this.composers.get(event.chatId);
-            const attachments = event.draft.attachments.map(value => ({ ...value, id: value.id ?? generateUuid() }));
-            const previews = attachments.map(value => ({ ...value, revision: value.contentRevision }));
-            const parts = toGlyphTranscriptParts({
-              id: '',
-              role: GlyphTranscriptRole.USER,
-              text: event.draft.text,
-              ...(event.draft.options ? { options: event.draft.options } : {}),
-              attachments: previews,
-            }).map(part =>
-              part.type === 'text'
-                ? part
-                : {
-                    type: 'attachment' as const,
-                    attachment: attachments[previews.findIndex(preview => preview === part.attachment)],
-                  },
+            composer?.restoreDraft(
+              restoreGlyphPrompt(
+                event.draft,
+                (_kind, id) => {
+                  const source = this.state.instructionSources?.find(rule => rule.id === id);
+                  return source
+                    ? {
+                        name: source.name ?? source.path.split('/').at(-1)!,
+                        ...(source.revision ? { revision: source.revision } : {}),
+                      }
+                    : undefined;
+                },
+                generateUuid,
+              ),
             );
-            const end = parts.reduce((size, part) => size + (part.type === 'text' ? part.text.length : 1), 0);
-            composer?.restoreDraft({ parts, from: end, to: end, options: { ...event.draft.options } });
             break;
           }
           case GlyphHostEventType.RUN_STATE:

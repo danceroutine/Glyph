@@ -3,7 +3,7 @@ import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwap } from '#src/desktop/protocol/events/GlyphModeSwap.js';
 import type { GlyphQuestionResponse } from '#src/desktop/protocol/events/GlyphQuestionResponse.js';
 import type { GlyphPlanRecord } from '#src/desktop/protocol/events/GlyphPlanRecord.js';
-import type { GlyphTurnOptions } from '#src/desktop/protocol/events/GlyphAnnotation.js';
+import type { ChatTurnOptions } from '#src/chat/ChatTurnOptions.js';
 import type { ContextAttachment } from '#src/context/attachments/ContextAttachment.js';
 import type { ChatProviderState } from '#src/chat/ChatProviderState.js';
 import type { TurnUsage } from '#src/chat/TurnUsage.js';
@@ -33,7 +33,7 @@ export interface ChatTranscriptTurn {
   readonly modeSwaps?: readonly GlyphModeSwap[];
   readonly questionResponses?: readonly GlyphQuestionResponse[];
   readonly checkpoints?: { readonly before: ChatHistoryCheckpoint; readonly after: ChatHistoryCheckpoint };
-  readonly options?: GlyphTurnOptions;
+  readonly options?: ChatTurnOptions;
   readonly userText: string;
   readonly attachments?: readonly ContextAttachment[];
   readonly attachmentPaths: readonly string[];

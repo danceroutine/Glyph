@@ -30,7 +30,7 @@ await copyProtocol(protocolSourceRoot, protocolTargetRoot);
 // in the generated tree instead of maintaining a second set of wire values.
 const chatContractTarget = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'chat');
 await mkdir(chatContractTarget, { recursive: true });
-for (const name of ['AgentMode.ts']) {
+for (const name of ['AgentMode.ts', 'ChatTurnOptions.ts']) {
   const source = join(repositoryRoot, 'src', 'chat', name);
   await writeFile(join(chatContractTarget, name), (await readFile(source, 'utf8')).replaceAll(".ts'", ".js'"));
 }
