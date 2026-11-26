@@ -134,6 +134,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         | 'peekPendingWake'
       >;
       readonly skills?: SkillCatalog;
+      readonly refreshCatalogs?: (signal: AbortSignal) => Promise<void>;
+      readonly instructionWatchRoots?: readonly string[];
       readonly skillManager?: SkillPackageManager;
       readonly skillSources?: SkillPackageSourceReader;
       readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'>;
@@ -178,6 +180,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     for (const proposal of this.options.glyph.proposalReviews?.retainedReviews ?? [])
       this.proposals.set(proposal.id, toProposal(proposal));
     return {
+      ...(this.options.instructionWatchRoots ? { instructionWatchRoots: this.options.instructionWatchRoots } : {}),
       ...(skills ? { skills } : {}),
       ...(this.options.skillManager ? { skillTargets: this.options.skillManager.targets } : {}),
       ...(this.skillPreview ? { skillPreview: this.skillPreview } : {}),
@@ -302,6 +305,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     if (this.disposed) throw new Error('The workspace runtime has stopped.');
     const glyph = this.options.glyph;
     switch (command.type) {
+      case GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
+        await this.options.refreshCatalogs?.(this.discovery.signal);
+        return;
       case GlyphWorkbenchCommandType.PREVIEW_SKILL: {
         const manager = this.options.skillManager;
         if (!manager) throw new Error('Skill management requires a trusted workspace.');

@@ -90,6 +90,7 @@ export interface GlyphWorkbenchService {
   discardSkillPreview(previewId: string): Promise<void>;
   setSkillEnabled(skillId: string, enabled: boolean): Promise<void>;
   refreshSkills(): Promise<void>;
+  refreshInstructionSources(): Promise<void>;
   createUserRule(name: string, activation: NonNullable<GlyphInstructionSource['activation']>): Promise<void>;
   setUserRuleEnabled(source: GlyphInstructionSource, enabled: boolean): Promise<void>;
   deleteUserRule(source: GlyphInstructionSource): Promise<void>;

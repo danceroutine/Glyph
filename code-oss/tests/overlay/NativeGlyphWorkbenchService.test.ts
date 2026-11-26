@@ -118,6 +118,12 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
         case WorkbenchCommandType.REQUEST_SNAPSHOT:
           this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
           return;
+        case WorkbenchCommandType.REFRESH_CONTEXT_CATALOGS: {
+          const state = this.snapshot() as GlyphDesktopSnapshot;
+          this.emit({ type: HostEventType.INSTRUCTION_SOURCES_CHANGED, sources: state.instructionSources ?? [] });
+          this.emit({ type: HostEventType.SKILLS_CHANGED, skills: state.skills ?? [] });
+          return;
+        }
         case WorkbenchCommandType.CREATE_CHAT: {
           const summary = {
             id: `created-${++this.created}`,
@@ -856,13 +862,12 @@ describe(NativeGlyphWorkbenchService, () => {
     });
   });
 
-  it('refreshes the catalog through a shared snapshot request and permits later refreshes', async () => {
+  it('refreshes the catalogs without reconnecting or resetting active runs and coalesces requests', async () => {
     const { service, host, context } = await workbench();
     host.request.mockClear();
     await Promise.all([service.refreshSkills(), service.refreshSkills()]);
     expect(host.request).toHaveBeenCalledExactlyOnceWith({
-      type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
-      afterSequence: 0,
+      type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS,
     });
     const [, refresh, roots] = context.setSkillSources.mock.calls[0];
     expect(roots()).toEqual([]);
@@ -872,6 +877,7 @@ describe(NativeGlyphWorkbenchService, () => {
   it('routes revision-bound skill management requests and publishes native skill watch roots', async () => {
     const { service, host, context } = await workbench({
       extra: {
+        instructionWatchRoots: ['file:///project/.glyph/skills'],
         skillTargets: [
           { id: 'project', label: 'Project', uri: 'file:///project/.glyph/skills' },
           { id: 'other', label: 'Other' },
@@ -898,7 +904,7 @@ describe(NativeGlyphWorkbenchService, () => {
   it('reports a failed catalog refresh and allows a later retry', async () => {
     const { service, host } = await workbench();
     host.request.mockRejectedValueOnce(new Error('Catalog unavailable'));
-    await service.refreshSkills();
+    await expect(service.refreshSkills()).rejects.toThrow('Catalog unavailable');
     expect(service.state.transcript).toEqual(
       expect.arrayContaining([expect.objectContaining({ text: 'Catalog unavailable' })]),
     );

@@ -574,6 +574,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       shellSessions: shells,
       ...(instructionCatalog ? { instructionCatalog } : {}),
       ...(skills ? { skills } : {}),
+      refreshCatalogs: async signal => {
+        await Promise.all([instructionCatalog?.refresh(signal), skills?.refresh(signal)]);
+      },
+      instructionWatchRoots: input.trusted
+        ? [userRuleUri(this.userDirectory, 'rules'), userRuleUri(this.userDirectory, 'skills')]
+        : [],
       ...(skillManager ? { skillManager, skillSources: new SkillPackageSourceReader(indexExecutable) } : {}),
       ...(userRules ? { userRules } : {}),
       emit: input.emit,

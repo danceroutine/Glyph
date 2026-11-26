@@ -163,8 +163,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     );
     this.context.setSkillSources(
       () => this.state.skills ?? [],
-      () => this.refreshSkills(),
-      () => (this.state.skillTargets ?? []).flatMap(target => (target.uri ? [target.uri] : [])),
+      () => this.refreshInstructionSources(),
+      () => [
+        ...(this.state.instructionWatchRoots ?? []),
+        ...(this.state.userRulesDirectoryUri ? [this.state.userRulesDirectoryUri] : []),
+      ],
     );
     this.proposalEditor = this._register(
       instantiationService.createInstance(GlyphProposalEditor, {
@@ -434,9 +437,13 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     return this.request({ type: GlyphWorkbenchCommandType.SET_SKILL_ENABLED, skillId, enabled });
   }
   refreshSkills(): Promise<void> {
-    return (this.skillRefresh ??= this.request({ type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT, afterSequence: 0 })
+    return this.refreshInstructionSources();
+  }
+  refreshInstructionSources(): Promise<void> {
+    return (this.skillRefresh ??= this.request({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS })
       .catch(error => {
         this.report(error);
+        throw error;
       })
       .finally(() => {
         this.skillRefresh = undefined;

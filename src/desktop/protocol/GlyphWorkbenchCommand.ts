@@ -49,6 +49,7 @@ export enum GlyphWorkbenchCommandType {
   WRITE_SHELL_INPUT = 'write_shell_input',
   STOP_SHELL_SESSION = 'stop_shell_session',
   REQUEST_SNAPSHOT = 'request_snapshot',
+  REFRESH_CONTEXT_CATALOGS = 'refresh_context_catalogs',
   DETACH = 'detach',
 }
 
@@ -57,6 +58,7 @@ export enum GlyphWorkbenchCommandType {
  * through MessagePort without coupling either process to the other's classes.
  */
 export type GlyphWorkbenchCommand =
+  | { readonly type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS }
   | {
       readonly type: GlyphWorkbenchCommandType.PREVIEW_SKILL;
       readonly targetId: string;

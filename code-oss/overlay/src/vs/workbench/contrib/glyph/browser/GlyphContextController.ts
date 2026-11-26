@@ -85,18 +85,35 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     if (!refresh) return;
     const followup = this.skillWatchers.add(
       new RunOnceScheduler(() => {
-        if (this.trust.isWorkspaceTrusted()) void refresh();
+        if (this.trust.isWorkspaceTrusted()) void refresh().catch(() => {});
       }, 1000),
     );
     const changed = this.skillWatchers.add(
       new RunOnceScheduler(() => {
         if (!this.trust.isWorkspaceTrusted()) return;
-        void refresh();
+        void refresh().catch(() => {});
         followup.schedule();
       }, 300),
     );
     const relevant = (uri: URI) =>
-      /\/\.(?:glyph|cursor)(?:\/skills(?:\/|$)|$)/u.test(uri.path) ||
+      /\/\.(?:glyph|cursor)(?:\/(?:skills|rules)(?:\/|$)|$)/iu.test(uri.path) ||
+      /\/AGENTS\.md$/iu.test(uri.path) ||
+      this.instructionSources().some(instruction => {
+        if (instruction.uri === uri.toString()) return true;
+        if (!instruction.references?.length) return false;
+        try {
+          const path = this.adapter.contextPath(uri);
+          return instruction.references.includes(path);
+        } catch {
+          return (
+            instruction.kind === 'glyph_user_rule' &&
+            instruction.uri !== undefined &&
+            instruction.references.some(
+              path => URI.joinPath(dirname(dirname(URI.parse(instruction.uri!))), path).toString() === uri.toString(),
+            )
+          );
+        }
+      }) ||
       this.skillRoots().some(root => {
         const path = URI.parse(root).path;
         return uri.path === path || uri.path.startsWith(`${path}/`);
@@ -115,7 +132,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     );
     const watched = new WeakSet<ITextModel>();
     const watch = (model: ITextModel) => {
-      if (!watched.has(model) && relevant(model.uri) && model.uri.path.endsWith('/SKILL.md')) {
+      if (!watched.has(model) && relevant(model.uri)) {
         watched.add(model);
         this.skillWatchers.add(
           model.onDidChangeContent(() => {

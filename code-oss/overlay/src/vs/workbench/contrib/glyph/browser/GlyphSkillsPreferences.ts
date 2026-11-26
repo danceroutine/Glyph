@@ -29,7 +29,7 @@ export class GlyphSkillsPreferences extends Disposable implements IPreferencesEd
       }),
     );
     this.update();
-    void this.glyph.refreshSkills();
+    void this.glyph.refreshSkills().catch(() => {});
   }
   getDomNode(): HTMLElement {
     return this.element;
@@ -40,7 +40,7 @@ export class GlyphSkillsPreferences extends Disposable implements IPreferencesEd
   search(text: string): void {
     this.query = text;
     this.update();
-    void this.glyph.refreshSkills();
+    void this.glyph.refreshSkills().catch(() => {});
   }
   private update(): void {
     const management: GlyphSkillsManagement = {

@@ -85,6 +85,8 @@ function controllerServices() {
       description?: string;
       uri?: string;
       revision?: string;
+      references?: readonly string[];
+      kind?: string;
     }[],
     codeEditorList: [] as ReturnType<typeof codeEditor>[],
     adapter: {
@@ -167,6 +169,54 @@ function createController(services: ControllerServices) {
 }
 
 describe(GlyphContextController, () => {
+  it.each([
+    '/workspace/src/AGENTS.md',
+    '/workspace/.glyph/rules/new.mdc',
+    '/workspace/.cursor/rules/new.mdc',
+    '/workspace/reference.md',
+    '/custom/references/note.md',
+  ])('refreshes instruction discovery after a relevant file or dirty-model change at %s', async path => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    services.instructionSources.push(
+      {
+        id: 'project',
+        status: 'active',
+        path: '.glyph/rules/project.mdc',
+        uri: 'file:///workspace/.glyph/rules/project.mdc',
+        references: ['reference.md'],
+      },
+      {
+        id: 'user',
+        kind: 'glyph_user_rule',
+        status: 'active',
+        path: '~/.glyph/rules/user.mdc',
+        uri: 'file:///custom/rules/user.mdc',
+        references: ['references/note.md'],
+      },
+    );
+    const edits = new Emitter<void>();
+    const model = { uri: URI.file(path), onDidChangeContent: edits.event };
+    services.models.push(model);
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      controller.setSkillSources(
+        () => [],
+        refresh,
+        () => ['file:///custom/rules'],
+      );
+      services.fileChanges.fire([{ resource: model.uri, type: 1 }]);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).toHaveBeenCalledOnce();
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
   it('refreshes saved and unsaved skill metadata, reconnects provider listeners, and suppresses refresh when trust is lost', async () => {
     vi.useFakeTimers();
     const services = controllerServices();

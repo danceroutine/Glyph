@@ -82,6 +82,7 @@ async function fixture(
     readonly skillManager?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skillManager'];
     readonly skillSources?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skillSources'];
     readonly skillCatalog?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skills'];
+    readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
     readonly records?: readonly ChatSessionRecord[];
     readonly instructionCatalog?: NonNullable<
       ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']
@@ -216,6 +217,7 @@ async function fixture(
     ...(extras.skillManager ? { skillManager: extras.skillManager } : {}),
     ...(extras.skillSources ? { skillSources: extras.skillSources } : {}),
     ...(extras.skillCatalog ? { skills: extras.skillCatalog } : {}),
+    ...(extras.refreshCatalogs ? { refreshCatalogs: extras.refreshCatalogs } : {}),
   });
   await runtime.handle({ type: Command.CREATE_CHAT, accountProvider: 'fixture', accountId: 'account', model: 'model' });
   const chatId = (await runtime.snapshot()).chats.find(
@@ -4509,6 +4511,17 @@ describe('goal continuation', () => {
 });
 
 describe('Skill lifecycle host commands', () => {
+  it('refreshes only instruction catalogs, without emitting reconnect snapshots or replacing runs', async () => {
+    const refreshCatalogs = vi.fn(async () => {});
+    const { runtime, events } = await fixture(async () => {}, 'owner', undefined, { refreshCatalogs });
+    onTestFinished(() => runtime.dispose());
+    events.length = 0;
+    await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+    expect(refreshCatalogs).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+    expect(events.some(event => event.type === GlyphHostEventType.INITIAL_STATE)).toBe(false);
+    refreshCatalogs.mockRejectedValueOnce(new Error('Discovery failed'));
+    await expect(runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS })).rejects.toThrow('Discovery failed');
+  });
   it('restores pinned skill provenance when reopening a saved conversation', async () => {
     const activation = {
       descriptor: aSkillDescriptor(),

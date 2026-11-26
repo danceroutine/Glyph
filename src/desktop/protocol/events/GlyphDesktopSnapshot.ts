@@ -12,6 +12,9 @@ import type { GlyphInstructionSource } from './GlyphInstructionSource.ts';
 
 /** Full recoverable projection used when replay is unavailable or unsafe. */
 export interface GlyphDesktopSnapshot {
+  /** Host-authorized instruction locations to observe, independent of write capabilities. */
+  readonly instructionWatchRoots?: readonly string[];
+  readonly userRulesDirectoryUri?: string;
   readonly skillTargets?: readonly GlyphSkillTarget[];
   readonly skillPreview?: GlyphSkillPreview;
   readonly skillManagementMessage?: string;
