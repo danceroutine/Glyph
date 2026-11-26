@@ -23,6 +23,12 @@ export interface Tool {
    */
   readonly requiresExclusiveRound?: boolean;
 
+  /** Defer presentation when a domain may return an internal context handoff instead of a user-visible operation. */
+  readonly activityPresentation?: {
+    readonly afterCompletion: true;
+    readonly show: (output: string) => boolean;
+  };
+
   /** Nonempty routing scope; together with name, identifies one registered tool. */
   readonly namespace: string;
 
