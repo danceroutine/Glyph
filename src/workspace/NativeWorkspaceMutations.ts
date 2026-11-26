@@ -9,7 +9,13 @@ const replySchema = z.discriminatedUnion('ok', [
   z.strictObject({ ok: z.literal(false), code: z.string(), message: z.string() }),
 ]);
 type Operation =
-  | { operation: 'ensure_directory' | 'remove_tree'; relative: string }
+  | { operation: 'ensure_directory' | 'remove_tree' | 'create_stage'; relative: string; mode?: number }
+  | {
+      operation: 'stage_package';
+      relative: string;
+      files: { path: string; mode: number; content: string }[];
+      directories: { path: string; mode: number }[];
+    }
   | { operation: 'rename_exclusive'; sourceRelative: string; targetRelative: string };
 
 /** Pins the host-authorized physical directory; the native helper traverses and mutates relative to that identity. */
@@ -33,8 +39,23 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
       await handle.close();
     }
   }
-  ensureDirectory(relative: string): Promise<void> {
-    return this.run({ operation: 'ensure_directory', relative });
+  ensureDirectory(relative: string, mode?: number): Promise<void> {
+    return this.run({ operation: 'ensure_directory', relative, ...(mode === undefined ? {} : { mode }) });
+  }
+  createStage(relative: string): Promise<void> {
+    return this.run({ operation: 'create_stage', relative });
+  }
+  stagePackage(
+    relative: string,
+    files: ReadonlyMap<string, { readonly bytes: Uint8Array; readonly mode: number }>,
+    directories: ReadonlyMap<string, number>,
+  ): Promise<void> {
+    return this.run({
+      operation: 'stage_package',
+      relative,
+      files: [...files].map(([path, file]) => ({ path, mode: file.mode, content: Buffer.from(file.bytes).toString('base64') })),
+      directories: [...directories].map(([path, mode]) => ({ path, mode })),
+    });
   }
   renameExclusive(sourceRelative: string, targetRelative: string): Promise<void> {
     return this.run({ operation: 'rename_exclusive', sourceRelative, targetRelative });
@@ -44,7 +65,8 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
   }
   private async run(operation: Operation): Promise<void> {
     const request = JSON.stringify({ ...operation, root: this.root, rootIdentity: this.rootIdentity });
-    if (Buffer.byteLength(request) > 32 * 1024) throw new Error('Workspace mutation request exceeds 32 KiB.');
+    const maxBytes = operation.operation === 'stage_package' ? 24 * 1024 * 1024 : 32 * 1024;
+    if (Buffer.byteLength(request) > maxBytes) throw new Error('Workspace mutation request exceeds ' + (maxBytes / 1024) + ' KiB.');
     const stdout = await new Promise<string>((resolve, reject) => {
       const child = execFile(
         this.executable,
