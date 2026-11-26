@@ -1,3 +1,6 @@
+import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleInstructionProvider.js';
+import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -124,11 +127,27 @@ describe(ProjectAccess, () => {
         await mkdir(join(root, directory));
         await writeFile(join(root, directory, 'AGENTS.md'), `${directory} guidance`);
         await writeFile(join(root, directory, 'file.ts'), 'content');
+        await mkdir(join(root, directory, '.glyph', 'rules'), { recursive: true });
+        await writeFile(
+          join(root, directory, '.glyph', 'rules', 'files.mdc'),
+          '---\nglobs: ["**/*.ts"]\n---\nTypeScript guidance',
+        );
+        await writeFile(
+          join(root, directory, '.glyph', 'rules', 'model.mdc'),
+          '---\ndescription: Scoped review workflow\n---\nModel guidance',
+        );
       }
       const workspace = new FileSystemWorkspaceTextStore(root);
-      const instructions = new AgentInstructionCatalog([new AgentsMdInstructionProvider(workspace)]);
-      await instructions.beginTurn('turn', []);
-      const access = new ProjectAccess(root, {}, workspace, undefined, instructions);
+      const instructions = new AgentInstructionCatalog([
+        new AgentsMdInstructionProvider(workspace),
+        new AgentRuleInstructionProvider(workspace, {
+          kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+          directory: '.glyph',
+        }),
+      ]);
+      const coordinator = new TurnContextCoordinator(instructions);
+      await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: [] });
+      const access = new ProjectAccess(root, {}, workspace, undefined, coordinator);
       const result = JSON.parse(
         await access.execute(
           'read_project_file',
@@ -142,7 +161,14 @@ describe(ProjectAccess, () => {
         ),
       ) as { path: string; instructionContext?: AgentInstructionContext };
       expect(result.path).toBe(normalized);
-      expect(result.instructionContext?.sources.map(source => source.path)).toEqual([instruction]);
+      const scope = normalized.split('/')[0]!;
+      expect(result.instructionContext?.sources.map(source => source.path)).toEqual([
+        `${scope}/.glyph/rules/files.mdc`,
+        instruction,
+      ]);
+      expect(result.instructionContext?.candidates?.map(source => source.id)).toEqual([
+        `glyph_project_rule:${scope}/.glyph/rules/model.mdc`,
+      ]);
     },
   );
 

@@ -1,3 +1,4 @@
+import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import { GlyphShellTerminals } from './GlyphShellTerminals.js';
 import { BrowserViewUri } from '#vs/platform/browserView/common/browserViewUri.js';
@@ -1494,6 +1495,7 @@ function instructionResource(folders: readonly IWorkspaceFolder[], path: string)
   const only = folders.length === 1 ? folders[0] : undefined;
   if (only) return URI.joinPath(only.uri, path);
   const [rootName, ...relative] = path.split('/');
-  const folder = folders.find(candidate => candidate.name === rootName);
+  const roots = folders.map(folder => ({ name: folder.name, uri: folder.uri.toString() }));
+  const folder = folders.find((_folder, index) => getGlyphWorkspaceRootId(roots[index], roots) === rootName);
   return folder ? URI.joinPath(folder.uri, ...relative) : undefined;
 }

@@ -1,3 +1,5 @@
+import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
+import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import { AgentMode, type AgentModeID } from '#src/chat/AgentMode.js';
 import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
@@ -189,6 +191,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
             for (const instruction of steering) {
               boundaryInstructions = this.steeringInstructions(turnId, instruction);
               turn = await this.adapter.steerTurn(turn, modelInput(instruction), context(round));
+            }
             this.state = this.persistentState(this.adapter.snapshot(turn));
             hasToolCheckpoint = true;
             await options.onStateCheckpoint?.(structuredClone(this.state));
@@ -270,6 +273,23 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       this.turnContexts?.discardTurn(turnId);
       this.busy = false;
     }
+  }
+
+  private steeringInstructions(turnId: string, request: ChatRequest): AgentInstructionContext | undefined {
+    const contexts = [
+      this.turnContexts?.discloseAttachments(
+        turnId,
+        request.attachments.map(attachment => attachment.path),
+      ),
+      this.turnContexts?.activateManualRules(turnId, request.manualRuleIds ?? []),
+    ].filter((value): value is AgentInstructionContext => value !== undefined);
+    if (contexts.length === 0) return undefined;
+    return {
+      schema: 'glyph.agent-instructions.v1',
+      sources: contexts.flatMap(context => context.sources),
+      activations: contexts.flatMap(context => context.activations ?? []),
+      candidates: contexts.flatMap(context => context.candidates ?? []),
+    };
   }
 
   /** Every state entering durable storage passes through the same host policy. */

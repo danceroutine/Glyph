@@ -1,3 +1,4 @@
+import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { ToolRegistry } from '#src/tools/ToolRegistry.js';
 import OpenAI from 'openai';
 import { z } from 'zod';
