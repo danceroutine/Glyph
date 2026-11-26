@@ -1,3 +1,4 @@
+import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
 import { mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -21,6 +22,32 @@ describe(SkillPackageManager, () => {
       packageRevision: draft.revision,
     });
     await expect(manager.apply(preview.id)).rejects.toThrow('expired');
+  });
+  it('derives instruction paths from the retained project inventory across installs, updates and removals', async () => {
+    const { location, state, catalog, manager: user } = await aSkillLifecycle();
+    const draft = aSkillDraft();
+    const userPreview = await user.prepare(location.id, draft);
+    expect(user.workspacePaths(userPreview.id)).toEqual([]);
+    user.discard(userPreview.id);
+    const manager = new SkillPackageManager([{ ...location, scope: 'project' }], catalog, state);
+    const install = await manager.prepare(location.id, draft);
+    const installedPaths = install.files.map(file => 'skills/example/' + file.path);
+    expect(manager.workspacePaths(install.id)).toEqual(installedPaths);
+    await manager.apply(install.id);
+    const skill = catalog.skills[0]!;
+    const source = draft.toJSON();
+    const replacement = new SkillPackageDraft({
+      ...source,
+      files: source.files.filter(file => !file.path.endsWith('.bin')),
+    });
+    const update = await manager.prepare(location.id, replacement, skill.id);
+    expect(update.files.find(file => file.path === 'assets/image.bin')?.status).toBe('removed');
+    expect(manager.workspacePaths(update.id)).toEqual(installedPaths);
+    manager.discard(update.id);
+    const removal = await manager.prepareRemoval(skill.id);
+    expect(manager.workspacePaths(removal.id)).toEqual(installedPaths);
+    manager.discard(removal.id);
+    expect(() => manager.workspacePaths(removal.id)).toThrow('expired');
   });
   it('persists enablement independently of package contents and restores it after reload', async () => {
     const { store, state, catalog, manager, install } = await aSkillLifecycle();

@@ -338,18 +338,33 @@ sequenceDiagram
 
 ## Agent-proposed package changes
 
-`skills.propose_change` accepts a complete draft or an installed skill identity to remove. It is available in Agent mode. The host captures a preview and presents a one-shot approval containing its file comparisons, origin, and revision. The approval shows the retained physical destination and whether it affects the project or the user profile, together with changed file digests and modes. Dirty working copies, including unsaved new files, must be saved or discarded first. Global user packages also consult connected trusted windows in the same profile. The approval belongs to the requesting run and cannot create a reusable permission grant. Ordinary project edit tools direct managed-package changes through this approval boundary. Denial and cancellation discard the proposal. Approval applies the retained token through the same manager used by Settings, including stale-preview checks and rollback behavior.
+`skills.propose_change` lets an agent propose a complete skill package or select an installed package for removal. For a project package, Glyph checks every path in the preview against the turn’s repository instructions, including files an update or removal would delete. The installed destination determines the workspace root. If a nested `AGENTS.md` or file-pattern rule applies for the first time, Glyph discards that preview and returns the guidance to the model. The model can revise and resubmit its proposal. This exchange stays out of tool activity and the approval UI. A turn that already has the applicable guidance proceeds directly to review. User-profile packages proceed to review independently of project paths.
+
+Before preview and again during publication, Glyph checks for dirty working copies, including unsaved new files. For a project package, it checks the owning window and every trusted window whose workspace overlaps the package directory. This includes a window opened directly on a subdirectory of the package and a window using a different path to the same physical directory. For a user package, it checks trusted windows sharing the user skill store. Save or discard affected edits before retrying.
+
+The one-shot approval shows the physical destination, project or user scope, package origin, revision, and file comparisons with changed digests and modes. It belongs to the requesting run. Ordinary project edit tools direct managed-package changes through this review. Denial or cancellation discards the preview. Approval applies the retained token through the same stale-preview checks and rollback path used by Settings.
 
 ```mermaid
 sequenceDiagram
     participant Model
     participant Tool as Skill lifecycle tool
     participant Manager as Package manager
+    participant Turn as Turn context
     participant Broker as Interaction broker
     actor User
-    Model->>Tool: propose_change with complete package
-    Tool->>Manager: Capture immutable preview
-    Manager-->>Tool: Token, revision, and comparisons
+    loop Until the turn has the applicable instructions
+        Model->>Tool: Propose a complete package or an installed package removal
+        Tool->>Manager: Capture immutable preview
+        Manager-->>Tool: Token, destination, revision, and file comparisons
+        opt Project package
+            Tool->>Turn: Disclose instructions for all preview paths in the owning root
+            Turn-->>Tool: Newly applicable guidance, if any
+        end
+        opt Newly applicable guidance
+            Tool->>Manager: Discard preview
+            Tool-->>Model: Return guidance and request a revised proposal
+        end
+    end
     Tool->>Broker: Request one-shot package approval
     Broker-->>User: Show reviewed files and revision
     alt User approves

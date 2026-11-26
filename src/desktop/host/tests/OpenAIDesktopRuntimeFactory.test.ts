@@ -767,6 +767,123 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
 
   describe(OpenAIDesktopRuntimeFactory.prototype.create, () => {
+    it('discloses nested and file-pattern guidance before approving removal from the owning project root', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const one = await fixture.folder('one', { 'AGENTS.md': 'First root guidance.' });
+      const two = await fixture.folder('two', { 'AGENTS.md': 'Second root guidance.' });
+      await mkdir(join(one, 'nested'));
+      await writeFile(join(one, 'nested/AGENTS.md'), 'Other root guidance.');
+      const packagePath = join(two, 'nested/.glyph/skills/example');
+      await mkdir(join(packagePath, 'assets'), { recursive: true });
+      await mkdir(join(two, '.glyph/rules'), { recursive: true });
+      await writeFile(join(two, 'nested/AGENTS.md'), 'Nested package guidance.');
+      await writeFile(
+        join(two, '.glyph/rules/assets.mdc'),
+        '---\nactivation: file_pattern\nglobs: ["**/*.bin"]\n---\nBinary asset guidance.',
+      );
+      await writeFile(join(packagePath, 'SKILL.md'), '---\nname: example\ndescription: fixture\n---\nBody');
+      await writeFile(join(packagePath, 'assets/image.bin'), Buffer.from([0, 255]));
+      const userPackage = join(fixture.userDirectory, 'skills/personal');
+      await mkdir(join(userPackage, 'assets'), { recursive: true });
+      await writeFile(join(userPackage, 'SKILL.md'), '---\nname: personal\ndescription: fixture\n---\nBody');
+      await writeFile(join(userPackage, 'assets/image.bin'), Buffer.from([0, 128]));
+      useFilesystemIndex();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_who, request) => {
+        if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          return { operationId: request.operationId, ok: true };
+        if (
+          request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ||
+          request.type === GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES
+        )
+          return { operationId: request.operationId, ok: true, packageClean: true };
+        if (request.type === GlyphEditorRequestType.READ_SNAPSHOT) {
+          expect(request.path).toBe('two/nested/.glyph/skills/example/SKILL.md');
+          const file = await new FileSystemWorkspaceTextStore(two).read(request.path.slice('two/'.length));
+          return editorResponse(request, request.path, file.text);
+        }
+        throw new Error('Unexpected editor request for package removal.');
+      });
+      const events: GlyphHostEvent[] = [];
+      const runtime = await fixture.create([one, two], event => {
+        events.push(event);
+      });
+      const state = await runtime.snapshot();
+      const installed = state.skills!.find(skill => skill.name === 'example')!;
+      const user = state.skillTargets!.find(target => target.scope === 'user')!;
+      const [, , registry, , turns] = captured.providerFactories[0]!;
+      const turnId = 'project-removal';
+      const turn = await turns!.beginTurn({ turnId, attachmentPaths: [] }, new AbortController().signal);
+      expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual([
+        'First root guidance.',
+        'Second root guidance.',
+      ]);
+      const propose = registry!.tools.find(tool => tool.namespace === 'skills' && tool.name === 'propose_change')!;
+      const input = JSON.stringify({ target_id: user.id, replace_id: null, remove_id: installed.id, draft: null });
+      const context = {
+        turnId,
+        mode: AgentModeID.AGENT,
+        chat: { id: 'chat', accountProvider: 'openai', accountId: 'account' },
+      };
+      const broker = captured.brokers[0]!.broker;
+      const execute = (currentTurn: string, change = input) =>
+        broker.run({ chatId: 'chat', runId: 'run' }, () =>
+          propose.execute(change, new AbortController().signal, { ...context, turnId: currentTurn }),
+        );
+      const denyApproval = async (currentTurn: string, change = input) => {
+        const firstEvent = events.length;
+        const pending = execute(currentTurn, change);
+        const approval = await vi.waitFor(() => {
+          const event = events.slice(firstEvent).find(value => value.type === GlyphHostEventType.APPROVAL);
+          if (!event || event.type !== GlyphHostEventType.APPROVAL) throw new Error('Waiting for package approval.');
+          return event.approval;
+        });
+        broker.answer({
+          chatId: 'chat',
+          runId: 'run',
+          id: approval.id,
+          kind: 'approval',
+          value: GlyphApprovalDecision.DENY,
+        });
+        expect(JSON.parse(await pending)).toMatchObject({ applied: false, denied: true });
+      };
+      const result = await execute(turnId);
+      expect(JSON.parse(result)).toMatchObject({
+        status: 'INSTRUCTION_CONTEXT_REQUIRED',
+        instructionContext: {
+          sources: expect.arrayContaining([
+            expect.objectContaining({ path: 'two/nested/AGENTS.md', content: 'Nested package guidance.' }),
+            expect.objectContaining({ path: 'two/.glyph/rules/assets.mdc', content: 'Binary asset guidance.' }),
+          ]),
+        },
+      });
+      expect(result).not.toContain('root guidance.');
+      expect(propose.activityPresentation?.show(result)).toBe(false);
+      expect(events.some(event => event.type === GlyphHostEventType.APPROVAL)).toBe(false);
+      await denyApproval(turnId);
+
+      const attachedTurn = 'already-informed';
+      const informed = await turns!.beginTurn({
+        turnId: attachedTurn,
+        attachmentPaths: ['two/nested/.glyph/skills/example/assets/image.bin'],
+      });
+      expect(informed.initialEnvelope().sources.map(source => source.content)).toEqual(
+        expect.arrayContaining(['Nested package guidance.', 'Binary asset guidance.']),
+      );
+      await denyApproval(attachedTurn);
+      turns!.discardTurn(attachedTurn);
+
+      const userTurn = 'user-removal';
+      await turns!.beginTurn({ turnId: userTurn, attachmentPaths: [] });
+      const personal = state.skills!.find(skill => skill.name === 'personal')!;
+      await denyApproval(
+        userTurn,
+        JSON.stringify({ target_id: installed.origin.id, replace_id: null, remove_id: personal.id, draft: null }),
+      );
+      turns!.discardTurn(userTurn);
+      expect((await runtime.snapshot()).skills!.some(skill => skill.id === installed.id)).toBe(true);
+      turns!.discardTurn(turnId);
+    });
     it('wires isolated user and project package management, pinned activation, approvals, and shared enablement into production runtimes', async () => {
       const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
@@ -783,14 +900,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         truncated: false,
         durationMilliseconds: 0,
       });
-      vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
-        this: RustWorkspacePathIndex,
-        pattern,
-        options,
-      ) {
-        const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
-        return new FileSystemWorkspaceTextStore(configuration.root).list(options.limit, pattern);
-      });
+      useFilesystemIndex();
       const roots = [await fixture.folder('one'), await fixture.folder('two')];
       const events: GlyphHostEvent[] = [];
       const runtime = await fixture.create(roots, event => {
@@ -1507,6 +1617,17 @@ describe(OpenAIDesktopRuntimeFactory, () => {
 
 const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..', '..');
 const factoryIdentity: GlyphConnectionIdentity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
+
+function useFilesystemIndex(): void {
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
+    this: RustWorkspacePathIndex,
+    pattern,
+    options,
+  ) {
+    const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
+    return new FileSystemWorkspaceTextStore(configuration.root).list(options.limit, pattern);
+  });
+}
 
 async function factoryFixture(options: { readonly transport?: typeof fetch } = {}) {
   for (const values of Object.values(captured)) values.length = 0;

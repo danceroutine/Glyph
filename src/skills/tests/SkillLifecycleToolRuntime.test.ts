@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { SkillLifecycleToolRuntime } from '#src/skills/SkillLifecycleToolRuntime.js';
 import { SkillTurnContext } from '#src/skills/SkillContextContributor.js';
@@ -25,12 +26,13 @@ function fixture(allowed = true) {
     prepareRemoval: vi.fn(async () => ({ ...preview, action: 'remove' })),
     apply: vi.fn(async () => ({ applied: true })),
     discard: vi.fn(),
+    workspacePaths: vi.fn((): readonly string[] => []),
   };
   const approve = vi.fn(async () => allowed);
   const descriptor = aSkillDescriptor();
   const catalog = { capture: vi.fn(async () => aSkillPackage(descriptor)) };
   const session = new SkillTurnContext('turn', [descriptor], [descriptor], catalog as never);
-  const turns = { contribution: vi.fn(() => session) };
+  const turns = { contribution: vi.fn(() => session), disclosePaths: vi.fn<TurnContextCoordinator['disclosePaths']>() };
   const runner = { run: vi.fn(async () => ({ output: 'Done', exitCode: 0 })) };
   const runtime = new SkillLifecycleToolRuntime(manager as never, approve, turns, runner as never);
   const tool = runtime.tools[0]!;
@@ -52,14 +54,57 @@ describe(SkillLifecycleToolRuntime, () => {
     });
   });
   it.each([true, false])('applies exactly the approved revision when authorization is %s', async allowed => {
-    const { manager, approve, tool, context, signal } = fixture(allowed);
+    const { manager, approve, turns, tool, context, signal } = fixture(allowed);
     const input = JSON.stringify({ target_id: 'user:glyph', replace_id: null, remove_id: null, draft });
     tool.validateInput(input);
     const output = JSON.parse(await tool.execute(input, signal, context));
     expect(approve).toHaveBeenCalledWith(expect.objectContaining({ revision: 'pinned' }), signal);
     expect(output).toMatchObject({ applied: allowed });
+    expect(turns.disclosePaths).not.toHaveBeenCalled();
     expect(manager.apply).toHaveBeenCalledTimes(allowed ? 1 : 0);
     expect(manager.discard).toHaveBeenCalledWith('preview');
+  });
+  it('discloses newly applicable package instructions before approval and admits the regenerated proposal', async () => {
+    const { manager, approve, tool, context, turns, signal } = fixture();
+    const paths = ['two/.glyph/skills/example/SKILL.md', 'two/.glyph/skills/example/assets/icon.bin'];
+    manager.workspacePaths.mockReturnValue(paths);
+    const instructions = { schema: 'glyph.agent-instructions.v1' as const, sources: [] };
+    turns.disclosePaths.mockReturnValueOnce(instructions);
+    const input = JSON.stringify({
+      target_id: 'user:glyph',
+      replace_id: null,
+      remove_id: 'installed-project-skill',
+      draft: null,
+    });
+    const first = await tool.execute(input, signal, context);
+    expect(JSON.parse(first)).toMatchObject({
+      status: 'INSTRUCTION_CONTEXT_REQUIRED',
+      instructionContext: instructions,
+    });
+    expect(turns.disclosePaths).toHaveBeenCalledWith(context.turnId, paths);
+    expect(manager.workspacePaths).toHaveBeenCalledWith('preview');
+    expect(tool.activityPresentation?.show(first)).toBe(false);
+    expect(approve).not.toHaveBeenCalled();
+    expect(manager.apply).not.toHaveBeenCalled();
+    expect(manager.discard).toHaveBeenCalledWith('preview');
+    const final = await tool.execute(input, signal, context);
+    expect(JSON.parse(final)).toMatchObject({ applied: true });
+    expect(tool.activityPresentation?.show(final)).toBe(true);
+    expect(approve).toHaveBeenCalledOnce();
+    expect(manager.apply).toHaveBeenCalledOnce();
+    expect(manager.discard).toHaveBeenCalledTimes(2);
+  });
+  it('discards the pending preview if instruction disclosure fails before review', async () => {
+    const { manager, approve, turns, tool, context, signal } = fixture();
+    manager.workspacePaths.mockReturnValue(['src/.glyph/skills/example/SKILL.md']);
+    turns.disclosePaths.mockImplementation(() => {
+      throw new Error('Instruction catalog changed');
+    });
+    const input = JSON.stringify({ target_id: 'project', replace_id: null, remove_id: null, draft });
+    await expect(tool.execute(input, signal, context)).rejects.toThrow('Instruction catalog changed');
+    expect(manager.discard).toHaveBeenCalledWith('preview');
+    expect(approve).not.toHaveBeenCalled();
+    expect(manager.apply).not.toHaveBeenCalled();
   });
   it('requires a turn, validates exclusive actions, and discards a cancelled proposal without mutation', async () => {
     const { manager, approve, tool, context, signal } = fixture();

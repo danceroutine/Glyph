@@ -405,6 +405,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:.glyph`,
             label: `${part.name} project skills`,
             scope: 'project' as const,
+            ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
             mutations: mutationRoots.get(part.disk.root)!,
             assertClean: (path: string) => {
               const logicalRoot = input.roots.find(
