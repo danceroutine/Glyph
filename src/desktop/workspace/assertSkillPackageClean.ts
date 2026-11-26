@@ -46,6 +46,7 @@ export async function assertSkillPackageClean(
               operationId: randomUUID(),
               type: CHECK_SKILL_WORKING_COPIES,
               scope,
+              peerWorkspaceIntersection: true,
               directoryUri:
                 peer.directoryUri ??
                 (() => {
@@ -67,16 +68,12 @@ export async function assertSkillPackageClean(
       if (!response.packageClean) throw new Error('Save or discard unsaved skill edits before managing the package.');
     }),
   );
-  {
-    const current = new Set(
-      (scope === 'user'
-        ? editors.trustedSkillEditors(identity)
-        : editors.trustedSkillEditors(identity, absolutePackageDirectory)
-      ).map(peer => peer.connectionId),
-    );
-    if (current.size !== peers.length || peers.some(peer => !current.has(peer.connectionId)))
-      throw new Error(
-        'The trusted Glyph windows changed during the working-copy check. Preview the skill change again.',
-      );
-  }
+  const current =
+    scope === 'user'
+      ? editors.trustedSkillEditors(identity)
+      : editors.trustedSkillEditors(identity, absolutePackageDirectory);
+  const peerKey = (peer: (typeof peers)[number]) => JSON.stringify([peer.connectionId, peer.directoryUri]);
+  const currentKeys = new Set(current.map(peer => peerKey(peer)));
+  if (currentKeys.size !== peers.length || peers.some(peer => !currentKeys.has(peerKey(peer))))
+    throw new Error('The trusted Glyph windows changed during the working-copy check. Preview the skill change again.');
 }

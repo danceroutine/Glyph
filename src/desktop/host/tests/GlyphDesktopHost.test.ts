@@ -15,6 +15,8 @@ import type { GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent
 import type { GlyphHostEventEnvelope } from '#src/desktop/protocol/events/GlyphHostEventEnvelope.js';
 import type { GlyphRequestEnvelope } from '#src/desktop/protocol/GlyphRequestEnvelope.js';
 import type { GlyphWorkbenchCommand } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { assertSkillPackageClean } from '#src/desktop/workspace/assertSkillPackageClean.js';
+import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import { GlyphDesktopHost } from '#src/desktop/host/GlyphDesktopHost.js';
 import {
   type GlyphDesktopWorkspaceRuntime,
@@ -71,6 +73,86 @@ describe(GlyphDesktopHost, () => {
     expect(() => fixture.host.trustedSkillEditors(owner, destination)).toThrow('reconnecting');
     expect(() => fixture.host.trustedSkillEditors(owner)).toThrow('reconnecting');
     await fixture.host.dispose();
+  });
+  it('blocks publication on a dirty peer opened inside the package and checks each overlapping logical alias', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'glyph-nested-peer-'));
+    onTestFinished(() => rm(parent, { recursive: true, force: true }));
+    const project = join(parent, 'project');
+    const store = join(project, '.glyph', 'skills');
+    const destination = join(store, 'example');
+    await mkdir(join(destination, 'references'), { recursive: true });
+    await mkdir(join(destination, 'scripts'));
+    await mkdir(join(store, 'example-sibling'));
+    const references = join(parent, 'reference-alias');
+    const scripts = join(parent, 'script-alias');
+    const storeAlias = join(parent, 'store-alias');
+    const unrelated = join(parent, 'other-alias');
+    await symlink(join(destination, 'references'), references);
+    await symlink(join(destination, 'scripts'), scripts);
+    await symlink(store, storeAlias);
+    await symlink(join(store, 'example-sibling'), unrelated);
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const describeRoot = (path: string) => ({ name: path, uri: pathToFileURL(path).toString(), canonicalPath: path });
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    const attachPeer = async (id: string, paths: string[]) =>
+      fixture.receive('peer', peer, id, {
+        type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+        roots: paths.map(path => describeRoot(path)),
+        trusted: true,
+      });
+    await fixture.receive('owner', owner, 'owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: [describeRoot(project)],
+      trusted: true,
+    });
+    await attachPeer('peer', [references, scripts, storeAlias, unrelated]);
+    const physical = await realpath(destination);
+    expect(fixture.host.trustedSkillEditors(owner, physical).map(value => value.directoryUri)).toEqual(
+      [references, scripts, join(storeAlias, 'example')].map(path => pathToFileURL(path).toString()),
+    );
+    let dirty = true;
+    const check = () =>
+      assertSkillPackageClean(
+        {
+          trustedSkillEditors: fixture.host.trustedSkillEditors.bind(fixture.host),
+          request: async (identity, input) => {
+            if (input.type !== GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES)
+              throw new Error('Unexpected editor request.');
+            return {
+              operationId: input.operationId,
+              ok: true,
+              packageClean: !(
+                dirty &&
+                identity.windowId === peer.windowId &&
+                input.directoryUri === pathToFileURL(scripts).toString()
+              ),
+            };
+          },
+        },
+        owner,
+        'project',
+        physical,
+      );
+    await expect(check()).rejects.toThrow('unsaved');
+    dirty = false;
+    await rm(unrelated);
+    await check();
+    await symlink(join(destination, 'references'), unrelated);
+    await check();
+    expect(fixture.host.trustedSkillEditors(owner, physical).map(value => value.directoryUri)).toContain(
+      pathToFileURL(unrelated).toString(),
+    );
+    await rm(scripts);
+    await symlink(join(store, 'example-sibling'), scripts);
+    expect(fixture.host.trustedSkillEditors(owner, join(parent, 'another-project'))).toEqual([]);
+    await expect(check()).rejects.toThrow('unavailable project root');
+    await attachPeer('unknown', [references, join(parent, 'never-resolved')]);
+    await expect(check()).rejects.toThrow('unavailable project root');
+    await attachPeer('reconnect', [references]);
+    await fixture.host.disconnect('peer');
+    await expect(check()).rejects.toThrow('reconnecting');
   });
   it('does not invoke trusted snapshot work for a rejected observer', async () => {
     const fixture = new HostFixture();

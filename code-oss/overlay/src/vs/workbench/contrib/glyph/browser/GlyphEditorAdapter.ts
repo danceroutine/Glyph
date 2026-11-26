@@ -728,7 +728,7 @@ export class GlyphEditorAdapter extends Disposable {
     return this.receipts.get(operationId);
   }
 
-  /** Save only the changed resource; skip formatters that would escape the recorded edit. */
+  /** Checks only dirty working copies under the authorized package or peer workspace intersection. */
   private skillPackageClean(
     request: Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES }>,
     targets: readonly GlyphSkillTarget[],
@@ -762,8 +762,9 @@ export class GlyphEditorAdapter extends Disposable {
       if (
         request.scope !== 'project' ||
         !owner ||
-        !identity.isEqualOrParent(scope, owner.uri) ||
-        !identity.isEqual(parent, URI.joinPath(scope, '.glyph', 'skills'))
+        (!request.peerWorkspaceIntersection &&
+          (!identity.isEqualOrParent(scope, owner.uri) ||
+            !identity.isEqual(parent, URI.joinPath(scope, '.glyph', 'skills'))))
       )
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
     }

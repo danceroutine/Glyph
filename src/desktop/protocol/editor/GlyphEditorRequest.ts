@@ -28,6 +28,8 @@ export type GlyphEditorRequest =
       readonly type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES;
       readonly operationId: string;
       readonly scope: 'user' | 'project';
+      /** The host resolved this project-package intersection against the peer's physical workspace roots. */
+      readonly peerWorkspaceIntersection?: true;
       readonly directoryUri: string;
     }
   | { readonly type: GlyphEditorRequestType.EXISTS; readonly operationId: string; readonly path: string }

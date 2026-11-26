@@ -34,6 +34,7 @@ it('checks the owner and overlapping peer through each editor’s authorized log
       type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
       scope: 'project',
       directoryUri: peer.directoryUri,
+      peerWorkspaceIntersection: true,
     },
   ]);
   const missingDirectory = () => [{ identity: peer.identity, connectionId: peer.connectionId }];
@@ -45,6 +46,34 @@ it('checks the owner and overlapping peer through each editor’s authorized log
       '/physical/.glyph/skills/example',
     ),
   ).rejects.toThrow('peer project destination');
+});
+it('revalidates every logical intersection when one connection covers multiple package subtrees', async () => {
+  const peer = {
+    identity: { ...identity, windowId: 'peer' },
+    connectionId: 'peer',
+    directoryUri: 'file:///alias/refs',
+  };
+  const second = { ...peer, directoryUri: 'file:///alias/scripts' };
+  const registry = vi.fn(() => [peer, second]);
+  const request = vi.fn<EditorRpcRouter['request']>(async (_identity, input) => ({
+    operationId: 'operationId' in input ? input.operationId : '',
+    ok: true,
+    packageClean: true,
+  }));
+  const check = () =>
+    assertSkillPackageClean(
+      { request, trustedSkillEditors: registry },
+      identity,
+      'project',
+      '/project/.glyph/skills/example',
+    );
+  registry.mockReturnValueOnce([peer, second]).mockReturnValueOnce([second, peer]);
+  await check();
+  expect(request).toHaveBeenCalledTimes(3);
+  registry
+    .mockReturnValueOnce([peer, second])
+    .mockReturnValueOnce([peer, { ...second, directoryUri: 'file:///new-alias' }]);
+  await expect(check()).rejects.toThrow('windows changed');
 });
 it('sends only the owning window and approved directory to the working-copy guard', async () => {
   const request = vi.fn<EditorRpcRouter['request']>(async (_identity, input) => ({

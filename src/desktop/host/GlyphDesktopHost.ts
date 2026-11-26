@@ -38,6 +38,7 @@ interface Connection {
   trusted: boolean;
   readOnly: boolean;
   roots: readonly GlyphWorkspaceRoot[];
+  physicalRoots: Map<GlyphWorkspaceRoot, Set<string>>;
   attachmentQueue: Promise<void>;
   pendingAttachments: number;
 }
@@ -70,7 +71,7 @@ export class GlyphDesktopHost {
     this.generation = generation;
   }
 
-  /** Live trusted windows sharing the user package store. A changing peer must settle before publication. */
+  /** Checks trusted editors for the shared user store or a project destination, including peers in reconnection grace. */
   trustedSkillEditors(
     owner: GlyphConnectionIdentity,
     projectDirectory?: string,
@@ -78,28 +79,33 @@ export class GlyphDesktopHost {
     const peers = [];
     for (const peer of this.sessions.values()) {
       if (!peer.trusted || connectionKey(peer.identity) === connectionKey(owner)) continue;
-      let directoryUri: string | undefined;
-      if (projectDirectory !== undefined) {
+      const directories = new Set<string | undefined>();
+      if (projectDirectory === undefined) {
+        directories.add(undefined);
+      } else {
         for (const root of peer.roots) {
-          let physicalRoot: string;
-          try {
-            physicalRoot = realpathSync(root.canonicalPath);
-          } catch {
+          const current = physicalRoot(root);
+          const observed = peer.physicalRoots.get(root)!;
+          if (current !== undefined) observed.add(current);
+          // A disappearing or retargeted alias can still own dirty working copies under its original URI.
+          const lostOverlap = [...observed].some(
+            physical => physical !== current && projectIntersection(root, physical, projectDirectory) !== undefined,
+          );
+          if (lostOverlap || observed.size === 0)
             throw new Error(
               'A trusted Glyph window has an unavailable project root. Reconnect it before changing the package.',
             );
-          }
-          const path = relative(physicalRoot, projectDirectory);
-          if (path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) continue;
-          directoryUri = pathToFileURL(join(fileURLToPath(root.uri), path)).toString();
-          break;
+          if (current === undefined) continue;
+          const directory = projectIntersection(root, current, projectDirectory);
+          if (directory !== undefined) directories.add(directory);
         }
-        if (directoryUri === undefined) continue;
+        if (directories.size === 0) continue;
       }
       const connectionId = [...this.connections].find(([, current]) => current === peer)?.[0];
       if (!connectionId || !peer.authorityKnown || peer.pendingAttachments > 0)
         throw new Error('Another trusted Glyph window is reconnecting. Retry the skill change after it reconnects.');
-      peers.push({ identity: peer.identity, connectionId, ...(directoryUri === undefined ? {} : { directoryUri }) });
+      for (const directoryUri of directories)
+        peers.push({ identity: peer.identity, connectionId, ...(directoryUri === undefined ? {} : { directoryUri }) });
     }
     return peers;
   }
@@ -123,6 +129,7 @@ export class GlyphDesktopHost {
         trusted: false,
         readOnly: true,
         roots: [],
+        physicalRoots: new Map(),
         attachmentQueue: Promise.resolve(),
         pendingAttachments: 0,
       };
@@ -290,6 +297,12 @@ export class GlyphDesktopHost {
     // roots and trust so package publication still checks that editor.
     connection.trusted = command.trusted;
     connection.roots = command.roots;
+    connection.physicalRoots = new Map(
+      command.roots.map(root => {
+        const physical = physicalRoot(root);
+        return [root, new Set(physical === undefined ? [] : [physical])];
+      }),
+    );
     connection.authorityKnown = true;
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
@@ -510,6 +523,26 @@ export class GlyphDesktopHost {
     if (!connection) throw new Error(`Unknown desktop connection: ${connectionId}`);
     return connection;
   }
+}
+
+function physicalRoot(root: GlyphWorkspaceRoot): string | undefined {
+  try {
+    return realpathSync(root.canonicalPath);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The portion of the physical package visible under this peer's logical workspace URI. */
+function projectIntersection(root: GlyphWorkspaceRoot, physical: string, directory: string): string | undefined {
+  const withinRoot = relative(physical, directory);
+  if (isContainedPath(withinRoot)) return pathToFileURL(join(fileURLToPath(root.uri), withinRoot)).toString();
+  if (isContainedPath(relative(directory, physical))) return root.uri;
+  return undefined;
+}
+
+function isContainedPath(path: string): boolean {
+  return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
 function connectionKey(identity: GlyphConnectionIdentity): string {
