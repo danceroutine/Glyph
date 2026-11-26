@@ -11,7 +11,7 @@ import type { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ProjectToolName } from '#src/project/ProjectToolName.js';
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
-import { SkillProjectMutationPolicy } from '../SkillProjectMutationPolicy.ts';
+import { SkillProjectMutationPolicy } from '#src/skills/SkillProjectMutationPolicy.js';
 import { aSkillDescriptor } from './fixtures/aSkillDescriptor.ts';
 import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 

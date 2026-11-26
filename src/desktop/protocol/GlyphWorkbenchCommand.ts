@@ -50,7 +50,6 @@ export enum GlyphWorkbenchCommandType {
   STOP_SHELL_SESSION = 'stop_shell_session',
   REFRESH_CONTEXT_CATALOGS = 'refresh_context_catalogs',
   REQUEST_SNAPSHOT = 'request_snapshot',
-  REFRESH_CONTEXT_CATALOGS = 'refresh_context_catalogs',
   DETACH = 'detach',
 }
 

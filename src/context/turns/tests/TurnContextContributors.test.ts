@@ -57,3 +57,36 @@ describe('Turn context contributor lifetime', () => {
     expect(await coordinator.activateSource('replacement', 'empty', 'missing', 'manual', 'Selected')).toBeUndefined();
   });
 });
+
+it('composes steering domains and synchronous rule/path activation without requiring optional participants', async () => {
+  const rule = {
+    schema: 'glyph.agent-instructions.v1' as const,
+    sources: [],
+    candidates: [{ id: 'rule', name: 'Rule', description: 'Rule relevance', scope: '.' }],
+  };
+  const coordinator = new TurnContextCoordinator([
+    {
+      id: 'async',
+      beginTurn: async input => ({
+        ...aContribution(input.turnId),
+        steer: vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(rule),
+      }),
+    },
+    {
+      id: 'rules',
+      beginTurn: async input => ({
+        ...aContribution(input.turnId),
+        discloseAttachments: paths => (paths.length > 0 ? rule : undefined),
+        activateManualRules: ids => (ids.length > 0 ? rule : undefined),
+      }),
+    },
+    { id: 'optional', beginTurn: async input => aContribution(input.turnId) },
+  ]);
+  expect(await coordinator.steer({ turnId: 'missing', attachmentPaths: [] })).toBeUndefined();
+  await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: [] });
+  expect(await coordinator.steer({ turnId: 'turn', attachmentPaths: [] })).toBeUndefined();
+  expect(
+    (await coordinator.steer({ turnId: 'turn', attachmentPaths: ['src/file.ts'], manualRuleIds: ['rule'] }))
+      ?.candidates,
+  ).toHaveLength(3);
+});

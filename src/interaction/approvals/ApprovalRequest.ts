@@ -36,6 +36,7 @@ export interface ApprovalDefinitions {
       readonly workingDirectory: string;
       readonly background: boolean;
       readonly existingTerminal: boolean;
+      readonly transient?: boolean;
     };
     readonly effect: ShellChoiceEffect;
   };

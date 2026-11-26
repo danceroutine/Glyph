@@ -51,7 +51,7 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
         [],
         { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 },
         (error, output) => {
-          if (error) reject(error);
+          if (error) reject(new Error('Workspace mutation helper failed.', { cause: error }));
           else resolve(output);
         },
       );

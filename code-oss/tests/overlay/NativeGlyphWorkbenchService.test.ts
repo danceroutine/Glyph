@@ -115,10 +115,6 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
             ],
           } as never;
           return;
-        case WorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
-          this.emit({ type: HostEventType.INSTRUCTION_SOURCES_CHANGED, sources: this.snapshot().instructionSources });
-          this.emit({ type: HostEventType.SKILLS_CHANGED, skills: this.snapshot().skills ?? [] });
-          return;
         case WorkbenchCommandType.REQUEST_SNAPSHOT:
           this.emit({ type: HostEventType.INITIAL_STATE, state: this.snapshot() });
           return;
@@ -1041,7 +1037,8 @@ describe(NativeGlyphWorkbenchService, () => {
       { type: GlyphWorkbenchCommandType.DISCARD_SKILL_PREVIEW, previewId: 'discard' },
       { type: GlyphWorkbenchCommandType.SET_SKILL_ENABLED, skillId: 'skill', enabled: false },
     ]);
-    const [sources, , roots] = context.setSkillSources.mock.calls[0];
+    const [sources] = context.setSkillSources.mock.calls[0];
+    const [, roots] = context.setInstructionRefresh.mock.calls[0];
     expect(sources()).toEqual([]);
     expect(roots()).toEqual(['file:///project/.glyph/skills']);
   });

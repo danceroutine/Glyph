@@ -36,6 +36,9 @@ pub struct SandboxRequest {
     pub state_directory: PathBuf,
     pub workspace_roots: Vec<PathBuf>,
     pub protected_paths: Vec<PathBuf>,
+    /// Host-admitted resources exposed read-only for one invocation.
+    pub read_only_paths: Vec<PathBuf>,
+    pub private_paths: Vec<PathBuf>,
     pub workspace_policy: WorkspaceAccessPolicy,
     pub command: Vec<OsString>,
 }
@@ -113,6 +116,8 @@ where
     let mut state_directory = None;
     let mut workspace_roots = Vec::new();
     let mut protected_paths = Vec::new();
+    let mut read_only_paths = Vec::new();
+    let mut private_paths = Vec::new();
     let mut workspace_policy = None;
     let mut index = 0;
 
@@ -141,6 +146,8 @@ where
             }
             "--workspace-root" => workspace_roots.push(PathBuf::from(value)),
             "--protected-path" => protected_paths.push(PathBuf::from(value)),
+            "--read-only-path" => read_only_paths.push(PathBuf::from(value)),
+            "--private-path" => private_paths.push(PathBuf::from(value)),
             "--workspace-policy" if workspace_policy.is_none() => {
                 workspace_policy = Some(
                     serde_json::from_str(value.to_str().ok_or_else(|| {
@@ -186,6 +193,8 @@ where
             .ok_or_else(|| SandboxError::Usage("--state-directory is required".to_owned()))?,
         workspace_roots,
         protected_paths,
+        read_only_paths,
+        private_paths,
         workspace_policy: workspace_policy
             .ok_or_else(|| SandboxError::Usage("--workspace-policy is required".to_owned()))?,
         command,
@@ -210,8 +219,42 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
         .collect::<Result<Vec<_>, _>>()?;
     request.protected_paths.sort();
     request.protected_paths.dedup();
+    request.read_only_paths = request
+        .read_only_paths
+        .iter()
+        .map(|path| canonical_directory(path, "read-only resource"))
+        .collect::<Result<Vec<_>, _>>()?;
+    request.read_only_paths.sort();
+    request.read_only_paths.dedup();
+    request.private_paths = request
+        .private_paths
+        .iter()
+        .map(|path| canonical_path(path, "private path"))
+        .collect::<Result<Vec<_>, _>>()?;
+    request.private_paths.sort();
+    request.private_paths.dedup();
+    for path in &request.read_only_paths {
+        if path.starts_with(&request.state_directory)
+            || request.state_directory.starts_with(path)
+            || request
+                .private_paths
+                .iter()
+                .any(|private| path.starts_with(private) || private.starts_with(path))
+        {
+            return Err(SandboxError::InvalidPath(
+                "read-only resources must not expose host state".to_owned(),
+            ));
+        }
+    }
 
     let home_directory = std::env::var_os("HOME").and_then(|path| fs::canonicalize(path).ok());
+    for resource in &request.read_only_paths {
+        if is_unsafe_workspace_root(resource, home_directory.as_deref()) {
+            return Err(SandboxError::InvalidPath(
+                "read-only resource is too broad or sensitive".to_owned(),
+            ));
+        }
+    }
     for root in &request.workspace_roots {
         if is_unsafe_workspace_root(root, home_directory.as_deref()) {
             return Err(SandboxError::InvalidPath(format!(
@@ -481,6 +524,7 @@ fn protected_executable() -> Result<PathBuf, SandboxError> {
 
 fn protected_paths(request: &SandboxRequest) -> Result<Vec<PathBuf>, SandboxError> {
     let mut paths = request.protected_paths.clone();
+    paths.extend(request.read_only_paths.iter().cloned());
     paths.push(protected_executable()?);
     paths.sort();
     paths.dedup();
@@ -576,6 +620,12 @@ pub mod macos {
             "(deny file-read* file-write* (subpath {}))\n",
             seatbelt_string(&request.state_directory)
         ));
+        for path in &request.private_paths {
+            policy.push_str(&format!(
+                "(deny file-read* file-write* (subpath {}))\n",
+                seatbelt_string(path)
+            ));
+        }
         for path in sensitive_paths(home_directory) {
             policy.push_str(&format!(
                 "(deny file-read* file-write* (subpath {}) (literal {}))\n",
@@ -650,6 +700,7 @@ pub mod macos {
         .map(PathBuf::from)
         .collect::<Vec<_>>();
         paths.extend(request.workspace_roots.iter().cloned());
+        paths.extend(request.read_only_paths.iter().cloned());
         paths.push(temporary_directory.to_owned());
         paths.extend(toolchain_paths(home_directory));
         paths.sort();
@@ -785,6 +836,10 @@ pub mod linux {
             push_path_mount(&mut arguments, option, root, root);
         }
 
+        for resource in &request.read_only_paths {
+            push_path_mount(&mut arguments, "--ro-bind", resource, resource);
+        }
+
         for root in &request.workspace_roots {
             for metadata in super::repository_metadata_paths(root, &request.workspace_policy)? {
                 if request
@@ -811,6 +866,16 @@ pub mod linux {
             push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), &path);
         }
 
+        for path in &request.private_paths {
+            if path.is_dir() {
+                arguments.push("--tmpfs".into());
+                arguments.push(path.as_os_str().to_owned());
+                arguments.push("--remount-ro".into());
+                arguments.push(path.as_os_str().to_owned());
+            } else {
+                push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), path);
+            }
+        }
         if request.state_directory.exists() {
             arguments.push("--tmpfs".into());
             arguments.push(request.state_directory.as_os_str().to_owned());
@@ -921,7 +986,7 @@ fn home_sensitive_paths(home_directory: Option<&Path>) -> Vec<PathBuf> {
 }
 
 pub fn usage() -> &'static str {
-    "Usage: glyph-shell-sandbox --profile <read-only|workspace-write> --working-directory <path> --state-directory <path> --workspace-root <path> [--workspace-root <path> ...] [--protected-path <path> ...] --workspace-policy <json> -- <command> [arguments ...]"
+    "Usage: glyph-shell-sandbox --profile <read-only|workspace-write> --working-directory <path> --state-directory <path> --workspace-root <path> [--workspace-root <path> ...] [--protected-path <path> ...] [--read-only-path <path> ...] --workspace-policy <json> -- <command> [arguments ...]"
 }
 
 #[cfg(test)]

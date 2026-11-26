@@ -1,3 +1,4 @@
+import { ToolOperationError } from '#src/tools/ToolOperationError.js';
 import { skillToolFailure } from './SkillToolFailure.ts';
 import { z } from 'zod';
 import { AgentModeID } from '#src/chat/AgentMode.js';
@@ -9,7 +10,7 @@ import type { SkillPackageManager } from './SkillPackageManager.ts';
 import { SkillPackageDraft, skillPackageDraftSchema } from './SkillPackageDraft.ts';
 import type { SkillPreview } from './SkillLifecycle.ts';
 import type { SkillScriptRunner } from './SkillScriptRunner.ts';
-import { SkillTurnContext } from './SkillContextContributor.ts';
+import { activeSkillPackage } from './activeSkillPackage.ts';
 
 const changeSchema = z
   .object({
@@ -20,7 +21,12 @@ const changeSchema = z
   })
   .strict();
 const runSchema = z
-  .object({ id: z.string().min(1), path: z.string().min(1), args: z.array(z.string().max(1000)).max(32) })
+  .object({
+    id: z.string().min(1),
+    path: z.string().min(1),
+    args: z.array(z.string().max(1000)).max(32),
+    workspace_root_id: z.string().min(1).nullish(),
+  })
   .strict();
 /** Human-reviewed package proposals and sandboxed execution share existing tool and interaction lifetimes. */
 export class SkillLifecycleToolRuntime implements ToolSource {
@@ -35,6 +41,7 @@ export class SkillLifecycleToolRuntime implements ToolSource {
       {
         namespace: 'skills',
         name: 'propose_change',
+        requiresExclusiveRound: true,
         allowedModes: [AgentModeID.AGENT],
         inputKind: ToolInputKind.JSON,
         description: `Propose a complete skill package installation/update or removal. The human reviews every file before it changes. Native targets: ${JSON.stringify(manager.targets.slice(0, 32).map(({ id, label }) => ({ id, label })))}. Set unused nullable fields to null. Draft files replace the complete package, not individual hunks.`,
@@ -74,8 +81,7 @@ export class SkillLifecycleToolRuntime implements ToolSource {
         name: 'run_script',
         allowedModes: [AgentModeID.AGENT],
         inputKind: ToolInputKind.JSON,
-        description:
-          'Run a script from an activated, pinned skill package. Uses ordinary shell approval and sandbox policy. Script declarations never grant permissions. A process finishing does not mean the skill workflow is complete.',
+        description: `Run a script from an activated, pinned skill package with one-shot shell approval. For user skills in multi-root workspaces select workspace_root_id from ${JSON.stringify(runner.targets)}. Project scripts run in their owning root. Script declarations never grant permissions. A process finishing does not mean the skill workflow is complete.`,
         parameters: parameters(runSchema),
         validateInput: input => {
           runSchema.parse(JSON.parse(input));
@@ -84,10 +90,18 @@ export class SkillLifecycleToolRuntime implements ToolSource {
           if (!context.chat || !context.turnId) throw new Error('Skill execution requires an owning agent turn.');
           const request = runSchema.parse(JSON.parse(input));
           const session = turns.contribution(context.turnId, 'skills');
-          if (!(session instanceof SkillTurnContext)) throw new Error('Skill context is unavailable.');
-          return JSON.stringify(
-            await runner.run(session.activePackage(request.id), request.path, request.args, context.chat.id, signal),
+          const result = await runner.run(
+            activeSkillPackage(session, request.id),
+            request.path,
+            request.args,
+            context.chat.id,
+            signal,
+            request.workspace_root_id ?? undefined,
           );
+          const output = JSON.stringify(result);
+          if (result.exitCode !== 0)
+            throw new ToolOperationError('SKILL_SCRIPT_FAILED', 'The skill process failed.', 'unknown', output);
+          return output;
         },
       },
     ];

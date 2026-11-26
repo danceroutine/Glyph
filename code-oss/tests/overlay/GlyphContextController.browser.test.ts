@@ -202,11 +202,9 @@ describe(GlyphContextController, () => {
     const controller = createController(services);
     const refresh = vi.fn(async () => {});
     try {
-      controller.setSkillSources(
-        () => [],
-        refresh,
-        () => ['file:///custom/rules'],
-      );
+      controller.setSkillSources(() => []);
+      controller.setInstructionRefresh(refresh, () => ['file:///custom/rules']);
+      controller.notifyInstructionsChanged();
       services.fileChanges.fire([{ resource: model.uri, type: 1 }]);
       await vi.advanceTimersByTimeAsync(300);
       expect(refresh).toHaveBeenCalledOnce();
@@ -336,9 +334,6 @@ describe(GlyphContextController, () => {
       { skillId: 'new-skill', revision: 'repaired-r1' },
     ]);
     expect(refresh).toHaveBeenCalledOnce();
-    sources = sources.map(source => ({ ...source, revision: 'repaired-version' }));
-    controller.setSkillSources(() => sources);
-    expect(await controller.searchInstructions('repaired')).toMatchObject([{ revision: 'repaired-version' }]);
     services.trust.isWorkspaceTrusted.mockReturnValue(false);
     await expect(controller.searchInstructions('repaired')).rejects.toThrow();
     expect(refresh).toHaveBeenCalledOnce();

@@ -1,3 +1,6 @@
+import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
+import { testPackageMutations } from '#src/skills/tests/fixtures/testPackageMutations.js';
+import type { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -57,6 +60,7 @@ import { WebApprovalService } from '#src/web/WebApprovalService.js';
 
 const captured = vi.hoisted(() => ({
   editorClients: [] as EditorWorkspaceClient[],
+  sandboxOptions: [] as ConstructorParameters<typeof NativeShellSandboxLauncher>[0][],
   indexOptions: [] as RustWorkspacePathIndexConfiguration[],
   indexes: [] as RustWorkspacePathIndex[],
   modeSwitches: [] as ConstructorParameters<typeof ModeSwitchToolRuntime>[0][],
@@ -69,15 +73,37 @@ const captured = vi.hoisted(() => ({
   providerFactories: [] as ConstructorParameters<typeof OpenAIProviderFactory>[],
 }));
 
+const openWorkspaceMutations = NativeWorkspaceMutations.open;
 let isolatedUserDirectory: string;
 beforeEach(async () => {
   isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
   onTestFinished(() => rm(isolatedUserDirectory, { recursive: true, force: true }));
+  vi.spyOn(NativeWorkspaceMutations, 'open').mockImplementation(async (executable, root) => {
+    const instance = await openWorkspaceMutations(executable, root);
+    const mutations = testPackageMutations(root);
+    vi.spyOn(instance, 'ensureDirectory').mockImplementation(mutations.ensureDirectory);
+    vi.spyOn(instance, 'renameExclusive').mockImplementation(mutations.renameExclusive);
+    vi.spyOn(instance, 'removeTree').mockImplementation(mutations.removeTree);
+    return instance;
+  });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });
 });
 
 it('resolves user rule URIs below the dedicated user rule root', () => {
   expect(userRuleUri('/home/user/.glyph', 'rules/test.mdc')).toBe('file:///home/user/.glyph/rules/test.mdc');
+});
+
+vi.mock('#src/shell/NativeShellSandboxLauncher.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('#src/shell/NativeShellSandboxLauncher.js')>();
+  return {
+    ...actual,
+    NativeShellSandboxLauncher: class extends actual.NativeShellSandboxLauncher {
+      constructor(...args: ConstructorParameters<typeof actual.NativeShellSandboxLauncher>) {
+        super(...args);
+        captured.sandboxOptions.push(args[0]);
+      }
+    },
+  };
 });
 
 vi.mock('#src/desktop/workspace/EditorWorkspaceTextStore.js', async importOriginal => {
@@ -765,6 +791,14 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const runtime = await fixture.create(roots, event => {
         events.push(event);
       });
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES)
+          return { operationId: request.operationId, ok: true, packageClean: true };
+        throw new Error('Only skill working-copy checks are expected');
+      });
+      const privatePaths = captured.sandboxOptions[0]!.privatePaths;
+      if (typeof privatePaths !== 'function') throw new Error('Expected dynamic host metadata masks');
+      expect(privatePaths()).toContain(fixture.userDirectory);
       const targets = (await runtime.snapshot()).skillTargets!;
       for (const [index, target] of targets.entries()) {
         const draft = aSkillDraft('Reviewed factory workflow', `workflow-${index}`);
@@ -772,6 +806,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         await runtime.handle({ type: Command.APPLY_SKILL, previewId: (await runtime.snapshot()).skillPreview!.id });
       }
       vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES)
+          return { operationId: request.operationId, ok: true, packageClean: true };
         if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Only read snapshots are expected');
         for (const root of roots) {
           const store = new FileSystemWorkspaceTextStore(root);
@@ -800,6 +836,17 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(prepared.snapshot().skills).toHaveLength(3);
       expect(prepared.snapshot().skills!.every(skill => skill.body === 'Reviewed factory workflow')).toBe(true);
       turns!.discardTurn('skills-turn');
+      for (const skill of skills.filter(skill => skill.origin.scope === 'project')) {
+        await runtime.handle({
+          type: Command.PREVIEW_SKILL,
+          targetId: skill.origin.id,
+          replaceId: skill.id,
+          draft: aSkillDraft('Updated factory workflow', skill.name).toJSON(),
+        });
+        await runtime.handle({ type: Command.APPLY_SKILL, previewId: (await runtime.snapshot()).skillPreview!.id });
+      }
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+
       await catalogs[0]!.refreshIndexes();
       const propose = toolSource!.tools.find(tool => tool.namespace === 'skills' && tool.name === 'propose_change')!;
       const broker = captured.brokers[0]!.broker;

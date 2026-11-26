@@ -86,7 +86,6 @@ async function fixture(
     readonly skillCatalog?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skills'];
     readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
     readonly records?: readonly ChatSessionRecord[];
-    readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
     readonly instructionCatalog?: NonNullable<
       ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']
     >;

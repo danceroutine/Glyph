@@ -11,6 +11,8 @@ export interface NativeShellSandboxLauncherOptions {
   readonly workspaceRoots: readonly string[];
   readonly stateDirectory: string;
   readonly protectedPaths?: readonly string[];
+  /** Host metadata that must be neither readable nor writable by sandboxed commands. */
+  readonly privatePaths?: readonly string[] | (() => readonly string[]);
   readonly environment?: NodeJS.ProcessEnv;
   readonly accessPolicy?: WorkspaceAccessPolicy;
 }
@@ -54,6 +56,11 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       '--workspace-root',
       workspaceRoot,
       ...(this.options.protectedPaths ?? []).flatMap(path => ['--protected-path', path]),
+      ...(typeof this.options.privatePaths === 'function'
+        ? this.options.privatePaths()
+        : (this.options.privatePaths ?? [])
+      ).flatMap(path => ['--private-path', path]),
+      ...(authorization.readOnlyPaths ?? []).flatMap(path => ['--read-only-path', path]),
       '--workspace-policy',
       JSON.stringify(accessPolicy.toJSON()),
       '--',

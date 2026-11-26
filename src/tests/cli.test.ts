@@ -90,8 +90,11 @@ describe('glyph command line', () => {
           join(root, 'target', 'release', 'glyph-shell-sandbox'),
         ],
         accessPolicy,
+        privatePaths: expect.any(Function),
       },
     ]);
+    const privatePaths = (launcher!.args[0] as { privatePaths: () => readonly string[] }).privatePaths;
+    expect(privatePaths()).toEqual([]);
     const [registry] = cli.instances('ToolRegistry');
     expect(registry?.args).toEqual([
       ['ProjectToolRuntime', 'WebToolRuntime', 'ProposeQuestionToolRuntime', 'ShellToolRuntime'],

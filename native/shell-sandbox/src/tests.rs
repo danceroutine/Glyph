@@ -105,9 +105,142 @@ fn request(profile: SandboxProfile, root: &Path, state: &Path) -> SandboxRequest
         state_directory: state.to_owned(),
         workspace_roots: vec![root.to_owned()],
         protected_paths: Vec::new(),
+        read_only_paths: Vec::new(),
+        private_paths: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["sh".into(), "-c".into(), "pwd".into()],
     }
+}
+
+#[test]
+fn admits_only_explicit_read_only_resources_without_exposing_host_state() {
+    let fixture = tempdir().unwrap();
+    let root = fixture.path().join("workspace");
+    let state = fixture.path().join("state");
+    let package = fixture.path().join("package");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&state).unwrap();
+    fs::create_dir(&package).unwrap();
+    let parsed = parse_arguments(vec![
+        "--profile".into(),
+        "workspace-write".into(),
+        "--working-directory".into(),
+        root.clone().into_os_string(),
+        "--state-directory".into(),
+        state.clone().into_os_string(),
+        "--workspace-root".into(),
+        root.clone().into_os_string(),
+        "--read-only-path".into(),
+        package.clone().into_os_string(),
+        "--read-only-path".into(),
+        package.clone().into_os_string(),
+        "--workspace-policy".into(),
+        serde_json::to_string(&WorkspaceAccessPolicy::default())
+            .unwrap()
+            .into(),
+        "--".into(),
+        "true".into(),
+    ])
+    .unwrap();
+    let prepared = prepare_request(parsed).unwrap();
+    let package = fs::canonicalize(package).unwrap();
+    assert_eq!(prepared.read_only_paths, vec![package.clone()]);
+    let policy = macos::seatbelt_policy(&prepared, fixture.path(), None).unwrap();
+    assert!(policy.contains(&format!(
+        "(deny file-write* (subpath \"{}\")",
+        package.display()
+    )));
+    let mounts = linux::bubblewrap_arguments(&prepared, None).unwrap();
+    assert!(mounts.windows(3).any(|window| window[0] == "--ro-bind"
+        && window[1] == package.as_os_str()
+        && window[2] == package.as_os_str()));
+    let mut invalid = request(SandboxProfile::ReadOnly, &root, &state);
+    invalid.read_only_paths.push(state.clone());
+    assert!(prepare_request(invalid).is_err());
+    let mut invalid = request(SandboxProfile::ReadOnly, &root, &state);
+    invalid.read_only_paths.push(fixture.path().to_owned());
+    assert!(prepare_request(invalid).is_err());
+    let mut invalid = request(SandboxProfile::ReadOnly, &root, &state);
+    invalid.read_only_paths.push(PathBuf::from("/"));
+    assert!(prepare_request(invalid).is_err());
+    let mut invalid = request(SandboxProfile::ReadOnly, &root, &state);
+    invalid.read_only_paths.push(PathBuf::from("/usr"));
+    assert!(prepare_request(invalid).is_err());
+    let mut invalid = request(SandboxProfile::ReadOnly, &root, &state);
+    invalid.read_only_paths.push(root.join("missing"));
+    assert!(prepare_request(invalid).is_err());
+}
+
+#[test]
+fn private_metadata_is_masked_and_cannot_be_admitted_as_a_readable_resource() {
+    let fixture = tempdir().unwrap();
+    let root = fixture.path().join("workspace");
+    let state = fixture.path().join("state");
+    let private = root.join(".skill-staging");
+    fs::create_dir_all(&private).unwrap();
+    fs::create_dir(&state).unwrap();
+    let mut source = request(SandboxProfile::WorkspaceWrite, &root, &state);
+    let preferences = root.join("skill-state.json");
+    fs::write(&preferences, "private preferences").unwrap();
+    source.private_paths = vec![private.clone(), private.clone(), preferences.clone()];
+    let parsed = parse_arguments([
+        "--profile".into(),
+        "workspace-write".into(),
+        "--working-directory".into(),
+        root.clone().into_os_string(),
+        "--workspace-root".into(),
+        root.into_os_string(),
+        "--state-directory".into(),
+        state.into_os_string(),
+        "--private-path".into(),
+        private.clone().into_os_string(),
+        "--workspace-policy".into(),
+        serde_json::to_string(&WorkspaceAccessPolicy::default())
+            .unwrap()
+            .into(),
+        "--".into(),
+        "true".into(),
+    ])
+    .unwrap();
+    assert_eq!(parsed.private_paths, vec![private.clone()]);
+    let prepared = prepare_request(source).unwrap();
+    let private = fs::canonicalize(private).unwrap();
+    let preferences = fs::canonicalize(preferences).unwrap();
+    assert_eq!(
+        prepared.private_paths,
+        vec![private.clone(), preferences.clone()]
+    );
+    let policy = macos::seatbelt_policy(&prepared, fixture.path(), None).unwrap();
+    assert!(policy.contains(&format!(
+        "(deny file-read* file-write* (subpath \"{}\"))",
+        private.display()
+    )));
+    let mounts = linux::bubblewrap_arguments(&prepared, None).unwrap();
+    assert!(mounts.windows(4).any(|window| window[0] == "--tmpfs"
+        && window[1] == private.as_os_str()
+        && window[2] == "--remount-ro"
+        && window[3] == private.as_os_str()));
+    let mut invalid = request(
+        SandboxProfile::WorkspaceWrite,
+        &prepared.working_directory,
+        &prepared.state_directory,
+    );
+    invalid.private_paths = prepared.private_paths.clone();
+    invalid.read_only_paths = vec![private.clone()];
+    assert!(prepare_request(invalid).is_err());
+    let child = private.join("candidate");
+    fs::create_dir(&child).unwrap();
+    let mut invalid = request(
+        SandboxProfile::WorkspaceWrite,
+        &prepared.working_directory,
+        &prepared.state_directory,
+    );
+    invalid.private_paths = prepared.private_paths.clone();
+    invalid.read_only_paths = vec![child];
+    assert!(prepare_request(invalid).is_err());
+    let mut invalid = prepared;
+    invalid.private_paths = vec![private.join("missing")];
+    assert!(prepare_request(invalid).is_err());
 }
 
 #[test]
@@ -363,6 +496,8 @@ fn seatbelt_policy_escapes_paths_as_strings() {
         state_directory: PathBuf::from("/tmp/state\"quoted"),
         workspace_roots: vec![PathBuf::from("/tmp/project\\root")],
         protected_paths: Vec::new(),
+        read_only_paths: Vec::new(),
+        private_paths: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["true".into()],
     };
@@ -457,6 +592,8 @@ fn bubblewrap_arguments_fail_closed_and_overlay_writable_roots_safely() {
         state_directory: state.clone(),
         workspace_roots: vec![config_root, docker_root],
         protected_paths: Vec::new(),
+        read_only_paths: Vec::new(),
+        private_paths: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["true".into()],
     };
@@ -668,6 +805,8 @@ fn accepts_repeated_workspace_roots_and_protected_paths() {
                 PathBuf::from("/workspace/worker"),
                 PathBuf::from("/workspace/helper")
             ],
+            read_only_paths: Vec::new(),
+            private_paths: Vec::new(),
             workspace_policy: WorkspaceAccessPolicy {
                 ignored_directories: Vec::new(),
                 sensitive_file_names: Vec::new(),
@@ -950,6 +1089,8 @@ fn seatbelt_policy_escapes_control_characters_in_paths() {
         state_directory: PathBuf::from("/tmp/state\nline\rreturn\ttab"),
         workspace_roots: vec![PathBuf::from("/tmp/project")],
         protected_paths: Vec::new(),
+        read_only_paths: Vec::new(),
+        private_paths: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["true".into()],
     };

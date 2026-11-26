@@ -78,14 +78,16 @@ export class ShellApprovalPolicy implements ApprovalCapabilityPolicy<ApprovalCap
       title: 'Allow shell command?',
       detail: `${command}\nWorking directory: ${operation.workingDirectory}`,
       timeout: null,
-      choices: choices.filter(choice => this.availableChoices.includes(choice.id)),
+      choices: choices.filter(
+        choice => this.availableChoices.includes(choice.id) && (!operation.transient || choice.effect.grant === null),
+      ),
     };
   }
   matchGrant(
     request: ApprovalRequest<ApprovalCapability.SHELL>,
     permission: GrantPermission,
   ): ApprovalGrantMatch<ApprovalCapability.SHELL> | null {
-    if (permission.capability !== this.capability) return null;
+    if (permission.capability !== this.capability || request.operation.transient) return null;
     switch (permission.kind) {
       case 'all_shell_commands':
         return {

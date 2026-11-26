@@ -24,14 +24,6 @@ export function useGlyphComposerState({ status, actions, disabled }: GlyphCompos
   const model = actions.composer;
   const pickerId = useId();
   const [state, setState] = useState(model.snapshot);
-  const [instructionRevision, setInstructionRevision] = useState(0);
-  useEffect(
-    () =>
-      actions.context.onDidChangeInstructions?.(() => {
-        setInstructionRevision(value => value + 1);
-      }),
-    [actions.context],
-  );
   const [query, setQuery] = useState<GlyphPromptQuery>();
   const [candidates, setCandidates] = useState<readonly GlyphContextCandidate[]>([]);
   const [selected, setSelected] = useState(0);

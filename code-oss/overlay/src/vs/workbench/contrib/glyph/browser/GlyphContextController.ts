@@ -1,6 +1,3 @@
-import { Emitter } from '#vs/base/common/event.js';
-import { RunOnceScheduler } from '#vs/base/common/async.js';
-import { DisposableStore, DisposableMap, MutableDisposable, type IDisposable } from '#vs/base/common/lifecycle.js';
 import type { GlyphSkill } from '#glyph/protocol/events/GlyphSkill.js';
 import { Emitter } from '#vs/base/common/event.js';
 import { RunOnceScheduler } from '#vs/base/common/async.js';
@@ -75,13 +72,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
   }
-  setSkillSources(
-    source: () => readonly GlyphSkill[],
-    refresh?: () => Promise<void>,
-    roots?: () => readonly string[],
-  ): void {
-    this.skillRoots = roots ?? (() => []);
-    this.rootWatches.clearAndDisposeAll();
+  setSkillSources(source: () => readonly GlyphSkill[], refresh?: () => Promise<void>): void {
     this.skillSources = source;
     if (refresh) this.setInstructionRefresh(refresh);
   }

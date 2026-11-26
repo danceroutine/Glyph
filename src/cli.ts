@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from 'node:fs';
 import { WebToolRuntime } from './web/WebToolRuntime.ts';
 import { AuthorizedWebTransport } from './web/AuthorizedWebTransport.ts';
 import { WebApprovalService } from './web/WebApprovalService.ts';
@@ -118,6 +119,10 @@ async function main(): Promise<void> {
       workspaceRoots: projectContext.roots.map(root => root.path),
       stateDirectory: configuration.stateDirectory,
       protectedPaths: [packageRoot, indexExecutable, shellSandboxExecutable],
+      privatePaths: () =>
+        [userDirectory, ...projectContext.roots.map(root => join(root.path, '.skill-staging'))].filter(path =>
+          existsSync(path),
+        ),
       accessPolicy,
     }),
   );

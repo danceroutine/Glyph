@@ -85,6 +85,7 @@ describe(SkillLifecycleToolRuntime, () => {
       [],
       'chat',
       signal,
+      undefined,
     );
     session.release();
     await expect(script.execute(input, signal, context)).rejects.toThrow('ended');
@@ -105,4 +106,21 @@ it('propagates cancellation before applying a skill proposal', async () => {
     ),
   ).rejects.toThrow('Cancelled skill proposal');
   expect(manager.apply).not.toHaveBeenCalled();
+});
+
+it('preserves failed script exit status and process output as a failed tool operation', async () => {
+  const { script, context, signal, runner, session } = fixture();
+  await session.activateSource('project:example', 'manual', 'Selected');
+  runner.run.mockResolvedValueOnce({ exitCode: 7, output: 'Failed process output' });
+  await expect(
+    script.execute(
+      JSON.stringify({ id: 'project:example', path: 'scripts/task.sh', args: [], workspace_root_id: 'second' }),
+      signal,
+      context,
+    ),
+  ).rejects.toMatchObject({
+    code: 'SKILL_SCRIPT_FAILED',
+    output: JSON.stringify({ exitCode: 7, output: 'Failed process output' }),
+  });
+  expect(runner.run).toHaveBeenCalledWith(expect.anything(), 'scripts/task.sh', [], 'chat', signal, 'second');
 });

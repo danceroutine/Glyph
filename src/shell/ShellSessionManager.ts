@@ -24,6 +24,8 @@ interface RunningCommand {
 }
 
 interface ExecuteShellCommandOptions {
+  readonly transient?: boolean;
+  readonly readOnlyPaths?: readonly string[];
   readonly executionId?: string;
   readonly terminalId?: string;
   readonly workingDirectory?: string;
@@ -131,6 +133,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
     const authorization = await this.authorizer.authorize(command, workingDirectory, options.signal, {
       background: options.background === true,
       existingTerminal: existing !== undefined,
+      ...(options.transient ? { transient: true } : {}),
     });
     options.signal.throwIfAborted();
     this.assertAvailable();
@@ -147,7 +150,9 @@ export class ShellSessionManager implements ShellSessionRegistry {
       // allocated terminal just like a synchronous process-launch failure.
       completion = terminal.execute({
         command,
-        authorization,
+        authorization: options.readOnlyPaths
+          ? { ...authorization, readOnlyPaths: options.readOnlyPaths }
+          : authorization,
         wakeOn: options.wakeOn,
         executionId: options.executionId,
       });

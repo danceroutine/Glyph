@@ -451,7 +451,6 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   refreshSkills(): Promise<void> {
     return this.refreshInstructionSources();
   }
-  }
   copyText(text: string): Promise<void> {
     return this.clipboard.writeText(text);
   }

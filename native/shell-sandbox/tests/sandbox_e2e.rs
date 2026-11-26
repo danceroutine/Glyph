@@ -319,3 +319,62 @@ fn assert_denied(output: &Output, description: &str) {
         "{description} unexpectedly escaped the sandbox"
     );
 }
+
+#[test]
+#[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
+fn security_admitted_package_is_readable_but_immutable_outside_the_workspace() {
+    let fixture = Fixture::new();
+    let package = fixture.outside.join("pinned-package");
+    fs::create_dir(&package).unwrap();
+    let script = package.join("task.sh");
+    fs::write(&script, "echo pinned").unwrap();
+    let run = |admit: bool, code: &str| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_glyph-shell-sandbox"));
+        command
+            .args(["--profile", "workspace-write", "--working-directory"])
+            .arg(&fixture.workspace)
+            .arg("--state-directory")
+            .arg(&fixture.state)
+            .arg("--workspace-root")
+            .arg(&fixture.workspace)
+            .arg("--workspace-policy")
+            .arg(
+                serde_json::to_string(&glyph_shell_sandbox::WorkspaceAccessPolicy::default())
+                    .unwrap(),
+            );
+        if admit {
+            command.arg("--read-only-path").arg(&package);
+        }
+        command
+            .args(["--", "/bin/sh", "-c", code])
+            .env_clear()
+            .env("HOME", &fixture.home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("GLYPH_RESOURCE", &script)
+            .env("GLYPH_OUTPUT", fixture.workspace.join("result.txt"))
+            .output()
+            .unwrap()
+    };
+    assert_denied(
+        &run(false, "cat \"$GLYPH_RESOURCE\""),
+        "unadmitted package read",
+    );
+    let output = run(
+        true,
+        "cat \"$GLYPH_RESOURCE\"; printf 'I win' > \"$GLYPH_OUTPUT\"",
+    );
+    assert_success(
+        &output,
+        "admitted package read and ordinary workspace write",
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("echo pinned"));
+    assert_eq!(
+        fs::read_to_string(fixture.workspace.join("result.txt")).unwrap(),
+        MARKER
+    );
+    assert_denied(
+        &run(true, "printf 'I win' > \"$GLYPH_RESOURCE\""),
+        "pinned package replacement",
+    );
+    assert_eq!(fs::read_to_string(script).unwrap(), "echo pinned");
+}

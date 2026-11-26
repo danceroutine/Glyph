@@ -1235,3 +1235,47 @@ it('rejects unavailable steering without aborting the active turn or replaying b
     adapter.requests.flatMap(turn => turn.messages).some(message => message.content === 'Use missing selection'),
   ).toBe(false);
 });
+
+it.each(['abort', 'non-error', 'late-rejection'] as const)(
+  'settles an in-flight instruction boundary after %s',
+  async scenario => {
+    const turns = new TurnContextCoordinator([]);
+    const controller = new AbortController();
+    let calls = 0;
+    vi.spyOn(turns, 'steer').mockImplementation(async () => {
+      calls++;
+      if (scenario === 'abort') {
+        controller.abort(new Error('Cancelled boundary'));
+        throw controller.signal.reason;
+      }
+      if (scenario === 'non-error') throw 'Unavailable context';
+      if (calls === 2) throw new Error('Unavailable later selection');
+      return undefined;
+    });
+    const runtime = new AgentRuntime(
+      new ClaudeShapedAdapter(),
+      { timeoutMs: 10000 },
+      mockTools(async () => 'file'),
+      undefined,
+      turns,
+    );
+    let pending = true;
+    const result = runtime.send('Start', {
+      signal: controller.signal,
+      onText: () => {},
+      takeSteering: finishing => {
+        if (!pending || (scenario === 'late-rejection' && !finishing)) return [];
+        pending = false;
+        return scenario === 'late-rejection'
+          ? [
+              { text: 'Accepted', attachments: [] },
+              { text: 'Rejected', attachments: [] },
+            ]
+          : [{ text: 'Rejected', attachments: [] }];
+      },
+    });
+    if (scenario === 'abort') await expect(result).rejects.toThrow('cancelled');
+    else await expect(result).resolves.toMatchObject({ responseId: 'msg_final' });
+    expect(calls).toBe(scenario === 'late-rejection' ? 2 : 1);
+  },
+);

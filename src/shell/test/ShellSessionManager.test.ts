@@ -946,3 +946,27 @@ function deferredAuthorization(): {
     resolve,
   };
 }
+
+it('passes host-owned read-only resources to the admitted process without putting them in model input', async () => {
+  const authorize = vi.fn(async () => ({ sandboxProfile: ShellSandboxProfile.WORKSPACE_WRITE }));
+  const launch = vi.fn(() => {
+    throw new Error('Captured launch');
+  });
+  const manager = new ShellSessionManager({ authorize } as never, { resolve: async () => '/workspace' } as never, {
+    launch,
+  });
+  managers.push(manager);
+  const signal = new AbortController().signal;
+  await expect(
+    manager.execute('sh /host/package/task.sh', { signal, transient: true, readOnlyPaths: ['/host/package'] }),
+  ).rejects.toThrow('Captured launch');
+  expect(authorize).toHaveBeenCalledWith('sh /host/package/task.sh', '/workspace', signal, {
+    background: false,
+    existingTerminal: false,
+    transient: true,
+  });
+  expect(launch).toHaveBeenCalledWith('sh /host/package/task.sh', '/workspace', {
+    sandboxProfile: ShellSandboxProfile.WORKSPACE_WRITE,
+    readOnlyPaths: ['/host/package'],
+  });
+});

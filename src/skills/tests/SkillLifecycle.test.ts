@@ -1,8 +1,8 @@
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
 import { SkillScriptRunner } from '#src/skills/SkillScriptRunner.js';
@@ -141,7 +141,9 @@ describe(SkillScriptRunner, () => {
       },
     );
     script.fill(0);
-    const runner = new SkillScriptRunner({ execute }, new FileSystemWorkspaceTextStore(root), 'project');
+    const runner = new SkillScriptRunner({ execute }, [
+      { id: 'project', label: 'Project', directory: root, workingDirectory: 'project', originIds: ['project'] },
+    ]);
     expect(await runner.run(skill, 'scripts/task.sh', ["argument'with quote"], 'chat', signal)).toMatchObject({
       packageRevision: skill.revision,
       output: 'pinned',
@@ -154,7 +156,7 @@ describe(SkillScriptRunner, () => {
   });
   it('rejects undeclared execution, missing resources, traversal, binary scripts, and unsupported interpreters', async () => {
     const execute = vi.fn();
-    const runner = new SkillScriptRunner({ execute }, new FileSystemWorkspaceTextStore('/not-used'));
+    const runner = new SkillScriptRunner({ execute }, []);
     const signal = new AbortController().signal;
     const skill = aSkillPackage(aSkillDescriptor({ allowedTools: ['project.read_file'] }), 'Body', {
       'scripts/task.sh': Buffer.from('echo nope'),
@@ -177,7 +179,9 @@ it('rejects malformed paths in a pinned package before running a script and clea
   const root = await mkdtemp(join(tmpdir(), 'glyph-skill-stage-'));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const execute = vi.fn();
-  const runner = new SkillScriptRunner({ execute }, new FileSystemWorkspaceTextStore(root));
+  const runner = new SkillScriptRunner({ execute }, [
+    { id: 'project', label: 'Project', directory: root, workingDirectory: '.', originIds: ['project'] },
+  ]);
   const skill = aSkillPackage(undefined, undefined, {
     'scripts/task.sh': Buffer.from('echo valid'),
     '../escape': Buffer.from('invalid'),
@@ -206,7 +210,9 @@ it('runs supported Python and Node scripts with visible compatibility guidance',
     exitCode: 127,
     output: 'Interpreter unavailable',
   }));
-  const runner = new SkillScriptRunner({ execute }, new FileSystemWorkspaceTextStore(root));
+  const runner = new SkillScriptRunner({ execute }, [
+    { id: 'project', label: 'Project', directory: root, workingDirectory: '.', originIds: ['project'] },
+  ]);
   const skill = aSkillPackage(aSkillDescriptor({ compatibility: 'Requires Python or Node' }), 'Body', {
     'scripts/task.py': Buffer.from('print("hello")'),
     'scripts/task.js': Buffer.from('console.log("hello")'),
