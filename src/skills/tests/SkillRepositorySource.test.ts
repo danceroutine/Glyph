@@ -76,3 +76,11 @@ describe('Repository package source boundary', () => {
     await expect(reader.read(source)).rejects.toThrow('8 MiB');
   });
 });
+
+it('rejects unsafe revision expressions before spawning Git and preserves executable Git tree entries', async () => {
+  for (const revision of ['--option', 'branch..other'])
+    await expect(reader.read({ ...source, revision })).rejects.toThrow('commit, branch or tag');
+  expect(git).not.toHaveBeenCalled();
+  repository('100755 blob abc\tSKILL.md\0');
+  expect((await reader.read(source)).packageFiles().get('SKILL.md')?.mode).toBe(0o755);
+});

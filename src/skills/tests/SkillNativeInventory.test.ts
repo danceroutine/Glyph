@@ -104,3 +104,16 @@ describe('Skill package inventory boundaries', () => {
     expect(read).not.toHaveBeenCalled();
   });
 });
+
+it('rejects local packages when the physical inventory contains omitted files or different paths at the same count', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'glyph-incomplete-import-'));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, 'hidden'), 'contents');
+  for (const files of [[], ['other']]) {
+    native.refresh.mockResolvedValueOnce({ truncated: false });
+    native.glob.mockResolvedValueOnce({ files, truncated: false });
+    await expect(new SkillPackageSourceReader('native').read({ kind: 'local', path: root })).rejects.toThrow(
+      'unindexed',
+    );
+  }
+});
