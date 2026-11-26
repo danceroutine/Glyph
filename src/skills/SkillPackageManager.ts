@@ -1,9 +1,10 @@
 import { SkillProjectMutationPolicy } from './SkillProjectMutationPolicy.ts';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, open } from 'node:fs/promises';
+import { mkdir, open } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { SkillCatalog } from './SkillCatalog.ts';
 import { SkillPreferenceCommitUncertain, type SkillStateStore } from './SkillStateStore.ts';
@@ -22,6 +23,7 @@ export interface SkillPackageLocation {
   readonly scope: 'user' | 'project';
   readonly store: FileSystemWorkspaceTextStore;
   readonly workspace: WorkspaceTextStore;
+  readonly mutations: WorkspaceDirectoryMutations;
   readonly directory: string;
   readonly listFiles: () => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly refreshIndex: () => Promise<void>;
@@ -262,7 +264,7 @@ export class SkillPackageManager {
       const target = await this.target(location, entry.directory);
       const stage = join(await privateSkillDirectory(location.store.root), entry.id);
       if (entry.retired) {
-        await this.finish(entry, stage);
+        await this.finish(location, entry);
         continue;
       }
       await location.assertClean?.(target);
@@ -271,22 +273,21 @@ export class SkillPackageManager {
           throw new Error('Package recovery is required. Published files changed at ' + target);
         await this.assertBackup(entry, stage);
         await this.persist(entry);
-      } else await this.rollback(entry, stage, target);
-      await this.finish(entry, stage);
+      } else await this.rollback(location, entry, stage, target);
+      await this.finish(location, entry);
     }
   }
   private async assertBackup(entry: SkillTransaction, stage: string) {
     if (entry.expected && (await diskRevision(join(stage, 'previous'))) !== entry.expected)
       throw new Error('Package recovery is required. Inspect retained staging at ' + stage);
   }
-  private async finish(entry: SkillTransaction, stage: string) {
+  private async finish(location: SkillPackageLocation, entry: SkillTransaction) {
     // Record the decision before cleanup so an interruption can finish deleting only our private staging.
     if (!entry.retired) await this.journal.write({ ...entry, retired: true });
-    await rm(stage, { recursive: true, force: true });
-    await syncDirectory(dirname(stage));
+    await location.mutations.removeTree('.skill-staging/' + entry.id);
     await this.journal.finish(entry.id);
   }
-  private async rollback(entry: SkillTransaction, stage: string, target: string) {
+  private async rollback(location: SkillPackageLocation, entry: SkillTransaction, stage: string, target: string) {
     const backup = join(stage, 'previous');
     let saved: boolean;
     try {
@@ -294,6 +295,11 @@ export class SkillPackageManager {
     } catch (cause) {
       throw new Error('Package recovery is required. Inspect retained staging at ' + stage, { cause });
     }
+    const relativeStage = '.skill-staging/' + entry.id;
+    const reverted = join(stage, 'reverted');
+    const retained = await diskRevision(reverted);
+    if (retained !== null && retained !== entry.replacement)
+      throw new Error('Package recovery is required. Inspect the changed candidate at ' + reverted);
     const actual = await diskRevision(target);
     // An initial occupant that never moved remains authoritative, including concurrent edits.
     if (entry.expected && !saved) {
@@ -311,10 +317,11 @@ export class SkillPackageManager {
         if (!saved) return;
         throw new Error('Package recovery is required. Preserved backups at ' + backup);
       }
-      await rename(target, join(stage, 'reverted'));
+      await location.mutations.renameExclusive(entry.directory, relativeStage + '/reverted');
+      if ((await diskRevision(reverted)) !== entry.replacement)
+        throw new Error('Package recovery is required. Inspect the changed candidate at ' + reverted);
     }
-    if (saved) await rename(backup, target);
-    await syncDirectory(dirname(target));
+    if (saved) await location.mutations.renameExclusive(relativeStage + '/previous', entry.directory);
   }
   private async commit(change: Pending, signal?: AbortSignal) {
     const { location, directory, preview, files, expected } = change;
@@ -326,7 +333,8 @@ export class SkillPackageManager {
       throw new Error('The skill changed after preview. Preview it again.');
     const target = await this.target(location, directory);
     if (preview.destination.path !== target) throw new Error('The skill destination changed after preview.');
-    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await location.mutations.ensureDirectory(posix.dirname(directory));
+    const relativeStage = '.skill-staging/' + preview.id;
     const stage = join(await privateSkillDirectory(location.store.root), preview.id);
     await mkdir(stage, { mode: 0o700 });
     await syncDirectory(dirname(stage));
@@ -352,16 +360,12 @@ export class SkillPackageManager {
       await location.assertClean?.(target);
       signal?.throwIfAborted();
       if (expected) {
-        await rename(target, backup);
-        await syncDirectory(stage);
-        await syncDirectory(dirname(target));
+        await location.mutations.renameExclusive(directory, relativeStage + '/previous');
         if ((await diskRevision(backup)) !== expected)
           throw new Error('The skill changed during replacement. Preview it again.');
       } else if (await optionalStat(target)) throw new Error('A skill appeared at the destination. Preview again.');
       signal?.throwIfAborted();
-      if (files) await rename(join(stage, 'package'), target);
-      await syncDirectory(dirname(target));
-      await syncDirectory(stage);
+      if (files) await location.mutations.renameExclusive(relativeStage + '/package', directory);
       if ((await diskRevision(target)) !== entry.replacement) throw new Error('The skill changed during publication.');
       await location.assertClean?.(target);
       await this.assertBackup(entry, stage);
@@ -380,11 +384,11 @@ export class SkillPackageManager {
           entry.published = false;
           await this.journal.write(entry);
         }
-        await this.rollback(entry, stage, target);
-        await this.finish(entry, stage);
-      } else await rm(stage, { recursive: true, force: true });
+        await this.rollback(location, entry, stage, target);
+        await this.finish(location, entry);
+      } else await location.mutations.removeTree(relativeStage);
       throw error;
     }
-    await this.finish(entry, stage);
+    await this.finish(location, entry);
   }
 }

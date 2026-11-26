@@ -1,6 +1,8 @@
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
+import { testPackageMutations } from './testPackageMutations.ts';
 import { onTestFinished, vi } from 'vitest';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
@@ -24,7 +26,11 @@ export function aSkillDraft(body = 'Reviewed instructions', name = 'example') {
     ],
   });
 }
-export async function aSkillLifecycle() {
+export async function aSkillLifecycle(
+  openMutations: (
+    root: string,
+  ) => WorkspaceDirectoryMutations | Promise<WorkspaceDirectoryMutations> = testPackageMutations,
+) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-manager-')));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const store = new FileSystemWorkspaceTextStore(root);
@@ -48,6 +54,7 @@ export async function aSkillLifecycle() {
     label: 'User',
     store,
     workspace: store,
+    mutations: await openMutations(root),
     directory: 'skills',
     listFiles,
     refreshIndex,

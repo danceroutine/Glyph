@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
@@ -16,6 +18,7 @@ const location = {
   directory: 'skills',
   store,
   workspace: store,
+  mutations: await NativeWorkspaceMutations.open(resolve('target/release/glyph-workspace-mutations'), root),
   listFiles: () => store.list(10000, 'skills/**/*'),
   refreshIndex: async () => {},
 };

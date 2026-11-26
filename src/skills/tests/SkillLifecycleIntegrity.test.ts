@@ -324,3 +324,22 @@ it('rechecks an empty journal and rolls back an unrecordable first installation'
   await expect(stat(join(root, 'skills/example'))).rejects.toMatchObject({ code: 'ENOENT' });
   await manager.recover();
 });
+
+it('retains a candidate changed while rollback was moving it and checks that copy on recovery', async () => {
+  const { root, location, state, manager, install } = await aSkillLifecycle();
+  const skill = await install();
+  const preview = await manager.prepare(location.id, aSkillDraft('Replacement'), skill.id);
+  vi.spyOn(state, 'record').mockRejectedValueOnce(new Error('Preferences unavailable'));
+  const renameExclusive = location.mutations.renameExclusive.bind(location.mutations);
+  vi.spyOn(location.mutations, 'renameExclusive').mockImplementation(async (from, to) => {
+    await renameExclusive(from, to);
+    if (to.endsWith('/reverted')) await writeFile(join(root, to, 'notes'), 'Edited during restore');
+  });
+  await expect(manager.apply(preview.id)).rejects.toThrow('changed candidate');
+  const stage = join(root, '.skill-staging', preview.id);
+  expect(await readFile(join(stage, 'reverted/notes'), 'utf8')).toBe('Edited during restore');
+  await expect(manager.recover()).rejects.toThrow('changed candidate');
+  await rm(join(stage, 'reverted/notes'));
+  await manager.recover();
+  expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
+});

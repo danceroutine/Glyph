@@ -128,10 +128,10 @@ describe('Skill package transactions', () => {
 });
 
 it('fails closed when backup inspection fails after an uncertain rename', async () => {
-  const { manager, install } = await aSkillLifecycle();
+  const { location, manager, install } = await aSkillLifecycle();
   const skill = await install();
   const preview = await manager.prepare(skill.origin.id, aSkillDraft('Update'), skill.id);
-  vi.mocked(fs.rename).mockRejectedValueOnce(new Error('Lost filesystem acknowledgement'));
+  vi.spyOn(location.mutations, 'renameExclusive').mockRejectedValueOnce(new Error('Lost filesystem acknowledgement'));
   vi.mocked(fs.lstat).mockImplementation((path, options) => {
     if (String(path).endsWith('/previous'))
       return Promise.reject(Object.assign(new Error('Permission denied'), { code: 'EACCES' }));
