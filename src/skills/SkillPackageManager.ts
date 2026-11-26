@@ -22,6 +22,8 @@ export interface SkillPackageLocation {
   readonly id: string;
   readonly label: string;
   readonly scope: 'user' | 'project';
+  /** Workspace routing prefix for project packages in a multi-root window. */
+  readonly scopePrefix?: string;
   readonly store: FileSystemWorkspaceTextStore;
   readonly workspace: WorkspaceTextStore;
   readonly mutations: WorkspaceDirectoryMutations;
@@ -161,9 +163,15 @@ export class SkillPackageManager {
   hasPreview(id: string): boolean {
     return this.pending.has(id);
   }
+  /** The complete destination inventory can disclose scoped instructions before package approval. */
+  workspacePaths(id: string): readonly string[] {
+    const { location, directory, preview } = this.requirePreview(id);
+    if (location.scope === 'user') return [];
+    const parent = location.scopePrefix ? location.scopePrefix + '/' + directory : directory;
+    return preview.files.map(file => parent + '/' + file.path);
+  }
   async apply(id: string, signal?: AbortSignal): Promise<{ applied: true; refreshError?: string }> {
-    const change = this.pending.get(id);
-    if (!change) throw new Error('Skill preview expired. Preview the change again.');
+    const change = this.requirePreview(id);
     this.pending.delete(id);
     signal?.throwIfAborted();
     if (this.ensureReady) await this.ensureReady();
@@ -199,6 +207,11 @@ export class SkillPackageManager {
       });
     else await this.state.setEnabled(id, enabled);
     await this.catalog.refresh();
+  }
+  private requirePreview(id: string) {
+    const change = this.pending.get(id);
+    if (!change) throw new Error('Skill preview expired. Preview the change again.');
+    return change;
   }
   private location(id: string) {
     const location = this.locations.find(candidate => candidate.id === id);

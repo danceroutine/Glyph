@@ -5,6 +5,10 @@ import { AgentModeID } from '#src/chat/AgentMode.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
 import type { ToolSource } from '#src/tools/ToolSource.js';
 import type { Tool } from '#src/tools/Tool.js';
+import {
+  proposalActivityPresentation,
+  proposalInstructionContext,
+} from '#src/context/turns/proposalInstructionContext.js';
 import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import type { SkillPackageManager } from './SkillPackageManager.ts';
 import { SkillPackageDraft, skillPackageDraftSchema } from './SkillPackageDraft.ts';
@@ -34,7 +38,7 @@ export class SkillLifecycleToolRuntime implements ToolSource {
   constructor(
     manager: SkillPackageManager,
     approve: (preview: SkillPreview, signal: AbortSignal) => Promise<boolean>,
-    turns: Pick<TurnContextCoordinator, 'contribution'>,
+    turns: Pick<TurnContextCoordinator, 'contribution' | 'disclosePaths'>,
     runner: SkillScriptRunner,
   ) {
     this.tools = [
@@ -42,6 +46,7 @@ export class SkillLifecycleToolRuntime implements ToolSource {
         namespace: 'skills',
         name: 'propose_change',
         requiresExclusiveRound: true,
+        activityPresentation: proposalActivityPresentation,
         allowedModes: [AgentModeID.AGENT],
         inputKind: ToolInputKind.JSON,
         description: `Propose a complete skill package installation/update or removal. The human reviews every file before it changes. Native targets: ${JSON.stringify(manager.targets.slice(0, 32).map(({ id, label }) => ({ id, label })))}. Set unused nullable fields to null. Draft files replace the complete package, not individual hunks.`,
@@ -62,6 +67,10 @@ export class SkillLifecycleToolRuntime implements ToolSource {
                 change.replace_id ?? undefined,
               );
           try {
+            signal.throwIfAborted();
+            const paths = manager.workspacePaths(preview.id);
+            const instructionContext = paths.length > 0 ? turns.disclosePaths(context.turnId, paths) : undefined;
+            if (instructionContext) return proposalInstructionContext(instructionContext);
             if (!(await approve(preview, signal))) return JSON.stringify({ applied: false, denied: true });
             signal.throwIfAborted();
             const result = await manager.apply(preview.id, signal);
