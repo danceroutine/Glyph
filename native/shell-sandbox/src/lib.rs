@@ -574,15 +574,20 @@ pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
 #[cfg(target_os = "linux")]
 pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
     let home_directory = std::env::var_os("HOME").and_then(|path| fs::canonicalize(path).ok());
-    let executable = linux::bubblewrap_executable()?;
-    let mut mounts = kernel_workspace::KernelWorkspace::open()?;
-    let arguments = linux::arguments(request, home_directory.as_deref(), &mut mounts)?;
-    Ok(std::process::Command::new(executable)
-        .args(arguments)
-        .args(&request.command)
-        .current_dir(&request.working_directory)
-        .env("TMPDIR", "/tmp")
-        .status()?)
+    fn run(request: &SandboxRequest, home: Option<&Path>) -> Result<ExitStatus, SandboxError> {
+        let executable = linux::bubblewrap_executable()?;
+        let mut mounts = kernel_workspace::KernelWorkspace::open()?;
+        let arguments = linux::arguments(request, home, &mut mounts)?;
+        Ok(std::process::Command::new(executable)
+            .args(arguments)
+            .args(&request.command)
+            .current_dir(&request.working_directory)
+            .env("TMPDIR", "/tmp")
+            .status()?)
+    }
+    run(request, home_directory.as_deref()).map_err(|error| {
+        SandboxError::Backend(format!("Linux workspace sandbox setup failed: {error}"))
+    })
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -606,6 +611,7 @@ pub mod macos {
             r#"(version 1)
 (deny default)
 (deny network*)
+(deny file-link)
 (allow process-exec)
 (allow process-fork)
 (allow process-info* (target same-sandbox))
@@ -853,6 +859,11 @@ pub mod linux {
             "/tmp",
         ]);
 
+        let mut filtered_roots = request.workspace_roots.clone();
+        let mut view = WorkspaceView::new(mounts);
+        let mut private = super::home_sensitive_paths(home_directory);
+        private.extend(request.private_paths.iter().cloned());
+        private.push(request.state_directory.clone());
         for path in [
             "/usr",
             "/bin",
@@ -865,7 +876,8 @@ pub mod linux {
         ] {
             let path = Path::new(path);
             if path.exists() {
-                push_path_mount(&mut arguments, "--ro-bind", path, path);
+                arguments.extend(view.mounts.runtime(path, path, request, &private)?);
+                filtered_roots.push(path.to_owned());
             }
         }
 
@@ -880,11 +892,11 @@ pub mod linux {
                 {
                     continue;
                 }
-                push_path_mount(&mut arguments, "--ro-bind", &physical, &path);
+                arguments.extend(view.mounts.runtime(&physical, &path, request, &private)?);
+                filtered_roots.push(path);
             }
         }
 
-        let mut view = WorkspaceView::new(mounts);
         let mut protected = super::protected_paths(request)?;
         for root in &request.workspace_roots {
             protected.extend(super::repository_metadata_paths(
@@ -892,22 +904,16 @@ pub mod linux {
                 &request.workspace_policy,
             )?);
         }
-        let mut private = super::home_sensitive_paths(home_directory);
-        private.extend(request.private_paths.iter().cloned());
-        private.push(request.state_directory.clone());
         for root in &request.workspace_roots {
             arguments.extend(view.workspace(root, request, &protected, &private)?);
         }
 
         for resource in &request.read_only_paths {
-            push_path_mount(&mut arguments, "--ro-bind", resource, resource);
+            arguments.extend(view.mounts.runtime(resource, resource, request, &private)?);
+            filtered_roots.push(resource.clone());
         }
         for path in &request.private_paths {
-            if request
-                .workspace_roots
-                .iter()
-                .any(|root| path.starts_with(root))
-            {
+            if filtered_roots.iter().any(|root| path.starts_with(root)) {
                 continue;
             }
             if path.is_dir() {
@@ -919,7 +925,11 @@ pub mod linux {
                 push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), path);
             }
         }
-        if request.state_directory.exists() {
+        if request.state_directory.exists()
+            && !filtered_roots
+                .iter()
+                .any(|root| request.state_directory.starts_with(root))
+        {
             arguments.push("--tmpfs".into());
             arguments.push(request.state_directory.as_os_str().to_owned());
             // Conceal host state without allowing writes to its masked pathname.

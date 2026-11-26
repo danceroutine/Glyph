@@ -520,3 +520,65 @@ fn admits_large_workspaces_without_per_file_arguments_or_open_descriptors() {
     );
     assert_eq!(fs::read(target).unwrap(), b"updated");
 }
+
+#[test]
+#[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
+fn security_private_data_stays_hidden_through_sibling_and_toolchain_paths() {
+    let fixture = Fixture::new();
+    let outside = fixture.outside.join("other/.skill-staging");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("private"), "private").unwrap();
+    std::os::unix::fs::symlink(&outside, fixture.workspace.join("alias")).unwrap();
+    for path in [
+        outside.join("private"),
+        fixture.workspace.join("alias/private"),
+    ] {
+        assert_denied(
+            &fixture.run("read-only", "cat \"$FILE\"", &[("FILE", &path)]),
+            "separate project transaction",
+        );
+    }
+    let alias = fixture.home.join(".cargo/bin");
+    fs::create_dir_all(alias.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(fixture.home.join(".ssh"), &alias).unwrap();
+    assert_denied(
+        &fixture.run(
+            "read-only",
+            "cat \"$FILE\"",
+            &[("FILE", &alias.join("synthetic-canary"))],
+        ),
+        "toolchain alias to private home storage",
+    );
+    fs::remove_file(&alias).unwrap();
+    let toolchain = fixture.home.join(".local/bin");
+    fs::create_dir_all(toolchain.join("another/.skill-staging")).unwrap();
+    let public = toolchain.join("public-tool");
+    fs::write(&public, "public").unwrap();
+    fs::write(toolchain.join("another/.skill-staging/private"), "private").unwrap();
+    assert_success(
+        &fixture.run("read-only", "cat \"$FILE\"", &[("FILE", &public)]),
+        "ordinary admitted toolchain",
+    );
+    fs::create_dir(&alias).unwrap();
+    fs::create_dir(alias.join("other")).unwrap();
+    fs::write(alias.join("other/public"), "tool").unwrap();
+    let duplicate = fixture.home.join(".bun/bin");
+    fs::create_dir_all(duplicate.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(alias.join("other"), &duplicate).unwrap();
+    assert_success(
+        &fixture.run(
+            "read-only",
+            "cat \"$FILE\"",
+            &[("FILE", &duplicate.join("public"))],
+        ),
+        "two admitted toolchain aliases",
+    );
+    assert_denied(
+        &fixture.run(
+            "read-only",
+            "cat \"$FILE\"",
+            &[("FILE", &toolchain.join("another/.skill-staging/private"))],
+        ),
+        "private data under admitted toolchain",
+    );
+}
