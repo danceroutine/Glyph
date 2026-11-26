@@ -239,14 +239,6 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
   };
 });
 
-let isolatedUserDirectory: string;
-beforeEach(async () => {
-  isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
-  onTestFinished(async () => {
-    await rm(isolatedUserDirectory, { recursive: true, force: true });
-  });
-});
-
 describe(OpenAIDesktopRuntimeFactory, () => {
   it('loads saved chats and reviews without project access while untrusted and reconciles after trust returns', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-untrusted-history-')));
