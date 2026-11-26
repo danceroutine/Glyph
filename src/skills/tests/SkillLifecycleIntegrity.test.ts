@@ -343,3 +343,34 @@ it('retains a candidate changed while rollback was moving it and checks that cop
   await manager.recover();
   expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
 });
+
+it('manages nested project markers with their physical spelling and keeps user installations direct children', async () => {
+  const { root, state, location, provider, catalog, install } = await aSkillLifecycle();
+  const skill = await install();
+  const directory = 'Work/.GLYPH/Skills/example';
+  await mkdir(join(root, 'Work/.GLYPH/Skills'), { recursive: true });
+  await rename(join(root, skill.directory), join(root, directory));
+  const paths = ['SKILL.md', 'assets/image.bin', 'references/notes.md'].map(path => directory + '/' + path);
+  const project = {
+    ...location,
+    scope: 'project' as const,
+    directory: '.glyph/skills',
+    store: new FileSystemWorkspaceTextStore(root, { caseSensitive: false }),
+    listFiles: async () => ({ files: paths, truncated: false }),
+  };
+  vi.spyOn(provider, 'discover').mockResolvedValue([{ ...skill, directory, path: paths[0]! }]);
+  await catalog.refresh();
+  const projectManager = new SkillPackageManager([project], catalog, state);
+  const review = await projectManager.prepareRemoval(skill.id);
+  expect(review.destination.path).toBe(join(root, directory));
+  const userManager = new SkillPackageManager([{ ...project, scope: 'user' }], catalog, state);
+  await expect(userManager.prepareRemoval(skill.id)).rejects.toThrow('outside its managed location');
+  const sensitive = new SkillPackageManager(
+    [{ ...project, store: new FileSystemWorkspaceTextStore(root, { caseSensitive: true }) }],
+    catalog,
+    state,
+  );
+  await expect(sensitive.prepareRemoval(skill.id)).rejects.toThrow('outside its managed location');
+  await projectManager.apply(review.id);
+  await expect(stat(join(root, directory))).rejects.toMatchObject({ code: 'ENOENT' });
+});

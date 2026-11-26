@@ -199,10 +199,12 @@ export class SkillPackageManager {
     return location;
   }
   private async target(location: SkillPackageLocation, directory: string) {
-    const parent = posix.dirname(directory);
+    const key = (path: string) => (location.store.caseSensitive ? path : path.toLowerCase());
+    const parent = key(posix.dirname(directory));
+    const marker = key(location.directory);
     if (
       location.store.normalizePath(directory) !== directory ||
-      !(parent === location.directory || parent.endsWith('/' + location.directory))
+      !(parent === marker || (location.scope === 'project' && parent.endsWith('/' + marker)))
     )
       throw new Error('Skill directory is outside its managed location.');
     return location.store.resolvePath(directory);
