@@ -596,6 +596,40 @@ describe(NativeGlyphWorkbenchService, () => {
       });
     });
 
+    it('resolves an old skill selection against the skill catalog and restores a removable badge', async () => {
+      const { service, host } = await workbench({
+        extra: {
+          skills: [
+            {
+              id: 'same',
+              name: 'Review',
+              description: 'Task',
+              directory: '.glyph/skills/review',
+              path: '.glyph/skills/review/SKILL.md',
+              origin: { id: 'project', scope: 'project', label: 'Project skill', compatibility: 'glyph' },
+              scope: '.',
+              enabled: true,
+              status: 'active',
+              allowedTools: [],
+              uri: 'file:///workspace/.glyph/skills/review/SKILL.md',
+              revision: 's1',
+            },
+          ],
+        },
+      });
+      const composer = service.composer;
+      emit(host, {
+        type: GlyphHostEventType.CHAT_RESTORED,
+        chatId: 'alpha',
+        runs: [],
+        draft: { text: 'Use /Review', attachments: [], options: { skillIds: ['same'] } },
+      });
+      expect(composer.snapshot.document.parts.at(-1)).toMatchObject({
+        type: 'attachment',
+        attachment: { skillId: 'same', path: 'Review', text: '', contentRevision: 's1', uri: 'glyph-skill:same' },
+      });
+    });
+
     it('restores drafts without options and ignores drafts of chats without a composer', async () => {
       const { service, host } = await workbench();
       const composer = service.composer;

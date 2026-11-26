@@ -339,22 +339,28 @@ async function sendDocument(document: GlyphPromptDocument, send: SendMessage): P
   const attachments: GlyphContextAttachment[] = [];
   const attachmentSpans: { from: number; to: number }[] = [];
   const referenceSpans: ChatReferenceSpan[] = [];
+  const ruleIds = new Set<string>();
+  const skillIds = new Set<string>();
   let offset = -(draft.length - draft.trimStart().length);
   for (const part of document.parts) {
     const from = offset;
     offset += toGlyphPromptText([part]).length;
     if (part.type === 'text') continue;
     const attachment = part.attachment;
-    if (attachment.kind === GlyphContextAttachmentKind.RULE) {
-      if (attachment.ruleId)
+    if (attachment.kind === GlyphContextAttachmentKind.RULE || attachment.kind === GlyphContextAttachmentKind.SKILL) {
+      const rule = attachment.kind === GlyphContextAttachmentKind.RULE;
+      const sourceId = rule ? attachment.ruleId : attachment.skillId;
+      if (sourceId) {
+        (rule ? ruleIds : skillIds).add(sourceId);
         referenceSpans.push({
-          kind: 'rule',
-          sourceId: attachment.ruleId,
+          kind: attachment.kind,
+          sourceId,
           label: attachment.path,
           revision: attachment.contentRevision,
           from,
           to: offset,
         });
+      }
     } else {
       attachments.push(attachment);
       attachmentSpans.push({ from, to: offset });
@@ -368,9 +374,9 @@ async function sendDocument(document: GlyphPromptDocument, send: SendMessage): P
   } = document.options ?? {};
   await send(draft, attachments, {
     ...options,
+    ...(skillIds.size > 0 ? { skillIds: [...skillIds] } : {}),
+    ...(ruleIds.size > 0 ? { manualRuleIds: [...ruleIds] } : {}),
+    ...(referenceSpans.length > 0 ? { referenceSpans } : {}),
     ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}),
-    ...(referenceSpans.length > 0
-      ? { referenceSpans, manualRuleIds: [...new Set(referenceSpans.map(ref => ref.sourceId))] }
-      : {}),
   });
 }

@@ -21,12 +21,15 @@ export function restoreGlyphPrompt(
   ) => { readonly name?: string; readonly revision?: string } | undefined,
   createId: () => string,
 ): GlyphPromptDocument {
-  const { attachmentSpans, referenceSpans = [], manualRuleIds = [], ...options } = draft.options ?? {};
+  const { attachmentSpans, referenceSpans = [], manualRuleIds = [], skillIds = [], ...options } = draft.options ?? {};
   const mentions: GlyphInlineMention<GlyphContextAttachment>[] = draft.attachments.map((capture, i) => {
     const attachment = { ...capture, id: capture.id ?? createId() };
     return { attachment, mention: toGlyphPromptText([{ type: 'attachment', attachment }]), span: attachmentSpans?.[i] };
   });
-  const selected = [...new Set(manualRuleIds)].map(sourceId => ({ kind: 'rule' as const, sourceId }));
+  const selected = [
+    ...[...new Set(manualRuleIds)].map(sourceId => ({ kind: 'rule' as const, sourceId })),
+    ...[...new Set(skillIds)].map(sourceId => ({ kind: 'skill' as const, sourceId })),
+  ];
   const exact = referenceSpans.filter(ref =>
     selected.some(choice => choice.kind === ref.kind && choice.sourceId === ref.sourceId),
   );
@@ -45,9 +48,10 @@ export function restoreGlyphPrompt(
     const mention = `/${ref.label}`;
     const attachment: GlyphContextAttachment = {
       id: createId(),
-      kind: GlyphContextAttachmentKind.RULE,
-      ruleId: ref.sourceId,
-      uri: `glyph-rule:${encodeURIComponent(ref.sourceId)}`,
+      ...(ref.kind === 'rule'
+        ? { kind: GlyphContextAttachmentKind.RULE, ruleId: ref.sourceId }
+        : { kind: GlyphContextAttachmentKind.SKILL, skillId: ref.sourceId }),
+      uri: `glyph-${ref.kind}:${encodeURIComponent(ref.sourceId)}`,
       path: ref.label,
       text: '',
       contentRevision: ref.revision,
