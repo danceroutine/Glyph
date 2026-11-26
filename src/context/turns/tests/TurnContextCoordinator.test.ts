@@ -3,6 +3,7 @@ import { InstructionContextContributor } from '#src/context/turns/InstructionCon
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
+import { TurnContextSession } from '#src/context/turns/TurnContextSession.js';
 import { describe, expect, it, vi } from 'vitest';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
@@ -409,4 +410,14 @@ it('restores every domain after a steering disclosure exceeds the remaining inst
   expect(accepted?.skills?.[0]?.body).toBe('Skill instructions');
   expect(accepted?.skillCandidates?.map(skill => skill.id)).toEqual([nestedSkill.id]);
   expect(accepted?.sources.map(rule => rule.id)).toEqual([nested.id]);
+});
+
+it('admits manual instructions through the direct turn session and through coordinated steering', async () => {
+  const input = { turnId: 'direct', attachmentPaths: [], manualRuleIds: [] };
+  const session = new TurnContextSession({ ...input, sources });
+  expect(session.activateRule('manual', AgentInstructionActivationReason.MANUAL)?.sources[0]?.id).toBe('manual');
+  const coordinator = new TurnContextCoordinator(catalog() as never);
+  expect(await coordinator.steer(input)).toBeUndefined();
+  await coordinator.beginTurn(input);
+  expect((await coordinator.steer({ ...input, manualRuleIds: ['manual'] }))?.sources[0]?.id).toBe('manual');
 });

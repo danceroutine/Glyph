@@ -330,3 +330,11 @@ describe(mountGlyphAgentInstructions, () => {
     expect(container.innerHTML).toBe('');
   });
 });
+
+it('ignores skill catalog updates after the view is disposed', () => {
+  const element = document.createElement('div');
+  const view = mountGlyphSkills(element, [], '', () => {});
+  view.dispose();
+  view.update([], 'again');
+  expect(element.childNodes.length).toBe(0);
+});

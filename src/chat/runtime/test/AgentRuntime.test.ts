@@ -1316,3 +1316,37 @@ it.each(['abort', 'non-error', 'late-rejection'] as const)(
     expect(calls).toBe(scenario === 'late-rejection' ? 2 : 1);
   },
 );
+it.each([false, true])('reports non-Error steering failures and propagates cancellation (%s)', async cancel => {
+  const controller = new AbortController();
+  const coordinator = new TurnContextCoordinator([]);
+  vi.spyOn(coordinator, 'steer').mockImplementationOnce(async () => {
+    if (cancel) controller.abort(new Error('Cancelled steering'));
+    throw 'unavailable';
+  });
+  const runtime = new AgentRuntime(
+    new ClaudeShapedAdapter(),
+    { timeoutMs: 10000 },
+    mockTools(async () => 'file'),
+    undefined,
+    coordinator,
+  );
+  const reject = vi.fn();
+  const take = vi
+    .fn()
+    .mockReturnValueOnce([{ text: 'use workflow', attachments: [] }])
+    .mockReturnValue([]);
+  const result = runtime.send('Start', {
+    signal: controller.signal,
+    onText: () => {},
+    onSteeringRejected: reject,
+    takeSteering: take,
+  });
+  if (cancel) await expect(result).rejects.toThrow('Response cancelled.');
+  else {
+    await result;
+    expect(reject).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'use workflow' }),
+      expect.objectContaining({ message: 'Selected context is unavailable.' }),
+    );
+  }
+});

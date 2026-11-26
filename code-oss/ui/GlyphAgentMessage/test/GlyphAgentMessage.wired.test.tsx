@@ -371,3 +371,63 @@ describe(GlyphAgentMessageWithState, () => {
     expect(changes.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+it('shows the pinned skill instructions and resources used by a past response and opens the selected package', () => {
+  const openLink = vi.fn(async () => {});
+  render(
+    <WiredGlyphAgentMessage
+      entry={transcriptEntry({
+        context: {
+          sources: [],
+          activations: [],
+          candidates: [],
+          skills: [
+            {
+              descriptor: {
+                id: 'project:review',
+                name: 'review',
+                description: 'Review code',
+                origin: { id: 'project', label: 'Project skill', scope: 'project', compatibility: 'glyph' },
+                path: '.glyph/skills/review/SKILL.md',
+                directory: '.glyph/skills/review',
+                scope: '.',
+                status: 'active',
+                enabled: true,
+                allowedTools: [],
+                uri: 'file:///workspace/.glyph/skills/review/SKILL.md',
+              },
+              revision: 'pinned-revision',
+              reason: 'manual',
+              explanation: 'Selected by the user',
+              body: 'Retained instructions',
+              resources: [
+                {
+                  path: 'references/notes.md',
+                  revision: 'resource-revision',
+                  content: 'Retained notes',
+                  encoding: 'utf8',
+                },
+              ],
+            },
+          ],
+        },
+      })}
+      actions={messageActions({ openLink })}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'review · manual · Project skill' }));
+  expect(openLink).toHaveBeenCalledWith('glyph-skill:project%3Areview');
+  expect(screen.getByText('Retained instructions')).toBeDefined();
+  expect(screen.getByText('Retained notes')).toBeDefined();
+  expect(screen.getByText('Context used (1)')).toBeDefined();
+});
+
+it('omits the context details when a recorded turn has no instructions or skill activations', () => {
+  render(
+    <WiredGlyphAgentMessage
+      entry={transcriptEntry({ context: { sources: [], activations: [], candidates: [] } })}
+      actions={messageActions()}
+    />,
+  );
+  expect(screen.queryByText(/Context used/u)).toBeNull();
+});

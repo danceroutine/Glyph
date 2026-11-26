@@ -7,6 +7,7 @@ import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import { aSkillDescriptor } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
+import { aSkillDescriptor } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ProviderDesktopRuntime } from '#src/desktop/host/ProviderDesktopRuntime.js';
@@ -2725,6 +2726,16 @@ describe(ProviderDesktopRuntime, () => {
             context: {
               schema: 'glyph.turn-context.v1',
               turnId: 'legacy-run',
+              skills: [
+                {
+                  descriptor: aSkillDescriptor(),
+                  body: 'pinned',
+                  explanation: 'Selected by the user',
+                  revision: 'hash',
+                  reason: 'manual',
+                  resources: [],
+                },
+              ],
               sources: [],
               activations: [],
               candidates: [],
@@ -2764,7 +2775,12 @@ describe(ProviderDesktopRuntime, () => {
         const run = (await harness.runtime.snapshot()).runs.find(value => value.runId === 'legacy-run')!;
         expect(run.createdAt).toBe('2026-09-01T00:00:00.000Z');
         expect(run).not.toHaveProperty('checkpointTurnId');
-        expect(run.context).toEqual({ sources: [], activations: [], candidates: [] });
+        expect(run.context).toMatchObject({
+          sources: [],
+          activations: [],
+          candidates: [],
+          skills: [{ body: 'pinned', reason: 'manual' }],
+        });
       } finally {
         await harness.runtime.dispose();
       }

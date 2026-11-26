@@ -334,6 +334,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         captureFiles: (directory, signal) =>
           listSkillPackageFiles(userRuleStore, directory, indexExecutable, false, signal),
         workspace: userRuleStore,
+        captureFiles: (directory, signal) =>
+          listSkillPackageFiles(userRuleStore, directory, indexExecutable, false, signal),
         binaryStore: userRuleStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
         listFiles: async signal => {

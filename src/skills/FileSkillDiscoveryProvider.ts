@@ -145,6 +145,7 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
 
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal, reconcile?: () => Promise<void>) {
     const inventory = async () => {
+      if (!this.location.captureFiles) await this.location.refreshIndex();
       const listed = await (this.location.captureFiles?.(descriptor.directory, signal) ??
         this.location.listFiles(signal));
       if (listed.truncated) throw new Error('Skill package inventory is incomplete.');

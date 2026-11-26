@@ -500,7 +500,6 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
 
   rebindAttachment(attachment: GlyphContextAttachment): GlyphContextAttachment {
     const { unavailable: _unavailable, token: _token, ...capture } = attachment;
-    if (attachment.kind === GlyphContextAttachmentKind.RULE) return capture;
     const uri = URI.parse(attachment.uri);
     if (
       uri.scheme === 'untitled' ||
