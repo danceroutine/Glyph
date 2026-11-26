@@ -189,7 +189,12 @@ describe('utilityMain', () => {
     await loaded;
     const router = editors.constructed.mock.calls[0]?.[0];
     const factory = openai.constructed.mock.calls[0]?.[0];
-    expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(factory, router, undefined, undefined);
+    expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(
+      factory,
+      router,
+      undefined,
+      process.env.GLYPH_USER_DIRECTORY,
+    );
     expect(host.constructed).toHaveBeenCalledExactlyOnceWith(factory);
     expect(scripted.constructed).not.toHaveBeenCalled();
     expect(deterministic.constructed).not.toHaveBeenCalled();

@@ -239,6 +239,14 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
   };
 });
 
+let isolatedUserDirectory: string;
+beforeEach(async () => {
+  isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
+  onTestFinished(async () => {
+    await rm(isolatedUserDirectory, { recursive: true, force: true });
+  });
+});
+
 describe(OpenAIDesktopRuntimeFactory, () => {
   it('loads saved chats and reviews without project access while untrusted and reconciles after trust returns', async () => {
     const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-untrusted-history-')));
@@ -1136,6 +1144,37 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         ]),
       );
       expect(diskList).not.toHaveBeenCalled();
+    });
+
+    it('routes catalog reads across roots and rejects snapshots for another file', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const first = await fixture.folder('first', { 'AGENTS.md': 'First disk' });
+      const second = await fixture.folder('second', { 'AGENTS.md': 'Second disk' });
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async pattern => ({
+        files: pattern === 'AGENTS.md' ? ['AGENTS.md'] : [],
+        truncated: false,
+      }));
+      const request = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_owner, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Unexpected request');
+        return request.path === 'first/AGENTS.md'
+          ? { ok: true, operationId: request.operationId }
+          : editorResponse(request, 'wrong/file');
+      });
+      const runtime = await fixture.create([first, second]);
+      const snapshot = await runtime.snapshot();
+      expect(snapshot.instructionSources).toEqual([
+        expect.objectContaining({ path: 'first/AGENTS.md', status: 'active' }),
+        expect.objectContaining({
+          path: 'second/AGENTS.md',
+          status: 'error',
+          message: expect.stringContaining('different path'),
+        }),
+      ]);
+      expect(request.mock.calls.map(([, req]) => 'path' in req && req.path)).toEqual([
+        'first/AGENTS.md',
+        'second/AGENTS.md',
+      ]);
     });
 
     it('reports an unsafe user rules directory without querying its native index', async () => {

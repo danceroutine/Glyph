@@ -116,7 +116,7 @@ function controllerServices() {
       })),
       openSource: vi.fn(async () => false),
     },
-    editors: { activeTextEditorControl: undefined as unknown, openEditor: vi.fn(async () => undefined) },
+    editors: { activeTextEditorControl: undefined as unknown, openEditor: vi.fn(async (_input: { resource: URI; options?: unknown }) => undefined) },
     modelService: {
       onModelAdded: modelAdded.event,
       getModels: () => models,

@@ -230,16 +230,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         },
       });
       const catalog = createCatalogWorkspace(disk, workspace, async request => {
-        const path = 'path' in request && roots.length > 1 ? `${workspaceRoot.name}/${request.path}` : undefined;
-        const response = await this.editors.request(
-          input.identity,
-          path === undefined ? request : { ...request, path },
-        );
-        if (response.snapshot && response.snapshot.path !== (path ?? request.path))
-          throw new Error('The editor returned a different catalog resource. Retry discovery.');
-        return response.snapshot && 'path' in request
-          ? { ...response, snapshot: { ...response.snapshot, path: request.path } }
-          : response;
+        const path = roots.length > 1 ? `${workspaceRoot.name}/${request.path}` : request.path;
+        const response = await this.editors.request(input.identity, { ...request, path });
+        if (response.snapshot && response.snapshot.path !== path)
+          throw new Error('The editor returned a catalog snapshot for a different path.');
+        return response.snapshot ? { ...response, snapshot: { ...response.snapshot, path: request.path } } : response;
       });
       return { name: workspaceRoot.name, workspace, catalog, disk, index };
     });

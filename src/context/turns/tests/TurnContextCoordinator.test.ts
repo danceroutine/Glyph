@@ -136,7 +136,7 @@ describe(TurnContextCoordinator, () => {
     const pattern = AgentInstructionActivationMode.FILE_PATTERN;
     const user = AgentInstructionSourceKind.GLYPH_USER_RULE;
     const rules = [
-      source('literal', user, '.', pattern, new Array(64).fill('src/entry.ts')),
+      source('literal', user, '.', pattern, Array.from({ length: 64 }, () => 'src/entry.ts')),
       source('glob', user, '.', pattern, ['src/*.ts']),
       source(
         'heavy',
