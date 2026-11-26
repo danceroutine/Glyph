@@ -176,6 +176,8 @@ it('loads saved history through the latest untrusted attachment when revocation 
     {
       createInstance: () => ({
         setSkillSources() {},
+        setInstructionRefresh() {},
+        notifyInstructionsChanged() {},
         invalidate() {},
         rebindWorkspace() {},
         rebindAttachment: (/** @type {unknown} */ value) => value,
@@ -299,6 +301,8 @@ it.each(['handshake', 'attach acknowledgement'])(
       {
         createInstance: () => ({
           setSkillSources() {},
+          setInstructionRefresh() {},
+          notifyInstructionsChanged() {},
           invalidate() {},
           rebindWorkspace() {},
           rebindAttachment: (/** @type {unknown} */ value) => value,
@@ -533,6 +537,8 @@ it.each(
     {
       createInstance: () => ({
         setSkillSources() {},
+        setInstructionRefresh() {},
+        notifyInstructionsChanged() {},
         invalidate,
         rebindWorkspace() {},
         rebindAttachment: (/** @type {unknown} */ value) => value,
@@ -720,6 +726,8 @@ it('drains the old runtime before rebinding, coalesces folder changes, and prese
     {
       createInstance: () => ({
         setSkillSources() {},
+        setInstructionRefresh() {},
+        notifyInstructionsChanged() {},
         invalidate() {},
         rebindWorkspace: rebind,
         rebindAttachment: (/** @type {unknown} */ value) => value,
