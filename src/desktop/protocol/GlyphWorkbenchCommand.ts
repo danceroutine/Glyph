@@ -1,3 +1,4 @@
+import type { GlyphSkillDraft, GlyphSkillSource } from './events/GlyphSkillManagement.ts';
 import type { AgentReviewInput, AgentReviewModel } from '#src/reviewing/AgentReview.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { GlyphModeSwapPolicy } from './events/GlyphModeSwap.ts';
@@ -20,6 +21,10 @@ export enum GlyphWorkbenchCommandType {
   START_AGENT_REVIEW = 'start_agent_review',
   CANCEL_AGENT_REVIEW = 'cancel_agent_review',
   DISMISS_AGENT_REVIEW_FINDING = 'dismiss_agent_review_finding',
+  PREVIEW_SKILL = 'preview_skill',
+  APPLY_SKILL = 'apply_skill',
+  DISCARD_SKILL_PREVIEW = 'discard_skill_preview',
+  SET_SKILL_ENABLED = 'set_skill_enabled',
   CREATE_USER_RULE = 'create_user_rule',
   SET_USER_RULE_ENABLED = 'set_user_rule_enabled',
   DELETE_USER_RULE = 'delete_user_rule',
@@ -52,6 +57,19 @@ export enum GlyphWorkbenchCommandType {
  * through MessagePort without coupling either process to the other's classes.
  */
 export type GlyphWorkbenchCommand =
+  | {
+      readonly type: GlyphWorkbenchCommandType.PREVIEW_SKILL;
+      readonly targetId: string;
+      readonly replaceId?: string;
+      readonly draft?: GlyphSkillDraft;
+      readonly source?: GlyphSkillSource;
+      readonly removeId?: string;
+    }
+  | {
+      readonly type: GlyphWorkbenchCommandType.APPLY_SKILL | GlyphWorkbenchCommandType.DISCARD_SKILL_PREVIEW;
+      readonly previewId: string;
+    }
+  | { readonly type: GlyphWorkbenchCommandType.SET_SKILL_ENABLED; readonly skillId: string; readonly enabled: boolean }
   | {
       readonly type: GlyphWorkbenchCommandType.CREATE_USER_RULE;
       readonly name: string;

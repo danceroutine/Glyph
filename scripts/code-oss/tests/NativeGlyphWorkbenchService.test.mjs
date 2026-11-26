@@ -336,6 +336,7 @@ async function fixture({
     {
       createInstance: () => ({
         setSkillSources() {},
+        notifyInstructionsChanged() {},
         invalidate() {},
         dispose() {},
         handle() {},

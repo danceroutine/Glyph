@@ -195,3 +195,19 @@ describe('Skill turn limits and tool authority', () => {
     ).toMatchObject({ activated: false });
   });
 });
+
+it('keeps cancellation distinct from actionable resource failures, including non-Error provider failures', async () => {
+  const turns = { activateSource: vi.fn().mockRejectedValue('Provider unavailable'), contribution: vi.fn() };
+  const runtime = new SkillToolRuntime(turns);
+  const activation = runtime.tools[0]!;
+  await expect(
+    activation.execute(JSON.stringify({ id: 'example', reason: 'Relevant' }), new AbortController().signal, {
+      turnId: 'turn',
+    }),
+  ).rejects.toThrow('Skill operation failed.');
+  const controller = new AbortController();
+  controller.abort(new Error('Cancelled instruction request'));
+  await expect(
+    activation.execute(JSON.stringify({ id: 'example', reason: 'Relevant' }), controller.signal, { turnId: 'turn' }),
+  ).rejects.toThrow('Cancelled instruction request');
+});

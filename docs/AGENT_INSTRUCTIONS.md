@@ -297,13 +297,99 @@ Discovery reads bounded `SKILL.md` snapshots and retains validated metadata. The
 
 [TurnContextCoordinator](../src/context/turns/TurnContextCoordinator.ts) prepares independent instruction and skill contributors for the same logical turn. Manual skill selections load during preparation. The model can select an advertised package with `skills.activate`, supplying its stable ID and a relevance explanation. Nested project candidates become visible when their scope participates through an attachment or file access. Candidate metadata is bounded to 50 entries and 32 KiB per turn; explicit user selections can address eligible packages beyond that advertised subset.
 
-Activation captures a bounded package snapshot in the host. This captures resource bytes, including binary assets, to keep later reads on the same package revision even if files change on disk. Only the instruction body enters model context at activation. `skills.read_resource` subsequently discloses an individual resource from that snapshot and records its revision in provenance. Reference prose is never recursively expanded into the model request. Reading a script returns its content; execution is a later capability with its own authorization boundary.
+Activation captures a bounded package snapshot in the host. This captures resource bytes, including binary assets, to keep later reads on the same package revision even if files change on disk. Only the instruction body enters model context at activation. `skills.read_resource` subsequently discloses an individual resource from that snapshot and records its revision in provenance. Reference prose is never recursively expanded into the model request. Reading a script returns its content. Execution uses the separate `skills.run_script` tool and the owning chat’s shell authorization boundary.
 
 The snapshot permits at most 256 files, 1 MiB per file, and 8 MiB in aggregate. An activated instruction body and each disclosed resource have separate 64 KiB limits. Oversized or unavailable content produces an error rather than truncated guidance. Each turn permits at most 32 active skill packages. These limits bound this skill contributor; the existing rules byte-budget TODO still concerns a combined instruction budget across domains.
 
 Activated packages and resources appear in “Context used” and are validated when the transcript is persisted. Their bodies are retained as provenance while the shared history-retention policy removes host envelopes from replayed conversation state. Activation records describe which context was used; they do not certify that a workflow completed.
 
-This discovery/activation milestone includes the Settings Edit action. Installation, updates, uninstall, persisted enablement management, and authorized script execution remain subsequent slices of rank 21. The package lifecycle contracts in `GlyphSkills.test.mjs` remain pending until those workflows are implemented and exercised.
+## Installing and managing skills
+
+Settings → Skills lets the user choose a user or project installation target, create a package, import a local directory, or select an HTTPS repository and commit or tag. **Preview package** shows the complete file comparison before application. Local sources are read through a Rust index scoped to the selected package. Repository sources are read from Git objects at the resolved commit, with checkout and hooks disabled. Both sources preserve binary assets and pass the same metadata, path, file-count, and byte-budget validation. **Edit** opens `SKILL.md` in the native editor; saving valid metadata makes the package available to discovery.
+
+[SkillPackageDraft](../src/skills/SkillPackageDraft.ts) captures the complete prospective package and a content revision. [SkillPackageManager](../src/skills/SkillPackageManager.ts) retains it behind an opaque preview token. Applying that token uses those captured bytes even if the import source changes after preview. Updates and removals also compare the complete installed package against the previewed revision. Collision checks, authoritative editor-versus-disk checks, and a bounded transaction inventory prevent replacement from discarding unsaved edits, excluded files, or unindexed resources. Staged directory swaps retain the original until persistence succeeds. A failed restoration preserves its backup and reports the recovery location. A catalog delivery failure after a successful mutation reports that the package changed successfully and requests a refresh.
+
+Enablement is stored independently of package content in `~/.glyph/skill-state.json`, keyed by provider and package identity. The same file retains the installation source and its reviewed content revision. The factory shares these maps across workspace runtimes, and a new host restores them before constructing its skill catalogs. `GLYPH_USER_DIRECTORY` relocates this user directory for managed installations and isolated acceptance fixtures; its default remains `~/.glyph`.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Settings as Skills settings
+    participant Host as Workspace runtime
+    participant Reader as Package source reader
+    participant Manager as Package manager
+    participant Store as Package and preference stores
+    participant Catalog as Skill catalog
+    User->>Settings: Select package, revision, and target
+    Settings->>Host: Preview selected source
+    Host->>Reader: Capture bounded package bytes
+    Reader-->>Host: Immutable draft and content revision
+    Host->>Manager: Prepare comparison with installed package
+    Manager-->>Settings: Preview token and file comparisons
+    User->>Settings: Apply reviewed preview
+    Settings->>Manager: Apply preview token
+    Manager->>Store: Recheck installed revision and stage replacement
+    Manager->>Store: Preserve original, install reviewed bytes, persist provenance
+    Manager->>Catalog: Reconcile indexes and publish metadata
+    Catalog-->>Settings: Updated source and enabled state
+```
+
+## Agent-proposed package changes
+
+`skills.propose_change` accepts a complete draft or an installed skill identity to remove. It is available in Agent mode. The host captures a preview and presents a one-shot approval containing its file comparisons, origin, and revision. The approval belongs to the requesting run and cannot create a reusable permission grant. Denial and cancellation discard the proposal. Approval applies the retained token through the same manager used by Settings, including stale-preview checks and rollback behavior.
+
+```mermaid
+sequenceDiagram
+    participant Model
+    participant Tool as Skill lifecycle tool
+    participant Manager as Package manager
+    participant Broker as Interaction broker
+    actor User
+    Model->>Tool: propose_change with complete package
+    Tool->>Manager: Capture immutable preview
+    Manager-->>Tool: Token, revision, and comparisons
+    Tool->>Broker: Request one-shot package approval
+    Broker-->>User: Show reviewed files and revision
+    alt User approves
+        User->>Broker: Apply change
+        Broker-->>Tool: Authorized one-shot decision
+        Tool->>Manager: Apply retained preview token
+        Manager-->>Model: Applied package revision
+    else User denies or cancels
+        Broker-->>Tool: Denied or cancelled
+        Tool->>Manager: Discard preview
+        Tool-->>Model: Package unchanged
+    end
+```
+
+## Running bundled scripts
+
+`skills.run_script` requires an activated package and a script beneath `scripts/`. The host selects `sh`, `python3`, or `node` from the script extension, validates the resource path and any declared tool constraints, and stages the pinned package bytes in a temporary workspace directory. Arguments are quoted individually. The shell approval displays the script body and package revision before execution. Compatibility prose remains visible package guidance; the host does not interpret arbitrary natural-language requirements as executable policy. Missing interpreters and nonzero process exits remain visible execution results.
+
+The runner delegates to the existing shell session manager, which owns grants, sandbox admission, output bounds, and cancellation. Tool declarations narrow this execution path and cannot supply shell permission. Foreground execution belongs to the requesting chat and ends with its turn; staging is removed after the process settles or is cancelled. Process completion records an exit status and package revision. The model remains responsible for verifying the requested workflow’s deliverables before claiming success.
+
+```mermaid
+sequenceDiagram
+    participant Model
+    participant Turn as Skill turn context
+    participant Runner as Script runner
+    participant Shell as Shell session manager
+    actor User
+    Model->>Turn: Activate selected package
+    Turn->>Turn: Reconcile selected package inventory and pin bytes
+    Model->>Runner: run_script with package ID, path, and arguments
+    Runner->>Turn: Retrieve active pinned package
+    Runner->>Runner: Check path and tool constraints, stage pinned resources
+    Runner->>Shell: Execute quoted script with owning turn signal
+    Shell-->>User: Request applicable shell authorization
+    User->>Shell: Approve or deny under existing grant policy
+    Shell->>Shell: Launch through native sandbox when authorized
+    Shell-->>Runner: Bounded output and exit status, or cancellation
+    Runner->>Runner: Remove staged resources
+    Runner-->>Model: Process outcome and pinned revision
+```
+
+Settings and slash searches request fresh catalog metadata. Native file and editor-model changes also schedule refreshes, and an open picker follows metadata change notifications. Activation reconciles only the selected package’s bounded inventory so newly added resources are included even when the workspace watcher is still catching up. Active turns retain their original snapshots; later turns apply catalog changes and saved enablement choices.
 
 ## Completion, provenance, and history
 

@@ -7,6 +7,44 @@ afterEach(cleanup);
 
 describe(WiredGlyphApprovalCard, () => {
   it.each([
+    ['Keep unchanged', GlyphApprovalDecision.DENY],
+    ['Apply change', GlyphApprovalDecision.ALLOW_ONCE],
+  ] as const)('offers %s for the exact skill package comparison without reusable grants', (label, decision) => {
+    const decideApproval = vi.fn(async () => {});
+    render(
+      <WiredGlyphApprovalCard
+        request={{
+          id: 'approval',
+          title: 'Install example?',
+          detail: 'Package proposal',
+          sandboxed: false,
+          skillChange: {
+            id: 'preview',
+            targetId: 'project',
+            action: 'install',
+            name: 'example',
+            source: 'Agent proposal',
+            revision: 'revision',
+            files: [
+              { path: 'SKILL.md', after: 'Reviewed instructions' },
+              { path: 'removed', before: 'Old contents' },
+            ],
+          },
+        }}
+        chatId="chat"
+        runId="run"
+        actions={{ decideApproval }}
+        disabled={false}
+      />,
+    );
+    expect(screen.getByRole('region', { name: 'Skill change approval' }).textContent).toContain(
+      'Reviewed instructions',
+    );
+    expect(screen.queryByRole('button', { name: 'Always Run' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    expect(decideApproval).toHaveBeenCalledWith('chat', 'run', 'approval', decision);
+  });
+  it.each([
     ['Start goal', GlyphApprovalDecision.ALLOW_ONCE],
     ['Decline', GlyphApprovalDecision.DENY],
   ] as const)('offers an explicit %s decision for a proposed goal', (label, decision) => {

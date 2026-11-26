@@ -1,3 +1,6 @@
+import { Emitter } from '#vs/base/common/event.js';
+import { RunOnceScheduler } from '#vs/base/common/async.js';
+import { DisposableStore, DisposableMap, MutableDisposable, type IDisposable } from '#vs/base/common/lifecycle.js';
 import type { GlyphSkill } from '#glyph/protocol/events/GlyphSkill.js';
 import { GlyphIdeContext } from './GlyphIdeContext.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
@@ -32,6 +35,12 @@ import type { GlyphInstructionSource } from '#glyph/protocol/events/GlyphInstruc
 
 /** Capture context only from explicit file selection, search, or selected editor text. */
 export class GlyphContextController extends Disposable implements GlyphContextActions {
+  private readonly instructionsChanged = this._register(new Emitter<void>());
+  private readonly skillWatchers = this._register(new DisposableStore());
+  private readonly rootWatches = this._register(new DisposableMap<string>());
+  private skillRoots: () => readonly string[] = () => [];
+  private watchSkillModel: ((model: ITextModel) => void) | undefined;
+  private instructionFingerprint = '';
   private refreshSkillSources: (() => Promise<void>) | undefined;
   private skillSources: () => readonly GlyphSkill[] = () => [];
   readonly ide: GlyphIdeContext;
@@ -63,9 +72,80 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
   }
-  setSkillSources(source: () => readonly GlyphSkill[], refresh?: () => Promise<void>): void {
+  setSkillSources(
+    source: () => readonly GlyphSkill[],
+    refresh?: () => Promise<void>,
+    roots?: () => readonly string[],
+  ): void {
+    this.skillRoots = roots ?? (() => []);
+    this.rootWatches.clearAndDisposeAll();
     this.skillSources = source;
     this.refreshSkillSources = refresh;
+    this.skillWatchers.clear();
+    if (!refresh) return;
+    const followup = this.skillWatchers.add(
+      new RunOnceScheduler(() => {
+        if (this.trust.isWorkspaceTrusted()) void refresh();
+      }, 1000),
+    );
+    const changed = this.skillWatchers.add(
+      new RunOnceScheduler(() => {
+        if (!this.trust.isWorkspaceTrusted()) return;
+        void refresh();
+        followup.schedule();
+      }, 300),
+    );
+    const relevant = (uri: URI) =>
+      /\/\.(?:glyph|cursor)(?:\/skills(?:\/|$)|$)/u.test(uri.path) ||
+      this.skillRoots().some(root => {
+        const path = URI.parse(root).path;
+        return uri.path === path || uri.path.startsWith(`${path}/`);
+      });
+    const providerChanges = this.skillWatchers.add(new MutableDisposable<IDisposable>());
+    const observeProvider = () => {
+      providerChanges.value = this.files.getProvider('file')?.onDidChangeFile(changes => {
+        if (changes.some(change => relevant(change.resource))) changed.schedule();
+      });
+    };
+    observeProvider();
+    this.skillWatchers.add(
+      this.files.onDidChangeFileSystemProviderRegistrations(event => {
+        if (event.scheme === 'file') observeProvider();
+      }),
+    );
+    const watched = new WeakSet<ITextModel>();
+    const watch = (model: ITextModel) => {
+      if (!watched.has(model) && relevant(model.uri) && model.uri.path.endsWith('/SKILL.md')) {
+        watched.add(model);
+        this.skillWatchers.add(
+          model.onDidChangeContent(() => {
+            changed.schedule();
+          }),
+        );
+      }
+    };
+    this.watchSkillModel = watch;
+    for (const model of this.models.getModels()) watch(model);
+    this.skillWatchers.add(this.models.onModelAdded(watch));
+  }
+  onDidChangeInstructions(listener: () => void): () => void {
+    const subscription = this.instructionsChanged.event(listener);
+    return () => {
+      subscription.dispose();
+    };
+  }
+  notifyInstructionsChanged(): void {
+    const roots = new Set(this.skillRoots());
+    for (const root of this.rootWatches.keys()) if (!roots.has(root)) this.rootWatches.deleteAndDispose(root);
+    for (const root of roots)
+      if (!this.rootWatches.has(root))
+        this.rootWatches.set(root, this.files.watch(URI.parse(root), { recursive: true, excludes: [] }));
+    for (const model of this.models.getModels()) this.watchSkillModel?.(model);
+    const fingerprint = JSON.stringify([this.skillSources(), this.instructionSources()]);
+    if (fingerprint !== this.instructionFingerprint) {
+      this.instructionFingerprint = fingerprint;
+      this.instructionsChanged.fire();
+    }
   }
 
   selectIdeContext(): Promise<readonly GlyphContextAttachment[]> {

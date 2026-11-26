@@ -1,3 +1,4 @@
+import { skillToolFailure } from './SkillToolFailure.ts';
 import { z } from 'zod';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
@@ -74,6 +75,17 @@ export class SkillToolRuntime implements ToolSource {
         },
       },
     ];
+    this.tools = this.tools.map(tool => ({
+      ...tool,
+      execute: async (input, signal, context) => {
+        try {
+          return await tool.execute(input, signal, context);
+        } catch (error) {
+          if (signal.aborted) throw signal.reason;
+          throw skillToolFailure(error, 'not_started');
+        }
+      },
+    }));
   }
 }
 

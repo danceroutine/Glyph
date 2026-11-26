@@ -1,3 +1,5 @@
+import { SkillChangeApprovalPolicy } from '#src/skills/SkillChangeApprovalPolicy.js';
+import type { SkillPreview } from '#src/skills/SkillLifecycle.js';
 import { shellPermissionChoices } from '#src/shell/shellPermissionChoices.js';
 import { Approval } from '#src/interaction/approvals/Approval.js';
 import { ApprovalCapability } from '#src/interaction/approvals/ApprovalCapability.js';
@@ -145,6 +147,27 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
         });
       },
     );
+  }
+
+  async presentSkillChange(preview: SkillPreview, signal: AbortSignal): Promise<boolean> {
+    const identity = this.requireRun();
+    const policy = new SkillChangeApprovalPolicy();
+    const detail = `${preview.source}\nRevision: ${preview.revision}\n\n${preview.files.map(file => `${file.path}\nBefore:\n${file.before ?? '(absent)'}\nAfter:\n${file.after ?? '(removed)'}`).join('\n\n')}`;
+    const approval = new Approval(
+      policy.createRequest({
+        workspace: this.workspace,
+        operation: { title: `${preview.action} skill ${preview.name}?`, detail, revision: preview.revision },
+      }),
+    );
+    const result = await this.resolveApproval(approval, policy, identity, signal, () => {
+      this.emit({
+        type: GlyphHostEventType.APPROVAL,
+        ...identity,
+        approval: { id: approval.id, title: approval.request.title, detail, sandboxed: false, skillChange: preview },
+      });
+    });
+    if (result.admission === 'failed' || result.admission === 'cancelled') throw result.error;
+    return result.admission === 'authorized';
   }
 
   presentGoalProposal(objective: string, signal: AbortSignal): Promise<boolean> {

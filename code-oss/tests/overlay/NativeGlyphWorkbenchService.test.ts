@@ -155,6 +155,7 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js', () => ({
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => ({
   GlyphContextController: class {
     readonly setSkillSources = vi.fn();
+    readonly notifyInstructionsChanged = vi.fn();
     readonly ide = { terminal: vi.fn() };
     readonly selectIdeContext = vi.fn(async () => [] as unknown[]);
     readonly attachSelection = vi.fn(async () => {});
@@ -863,9 +864,35 @@ describe(NativeGlyphWorkbenchService, () => {
       type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
       afterSequence: 0,
     });
-    const [, refresh] = context.setSkillSources.mock.calls[0];
+    const [, refresh, roots] = context.setSkillSources.mock.calls[0];
+    expect(roots()).toEqual([]);
     await refresh();
     expect(host.request).toHaveBeenCalledTimes(2);
+  });
+  it('routes revision-bound skill management requests and publishes native skill watch roots', async () => {
+    const { service, host, context } = await workbench({
+      extra: {
+        skillTargets: [
+          { id: 'project', label: 'Project', uri: 'file:///project/.glyph/skills' },
+          { id: 'other', label: 'Other' },
+        ],
+      },
+    });
+    host.request.mockClear();
+    const source = { kind: 'local' as const, path: '/selected/example' };
+    await service.previewSkill('project', { source });
+    await service.applySkill('preview');
+    await service.discardSkillPreview('discard');
+    await service.setSkillEnabled('skill', false);
+    expect(host.request.mock.calls.map(([command]) => command as GlyphWorkbenchCommand)).toEqual([
+      { type: GlyphWorkbenchCommandType.PREVIEW_SKILL, targetId: 'project', source },
+      { type: GlyphWorkbenchCommandType.APPLY_SKILL, previewId: 'preview' },
+      { type: GlyphWorkbenchCommandType.DISCARD_SKILL_PREVIEW, previewId: 'discard' },
+      { type: GlyphWorkbenchCommandType.SET_SKILL_ENABLED, skillId: 'skill', enabled: false },
+    ]);
+    const [sources, , roots] = context.setSkillSources.mock.calls[0];
+    expect(sources()).toEqual([]);
+    expect(roots()).toEqual(['file:///project/.glyph/skills']);
   });
 
   it('reports a failed catalog refresh and allows a later retry', async () => {

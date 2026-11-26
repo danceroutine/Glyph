@@ -33,6 +33,10 @@ export class SkillPackage {
       .digest('hex');
   }
 
+  /** Defensive copy for host-owned lifecycle and execution staging. */
+  packageFiles(): ReadonlyMap<string, SkillPackageFile> {
+    return new Map([...this.files].map(([path, file]) => [path, { ...file, bytes: Uint8Array.from(file.bytes) }]));
+  }
   readResource(path: string): SkillResourceUse {
     if (!path || path.includes('\\') || path.includes('\0') || posix.isAbsolute(path) || path.split('/').includes('..'))
       throw new Error('Skill resource must remain inside its package.');

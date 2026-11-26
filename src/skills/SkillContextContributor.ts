@@ -102,6 +102,12 @@ export class SkillTurnContext implements TurnContextContribution {
       this.pending.delete(id);
     });
   }
+  activePackage(id: string): SkillPackage {
+    if (this.released) throw new Error('Skill turn has ended.');
+    const active = this.packages.get(id);
+    if (!active) throw new Error('Activate the skill before using package resources.');
+    return active.package;
+  }
   readResource(id: string, path: string) {
     if (this.released) throw new Error('Skill turn has ended.');
     const active = this.packages.get(id);

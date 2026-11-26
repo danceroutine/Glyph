@@ -149,9 +149,11 @@ export class GlyphSession {
       NODE_ENV: 'development',
       VSCODE_DEV: '1',
       GLYPH_CONFIG_DIR: join(this.sandbox, 'glyph-config'),
+      GLYPH_USER_DIRECTORY: join(this.sandbox, 'glyph-user'),
       CHAT_TRACE_FILE: join(this.sandbox, 'glyph-trace.log'),
       GLYPH_DESKTOP_TEST_STREAM_DELAY_MS: '80',
     };
+    await mkdir(env.GLYPH_USER_DIRECTORY, { recursive: true });
     for (const key of [
       'ELECTRON_RUN_AS_NODE',
       'VSCODE_CLI',

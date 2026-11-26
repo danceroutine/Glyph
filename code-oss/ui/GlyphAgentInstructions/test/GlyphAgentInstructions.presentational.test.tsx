@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/preact';
 import { describe, expect, it, vi } from 'vitest';
-import { GlyphAgentInstructions } from './GlyphAgentInstructions.presentational.tsx';
+import { GlyphAgentInstructions } from '#code-oss/ui/GlyphAgentInstructions/GlyphAgentInstructions.presentational.tsx';
 
 const sources = [
   { id: 'root', kind: 'agents_md', label: 'AGENTS.md', path: 'AGENTS.md', scope: '.', status: 'active' },

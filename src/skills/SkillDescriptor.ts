@@ -19,6 +19,8 @@ export interface SkillDescriptor {
   readonly status: 'active' | 'error';
   readonly revision?: string;
   readonly compatibility?: string;
+  readonly installedFrom?: string;
+  readonly packageRevision?: string;
   readonly allowedTools: readonly string[];
   readonly uri: string;
   readonly message?: string;

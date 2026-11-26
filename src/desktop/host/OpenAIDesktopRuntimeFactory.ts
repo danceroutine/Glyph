@@ -1,3 +1,9 @@
+import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
+import { SkillScriptRunner } from '#src/skills/SkillScriptRunner.js';
+import { SkillLifecycleToolRuntime } from '#src/skills/SkillLifecycleToolRuntime.js';
+import { SkillStateStore } from '#src/skills/SkillStateStore.js';
+import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
+import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
@@ -87,12 +93,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   private readonly accounts = new OpenAIAccountService(new FileOpenAIAccountStore(this.configuration.stateDirectory));
   private initialized: Promise<void> | undefined;
   /** User rules are shared across workspaces; the factory owns this lazy index's lifetime. */
+  private skillState: Promise<SkillStateStore> | undefined;
   private userSkillIndex: RustWorkspacePathIndex | undefined;
   private userRuleIndex: RustWorkspacePathIndex | undefined;
 
   constructor(
     private readonly editors: EditorRpcRouter,
     private readonly transport?: typeof fetch,
+    private readonly userDirectory = join(homedir(), '.glyph'),
   ) {}
 
   async create(input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]): Promise<ProviderDesktopRuntime> {
@@ -230,6 +238,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             parts.map(part => ({ name: part.name, index: part.index })),
           );
     let skills: SkillCatalog | undefined;
+    let skillManager: SkillPackageManager | undefined;
     let instructionCatalog: AgentInstructionCatalog | undefined;
     let turnContexts: TurnContextCoordinator | undefined;
     let userRules: UserAgentRuleManager | undefined;
@@ -237,7 +246,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       // Reuse each root's watched native index; instruction refreshes must not rescan the workspace.
       const listProjectInstructions = (maxFiles: number, globPattern: string) =>
         listInstructionFilesAcrossRoots(parts, maxFiles, globPattern);
-      const userRuleRoot = join(homedir(), '.glyph');
+      const userRuleRoot = this.userDirectory;
       await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
       const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
@@ -285,6 +294,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const userSkills = new FileSkillDiscoveryProvider({
         origin: { id: 'user:glyph', label: 'User skill', scope: 'user', compatibility: 'glyph' },
         directory: 'skills',
+        captureFiles: (directory, signal) =>
+          listSkillPackageFiles(userRuleStore, directory, indexExecutable, false, signal),
         workspace: userRuleStore,
         binaryStore: userRuleStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
@@ -297,32 +308,74 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           await userSkillIndex.refresh();
         },
       });
-      skills = new SkillCatalog([
-        userSkills,
-        ...parts.flatMap(part =>
-          ['.glyph', '.cursor'].map(
-            location =>
-              new FileSkillDiscoveryProvider({
-                origin: {
-                  id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:${location}`,
-                  label: `${part.name} ${location} skill`,
-                  scope: 'project',
-                  compatibility: location.slice(1),
-                },
-                directory: `${location}/skills`,
-                workspace: part.workspace,
-                binaryStore: part.disk,
-                ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
-                uriForPath: path => userRuleUri(part.disk.root, path),
-                listFiles: signal =>
-                  part.index.glob(`**/${location}/skills/**/*`, { limit: 10_000, ...(signal ? { signal } : {}) }),
-                refreshIndex: async () => {
-                  await part.index.refresh();
-                },
-              }),
+      const skillState = await (this.skillState ??= (async () => {
+        const state = new SkillStateStore(userRuleStore);
+        await state.initialize();
+        return state;
+      })());
+      skills = new SkillCatalog(
+        [
+          userSkills,
+          ...parts.flatMap(part =>
+            ['.glyph', '.cursor'].map(
+              location =>
+                new FileSkillDiscoveryProvider({
+                  origin: {
+                    id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:${location}`,
+                    label: `${part.name} ${location} skill`,
+                    scope: 'project',
+                    compatibility: location.slice(1),
+                  },
+                  directory: `${location}/skills`,
+                  captureFiles: (directory, signal) =>
+                    listSkillPackageFiles(part.workspace, directory, indexExecutable, true, signal),
+                  workspace: part.workspace,
+                  binaryStore: part.disk,
+                  ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
+                  uriForPath: path => userRuleUri(part.disk.root, path),
+                  listFiles: signal =>
+                    part.index.glob(`**/${location}/skills/**/*`, { limit: 10_000, ...(signal ? { signal } : {}) }),
+                  refreshIndex: async () => {
+                    await part.index.refresh();
+                  },
+                }),
+            ),
           ),
-        ),
-      ]);
+        ],
+        skillState.enabled,
+        skillState.installations,
+      );
+      skillManager = new SkillPackageManager(
+        [
+          {
+            id: 'user:glyph',
+            label: 'User skills',
+            store: userRuleStore,
+            workspace: userRuleStore,
+            directory: 'skills',
+            listFiles: async () => {
+              const result = await userSkillIndex.glob('**/*', { limit: 10000 });
+              return { ...result, files: result.files.map(path => `skills/${path}`) };
+            },
+            refreshIndex: async () => {
+              await userSkillIndex.refresh();
+            },
+          },
+          ...parts.map(part => ({
+            id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:.glyph`,
+            label: `${part.name} project skills`,
+            store: part.disk,
+            workspace: part.workspace,
+            directory: '.glyph/skills',
+            listFiles: () => part.index.glob('**/.glyph/skills/**/*', { limit: 10000 }),
+            refreshIndex: async () => {
+              await part.index.refresh();
+            },
+          })),
+        ],
+        skills,
+        skillState,
+      );
       turnContexts = new TurnContextCoordinator([
         new InstructionContextContributor(instructionCatalog),
         new SkillContextContributor(skills),
@@ -401,6 +454,16 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           turnContexts,
         ),
         ...(turnContexts ? [new RuleToolRuntime(turnContexts), new SkillToolRuntime(turnContexts)] : []),
+        ...(turnContexts && skillManager
+          ? [
+              new SkillLifecycleToolRuntime(
+                skillManager,
+                (preview, signal) => interactions.presentSkillChange(preview, signal),
+                turnContexts,
+                new SkillScriptRunner(shells, parts[0]!.disk, parts.length > 1 ? parts[0]!.name : undefined),
+              ),
+            ]
+          : []),
         new WebToolRuntime(new WebFetchService(webHttp), new DuckDuckGoSearch(webHttp)),
         new ProposeQuestionToolRuntime(interactions),
         new ShellToolRuntime(shells),
@@ -511,6 +574,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       shellSessions: shells,
       ...(instructionCatalog ? { instructionCatalog } : {}),
       ...(skills ? { skills } : {}),
+      ...(skillManager ? { skillManager, skillSources: new SkillPackageSourceReader(indexExecutable) } : {}),
       ...(userRules ? { userRules } : {}),
       emit: input.emit,
       ownerWindowId: input.identity.windowId,

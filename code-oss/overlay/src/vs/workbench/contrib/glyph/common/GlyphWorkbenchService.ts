@@ -1,3 +1,4 @@
+import type { GlyphSkillDraft, GlyphSkillSource } from '#glyph/protocol/events/GlyphSkillManagement.js';
 import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import type { GlyphIdeContext } from '#vs/workbench/contrib/glyph/browser/GlyphIdeContext.js';
 import type { GlyphReviewCommand } from '#glyph/workbench/GlyphReviewCommand.js';
@@ -76,6 +77,18 @@ export interface GlyphWorkbenchService {
   acceptProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void>;
   rejectProposalItem(chatId: string, proposalId: string, itemId: string): Promise<void>;
   /** Reload skill metadata for Settings and slash selection without starting a model turn. */
+  previewSkill(
+    targetId: string,
+    input: {
+      readonly source?: GlyphSkillSource;
+      readonly draft?: GlyphSkillDraft;
+      readonly replaceId?: string;
+      readonly removeId?: string;
+    },
+  ): Promise<void>;
+  applySkill(previewId: string): Promise<void>;
+  discardSkillPreview(previewId: string): Promise<void>;
+  setSkillEnabled(skillId: string, enabled: boolean): Promise<void>;
   refreshSkills(): Promise<void>;
   createUserRule(name: string, activation: NonNullable<GlyphInstructionSource['activation']>): Promise<void>;
   setUserRuleEnabled(source: GlyphInstructionSource, enabled: boolean): Promise<void>;

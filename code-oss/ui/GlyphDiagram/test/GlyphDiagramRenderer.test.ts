@@ -11,7 +11,7 @@ let instances = 0;
 const drawing = (text: string) => ({ tree: { tag: 'svg', attributes: {}, children: [text] }, links: [] });
 
 async function freshRenderer(): Promise<typeof import('#code-oss/ui/GlyphDiagram/GlyphDiagramRenderer.ts')> {
-  const module = new URL('./GlyphDiagramRenderer.ts', import.meta.url);
+  const module = new URL('../GlyphDiagramRenderer.ts', import.meta.url);
   module.searchParams.set('instance', String(++instances));
   return import(module.href) as Promise<typeof import('#code-oss/ui/GlyphDiagram/GlyphDiagramRenderer.ts')>;
 }

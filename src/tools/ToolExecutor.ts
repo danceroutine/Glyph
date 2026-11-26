@@ -1,3 +1,4 @@
+import { ToolOperationError } from './ToolOperationError.ts';
 import { randomUUID } from 'node:crypto';
 import { ToolActivityPhase } from '#src/chat/ToolActivityPhase.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
@@ -90,6 +91,11 @@ export class ToolExecutor {
       if (signal.aborted) return { phase: ToolActivityPhase.INTERRUPTED, output, interruption: signal.reason };
       return { phase: ToolActivityPhase.COMPLETED, output };
     } catch (error) {
+      if (!signal.aborted && error instanceof ToolOperationError)
+        return {
+          phase: ToolActivityPhase.FAILED,
+          output: failure(error.code, error.message, error.outcome === 'unknown'),
+        };
       const phase = signal.aborted ? ToolActivityPhase.INTERRUPTED : ToolActivityPhase.FAILED;
       const code = !started
         ? 'TOOL_NOT_STARTED'

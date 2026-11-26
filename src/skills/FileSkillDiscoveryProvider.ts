@@ -18,6 +18,10 @@ export interface SkillDiscoveryLocation {
     signal?: AbortSignal,
   ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly uriForPath: (path: string) => string;
+  readonly captureFiles?: (
+    directory: string,
+    signal?: AbortSignal,
+  ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly refreshIndex: () => Promise<void>;
 }
 
@@ -104,11 +108,13 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
     }));
   }
 
-  capture(descriptor: SkillDescriptor, signal?: AbortSignal) {
+  async capture(descriptor: SkillDescriptor, signal?: AbortSignal) {
+    const inventory = await this.location.captureFiles?.(descriptor.directory, signal);
+    if (inventory?.truncated) throw new Error('Skill package exceeds its file budget.');
     return captureSkillPackage(
       descriptor,
       this.location.workspace,
-      this.paths.filter(path => path.startsWith(`${descriptor.directory}/`)),
+      (inventory?.files ?? this.paths).filter(path => path.startsWith(`${descriptor.directory}/`)),
       signal,
       this.location.binaryStore,
     );

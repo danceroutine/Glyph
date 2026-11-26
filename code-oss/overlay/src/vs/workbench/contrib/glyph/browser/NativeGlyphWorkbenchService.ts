@@ -1,3 +1,4 @@
+import type { GlyphSkillDraft, GlyphSkillSource } from '#glyph/protocol/events/GlyphSkillManagement.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import type { AgentReviewInput } from '#vs/platform/glyph/reviewing/AgentReview.js';
 import { GlyphShellTerminals } from './GlyphShellTerminals.js';
@@ -163,6 +164,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.context.setSkillSources(
       () => this.state.skills ?? [],
       () => this.refreshSkills(),
+      () => (this.state.skillTargets ?? []).flatMap(target => (target.uri ? [target.uri] : [])),
     );
     this.proposalEditor = this._register(
       instantiationService.createInstance(GlyphProposalEditor, {
@@ -247,6 +249,14 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             ? this.projection.state.chats.find(chat => chat.id === event.chat.id)?.mode
             : undefined;
         this.projection.accept(event);
+        if (
+          [
+            GlyphHostEventType.SKILLS_CHANGED,
+            GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED,
+            GlyphHostEventType.INITIAL_STATE,
+          ].includes(event.type)
+        )
+          this.context.notifyInstructionsChanged();
         this.shellTerminals.update(this.projection.state.shells ?? []);
         switch (event.type) {
           case GlyphHostEventType.INITIAL_STATE:
@@ -402,6 +412,26 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.composer.restoreDraft({ parts: [], from: 0, to: 0, options: {} });
     }
     this.composer.insertAttachments(attachments);
+  }
+  previewSkill(
+    targetId: string,
+    input: {
+      readonly source?: GlyphSkillSource;
+      readonly draft?: GlyphSkillDraft;
+      readonly replaceId?: string;
+      readonly removeId?: string;
+    },
+  ): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.PREVIEW_SKILL, targetId, ...input });
+  }
+  applySkill(previewId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.APPLY_SKILL, previewId });
+  }
+  discardSkillPreview(previewId: string): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.DISCARD_SKILL_PREVIEW, previewId });
+  }
+  setSkillEnabled(skillId: string, enabled: boolean): Promise<void> {
+    return this.request({ type: GlyphWorkbenchCommandType.SET_SKILL_ENABLED, skillId, enabled });
   }
   refreshSkills(): Promise<void> {
     return (this.skillRefresh ??= this.request({ type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT, afterSequence: 0 })

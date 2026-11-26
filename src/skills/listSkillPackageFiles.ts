@@ -1,0 +1,28 @@
+import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+
+/** Reconcile only the activated package's bounded inventory so a newly added resource cannot be omitted by watcher lag. */
+export async function listSkillPackageFiles(
+  workspace: WorkspaceTextStore,
+  directory: string,
+  binaryPath: string,
+  respectGitIgnore: boolean,
+  signal?: AbortSignal,
+) {
+  const root = await workspace.canonicalPath(directory);
+  const index = new RustWorkspacePathIndex({
+    root,
+    binaryPath,
+    caseSensitive: workspace.caseSensitive,
+    maxFiles: 257,
+    respectGitIgnore,
+  });
+  try {
+    const state = await index.refresh(signal);
+    if (state.truncated) return { files: [], truncated: true };
+    const listing = await index.glob('**/*', { limit: 257, ...(signal ? { signal } : {}) });
+    return { ...listing, files: listing.files.map(path => `${directory}/${path}`) };
+  } finally {
+    await index.dispose();
+  }
+}

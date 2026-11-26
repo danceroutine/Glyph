@@ -1,3 +1,4 @@
+import { ToolOperationError } from '#src/tools/ToolOperationError.js';
 import type { ToolActivity } from '#src/chat/ToolActivity.js';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentModeID } from '#src/chat/AgentMode.js';
@@ -43,6 +44,17 @@ describe(ToolExecutor, () => {
     });
     expect(f.tool.validateInput).not.toHaveBeenCalled();
     expect(f.tool.execute).not.toHaveBeenCalled();
+  });
+  it.each(['not_started', 'unknown'] as const)('preserves explicit domain failures with %s outcomes', async outcome => {
+    const f = fixture([AgentModeID.PLAN]);
+    f.tool.execute.mockRejectedValueOnce(
+      new ToolOperationError('PACKAGE_CHANGED', 'Preview the changed package again.', outcome),
+    );
+    const result = await f.executor.execute(call, f.options);
+    expect(f.options.onActivity.mock.calls.at(-1)?.[0].phase).toBe(ToolActivityPhase.FAILED);
+    expect(JSON.parse(result.output)).toEqual({
+      error: { code: 'PACKAGE_CHANGED', message: 'Preview the changed package again.', outcome },
+    });
   });
   it('permits a newly registered Plan tool without a central name list', async () => {
     const f = fixture([AgentModeID.PLAN]);

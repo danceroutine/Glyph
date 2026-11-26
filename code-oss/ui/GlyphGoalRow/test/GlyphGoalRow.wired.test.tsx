@@ -1,8 +1,12 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { GlyphGoal } from '#src/desktop/protocol/events/GlyphGoal.js';
-import { WiredGlyphGoalRow } from './GlyphGoalRow.wired.tsx';
-import { formatGoalDuration, useGlyphGoalRowState, type GlyphGoalRowState } from './useGlyphGoalRowState.ts';
+import { WiredGlyphGoalRow } from '#code-oss/ui/GlyphGoalRow/GlyphGoalRow.wired.tsx';
+import {
+  formatGoalDuration,
+  useGlyphGoalRowState,
+  type GlyphGoalRowState,
+} from '#code-oss/ui/GlyphGoalRow/useGlyphGoalRowState.ts';
 
 afterEach(() => {
   cleanup();

@@ -193,10 +193,20 @@ export const mountGlyphSkills = (
   skills: readonly GlyphSkill[],
   query: string,
   edit: (skill: GlyphSkill) => void,
+  management?: import('#src/desktop/workbench/GlyphSkillsManagement.js').GlyphSkillsManagement,
 ) => {
   let disposed = false;
-  const update = (next: readonly GlyphSkill[], search: string) => {
-    if (!disposed) render(<GlyphSkills skills={next} query={search} edit={edit} />, container);
+  const update = (next: readonly GlyphSkill[], search: string, nextManagement = management) => {
+    if (!disposed)
+      render(
+        <GlyphSkills
+          skills={next}
+          query={search}
+          edit={edit}
+          {...(nextManagement ? { management: nextManagement } : {})}
+        />,
+        container,
+      );
   };
   update(skills, query);
   return {

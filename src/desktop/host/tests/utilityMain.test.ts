@@ -83,6 +83,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   }));
   vi.stubEnv('GLYPH_DESKTOP_TEST_RUNTIME', undefined);
   vi.stubEnv('GLYPH_DESKTOP_TEST_PROVIDER_URL', undefined);
+  vi.stubEnv('GLYPH_USER_DIRECTORY', undefined);
   for (const [name, value] of Object.entries(options.environment ?? {})) vi.stubEnv(name, value);
   if (options.parentPort !== false)
     Object.defineProperty(process, 'parentPort', { value: parent, configurable: true, writable: true });
@@ -183,10 +184,16 @@ describe('utilityMain', () => {
     await loaded;
     const router = editors.constructed.mock.calls[0]?.[0];
     const factory = openai.constructed.mock.calls[0]?.[0];
-    expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(factory, router, undefined);
+    expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(factory, router, undefined, undefined);
     expect(host.constructed).toHaveBeenCalledExactlyOnceWith(factory);
     expect(scripted.constructed).not.toHaveBeenCalled();
     expect(deterministic.constructed).not.toHaveBeenCalled();
+  });
+
+  it('passes the selected user source directory to the production runtime', async () => {
+    const { loaded, openai } = startUtilityHost({ environment: { GLYPH_USER_DIRECTORY: '/managed/glyph' } });
+    await loaded;
+    expect(openai.constructed.mock.calls[0]?.[3]).toBe('/managed/glyph');
   });
 
   it('routes provider traffic through the scripted fixture when selected', async () => {

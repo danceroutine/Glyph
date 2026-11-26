@@ -50,6 +50,10 @@ import type { TodoToolRuntime } from '#src/todos/TodoToolRuntime.js';
 import type { GoalToolRuntime } from '#src/goals/GoalToolRuntime.js';
 import { Goal } from '#src/goals/Goal.js';
 import { GoalStatus } from '#src/goals/GoalStatus.js';
+import { GlyphWorkbenchCommandType as Command } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { aSkillDraft } from '#src/skills/tests/fixtures/aSkillLifecycle.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { WebApprovalService } from '#src/web/WebApprovalService.js';
 
 const captured = vi.hoisted(() => ({
   editorClients: [] as EditorWorkspaceClient[],
@@ -729,6 +733,111 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
 
   describe(OpenAIDesktopRuntimeFactory.prototype.create, () => {
+    it('wires isolated user and project package management, pinned activation, approvals, and shared enablement into production runtimes', async () => {
+      const fixture = await factoryFixture({ isolatedUserSources: true });
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const catalogs: SkillCatalog[] = [];
+      const refresh = SkillCatalog.prototype.refresh;
+      vi.spyOn(SkillCatalog.prototype, 'refresh').mockImplementation(function (this: SkillCatalog, signal) {
+        if (!catalogs.includes(this)) catalogs.push(this);
+        return refresh.call(this, signal);
+      });
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({
+        root: '/',
+        fileCount: 0,
+        fromCache: false,
+        truncated: false,
+        durationMilliseconds: 0,
+      });
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
+        this: RustWorkspacePathIndex,
+        pattern,
+        options,
+      ) {
+        const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
+        return new FileSystemWorkspaceTextStore(configuration.root).list(options.limit, pattern);
+      });
+      const roots = [await fixture.folder('one'), await fixture.folder('two')];
+      const events: GlyphHostEvent[] = [];
+      const runtime = await fixture.create(roots, event => {
+        events.push(event);
+      });
+      const targets = (await runtime.snapshot()).skillTargets!;
+      for (const [index, target] of targets.entries()) {
+        const draft = aSkillDraft('Reviewed factory workflow', `workflow-${index}`);
+        await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: target.id, draft: draft.toJSON() });
+        await runtime.handle({ type: Command.APPLY_SKILL, previewId: (await runtime.snapshot()).skillPreview!.id });
+      }
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Only read snapshots are expected');
+        for (const root of roots) {
+          const store = new FileSystemWorkspaceTextStore(root);
+          const path = request.path.startsWith(`${basename(root)}/`)
+            ? request.path.slice(basename(root).length + 1)
+            : request.path;
+          if (await store.exists(path)) return editorResponse(request, request.path, (await store.read(path)).text);
+        }
+        throw new Error('Package missing');
+      });
+      const skills = (await runtime.snapshot()).skills!;
+      expect(skills).toHaveLength(3);
+      expect(skills.map(skill => ({ status: skill.status, message: skill.message }))).toEqual(
+        skills.map(() => ({ status: 'active', message: undefined })),
+      );
+      expect(skills.every(skill => skill.installedFrom === 'Local fixture')).toBe(true);
+      const [, , toolSource, , turns] = captured.providerFactories[0]!;
+      const prepared = await turns!.beginTurn(
+        {
+          turnId: 'skills-turn',
+          attachmentPaths: [],
+          skillIds: skills.map(skill => skill.id),
+        },
+        new AbortController().signal,
+      );
+      expect(prepared.snapshot().skills).toHaveLength(3);
+      expect(prepared.snapshot().skills!.every(skill => skill.body === 'Reviewed factory workflow')).toBe(true);
+      turns!.discardTurn('skills-turn');
+      await catalogs[0]!.refreshIndexes();
+      const propose = toolSource!.tools.find(tool => tool.namespace === 'skills' && tool.name === 'propose_change')!;
+      const broker = captured.brokers[0]!.broker;
+      const pending = broker.run({ chatId: 'chat', runId: 'run' }, () =>
+        propose.execute(
+          JSON.stringify({ target_id: targets[0]!.id, replace_id: null, remove_id: skills[0]!.id, draft: null }),
+          new AbortController().signal,
+          {
+            turnId: 'turn',
+            mode: AgentModeID.AGENT,
+            chat: { id: 'chat', accountProvider: 'openai', accountId: 'account' },
+          },
+        ),
+      );
+      await vi.waitFor(() => {
+        expect(events.some(event => event.type === GlyphHostEventType.APPROVAL)).toBe(true);
+      });
+      const approval = events.find(event => event.type === GlyphHostEventType.APPROVAL)!;
+      if (approval.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected package approval');
+      broker.answer({
+        chatId: 'chat',
+        runId: 'run',
+        id: approval.approval.id,
+        kind: 'approval',
+        value: GlyphApprovalDecision.DENY,
+      });
+      expect(JSON.parse(await pending)).toMatchObject({ applied: false, denied: true });
+      await runtime.handle({ type: Command.SET_SKILL_ENABLED, skillId: skills[0]!.id, enabled: false });
+      const other = await fixture.create(roots);
+      expect((await other.snapshot()).skills!.find(skill => skill.id === skills[0]!.id)?.enabled).toBe(false);
+      const approvalBoundary = vi
+        .spyOn(WebApprovalService.prototype, 'request')
+        .mockRejectedValueOnce(new Error('Denied before network access'));
+      const fetch = toolSource!.tools.find(tool => tool.namespace === 'web' && tool.name === 'web_fetch')!;
+      expect(
+        JSON.parse(
+          await fetch.execute(JSON.stringify({ url: 'http://127.0.0.1/private' }), new AbortController().signal, {}),
+        ),
+      ).toMatchObject({ kind: 'web_error' });
+      expect(approvalBoundary).toHaveBeenCalledOnce();
+    });
     it('shares a lazy user-rule index across workspaces and disposes it with the factory', async () => {
       const fixture = await factoryFixture();
       const first = await fixture.create([await fixture.folder('one')]);
@@ -1231,14 +1340,20 @@ describe(OpenAIDesktopRuntimeFactory, () => {
 const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..', '..');
 const factoryIdentity: GlyphConnectionIdentity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
 
-async function factoryFixture(options: { readonly transport?: typeof fetch } = {}) {
+async function factoryFixture(
+  options: { readonly transport?: typeof fetch; readonly isolatedUserSources?: boolean } = {},
+) {
   for (const values of Object.values(captured)) values.length = 0;
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-')));
   vi.stubEnv('GLYPH_CONFIG_DIR', join(directory, 'state'));
   vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
   const initialize = vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
   const editors = new EditorRpcRouter();
-  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport);
+  const factory = new OpenAIDesktopRuntimeFactory(
+    editors,
+    options.transport,
+    options.isolatedUserSources ? join(directory, 'user') : undefined,
+  );
   const runtimes: ProviderDesktopRuntime[] = [];
   onTestFinished(async () => {
     for (const runtime of runtimes) await runtime.dispose();

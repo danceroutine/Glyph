@@ -21,6 +21,57 @@ const form = {
   ],
 };
 describe(DesktopInteractionBroker, () => {
+  describe('Skill package approvals', () => {
+    const preview = {
+      id: 'preview',
+      targetId: 'user',
+      name: 'example',
+      action: 'install' as const,
+      source: 'Repository @ pinned',
+      revision: 'revision',
+      files: [
+        { path: 'SKILL.md', after: 'Reviewed instructions' },
+        { path: 'removed', before: 'Old contents' },
+      ],
+    };
+    it.each([GlyphApprovalDecision.ALLOW_ONCE, GlyphApprovalDecision.DENY])(
+      'binds %s to one exact package revision without granting future permission',
+      async decision => {
+        const events: GlyphHostEvent[] = [];
+        const broker = new DesktopInteractionBroker(event => {
+          events.push(event);
+        });
+        const identity = { chatId: 'chat', runId: 'run' };
+        const pending = broker.run(identity, () => broker.presentSkillChange(preview, new AbortController().signal));
+        const event = events[0];
+        if (event?.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected skill approval');
+        expect(event.approval.skillChange).toEqual(preview);
+        expect(event.approval.detail).toContain('Revision: revision');
+        expect(event.approval.detail).toContain('(removed)');
+        expect(() => {
+          broker.answer({
+            ...identity,
+            id: event.approval.id,
+            kind: 'approval',
+            value: GlyphApprovalDecision.ALWAYS_ALLOW,
+          });
+        }).toThrow();
+        broker.answer({ ...identity, id: event.approval.id, kind: 'approval', value: decision });
+        await expect(pending).resolves.toBe(decision === GlyphApprovalDecision.ALLOW_ONCE);
+        expect(event.approval.canRemember).toBeUndefined();
+      },
+    );
+    it('cancels an unanswered package proposal with its owning run', async () => {
+      const broker = new DesktopInteractionBroker(() => {});
+      const controller = new AbortController();
+      const pending = broker.run({ chatId: 'chat', runId: 'run' }, () =>
+        broker.presentSkillChange(preview, controller.signal),
+      );
+      const rejected = expect(pending).rejects.toThrow('Stopped');
+      controller.abort(new Error('Stopped'));
+      await rejected;
+    });
+  });
   describe(DesktopInteractionBroker.prototype.presentGoalProposal, () => {
     it('asks the human to approve the objective and resolves with their decision', async () => {
       const events: GlyphHostEvent[] = [];

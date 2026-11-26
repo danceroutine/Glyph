@@ -8,6 +8,7 @@ export class SkillCatalog {
   constructor(
     private readonly providers: readonly SkillDiscoveryProvider[],
     private readonly enabled: ReadonlyMap<string, boolean> = new Map(),
+    private readonly installations: ReadonlyMap<string, { source: string; revision: string }> = new Map(),
   ) {
     if (new Set(providers.map(provider => provider.id)).size !== providers.length)
       throw new Error('Skill provider IDs must be unique.');
@@ -50,7 +51,16 @@ export class SkillCatalog {
       )
     )
       .flat()
-      .map(skill => ({ ...skill, enabled: skill.status === 'active' && (this.enabled.get(skill.id) ?? skill.enabled) }))
+      .map(skill => ({
+        ...skill,
+        ...(this.installations.has(skill.id)
+          ? {
+              installedFrom: this.installations.get(skill.id)!.source,
+              packageRevision: this.installations.get(skill.id)!.revision,
+            }
+          : {}),
+        enabled: skill.status === 'active' && (this.enabled.get(skill.id) ?? skill.enabled),
+      }))
       .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     signal?.throwIfAborted();
     if (JSON.stringify(discovered) !== JSON.stringify(this.current)) {

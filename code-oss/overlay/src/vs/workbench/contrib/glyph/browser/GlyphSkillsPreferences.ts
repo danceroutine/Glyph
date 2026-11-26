@@ -1,3 +1,5 @@
+import { IFileDialogService } from '#vs/platform/dialogs/common/dialogs.js';
+import type { GlyphSkillsManagement } from '#glyph/workbench/GlyphSkillsManagement.js';
 import * as DOM from '#vs/base/browser/dom.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
 import { URI } from '#vs/base/common/uri.js';
@@ -18,6 +20,7 @@ export class GlyphSkillsPreferences extends Disposable implements IPreferencesEd
   constructor(
     @GlyphWorkbenchService private readonly glyph: GlyphWorkbenchService,
     @IEditorService private readonly editors: IEditorService,
+    @IFileDialogService private readonly dialogs: IFileDialogService,
   ) {
     super();
     this._register(
@@ -40,6 +43,31 @@ export class GlyphSkillsPreferences extends Disposable implements IPreferencesEd
     void this.glyph.refreshSkills();
   }
   private update(): void {
-    this.view.update(this.glyph.state.skills ?? [], this.query);
+    const management: GlyphSkillsManagement = {
+      targets: this.glyph.state.skillTargets ?? [],
+      ...(this.glyph.state.skillManagementMessage ? { message: this.glyph.state.skillManagementMessage } : {}),
+      ...(this.glyph.state.skillPreview ? { preview: this.glyph.state.skillPreview } : {}),
+      previewDraft: (targetId, draft) => this.glyph.previewSkill(targetId, { draft }),
+      installLocal: async (targetId, replaceId) => {
+        const selected = await this.dialogs.showOpenDialog({
+          title: 'Select a skill package',
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: false,
+        });
+        if (selected?.[0])
+          await this.glyph.previewSkill(targetId, {
+            source: { kind: 'local', path: selected[0].fsPath },
+            ...(replaceId ? { replaceId } : {}),
+          });
+      },
+      previewRepository: (targetId, source, replaceId) =>
+        this.glyph.previewSkill(targetId, { source, ...(replaceId ? { replaceId } : {}) }),
+      setEnabled: (id, enabled) => this.glyph.setSkillEnabled(id, enabled),
+      remove: removeId => this.glyph.previewSkill('', { removeId }),
+      apply: id => this.glyph.applySkill(id),
+      discard: id => this.glyph.discardSkillPreview(id),
+    };
+    this.view.update(this.glyph.state.skills ?? [], this.query, this.glyph.state.readOnly ? undefined : management);
   }
 }

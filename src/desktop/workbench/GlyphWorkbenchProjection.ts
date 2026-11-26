@@ -35,6 +35,16 @@ export class GlyphWorkbenchProjection {
   /** A snapshot replaces old collections so removed or completed work cannot linger. */
   accept(event: GlyphHostEvent): void {
     switch (event.type) {
+      case GlyphHostEventType.SKILL_MANAGEMENT_CHANGED: {
+        const { skillPreview: _previous, skillManagementMessage: _notice, ...state } = this.snapshot;
+        this.snapshot = {
+          ...state,
+          skillTargets: event.targets,
+          ...(event.message ? { skillManagementMessage: event.message } : {}),
+          ...(event.preview ? { skillPreview: event.preview } : {}),
+        };
+        return;
+      }
       case GlyphHostEventType.SKILLS_CHANGED:
         this.snapshot = { ...this.snapshot, skills: event.skills };
         return;

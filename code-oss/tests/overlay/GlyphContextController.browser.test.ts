@@ -52,6 +52,9 @@ function controllerServices() {
   const folders: Folder[] = [{ name: 'workspace', uri: URI.file('/workspace') }];
   const models: { uri: URI }[] = [];
   const stats = new Map<string, Stat>();
+  const fileChanges = new Emitter<readonly { resource: URI; type: number }[]>();
+  const registrations = new Emitter<{ scheme: string }>();
+  const modelAdded = new Emitter<{ uri: URI }>();
   const editorAdded = new Emitter<ReturnType<typeof codeEditor>>();
   const folderOf = (uri: URI) =>
     folders.find(folder => uri.path === folder.uri.path || uri.path.startsWith(`${folder.uri.path}/`));
@@ -65,6 +68,9 @@ function controllerServices() {
   const composer = { insertAttachments: vi.fn((_attachments: { side?: string }[]) => undefined) };
   const services = {
     folders,
+    fileChanges,
+    registrations,
+    modelAdded,
     models,
     stats,
     editorAdded,
@@ -108,6 +114,7 @@ function controllerServices() {
     },
     editors: { activeTextEditorControl: undefined as unknown, openEditor: vi.fn(async () => undefined) },
     modelService: {
+      onModelAdded: modelAdded.event,
       getModels: () => models,
       getModel: (uri: URI) => models.find(model => model.uri.toString() === uri.toString()) ?? null,
     },
@@ -124,6 +131,10 @@ function controllerServices() {
       fileSearch: vi.fn(async (): Promise<{ results: { resource: URI }[]; limitHit?: boolean }> => ({ results: [] })),
     },
     files: {
+      onDidFilesChange: new Emitter<never>().event,
+      getProvider: vi.fn(() => ({ onDidChangeFile: fileChanges.event })),
+      onDidChangeFileSystemProviderRegistrations: registrations.event,
+      watch: vi.fn(() => ({ dispose: vi.fn() })),
       resolve: vi.fn(async (uri: URI): Promise<Stat> => stats.get(uri.path) ?? { children: [] }),
       stat: vi.fn(async (uri: URI): Promise<Stat> => stats.get(uri.path) ?? { isDirectory: false, size: 4 }),
       exists: vi.fn(async (_uri: URI) => true),
@@ -156,6 +167,43 @@ function createController(services: ControllerServices) {
 }
 
 describe(GlyphContextController, () => {
+  it('refreshes saved and unsaved skill metadata, reconnects provider listeners, and suppresses refresh when trust is lost', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const edits = new Emitter<void>();
+    const model = { uri: URI.file('/workspace/.glyph/skills/example/SKILL.md'), onDidChangeContent: edits.event };
+    services.models.push(model, { uri: URI.file('/workspace/source.ts') });
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      controller.notifyInstructionsChanged();
+      controller.setSkillSources(() => [], refresh);
+      controller.notifyInstructionsChanged();
+      services.fileChanges.fire([{ resource: URI.file('/workspace/source.ts'), type: 1 }]);
+      services.registrations.fire({ scheme: 'git' });
+      services.files.getProvider.mockReturnValueOnce(undefined as never);
+      services.registrations.fire({ scheme: 'file' });
+      services.registrations.fire({ scheme: 'file' });
+      services.modelAdded.fire({
+        uri: URI.file('/workspace/.cursor/skills/other/SKILL.md'),
+        onDidChangeContent: edits.event,
+      });
+      services.trust.isWorkspaceTrusted.mockReturnValue(false);
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).not.toHaveBeenCalled();
+      services.trust.isWorkspaceTrusted.mockReturnValue(true);
+      edits.fire();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(refresh).toHaveBeenCalledOnce();
+      services.trust.isWorkspaceTrusted.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(refresh).toHaveBeenCalledOnce();
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
   it.each([GlyphContextAttachmentKind.SKILL, GlyphContextAttachmentKind.RULE])(
     'treats %s badges as live references during refresh, open, and rebind',
     async kind => {
@@ -230,9 +278,45 @@ describe(GlyphContextController, () => {
     controller.setSkillSources(() => sources, refresh);
     expect(await controller.searchInstructions('repaired')).toMatchObject([{ skillId: 'new-skill' }]);
     expect(refresh).toHaveBeenCalledOnce();
+    sources = sources.map(source => ({ ...source, revision: 'repaired-version' }));
+    controller.setSkillSources(() => sources);
+    expect(await controller.searchInstructions('repaired')).toMatchObject([{ revision: 'repaired-version' }]);
     services.trust.isWorkspaceTrusted.mockReturnValue(false);
     await expect(controller.searchInstructions('repaired')).rejects.toThrow();
     expect(refresh).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it('refreshes changed packages and notifies an open picker only when metadata changes', async () => {
+    const services = controllerServices();
+    const controller = createController(services);
+    const sources: GlyphSkill[] = [];
+    const refresh = vi.fn(async () => {});
+    let roots = ['file:///custom-user/skills'];
+    controller.setSkillSources(
+      () => sources,
+      refresh,
+      () => roots,
+    );
+    const changed = vi.fn();
+    const unsubscribe = controller.onDidChangeInstructions(changed);
+    controller.notifyInstructionsChanged();
+    controller.notifyInstructionsChanged();
+    expect(changed).toHaveBeenCalledOnce();
+    expect(services.files.watch).toHaveBeenCalledOnce();
+    services.fileChanges.fire([{ resource: URI.file('/custom-user/skills/new/SKILL.md'), type: 1 }]);
+    await vi.waitFor(
+      () => {
+        expect(refresh).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2500 },
+    );
+    roots = [];
+    controller.notifyInstructionsChanged();
+    expect(
+      (services.files.watch.mock.results[0].value as { dispose: ReturnType<typeof vi.fn> }).dispose,
+    ).toHaveBeenCalledOnce();
+    unsubscribe();
     controller.dispose();
   });
 

@@ -1,6 +1,8 @@
+import type { GlyphSkillPreview } from './GlyphSkillManagement.ts';
 import type { GlyphApprovalDecision } from '#src/desktop/protocol/GlyphApprovalDecision.js';
 import type { GlyphModeSwap } from './GlyphModeSwap.ts';
 export interface GlyphApprovalRequest {
+  readonly skillChange?: GlyphSkillPreview;
   readonly choices?: readonly {
     readonly id: GlyphApprovalDecision;
     readonly label: string;
