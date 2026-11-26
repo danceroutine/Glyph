@@ -239,6 +239,15 @@ impl Fixture {
                 "--workspace-policy",
                 r#"{"ignoredDirectories":[".git",".next","coverage","dist","node_modules","target"],"sensitiveFileNames":[".git-credentials",".netrc",".npmrc",".pypirc"],"sensitiveFilePrefixes":[".env"],"sensitiveFileExtensions":[".key",".pem",".p12",".pfx"],"allowedFileNames":[".env.example"]}"#,
             ]);
+        let objects = self.home.join("store/v11/files");
+        if objects.is_dir() {
+            command.arg("--content-store").arg(
+                serde_json::json!({
+                    "root": objects, "layout": "sha512-prefix-2", "executableSuffix": "-exec"
+                })
+                .to_string(),
+            );
+        }
         for path in protected {
             assert!(path.starts_with(&self.root));
             command.arg("--protected-path").arg(path);
@@ -581,4 +590,59 @@ fn security_private_data_stays_hidden_through_sibling_and_toolchain_paths() {
         ),
         "private data under admitted toolchain",
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the Linux sandbox backend"]
+fn verified_dependency_hardlinks_are_readable_immutable_copies() {
+    use sha2::{Digest, Sha512};
+    use std::os::unix::fs::MetadataExt;
+    let fixture = Fixture::new();
+    let dependency = fixture.workspace.join("node_modules/example");
+    fs::create_dir_all(&dependency).unwrap();
+    let payload = "package fixture";
+    let digest = format!("{:x}", Sha512::digest(payload.as_bytes()));
+    let objects = fixture.home.join("store/v11/files").join(&digest[..2]);
+    fs::create_dir_all(&objects).unwrap();
+    let object = objects.join(&digest[2..]);
+    fs::write(&object, payload).unwrap();
+    let installed = dependency.join("index.js");
+    fs::hard_link(&object, &installed).unwrap();
+    for (directory, filename) in [
+        (".skill-staging", "private"),
+        (".glyph/skills/example", "managed"),
+    ] {
+        let directory = fixture.workspace.join(directory);
+        fs::create_dir_all(&directory).unwrap();
+        let source = directory.join(filename);
+        // Identical contents are insufficient when the trusted store name designates a different inode.
+        fs::write(&source, payload).unwrap();
+        fs::hard_link(&source, dependency.join(filename)).unwrap();
+    }
+    for profile in ["read-only", "workspace-write"] {
+        let read = fixture.run(profile, "cat node_modules/example/index.js", &[]);
+        assert_success(&read, "copy of verified package file");
+        assert_eq!(read.stdout, payload.as_bytes());
+        let object_info = fs::metadata(&object).unwrap();
+        let inode = fixture.run(profile, "stat -c %d:%i node_modules/example/index.js", &[]);
+        assert_success(&inode, "private file inode");
+        assert_ne!(
+            String::from_utf8_lossy(&inode.stdout).trim(),
+            format!("{}:{}", object_info.dev(), object_info.ino())
+        );
+        assert_denied(
+            &fixture.run(profile, "printf x > node_modules/example/index.js", &[]),
+            "immutable dependency",
+        );
+        for filename in ["private", "managed"] {
+            let probe = fixture.run(
+                profile,
+                &format!("test ! -e node_modules/example/{filename}"),
+                &[],
+            );
+            assert_success(&probe, "unverified alias stays absent");
+        }
+        assert_eq!(fs::read_to_string(&object).unwrap(), payload);
+    }
 }

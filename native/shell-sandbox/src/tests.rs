@@ -97,6 +97,7 @@ fn request(profile: SandboxProfile, root: &Path, state: &Path) -> SandboxRequest
         protected_paths: Vec::new(),
         read_only_paths: Vec::new(),
         private_paths: Vec::new(),
+        content_stores: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["sh".into(), "-c".into(), "pwd".into()],
     }
@@ -487,6 +488,7 @@ fn seatbelt_policy_escapes_paths_as_strings() {
         protected_paths: Vec::new(),
         read_only_paths: Vec::new(),
         private_paths: Vec::new(),
+        content_stores: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["true".into()],
     };
@@ -568,6 +570,7 @@ fn bubblewrap_arguments_fail_closed_and_overlay_writable_roots_safely() {
         protected_paths: Vec::new(),
         read_only_paths: Vec::new(),
         private_paths: Vec::new(),
+        content_stores: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["true".into()],
     };
@@ -776,6 +779,7 @@ fn accepts_repeated_workspace_roots_and_protected_paths() {
             ],
             read_only_paths: Vec::new(),
             private_paths: Vec::new(),
+            content_stores: Vec::new(),
             workspace_policy: WorkspaceAccessPolicy {
                 ignored_directories: Vec::new(),
                 sensitive_file_names: Vec::new(),
@@ -1060,6 +1064,7 @@ fn seatbelt_policy_escapes_control_characters_in_paths() {
         protected_paths: Vec::new(),
         read_only_paths: Vec::new(),
         private_paths: Vec::new(),
+        content_stores: Vec::new(),
         workspace_policy: WorkspaceAccessPolicy::default(),
         command: vec!["true".into()],
     };
@@ -1232,4 +1237,33 @@ fn shell_roots_and_resources_within_private_storage_are_rejected() {
         None
     )
     .is_err());
+}
+
+#[test]
+fn content_store_arguments_are_host_capabilities_with_strict_layouts() {
+    let no_args = arguments(&["--content-store", "{}"]);
+    assert!(
+        matches!(parse_arguments(no_args), Err(SandboxError::Usage(e)) if e.starts_with("invalid --content-store"))
+    );
+    let args = arguments(&[
+        "--workspace-root",
+        "/work",
+        "--working-directory",
+        "/work",
+        "--state-directory",
+        "/state",
+        "--profile",
+        "read-only",
+        "--workspace-policy",
+        r#"{"ignoredDirectories":[],"sensitiveFileNames":[],"sensitiveFilePrefixes":[],"sensitiveFileExtensions":[],"allowedFileNames":[]}"#,
+        "--content-store",
+        r#"{"root":"/outside/files","layout":"sha512-prefix-2"}"#,
+        "--",
+        "true",
+    ]);
+    let parsed = parse_arguments(args).unwrap();
+    assert_eq!(
+        parsed.content_stores[0].root,
+        PathBuf::from("/outside/files")
+    );
 }

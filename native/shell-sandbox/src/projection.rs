@@ -24,6 +24,7 @@ pub(super) trait Mounts {
     fn start(&mut self, root: &Path) -> io::Result<()>;
     fn directory(&mut self, path: &Path) -> io::Result<()>;
     fn symlink(&mut self, target: &OsStr, path: &Path) -> io::Result<()>;
+    fn linked_file(&mut self, path: &Path, fd: &OwnedFd) -> io::Result<()>;
     fn file(&mut self, path: &Path, fd: &OwnedFd, writable: bool) -> io::Result<()>;
     fn finish(&mut self, root: &Path) -> io::Result<Vec<OsString>>;
 }
@@ -111,12 +112,8 @@ impl<M: Mounts> WorkspaceView<M> {
             {
                 continue;
             }
-            let managed = name.eq_ignore_ascii_case("skills")
-                && path.file_name().is_some_and(|p| {
-                    p.eq_ignore_ascii_case(".glyph") || p.eq_ignore_ascii_case(".cursor")
-                });
             let writable = writable
-                && !managed
+                && !super::managed_directory(&child)
                 && !name.eq_ignore_ascii_case(".git")
                 && !access.protected.iter().any(|p| child.starts_with(p));
             let kind = FileType::from_raw_mode(
@@ -148,6 +145,15 @@ impl<M: Mounts> WorkspaceView<M> {
                 }
                 FileType::RegularFile if info.st_nlink == 1 => {
                     self.mounts.file(&child, &fd, writable)?;
+                }
+                FileType::RegularFile
+                    if access
+                        .request
+                        .workspace_roots
+                        .iter()
+                        .any(|root| child.starts_with(root)) =>
+                {
+                    self.mounts.linked_file(&child, &fd)?;
                 }
                 _ => {}
             }
@@ -181,6 +187,9 @@ impl Mounts for MountTrace {
     fn symlink(&mut self, target: &OsStr, path: &Path) -> io::Result<()> {
         self.0
             .extend(["--symlink".into(), target.into(), path.into()]);
+        Ok(())
+    }
+    fn linked_file(&mut self, _path: &Path, _fd: &OwnedFd) -> io::Result<()> {
         Ok(())
     }
     fn file(&mut self, path: &Path, _fd: &OwnedFd, writable: bool) -> io::Result<()> {
@@ -221,13 +230,14 @@ mod tests {
         .unwrap();
         symlink(&ordinary, root.join("symbolic")).unwrap();
         let _socket = std::os::unix::net::UnixListener::bind(root.join("socket")).unwrap();
-        let request = SandboxRequest {
+        let mut request = SandboxRequest {
             profile: SandboxProfile::WorkspaceWrite,
             working_directory: root.clone(),
             workspace_roots: vec![root.clone()],
             private_paths: vec![],
             protected_paths: vec![],
             read_only_paths: vec![],
+            content_stores: Vec::new(),
             workspace_policy: WorkspaceAccessPolicy::default(),
             state_directory: root.join("state"),
             command: vec!["true".into()],
@@ -241,6 +251,13 @@ mod tests {
             .windows(3)
             .any(|args| args[0] == "--ro-bind" && args[2] == protected));
         assert!(plan.iter().any(|arg| arg == "--symlink"));
+        // Runtime toolchain projections are independent of the selected project. A hardlinked
+        // runtime file cannot use the workspace's content-store admission.
+        request.workspace_roots.clear();
+        let external_plan = view.workspace(&root, &request, &[], &[]).unwrap();
+        assert!(!external_plan
+            .iter()
+            .any(|arg| arg == root.join("multiple-links").as_os_str()));
         view.entries = MAX_WORKSPACE_SCAN_ENTRIES;
         assert!(view.workspace(&root, &request, &[], &[]).is_err());
         let handle = open(&root, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty()).unwrap();

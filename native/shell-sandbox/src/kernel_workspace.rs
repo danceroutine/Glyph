@@ -15,6 +15,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 pub(super) struct KernelWorkspace {
+    stores: super::content_store::VerifiedStores,
     scratch: PathBuf,
     root: PathBuf,
     target: PathBuf,
@@ -23,7 +24,8 @@ pub(super) struct KernelWorkspace {
 }
 
 impl KernelWorkspace {
-    pub(super) fn open() -> io::Result<Self> {
+    pub(super) fn open(request: &super::SandboxRequest) -> io::Result<Self> {
+        let stores = super::content_store::VerifiedStores::open(request);
         let uid = getuid().as_raw();
         let gid = getgid().as_raw();
         // The standalone helper enters fresh user and mount namespaces. Its file descriptor table stays shared.
@@ -38,6 +40,7 @@ impl KernelWorkspace {
             .tempdir_in("/tmp")?;
         private_tmpfs(scratch.path())?;
         Ok(Self {
+            stores,
             scratch: scratch.keep(),
             root: PathBuf::new(),
             target: PathBuf::new(),
@@ -131,6 +134,10 @@ impl Mounts for &mut KernelWorkspace {
     }
     fn symlink(&mut self, target: &OsStr, path: &Path) -> io::Result<()> {
         std::os::unix::fs::symlink(target, self.target(path))
+    }
+    fn linked_file(&mut self, path: &Path, fd: &OwnedFd) -> io::Result<()> {
+        let target = self.target(path);
+        self.stores.copy_object(fd, &target)
     }
     fn file(&mut self, path: &Path, fd: &OwnedFd, writable: bool) -> io::Result<()> {
         let target = self.target(path);

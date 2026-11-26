@@ -41,8 +41,25 @@ pub struct SandboxRequest {
     /// Host-admitted resources exposed read-only for one invocation.
     pub read_only_paths: Vec<PathBuf>,
     pub private_paths: Vec<PathBuf>,
+    pub content_stores: Vec<ContentStore>,
     pub workspace_policy: WorkspaceAccessPolicy,
     pub command: Vec<OsString>,
+}
+
+/// An external host-provisioned directory containing content-addressed immutable objects.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ContentStore {
+    pub root: PathBuf,
+    pub layout: ContentStoreLayout,
+    #[serde(default)]
+    pub executable_suffix: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub enum ContentStoreLayout {
+    #[serde(rename = "sha512-prefix-2")]
+    Sha512Prefix2,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -116,6 +133,7 @@ where
     let mut profile = None;
     let mut working_directory = None;
     let mut state_directory = None;
+    let mut content_stores = Vec::new();
     let mut workspace_roots = Vec::new();
     let mut protected_paths = Vec::new();
     let mut read_only_paths = Vec::new();
@@ -145,6 +163,12 @@ where
             }
             "--state-directory" if state_directory.is_none() => {
                 state_directory = Some(PathBuf::from(value))
+            }
+            "--content-store" => {
+                let store = serde_json::from_slice(value.as_encoded_bytes()).map_err(|error| {
+                    SandboxError::Usage(format!("invalid --content-store: {error}"))
+                })?;
+                content_stores.push(store);
             }
             "--workspace-root" => workspace_roots.push(PathBuf::from(value)),
             "--protected-path" => protected_paths.push(PathBuf::from(value)),
@@ -194,6 +218,7 @@ where
         state_directory: state_directory
             .ok_or_else(|| SandboxError::Usage("--state-directory is required".to_owned()))?,
         workspace_roots,
+        content_stores,
         protected_paths,
         read_only_paths,
         private_paths,
@@ -293,6 +318,18 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
     }
 
     Ok(request)
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn managed_directory(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("skills"))
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|parent| {
+                parent.eq_ignore_ascii_case(".glyph") || parent.eq_ignore_ascii_case(".cursor")
+            })
 }
 
 fn private_component(path: &Path) -> bool {
@@ -576,7 +613,7 @@ pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
     let home_directory = std::env::var_os("HOME").and_then(|path| fs::canonicalize(path).ok());
     fn run(request: &SandboxRequest, home: Option<&Path>) -> Result<ExitStatus, SandboxError> {
         let executable = linux::bubblewrap_executable()?;
-        let mut mounts = kernel_workspace::KernelWorkspace::open()?;
+        let mut mounts = kernel_workspace::KernelWorkspace::open(request)?;
         let arguments = linux::arguments(request, home, &mut mounts)?;
         Ok(std::process::Command::new(executable)
             .args(arguments)
@@ -771,6 +808,8 @@ pub mod macos {
     }
 }
 
+#[cfg(any(target_os = "linux", all(test, unix)))]
+mod content_store;
 #[cfg(target_os = "linux")]
 mod kernel_workspace;
 #[cfg(any(target_os = "linux", all(test, unix)))]
@@ -1024,7 +1063,7 @@ fn home_sensitive_paths(home_directory: Option<&Path>) -> Vec<PathBuf> {
 }
 
 pub fn usage() -> &'static str {
-    "Usage: glyph-shell-sandbox --profile <read-only|workspace-write> --working-directory <path> --state-directory <path> --workspace-root <path> [--workspace-root <path> ...] [--protected-path <path> ...] [--read-only-path <path> ...] --workspace-policy <json> -- <command> [arguments ...]"
+    "Usage: glyph-shell-sandbox --profile <read-only|workspace-write> --working-directory <path> --state-directory <path> --workspace-root <path> [--workspace-root <path> ...] [--protected-path <path> ...] [--read-only-path <path> ...] [--content-store <json> ...] --workspace-policy <json> -- <command> [arguments ...]"
 }
 
 #[cfg(test)]
