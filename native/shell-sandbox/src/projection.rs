@@ -14,6 +14,13 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 pub(super) trait Mounts {
+    fn runtime(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        request: &SandboxRequest,
+        private: &[PathBuf],
+    ) -> Result<Vec<OsString>, SandboxError>;
     fn start(&mut self, root: &Path) -> io::Result<()>;
     fn directory(&mut self, path: &Path) -> io::Result<()>;
     fn symlink(&mut self, target: &OsStr, path: &Path) -> io::Result<()>;
@@ -154,6 +161,15 @@ impl<M: Mounts> WorkspaceView<M> {
 pub(super) struct MountTrace(Vec<OsString>);
 #[cfg(test)]
 impl Mounts for MountTrace {
+    fn runtime(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        _request: &SandboxRequest,
+        _private: &[PathBuf],
+    ) -> Result<Vec<OsString>, SandboxError> {
+        Ok(vec!["--ro-bind".into(), source.into(), target.into()])
+    }
     fn start(&mut self, root: &Path) -> io::Result<()> {
         self.0.extend(["--tmpfs".into(), root.into()]);
         Ok(())
