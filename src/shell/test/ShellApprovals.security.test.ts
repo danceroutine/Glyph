@@ -1,3 +1,4 @@
+import { ShellApprovalPolicy } from '#src/shell/ShellApprovalPolicy.js';
 import { describe, expect, it, vi } from 'vitest';
 import { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.js';
 import { ShellPermissionDecision } from '#src/shell/ShellPermissionDecision.js';
@@ -109,4 +110,20 @@ describe('security: shell approval integration', () => {
     if (phase === 'cancel') controller.abort(new Error('stopped'));
     await rejected;
   });
+});
+
+it('describes the Linux workspace namespace before authorizing a write', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { ...descriptor, value: 'linux' });
+  try {
+    const request = new ShellApprovalPolicy().createRequest({
+      workspace: scope,
+      operation: { command: 'make', workingDirectory: '/project', background: false, existingTerminal: false },
+    });
+    expect(request.choices.find(choice => choice.id === ShellPermissionDecision.ALLOW_ONCE)?.description).toContain(
+      'in-place edits',
+    );
+  } finally {
+    Object.defineProperty(process, 'platform', descriptor);
+  }
 });

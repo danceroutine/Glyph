@@ -119,10 +119,7 @@ async function main(): Promise<void> {
       workspaceRoots: projectContext.roots.map(root => root.path),
       stateDirectory: configuration.stateDirectory,
       protectedPaths: [packageRoot, indexExecutable, shellSandboxExecutable],
-      privatePaths: () =>
-        [userDirectory, ...projectContext.roots.map(root => join(root.path, '.skill-staging'))].filter(path =>
-          existsSync(path),
-        ),
+      privatePaths: () => (existsSync(userDirectory) ? [userDirectory] : []),
       accessPolicy,
     }),
   );

@@ -1,6 +1,8 @@
 use super::*;
 use std::fs::{create_dir, write};
-use tempfile::tempdir;
+fn tempdir() -> std::io::Result<tempfile::TempDir> {
+    tempfile::tempdir_in(fs::canonicalize(std::env::temp_dir())?)
+}
 
 /*
  * A workspace can be a writable subtree of the running installation. Linux
@@ -20,44 +22,32 @@ fn security_protected_installation_covers_workspace_intersections_without_exposi
     let sibling = fixture.path().join("sibling");
     fs::create_dir_all(&source).unwrap();
     fs::create_dir(&sibling).unwrap();
+    for directory in [&install, &source, &sibling] {
+        write(directory.join("marker"), "contents").unwrap();
+    }
     for profile in [SandboxProfile::ReadOnly, SandboxProfile::WorkspaceWrite] {
         for root in [&source, &install, &sibling] {
             let mut request = request(profile, root, &fixture.path().join("state"));
             request.protected_paths.push(install.clone());
             let arguments = linux::bubblewrap_arguments(&request, None).unwrap();
-            let last = arguments
-                .windows(3)
-                .filter(|entry| {
-                    (entry[0] == "--bind" || entry[0] == "--ro-bind")
-                        && entry[2] == root.as_os_str()
-                })
-                .next_back()
-                .unwrap();
-            if root == &sibling && profile == SandboxProfile::WorkspaceWrite {
-                assert_eq!(last[0], "--bind");
+            let option = if root == &sibling && profile == SandboxProfile::WorkspaceWrite {
+                "--bind"
             } else {
-                assert_eq!(
-                    last[0],
-                    "--ro-bind",
-                    "protected workspace: {}",
-                    root.display()
-                );
-            }
-            if root != &install {
-                assert!(
-                    !arguments
-                        .windows(3)
-                        .any(|entry| entry[2] == install.as_os_str()),
-                    "must not expose protected parent or disjoint sibling"
-                );
-            }
+                "--ro-bind"
+            };
+            assert!(arguments
+                .windows(3)
+                .any(|args| args[0] == option && args[2] == root.join("marker")));
+            assert!(!arguments
+                .iter()
+                .any(|arg| arg == &sibling.join("sibling-secret")));
         }
         let mut parent = request(profile, fixture.path(), &fixture.path().join("state"));
         parent.protected_paths.push(install.clone());
         let arguments = linux::bubblewrap_arguments(&parent, None).unwrap();
         assert!(arguments
             .windows(3)
-            .any(|entry| entry[0] == "--ro-bind" && entry[2] == install.as_os_str()));
+            .any(|entry| entry[0] == "--ro-bind" && entry[2] == source.join("marker")));
     }
 }
 
@@ -216,10 +206,9 @@ fn private_metadata_is_masked_and_cannot_be_admitted_as_a_readable_resource() {
         private.display()
     )));
     let mounts = linux::bubblewrap_arguments(&prepared, None).unwrap();
-    assert!(mounts.windows(4).any(|window| window[0] == "--tmpfs"
-        && window[1] == private.as_os_str()
-        && window[2] == "--remount-ro"
-        && window[3] == private.as_os_str()));
+    assert!(!mounts
+        .iter()
+        .any(|arg| arg == private.as_os_str() || arg == preferences.as_os_str()));
     let mut invalid = request(
         SandboxProfile::WorkspaceWrite,
         &prepared.working_directory,
@@ -539,35 +528,20 @@ fn bubblewrap_arguments_fail_closed_and_overlay_writable_roots_safely() {
     let mut writable_request = request(SandboxProfile::WorkspaceWrite, &root, &state);
     writable_request.protected_paths.push(protected.clone());
     let writable = linux::bubblewrap_arguments(&writable_request, Some(&home)).expect("arguments");
-    assert!(writable.windows(3).any(|values| {
-        values[0] == "--bind" && values[1] == root.as_os_str() && values[2] == root.as_os_str()
-    }));
-    assert!(writable.windows(3).any(|values| {
-        values[0] == "--ro-bind"
-            && values[1] == Path::new("/dev/null").as_os_str()
-            && values[2] == root.join(".git-credentials").as_os_str()
-    }));
-    assert!(writable.windows(3).any(|values| {
-        values[0] == "--ro-bind"
-            && values[1] == Path::new("/dev/null").as_os_str()
-            && values[2] == root.join(".env").as_os_str()
-    }));
-    assert!(writable.windows(3).any(|values| {
-        values[0] == "--ro-bind"
-            && values[1] == protected.as_os_str()
-            && values[2] == protected.as_os_str()
-    }));
-    let executable = protected_executable().unwrap();
-    assert!(!writable.windows(3).any(|values| {
-        values[0] == "--ro-bind"
-            && values[1] == executable.as_os_str()
-            && values[2] == executable.as_os_str()
-    }));
-    assert!(writable.windows(3).any(|values| {
-        values[0] == "--ro-bind"
-            && values[1] == root.join(".git").as_os_str()
-            && values[2] == root.join(".git").as_os_str()
-    }));
+    assert!(writable
+        .windows(2)
+        .any(|args| args[0] == "--remount-ro" && args[1] == root));
+    for sensitive in [".git-credentials", ".env"] {
+        assert!(!writable
+            .iter()
+            .any(|arg| arg == root.join(sensitive).as_os_str()));
+    }
+    assert!(writable
+        .windows(3)
+        .any(|args| args[0] == "--ro-bind" && args[2] == protected));
+    assert!(writable
+        .windows(2)
+        .any(|args| args[0] == "--dir" && args[1] == root.join(".git")));
     for arguments in [&read_only, &writable] {
         assert!(arguments.windows(4).any(|values| {
             values[0] == "--tmpfs"
@@ -599,14 +573,11 @@ fn bubblewrap_arguments_fail_closed_and_overlay_writable_roots_safely() {
     };
     let sensitive =
         linux::bubblewrap_arguments(&sensitive_request, Some(&home)).expect("sensitive arguments");
-    assert!(sensitive.windows(2).any(|values| {
-        values[0] == "--tmpfs" && values[1] == home.join(".config/gh").as_os_str()
-    }));
-    assert!(sensitive.windows(3).any(|values| {
-        values[0] == "--ro-bind"
-            && values[1] == Path::new("/dev/null").as_os_str()
-            && values[2] == home.join(".docker/config.json").as_os_str()
-    }));
+    for hidden in [home.join(".config/gh"), home.join(".docker/config.json")] {
+        assert!(!sensitive
+            .iter()
+            .any(|argument| argument == hidden.as_os_str()));
+    }
 }
 
 #[test]
@@ -681,11 +652,9 @@ fn bubblewrap_does_not_turn_external_gitdir_targets_into_read_grants() {
             && values[1] == external.as_os_str()
             && values[2] == external.as_os_str()
     }));
-    assert!(arguments.windows(3).any(|values| {
-        values[0] == "--ro-bind"
-            && values[1] == root.join(".git").as_os_str()
-            && values[2] == root.join(".git").as_os_str()
-    }));
+    assert!(arguments
+        .windows(3)
+        .any(|values| { values[0] == "--ro-bind" && values[2] == root.join(".git").as_os_str() }));
 }
 
 fn arguments(values: &[&str]) -> Vec<OsString> {
@@ -1108,6 +1077,8 @@ fn bubblewrap_exposes_existing_home_toolchains_read_only() {
     create_dir(&root).expect("root");
     fs::create_dir_all(home.join(".cargo/bin")).expect("toolchain directory");
 
+    fs::create_dir_all(home.join(".local")).unwrap();
+    std::os::unix::fs::symlink(&root, home.join(".local/bin")).unwrap();
     let arguments = linux::bubblewrap_arguments(
         &request(
             SandboxProfile::ReadOnly,
@@ -1118,6 +1089,9 @@ fn bubblewrap_exposes_existing_home_toolchains_read_only() {
     )
     .expect("arguments");
 
+    assert!(!arguments
+        .iter()
+        .any(|arg| arg == home.join(".local/bin").as_os_str()));
     let toolchain = home.join(".cargo/bin");
     let expected = [
         OsString::from("--ro-bind"),
@@ -1215,4 +1189,47 @@ fn bubblewrap_discovery_preserves_trusted_order_and_canonicalization_errors() {
         Err(SandboxError::Backend(_))
     ));
     assert_eq!(*absent.inspected.borrow(), ["/usr/bin/bwrap", "/bin/bwrap"]);
+}
+
+#[test]
+fn shell_roots_and_resources_within_private_storage_are_rejected() {
+    let dir = tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let nested = workspace.join("a/.SkIlL-StAgInG/b");
+    fs::create_dir_all(&nested).unwrap();
+    let private = workspace.join("profile");
+    fs::create_dir(&private).unwrap();
+    let state = dir.path().join("state");
+    fs::create_dir(&state).unwrap();
+    for root in [&nested, &private] {
+        let mut source = request(SandboxProfile::WorkspaceWrite, root, &state);
+        source.private_paths.push(private.clone());
+        assert!(prepare_request(source).is_err());
+    }
+    let mut admitted = request(SandboxProfile::ReadOnly, &workspace, &state);
+    admitted.read_only_paths.push(nested);
+    assert!(prepare_request(admitted).is_err());
+    let outside = dir.path().join("private");
+    fs::create_dir(&outside).unwrap();
+    let mut admitted = request(SandboxProfile::ReadOnly, &workspace, &state);
+    admitted.private_paths = vec![outside.clone()];
+    admitted.read_only_paths = vec![outside.clone()];
+    assert!(prepare_request(admitted).is_err());
+    let outside_file = dir.path().join("private-file");
+    fs::write(&outside_file, "state").unwrap();
+    let mut masked = request(SandboxProfile::ReadOnly, &workspace, &state);
+    masked.private_paths = vec![outside.clone(), outside_file.clone()];
+    let args = linux::bubblewrap_arguments(&masked, None).unwrap();
+    assert!(args
+        .windows(2)
+        .any(|a| a[0] == "--tmpfs" && a[1] == outside));
+    assert!(args
+        .windows(3)
+        .any(|a| a[0] == "--ro-bind" && a[2] == outside_file));
+    fs::write(workspace.join(".git"), [0xff]).unwrap();
+    assert!(linux::bubblewrap_arguments(
+        &request(SandboxProfile::ReadOnly, &workspace, &state),
+        None
+    )
+    .is_err());
 }
