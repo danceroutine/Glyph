@@ -78,6 +78,31 @@ Apply this guidance.`),
     expect(parseAgentRuleFile('---\nname: " "\n---\nBody')).not.toHaveProperty('name');
   });
 
+  it('preserves quoted separators and strips trailing comments from scalar and list values', () => {
+    expect(
+      parseAgentRuleFile(
+        [
+          '---',
+          "name: 'It''s #1' # comment",
+          "description: Don't split#me, 'even here # trailing",
+          'alwaysApply: true # default',
+          'globs: ["src/a,b.ts", "src/#tag.ts"] # comment',
+          'references:',
+          "  - 'docs/a, b # notes.md' # comment",
+          '---',
+          'Body',
+        ].join('\n'),
+      ),
+    ).toMatchObject({
+      name: "It's #1",
+      description: "Don't split#me, 'even here",
+      alwaysApply: true,
+      globs: ['src/a,b.ts', 'src/#tag.ts'],
+      references: ['docs/a, b # notes.md'],
+    });
+    expect(() => parseAgentRuleFile("---\nname: 'partial\n---\n")).toThrow('unterminated');
+  });
+
   it.each([
     ['missing delimiter', '---\ndescription: broken'],
     ['duplicate property', '---\nname: one\nname: two\n---\nbody'],

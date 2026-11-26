@@ -1,4 +1,3 @@
-import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
@@ -161,6 +160,7 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js', () => ({
 vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => ({
   GlyphContextController: class {
     readonly setSkillSources = vi.fn();
+    readonly openInstruction = vi.fn(async () => {});
     readonly setInstructionRefresh = vi.fn();
     readonly notifyInstructionsChanged = vi.fn();
     readonly openAttachment = vi.fn();
@@ -537,6 +537,28 @@ describe(NativeGlyphWorkbenchService, () => {
       expect(host.request).toHaveBeenCalledTimes(3);
     });
 
+    it.each([false, true])(
+      'drains invalidations arriving during a pending catalog request (failure %s)',
+      async failed => {
+        const { service, host, context } = await workbench();
+        const [invalidate] = context.setInstructionRefresh.mock.calls[0];
+        let release!: () => void;
+        host.request.mockClear().mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              release = () => (failed ? reject(new Error('old refresh')) : resolve());
+            }),
+        );
+        const pending = service.refreshInstructionSources();
+        await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+        void invalidate(true);
+        void invalidate(true);
+        release();
+        await pending;
+        expect(host.request).toHaveBeenCalledTimes(2);
+      },
+    );
+
     it('restores an unavailable rule badge before catalog roots have been announced', async () => {
       const { service, host, context } = await workbench();
       const [, watchRoots] = context.setInstructionRefresh.mock.calls[0];
@@ -765,7 +787,10 @@ describe(NativeGlyphWorkbenchService, () => {
             checkpointTurnId: 'checkpoint',
             options: { turnId: 'turn-1' },
             attachments: [preview],
-            steering: [{ id: 'steer', text: 'Faster' }] as never,
+            steering: [
+              { id: 'steer', text: 'Faster', rejection: 'Rule unavailable' },
+              { id: 'accepted', text: 'Continue' },
+            ] as never,
             modeSwaps: modeSwaps as never,
             questionResponses: questionResponses as never,
             usage: usage as never,
@@ -790,7 +815,15 @@ describe(NativeGlyphWorkbenchService, () => {
           options: { turnId: 'turn-1' },
           attachments: [preview],
         },
-        { id: 'steer', text: 'Faster', role: GlyphTranscriptRole.USER, steering: true },
+        {
+          id: 'steer',
+          text: 'Faster',
+          rejection: 'Rule unavailable',
+          attachmentError: 'Rule unavailable',
+          role: GlyphTranscriptRole.USER,
+          steering: true,
+        },
+        { id: 'accepted', text: 'Continue', role: GlyphTranscriptRole.USER, steering: true },
         {
           id: 'turn-1',
           role: GlyphTranscriptRole.ASSISTANT,
@@ -1072,85 +1105,10 @@ describe(NativeGlyphWorkbenchService, () => {
       expect(context.openAttachment).toHaveBeenCalledWith({ uri: 'glyph-skill:skill', path: '' });
     });
 
-    it('opens instruction sources by direct URI, single-root path, and multi-root path', async () => {
-      const direct = {
-        id: 'direct',
-        kind: 'glyph_user_rule',
-        label: 'Glyph user rule',
-        path: '~/.glyph/rules/user.mdc',
-        scope: '.',
-        status: 'active',
-        uri: 'file:///home/user/.glyph/rules/user.mdc',
-      };
-      const single = {
-        id: 'single',
-        kind: 'agents_md',
-        label: 'AGENTS.md',
-        path: 'AGENTS.md',
-        scope: '.',
-        status: 'active',
-      };
-      const one = await workbench({ extra: { instructionSources: [direct, single] as never } });
-      await one.service.openLink('glyph-instruction:direct');
-      await one.service.openLink('glyph-instruction:single');
-      expect(one.editors.openEditor.mock.calls.map(([input]) => String((input as { resource: URI }).resource))).toEqual(
-        ['file:///home/user/.glyph/rules/user.mdc', 'file:///project/AGENTS.md'],
-      );
-
-      const multi = await workbench({
-        folders: [folder('web'), folder('api')],
-        extra: { instructionSources: [{ ...single, id: 'api', path: 'api/AGENTS.md', scope: 'api' }] as never },
-      });
-      await multi.service.openLink('glyph-instruction:api');
-      expect(multi.editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/api/AGENTS.md') });
-    });
-
-    it('routes instruction links to the correct duplicate-named workspace root', async () => {
-      const folders = [
-        { ...folder('api'), uri: URI.file('/first/api') },
-        { ...folder('api'), uri: URI.file('/second/api') },
-      ];
-      const roots = folders.map(root => ({ name: root.name, uri: root.uri.toString() }));
-      const rootId = getGlyphWorkspaceRootId(roots[1], roots);
-      const { service, editors } = await workbench({
-        folders,
-        extra: {
-          instructionSources: [
-            {
-              id: 'second',
-              kind: 'agents_md',
-              label: 'AGENTS.md',
-              path: `${rootId}/src/AGENTS.md`,
-              scope: `${rootId}/src`,
-              status: 'active',
-            },
-          ] as never,
-        },
-      });
-      await service.openLink('glyph-instruction:second');
-      expect(editors.openEditor).toHaveBeenCalledWith({ resource: URI.file('/second/api/src/AGENTS.md') });
-    });
-
-    it('rejects unavailable and unresolved instruction sources', async () => {
-      const { service } = await workbench({
-        folders: [folder('web'), folder('api')],
-        extra: {
-          instructionSources: [
-            {
-              id: 'missing-root',
-              kind: 'agents_md',
-              label: 'AGENTS.md',
-              path: 'other/AGENTS.md',
-              scope: 'other',
-              status: 'active',
-            },
-          ] as never,
-        },
-      });
-      await expect(service.openLink('glyph-instruction:unknown')).rejects.toThrow('instruction source is unavailable');
-      await expect(service.openLink('glyph-instruction:missing-root')).rejects.toThrow(
-        'instruction source is unavailable',
-      );
+    it('routes instruction links through the checked catalog navigation', async () => {
+      const { service, context } = await workbench();
+      await service.openLink('glyph-instruction:rules%3Atest');
+      expect(context.openInstruction).toHaveBeenCalledExactlyOnceWith('rules:test');
     });
 
     it('opens web links externally by default', async () => {

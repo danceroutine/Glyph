@@ -55,7 +55,7 @@ function parseMetadata(frontmatter: string): Readonly<Record<string, MetadataVal
     if (item) {
       if (!activeList) throw new Error('Rule frontmatter list item has no property.');
       const value = item[1]!;
-      activeList.push(scalarString(value));
+      activeList.push(scalarString(withoutComment(value)));
       result[activeListKey!] = activeList;
       continue;
     }
@@ -66,7 +66,7 @@ function parseMetadata(frontmatter: string): Readonly<Record<string, MetadataVal
     if (Object.hasOwn(result, key)) throw new Error(`Duplicate rule frontmatter property: ${key}`);
     activeList = undefined;
     activeListKey = undefined;
-    const value = rawValue.trim();
+    const value = withoutComment(rawValue);
     if (value === '') {
       const values: string[] = [];
       result[key] = null;
@@ -82,13 +82,44 @@ function parseMetadata(frontmatter: string): Readonly<Record<string, MetadataVal
 function inlineList(value: string): readonly string[] {
   if (!value.endsWith(']')) throw new Error('Rule frontmatter inline list is missing ].');
   const body = value.slice(1, -1).trim();
-  return body === '' ? [] : body.split(',').map(part => scalarString(part.trim()));
+  if (!body) return [];
+  const parts: string[] = [];
+  let start = 0;
+  for (const comma of separators(body, ',')) {
+    parts.push(scalarString(body.slice(start, comma).trim()));
+    start = comma + 1;
+  }
+  parts.push(scalarString(body.slice(start).trim()));
+  return parts;
+}
+
+/** Scan only unquoted separators. Quotes in the middle of a plain scalar are ordinary text. */
+function* separators(value: string, separator: ',' | '#'): Generator<number> {
+  const list = separator === ',' || value.trimStart().startsWith('[');
+  let scalarStart = true;
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index]!;
+    if (/\s/u.test(char)) continue;
+    if (scalarStart && (char === '"' || char === "'")) {
+      const quoted = /"(?:\\.|[^"\\])*"|'(?:''|[^'])*'/uy;
+      quoted.lastIndex = index;
+      if (!quoted.test(value)) throw new Error('Rule frontmatter has an unterminated quoted string.');
+      index = quoted.lastIndex - 1;
+    } else if (char === separator && (char === ',' || index === 0 || /\s/u.test(value[index - 1]!))) {
+      yield index;
+    }
+    scalarStart = list && (char === '[' || char === ',');
+  }
+}
+
+function withoutComment(raw: string): string {
+  const end = separators(raw, '#').next();
+  return (end.done ? raw : raw.slice(0, end.value)).trim();
 }
 
 function scalarString(value: string): string {
-  if (value.startsWith('"') && value.endsWith('"')) return quotedString.parse(JSON.parse(value));
-  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1);
-  if (value.includes(': #')) return value.slice(0, value.indexOf(' #')).trimEnd();
+  if (value.startsWith('"')) return quotedString.parse(JSON.parse(value));
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1).replaceAll("''", "'");
   return value;
 }
 

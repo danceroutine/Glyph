@@ -367,7 +367,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expect((await runtime.snapshot()).proposals.map(value => value.id)).toEqual([proposal.id]);
         expect(requests).toHaveBeenCalledTimes(trusted ? 1 : 0);
         expect(indexing).toHaveBeenCalledTimes(trusted ? 1 : 0);
-        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 14 : 0);
+        expect(instructionGlobs).toHaveBeenCalledTimes(trusted ? 16 : 0);
         await runtime.dispose();
         runtime = undefined;
       }
@@ -1103,7 +1103,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
       const root = await fixture.folder('workspace', { 'AGENTS.md': 'Disk guidance' });
       const glob = vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async pattern => ({
-        files: pattern === '**/AGENTS.md' ? ['AGENTS.md'] : [],
+        files: pattern === 'AGENTS.md' ? ['AGENTS.md'] : [],
         truncated: false,
       }));
       // Neither user nor project instruction discovery may use the disk listing port.
@@ -1123,11 +1123,12 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           revision: contentRevision('Unsaved editor guidance', false),
         }),
       ]);
-      expect(glob).toHaveBeenCalledTimes(7);
+      expect(glob).toHaveBeenCalledTimes(8);
       expect(glob.mock.calls).toEqual(
         expect.arrayContaining([
           ['*.mdc', { limit: 10_000 }],
-          ['**/AGENTS.md', { limit: 10_000 }],
+          ['AGENTS.md', { limit: 1, rootFilesOnly: true }],
+          ['**/?*/AGENTS.md', { limit: 9_999 }],
           ['**/.glyph/rules/*.mdc', { limit: 10_000 }],
           ['**/.cursor/rules/*.mdc', { limit: 10_000 }],
         ]),
@@ -1153,7 +1154,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         }),
       ]);
       expect(glob).not.toHaveBeenCalledWith('*.mdc', expect.anything());
-      expect(glob).toHaveBeenCalledTimes(5);
+      expect(glob).toHaveBeenCalledTimes(6);
     });
 
     it.each([

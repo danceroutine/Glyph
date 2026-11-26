@@ -48,7 +48,7 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
     signal?.throwIfAborted();
     const sources: AgentInstructionSource[] = [];
     let remainingBytes = this.options.maxDiscoveryBytes ?? 8 * 1024 * 1024;
-    for (const path of listed.files) {
+    for (const path of listed.files.toSorted((a, b) => a.split('/').length - b.split('/').length)) {
       signal?.throwIfAborted();
       let normalized = path;
       const base = () => ({

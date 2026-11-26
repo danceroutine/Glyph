@@ -7,6 +7,8 @@ export interface GlyphSteeringMessage {
   readonly text: string;
   readonly createdAt: string;
   readonly options: GlyphTurnOptions;
+  /** Failed context admission. Retained for correction and excluded from model input. */
+  readonly rejection?: string;
   readonly attachments: readonly GlyphAttachmentPreview[];
   /** Failed context admission; the instruction was retained for correction and was not sent to the model. */
   readonly rejection?: string;

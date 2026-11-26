@@ -203,7 +203,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 
   async glob(
     pattern: string,
-    options: { targetDirectory?: string; limit: number; signal?: AbortSignal },
+    options: { targetDirectory?: string; rootFilesOnly?: boolean; limit: number; signal?: AbortSignal },
   ): Promise<WorkspacePathGlobResult> {
     if (!this.initialized) await this.initialize(options.signal);
     return globResultSchema.parse(
@@ -212,6 +212,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
         {
           pattern,
           targetDirectory: options.targetDirectory,
+          rootFilesOnly: options.rootFilesOnly,
           limit: options.limit,
         },
         options.signal,

@@ -91,15 +91,16 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     let normalized = path;
     let scope = '.';
     let name: string | undefined;
+    const dependencies = new Set<string>();
     let sourceRevision: string | undefined;
     let uri: string | undefined;
     try {
       normalized = this.workspace.normalizePath(path);
       scope = ruleScope(normalized, this.options.directory, this.paths.caseSensitive(normalized));
-      uri = this.options.uriForPath?.(normalized);
-      const snapshot = await this.read(normalized, budget, false);
+      const snapshot = await this.read(normalized, budget);
       signal?.throwIfAborted();
       sourceRevision = snapshot.revision;
+      uri = this.options.uriForPath?.(normalized);
       const parsed = parseAgentRuleFile(snapshot.text);
       name = parsed.name;
       const activation = resolveActivation(parsed.activation, parsed.alwaysApply, parsed.globs, parsed.description);
@@ -112,6 +113,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         normalized,
         scope,
         snapshot.revision,
+        dependencies,
         budget,
         signal,
       );
@@ -138,7 +140,8 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
       return {
         ...this.errorSource(normalized, scope, describe(error, 'Rule could not be read.')),
         ...(name ? { name } : {}),
-        ...(sourceRevision ? { sourceRevision } : {}),
+        ...(sourceRevision ? { sourceRevision, revision: sourceRevision } : {}),
+        ...(dependencies.size ? { references: [...dependencies] } : {}),
         ...(uri ? { uri } : {}),
       };
     }
@@ -149,6 +152,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     normalized: string,
     scope: string,
     sourceRevision: string,
+    dependencies: Set<string>,
     budget: DiscoveryBudget,
     signal?: AbortSignal,
   ) {
@@ -178,7 +182,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         if (ancestors.has(key)) throw new Error(`Circular rule reference: ${[...ancestors, target].join(' -> ')}`);
         let entry = cache.get(key);
         if (!entry) {
-          const reference = await this.read(target, budget, true);
+          const reference = await this.read(target, budget, dependencies);
           signal?.throwIfAborted();
           entry = { parsed: parseAgentRuleFile(reference.text), revision: reference.revision };
           cache.set(key, entry);
@@ -200,14 +204,19 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     };
   }
 
-  private async read(path: string, budget: DiscoveryBudget, optional: boolean): Promise<WorkspaceTextSnapshot> {
+  private async read(
+    path: string,
+    budget: DiscoveryBudget,
+    dependencies?: Set<string>,
+  ): Promise<WorkspaceTextSnapshot> {
     const maxBytes = Math.min(this.options.maxBytes ?? MAX_AGENT_RULE_BYTES, budget.readBytes);
     // Source reads consume the file allowance and referenced reads consume the separate edge allowance.
-    if (maxBytes <= 0 || (!optional && --budget.reads < 0))
+    if (maxBytes <= 0 || (!dependencies && --budget.reads < 0))
       throw new Error('Instruction discovery read budget exhausted.');
-    const snapshot = optional
+    const snapshot = dependencies
       ? await this.workspace.readOptional(path, { maxBytes })
       : await this.workspace.read(path, { maxBytes });
+    dependencies?.add(path);
     if (!snapshot) throw new Error(`Missing rule reference: ${path}`);
     budget.readBytes -= snapshot.byteLength ?? Buffer.byteLength(snapshot.text);
     return snapshot;

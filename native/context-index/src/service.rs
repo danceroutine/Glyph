@@ -224,6 +224,8 @@ pub(crate) struct SearchParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct GlobParams {
+    #[serde(default)]
+    pub(crate) root_files_only: bool,
     pub(crate) pattern: String,
     #[serde(default)]
     pub(crate) target_directory: Option<String>,
@@ -607,6 +609,7 @@ impl ContextIndexService {
             &paths,
             &params.pattern,
             params.target_directory.as_deref(),
+            params.root_files_only,
             params.limit as usize,
             initialized.policy.case_sensitive,
             initialized.truncated.load(Ordering::Acquire),
