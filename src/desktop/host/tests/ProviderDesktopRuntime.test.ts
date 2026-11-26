@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import { aSkillDraft, aSkillLifecycle } from '#src/skills/tests/fixtures/aSkillLifecycle.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import { aSkillDescriptor } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
@@ -282,6 +283,7 @@ it('keeps ordinary saved chat visible after trust revocation without privileged 
             phase: ToolActivityPhase.COMPLETED,
             arguments: 'PRIVATE ARGS',
             output: 'PRIVATE RESOURCE',
+            shell: { command: 'PRIVATE COMMAND', output: 'PRIVATE SHELL HISTORY', background: false },
           },
         ],
       },
@@ -293,8 +295,22 @@ it('keeps ordinary saved chat visible after trust revocation without privileged 
   const run = state.runs.find(run => run.chatId === record.id)!;
   expect(run.text).toBe('Ordinary answer');
   expect(run).not.toHaveProperty('context');
+  expect(run.tools).toEqual([
+    { id: 'resource', name: 'skills.read_resource', status: GlyphToolActivityStatus.COMPLETED },
+  ]);
   expect(JSON.stringify(run)).not.toContain('PRIVATE');
   await harness.runtime.dispose();
+});
+
+it('releases the profile subscription of its skill catalog on disposal', async () => {
+  const unsubscribe = vi.fn();
+  const subscribe = vi.fn(() => unsubscribe);
+  const catalog = new SkillCatalog([], undefined, undefined, undefined, undefined, subscribe);
+  const harness = await fixture(async () => {}, 'owner', undefined, { skillCatalog: catalog });
+  expect(subscribe).toHaveBeenCalledOnce();
+  expect(unsubscribe).not.toHaveBeenCalled();
+  await harness.runtime.dispose();
+  expect(unsubscribe).toHaveBeenCalledOnce();
 });
 
 it('refreshes only the instruction catalog while preserving connected chat runs', async () => {
@@ -616,6 +632,67 @@ describe(ProviderDesktopRuntime, () => {
       await expect(harness.runtime.handle(command)).rejects.toThrow();
     } finally {
       gate.resolve();
+      await harness.runtime.dispose();
+    }
+  });
+
+  it('publishes an admission failure on the queued message before the run finishes and persists it', async () => {
+    const entered = deferredVoid();
+    const admit = deferredVoid();
+    const reported = deferredVoid();
+    const finish = deferredVoid();
+    const harness = await fixture(async options => {
+      entered.resolve();
+      await admit.promise;
+      const [request] = options.takeSteering!(false);
+      options.onSteeringRejected!(request!, new Error('secret workflow disappeared'));
+      reported.resolve();
+      await finish.promise;
+      options.onText('Ordinary answer');
+    });
+    try {
+      await harness.runtime.handle({
+        type: Command.SEND,
+        chatId: harness.chatId,
+        runId: 'run',
+        text: 'Start',
+        attachments: [],
+      });
+      await entered.promise;
+      await harness.runtime.handle({
+        type: Command.STEER,
+        chatId: harness.chatId,
+        runId: 'run',
+        messageId: 'rejected-id',
+        text: 'Activate it',
+        attachments: [],
+      });
+      admit.resolve();
+      await reported.promise;
+      const rejected = { id: 'rejected-id', text: 'Activate it', rejection: '[REDACTED] workflow disappeared' };
+      expect((await harness.runtime.snapshot()).runs[0]).toMatchObject({
+        status: GlyphRunStatus.STREAMING,
+        steering: [rejected],
+      });
+      expect(harness.events).toContainEqual(
+        expect.objectContaining({
+          type: GlyphHostEventType.RUN_STATE,
+          run: expect.objectContaining({
+            status: GlyphRunStatus.STREAMING,
+            steering: [expect.objectContaining(rejected)],
+          }),
+        }),
+      );
+      finish.resolve();
+      await vi.waitFor(() => {
+        expect(harness.saved.get(harness.chatId)?.transcript[0]).toMatchObject({
+          assistantText: 'Ordinary answer',
+          steering: [rejected],
+        });
+      });
+    } finally {
+      admit.resolve();
+      finish.resolve();
       await harness.runtime.dispose();
     }
   });

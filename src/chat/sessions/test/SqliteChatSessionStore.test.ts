@@ -122,6 +122,14 @@ describe(SqliteChatSessionStore, () => {
             options: { mode: AgentModeID.PLAN },
             attachments: [{ path: 'README.md', text: 'Exact capture', revision: 'r1' }],
           },
+          {
+            id: 'rejected-guidance',
+            text: 'Use the removed workflow',
+            createdAt: source.createdAt,
+            options: {},
+            attachments: [],
+            rejection: 'The selected skill is no longer available.',
+          },
         ],
       })),
     };
