@@ -20,6 +20,7 @@ export class AgentInstructionSet {
 
   /** Effective sources in precedence order, including disabled sources and discovery errors. */
   readonly sources: readonly AgentInstructionSource[];
+  readonly rootGuidance: readonly AgentInstructionSource[];
   private readonly activeByScope = new Map<string, AgentInstructionSource[]>();
 
   /** Native project rules shadow same-name Cursor rules only within the same scope. */
@@ -44,6 +45,12 @@ export class AgentInstructionSet {
           AgentInstructionSet.SOURCE_PRIORITY[left.kind] - AgentInstructionSet.SOURCE_PRIORITY[right.kind] ||
           left.path.localeCompare(right.path),
       );
+    this.rootGuidance = this.sources.filter(
+      source =>
+        source.status === AgentInstructionSourceStatus.ACTIVE &&
+        source.kind === AgentInstructionSourceKind.AGENTS_MD &&
+        paths.isWorkspaceRoot(source.scope),
+    );
     for (const source of this.sources) {
       if (source.status !== AgentInstructionSourceStatus.ACTIVE) continue;
       const scope = paths.key(source.scope);

@@ -111,14 +111,14 @@ sequenceDiagram
 
 Initial activation follows these rules:
 
-| Source                           | Initial activation                                                                                               |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Root `AGENTS.md` with scope `.`  | Included automatically.                                                                                          |
-| Nested or multi-root `AGENTS.md` | Included when an attachment path lies in its scope.                                                              |
-| `always` rule                    | Included when scope is `.` or an initial attachment participates in its scope.                                   |
-| `file_pattern` rule              | Included when an attachment matches both scope and glob.                                                         |
-| `manual` rule                    | Included when its stable ID is explicitly selected.                                                              |
-| `model` rule                     | Only name, ID, description, and scope are advertised when its scope participates. Its body waits for activation. |
+| Source                     | Initial activation                                                                                               |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Workspace-root `AGENTS.md` | Included at the start of every turn for each attached workspace folder.                                          |
+| Nested `AGENTS.md`         | Included when an attachment path lies in its scope.                                                              |
+| `always` rule              | Included when scope is `.` or an initial attachment participates in its scope.                                   |
+| `file_pattern` rule        | Included when an attachment matches both scope and glob.                                                         |
+| `manual` rule              | Included when its stable ID is explicitly selected.                                                              |
+| `model` rule               | Only name, ID, description, and scope are advertised when its scope participates. Its body waits for activation. |
 
 Later file access or a steering attachment can activate scoped `AGENTS.md`, scoped `always` rules, and matching file-pattern rules. These paths also make additional model candidates available.
 

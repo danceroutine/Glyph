@@ -4,6 +4,10 @@ import { posix, win32 } from 'node:path';
 export class InstructionPaths {
   constructor(private readonly casing: boolean | ReadonlyMap<string, boolean> = true) {}
 
+  isWorkspaceRoot(scope: string): boolean {
+    return scope === '.' || (typeof this.casing !== 'boolean' && this.casing.has(scope));
+  }
+
   caseSensitive(path: string): boolean {
     return typeof this.casing === 'boolean' ? this.casing : this.casing.get(path.split('/')[0]!) !== false;
   }

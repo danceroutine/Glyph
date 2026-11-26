@@ -96,6 +96,32 @@ describe(TurnContextCoordinator, () => {
     expect(coordinator.snapshot('turn')).toBeUndefined();
   });
 
+  it('starts with AGENTS.md from every attached workspace root and defers other scoped guidance', async () => {
+    const paths = new InstructionPaths(
+      new Map([
+        ['Api', false],
+        ['api', true],
+      ]),
+    );
+    const discovered = [
+      source('A', AgentInstructionSourceKind.AGENTS_MD, 'Api'),
+      source('B', AgentInstructionSourceKind.AGENTS_MD, 'api'),
+      source('nested', AgentInstructionSourceKind.AGENTS_MD, 'Api/src'),
+      source('case-mismatch', AgentInstructionSourceKind.AGENTS_MD, 'API'),
+      source('on-entry', AgentInstructionSourceKind.GLYPH_PROJECT_RULE, 'api', AgentInstructionActivationMode.ALWAYS),
+    ];
+    const coordinator = new TurnContextCoordinator(
+      new AgentInstructionCatalog([{ discover: async () => discovered }], paths),
+    );
+    const turn = await coordinator.beginTurn({ turnId: 'roots', attachmentPaths: [] });
+    expect(turn.initialEnvelope().sources.map(value => value.id)).toEqual(['A', 'B']);
+    expect(turn.snapshot().activations.every(value => value.reason === AgentInstructionActivationReason.ALWAYS)).toBe(
+      true,
+    );
+    expect(coordinator.disclosePaths('roots', ['Api/SRC/readme'])?.sources.map(value => value.id)).toEqual(['nested']);
+    expect(coordinator.disclosePaths('roots', ['api/readme'])?.sources.map(value => value.id)).toEqual(['on-entry']);
+  });
+
   it('activates scoped always, AGENTS.md and matching rules at the first case-aliased access', async () => {
     const paths = new InstructionPaths(
       new Map([

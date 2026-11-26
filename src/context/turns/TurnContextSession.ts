@@ -40,12 +40,12 @@ export class TurnContextSession {
     this.scopeIndex = input.scopeIndex ?? new AgentInstructionSet(input.sources, this.paths);
     this.precedence = new Map(input.sources.map((source, index) => [source, index]));
     const attachments = unique(input.attachmentPaths);
-    const applicable = this.sourcesFor(attachments);
+    const applicable = this.sourcesFor(attachments, this.scopeIndex.rootGuidance);
     const candidates = this.advertiseCandidates(applicable);
     for (const source of applicable) {
       if (!eligible(source)) continue;
       if (source.kind === AgentInstructionSourceKind.AGENTS_MD) {
-        if (source.scope === '.') this.activate(source, AgentInstructionActivationReason.ALWAYS);
+        if (this.paths.isWorkspaceRoot(source.scope)) this.activate(source, AgentInstructionActivationReason.ALWAYS);
         else {
           const paths = attachments.filter(path => this.paths.contains(source.scope, path));
           this.activate(source, AgentInstructionActivationReason.ATTACHMENT, paths);
@@ -152,8 +152,11 @@ export class TurnContextSession {
     this.pending.set(source, { sourceId: source.id, reason, ...(paths ? { paths } : {}) });
   }
 
-  private sourcesFor(paths: readonly string[]): readonly AgentInstructionSource[] {
-    const applicable = new Set(this.scopeIndex.forPath('.'));
+  private sourcesFor(
+    paths: readonly string[],
+    upfront: readonly AgentInstructionSource[] = [],
+  ): readonly AgentInstructionSource[] {
+    const applicable = new Set([...this.scopeIndex.forPath('.'), ...upfront]);
     for (const path of paths) for (const source of this.scopeIndex.forPath(path)) applicable.add(source);
     return [...applicable].toSorted((a, b) => this.precedence.get(a)! - this.precedence.get(b)!);
   }
