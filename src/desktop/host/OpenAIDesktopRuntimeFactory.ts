@@ -1,3 +1,4 @@
+import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
@@ -309,6 +310,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         origin: { id: 'user:glyph', label: 'User skill', scope: 'user', compatibility: 'glyph' },
         directory: 'skills',
         workspace: userRuleStore,
+        captureFiles: (directory, signal) =>
+          listSkillPackageFiles(userRuleStore, directory, indexExecutable, false, signal),
         binaryStore: userRuleStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
         listFiles: async signal => {
@@ -334,6 +337,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 },
                 directory: `${location}/skills`,
                 workspace: part.catalog,
+                captureFiles: (directory, signal) =>
+                  listSkillPackageFiles(part.disk, directory, indexExecutable, true, signal),
                 binaryStore: part.disk,
                 ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
                 uriForPath: path => userRuleUri(part.disk.root, path),

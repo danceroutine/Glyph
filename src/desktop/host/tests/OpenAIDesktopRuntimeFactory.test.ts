@@ -1,3 +1,4 @@
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
@@ -1010,6 +1011,71 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         'first/AGENTS.md',
         'second/AGENTS.md',
       ]);
+    });
+
+    it('refreshes and captures user and project skills through their owning indexes', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const root = await fixture.folder('workspace');
+      for (const [base, path] of [
+        [root, '.glyph/skills/workflow'],
+        [fixture.userDirectory, 'skills/default'],
+      ] as const) {
+        await mkdir(join(base, path), { recursive: true });
+        await writeFile(
+          join(base, path, 'SKILL.md'),
+          `---\nname: ${basename(path)}\ndescription: perform work\n---\nInstructions`,
+        );
+      }
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => ({
+        operationId: 'mutation' in request ? request.mutation.operationId : request.operationId,
+        ok: true,
+      }));
+      const observe = vi.spyOn(SkillCatalog.prototype, 'refresh');
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
+        this: RustWorkspacePathIndex,
+        pattern,
+      ) {
+        const rootPath = captured.indexOptions[captured.indexes.indexOf(this)]!.root;
+        const files =
+          pattern === '**/.glyph/skills/**/*'
+            ? ['.glyph/skills/workflow/SKILL.md']
+            : pattern === '**/*' && rootPath.endsWith('/skills')
+              ? ['default/SKILL.md']
+              : pattern === '**/*'
+                ? ['SKILL.md']
+                : [];
+        return { files, truncated: false };
+      });
+      const refresh = vi
+        .spyOn(RustWorkspacePathIndex.prototype, 'refresh')
+        .mockResolvedValue({ truncated: false } as never);
+      const runtime = await fixture.create([root]);
+      const skills = (await runtime.snapshot()).skills!;
+      expect(skills.map(s => s.name).toSorted()).toEqual(['default', 'workflow']);
+      const coordinator = captured.providerFactories[0]![4]!;
+      const turn = await coordinator.beginTurn(
+        {
+          turnId: 'select',
+          attachmentPaths: [],
+          skillIds: skills.map(s => s.id),
+        },
+        new AbortController().signal,
+      );
+      expect(turn.snapshot().skills).toHaveLength(2);
+      expect(refresh).toHaveBeenCalledTimes(4);
+      await (observe.mock.contexts[0] as SkillCatalog).refreshIndexes();
+      expect(refresh).toHaveBeenCalledTimes(7);
+      const second = await coordinator.beginTurn({
+        turnId: 'no-signal',
+        attachmentPaths: [],
+        skillIds: [skills[0]!.id],
+      });
+      expect(second.snapshot().skills).toHaveLength(1);
+      refresh.mockResolvedValueOnce({ truncated: true } as never);
+      await expect(
+        coordinator.beginTurn({ turnId: 'incomplete', attachmentPaths: [], skillIds: [skills[0]!.id] }),
+      ).rejects.toThrow('incomplete');
     });
 
     it('reports an unsafe user rules directory without querying its native index', async () => {

@@ -1130,3 +1130,46 @@ describe(useGlyphComposerState, () => {
     expect(document.activeElement).toBe(prompt());
   });
 });
+
+it('inserts a selected skill with its stable origin identity and current revision', async () => {
+  const actions = composerActions();
+  renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
+  await openPicker(actions, '/review', [
+    {
+      uri: 'glyph-skill:project-review',
+      path: 'review',
+      name: 'Review workflow',
+      kind: GlyphContextCandidateKind.SKILL,
+      skillId: 'project-review',
+      revision: 'pinned',
+    },
+  ]);
+  await act(async () => {
+    fireEvent.click(screen.getByRole('option', { name: 'review' }));
+  });
+  expect(actions.composer.snapshot.document.parts).toMatchObject([
+    {
+      type: 'attachment',
+      attachment: {
+        kind: GlyphContextAttachmentKind.SKILL,
+        path: 'Review workflow',
+        skillId: 'project-review',
+        contentRevision: 'pinned',
+      },
+    },
+  ]);
+  expect(actions.context.captureFile).not.toHaveBeenCalled();
+});
+
+it('rejects skill candidates without a stable identity', async () => {
+  const actions = composerActions();
+  const { result } = renderComposer({ status: GlyphWorkbenchStatus.READY, actions });
+  await act(() =>
+    result.current.choose({
+      uri: 'glyph-skill:missing',
+      path: 'Missing skill',
+      kind: GlyphContextCandidateKind.SKILL,
+    }),
+  );
+  expect(screen.getByRole('alert').textContent).toBe('This skill cannot be selected.');
+});

@@ -57,3 +57,9 @@ describe('Turn context contributor lifetime', () => {
     expect(await coordinator.activateSource('replacement', 'empty', 'missing', 'manual', 'Selected')).toBeUndefined();
   });
 });
+
+it('steers contributors that do not provide a checkpoint', async () => {
+  const coordinator = new TurnContextCoordinator([{ id: 'fixture', beginTurn: async () => aContribution('turn') }]);
+  await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: [] });
+  expect(await coordinator.steer({ turnId: 'turn', attachmentPaths: [] })).toBeUndefined();
+});

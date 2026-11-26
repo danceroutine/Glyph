@@ -117,7 +117,10 @@ function controllerServices() {
       })),
       openSource: vi.fn(async () => false),
     },
-    editors: { activeTextEditorControl: undefined as unknown, openEditor: vi.fn(async () => undefined) },
+    editors: {
+      activeTextEditorControl: undefined as unknown,
+      openEditor: vi.fn(async (_input: { resource: URI; options?: unknown }) => undefined),
+    },
     modelService: {
       onModelAdded: modelAdded.event,
       getModels: () => models,
@@ -209,8 +212,14 @@ describe(GlyphContextController, () => {
         isFile: resource.path.endsWith('SKILL.md'),
         isDirectory: !resource.path.endsWith('SKILL.md'),
       }));
+      if (kind === GlyphContextAttachmentKind.SKILL) {
+        const { revision: _revision, ...unversioned } = source;
+        controller.setSkillSources(() => [unversioned]);
+        expect((await controller.refreshAttachment(badge)).contentRevision).toBe(source.id);
+        controller.setSkillSources(() => sources);
+      }
       await controller.openAttachment(badge);
-      expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(source.uri);
+      expect(services.editors.openEditor.mock.calls.at(-1)?.[0].resource.toString()).toBe(source.uri);
       expect(services.editors.openEditor).toHaveBeenCalledWith(expect.objectContaining({ options: { pinned: true } }));
       source.enabled = false;
       expect(await controller.checkAttachment(badge)).toContain('unavailable');
@@ -342,7 +351,7 @@ describe(GlyphContextController, () => {
       isDirectory: !resource.path.endsWith('.mdc'),
     }));
     await controller.openAttachment(badge);
-    expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(
+    expect(services.editors.openEditor.mock.calls.at(-1)?.[0].resource.toString()).toBe(
       'file:///workspace/.glyph/rules/example.mdc',
     );
     expect(services.editors.openEditor).toHaveBeenCalledWith(expect.objectContaining({ options: { pinned: true } }));

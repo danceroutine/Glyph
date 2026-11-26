@@ -116,6 +116,7 @@ describe(SqliteChatSessionStore, () => {
         ...turn,
         steering: [
           {
+            rejection: 'The manual rule is no longer available',
             id: 'guidance',
             text: 'Keep working',
             createdAt: source.createdAt,

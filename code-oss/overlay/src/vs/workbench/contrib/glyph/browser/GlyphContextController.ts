@@ -292,7 +292,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     this.assertTrusted();
     const normalized = query.toLowerCase();
     const rules = this.instructionSources()
-      .filter(rule=>isManualRule(rule))
+      .filter(rule => isManualRule(rule))
       .filter(rule => {
         const name = rule.name ?? rule.path.split('/').at(-1)!;
         return `${name} ${rule.description ?? ''} ${rule.path}`.toLowerCase().includes(normalized);
@@ -437,7 +437,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
       this.assertTrusted();
       const source = this.skillSource(attachment.uri);
-      if (!source || source.status !== 'active' || source.enabled === false)
+      if (!source || source.status !== 'active' || !source.enabled)
         throw new GlyphContextError(
           GlyphDesktopErrorCode.NOT_FOUND,
           'Selected instruction is unavailable. Choose it again.',
@@ -465,7 +465,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
     if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
       const source = this.skillSource(attachment.uri);
-      if (!source || source.status !== 'active' || source.enabled === false)
+      if (!source || source.status !== 'active' || !source.enabled)
         return 'Selected instruction is unavailable. Remove it or choose it again.';
       return source.revision && source.revision !== attachment.contentRevision
         ? 'These instructions changed. The latest version will load when you send.'
@@ -657,8 +657,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
 
   private skillSource(value: string): GlyphSkill | undefined {
     if (!value.startsWith('glyph-skill:')) return undefined;
-    const id=decodeURIComponent(value.slice('glyph-skill:'.length));
-    return this.skillSources().find(source=>source.id===id);
+    const id = decodeURIComponent(value.slice('glyph-skill:'.length));
+    return this.skillSources().find(source => source.id === id);
   }
 
   private activeEditor(): ICodeEditor | undefined {
