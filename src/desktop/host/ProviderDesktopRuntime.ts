@@ -884,6 +884,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           {
             push: part => {
               this.response(command.runId, part);
+              if (part.type === ChatResponsePartType.DIAGNOSTIC) {
+                const current = this.runs.get(command.runId)!;
+                this.setRun({ ...current, steering: steering.messages });
+              }
             },
           },
           signal,

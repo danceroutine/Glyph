@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
 
 describe(ChatSteeringQueue, () => {
+  it('retains rejected admission against its exact message identity for restoration', () => {
+    const queue = new ChatSteeringQueue();
+    const request = { text: 'Use rule', attachments: [] };
+    queue.add(request, {
+      id: 'rejected',
+      text: request.text,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      options: {},
+      attachments: [],
+    });
+    queue.reject({ text: 'Use rule', attachments: [] }, 'Unrelated');
+    expect(queue.messages[0]?.rejection).toBeUndefined();
+    queue.reject(request, 'Selected context is unavailable.');
+    expect(queue.messages[0]?.rejection).toBe('Selected context is unavailable.');
+  });
   describe(ChatSteeringQueue.prototype.add, () => {
     it('accepts each message once and drains its request at the next boundary', () => {
       const queue = new ChatSteeringQueue();

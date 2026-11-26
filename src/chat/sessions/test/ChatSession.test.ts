@@ -89,6 +89,29 @@ function turn(overrides: Partial<ChatTranscriptTurn> = {}): ChatTranscriptTurn {
 }
 
 describe(ChatSession, () => {
+  it('persists a rejected steering message with its admission outcome', async () => {
+    const request = { text: 'Use unavailable workflow', attachments: [] };
+    const steering = new ChatSteeringQueue();
+    steering.add(request, {
+      id: 'rejected',
+      text: request.text,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      options: {},
+      attachments: [],
+    });
+    const { session, record } = harness({
+      send: async (_request, options) => {
+        options.onSteeringRejected?.(request, new Error('The selected workflow is no longer available.'));
+        options.onText('Continuing the original task.');
+        return { responseId: 'response', usage: null };
+      },
+    });
+    await session.send('Start', { push: () => {} }, new AbortController().signal, undefined, undefined, steering);
+    expect(record().transcript[0]?.steering?.[0]).toMatchObject({
+      id: 'rejected',
+      rejection: 'The selected workflow is no longer available.',
+    });
+  });
   it('exposes the conversation model, trace setting, and saved usage', () => {
     const usage = { inputTokens: 1, cachedInputTokens: 0, outputTokens: 2, reasoningTokens: 0, totalTokens: 3 };
     const { session } = harness({ transcript: [turn({ usage }), turn()] });

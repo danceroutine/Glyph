@@ -210,7 +210,14 @@ export class ChatSession {
     let result: ChatTurnResult;
     try {
       result = await this.conversation.send(request, recordingResponse, signal, {
-        ...(steering ? { takeSteering: steering.take } : {}),
+        ...(steering
+          ? {
+              takeSteering: steering.take,
+              onSteeringRejected: (steeringRequest, message) => {
+                steering.reject(steeringRequest, message);
+              },
+            }
+          : {}),
         onStateCheckpoint: async state => {
           this.unpersistedProviderState = state;
           await this.checkpoint(state, undefined, true);
