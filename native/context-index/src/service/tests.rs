@@ -220,6 +220,19 @@ fn private_root_does_not_scan_watch_or_admit_paths() {
 }
 
 #[test]
+fn private_root_can_initialize_when_no_monitor_thread_is_available() {
+    let directory = tempdir().unwrap();
+    let mut options = params(directory.path());
+    options.exclude_root = true;
+    let mut service = ContextIndexService::new();
+    let result = service
+        .initialize_with_workers(options, &MonitorWorkers { available: false })
+        .unwrap();
+    assert_eq!(result.file_count, 0);
+    assert!(service.monitor.is_none());
+}
+
+#[test]
 fn excluded_paths_require_normalized_project_relative_paths() {
     let directory = tempdir().expect("temporary directory should exist");
     for invalid in [
