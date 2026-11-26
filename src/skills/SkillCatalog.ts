@@ -11,6 +11,7 @@ export class SkillCatalog {
     private readonly providers: readonly SkillDiscoveryProvider[],
     private readonly enabled: ReadonlyMap<string, boolean> = new Map(),
     private readonly installations: ReadonlyMap<string, { source: string; revision: string }> = new Map(),
+    private readonly ensureReady?: () => Promise<void>,
   ) {
     if (new Set(providers.map(provider => provider.id)).size !== providers.length)
       throw new Error('Skill provider IDs must be unique.');
@@ -26,10 +27,17 @@ export class SkillCatalog {
   }
   async refresh(signal?: AbortSignal): Promise<readonly SkillDescriptor[]> {
     const generation = ++this.generation;
+    let unavailable: { cause: unknown } | undefined;
+    try {
+      if (this.ensureReady) await this.ensureReady();
+    } catch (cause) {
+      unavailable = { cause };
+    }
     const discovered = (
       await Promise.all(
         this.providers.map(async provider => {
           try {
+            if (unavailable) throw unavailable.cause;
             return await provider.discover(signal);
           } catch (error) {
             if (signal?.aborted) throw signal.reason;
@@ -85,7 +93,9 @@ export class SkillCatalog {
   }
 
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal) {
-    if (!descriptor.enabled || descriptor.status !== 'active') throw new Error('Skill is disabled or unavailable.');
+    if (this.ensureReady) await this.ensureReady();
+    if (!descriptor.enabled || descriptor.status !== 'active' || this.enabled.get(descriptor.id) === false)
+      throw new Error('Skill is disabled or unavailable.');
     const provider = this.providers.find(candidate => candidate.id === descriptor.origin.id);
     if (!provider) throw new Error('Skill provider is unavailable.');
     return provider.capture(descriptor, signal);

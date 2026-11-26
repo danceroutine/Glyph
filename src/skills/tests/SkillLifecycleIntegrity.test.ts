@@ -148,3 +148,32 @@ it('fails closed on malformed preferences, accepts repairs, and only publishes a
   await state.initialize();
   expect(state.enabled.get('one')).toBe(false);
 });
+
+it('blocks discovery, capture, management and stale approvals while preferences are unreadable, then retries after repair', async () => {
+  const { root, state, location, provider, install } = await aSkillLifecycle();
+  const installed = await install();
+  const { SkillCatalog } = await import('../SkillCatalog.ts');
+  const ready = async () => state.initialize();
+  const catalog = new SkillCatalog([provider], state.enabled, state.installations, ready);
+  const manager = new SkillPackageManager([location], catalog, state, ready);
+  await catalog.refresh();
+  const change = await manager.prepare(location.id, aSkillDraft('New workflow', 'another'));
+  const preferencePath = join(root, 'skill-state.json');
+  const previous = await readFile(preferencePath, 'utf8');
+  await writeFile(preferencePath, '{invalid-json');
+  const discover = vi.spyOn(provider, 'discover');
+  expect(await catalog.refresh()).toMatchObject([{ enabled: false, path: '' }]);
+  expect(discover).not.toHaveBeenCalled();
+  await expect(catalog.capture(installed)).rejects.toThrow();
+  await expect(manager.prepare(location.id, aSkillDraft())).rejects.toThrow();
+  await expect(manager.prepareRemoval(installed.id)).rejects.toThrow();
+  await expect(manager.setEnabled(installed.id, true)).rejects.toThrow();
+  await expect(manager.apply(change.id)).rejects.toThrow();
+  expect(manager.hasPreview(change.id)).toBe(false);
+  await writeFile(preferencePath, previous);
+  expect(await catalog.refresh()).toMatchObject([{ id: installed.id, enabled: true }]);
+  expect((await catalog.capture(installed)).descriptor.id).toBe(installed.id);
+  await manager.setEnabled(installed.id, false);
+  await expect(catalog.capture(installed)).rejects.toThrow('disabled');
+  expect((await manager.prepareRemoval(installed.id)).action).toBe('remove');
+});

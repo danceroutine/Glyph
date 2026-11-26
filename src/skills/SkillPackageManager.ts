@@ -106,6 +106,7 @@ export class SkillPackageManager {
     private readonly locations: readonly SkillPackageLocation[],
     private readonly catalog: SkillCatalog,
     private readonly state: SkillStateStore,
+    private readonly ensureReady?: () => Promise<void>,
   ) {
     this.journal = new SkillTransactionJournal(state.userDirectory);
   }
@@ -126,6 +127,7 @@ export class SkillPackageManager {
     }
   }
   async prepare(targetId: string, draft: SkillPackageDraft, replaceId?: string): Promise<SkillPreview> {
+    if (this.ensureReady) await this.ensureReady();
     const location = this.location(targetId);
     const existing = replaceId ? this.catalog.skills.find(skill => skill.id === replaceId) : undefined;
     if (replaceId && (!existing?.directory || existing.origin.id !== targetId || existing.name !== draft.name))
@@ -139,9 +141,9 @@ export class SkillPackageManager {
     return this.remember(location, directory, before, draft);
   }
   async prepareRemoval(id: string): Promise<SkillPreview> {
+    if (this.ensureReady) await this.ensureReady();
     const descriptor = this.catalog.skills.find(skill => skill.id === id);
-    if (!descriptor?.directory || !descriptor.path || descriptor.id.endsWith(':discovery-error'))
-      throw new Error('Skill is unavailable. Refresh Settings.');
+    if (!descriptor?.directory || !descriptor.path) throw new Error('Skill is unavailable. Refresh Settings.');
     const location = this.location(descriptor.origin.id);
     const before = await this.read(location, descriptor.directory);
     if (before.size === 0) throw new Error('The installed skill is missing. Refresh Settings.');
@@ -158,6 +160,7 @@ export class SkillPackageManager {
     if (!change) throw new Error('Skill preview expired. Preview the change again.');
     this.pending.delete(id);
     signal?.throwIfAborted();
+    if (this.ensureReady) await this.ensureReady();
     await withSkillLock(change.location.store.root, 'destination', () => this.commit(change, signal), signal);
     try {
       await change.location.refreshIndex();
@@ -171,6 +174,7 @@ export class SkillPackageManager {
     }
   }
   async setEnabled(id: string, enabled: boolean): Promise<void> {
+    if (this.ensureReady) await this.ensureReady();
     const skill = this.catalog.skills.find(skill => skill.id === id && skill.status === 'active');
     if (!skill) throw new Error('Skill is unavailable.');
     const location = this.locations.find(item => item.id === skill.origin.id);
