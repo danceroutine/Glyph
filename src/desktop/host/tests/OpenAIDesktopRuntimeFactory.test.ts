@@ -1,6 +1,6 @@
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { GlyphService } from '#src/application/GlyphService.js';
@@ -735,7 +735,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await fixture.create([await fixture.folder('two')]);
       expect(captured.indexOptions).toHaveLength(4);
       expect(captured.indexOptions[1]).toMatchObject({
-        root: join(homedir(), '.glyph', 'rules'),
+        root: join(fixture.userDirectory, 'rules'),
         respectGitIgnore: false,
       });
       const userIndex = captured.indexes[1]!;
@@ -1243,7 +1243,8 @@ async function factoryFixture(options: { readonly transport?: typeof fetch } = {
   vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
   const initialize = vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
   const editors = new EditorRpcRouter();
-  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport, join(directory, 'user'));
+  const userDirectory = join(directory, 'user');
+  const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport, userDirectory);
   const runtimes: ProviderDesktopRuntime[] = [];
   onTestFinished(async () => {
     for (const runtime of runtimes) await runtime.dispose();
@@ -1253,6 +1254,7 @@ async function factoryFixture(options: { readonly transport?: typeof fetch } = {
     await rm(directory, { recursive: true, force: true });
   });
   return {
+    userDirectory,
     factory,
     editors,
     initialize,
