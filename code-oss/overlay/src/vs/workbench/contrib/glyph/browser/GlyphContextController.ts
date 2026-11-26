@@ -436,14 +436,14 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }
     if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
       this.assertTrusted();
-      const source = this.referenceSource(attachment.uri);
+      const source = this.referenceSkill(attachment.uri);
       if (!source || source.status !== 'active' || source.enabled === false)
         throw new GlyphContextError(
           GlyphDesktopErrorCode.NOT_FOUND,
           'Selected instruction is unavailable. Choose it again.',
         );
       const { unavailable: _, ...reference } = attachment;
-      return { ...reference, path: source.name ?? reference.path, contentRevision: source.revision ?? source.id };
+      return { ...reference, path: source.name, contentRevision: source.revision ?? source.id };
     }
 
     if (!['file', 'selection', 'folder'].includes(attachment.kind))
@@ -464,7 +464,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   }
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
     if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
-      const source = this.referenceSource(attachment.uri);
+      const source = this.referenceSkill(attachment.uri);
       if (!source || source.status !== 'active' || source.enabled === false)
         return 'Selected instruction is unavailable. Remove it or choose it again.';
       return source.revision && source.revision !== attachment.contentRevision
@@ -634,7 +634,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     this.assertTrusted();
     await this.refreshInstructionSources?.();
     this.assertTrusted();
-    const source = this.referenceSource(reference);
+    const source = this.referenceSkill(reference);
     if (!source?.uri) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
     const selectedUri = source.uri;
     const resource = URI.parse(selectedUri);
@@ -650,19 +650,15 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       current = dirname(current);
     }
     this.assertTrusted();
-    if (this.referenceSource(reference)?.uri !== selectedUri)
+    if (this.referenceSkill(reference)?.uri !== selectedUri)
       throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
     await this.editors.openEditor({ resource, options: { pinned: true } });
   }
 
-  private referenceSource(value: string): GlyphSkill | GlyphInstructionSource | undefined {
+  private referenceSkill(value: string): GlyphSkill | undefined {
     const uri = URI.parse(value);
     const id = decodeURIComponent(value.slice(value.indexOf(':') + 1));
-    return uri.scheme === 'glyph-skill'
-      ? this.skillSources().find(source => source.id === id)
-      : uri.scheme === 'glyph-rule'
-        ? this.instructionSources().find(source => source.id === id)
-        : undefined;
+    return uri.scheme === 'glyph-skill' ? this.skillSources().find(source => source.id === id) : undefined;
   }
 
   private activeEditor(): ICodeEditor | undefined {

@@ -12,7 +12,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   const parent = new EventEmitter();
   const host = {
     constructed: vi.fn(),
-    trustedSkillEditors: vi.fn((_owner: GlyphConnectionIdentity) => []),
+    trustedSkillEditors: vi.fn((_owner: GlyphConnectionIdentity, _projectDirectory?: string) => []),
     connect: vi.fn(),
     receive: vi.fn(async (_connectionId: string, _envelope: unknown) => {}),
     disconnect: vi.fn(async (_connectionId: string) => {}),
@@ -28,8 +28,10 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
       constructor(factory: unknown) {
         host.constructed(factory);
       }
-      trustedSkillEditors(owner: GlyphConnectionIdentity) {
-        return host.trustedSkillEditors(owner);
+      trustedSkillEditors(owner: GlyphConnectionIdentity, projectDirectory?: string) {
+        return projectDirectory === undefined
+          ? host.trustedSkillEditors(owner)
+          : host.trustedSkillEditors(owner, projectDirectory);
       }
       connect(...arguments_: unknown[]): unknown {
         return host.connect(...arguments_);
@@ -276,9 +278,14 @@ describe('utilityMain', () => {
   it('wires user package checks to the live host trust registry', async () => {
     const { loaded, editors, host } = startUtilityHost();
     await loaded;
-    const peers = editors.constructed.mock.calls[0]![1] as (owner: GlyphConnectionIdentity) => unknown;
+    const peers = editors.constructed.mock.calls[0]![1] as (
+      owner: GlyphConnectionIdentity,
+      projectDirectory?: string,
+    ) => unknown;
     expect(peers(identity)).toEqual([]);
     expect(host.trustedSkillEditors).toHaveBeenCalledExactlyOnceWith(identity);
+    expect(peers(identity, '/workspace/.glyph/skills/example')).toEqual([]);
+    expect(host.trustedSkillEditors).toHaveBeenLastCalledWith(identity, '/workspace/.glyph/skills/example');
   });
 
   it('connects a window to the host and its editor, then announces readiness', async () => {

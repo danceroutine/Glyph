@@ -1681,6 +1681,7 @@ it('uses independently authorized user directories at bootstrap and resolves onl
   });
   try {
     delete env['GLYPH_USER_DIRECTORY'];
+    expect(await adapter.handle(peer('example'))).toMatchObject({ ok: true, packageClean: true });
     for (const [configure, directory] of [
       [false, '/local-home/.glyph/skills/example'],
       [true, '/configured/skills/example'],

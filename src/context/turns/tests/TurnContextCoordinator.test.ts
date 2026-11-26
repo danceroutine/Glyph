@@ -1,3 +1,4 @@
+import { TurnContextSession } from '#src/context/turns/TurnContextSession.js';
 import { InstructionContextContributor } from '#src/context/turns/InstructionContextContributor.js';
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
@@ -54,6 +55,24 @@ const sources = [
 const catalog = () => ({ refresh: vi.fn(async () => sources) });
 
 describe(TurnContextCoordinator, () => {
+  it('supports manual activation through the instruction contribution port', () => {
+    const rule = source(
+      'manual-port',
+      AgentInstructionSourceKind.GLYPH_USER_RULE,
+      '.',
+      AgentInstructionActivationMode.MANUAL,
+    );
+    const session = new TurnContextSession({
+      turnId: 'manual-port',
+      sources: [rule],
+      manualRuleIds: [],
+      attachmentPaths: [],
+    });
+    expect(
+      session.activateRule(rule.id, AgentInstructionActivationReason.MANUAL)?.sources.map(source => source.id),
+    ).toEqual([rule.id]);
+  });
+
   it('prepares attachments, always-on sources, manual selections, and bounded candidates once', async () => {
     const coordinator = new TurnContextCoordinator(catalog() as never);
     const session = await coordinator.beginTurn({
@@ -136,7 +155,13 @@ describe(TurnContextCoordinator, () => {
     const pattern = AgentInstructionActivationMode.FILE_PATTERN;
     const user = AgentInstructionSourceKind.GLYPH_USER_RULE;
     const rules = [
-      source('literal', user, '.', pattern, Array.from({ length: 64 }, () => 'src/entry.ts')),
+      source(
+        'literal',
+        user,
+        '.',
+        pattern,
+        Array.from({ length: 64 }, () => 'src/entry.ts'),
+      ),
       source('glob', user, '.', pattern, ['src/*.ts']),
       source(
         'heavy',
