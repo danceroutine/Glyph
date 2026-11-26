@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { onTestFinished, vi } from 'vitest';
@@ -25,7 +25,7 @@ export function aSkillDraft(body = 'Reviewed instructions', name = 'example') {
   });
 }
 export async function aSkillLifecycle() {
-  const root = await mkdtemp(join(tmpdir(), 'glyph-skill-manager-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-manager-')));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const store = new FileSystemWorkspaceTextStore(root);
   const state = new SkillStateStore(store);
@@ -42,15 +42,21 @@ export async function aSkillLifecycle() {
     uriForPath: path => `file://${root}/${path}`,
   });
   const catalog = new SkillCatalog([provider], state.enabled, state.installations);
-  const manager = new SkillPackageManager(
-    [{ id: provider.id, label: 'User', store, workspace: store, directory: 'skills', listFiles, refreshIndex }],
-    catalog,
-    state,
-  );
+  const location = {
+    id: provider.id,
+    scope: 'user' as const,
+    label: 'User',
+    store,
+    workspace: store,
+    directory: 'skills',
+    listFiles,
+    refreshIndex,
+  };
+  const manager = new SkillPackageManager([location], catalog, state);
   const install = async () => {
     const preview = await manager.prepare(provider.id, aSkillDraft());
     await manager.apply(preview.id);
     return catalog.skills[0]!;
   };
-  return { root, store, state, catalog, manager, provider, install };
+  return { root, store, state, catalog, location, manager, provider, install };
 }

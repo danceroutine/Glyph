@@ -152,7 +152,39 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
   async presentSkillChange(preview: SkillPreview, signal: AbortSignal): Promise<boolean> {
     const identity = this.requireRun();
     const policy = new SkillChangeApprovalPolicy();
-    const detail = `${preview.source}\nRevision: ${preview.revision}\n\n${preview.files.map(file => `${file.path}\nBefore:\n${file.before ?? '(absent)'}\nAfter:\n${file.after ?? '(removed)'}`).join('\n\n')}`;
+    const detail = [
+      preview.source,
+      'Revision: ' + preview.revision,
+      'Destination (' + preview.destination.scope + '): ' + preview.destination.label,
+      preview.destination.path,
+      ...preview.files.map(file =>
+        [
+          file.path + ' (' + file.status + ')',
+          ...(
+            [
+              ['Before', file.beforeInfo],
+              ['After', file.afterInfo],
+            ] as const
+          ).flatMap(([label, info]) =>
+            info
+              ? [
+                  label +
+                    ': ' +
+                    info.encoding +
+                    ', ' +
+                    info.size +
+                    ' bytes, mode ' +
+                    info.mode.toString(8) +
+                    ', SHA-256 ' +
+                    info.digest,
+                ]
+              : [],
+          ),
+          ...(file.before === undefined ? [] : [file.before]),
+          ...(file.after === undefined ? [] : [file.after]),
+        ].join('\n'),
+      ),
+    ].join('\n');
     const approval = new Approval(
       policy.createRequest({
         workspace: this.workspace,

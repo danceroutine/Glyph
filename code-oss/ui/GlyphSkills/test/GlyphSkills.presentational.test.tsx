@@ -121,11 +121,12 @@ describe('Skill management', () => {
       preview: {
         id: 'token',
         targetId: 'project',
+        destination: { label: 'App project skills', scope: 'project' as const, path: '/project/.glyph/skills/review' },
         action: 'update' as const,
         name: 'review',
         source: 'Pinned repository',
         revision: '123456789012',
-        files: [{ path: 'SKILL.md', before: 'Before', after: 'After' }],
+        files: [{ path: 'SKILL.md', status: 'modified' as const, before: 'Before', after: 'After' }],
       },
     };
     management.apply.mockRejectedValueOnce(new Error('The package changed. Preview again.'));
@@ -136,6 +137,7 @@ describe('Skill management', () => {
         management={management}
       />,
     );
+    expect(screen.getByText('/project/.glyph/skills/review')).toBeDefined();
     expect(screen.getByText('Before')).toBeDefined();
     expect(screen.getByText('After')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Apply update' }));

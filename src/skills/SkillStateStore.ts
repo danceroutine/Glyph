@@ -1,65 +1,105 @@
 import { z } from 'zod';
-import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import { randomUUID } from 'node:crypto';
+import { link, open, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { syncDirectory, withSkillLock } from './SkillPackageStorage.ts';
 
 const schema = z.object({
   enabled: z.record(z.string(), z.boolean()),
   installations: z.record(z.string(), z.object({ source: z.string(), revision: z.string() })),
 });
+type Preferences = z.infer<typeof schema>;
+function parsePreferences(text?: string): Preferences {
+  return text === undefined ? { enabled: {}, installations: {} } : schema.parse(JSON.parse(text));
+}
+export class SkillPreferenceCommitUncertain extends Error {
+  constructor(cause: unknown) {
+    super('The skill preference write needs recovery. Check the user preferences and refresh Skills.', { cause });
+  }
+}
 /** User-owned lifecycle preferences, keyed by stable package identity across workspace reloads. */
 export class SkillStateStore {
   readonly enabled = new Map<string, boolean>();
   readonly installations = new Map<string, { source: string; revision: string }>();
-  private queue = Promise.resolve();
-  constructor(private readonly workspace: WorkspaceTextStore) {}
+  constructor(private readonly workspace: FileSystemWorkspaceTextStore) {}
+  get userDirectory(): string {
+    return this.workspace.root;
+  }
   async initialize(): Promise<void> {
-    const snapshot = await this.workspace.readOptional('skill-state.json');
-    if (!snapshot) return;
-    const data = schema.parse(JSON.parse(snapshot.text));
-    for (const [id, enabled] of Object.entries(data.enabled)) this.enabled.set(id, enabled);
-    for (const [id, installation] of Object.entries(data.installations)) this.installations.set(id, installation);
+    await withSkillLock(this.userDirectory, 'preferences', async () => {
+      this.publish(parsePreferences((await this.workspace.readOptional('skill-state.json'))?.text));
+    });
   }
   setEnabled(id: string, enabled: boolean): Promise<void> {
-    return this.update(() => this.enabled.set(id, enabled));
+    return this.update(next => {
+      next.enabled[id] = enabled;
+    });
   }
   record(id: string, source: string, revision: string): Promise<void> {
-    return this.update(() => this.installations.set(id, { source, revision }));
+    return this.update(next => {
+      next.installations[id] = { source, revision };
+    });
   }
   forget(id: string): Promise<void> {
-    return this.update(() => {
-      this.enabled.delete(id);
-      this.installations.delete(id);
+    return this.update(next => {
+      delete next.enabled[id];
+      delete next.installations[id];
     });
   }
-  private update(change: () => unknown): Promise<void> {
-    const operation = this.queue.then(async () => {
+  private async update(change: (data: Preferences) => void): Promise<void> {
+    await withSkillLock(this.userDirectory, 'preferences', async () => {
       const previous = await this.workspace.readOptional('skill-state.json');
-      const enabled = new Map(this.enabled),
-        installations = new Map(this.installations);
-      if (previous) {
-        const data = schema.parse(JSON.parse(previous.text));
-        this.enabled.clear();
-        this.installations.clear();
-        for (const [id, value] of Object.entries(data.enabled)) this.enabled.set(id, value);
-        for (const [id, value] of Object.entries(data.installations)) this.installations.set(id, value);
-      }
-      change();
-      const text = JSON.stringify(
-        { enabled: Object.fromEntries(this.enabled), installations: Object.fromEntries(this.installations) },
-        null,
-        2,
-      );
+      const next = parsePreferences(previous?.text);
+      change(next);
+      const text = JSON.stringify(next, null, 2);
+      const destination = await this.workspace.resolvePath('skill-state.json');
       try {
         if (previous) await this.workspace.replace('skill-state.json', previous.revision, text, false);
-        else await this.workspace.create('skill-state.json', text, false);
+        else {
+          // An interrupted first write must leave either a complete JSON document or an absent preference file.
+          const temporary = join(dirname(destination), '.skill-staging', randomUUID() + '.json');
+          try {
+            const handle = await open(temporary, 'wx', 0o600);
+            try {
+              await handle.writeFile(text);
+              await handle.sync();
+            } finally {
+              await handle.close();
+            }
+            await link(temporary, destination);
+          } finally {
+            await rm(temporary, { force: true });
+          }
+        }
       } catch (error) {
-        this.enabled.clear();
-        this.installations.clear();
-        for (const [key, value] of enabled) this.enabled.set(key, value);
-        for (const [key, value] of installations) this.installations.set(key, value);
-        throw error;
+        // A filesystem acknowledgement can fail after publication. Reconcile before returning a failed commit.
+        let observed: string | undefined;
+        try {
+          observed = (await this.workspace.readOptional('skill-state.json'))?.text;
+        } catch (cause) {
+          throw new SkillPreferenceCommitUncertain(cause);
+        }
+        if (observed !== text) throw error;
       }
+      try {
+        const handle = await open(destination, 'r');
+        try {
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await syncDirectory(dirname(destination));
+      } catch (cause) {
+        throw new SkillPreferenceCommitUncertain(cause);
+      }
+      this.publish(next);
     });
-    this.queue = operation.catch(() => {});
-    return operation;
+  }
+  private publish(data: Preferences): void {
+    this.enabled.clear();
+    this.installations.clear();
+    for (const [id, enabled] of Object.entries(data.enabled)) this.enabled.set(id, enabled);
+    for (const [id, installation] of Object.entries(data.installations)) this.installations.set(id, installation);
   }
 }

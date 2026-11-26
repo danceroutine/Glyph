@@ -94,9 +94,10 @@ it('bounds preview retention and exposes installation targets without exposing p
     expect.objectContaining({ id: provider.id, label: 'User', uri: expect.stringMatching(/skills$/u) }),
   ]);
   const previews = [];
-  for (let i = 0; i < 33; i++) previews.push(await manager.prepare(provider.id, aSkillDraft()));
-  await expect(manager.apply(previews[0]!.id)).rejects.toThrow('expired');
-  await manager.apply(previews.at(-1)!.id);
+  for (let i = 0; i < 32; i++) previews.push(await manager.prepare(provider.id, aSkillDraft()));
+  await expect(manager.prepare(provider.id, aSkillDraft())).rejects.toThrow('Too many');
+  expect(manager.hasPreview(previews[0]!.id)).toBe(true);
+  await manager.apply(previews[0]!.id);
 });
 
 it('refuses package replacement while an editor contains unsaved changes', async () => {

@@ -67,7 +67,7 @@ describe('Skill package inventory boundaries', () => {
   });
   it('qualifies fresh native package paths and disposes the index on truncation and failure', async () => {
     const workspace = new FileSystemWorkspaceTextStore('/workspace');
-    vi.spyOn(workspace, 'canonicalPath').mockResolvedValue('/workspace/example');
+    vi.spyOn(workspace, 'resolvePath').mockResolvedValue('/workspace/example');
     native.glob.mockResolvedValueOnce({ files: ['SKILL.md'], truncated: false });
     expect(await listSkillPackageFiles(workspace, 'example', 'native', false, new AbortController().signal)).toEqual({
       files: ['example/SKILL.md'],

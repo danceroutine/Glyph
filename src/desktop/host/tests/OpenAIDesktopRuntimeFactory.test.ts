@@ -1,6 +1,6 @@
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { GlyphService } from '#src/application/GlyphService.js';
@@ -69,7 +69,10 @@ const captured = vi.hoisted(() => ({
   providerFactories: [] as ConstructorParameters<typeof OpenAIProviderFactory>[],
 }));
 
-beforeEach(() => {
+let isolatedUserDirectory: string;
+beforeEach(async () => {
+  isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
+  onTestFinished(() => rm(isolatedUserDirectory, { recursive: true, force: true }));
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });
 });
 
@@ -320,7 +323,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       };
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editor);
+    const factory = new OpenAIDesktopRuntimeFactory(editor, undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       for (trusted of [true, false, true]) {
@@ -414,7 +417,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       },
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editors);
+    const factory = new OpenAIDesktopRuntimeFactory(editors, undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       runtime = await factory.create({
@@ -443,7 +446,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     vi.stubEnv('GLYPH_CONFIG_DIR', join(directory, 'state'));
     vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
     vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
-    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       runtime = await factory.create({
@@ -479,7 +482,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         durationMilliseconds: 0,
       });
       const store = new SqliteChatSessionStore(state);
-      const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+      const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, isolatedUserDirectory);
       let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
       try {
         for (const identity of [
@@ -604,7 +607,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       };
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editor);
+    const factory = new OpenAIDesktopRuntimeFactory(editor, undefined, isolatedUserDirectory);
     const runtimes: Awaited<ReturnType<typeof factory.create>>[] = [];
     const open = async (names: string[]) => {
       const runtime = await factory.create({
@@ -702,7 +705,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         },
       };
     });
-    const factory = new OpenAIDesktopRuntimeFactory(editor);
+    const factory = new OpenAIDesktopRuntimeFactory(editor, undefined, isolatedUserDirectory);
     let runtime: Awaited<ReturnType<typeof factory.create>> | undefined;
     try {
       runtime = await factory.create({
@@ -734,7 +737,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
 
   describe(OpenAIDesktopRuntimeFactory.prototype.create, () => {
     it('wires isolated user and project package management, pinned activation, approvals, and shared enablement into production runtimes', async () => {
-      const fixture = await factoryFixture({ isolatedUserSources: true });
+      const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
       const catalogs: SkillCatalog[] = [];
       const refresh = SkillCatalog.prototype.refresh;
@@ -844,7 +847,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await fixture.create([await fixture.folder('two')]);
       expect(captured.indexOptions).toHaveLength(4);
       expect(captured.indexOptions[1]).toMatchObject({
-        root: join(homedir(), '.glyph', 'rules'),
+        root: join(fixture.userDirectory, 'rules'),
         respectGitIgnore: false,
       });
       const userIndex = captured.indexes[1]!;
@@ -1329,7 +1332,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
   });
 
   it('leaves workspace-wide editor requests unqualified even when given a path', () => {
-    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, isolatedUserDirectory);
     const request: GlyphEditorRequest = { type: GlyphEditorRequestType.LIST_WORKING_COPIES, operationId: 'copies' };
 
     const qualified = (
@@ -1345,9 +1348,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
 const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..', '..');
 const factoryIdentity: GlyphConnectionIdentity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
 
-async function factoryFixture(
-  options: { readonly transport?: typeof fetch; readonly isolatedUserSources?: boolean } = {},
-) {
+async function factoryFixture(options: { readonly transport?: typeof fetch } = {}) {
   for (const values of Object.values(captured)) values.length = 0;
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-')));
   vi.stubEnv('GLYPH_CONFIG_DIR', join(directory, 'state'));
@@ -1364,6 +1365,7 @@ async function factoryFixture(
     await rm(directory, { recursive: true, force: true });
   });
   return {
+    userDirectory: join(directory, 'user'),
     factory,
     editors,
     initialize,

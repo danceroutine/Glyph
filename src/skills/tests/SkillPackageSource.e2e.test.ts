@@ -122,3 +122,35 @@ it('rejects repository URLs that would persist credentials in provenance', async
       'without embedded credentials',
     );
 });
+
+it('rejects a partial local import when native indexing omits a symlink or policy-excluded resource', async () => {
+  const { directory, reader } = await fixture();
+  await symlink('SKILL.md', join(directory, 'helper'));
+  await expect(reader.read({ kind: 'local', path: directory })).rejects.toThrow('symlinks');
+  await rm(join(directory, 'helper'));
+  await mkdir(join(directory, '.git'));
+  await writeFile(join(directory, '.git', 'config'), 'excluded metadata');
+  await expect(reader.read({ kind: 'local', path: directory })).rejects.toThrow('excluded');
+});
+it('captures executable permissions from local and Git source packages', async () => {
+  const { root, directory, reader } = await fixture();
+  await writeFile(join(directory, 'helper'), 'fixture', { mode: 0o700 });
+  expect((await reader.read({ kind: 'local', path: directory })).packageFiles().get('helper')?.mode).toBe(0o700);
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd: root });
+  git('init', '-b', 'main');
+  git('add', 'example');
+  git('-c', 'user.name=Fixture', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture');
+  const config = join(root, 'test-config');
+  await writeFile(config, '[url "file://' + root + '/"]\n  insteadOf = https://skills.invalid/source.git\n');
+  vi.stubEnv('GIT_CONFIG_GLOBAL', config);
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  const captured = await reader.read({
+    kind: 'repository',
+    revision: 'main',
+    directory: 'example',
+    url: 'https://skills.invalid/source.git',
+  });
+  expect(captured.packageFiles().get('helper')?.mode).toBe(0o755);
+});

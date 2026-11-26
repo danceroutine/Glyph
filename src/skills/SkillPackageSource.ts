@@ -1,4 +1,5 @@
-import { execFile, type ExecFileOptions } from 'node:child_process';
+import { SkillRepositoryGit } from './SkillRepositoryGit.ts';
+import { inventoryFiles } from './skillPackageInventory.ts';
 import { basename, join, resolve } from 'node:path';
 import { mkdtemp, rm, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,18 +20,6 @@ export const skillPackageSourceSchema = z.discriminatedUnion('kind', [
     .strict(),
 ]);
 export type SkillPackageSource = z.infer<typeof skillPackageSourceSchema>;
-function run(
-  command: string,
-  args: readonly string[],
-  options: ExecFileOptions,
-): Promise<{ stdout: Buffer; stderr: Buffer }> {
-  return new Promise((settle, reject) => {
-    execFile(command, args, { ...options, encoding: 'buffer' }, (error, stdout, stderr) => {
-      if (error) reject(new Error(error.message, { cause: error }));
-      else settle({ stdout, stderr });
-    });
-  });
-}
 /** Reads selected packages without checking out repositories, following symlinks, or executing package code. */
 export class SkillPackageSourceReader {
   constructor(private readonly binaryPath: string) {}
@@ -52,6 +41,10 @@ export class SkillPackageSourceReader {
         if (state.truncated) throw new Error('Skill source exceeds the file budget.');
         const list = await index.glob('**/*', { limit: 257, ...(signal ? { signal } : {}) });
         if (list.truncated) throw new Error('Skill source exceeds the file budget.');
+        const inventory = await inventoryFiles(root, signal);
+        const indexed = new Set(list.files);
+        if (indexed.size !== inventory.length || inventory.some(path => !indexed.has(path)))
+          throw new Error('Skill source contains excluded or unindexed files.');
         const files = [];
         let bytes = 0;
         for (const path of list.files) {
@@ -59,7 +52,12 @@ export class SkillPackageSourceReader {
           const file = await store.readBytes(path, { maxBytes: 1024 * 1024 });
           bytes += file.bytes.byteLength;
           if (bytes > 8 * 1024 * 1024) throw new Error('Skill source exceeds 8 MiB.');
-          files.push({ path, content: Buffer.from(file.bytes).toString('base64'), encoding: 'base64' as const });
+          files.push({
+            path,
+            mode: file.mode,
+            content: Buffer.from(file.bytes).toString('base64'),
+            encoding: 'base64' as const,
+          });
         }
         return new SkillPackageDraft({ name: basename(root), source: root, files });
       } finally {
@@ -77,21 +75,27 @@ export class SkillPackageSourceReader {
       source.directory.startsWith('/')
     )
       throw new Error('Repository package directory must be relative.');
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/u.test(source.revision) || source.revision.includes('..'))
+      throw new Error('Select a commit, branch or tag.');
     const temporary = await mkdtemp(join(tmpdir(), 'glyph-skill-repository-'));
-    const git = async (...args: string[]) =>
-      (
-        await run('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
-          cwd: temporary,
-          ...(signal ? { signal } : {}),
-          timeout: 60000,
-          maxBuffer: 12 * 1024 * 1024,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-        })
-      ).stdout.toString('utf8');
+    const deadline = AbortSignal.timeout(60_000);
+    const transport = new SkillRepositoryGit(temporary, signal ? AbortSignal.any([signal, deadline]) : deadline);
+    const git = async (...args: string[]) => (await transport.run(args)).toString('utf8');
     try {
-      await git('clone', '--bare', '--filter=blob:none', '--', source.url, 'source.git');
+      await git('init', '--bare', '--template=', 'source.git');
+      await git('--git-dir=source.git', 'remote', 'add', 'origin', source.url);
+      await git(
+        '--git-dir=source.git',
+        'fetch',
+        '--depth=1',
+        '--no-tags',
+        '--filter=blob:none',
+        '--no-recurse-submodules',
+        'origin',
+        source.revision,
+      );
       const revision = (
-        await git('--git-dir=source.git', 'rev-parse', '--verify', '--end-of-options', `${source.revision}^{commit}`)
+        await git('--git-dir=source.git', 'rev-parse', '--verify', '--end-of-options', 'FETCH_HEAD^{commit}')
       ).trim();
       const tree = source.directory ? `${revision}:${source.directory.replace(/\/$/u, '')}` : revision;
       const entries = (await git('--git-dir=source.git', 'ls-tree', '-r', '-z', tree)).split('\0').filter(Boolean);
@@ -101,16 +105,15 @@ export class SkillPackageSourceReader {
       for (const entry of entries) {
         const match = /^(100644|100755) blob ([a-f0-9]+)\t(.+)$/su.exec(entry);
         if (!match) throw new Error('Skill repositories cannot contain symlinks or submodules.');
-        const blob = await run('git', ['--git-dir=source.git', 'cat-file', 'blob', match[2]!], {
-          cwd: temporary,
-          encoding: 'buffer',
-          ...(signal ? { signal } : {}),
-          timeout: 60000,
-          maxBuffer: 1024 * 1024,
-        });
-        bytes += blob.stdout.byteLength;
+        const blob = await transport.run(['--git-dir=source.git', 'cat-file', 'blob', match[2]!], 1024 * 1024);
+        bytes += blob.byteLength;
         if (bytes > 8 * 1024 * 1024) throw new Error('Skill source exceeds 8 MiB.');
-        files.push({ path: match[3]!, content: blob.stdout.toString('base64'), encoding: 'base64' as const });
+        files.push({
+          path: match[3]!,
+          mode: match[1] === '100755' ? 0o755 : 0o644,
+          content: blob.toString('base64'),
+          encoding: 'base64' as const,
+        });
       }
       return new SkillPackageDraft({
         name: basename(source.directory || source.url.replace(/\.git$/u, '')),

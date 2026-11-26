@@ -287,6 +287,13 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
             <p class={styles.metadata}>
               {management.preview.source} · {management.preview.revision.slice(0, 12)}
             </p>
+            {management.preview.destination && (
+              <p>
+                Destination ({management.preview.destination.scope}) · {management.preview.destination.label}
+                <br />
+                <code>{management.preview.destination.path}</code>
+              </p>
+            )}
             <GlyphSkillFileComparison files={management.preview.files} />
             <div class={styles.toolbar}>
               <Button
@@ -349,7 +356,7 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
                   {skill.path}
                   {skill.revision ? ` · ${skill.revision.slice(0, 8)}` : ''}
                 </p>
-                {management && (
+                {management && skill.directory && skill.path && (
                   <div class={styles.toolbar}>
                     <Button
                       disabled={busy || skill.status === 'error'}

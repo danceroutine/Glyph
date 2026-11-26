@@ -21,13 +21,23 @@ describe(WiredGlyphApprovalCard, () => {
           skillChange: {
             id: 'preview',
             targetId: 'project',
+            destination: {
+              label: 'App project skills',
+              scope: 'project' as const,
+              path: '/project/.glyph/skills/review',
+            },
             action: 'install',
             name: 'example',
             source: 'Agent proposal',
             revision: 'revision',
             files: [
-              { path: 'SKILL.md', after: 'Reviewed instructions' },
-              { path: 'removed', before: 'Old contents' },
+              { path: 'SKILL.md', status: 'added', after: 'Reviewed instructions' },
+              { path: 'removed', status: 'removed', before: 'Old contents' },
+              {
+                path: 'image.bin',
+                status: 'modified',
+                afterInfo: { encoding: 'binary', size: 3, digest: 'reviewed-binary-sha', mode: 0o600 },
+              },
             ],
           },
         }}
@@ -40,6 +50,8 @@ describe(WiredGlyphApprovalCard, () => {
     expect(screen.getByRole('region', { name: 'Skill change approval' }).textContent).toContain(
       'Reviewed instructions',
     );
+    expect(screen.getByText('/project/.glyph/skills/review')).toBeDefined();
+    expect(screen.getByText('reviewed-binary-sha')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Always Run' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: label }));
     expect(decideApproval).toHaveBeenCalledWith('chat', 'run', 'approval', decision);

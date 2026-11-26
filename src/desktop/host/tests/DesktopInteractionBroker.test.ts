@@ -25,13 +25,14 @@ describe(DesktopInteractionBroker, () => {
     const preview = {
       id: 'preview',
       targetId: 'user',
+      destination: { scope: 'user' as const, path: '/user/skills/example', label: 'User skills' },
       name: 'example',
       action: 'install' as const,
       source: 'Repository @ pinned',
       revision: 'revision',
       files: [
-        { path: 'SKILL.md', after: 'Reviewed instructions' },
-        { path: 'removed', before: 'Old contents' },
+        { path: 'SKILL.md', status: 'added' as const, after: 'Reviewed instructions' },
+        { path: 'removed', status: 'removed' as const, before: 'Old contents' },
       ],
     };
     it.each([GlyphApprovalDecision.ALLOW_ONCE, GlyphApprovalDecision.DENY])(
@@ -47,6 +48,7 @@ describe(DesktopInteractionBroker, () => {
         if (event?.type !== GlyphHostEventType.APPROVAL) throw new Error('Expected skill approval');
         expect(event.approval.skillChange).toEqual(preview);
         expect(event.approval.detail).toContain('Revision: revision');
+        expect(event.approval.detail).toContain('/user/skills/example');
         expect(event.approval.detail).toContain('(removed)');
         expect(() => {
           broker.answer({

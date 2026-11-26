@@ -10,7 +10,7 @@ vi.mock('node:fs/promises', async importOriginal => {
     rename: vi.fn(actual.rename),
     mkdir: vi.fn(actual.mkdir),
     lstat: vi.fn(actual.lstat),
-    readdir: vi.fn(actual.readdir),
+    opendir: vi.fn(actual.opendir),
   };
 });
 const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -18,7 +18,7 @@ afterEach(() => {
   vi.mocked(fs.rename).mockImplementation(actual.rename);
   vi.mocked(fs.mkdir).mockImplementation(actual.mkdir);
   vi.mocked(fs.lstat).mockImplementation(actual.lstat);
-  vi.mocked(fs.readdir).mockImplementation(actual.readdir);
+  vi.mocked(fs.opendir).mockImplementation(actual.opendir);
 });
 describe('Skill package transactions', () => {
   it('bounds the transaction inventory even when discovery excludes excess files', async () => {
@@ -52,10 +52,10 @@ describe('Skill package transactions', () => {
   });
   it('treats a directory disappearing between stat and inventory as missing', async () => {
     const { manager, provider } = await aSkillLifecycle();
-    vi.mocked(fs.readdir).mockImplementation((path, options) => {
+    vi.mocked(fs.opendir).mockImplementation((path, options) => {
       if (String(path).endsWith('/skills/example'))
         return Promise.reject(Object.assign(new Error('Removed directory'), { code: 'ENOENT' }));
-      return actual.readdir(path, options);
+      return actual.opendir(path, options);
     });
     expect((await manager.prepare(provider.id, aSkillDraft())).action).toBe('install');
   });
@@ -82,7 +82,9 @@ describe('Skill package transactions', () => {
     });
     await expect(manager.apply(preview.id)).rejects.toThrow('recovery is required');
     expect(await fs.readFile(join(root, 'skills/example/user.txt'), 'utf8')).toBe('New destination');
-    const backups = await fs.readdir(join(root, '.skill-staging'));
+    const backups = (await fs.readdir(join(root, '.skill-staging'), { withFileTypes: true }))
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name);
     expect(backups).toHaveLength(1);
     expect(await fs.readFile(join(root, '.skill-staging', backups[0]!, 'previous/SKILL.md'), 'utf8')).toContain(
       'Reviewed instructions',
@@ -98,7 +100,9 @@ describe('Skill package transactions', () => {
     });
     await expect(manager.apply(preview.id)).rejects.toThrow('Preserved backups');
     expect(await fs.readFile(join(root, 'skills/example/user.txt'), 'utf8')).toBe('Concurrent change');
-    expect(await fs.readdir(join(root, '.skill-staging'))).toHaveLength(1);
+    expect(
+      (await fs.readdir(join(root, '.skill-staging'), { withFileTypes: true })).filter(entry => entry.isDirectory()),
+    ).toHaveLength(1);
   });
   it('reports committed changes separately from catalog delivery failures', async () => {
     const { root, catalog, manager, provider } = await aSkillLifecycle();
@@ -138,7 +142,7 @@ it('fails closed when backup inspection fails after an uncertain rename', async 
 
 it('does not hide filesystem errors when checking package occupancy', async () => {
   const { store, manager, provider } = await aSkillLifecycle();
-  const target = await store.canonicalPath('skills/example');
+  const target = await store.resolvePath('skills/example');
   const preview = await manager.prepare(provider.id, aSkillDraft());
   let staged = false;
   vi.mocked(fs.mkdir).mockImplementation(async (path, options) => {
@@ -159,13 +163,13 @@ it('refuses unreadable or non-directory packages without starting a replacement'
   const skill = await install();
   const listed = await store.list(10000, 'skills/**/*');
   vi.spyOn(store, 'list').mockResolvedValue(listed);
-  vi.mocked(fs.readdir).mockImplementation((path, options) => {
+  vi.mocked(fs.opendir).mockImplementation((path, options) => {
     if (String(path) === join(root, 'skills/example'))
       return Promise.reject(Object.assign(new Error('Read denied'), { code: 'EACCES' }));
-    return actual.readdir(path, options);
+    return actual.opendir(path, options);
   });
   await expect(manager.prepareRemoval(skill.id)).rejects.toThrow('Read denied');
-  vi.mocked(fs.readdir).mockImplementation(actual.readdir);
+  vi.mocked(fs.opendir).mockImplementation(actual.opendir);
   vi.mocked(fs.lstat).mockImplementation((path, options) => {
     if (String(path) === join(root, 'skills/example'))
       return Promise.reject(Object.assign(new Error('Stat denied'), { code: 'EACCES' }));
@@ -178,4 +182,23 @@ it('refuses unreadable or non-directory packages without starting a replacement'
   await catalog.refresh();
   vi.mocked(store.list).mockResolvedValue({ files: [], truncated: false });
   await expect(manager.prepareRemoval(skill.id)).rejects.toThrow('real directory');
+});
+
+it('preserves the previous package and rejects provenance when published bytes differ from approval', async () => {
+  const { manager, root, state, install } = await aSkillLifecycle();
+  const skill = await install();
+  const preview = await manager.prepare(skill.origin.id, aSkillDraft('Update'), skill.id);
+  const record = vi.spyOn(state, 'record');
+  vi.mocked(fs.rename).mockImplementation(async (from, to) => {
+    await actual.rename(from, to);
+    if (String(from).endsWith('/package'))
+      await actual.writeFile(join(String(to), 'references/notes.md'), 'External change');
+  });
+  await expect(manager.apply(preview.id)).rejects.toThrow('recovery is required');
+  expect(record).not.toHaveBeenCalled();
+  expect(await actual.readFile(join(root, 'skills/example/references/notes.md'), 'utf8')).toBe('External change');
+  expect(await actual.readFile(join(root, '.skill-staging', preview.id, 'previous/references/notes.md'), 'utf8')).toBe(
+    'Pinned notes',
+  );
+  await expect(manager.recover()).rejects.toThrow('recovery is required');
 });

@@ -25,9 +25,22 @@ export function GlyphSkillFileComparison({ files }: { readonly files: GlyphSkill
           <summary>
             <span class={styles.path}>
               <GlyphFileIcon path={file.path} />
-              {file.path}
+              {file.path} {file.status && <small>({file.status})</small>}
             </span>
           </summary>
+          {(['beforeInfo', 'afterInfo'] as const).map(side => {
+            const info = file[side];
+            return (
+              info && (
+                <p key={side}>
+                  {side === 'beforeInfo' ? 'Before' : 'After'} · {info.encoding} · {info.size} bytes · mode{' '}
+                  {info.mode.toString(8).padStart(4, '0')}
+                  <br />
+                  SHA-256 <code>{info.digest}</code>
+                </p>
+              )
+            );
+          })}
           {file.before !== undefined && (
             <pre class={`${styles.contents} ${styles.before}`} aria-label={`Before ${file.path}`}>
               {file.before}

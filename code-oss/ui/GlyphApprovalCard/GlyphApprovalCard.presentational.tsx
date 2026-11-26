@@ -61,6 +61,13 @@ export function GlyphApprovalCard({
           <p>
             {skillChange.source} · {skillChange.revision.slice(0, 12)}
           </p>
+          {skillChange.destination && (
+            <p>
+              Destination ({skillChange.destination.scope}) · {skillChange.destination.label}
+              <br />
+              <code>{skillChange.destination.path}</code>
+            </p>
+          )}
           <GlyphSkillFileComparison files={skillChange.files} />
         </div>
       ) : (

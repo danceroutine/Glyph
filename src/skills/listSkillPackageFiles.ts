@@ -1,15 +1,15 @@
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
-import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
+import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 
 /** Reconcile only the activated package's bounded inventory so a newly added resource cannot be omitted by watcher lag. */
 export async function listSkillPackageFiles(
-  workspace: WorkspaceTextStore,
+  workspace: Pick<FileSystemWorkspaceTextStore, 'resolvePath' | 'caseSensitive'>,
   directory: string,
   binaryPath: string,
   respectGitIgnore: boolean,
   signal?: AbortSignal,
 ) {
-  const root = await workspace.canonicalPath(directory);
+  const root = await workspace.resolvePath(directory);
   const index = new RustWorkspacePathIndex({
     root,
     binaryPath,

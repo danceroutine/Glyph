@@ -17,6 +17,7 @@ describe(GlyphWorkbenchProjection, () => {
     const preview = {
       id: 'preview',
       targetId: 'user:glyph',
+      destination: { label: 'User skills', scope: 'user' as const, path: '/user/.glyph/skills/review' },
       name: 'example',
       action: 'install' as const,
       source: 'Fixture',

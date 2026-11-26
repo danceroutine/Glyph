@@ -32,6 +32,7 @@ describe(GlyphSkillsPreferences, () => {
       skillPreview: {
         id: 'token',
         targetId: 'project',
+        destination: { label: 'Project skills', scope: 'project' as const, path: '/app/.glyph/skills/review' },
         action: 'update',
         name: 'example',
         source: 'Reviewed source',

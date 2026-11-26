@@ -67,6 +67,12 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async canonicalPath(input: string): Promise<string> {
+    const key = (await this.resolvePath(input)).split(sep).join('/');
+    return this.caseSensitive ? key : key.toLocaleLowerCase('en-US');
+  }
+
+  /** Authorized physical path with the spelling required by filesystem operations. */
+  async resolvePath(input: string): Promise<string> {
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const root = await realpath(this.root);
@@ -80,8 +86,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         const canonical = resolve(existing, ...missing);
         assertInsideRoot(root, canonical, path);
         this.normalizePath(relative(root, canonical));
-        const key = canonical.split(sep).join('/');
-        return this.caseSensitive ? key : key.toLocaleLowerCase('en-US');
+        return canonical;
       } catch (error) {
         if (errorCodeOf(error) !== 'ENOENT' || cursor === this.root) {
           throw classifyPathError(error, path);

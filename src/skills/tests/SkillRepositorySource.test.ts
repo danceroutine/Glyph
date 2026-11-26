@@ -1,18 +1,12 @@
-import type { ExecFileOptions } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 
-const git = vi.hoisted(() =>
-  vi.fn<
-    (
-      command: string,
-      args: readonly string[],
-      options: ExecFileOptions,
-      callback: (error: Error | null, stdout: Buffer, stderr: Buffer) => void,
-    ) => void
-  >(),
-);
-vi.mock('node:child_process', () => ({ execFile: git }));
+const git = vi.hoisted(() => vi.fn<(args: string[], maxOutput?: number) => Promise<Buffer>>());
+vi.mock('#src/skills/SkillRepositoryGit.js', () => ({
+  SkillRepositoryGit: class {
+    run = git;
+  },
+}));
 afterEach(() => git.mockReset());
 const manifest = Buffer.from('---\nname: example\ndescription: Fixture\n---\nReviewed workflow');
 const source = {
@@ -24,9 +18,9 @@ const source = {
 const reader = new SkillPackageSourceReader('unused');
 
 function repository(entries = '100644 blob abc\tSKILL.md\0', blob = manifest) {
-  git.mockImplementation((_command, args, _options, callback) => {
+  git.mockImplementation(async args => {
     const result = args.includes('rev-parse') ? 'deadbeef\n' : args.includes('ls-tree') ? entries : undefined;
-    callback(null, args.includes('cat-file') ? blob : Buffer.from(result ?? ''), Buffer.alloc(0));
+    return args.includes('cat-file') ? blob : Buffer.from(result ?? '');
   });
 }
 describe('Repository package source boundary', () => {
@@ -37,27 +31,21 @@ describe('Repository package source boundary', () => {
     expect(draft.name).toBe('example');
     expect(draft.source).toBe(`${source.url}@deadbeef`);
     expect(draft.files().get('SKILL.md')).toEqual(Uint8Array.from(manifest));
-    expect(
-      git.mock.calls.every(
-        ([command, , options]) => command === 'git' && options.signal === signal && options.timeout === 60000,
-      ),
-    ).toBe(true);
-    expect(git.mock.calls[0]?.[1]).toContain('core.hooksPath=/dev/null');
-    expect(git.mock.calls[1]?.[1]).toContain('--end-of-options');
-    expect(git.mock.calls[2]?.[1]).toContain('deadbeef');
+    expect(git.mock.calls.find(([args]) => args.includes('fetch'))?.[0]).toEqual(
+      expect.arrayContaining(['--depth=1', '--no-tags', '--filter=blob:none', source.revision]),
+    );
+    expect(git.mock.calls.find(([args]) => args.includes('cat-file'))?.[1]).toBe(1024 * 1024);
   });
   it('uses the selected package subtree without checking out or running the package', async () => {
     repository();
     const draft = await reader.read({ ...source, directory: 'nested/example/' });
     expect(draft.name).toBe('example');
     expect(draft.source).toContain(':nested/example/');
-    expect(git.mock.calls[2]?.[1]).toContain('deadbeef:nested/example');
-    expect(git.mock.calls.flatMap(call => call[1])).not.toContain('checkout');
+    expect(git.mock.calls.find(([args]) => args.includes('ls-tree'))?.[0]).toContain('deadbeef:nested/example');
+    expect(git.mock.calls.flatMap(call => call[0])).not.toContain('checkout');
   });
   it('preserves subprocess failures without returning a partial package', async () => {
-    git.mockImplementation((_command, _args, _options, callback) => {
-      callback(new Error('Authentication required'), Buffer.alloc(0), Buffer.alloc(0));
-    });
+    git.mockRejectedValue(new Error('Authentication required'));
     await expect(reader.read(source)).rejects.toThrow('Authentication required');
   });
   it.each([

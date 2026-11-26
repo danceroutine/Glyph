@@ -69,7 +69,7 @@ describe('security: production desktop web consent', () => {
     vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
     const exchange = vi.fn(async () => new Response('fixture page', { headers: { 'content-type': 'text/plain' } }));
     vi.stubGlobal('fetch', exchange);
-    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter());
+    const factory = new OpenAIDesktopRuntimeFactory(new EditorRpcRouter(), undefined, join(directory, 'user'));
     const runtimes: ProviderDesktopRuntime[] = [];
     onTestFinished(async () => {
       for (const runtime of runtimes) await runtime.dispose();
