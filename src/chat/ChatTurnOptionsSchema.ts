@@ -63,7 +63,7 @@ export const chatTurnOptionsSchema = z
       .array(
         z
           .object({
-            kind: z.literal('rule'),
+            kind: z.enum(['rule', 'skill']),
             sourceId: z.string().min(1).max(500),
             label: z.string().min(1),
             revision: z.string().min(1),

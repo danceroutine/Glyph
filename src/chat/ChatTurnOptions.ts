@@ -33,7 +33,7 @@ export interface ChatTurnOptions {
 
 /** UTF-16 position and display metadata sufficient to restore an editable selection. */
 export interface ChatReferenceSpan {
-  readonly kind: 'rule';
+  readonly kind: 'rule' | 'skill';
   readonly sourceId: string;
   readonly label: string;
   readonly revision: string;

@@ -291,7 +291,8 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
             composer?.restoreDraft(
               restoreGlyphPrompt(
                 event.draft,
-                (_kind, id) => {
+                (kind, id) => {
+                  if (kind === 'skill') return this.state.skills?.find(skill => skill.id === id);
                   const source = this.state.instructionSources?.find(rule => rule.id === id);
                   return source
                     ? {
