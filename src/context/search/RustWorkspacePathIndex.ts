@@ -405,7 +405,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 }
 
 function startProcess(binaryPath: string): SidecarProcess {
-  return spawn(binaryPath, [], { shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+  return spawn(binaryPath, [], { env: {}, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
 function toAbortError(signal: AbortSignal | undefined): Error {

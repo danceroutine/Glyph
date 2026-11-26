@@ -84,6 +84,8 @@ beforeEach(async () => {
     vi.spyOn(instance, 'ensureDirectory').mockImplementation(mutations.ensureDirectory);
     vi.spyOn(instance, 'renameExclusive').mockImplementation(mutations.renameExclusive);
     vi.spyOn(instance, 'removeTree').mockImplementation(mutations.removeTree);
+    vi.spyOn(instance, 'createStage').mockImplementation(mutations.createStage);
+    vi.spyOn(instance, 'stagePackage').mockImplementation(mutations.stagePackage);
     return instance;
   });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });

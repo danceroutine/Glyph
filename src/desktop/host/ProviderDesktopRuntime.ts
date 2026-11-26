@@ -815,6 +815,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     this.unsubscribe?.();
     this.unsubscribeInstructions?.();
     this.unsubscribeSkills?.();
+    this.options.skills?.dispose();
     this.unsubscribeShells();
     this.unsubscribeWakes();
     await this.options.glyph.dispose();

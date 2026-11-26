@@ -235,6 +235,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           input.identity,
           path === undefined ? request : { ...request, path },
         );
+        if (response.snapshot && response.snapshot.path !== (path ?? request.path))
+          throw new Error('The editor returned a different catalog resource. Retry discovery.');
         return response.snapshot && 'path' in request
           ? { ...response, snapshot: { ...response.snapshot, path: request.path } }
           : response;
@@ -349,10 +351,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         },
       });
       const skillState = (this.skillState ??= new SkillStateStore(userRuleStore));
-      const ensureSkillsReady = async () => {
-        await skillState.initialize();
-        await skillManager!.recover();
-      };
+      const ensureSkillsReady = () => skillState.initialize();
       skills = new SkillCatalog(
         [
           userSkills,
@@ -385,6 +384,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         skillState.enabled,
         skillState.installations,
         ensureSkillsReady,
+        originId => skillManager!.recover(originId),
+        skillState.onDidChange.bind(skillState),
       );
       skillManager = new SkillPackageManager(
         [
@@ -660,7 +661,13 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       refreshCatalogs: async signal => {
         await Promise.all([instructionCatalog?.refresh(signal), skills?.refresh(signal)]);
       },
-      instructionWatchRoots: userRules ? [userRules.directoryUri, userRuleUri(canonicalUserDirectory, 'skills')] : [],
+      instructionWatchRoots: userRules
+        ? [
+            userRules.directoryUri,
+            userRuleUri(canonicalUserDirectory, 'skills'),
+            userRuleUri(canonicalUserDirectory, 'skill-state.json'),
+          ]
+        : [],
       ...(skillManager ? { skillManager, skillSources: new SkillPackageSourceReader(indexExecutable) } : {}),
       ...(userRules ? { userRules } : {}),
       emit: input.emit,

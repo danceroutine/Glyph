@@ -136,7 +136,7 @@ describe(TurnContextCoordinator, () => {
     const pattern = AgentInstructionActivationMode.FILE_PATTERN;
     const user = AgentInstructionSourceKind.GLYPH_USER_RULE;
     const rules = [
-      source('literal', user, '.', pattern, Array(64).fill('src/entry.ts')),
+      source('literal', user, '.', pattern, new Array(64).fill('src/entry.ts')),
       source('glob', user, '.', pattern, ['src/*.ts']),
       source(
         'heavy',
@@ -150,12 +150,15 @@ describe(TurnContextCoordinator, () => {
       new AgentInstructionCatalog([{ discover: async () => rules }], paths),
     );
     const turn = await coordinator.beginTurn({ turnId: 'bounded', attachmentPaths: [] });
-    expect(() => turn.disclosePaths(['api/SRC/ENTRY.TS', 'web/' + 'a'.repeat(1000)])).toThrow(
+    expect(() => coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS', 'web/' + 'a'.repeat(1000)])).toThrow(
       'per-disclosure work limit',
     );
     expect(turn.snapshot().activations).toEqual([]);
-    expect(turn.disclosePaths(['web/SRC/ENTRY.TS'])).toBeUndefined();
-    expect(turn.disclosePaths(['api/SRC/ENTRY.TS'])?.sources.map(value => value.id)).toEqual(['glob', 'literal']);
+    expect(coordinator.disclosePaths('bounded', ['web/SRC/ENTRY.TS'])).toBeUndefined();
+    expect(coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS'])?.sources.map(value => value.id)).toEqual([
+      'glob',
+      'literal',
+    ]);
   });
 
   it('identifies unreadable required guidance before starting a turn', async () => {
@@ -335,11 +338,11 @@ describe(TurnContextCoordinator, () => {
     expect(() => coordinator.activateManualRules('ineligible', ['disabled', 'missing'])).toThrow('manual activation');
     expect(coordinator.activateManualRules('ineligible', ['missing'])).toBeUndefined();
     expect(coordinator.activateRule('ineligible', 'disabled')).toBeUndefined();
-    expect(() => session.activateRule('unnamed', AgentInstructionActivationReason.MANUAL)).toThrow('manual activation');
+    expect(() => coordinator.activateManualRules('ineligible', ['unnamed'])).toThrow('manual activation');
     await expect(
       coordinator.beginTurn({ turnId: 'queued', attachmentPaths: [], manualRuleIds: ['unnamed'] }),
     ).rejects.toThrow('manual activation');
-    expect(session.activateRule('missing', AgentInstructionActivationReason.MANUAL)).toBeUndefined();
+    expect(coordinator.activateManualRules('ineligible', ['missing'])).toBeUndefined();
   });
 });
 
