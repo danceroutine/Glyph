@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import { GlyphTransportMessageType } from '#src/desktop/protocol/connection/GlyphTransportMessage.js';
 
 function messagePort() {
@@ -11,6 +12,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   const parent = new EventEmitter();
   const host = {
     constructed: vi.fn(),
+    trustedUserSkillPeers: vi.fn((_owner: GlyphConnectionIdentity) => []),
     connect: vi.fn(),
     receive: vi.fn(async (_connectionId: string, _envelope: unknown) => {}),
     disconnect: vi.fn(async (_connectionId: string) => {}),
@@ -25,6 +27,9 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
       readonly generation = 'generation';
       constructor(factory: unknown) {
         host.constructed(factory);
+      }
+      trustedUserSkillPeers(owner: GlyphConnectionIdentity) {
+        return host.trustedUserSkillPeers(owner);
       }
       connect(...arguments_: unknown[]): unknown {
         return host.connect(...arguments_);
@@ -42,8 +47,8 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   }));
   vi.doMock('#src/desktop/workspace/EditorRpcRouter.js', () => ({
     EditorRpcRouter: class {
-      constructor() {
-        editors.constructed(this);
+      constructor(peers: (owner: GlyphConnectionIdentity) => unknown) {
+        editors.constructed(this, peers);
       }
       connect(...arguments_: unknown[]): unknown {
         return editors.connect(...arguments_);
@@ -261,6 +266,14 @@ describe('utilityMain', () => {
       }),
     ).not.toThrow();
     expect(host.connect).not.toHaveBeenCalled();
+  });
+
+  it('wires user package checks to the live host trust registry', async () => {
+    const { loaded, editors, host } = startUtilityHost();
+    await loaded;
+    const peers = editors.constructed.mock.calls[0]![1] as (owner: GlyphConnectionIdentity) => unknown;
+    expect(peers(identity)).toEqual([]);
+    expect(host.trustedUserSkillPeers).toHaveBeenCalledExactlyOnceWith(identity);
   });
 
   it('connects a window to the host and its editor, then announces readiness', async () => {
