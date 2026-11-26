@@ -8,6 +8,7 @@ export interface SkillDiscoveryProvider {
   /** A comparison key for qualified turn paths, preserving the workspace root's routing identity. */
   scopePathKey?(path: string): string;
   discover(signal?: AbortSignal): Promise<readonly SkillDescriptor[]>;
-  capture(descriptor: SkillDescriptor, signal?: AbortSignal): Promise<SkillPackage>;
+  /** Reconcile a concurrent publisher between the initial capture and its final verification. */
+  capture(descriptor: SkillDescriptor, signal?: AbortSignal, reconcile?: () => Promise<void>): Promise<SkillPackage>;
   refreshIndex(): Promise<void>;
 }

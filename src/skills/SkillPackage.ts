@@ -63,6 +63,21 @@ export async function captureSkillPackage(
   signal?: AbortSignal,
   binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'>,
 ): Promise<SkillPackage> {
+  const files = await readSkillPackageFiles(descriptor, workspace, paths, signal, binaryStore);
+  const entry = files.get(posix.relative(descriptor.directory, descriptor.path));
+  if (!entry) throw new Error('Skill package is missing SKILL.md.');
+  if (descriptor.revision !== entry.revision) throw new Error('The skill changed. Refresh and activate it again.');
+  const manifest = parseSkillManifest(new TextDecoder('utf8', { fatal: true }).decode(entry.bytes), descriptor.name);
+  return new SkillPackage(descriptor, manifest.body, files);
+}
+
+export async function readSkillPackageFiles(
+  descriptor: SkillDescriptor,
+  workspace: Pick<WorkspaceTextStore, 'read'>,
+  paths: readonly string[],
+  signal?: AbortSignal,
+  binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'>,
+): Promise<ReadonlyMap<string, SkillPackageFile>> {
   if (paths.length > 256) throw new Error('Skill package exceeds 256 files.');
   const files = new Map<string, SkillPackageFile>();
   let bytes = 0;
@@ -92,9 +107,5 @@ export async function captureSkillPackage(
     if (bytes > 8 * 1024 * 1024) throw new Error('Skill package exceeds 8 MiB.');
     files.set(relative, captured);
   }
-  const entry = files.get(posix.relative(descriptor.directory, descriptor.path));
-  if (!entry) throw new Error('Skill package is missing SKILL.md.');
-  if (descriptor.revision !== entry.revision) throw new Error('The skill changed. Refresh and activate it again.');
-  const manifest = parseSkillManifest(new TextDecoder('utf8', { fatal: true }).decode(entry.bytes), descriptor.name);
-  return new SkillPackage(descriptor, manifest.body, files);
+  return files;
 }

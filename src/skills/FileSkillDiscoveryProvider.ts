@@ -1,9 +1,11 @@
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { posix } from 'node:path';
+import { lstat } from 'node:fs/promises';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { SkillDescriptor, SkillOrigin } from './SkillDescriptor.ts';
 import type { SkillDiscoveryProvider } from './SkillDiscoveryProvider.ts';
-import { captureSkillPackage } from './SkillPackage.ts';
+import { packageRevision } from './skillPackageRevision.ts';
+import { captureSkillPackage, readSkillPackageFiles } from './SkillPackage.ts';
 import { skillPackageId } from './skillPackageId.ts';
 import { parseSkillManifest } from './SkillManifest.ts';
 
@@ -14,13 +16,17 @@ export interface SkillDiscoveryLocation {
   /** Store-relative directory. Nested occurrences are allowed for project locations. */
   readonly directory: string;
   readonly workspace: WorkspaceTextStore;
-  readonly binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'>;
+  readonly binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'> &
+    Partial<Pick<FileSystemWorkspaceTextStore, 'resolvePath'>>;
   readonly listFiles: (
     signal?: AbortSignal,
   ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
-  /** Optional package-scoped inventory for native indexes. */
-  readonly captureFiles?: (directory: string, signal?: AbortSignal) => ReturnType<SkillDiscoveryLocation['listFiles']>;
   readonly uriForPath: (path: string) => string;
+  /** Optional package-scoped inventory for native indexes. */
+  readonly captureFiles?: (
+    directory: string,
+    signal?: AbortSignal,
+  ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly refreshIndex: () => Promise<void>;
 }
 
@@ -72,6 +78,8 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
       directories.set(directory, entry);
     }
     // Bound metadata reads across large native catalogs.
+    let remainingBytes = 8 * 1024 * 1024;
+    const maxManifestBytes = 256 * 1024;
     const readDescriptor = async ({
       directory,
       scope,
@@ -96,7 +104,11 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
       try {
         signal?.throwIfAborted();
         if (!indexedPath) throw new Error('Skill package has no indexed SKILL.md.');
-        const snapshot = await this.location.workspace.read(path, { maxBytes: 256 * 1024 });
+        const maxBytes = Math.min(remainingBytes, maxManifestBytes);
+        if (maxBytes <= 0) throw new Error('Skill metadata exceeds the 8 MiB discovery budget.');
+        remainingBytes -= maxBytes;
+        const snapshot = await this.location.workspace.read(path, { maxBytes });
+        remainingBytes += maxBytes - snapshot.byteLength;
         uri = this.location.uriForPath(path);
         const manifest = parseSkillManifest(snapshot.text, name);
         return {
@@ -121,25 +133,56 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
     };
     const ordered = [...directories.values()].toSorted((left, right) => left.directory.localeCompare(right.directory));
     const descriptors: SkillDescriptor[] = [];
-    for (let offset = 0; offset < ordered.length; offset += 8) {
+    for (let offset = 0; offset < ordered.length;) {
+      const width = Math.min(8, Math.max(1, Math.floor(remainingBytes / maxManifestBytes)));
       descriptors.push(
-        ...(await Promise.all(ordered.slice(offset, offset + 8).map(directory => readDescriptor(directory)))),
+        ...(await Promise.all(ordered.slice(offset, offset + width).map(directory => readDescriptor(directory)))),
       );
+      offset += width;
     }
     return descriptors;
   }
 
-  async capture(descriptor: SkillDescriptor, signal?: AbortSignal) {
-    const listed = await (this.location.captureFiles?.(descriptor.directory, signal) ??
-      this.location.listFiles(signal));
-    if (listed.truncated) throw new Error('Skill package inventory is incomplete.');
-    return captureSkillPackage(
+  async capture(descriptor: SkillDescriptor, signal?: AbortSignal, reconcile?: () => Promise<void>) {
+    const inventory = async () => {
+      const listed = await (this.location.captureFiles?.(descriptor.directory, signal) ??
+        this.location.listFiles(signal));
+      if (listed.truncated) throw new Error('Skill package inventory is incomplete.');
+      return listed.files.filter(path => path.startsWith(descriptor.directory + '/')).toSorted();
+    };
+    const directory = await this.location.binaryStore?.resolvePath?.(descriptor.directory);
+    // Replacing the package directory changes its filesystem identity even when a manifest is identical.
+    const generation = async () => {
+      if (!directory) return;
+      const stat = await lstat(directory, { bigint: true });
+      return [stat.dev, stat.ino, stat.birthtimeNs, stat.ctimeNs].join('/');
+    };
+    const initialGeneration = await generation();
+    const paths = await inventory();
+    const snapshot = await captureSkillPackage(
       descriptor,
       this.location.workspace,
-      listed.files.filter(path => path.startsWith(`${descriptor.directory}/`)),
+      paths,
       signal,
       this.location.binaryStore,
     );
+    if (reconcile) await reconcile();
+    // Re-read every authorized file and both inventory boundaries before admitting this revision.
+    const verified = await readSkillPackageFiles(
+      descriptor,
+      this.location.workspace,
+      paths,
+      signal,
+      this.location.binaryStore,
+    );
+    const finalPaths = await inventory();
+    if (
+      initialGeneration !== (await generation()) ||
+      packageRevision(verified) !== snapshot.revision ||
+      JSON.stringify(paths) !== JSON.stringify(finalPaths)
+    )
+      throw new Error('The skill changed during capture. Refresh and activate it again.');
+    return snapshot;
   }
 
   refreshIndex(): Promise<void> {
