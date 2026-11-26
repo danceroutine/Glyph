@@ -2,14 +2,16 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
-import { externalShellContentStores } from '../ShellContentStore.ts';
-import { pnpmContentStore } from '../pnpmContentStore.ts';
+import { externalShellContentStores } from '#src/shell/ShellContentStore.js';
+import { pnpmContentStore } from '#src/shell/pnpmContentStore.js';
 
 it('grants the host pnpm v11 store only when it is physically independent of every attached workspace', () => {
   const admitted = (env: NodeJS.ProcessEnv, roots: string[], platform: NodeJS.Platform) =>
     externalShellContentStores(pnpmContentStore(env, platform), roots);
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'glyph-pnpm-store-')));
-  onTestFinished(() => rmSync(base, { recursive: true, force: true }));
+  onTestFinished(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
   const project = join(base, 'project');
   mkdirSync(project);
   for (const [environment, store] of [
