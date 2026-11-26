@@ -81,7 +81,15 @@ export class GlyphDesktopHost {
       let directoryUri: string | undefined;
       if (projectDirectory !== undefined) {
         for (const root of peer.roots) {
-          const path = relative(realpathSync(root.canonicalPath), projectDirectory);
+          let physicalRoot: string;
+          try {
+            physicalRoot = realpathSync(root.canonicalPath);
+          } catch {
+            throw new Error(
+              'A trusted Glyph window has an unavailable project root. Reconnect it before changing the package.',
+            );
+          }
+          const path = relative(physicalRoot, projectDirectory);
           if (path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) continue;
           directoryUri = pathToFileURL(join(fileURLToPath(root.uri), path)).toString();
           break;

@@ -64,6 +64,9 @@ describe(GlyphDesktopHost, () => {
       },
     ]);
     expect(fixture.host.trustedSkillEditors(owner, join(parent, 'outside'))).toEqual([]);
+    await rm(alias);
+    expect(() => fixture.host.trustedSkillEditors(owner, destination)).toThrow('unavailable project root');
+    await symlink(root, alias);
     await fixture.host.disconnect('peer');
     expect(() => fixture.host.trustedSkillEditors(owner, destination)).toThrow('reconnecting');
     expect(() => fixture.host.trustedSkillEditors(owner)).toThrow('reconnecting');
