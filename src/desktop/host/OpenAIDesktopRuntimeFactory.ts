@@ -1,4 +1,5 @@
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
+import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { SkillProjectMutationPolicy } from '#src/skills/SkillProjectMutationPolicy.js';
 import { existsSync } from 'node:fs';
 import { assertSkillPackageClean } from '#src/desktop/workspace/assertSkillPackageClean.js';
@@ -34,7 +35,7 @@ import OpenAI from 'openai';
 import { mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative, isAbsolute, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
 import { SqliteChatSessionStore } from '#src/chat/sessions/SqliteChatSessionStore.js';
@@ -228,7 +229,17 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             : response;
         },
       });
-      return { name: workspaceRoot.name, workspace, disk, index };
+      const catalog = createCatalogWorkspace(disk, workspace, async request => {
+        const path = 'path' in request && roots.length > 1 ? `${workspaceRoot.name}/${request.path}` : undefined;
+        const response = await this.editors.request(
+          input.identity,
+          path === undefined ? request : { ...request, path },
+        );
+        return response.snapshot && 'path' in request
+          ? { ...response, snapshot: { ...response.snapshot, path: request.path } }
+          : response;
+      });
+      return { name: workspaceRoot.name, workspace, catalog, disk, index };
     });
     const workspace =
       roots.length === 1
@@ -250,6 +261,13 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     let turnContexts: TurnContextCoordinator | undefined;
     let userRules: UserAgentRuleManager | undefined;
     if (input.trusted) {
+      const catalogWorkspace =
+        parts.length === 1
+          ? parts[0]!.catalog
+          : new MultiRootWorkspaceTextStore(
+              context,
+              parts.map(part => ({ name: part.name, store: part.catalog })),
+            );
       // Reuse each root's watched native index; instruction refreshes must not rescan the workspace.
       const listProjectInstructions = (maxFiles: number, globPattern: string) =>
         listInstructionFilesAcrossRoots(parts, maxFiles, globPattern);
@@ -291,14 +309,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               return listUserRuleFiles(userRuleIndex, maxFiles);
             },
           ),
-          new AgentsMdInstructionProvider(workspace, {}, listProjectInstructions),
+          new AgentsMdInstructionProvider(catalogWorkspace, {}, listProjectInstructions),
           new AgentRuleInstructionProvider(
-            workspace,
+            catalogWorkspace,
             { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', paths },
             listProjectInstructions,
           ),
           new AgentRuleInstructionProvider(
-            workspace,
+            catalogWorkspace,
             { kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, directory: '.cursor', paths },
             listProjectInstructions,
           ),
@@ -351,7 +369,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                   directory: `${location}/skills`,
                   captureFiles: (directory, signal) =>
                     listSkillPackageFiles(part.disk, directory, indexExecutable, true, signal),
-                  workspace: part.workspace,
+                  workspace: part.catalog,
                   binaryStore: part.disk,
                   ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
                   uriForPath: path => userRuleUri(part.disk.root, path),
@@ -392,7 +410,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             label: `${part.name} project skills`,
             scope: 'project' as const,
             mutations: mutationRoots.get(part.disk.root)!,
-            assertClean: (path: string) => assertSkillPackageClean(this.editors, input.identity, 'project', path),
+            assertClean: (path: string) => {
+              const logicalRoot = input.roots.find(
+                candidate => getGlyphWorkspaceRootId(candidate, input.roots) === part.name,
+              )!;
+              const logicalDirectory = pathToFileURL(
+                join(fileURLToPath(logicalRoot.uri), relative(part.disk.root, path)),
+              ).toString();
+              return assertSkillPackageClean(this.editors, input.identity, 'project', path, logicalDirectory);
+            },
             store: part.disk,
             workspace: part.workspace,
             directory: '.glyph/skills',
@@ -639,6 +665,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       ...(userRules ? { userRules } : {}),
       emit: input.emit,
       ownerWindowId: input.identity.windowId,
+      trusted: input.trusted,
     });
     return runtime;
   }

@@ -15,9 +15,10 @@ export class EditorRpcRouter {
   >();
 
   constructor(
-    readonly trustedUserSkillPeers: (
+    readonly trustedSkillEditors: (
       owner: GlyphConnectionIdentity,
-    ) => readonly { identity: GlyphConnectionIdentity; connectionId: string }[] = () => [],
+      projectDirectory?: string,
+    ) => readonly { identity: GlyphConnectionIdentity; connectionId: string; directoryUri?: string }[] = () => [],
   ) {}
 
   connect(

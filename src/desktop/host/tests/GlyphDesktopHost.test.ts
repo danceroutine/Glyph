@@ -1,4 +1,8 @@
 import { describe, expect, beforeEach, it, onTestFinished, vi, type Mock } from 'vitest';
+import { mkdtemp, mkdir, symlink, rm, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 vi.mock('#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.ts', () => ({
   isGlyphRequestEnvelope: vi.fn(),
 }));
@@ -28,6 +32,96 @@ const peer = { ...owner, windowId: 'peer' } as const;
 const roots = [{ name: 'project', uri: 'file:///project', canonicalPath: '/project' }] as const;
 
 describe(GlyphDesktopHost, () => {
+  it('checks project editors using their logical aliases and blocks publication throughout reconnection grace', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'glyph-peer-roots-'));
+    onTestFinished(() => rm(parent, { recursive: true, force: true }));
+    const root = join(parent, 'project');
+    const alias = join(parent, 'alias');
+    await mkdir(root);
+    await symlink(root, alias);
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    const describeRoot = (path: string) => [
+      { name: 'project', uri: pathToFileURL(path).toString(), canonicalPath: path },
+    ];
+    await fixture.receive('owner', owner, 'owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: describeRoot(root),
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'peer', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: describeRoot(alias),
+      trusted: true,
+    });
+    const destination = join(await realpath(root), '.glyph/skills/example');
+    expect(fixture.host.trustedSkillEditors(owner, destination)).toEqual([
+      {
+        identity: peer,
+        connectionId: 'peer',
+        directoryUri: pathToFileURL(join(alias, '.glyph/skills/example')).toString(),
+      },
+    ]);
+    expect(fixture.host.trustedSkillEditors(owner, join(parent, 'outside'))).toEqual([]);
+    await fixture.host.disconnect('peer');
+    expect(() => fixture.host.trustedSkillEditors(owner, destination)).toThrow('reconnecting');
+    expect(() => fixture.host.trustedSkillEditors(owner)).toThrow('reconnecting');
+    await fixture.host.dispose();
+  });
+  it('does not invoke trusted snapshot work for a rejected observer', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    await fixture.receive('owner', owner, 'attach-owner', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.receive('peer', peer, 'attach-peer', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    const snapshot = vi.spyOn(fixture.runtime, 'snapshot');
+    await fixture.receive('peer', peer, 'snapshot-rejected', {
+      type: GlyphWorkbenchCommandType.REQUEST_SNAPSHOT,
+      afterSequence: 0,
+    });
+    expect(snapshot).not.toHaveBeenCalled();
+    await fixture.host.dispose();
+  });
+
+  it('withholds live broadcasts from a replacement port until its attachment is authorized', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: true,
+    });
+    await fixture.host.disconnect('owner');
+    fixture.connect('replacement', owner);
+    fixture.runtime.emit({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: [] });
+    expect(fixture.events('replacement')).toEqual([]);
+    await fixture.receive('replacement', owner, 'restricted', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+    });
+    const after = fixture.events('replacement').at(-1)!.sequence;
+    await fixture.receive('replacement', owner, 'resume-restricted', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots,
+      trusted: false,
+      resumeHostGeneration: fixture.host.generation,
+      resumeAfterSequence: after - 1,
+    });
+    expect(
+      fixture.events('replacement').some(value => value.event.type === GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED),
+    ).toBe(false);
+    await fixture.host.dispose();
+  });
   it.each([false, true])(
     'requires peers to match the owning runtime trust (%s) before sharing snapshots or events',
     async trusted => {
@@ -94,7 +188,7 @@ describe(GlyphDesktopHost, () => {
     vi.mocked(isGlyphRequestEnvelope).mockReturnValue(true);
   });
 
-  it('selects only currently trusted same-profile peer windows and fails closed during their attachment transitions', async () => {
+  it('selects currently trusted windows sharing the physical user store across profiles and fails closed during their attachment transitions', async () => {
     const fixture = new HostFixture();
     const windowRoots = (id: string) => [{ name: id, uri: 'file:///' + id, canonicalPath: '/' + id }];
     const trusted = { ...peer, workspaceId: 'other-root' };
@@ -113,20 +207,23 @@ describe(GlyphDesktopHost, () => {
         trusted: trust,
       });
     }
-    expect(fixture.host.trustedUserSkillPeers(owner)).toEqual([{ identity: trusted, connectionId: 'trusted' }]);
+    expect(fixture.host.trustedSkillEditors(owner)).toEqual([
+      { identity: trusted, connectionId: 'trusted' },
+      { identity: foreign, connectionId: 'foreign' },
+    ]);
     const resync = fixture.receive('trusted', trusted, 'resync', {
       type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
       roots: windowRoots('trusted'),
       trusted: true,
     });
-    expect(() => fixture.host.trustedUserSkillPeers(owner)).toThrow('reconnecting');
+    expect(() => fixture.host.trustedSkillEditors(owner)).toThrow('reconnecting');
     await resync;
     await fixture.receive('trusted', trusted, 'revoke', {
       type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
       roots: windowRoots('trusted'),
       trusted: false,
     });
-    expect(fixture.host.trustedUserSkillPeers(owner)).toEqual([]);
+    expect(fixture.host.trustedSkillEditors(owner)).toEqual([{ identity: foreign, connectionId: 'foreign' }]);
     await fixture.host.dispose();
   });
 

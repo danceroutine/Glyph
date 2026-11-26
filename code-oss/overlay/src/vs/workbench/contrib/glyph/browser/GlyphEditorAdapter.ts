@@ -128,12 +128,21 @@ export class GlyphEditorAdapter extends Disposable {
         case GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES: {
           const root = skillTargets.find(target => target.scope === 'user')?.uri;
           const name = request.packageName;
-          if (!root || !name || name === '.' || name === '..' || /[/\\\0]/u.test(name))
+          if (!name || name === '.' || name === '..' || /[/\\\0]/u.test(name))
             throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+          const configured = env['GLYPH_USER_DIRECTORY'];
+          const localRoot = URI.joinPath(
+            configured
+              ? URI.file(configured)
+              : URI.joinPath(this.pathService.userHome({ preferLocal: true }), '.glyph'),
+            'skills',
+          );
           return {
             operationId,
             ok: true,
-            packageClean: this.packageWorkingCopiesClean(URI.joinPath(URI.parse(root, true), name)),
+            packageClean:
+              this.packageWorkingCopiesClean(URI.joinPath(localRoot, name)) &&
+              (!root || this.packageWorkingCopiesClean(URI.joinPath(URI.parse(root, true), name))),
           };
         }
         case GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES:
@@ -142,6 +151,19 @@ export class GlyphEditorAdapter extends Disposable {
           return { operationId, ok: true, exists: await this.exists(request.path) };
         case GlyphEditorRequestType.READ_SNAPSHOT:
           return { operationId, ok: true, snapshot: await this.read(request.path, request.maxBytes) };
+        case GlyphEditorRequestType.READ_OPEN_SNAPSHOT: {
+          const resource = this.resolve(request.path);
+          const model = this.modelService.getModel(resource);
+          // Automatic metadata reads may inspect an existing dirty buffer but
+          // never open a pathname whose filesystem identity the host cannot pin.
+          return {
+            operationId,
+            ok: true,
+            ...(model && this.textFileService.isDirty(resource)
+              ? { snapshot: await this.snapshot(request.path, model, request.maxBytes) }
+              : {}),
+          };
+        }
         case GlyphEditorRequestType.APPLY_FILE_MUTATION:
           return { operationId, ok: true, ...(await this.applyFile(request.mutation)) };
         case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
@@ -151,7 +173,12 @@ export class GlyphEditorAdapter extends Disposable {
         case GlyphEditorRequestType.LIST_WORKING_COPY_PATHS: {
           const models = this.modelService
             .getModels()
-            .filter(model => model.uri.scheme === 'file' && this.workspaceContextService.isInsideWorkspace(model.uri));
+            .filter(
+              model =>
+                model.uri.scheme === 'file' &&
+                this.workspaceContextService.isInsideWorkspace(model.uri) &&
+                this.textFileService.isDirty(model.uri),
+            );
           if (models.length > 2000)
             throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED, {
               maximumWorkingCopies: 2000,

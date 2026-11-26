@@ -792,7 +792,10 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         events.push(event);
       });
       vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
-        if (request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES)
+        if (
+          request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ||
+          request.type === GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES
+        )
           return { operationId: request.operationId, ok: true, packageClean: true };
         throw new Error('Only skill working-copy checks are expected');
       });
@@ -806,8 +809,13 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         await runtime.handle({ type: Command.APPLY_SKILL, previewId: (await runtime.snapshot()).skillPreview!.id });
       }
       vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
-        if (request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES)
+        if (
+          request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ||
+          request.type === GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES
+        )
           return { operationId: request.operationId, ok: true, packageClean: true };
+        if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          return { operationId: request.operationId, ok: true };
         if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Only read snapshots are expected');
         for (const root of roots) {
           const store = new FileSystemWorkspaceTextStore(root);
@@ -1102,9 +1110,10 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const diskList = vi
         .spyOn(FileSystemWorkspaceTextStore.prototype, 'list')
         .mockResolvedValue({ files: [], truncated: false });
-      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) =>
-        editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance'),
-      );
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => ({
+        ...editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance'),
+        snapshot: { ...editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance').snapshot!, dirty: true },
+      }));
       const runtime = await fixture.create([root]);
       const snapshot = await runtime.snapshot();
       expect(snapshot.instructionSources).toEqual([

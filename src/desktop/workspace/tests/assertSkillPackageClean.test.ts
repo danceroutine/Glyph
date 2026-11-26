@@ -3,6 +3,49 @@ import { assertSkillPackageClean } from '#src/desktop/workspace/assertSkillPacka
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { EditorRpcRouter } from '#src/desktop/workspace/EditorRpcRouter.js';
 const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'owner' };
+it('checks the owner and overlapping peer through each editor’s authorized logical project URI', async () => {
+  const peer = {
+    identity: { ...identity, windowId: 'peer' },
+    connectionId: 'peer',
+    directoryUri: 'file:///alias/.glyph/skills/example',
+  };
+  const request = vi.fn<EditorRpcRouter['request']>(async (_identity, input) => ({
+    operationId: 'operationId' in input ? input.operationId : '',
+    ok: true,
+    packageClean: true,
+  }));
+  const registry = vi.fn(() => [peer]);
+  await assertSkillPackageClean(
+    { request, trustedSkillEditors: registry },
+    identity,
+    'project',
+    '/physical/.glyph/skills/example',
+    'file:///logical/.glyph/skills/example',
+  );
+  expect(request.mock.calls.map(([, command]) => command)).toEqual([
+    {
+      operationId: expect.any(String),
+      type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+      scope: 'project',
+      directoryUri: 'file:///logical/.glyph/skills/example',
+    },
+    {
+      operationId: expect.any(String),
+      type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+      scope: 'project',
+      directoryUri: peer.directoryUri,
+    },
+  ]);
+  const missingDirectory = () => [{ identity: peer.identity, connectionId: peer.connectionId }];
+  await expect(
+    assertSkillPackageClean(
+      { request, trustedSkillEditors: missingDirectory },
+      identity,
+      'project',
+      '/physical/.glyph/skills/example',
+    ),
+  ).rejects.toThrow('peer project destination');
+});
 it('sends only the owning window and approved directory to the working-copy guard', async () => {
   const request = vi.fn<EditorRpcRouter['request']>(async (_identity, input) => ({
     operationId: 'operationId' in input ? input.operationId : '',
@@ -10,19 +53,18 @@ it('sends only the owning window and approved directory to the working-copy guar
     packageClean: true,
   }));
   await assertSkillPackageClean(
-    { request, trustedUserSkillPeers: () => [] },
+    { request, trustedSkillEditors: () => [] },
     identity,
     'user',
     '/home/user/.glyph/skills/example',
   );
   expect(request).toHaveBeenCalledWith(identity, {
     operationId: expect.any(String),
-    type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
-    scope: 'user',
-    directoryUri: 'file:///home/user/.glyph/skills/example',
+    type: GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES,
+    packageName: 'example',
   });
   await expect(
-    assertSkillPackageClean({ request, trustedUserSkillPeers: () => [] }, identity, 'project', 'relative'),
+    assertSkillPackageClean({ request, trustedSkillEditors: () => [] }, identity, 'project', 'relative'),
   ).rejects.toThrow('absolute');
 });
 it('requires a correlated clean response and fails closed on dirty, unavailable, or malformed replies', async () => {
@@ -38,7 +80,7 @@ it('requires a correlated clean response and fails closed on dirty, unavailable,
     });
     await expect(
       assertSkillPackageClean(
-        { request, trustedUserSkillPeers: () => [] },
+        { request, trustedSkillEditors: () => [] },
         identity,
         'project',
         '/workspace/.glyph/skills/example',
@@ -49,13 +91,13 @@ it('requires a correlated clean response and fails closed on dirty, unavailable,
 
 it('queries same-profile peers by package basename and refuses dirty, unavailable or changed peers', async () => {
   const peer = { identity: { ...identity, windowId: 'peer' }, connectionId: 'peer-connection' };
-  const trustedUserSkillPeers = vi.fn(() => [peer]);
+  const trustedSkillEditors = vi.fn(() => [peer]);
   const request = vi.fn<EditorRpcRouter['request']>(async (_identity, input) => ({
     operationId: 'operationId' in input ? input.operationId : '',
     ok: true,
     packageClean: true,
   }));
-  const editors = { request, trustedUserSkillPeers };
+  const editors = { request, trustedSkillEditors };
   const check = () => assertSkillPackageClean(editors, identity, 'user', '/private/user-profile/.glyph/skills/example');
   await check();
   expect(request.mock.calls.find(([who]) => who === peer.identity)?.[1]).toEqual({
@@ -74,12 +116,13 @@ it('queries same-profile peers by package basename and refuses dirty, unavailabl
   });
   await expect(check()).rejects.toThrow('peer unavailable');
   request.mockImplementation(normal);
-  trustedUserSkillPeers.mockReturnValueOnce([peer]).mockReturnValueOnce([]);
+  trustedSkillEditors.mockReturnValueOnce([peer]).mockReturnValueOnce([]);
   await expect(check()).rejects.toThrow('windows changed');
-  trustedUserSkillPeers
+  trustedSkillEditors
     .mockReturnValueOnce([peer])
     .mockReturnValueOnce([{ ...peer, connectionId: 'different-connection' }]);
   await expect(check()).rejects.toThrow('windows changed');
+  trustedSkillEditors.mockReturnValue([]);
   const previous = request.mock.calls.length;
   await assertSkillPackageClean(editors, identity, 'project', '/workspace/.glyph/skills/example');
   expect(request).toHaveBeenCalledTimes(previous + 1);

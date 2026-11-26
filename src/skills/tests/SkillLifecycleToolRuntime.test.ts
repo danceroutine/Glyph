@@ -44,6 +44,13 @@ function fixture(allowed = true) {
   return { manager, approve, turns, runner, session, tool, script, context, signal };
 }
 describe(SkillLifecycleToolRuntime, () => {
+  it('advertises a strict object schema with every nullable script field required', () => {
+    const { script } = fixture();
+    expect(script.parameters).toMatchObject({
+      additionalProperties: false,
+      required: ['id', 'path', 'args', 'workspace_root_id'],
+    });
+  });
   it.each([true, false])('applies exactly the approved revision when authorization is %s', async allowed => {
     const { manager, approve, tool, context, signal } = fixture(allowed);
     const input = JSON.stringify({ target_id: 'user:glyph', replace_id: null, remove_id: null, draft });

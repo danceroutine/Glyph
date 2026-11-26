@@ -965,6 +965,43 @@ function mockTools(execute: TestToolHandler, planningNames: readonly string[] = 
 }
 
 describe('provider-neutral steering', () => {
+  it('drains input accepted during a rejected final admission before closing the mailbox', async () => {
+    const adapter = new ClaudeShapedAdapter();
+    const queue = new ChatSteeringQueue();
+    const turns = new TurnContextCoordinator([]);
+    const stream = adapter.streamStep.bind(adapter);
+    let steps = 0;
+    adapter.streamStep = async (turn, context) => {
+      const result = await stream({ ...turn, round: 1 }, context);
+      if (++steps === 1) instruction(queue, 'Stale workflow');
+      return result;
+    };
+    vi.spyOn(turns, 'steer').mockImplementationOnce(async () => {
+      instruction(queue, 'Valid follow-up');
+      await Promise.resolve();
+      throw new Error('Workflow removed');
+    });
+    const rejected = vi.fn();
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10000 },
+      mockTools(async () => 'unused'),
+      undefined,
+      turns,
+    );
+    await runtime.send('Start', {
+      signal: new AbortController().signal,
+      onText: () => {},
+      takeSteering: queue.take,
+      onSteeringRejected: rejected,
+    });
+    expect(rejected).toHaveBeenCalledOnce();
+    expect(adapter.requests[1]?.messages.at(-1)).toEqual({ role: 'user', content: 'Valid follow-up' });
+    expect(queue.take(false)).toEqual([]);
+    expect(() => {
+      instruction(queue, 'Too late');
+    }).toThrow('finished');
+  });
   it('activates explicit skills through the initial provider-neutral turn pipeline', async () => {
     const descriptor = aSkillDescriptor();
     const capture = vi.fn(async () => aSkillPackage(descriptor, 'Initial skill instructions'));

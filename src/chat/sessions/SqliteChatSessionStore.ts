@@ -130,6 +130,7 @@ const transcriptTurnSchema = z
             id: z.string(),
             text: z.string(),
             createdAt: z.iso.datetime(),
+            rejection: z.string().optional(),
             options: chatTurnOptionsSchema,
             attachments: z.array(
               z
@@ -154,7 +155,11 @@ const transcriptTurnSchema = z
                 })),
             ),
           })
-          .strict(),
+          .strict()
+          .transform(({ rejection, ...message }) => ({
+            ...message,
+            ...(rejection === undefined ? {} : { rejection }),
+          })),
       )
       .optional(),
     checkpoints: z.object({ before: historyCheckpointSchema, after: historyCheckpointSchema }).strict().optional(),

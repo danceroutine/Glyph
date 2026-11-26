@@ -82,7 +82,7 @@ export class SkillLifecycleToolRuntime implements ToolSource {
         allowedModes: [AgentModeID.AGENT],
         inputKind: ToolInputKind.JSON,
         description: `Run a script from an activated, pinned skill package with one-shot shell approval. For user skills in multi-root workspaces select workspace_root_id from ${JSON.stringify(runner.targets)}. Project scripts run in their owning root. Script declarations never grant permissions. A process finishing does not mean the skill workflow is complete.`,
-        parameters: parameters(runSchema),
+        parameters: parameters(runSchema.extend({ workspace_root_id: z.string().min(1).nullable() })),
         validateInput: input => {
           runSchema.parse(JSON.parse(input));
         },
@@ -118,7 +118,7 @@ export class SkillLifecycleToolRuntime implements ToolSource {
     }));
   }
 }
-function parameters(schema: typeof changeSchema | typeof runSchema) {
+function parameters(schema: z.ZodObject) {
   const { $schema: _, ...value } = z.toJSONSchema(schema, { target: 'draft-7' });
   return value;
 }

@@ -81,6 +81,7 @@ async function fixture(
   reviews?: ProposalReviewManager,
   extras: {
     readonly agentReviews?: AgentReviewService;
+    readonly trusted?: boolean;
     readonly skillManager?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skillManager'];
     readonly skillSources?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skillSources'];
     readonly skillCatalog?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skills'];
@@ -213,6 +214,7 @@ async function fixture(
       events.push(event);
     },
     ownerWindowId,
+    ...(extras.trusted === undefined ? {} : { trusted: extras.trusted }),
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
     ...(extras.refreshCatalogs ? { refreshCatalogs: extras.refreshCatalogs } : {}),
     ...(extras.instructionCatalog ? { instructionCatalog: extras.instructionCatalog } : {}),
@@ -246,6 +248,54 @@ async function fixture(
     },
   };
 }
+
+it('keeps ordinary saved chat visible after trust revocation without privileged context or tool payloads', async () => {
+  const record = chatRecord({
+    transcript: [
+      {
+        userText: 'Review this',
+        assistantText: 'Ordinary answer',
+        reasoningSummary: '',
+        attachmentPaths: [],
+        createdAt: '2026-10-01T00:00:00.000Z',
+        context: {
+          schema: 'glyph.turn-context.v1',
+          turnId: 'prior',
+          sources: [
+            {
+              id: 'private',
+              kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+              label: 'User',
+              path: '~/.glyph/rules/private.mdc',
+              scope: '.',
+              status: AgentInstructionSourceStatus.ACTIVE,
+              content: 'PRIVATE RULE BODY',
+            },
+          ],
+          activations: [],
+          candidates: [],
+        },
+        tools: [
+          {
+            callId: 'resource',
+            name: 'skills.read_resource',
+            phase: ToolActivityPhase.COMPLETED,
+            arguments: 'PRIVATE ARGS',
+            output: 'PRIVATE RESOURCE',
+          },
+        ],
+      },
+    ],
+  });
+  const harness = await fixture(async () => {}, 'owner', undefined, { records: [record], trusted: false });
+  await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: record.id });
+  const state = await harness.runtime.snapshot();
+  const run = state.runs.find(run => run.chatId === record.id)!;
+  expect(run.text).toBe('Ordinary answer');
+  expect(run).not.toHaveProperty('context');
+  expect(JSON.stringify(run)).not.toContain('PRIVATE');
+  await harness.runtime.dispose();
+});
 
 it('refreshes only the instruction catalog while preserving connected chat runs', async () => {
   const refreshCatalogs = vi.fn(async () => {});

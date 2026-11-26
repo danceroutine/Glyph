@@ -211,9 +211,16 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         usageIncomplete ||= step.usage === null;
         totalUsage = addUsage(totalUsage, step.usage);
         if (step.toolCalls.length === 0) {
-          const steering = options.takeSteering?.(true) ?? [];
           let appliedSteering = false;
-          for (const instruction of steering) appliedSteering = (await applySteering(instruction)) || appliedSteering;
+          // Admission can await filesystem/catalog work. Drain again after a
+          // rejected batch so input accepted during that await is either applied
+          // or covered by the mailbox's synchronous empty-and-close boundary.
+          for (;;) {
+            const steering = options.takeSteering?.(true) ?? [];
+            if (steering.length === 0) break;
+            for (const instruction of steering) appliedSteering = (await applySteering(instruction)) || appliedSteering;
+            if (appliedSteering) break;
+          }
           if (appliedSteering) {
             this.state = this.persistentState(this.adapter.snapshot(turn));
             hasToolCheckpoint = true;

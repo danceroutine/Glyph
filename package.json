@@ -75,7 +75,7 @@
     "test:unit": "vitest run --project unit --project code-oss --project overlay --project ui --maxWorkers=2",
     "test:unit:coverage": "vitest run --project unit --project code-oss --project overlay --project ui --coverage --coverage.thresholds.100 --coverage.thresholds.perFile --maxWorkers=2",
     "test:ui": "vitest run --project ui",
-    "test:e2e": "pnpm context-index:build && pnpm shell-sandbox:build && vitest run --project e2e",
+    "test:e2e": "pnpm context-index:build && pnpm shell-sandbox:build && pnpm workspace-mutations:build && vitest run --project e2e",
     "test:transform-performance": "for size in 1 5 10 20 50; do node --expose-gc --import tsx src/editing/documents/test/TextEditTransformer.benchmark.ts $size; done",
     "test:watch": "vitest",
     "test:security": "vitest run --project unit --project code-oss --project overlay --project ui --maxWorkers=2 security.test utilityMain.test --reporter=default --reporter=json --reporter=./scripts/security/reporter.mjs --outputFile.json=.artifacts/security/results.json",

@@ -6,10 +6,10 @@ import { GlyphFileMutationKind } from '#src/desktop/protocol/editor/GlyphFileMut
 const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'owner' };
 describe(EditorRpcRouter, () => {
   it('consults only the supplied trust registry when finding other user-package editors', () => {
-    expect(new EditorRpcRouter().trustedUserSkillPeers(identity)).toEqual([]);
+    expect(new EditorRpcRouter().trustedSkillEditors(identity)).toEqual([]);
     const peer = { identity: { ...identity, windowId: 'trusted' }, connectionId: 'peer' };
     const registry = vi.fn(() => [peer]);
-    expect(new EditorRpcRouter(registry).trustedUserSkillPeers(identity)).toEqual([peer]);
+    expect(new EditorRpcRouter(registry).trustedSkillEditors(identity)).toEqual([peer]);
     expect(registry).toHaveBeenCalledExactlyOnceWith(identity);
   });
   it('ignores editor responses from a connection that does not own the operation', async () => {

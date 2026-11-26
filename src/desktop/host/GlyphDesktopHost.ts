@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphCommandResultHostEvent } from '#src/desktop/protocol/events/GlyphCommandResultHostEvent.js';
 import type { GlyphErrorHostEvent } from '#src/desktop/protocol/events/GlyphErrorHostEvent.js';
@@ -31,6 +34,7 @@ interface Connection {
   attached: boolean;
   ready: boolean;
   canReplay: boolean;
+  authorityKnown: boolean;
   trusted: boolean;
   readOnly: boolean;
   roots: readonly GlyphWorkspaceRoot[];
@@ -67,16 +71,27 @@ export class GlyphDesktopHost {
   }
 
   /** Live trusted windows sharing the user package store. A changing peer must settle before publication. */
-  trustedUserSkillPeers(
+  trustedSkillEditors(
     owner: GlyphConnectionIdentity,
-  ): readonly { identity: GlyphConnectionIdentity; connectionId: string }[] {
+    projectDirectory?: string,
+  ): readonly { identity: GlyphConnectionIdentity; connectionId: string; directoryUri?: string }[] {
     const peers = [];
-    for (const [connectionId, peer] of this.connections) {
-      if (!peer.trusted || peer.identity.profileId !== owner.profileId || peer.identity.windowId === owner.windowId)
-        continue;
-      if (!peer.attached || !peer.ready || peer.pendingAttachments > 0)
+    for (const peer of this.sessions.values()) {
+      if (!peer.trusted || connectionKey(peer.identity) === connectionKey(owner)) continue;
+      let directoryUri: string | undefined;
+      if (projectDirectory !== undefined) {
+        for (const root of peer.roots) {
+          const path = relative(realpathSync(root.canonicalPath), projectDirectory);
+          if (path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) continue;
+          directoryUri = pathToFileURL(join(fileURLToPath(root.uri), path)).toString();
+          break;
+        }
+        if (directoryUri === undefined) continue;
+      }
+      const connectionId = [...this.connections].find(([, current]) => current === peer)?.[0];
+      if (!connectionId || !peer.authorityKnown || peer.pendingAttachments > 0)
         throw new Error('Another trusted Glyph window is reconnecting. Retry the skill change after it reconnects.');
-      peers.push({ identity: peer.identity, connectionId });
+      peers.push({ identity: peer.identity, connectionId, ...(directoryUri === undefined ? {} : { directoryUri }) });
     }
     return peers;
   }
@@ -96,6 +111,7 @@ export class GlyphDesktopHost {
         attached: false,
         ready: false,
         canReplay: false,
+        authorityKnown: false,
         trusted: false,
         readOnly: true,
         roots: [],
@@ -108,6 +124,7 @@ export class GlyphDesktopHost {
     clearTimeout(this.disconnectTimers.get(connection));
     this.disconnectTimers.delete(connection);
     connection.ready = false;
+    connection.authorityKnown = false;
     this.connections.set(connectionId, connection);
   }
 
@@ -124,6 +141,7 @@ export class GlyphDesktopHost {
     this.connections.delete(connectionId);
     connection.send = undefined;
     connection.ready = false;
+    connection.authorityKnown = false;
     // Preserve replay across a renderer reload, but never leave authority or
     // background processes owned by a vanished window indefinitely.
     const timer = setTimeout(() => {
@@ -245,6 +263,10 @@ export class GlyphDesktopHost {
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
   ): Promise<readonly GlyphHostEvent[]> {
     const key = getWorkspaceKey(connection.identity);
+    if (command.trusted !== connection.trusted || JSON.stringify(command.roots) !== JSON.stringify(connection.roots)) {
+      connection.journal.discard();
+      connection.canReplay = false;
+    }
     if (command.trusted !== connection.trusted && connection.attached) {
       // Trust changes are lifecycle boundaries. Revocation drains tools; a
       // grant must reconcile deferred reviews before authorizing new mutations.
@@ -255,6 +277,12 @@ export class GlyphDesktopHost {
     const stopping = this.runtimeStops.get(key);
     if (stopping) await stopping;
     this.assertCurrentConnection(connection);
+    // Editor working-copy authority also exists in a window whose Glyph session
+    // cannot acquire overlapping runtime ownership. Remember its negotiated
+    // roots and trust so package publication still checks that editor.
+    connection.trusted = command.trusted;
+    connection.roots = command.roots;
+    connection.authorityKnown = true;
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {
@@ -372,8 +400,11 @@ export class GlyphDesktopHost {
   }
 
   private async publishSnapshot(connection: Connection): Promise<void> {
+    this.assertCurrentConnection(connection);
     const record = this.runtimes.get(getWorkspaceKey(connection.identity));
     if (!record) throw new Error('The Glyph workspace runtime is unavailable.');
+    if (!connection.attached || !connection.ready || record.trusted !== connection.trusted)
+      throw new Error('Attach an authorized workspace before requesting a snapshot.');
     for (let attempt = 0; attempt < 8; attempt++) {
       const before = connection.journal.watermark;
       const state = await record.runtime.snapshot();
@@ -408,6 +439,7 @@ export class GlyphDesktopHost {
     connection.attached = false;
     connection.ready = false;
     connection.canReplay = false;
+    connection.journal.discard();
     const record = this.runtimes.get(key);
     if (!isOwner) {
       await record?.runtime.connectionLost(connection.identity.windowId);
@@ -418,6 +450,7 @@ export class GlyphDesktopHost {
       peer.attached = false;
       peer.ready = false;
       peer.canReplay = false;
+      peer.journal.discard();
       if (peer === connection && options.notifyOwner === false) continue;
       this.send(peer, {
         type: GlyphHostEventType.HOST_STATUS,
@@ -444,7 +477,9 @@ export class GlyphDesktopHost {
 
   private broadcast(key: string, event: GlyphHostEvent): void {
     for (const connection of this.sessions.values()) {
-      if (connection.attached && getWorkspaceKey(connection.identity) === key) this.send(connection, event);
+      if (!connection.attached || getWorkspaceKey(connection.identity) !== key) continue;
+      const envelope = connection.journal.append(connection.identity, event);
+      if (connection.ready) connection.send?.(envelope);
     }
   }
 

@@ -20,7 +20,7 @@ const skillFiles = {
 const candidateSchema = z.object({
   id: z.string(),
   name: z.string(),
-  origin: z.object({ id: z.string(), scope: z.string() }),
+  origin: z.object({ scope: z.string() }),
 });
 const contextSchema = z.object({
   schema: z.literal('glyph.agent-instructions.v1'),
@@ -375,7 +375,7 @@ it.describe('Human and agent skill management', () => {
   }) => {
     const selected = skillCandidate(await skillRequest(glyph, provider, 'List workflows.'));
     const call = skillCall('propose_change', {
-      target_id: selected.origin.id,
+      target_id: proposalTarget(provider.requests.at(-1)),
       replace_id: selected.id,
       remove_id: null,
       draft: {
@@ -396,9 +396,9 @@ it.describe('Human and agent skill management', () => {
     glyph,
     provider,
   }) => {
-    const selected = skillCandidate(await skillRequest(glyph, provider, 'List workflows.'));
+    await skillRequest(glyph, provider, 'List workflows.');
     const call = skillCall('propose_change', {
-      target_id: selected.origin.id,
+      target_id: proposalTarget(provider.requests.at(-1)),
       replace_id: null,
       remove_id: null,
       draft: {
@@ -435,7 +435,7 @@ it.describe('Human and agent skill management', () => {
     const selected = skillCandidate(await skillRequest(glyph, provider, 'List workflows.'));
     const original = await readFile(join(glyph.workspace, '.glyph/skills/example/SKILL.md'), 'utf8');
     const call = skillCall('propose_change', {
-      target_id: selected.origin.id,
+      target_id: proposalTarget(provider.requests.at(-1)),
       replace_id: null,
       remove_id: selected.id,
       draft: null,
@@ -467,7 +467,7 @@ it.describe('Human and agent skill management', () => {
     const selected = skillCandidate(await skillRequest(glyph, provider, 'List workflows.'));
     const original = await readFile(join(glyph.workspace, '.glyph/skills/example/SKILL.md'), 'utf8');
     const call = skillCall('propose_change', {
-      target_id: selected.origin.id,
+      target_id: proposalTarget(provider.requests.at(-1)),
       replace_id: selected.id,
       remove_id: null,
       draft: {
@@ -527,7 +527,12 @@ it.describe('Skill execution boundaries', () => {
   }) => {
     const selected = skillCandidate(await skillRequest(glyph, provider, 'List workflows.'));
     const activate = skillCall('activate', { id: selected.id, reason: 'Run the selected script' });
-    const run = skillCall('run_script', { id: selected.id, path: 'scripts/read-only.sh', args: [] });
+    const run = skillCall('run_script', {
+      id: selected.id,
+      path: 'scripts/read-only.sh',
+      args: [],
+      workspace_root_id: null,
+    });
     provider.enqueue({ output: [activate] }, { output: [run] }, { chunks: ['Script finished.'] });
     await glyph.send('Run the selected skill script.');
     const approval = glyph.page.getByRole('region', { name: 'Command approval' });
@@ -546,7 +551,12 @@ it.describe('Skill execution boundaries', () => {
       '---\nname: example\ndescription: Constrained workflow\nallowed-tools: project.read_file\n---\nConstrained body',
     );
     const selected = skillCandidate(await sendSkillText(glyph, provider, 'List workflows.'));
-    const run = skillCall('run_script', { id: selected.id, path: 'scripts/read-only.sh', args: [] });
+    const run = skillCall('run_script', {
+      id: selected.id,
+      path: 'scripts/read-only.sh',
+      args: [],
+      workspace_root_id: null,
+    });
     await skillSteps(glyph, provider, [skillCall('activate', { id: selected.id, reason: 'Check constraints' }), run]);
     expect(output(provider, run)).toContain('does not declare');
     await expect(glyph.page.getByRole('region', { name: 'Command approval' })).toHaveCount(0);
@@ -580,7 +590,12 @@ it.describe('Skill execution boundaries', () => {
       'printf started > skill-started.txt; sleep 60',
     );
     const selected = skillCandidate(await skillRequest(glyph, provider, 'List workflows.'));
-    const run = skillCall('run_script', { id: selected.id, path: 'scripts/read-only.sh', args: [] });
+    const run = skillCall('run_script', {
+      id: selected.id,
+      path: 'scripts/read-only.sh',
+      args: [],
+      workspace_root_id: null,
+    });
     provider.enqueue(
       { output: [skillCall('activate', { id: selected.id, reason: 'Run cancellable workflow' })] },
       { output: [run] },
@@ -599,9 +614,9 @@ it.describe('Skill execution boundaries', () => {
     glyph,
     provider,
   }) => {
-    const selected = skillCandidate(await skillRequest(glyph, provider, 'List workflows.'));
+    await skillRequest(glyph, provider, 'List workflows.');
     const call = skillCall('propose_change', {
-      target_id: selected.origin.id,
+      target_id: proposalTarget(provider.requests.at(-1)),
       replace_id: null,
       remove_id: null,
       draft: {
@@ -652,17 +667,42 @@ function skillCandidate(request) {
     if (typeof item.content !== 'string') continue;
     let value;
     try {
-      value = contextSchema.safeParse(JSON.parse(item.content));
+      const parsed = z.looseObject({ schema: z.string() }).safeParse(JSON.parse(item.content));
+      if (!parsed.success || parsed.data.schema !== 'glyph.agent-instructions.v1') continue;
+      value = contextSchema.safeParse(parsed.data);
     } catch {
       continue;
     }
-    if (!value.success) continue;
+    if (!value.success) throw new Error(`Invalid instruction envelope: ${value.error.message}`);
     const candidate = value.data.skillCandidates?.find(
       skill => skill.name === 'example' && skill.origin.scope === 'project',
     );
     if (candidate) return candidate;
   }
   throw new Error('Missing example skill candidate.');
+}
+
+/** Resolve the public destination catalog advertised by the proposal tool, never private origin metadata.
+ * @param {ScriptedProvider['requests'][number] | undefined} request
+ */
+function proposalTarget(request) {
+  const tools = request?.body.tools ?? [];
+  for (const entry of tools) {
+    const group = z
+      .object({ type: z.string(), name: z.string().optional(), tools: z.array(z.unknown()).optional() })
+      .safeParse(entry);
+    const functions = group.success && group.data.tools ? group.data.tools : [entry];
+    for (const candidate of functions) {
+      const tool = z.object({ name: z.string(), description: z.string() }).safeParse(candidate);
+      if (!tool.success || tool.data.name !== 'propose_change') continue;
+      const match = /Native targets: (\[.*?\])\. Set unused/u.exec(tool.data.description);
+      if (!match) throw new Error('The proposal tool did not advertise native destinations.');
+      const targets = z.array(z.object({ id: z.string(), label: z.string() })).parse(JSON.parse(match[1]));
+      const project = targets.find(target => target.id.startsWith('project:'));
+      if (project) return project.id;
+    }
+  }
+  throw new Error('Missing project proposal destination.');
 }
 
 /** @param {string} name @param {string} description @param {string} body */

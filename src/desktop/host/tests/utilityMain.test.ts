@@ -12,7 +12,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   const parent = new EventEmitter();
   const host = {
     constructed: vi.fn(),
-    trustedUserSkillPeers: vi.fn((_owner: GlyphConnectionIdentity) => []),
+    trustedSkillEditors: vi.fn((_owner: GlyphConnectionIdentity) => []),
     connect: vi.fn(),
     receive: vi.fn(async (_connectionId: string, _envelope: unknown) => {}),
     disconnect: vi.fn(async (_connectionId: string) => {}),
@@ -28,8 +28,8 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
       constructor(factory: unknown) {
         host.constructed(factory);
       }
-      trustedUserSkillPeers(owner: GlyphConnectionIdentity) {
-        return host.trustedUserSkillPeers(owner);
+      trustedSkillEditors(owner: GlyphConnectionIdentity) {
+        return host.trustedSkillEditors(owner);
       }
       connect(...arguments_: unknown[]): unknown {
         return host.connect(...arguments_);
@@ -273,7 +273,7 @@ describe('utilityMain', () => {
     await loaded;
     const peers = editors.constructed.mock.calls[0]![1] as (owner: GlyphConnectionIdentity) => unknown;
     expect(peers(identity)).toEqual([]);
-    expect(host.trustedUserSkillPeers).toHaveBeenCalledExactlyOnceWith(identity);
+    expect(host.trustedSkillEditors).toHaveBeenCalledExactlyOnceWith(identity);
   });
 
   it('connects a window to the host and its editor, then announces readiness', async () => {
