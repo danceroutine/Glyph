@@ -9,6 +9,10 @@ const io = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
 vi.mock('node:fs/promises', () => ({ readdir: io.list, lstat: io.stat }));
+vi.mock('#src/shell/TrustedHostExecutable.js', () => ({
+  trustedHostExecutable: (name: string) => '/usr/bin/' + name,
+  repositoryEnvironment: () => ({}),
+}));
 vi.mock('node:child_process', () => ({ spawn: io.spawn }));
 function child(pid?: number) {
   return Object.assign(new EventEmitter(), {

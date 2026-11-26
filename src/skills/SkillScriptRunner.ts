@@ -1,3 +1,4 @@
+import { trustedHostExecutable, type HostExecutable } from '#src/shell/TrustedHostExecutable.js';
 import { chmod, mkdir, mkdtemp, realpath, writeFile, rm } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -47,7 +48,7 @@ export class SkillScriptRunner {
     if (resource.encoding !== 'utf8') throw new Error('Skill scripts must contain UTF-8 source.');
     const source = resource.content;
     const interpreter = (
-      { '.sh': 'sh', '.py': 'python3', '.js': 'node', '.mjs': 'node' } as Readonly<Record<string, string>>
+      { '.sh': 'sh', '.py': 'python3', '.js': 'node', '.mjs': 'node' } as Readonly<Record<string, HostExecutable>>
     )[extname(path)];
     if (!interpreter) throw new Error('Supported skill interpreters are sh, python3, and node.');
     const owner =
@@ -70,6 +71,10 @@ export class SkillScriptRunner {
       if (from === '' || (!isAbsolute(from) && from !== '..' && !from.startsWith(`..${sep}`)))
         throw new Error('Skill execution staging must be outside every workspace root.');
     }
+    const executable = trustedHostExecutable(
+      interpreter,
+      this.roots.map(candidate => candidate.directory),
+    );
     const directory = await mkdtemp(join(stagingRoot, 'glyph-skill-run-'));
     await chmod(directory, 0o700);
     try {
@@ -81,12 +86,12 @@ export class SkillScriptRunner {
         await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
         await writeFile(destination, content.bytes, { flag: 'wx', mode: content.mode & 0o111 ? 0o500 : 0o400 });
       }
-      const command = `# Skill ${skill.descriptor.name}, revision ${skill.revision}\n# Compatibility: ${(skill.descriptor.compatibility ?? 'No requirements declared').replaceAll('\n', '\n# ')}\n${source
+      const command = `# Skill ${skill.descriptor.name}, revision ${skill.revision}\n# Interpreter: ${executable}\n# Compatibility: ${(skill.descriptor.compatibility ?? 'No requirements declared').replaceAll('\n', '\n# ')}\n${source
         .split('\n')
         .map(line => `# ${line}`)
         .join(
           '\n',
-        )}\n${interpreter} ${quote(join(directory, path))} ${args.map(argument => quote(argument)).join(' ')}`;
+        )}\n${quote(executable)} ${quote(join(directory, path))} ${args.map(argument => quote(argument)).join(' ')}`;
       const result = await this.shells.execute(command, {
         ownerChatId,
         signal,

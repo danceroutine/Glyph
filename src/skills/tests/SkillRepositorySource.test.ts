@@ -29,7 +29,7 @@ describe('Repository package source boundary', () => {
     const signal = new AbortController().signal;
     const draft = await reader.read(source, signal);
     expect(draft.name).toBe('example');
-    expect(draft.source).toBe(`${source.url}@deadbeef`);
+    expect(draft.source).toBe(`Requested repository ${source.url}@deadbeef`);
     expect(draft.files().get('SKILL.md')).toEqual(Uint8Array.from(manifest));
     expect(git.mock.calls.find(([args]) => args.includes('fetch'))?.[0]).toEqual(
       expect.arrayContaining(['--depth=1', '--no-tags', '--filter=blob:none', source.revision]),

@@ -1,3 +1,4 @@
+import { repositoryEnvironment, trustedHostExecutable } from '#src/shell/TrustedHostExecutable.js';
 import { spawn } from 'node:child_process';
 import { readdir, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -34,6 +35,7 @@ export class SkillRepositoryGit {
   constructor(
     private readonly cwd: string,
     private readonly signal: AbortSignal,
+    private readonly workspaceRoots: readonly string[] = [],
   ) {}
   async run(args: string[], maxOutput = 2 * 1024 * 1024): Promise<Buffer> {
     this.signal.throwIfAborted();
@@ -54,23 +56,14 @@ export class SkillRepositoryGit {
       ...args,
     ];
     const windows = process.platform === 'win32';
-    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_LFS_SKIP_SMUDGE: '1' };
-    for (const key of [
-      'GIT_DIR',
-      'GIT_COMMON_DIR',
-      'GIT_OBJECT_DIRECTORY',
-      'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-      'GIT_INDEX_FILE',
-      'GIT_WORK_TREE',
-      'GIT_TEMPLATE_DIR',
-    ])
-      delete (env as NodeJS.ProcessEnv)[key];
+    const env = repositoryEnvironment(this.workspaceRoots);
+    const executable = trustedHostExecutable('git', this.workspaceRoots);
     // POSIX sh specifies 512-byte blocks. Limit each incoming pack before it can fill the disk between polls.
     const blocks = Math.max(1, Math.floor((maxStorage - used) / 512));
-    const command = windows ? 'git' : '/bin/sh';
+    const command = windows ? executable : trustedHostExecutable('sh', this.workspaceRoots);
     const argv = windows
       ? gitArgs
-      : ['-c', 'ulimit -f "$1" || exit 1; shift; exec "$@"', 'glyph-git', String(blocks), 'git', ...gitArgs];
+      : ['-c', 'ulimit -f "$1" || exit 1; shift; exec "$@"', 'glyph-git', String(blocks), executable, ...gitArgs];
     const result = await new Promise<Buffer>((accept, reject) => {
       const child = spawn(command, argv, {
         cwd: this.cwd,
@@ -90,7 +83,7 @@ export class SkillRepositoryGit {
         failure = reason;
         if (!child.pid) return;
         if (windows) {
-          const kill = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
+          const kill = spawn('C:\\Windows\\System32\\taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
             windowsHide: true,
             stdio: 'ignore',
           });
