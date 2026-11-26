@@ -30,12 +30,9 @@ export class SkillContextContributor implements TurnContextContributor {
 
 /** Owns pinned package revisions, on-demand resource disclosure, and activation provenance for one turn. */
 export class SkillTurnContext implements TurnContextContribution {
-  private readonly packages = new Map<
-    string,
-    { package: SkillPackage; reason: 'manual' | 'model'; explanation: string }
-  >();
+  private packages = new Map<string, { package: SkillPackage; reason: 'manual' | 'model'; explanation: string }>();
   private pending: { ids: ReadonlySet<string>; result: Promise<TurnContextEnvelope> } | undefined;
-  private readonly advertised = new Map<string, SkillCandidate>();
+  private advertised = new Map<string, SkillCandidate>();
   private readonly initialCandidates: readonly SkillCandidate[];
   private initialSkills: readonly SkillInstruction[] = [];
   private released = false;
@@ -70,6 +67,15 @@ export class SkillTurnContext implements TurnContextContribution {
   }
   discloseAttachments(paths: readonly string[]): TurnContextEnvelope | undefined {
     return this.disclosePaths(paths);
+  }
+  checkpointSteering(): () => void {
+    // Steering may pin new packages and advertise candidates. Existing resource disclosures remain unchanged.
+    const packages = new Map(this.packages);
+    const advertised = new Map(this.advertised);
+    return () => {
+      this.packages = packages;
+      this.advertised = advertised;
+    };
   }
   async steer(input: TurnContextInput, signal?: AbortSignal): Promise<TurnContextEnvelope | undefined> {
     const activation = await this.activateManualSkills(

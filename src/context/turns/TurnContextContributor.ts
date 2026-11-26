@@ -26,6 +26,8 @@ export interface TurnContextContribution {
     explanation: string,
     signal?: AbortSignal,
   ): Promise<TurnContextEnvelope | undefined>;
+  /** Capture mutable disclosure state before steering. Restore it if another domain rejects the request. */
+  checkpointSteering?(): () => void;
   /** Validate and prepare domain selections for an in-flight user instruction. */
   steer?(input: TurnContextInput, signal?: AbortSignal): Promise<TurnContextEnvelope | undefined>;
   release?(): void;

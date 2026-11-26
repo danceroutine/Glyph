@@ -1,3 +1,7 @@
+import { InstructionContextContributor } from '#src/context/turns/InstructionContextContributor.js';
+import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { describe, expect, it, vi } from 'vitest';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
@@ -286,4 +290,44 @@ describe(TurnContextCoordinator, () => {
     expect(coordinator.activateRule('ineligible', 'disabled')).toBeUndefined();
     expect(coordinator.activateManualRules('ineligible', ['unnamed'])).toBeUndefined();
   });
+});
+
+it('restores every domain after a steering disclosure exceeds the remaining instruction budget', async () => {
+  const nested = {
+    ...source('nested', AgentInstructionSourceKind.AGENTS_MD, 'src'),
+    content: 'n'.repeat(280 * 1024),
+  };
+  const manual = {
+    ...source(
+      'manual-large',
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      '.',
+      AgentInstructionActivationMode.MANUAL,
+    ),
+    content: 'm'.repeat(280 * 1024),
+  };
+  const selected = aSkillDescriptor();
+  const nestedSkill = aSkillDescriptor({ id: 'nested-skill', name: 'nested-skill', scope: 'src' });
+  const skills = new SkillCatalog([
+    {
+      id: selected.origin.id,
+      origin: selected.origin,
+      discover: async () => [selected, nestedSkill],
+      capture: async descriptor => aSkillPackage(descriptor),
+      refreshIndex: async () => {},
+    },
+  ]);
+  const turns = new TurnContextCoordinator([
+    new InstructionContextContributor(new AgentInstructionCatalog([{ discover: async () => [nested, manual] }])),
+    new SkillContextContributor(skills),
+  ]);
+  const input = { turnId: 'steer', attachmentPaths: ['src/app.ts'], skillIds: [selected.id] };
+  const session = await turns.beginTurn({ turnId: input.turnId, attachmentPaths: [] });
+  const prior = session.snapshot();
+  await expect(turns.steer({ ...input, manualRuleIds: [manual.id] })).rejects.toThrow('512 KiB');
+  expect(session.snapshot()).toEqual(prior);
+  const accepted = await turns.steer(input);
+  expect(accepted?.skills?.[0]?.body).toBe('Skill instructions');
+  expect(accepted?.skillCandidates?.map(skill => skill.id)).toEqual([nestedSkill.id]);
+  expect(accepted?.sources.map(rule => rule.id)).toEqual([nested.id]);
 });
