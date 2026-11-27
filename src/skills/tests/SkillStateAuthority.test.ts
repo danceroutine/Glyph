@@ -1,3 +1,4 @@
+import { testPackageMutations } from './fixtures/testPackageMutations.ts';
 import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { chmod, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,7 +12,7 @@ async function fixture() {
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const path = join(root, 'skill-state.json');
   await writeFile(path, JSON.stringify({ enabled: { example: false }, installations: {} }), { mode: 0o600 });
-  const state = new SkillStateStore(root, testFilesystemMetadata);
+  const state = new SkillStateStore(root, testFilesystemMetadata, testPackageMutations);
   return { root, path, state };
 }
 
@@ -34,7 +35,7 @@ describe(SkillStateStore, () => {
           await testFilesystemMetadata.inspect(...args);
         },
       };
-      const state = new SkillStateStore(root, metadata);
+      const state = new SkillStateStore(root, metadata, testPackageMutations);
       await expect(state.setEnabled('example', true, owner.signal)).rejects.toThrow('Window revoked');
       if (existing) expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ enabled: { example: false } });
       else await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -95,7 +96,7 @@ describe(SkillStateStore, () => {
   it('rejects a foreign-owned preference file inside an admitted owner-controlled directory', async () => {
     const { root, path } = await fixture();
     const disk = fixtureWorkspace(root);
-    const state = new SkillStateStore(disk.root, testFilesystemMetadata);
+    const state = new SkillStateStore(disk.root, testFilesystemMetadata, testPackageMutations);
     await state.initialize();
     const uid = (await stat(path)).uid;
     const readOptional = state.preferences.read.bind(state.preferences);
@@ -137,7 +138,7 @@ describe(SkillStateStore, () => {
         if ((await handle.stat()).ino === inode) await handle.chmod(0o666);
       }),
     };
-    const state = new SkillStateStore(root, metadata);
+    const state = new SkillStateStore(root, metadata, testPackageMutations);
     await expect(state.initialize()).rejects.toThrow('preferences');
     expect(state.enabled.size).toBe(0);
     expect((await stat(path)).mode & 0o777).toBe(0o666);

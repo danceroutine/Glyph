@@ -1,10 +1,11 @@
+import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
 import { SkillPackageRetirements } from './SkillPackageRetirements.ts';
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { inspectOwnerControlledDirectory, inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { link, open, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { open, rm } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 import { SkillPreferenceFile } from './SkillPreferenceFile.ts';
 import { syncDirectory, withSkillLock } from './SkillPackageStorage.ts';
 
@@ -36,6 +37,11 @@ export class SkillStateStore {
   constructor(
     readonly userDirectory: string,
     readonly metadata: FilesystemMetadata,
+    private readonly openMutations: (
+      root: string,
+    ) =>
+      | Pick<WorkspaceDirectoryMutations, 'renameExclusive'>
+      | Promise<Pick<WorkspaceDirectoryMutations, 'renameExclusive'>>,
   ) {
     this.preferences = new SkillPreferenceFile(userDirectory, metadata);
   }
@@ -145,10 +151,11 @@ export class SkillStateStore {
               } finally {
                 await handle.close();
               }
+              const mutations = await this.openMutations(parent);
               await checkDirectories();
               await inspectFileMetadata(this.metadata, temporary, 'replaceable');
               signal?.throwIfAborted();
-              await link(temporary, destination);
+              await mutations.renameExclusive(relative(parent, temporary), relative(parent, destination));
             } finally {
               await rm(temporary, { force: true });
             }

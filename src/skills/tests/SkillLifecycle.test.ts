@@ -91,13 +91,13 @@ describe(SkillStateStore, () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-state-')));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     const store = fixtureWorkspace(root);
-    const first = new SkillStateStore(store.root, testFilesystemMetadata);
+    const first = new SkillStateStore(store.root, testFilesystemMetadata, testPackageMutations);
     await first.initialize();
     await Promise.all([
       first.setEnabled('one', false, new AbortController().signal),
       first.setEnabled('two', true, new AbortController().signal),
     ]);
-    const second = new SkillStateStore(store.root, testFilesystemMetadata);
+    const second = new SkillStateStore(store.root, testFilesystemMetadata, testPackageMutations);
     await second.initialize();
     await second.record('one', 'Repository @ pinned SHA', 'version');
     await first.setEnabled('three', true, new AbortController().signal);

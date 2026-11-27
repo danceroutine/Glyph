@@ -1,3 +1,4 @@
+import { testPackageMutations } from './fixtures/testPackageMutations.ts';
 import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { packageRevision } from '#src/skills/skillPackageRevision.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
@@ -43,7 +44,7 @@ it('binds equal-size binary updates, owner permissions and the physical target t
   const exact = await manager.prepare(skill.origin.id, replacement, skill.id);
   await manager.apply(exact.id);
   expect((await stat(join(root, 'skills/example/assets/image.bin'))).mode & 0o777).toBe(0o700);
-  const state = new SkillStateStore(store.root, testFilesystemMetadata);
+  const state = new SkillStateStore(store.root, testFilesystemMetadata, testPackageMutations);
   await state.initialize();
   expect(state.installations.get(skill.id)?.revision).toBe(exact.revision);
 });
@@ -321,7 +322,7 @@ it('preserves the journal on uncertainty or post-commit changes, and refuses sta
   const separate = new SkillPackageManager(
     [location],
     catalog,
-    new SkillStateStore(store.root, testFilesystemMetadata),
+    new SkillStateStore(store.root, testFilesystemMetadata, testPackageMutations),
   );
   await rm(join(root, skill.directory), { recursive: true });
   const journal = new SkillTransactionJournal(root, testFilesystemMetadata);
