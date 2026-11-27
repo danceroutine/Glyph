@@ -61,6 +61,7 @@ describe(SkillPackageManager, () => {
     const manager = new SkillPackageManager([{ ...location, scope: 'project' }], catalog, state);
     const install = await manager.prepare(location.id, draft);
     const installedPaths = [
+      'skills/example',
       ...install.files.map(file => 'skills/example/' + file.path),
       'skills/example/assets',
       'skills/example/references',

@@ -123,7 +123,7 @@ describe(SkillLifecycleToolRuntime, () => {
               revision: 'one',
               status: AgentInstructionSourceStatus.ACTIVE,
               activation: AgentInstructionActivationMode.FILE_PATTERN,
-              globs: [target],
+              globs: ['skills/example', target],
             },
           ],
         },
@@ -141,7 +141,7 @@ describe(SkillLifecycleToolRuntime, () => {
     const first = JSON.parse(await tool.execute(input, signal, context));
     expect(first).toMatchObject({
       status: 'INSTRUCTION_CONTEXT_REQUIRED',
-      instructionContext: { sources: [{ id: 'directory' }], activations: [{ paths: [target] }] },
+      instructionContext: { sources: [{ id: 'directory' }], activations: [{ paths: ['skills/example', target] }] },
     });
     expect(approve).not.toHaveBeenCalled();
     expect(JSON.parse(await tool.execute(input, signal, context))).toMatchObject({ applied: true });
