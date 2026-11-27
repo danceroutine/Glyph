@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { inventoryPackage } from '#src/skills/skillPackageInventory.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
@@ -1455,6 +1456,69 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         'first/AGENTS.md',
         'second/AGENTS.md',
       ]);
+    });
+
+    it('uses the physical profile for discovery and resolves a formerly shared project rule only through its user owner', async () => {
+      const profile = join(isolatedUserDirectory, 'current');
+      const fixture = await factoryFixture({ userDirectory: profile });
+      useFilesystemIndex();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
+      const first = await fixture.folder('first');
+      const second = await fixture.folder('second');
+      for (const root of [first, second]) {
+        const skill = basename(root);
+        await mkdir(join(root, '.glyph/skills', skill), { recursive: true });
+        await writeFile(
+          join(root, '.glyph/skills', skill, 'SKILL.md'),
+          '---\nname: ' + skill + '\ndescription: Example\n---\nWorkflow',
+        );
+        await mkdir(join(root, '.glyph/rules'), { recursive: true });
+        await writeFile(
+          join(root, '.glyph/rules/shared.mdc'),
+          '---\nactivation: manual\nreferences: [context.md]\n---\nShared',
+        );
+        await writeFile(join(root, '.glyph/context.md'), basename(root) + ' profile context');
+        await writeFile(join(root, 'context.md'), 'Project context');
+      }
+      await symlink(join(first, '.glyph'), profile);
+      const old = 'glyph_project_rule:.glyph/rules/shared.mdc';
+      for (const root of [first, second]) {
+        if (root === second) {
+          await rm(profile);
+          await symlink(join(second, '.glyph'), profile);
+          await writeFile(join(second, '.glyph/rules/new.mdc'), 'New');
+        }
+        const runtime = await fixture.create([root]);
+        const snapshot = await runtime.snapshot();
+        expect(snapshot.skills!.map(skill => skill.name)).toEqual([basename(root)]);
+        expect(snapshot.instructionWatchRoots).toContain(pathToFileURL(join(root, '.glyph/skills')).href);
+        const sources = snapshot.instructionSources!;
+        const user = sources.find(source => source.path.endsWith('shared.mdc'))!;
+        if (root === second) {
+          await runtime.handle({
+            type: GlyphWorkbenchCommandType.SET_SKILL_ENABLED,
+            skillId: snapshot.skills![0]!.id,
+            enabled: false,
+          });
+          expect(await readFile(join(root, '.glyph/skill-state.json'), 'utf8')).toContain(snapshot.skills![0]!.id);
+          await expect(readFile(join(first, '.glyph/skill-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+        }
+        expect(sources).toHaveLength(root === first ? 1 : 2);
+        expect(user.kind).toBe('glyph_user_rule');
+        expect(user.legacyIds).toBeUndefined();
+        expect(runtime.resolveRuleReference(old)).toBe(user.id);
+        const turn = await captured.providerFactories
+          .at(-1)![4]!
+          .beginTurn({ turnId: 'manual', attachmentPaths: [], manualRuleIds: [old] });
+        const bodies = turn.initialEnvelope().sources.map(source => source.content);
+        expect(bodies).toHaveLength(1);
+        expect(bodies[0]).toContain(basename(root) + ' profile context');
+        expect(bodies[0]).not.toContain('Project context');
+      }
     });
 
     it('retains mandatory and manual instruction identity when an alias becomes a second workspace route', async () => {

@@ -30,6 +30,7 @@ export interface AgentRuleInstructionProviderOptions {
   readonly maxDiscoveryBytes?: number;
   readonly maxDiscoveryReferenceEdges?: number;
   readonly displayPrefix?: string;
+  readonly projectAlias?: (path: string) => AgentInstructionSource['projectAlias'];
   readonly uriForPath?: (path: string) => string;
 }
 
@@ -120,7 +121,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         signal,
       );
       return {
-        ...this.paths.sourceIdentity(this.options.kind, normalized),
+        ...this.identity(normalized),
         kind: this.options.kind,
         label: label(this.options.kind),
         name: name ?? posix.parse(normalized).name,
@@ -215,8 +216,9 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     // Source reads consume the file allowance and referenced reads consume the separate edge allowance.
     if (maxBytes <= 0 || (!dependencies && --budget.reads < 0))
       throw new Error('Instruction discovery read budget exhausted.');
+    const options = { maxBytes, physicalByteBudget: budget.readBytes };
     const snapshot = dependencies
-      ? await this.workspace.readOptional(path, { maxBytes }).catch(async (error: unknown) => {
+      ? await this.workspace.readOptional(path, options).catch(async (error: unknown) => {
           // A bounded read checks store policy and file identity, including link restrictions,
           // before reporting a size limit. Track only an authorized name when its contents fail.
           budget.readBytes -= workspaceReadFailureBytes(error);
@@ -232,19 +234,25 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
           if (canWatch) dependencies.add(path);
           throw error;
         })
-      : await this.workspace.read(path, { maxBytes }).catch((error: unknown) => {
+      : await this.workspace.read(path, options).catch((error: unknown) => {
           budget.readBytes -= workspaceReadFailureBytes(error);
           throw error;
         });
     dependencies?.add(path);
     if (!snapshot) throw new Error(`Missing rule reference: ${path}`);
-    budget.readBytes -= snapshot.byteLength ?? Buffer.byteLength(snapshot.text);
+    budget.readBytes -= Math.max(snapshot.bytesRead ?? 0, snapshot.byteLength ?? Buffer.byteLength(snapshot.text));
     return snapshot;
+  }
+
+  private identity(path: string) {
+    const identity = this.paths.sourceIdentity(this.options.kind, path);
+    const projectAlias = this.options.projectAlias?.(path);
+    return projectAlias ? { ...identity, projectAlias } : identity;
   }
 
   private errorSource(path: string, scope: string, message: string): AgentInstructionSource {
     return {
-      ...this.paths.sourceIdentity(this.options.kind, path),
+      ...this.identity(path),
       kind: this.options.kind,
       label: label(this.options.kind),
       name: posix.parse(path).name,

@@ -1,4 +1,7 @@
-import { it, expect, vi } from 'vitest';
+import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { it, expect, vi, onTestFinished } from 'vitest';
 import { assertUserWorkingCopiesClean } from '#src/desktop/workspace/assertUserWorkingCopiesClean.js';
 import { GlyphEditorRequestType, type GlyphEditorRequest } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
@@ -39,4 +42,30 @@ it('requires the matching affirmative response from every trusted editor and rec
     peers.mockReturnValueOnce([other]).mockReturnValueOnce(after);
     await expect(check()).rejects.toThrow('changed');
   }
+});
+
+it('rechecks the configured profile while dirty-editor requests are in flight', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-user-profile-')));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const [a, b, profile] = ['a', 'b', 'current'].map(name => join(root, name)) as [string, string, string];
+  await Promise.all([mkdir(a), mkdir(b)]);
+  await symlink(a, profile);
+  const request = vi.fn(async (_owner: GlyphConnectionIdentity, input: GlyphEditorRequest) => {
+    await rm(profile);
+    await symlink(b, profile);
+    return { ok: true, operationId: 'operationId' in input ? input.operationId : '', workingCopiesClean: true };
+  });
+  const check = () =>
+    assertUserWorkingCopiesClean(
+      { request, trustedUserEditors: () => [] },
+      owner,
+      'rule',
+      'one.mdc',
+      true,
+      join(a, 'rules', 'one.mdc'),
+      profile,
+    );
+  await expect(check()).rejects.toThrow('user directory changed');
+  await expect(check()).rejects.toThrow('user directory changed');
+  expect(request).toHaveBeenCalledTimes(1);
 });

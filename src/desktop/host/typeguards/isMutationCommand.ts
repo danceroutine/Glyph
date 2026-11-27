@@ -7,5 +7,6 @@ export function isMutationCommand(command: GlyphAttachedCommand): boolean {
     GlyphWorkbenchCommandType.OPEN_CHAT,
     GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS,
     GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE,
+    GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE,
   ].includes(command.type);
 }

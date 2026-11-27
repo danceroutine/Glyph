@@ -34,6 +34,11 @@ export class AgentInstructionSet {
         .filter(source => source.kind === AgentInstructionSourceKind.GLYPH_PROJECT_RULE)
         .map(source => compatibilityKey(source, paths.key(source.scope))),
     );
+    for (const source of sources) {
+      const alias = source.projectAlias;
+      if (alias?.kind === AgentInstructionSourceKind.GLYPH_PROJECT_RULE)
+        native.add(compatibilityKey(source, paths.key(alias.scope)));
+    }
     const depth = new Map(
       [...new Set(sources.map(source => source.scope))].map(scope => [
         scope,
@@ -46,6 +51,11 @@ export class AgentInstructionSet {
           source.kind !== AgentInstructionSourceKind.CURSOR_PROJECT_RULE ||
           !native.has(compatibilityKey(source, paths.key(source.scope))),
       )
+      .map(source => {
+        if (!source.projectAlias) return source;
+        const { projectAlias, ...owner } = source;
+        return { ...owner, legacyIds: [projectAlias.id, ...(projectAlias.legacyIds ?? [])] };
+      })
       .toSorted(
         (left, right) =>
           depth.get(left.scope)! - depth.get(right.scope)! ||

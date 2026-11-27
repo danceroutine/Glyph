@@ -17,9 +17,15 @@ export function createCatalogWorkspace(
     readonly maxBytes?: number;
   }) => Promise<GlyphEditorResponse>,
 ): WorkspaceTextStore {
-  const readOptional = async (input: string, options: WorkspaceReadOptions = {}) => {
+  const readOptional = async (input: string, options: WorkspaceReadOptions = {}, required = false) => {
     const path = disk.normalizePath(input);
-    const before = await disk.readOptional(path, options);
+    const { maxBytes, physicalByteBudget } = options;
+    // Reserve enough for the descriptor-backed verification after the editor replies.
+    const diskOptions =
+      physicalByteBudget === undefined
+        ? options
+        : { ...options, maxBytes: Math.min(maxBytes ?? Infinity, Math.floor(physicalByteBudget / 2)) };
+    const before = required ? await disk.read(path, diskOptions) : await disk.readOptional(path, diskOptions);
     if (!before) return undefined;
     let completedBytes = before.byteLength;
     try {
@@ -27,21 +33,22 @@ export function createCatalogWorkspace(
         type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT,
         operationId: randomUUID(),
         path,
-        ...options,
+        ...(maxBytes !== undefined ? { maxBytes } : {}),
       });
       if (!response.ok) throw new Error(response.error?.message ?? 'The editor catalog snapshot is unavailable.');
       // Recheck the descriptor-backed identity and bytes after crossing processes.
       // A rebind or concurrent disk edit cannot authorize a different model read.
-      const after = await disk.read(path, options);
+      const after = await disk.read(path, diskOptions);
       completedBytes += after.byteLength;
       if (before.identity !== after.identity || before.revision !== after.revision)
         throw new Error('Instruction file changed during the editor read. Retry discovery.');
       const snapshot = response.snapshot;
-      if (!snapshot) return after;
+      if (!snapshot) return { ...after, bytesRead: completedBytes };
       if (snapshot.path !== path || !snapshot.dirty)
         throw new Error('The editor returned an invalid catalog snapshot.');
       return {
         ...after,
+        bytesRead: completedBytes,
         text: snapshot.text,
         byteOrderMark: snapshot.byteOrderMark,
         byteLength: snapshot.byteLength,
@@ -60,11 +67,7 @@ export function createCatalogWorkspace(
     list: workspace.list.bind(workspace),
     exists: workspace.exists.bind(workspace),
     readOptional,
-    read: async (path, options) => {
-      const snapshot = await readOptional(path, options);
-      if (!snapshot) return disk.read(path, options);
-      return snapshot;
-    },
+    read: async (path, options) => (await readOptional(path, options, true))!,
     create: workspace.create.bind(workspace),
     replace: workspace.replace.bind(workspace),
     rename: workspace.rename.bind(workspace),

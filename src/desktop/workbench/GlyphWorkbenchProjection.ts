@@ -48,6 +48,8 @@ export class GlyphWorkbenchProjection {
       case GlyphHostEventType.SKILLS_CHANGED:
         this.snapshot = { ...this.snapshot, skills: event.skills };
         return;
+      case GlyphHostEventType.RULE_REFERENCE_RESOLVED:
+        return;
       case GlyphHostEventType.AGENT_REVIEW_CHANGED:
         this.snapshot = {
           ...this.snapshot,
