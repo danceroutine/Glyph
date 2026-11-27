@@ -3,6 +3,8 @@ import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 export interface WorkspaceMutationOptions {
   /** Durable id used by remote/editor adapters to deduplicate mutation retries. */
   readonly operationId?: string;
+  /** Lifetime of the initiating command. Consult immediately before publishing its filesystem change. */
+  readonly signal?: AbortSignal;
   readonly undoGroupId?: string;
   /** Save the edited working copy so commands see the applied change on disk. */
   readonly save?: boolean;

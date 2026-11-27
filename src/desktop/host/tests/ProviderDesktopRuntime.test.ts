@@ -423,9 +423,9 @@ it('dispatches user rule lifecycle commands and reports unavailable management',
       path: 'rules/test.mdc',
       expectedRevision: 'two',
     });
-    expect(userRules.create).toHaveBeenCalledWith('Test', 'manual', undefined);
-    expect(userRules.setEnabled).toHaveBeenCalledWith('rules/test.mdc', 'one', false);
-    expect(userRules.remove).toHaveBeenCalledWith('rules/test.mdc', 'two');
+    expect(userRules.create).toHaveBeenCalledWith(expect.any(AbortSignal), 'Test', 'manual', undefined);
+    expect(userRules.setEnabled).toHaveBeenCalledWith(expect.any(AbortSignal), 'rules/test.mdc', 'one', false);
+    expect(userRules.remove).toHaveBeenCalledWith(expect.any(AbortSignal), 'rules/test.mdc', 'two');
   } finally {
     await harness.runtime.dispose();
   }
@@ -2040,9 +2040,9 @@ describe(ProviderDesktopRuntime, () => {
     await harness.runtime.dispose();
 
     await expect(
-      (harness.runtime as unknown as { dispatch(command: GlyphRuntimeCommand): Promise<void> }).dispatch({
-        type: Command.LIST_CHATS,
-      }),
+      (
+        harness.runtime as unknown as { dispatch(command: GlyphRuntimeCommand, signal: AbortSignal): Promise<void> }
+      ).dispatch({ type: Command.LIST_CHATS }, new AbortController().signal),
     ).rejects.toThrow('The workspace runtime has stopped.');
   });
 
@@ -3751,7 +3751,10 @@ describe('background shell continuation scheduling', () => {
         expect(saving).toHaveBeenCalledTimes(1);
         expect(send).not.toHaveBeenCalled();
         expect(harness.recorded.flat()).toEqual([]);
-        await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId }, { windowId: 'peer' });
+        await harness.runtime.handle(
+          { type: Command.OPEN_CHAT, chatId: harness.chatId },
+          { windowId: 'peer', signal: new AbortController().signal },
+        );
         expect(saving).toHaveBeenCalledTimes(1);
         await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
         await vi.waitFor(() => {
@@ -3922,7 +3925,10 @@ describe('background shell continuation scheduling', () => {
     try {
       await harness.runtime.connectionLost('owner');
       harness.wake(wakeFor(harness.chatId));
-      await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId }, { windowId: 'peer' });
+      await harness.runtime.handle(
+        { type: Command.OPEN_CHAT, chatId: harness.chatId },
+        { windowId: 'peer', signal: new AbortController().signal },
+      );
       await harness.runtime.snapshot();
       expect(sends).toBe(0);
       await harness.runtime.handle({ type: Command.OPEN_CHAT, chatId: harness.chatId });
@@ -4061,7 +4067,7 @@ describe('goal continuation', () => {
       });
       await harness.runtime.handle(
         { type: Command.CONTINUE_GOAL, chatId: harness.chatId, goalId: goal.id },
-        { windowId: 'peer' },
+        { windowId: 'peer', signal: new AbortController().signal },
       );
       expect(send).not.toHaveBeenCalled();
       expect((await goalOf(harness.runtime, harness.chatId))?.continuationCount).toBe(0);

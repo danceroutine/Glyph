@@ -308,6 +308,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
             if (!(await ownsStagedEntry())) throw new Error('The staged create file changed before publication.');
             await this.assertPhysicalAccess(absolute);
             operation.assertCurrent();
+            options?.signal?.throwIfAborted();
             await link(staged, absolute);
           } finally {
             if (await ownsStagedEntry()) await unlink(staged);
@@ -319,6 +320,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         await options?.beforePublish?.();
         await this.assertPhysicalAccess(absolute);
         operation.assertCurrent();
+        options?.signal?.throwIfAborted();
         const handle = await open(absolute, 'wx', mode);
         try {
           await this.assertPhysicalAccess(absolute, handle);
@@ -376,6 +378,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       await options?.beforeReplace?.(temporary);
       await this.assertPhysicalAccess(absolute);
       operation.assertCurrent();
+      options?.signal?.throwIfAborted();
       await rename(temporary, absolute);
     } catch (error) {
       throw classifyPathError(error, path);
@@ -433,6 +436,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     try {
       await this.assertPhysicalAccess(resolve(this.root, path));
       operation.assertCurrent();
+      options?.signal?.throwIfAborted();
       await unlink(resolve(this.root, path));
     } catch (error) {
       throw classifyPathError(error, path);

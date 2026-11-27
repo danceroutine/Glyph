@@ -14,7 +14,10 @@ interface UserRuleFileAuthority {
 
 export type UserAgentRuleActivation = 'always' | 'file_pattern' | 'model' | 'manual';
 
-/** Revision-guarded lifecycle operations for rules owned by the current user. */
+/**
+ * Manages personal rules under the profile lock. Each change carries the initiating command's lifetime into
+ * lock acquisition and filesystem publication. Revision and working-copy checks protect concurrent file edits.
+ */
 export class UserAgentRuleManager {
   constructor(
     private readonly workspace: Pick<
@@ -32,7 +35,12 @@ export class UserAgentRuleManager {
     return pathToFileURL(join(this.workspace.root, 'rules')).href;
   }
 
-  async create(name: string, activation: UserAgentRuleActivation, condition?: string): Promise<void> {
+  async create(
+    signal: AbortSignal,
+    name: string,
+    activation: UserAgentRuleActivation,
+    condition?: string,
+  ): Promise<void> {
     const title = name.trim();
     if (!title) throw new Error('Rule name cannot be empty.');
     const slug = title
@@ -58,20 +66,21 @@ export class UserAgentRuleManager {
     const text = ['---', ...metadata, '---', '', 'Describe the rule here.', ''].join('\n');
     if (Buffer.byteLength(text) > MAX_AGENT_RULE_BYTES) throw new Error('User rules can contain at most 64 KiB.');
     parseAgentRuleFile(text);
-    await this.mutate(async () => {
+    await this.mutate(signal, async () => {
       const check = this.workingCopyCheck(path);
       await check?.beforePublish();
       return this.workspace.create(path, text, false, 0o600, {
         ...check,
+        signal,
         inspectBeforeWrite: file => this.metadata.inspect(file, 'access'),
       });
     });
     await this.refreshDiscovery();
   }
 
-  async setEnabled(path: string, expectedRevision: string, enabled: boolean): Promise<void> {
+  async setEnabled(signal: AbortSignal, path: string, expectedRevision: string, enabled: boolean): Promise<void> {
     const normalized = this.rulePath(path);
-    await this.mutate(async () => {
+    await this.mutate(signal, async () => {
       const filename = normalized.slice('rules/'.length);
       await this.assertClean?.(filename);
       const current = await this.workspace.read(normalized, { maxBytes: MAX_AGENT_RULE_BYTES });
@@ -85,6 +94,7 @@ export class UserAgentRuleManager {
       };
       await checkSource();
       await this.workspace.replace(normalized, expectedRevision, text, current.byteOrderMark, {
+        signal,
         beforeReplace: async stagedPath => {
           await inspectFileMetadata(this.metadata, stagedPath, 'replaceable');
           await checkSource();
@@ -94,12 +104,12 @@ export class UserAgentRuleManager {
     await this.refreshDiscovery();
   }
 
-  async remove(path: string, expectedRevision: string): Promise<void> {
+  async remove(signal: AbortSignal, path: string, expectedRevision: string): Promise<void> {
     const normalized = this.rulePath(path);
-    await this.mutate(async () => {
+    await this.mutate(signal, async () => {
       const check = this.workingCopyCheck(normalized);
       await check?.beforePublish();
-      await this.workspace.delete(normalized, expectedRevision, check);
+      await this.workspace.delete(normalized, expectedRevision, { ...check, signal });
     });
     await this.refreshDiscovery();
   }
@@ -109,9 +119,15 @@ export class UserAgentRuleManager {
     return check ? { beforePublish: () => check(path.slice('rules/'.length)) } : undefined;
   }
 
-  private mutate<T>(work: () => Promise<T>): Promise<T> {
+  private mutate<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
     this.prepareProfile?.();
-    return withPrivateFileLock(this.metadata, join(this.workspace.root, '.skill-staging', 'user-rules.sqlite'), work);
+    return withPrivateFileLock(
+      this.metadata,
+      join(this.workspace.root, '.skill-staging', 'user-rules.sqlite'),
+      work,
+      signal,
+    );
   }
 
   /** Publish managed mutations immediately, without waiting for native watcher reconciliation. */
