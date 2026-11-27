@@ -39,10 +39,12 @@ export class WorkspaceAccessPolicy {
 
   private privatePathSnapshot: readonly string[] = [];
   private privatePathRevision = 0;
+  private sourceRevision: number | undefined;
 
   constructor(
     options: WorkspaceAccessPolicyOptions = {},
     private readonly privatePathSource: readonly string[] | (() => readonly string[]) = [],
+    private readonly verifyAuthority?: () => number,
   ) {
     const resolved = schema.parse(options);
     // Transaction journals, locks and rollback copies remain host-private under customized policies too.
@@ -56,11 +58,14 @@ export class WorkspaceAccessPolicy {
 
   /** Absolute host exclusions, including profiles admitted after this policy was constructed. */
   get privatePaths(): readonly string[] {
+    const sourceRevision = this.verifyAuthority?.();
     const paths = typeof this.privatePathSource === 'function' ? this.privatePathSource() : this.privatePathSource;
     if (
+      this.sourceRevision !== sourceRevision ||
       paths.length !== this.privatePathSnapshot.length ||
       paths.some((path, i) => path !== this.privatePathSnapshot[i])
     ) {
+      this.sourceRevision = sourceRevision;
       this.privatePathSnapshot = Object.freeze([...paths]);
       this.privatePathRevision++;
     }

@@ -63,7 +63,13 @@ tool reads each have their own workspace access requirements.
 Native search and the shell run outside the JavaScript process. Pass the host's
 policy to their adapters. An OS sandbox is established at launch. For an
 intentional move of private storage, stop existing commands that could reach the
-new location, including detached commands, before switching the boundary.
+new location, including detached commands, before switching the boundary. Glyph verifies the startup profile's directory identity
+when issuing a project, selected-file, catalog, or sandbox operation and when a
+host-mediated result is delivered. An observed removal or replacement invalidates
+outstanding operations and cached projections. New operations resume when the
+original directory returns to its enrolled path. A running sandbox keeps the
+OS rules installed at launch. External moves between host checks, including
+moves during a running command, require the same stop-before-move procedure.
 
 ## Extending access
 
