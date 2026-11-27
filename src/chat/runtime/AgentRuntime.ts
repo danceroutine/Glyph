@@ -129,9 +129,6 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       signal,
       turnId,
       round,
-      ...(this.turnContexts?.authorizeDisclosure
-        ? { authorizeDisclosure: () => this.turnContexts!.authorizeDisclosure(turnId, signal) }
-        : {}),
       mode: AgentMode.resolve(mode),
       ...(boundaryInstructions ? { instructionContext: boundaryInstructions } : {}),
       onText: options.onText,
@@ -189,7 +186,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           await options.onStateCheckpoint?.(structuredClone(this.state));
         }
         round += 1;
-        const step = await this.adapter.streamStep(turn, context(round));
+        const send = await this.adapter.prepareStep(turn, context(round));
+        const assertCurrent = await this.turnContexts?.authorizeDisclosure?.(turnId, signal);
+        assertCurrent?.();
+        const step = await send(assertCurrent);
         turn = step.turn;
         usageIncomplete ||= step.usage === null;
         totalUsage = addUsage(totalUsage, step.usage);
