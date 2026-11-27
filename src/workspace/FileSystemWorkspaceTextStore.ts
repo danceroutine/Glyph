@@ -31,6 +31,9 @@ import { WorkspaceReadLimitError } from './WorkspaceReadLimitError.ts';
 import { assertWellFormedWorkspacePath } from './assertWellFormedWorkspacePath.ts';
 import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 
+/** A revocable disk write stages its bytes and checks the initiating command immediately before publication. */
+type DiskPublicationOptions = WorkspaceMutationOptions & { readonly signal?: AbortSignal };
+
 const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
     access: z.instanceof(WorkspaceRootAccess),
@@ -44,6 +47,11 @@ const fileSystemWorkspaceTextStoreOptionsSchema = z
   })
   .strict();
 
+/**
+ * Performs workspace reads and revision-checked disk mutations through the selected root's access policy.
+ * A window can supply its command signal when publishing a personal rule. The store stages revocable creates
+ * and checks the signal at the filesystem call that makes a creation, replacement, or removal visible.
+ */
 export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   readonly root: string;
   readonly caseSensitive: boolean;
@@ -276,7 +284,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     text: string,
     byteOrderMark: boolean,
     mode = 0o644,
-    options?: WorkspaceMutationOptions & { readonly inspectBeforeWrite?: (file: FileHandle) => Promise<void> },
+    options?: DiskPublicationOptions & { readonly inspectBeforeWrite?: (file: FileHandle) => Promise<void> },
   ): Promise<WorkspaceTextSnapshot> {
     const operation = this.options.access.beginOperation();
     assertSupportedText(text, input);
@@ -286,7 +294,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     await this.assertPhysicalAccess(absolute);
     const created = await this.createParents(dirname(absolute), operation.assertCurrent);
     try {
-      if (options?.inspectBeforeWrite) {
+      if (options?.inspectBeforeWrite || options?.signal) {
         // Inherit metadata from the destination directory, admit the empty inode, then publish without overwriting.
         const staged = resolve(dirname(absolute), `.${randomUUID()}.glyph.tmp`);
         const handle = await open(staged, 'wx', mode);
@@ -301,14 +309,14 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           };
           try {
             await handle.chmod(mode);
-            await options.inspectBeforeWrite(handle);
+            await options.inspectBeforeWrite?.(handle);
             operation.assertCurrent();
             await handle.writeFile(toBytes(text, byteOrderMark));
             await options.beforePublish?.();
             if (!(await ownsStagedEntry())) throw new Error('The staged create file changed before publication.');
             await this.assertPhysicalAccess(absolute);
             operation.assertCurrent();
-            options?.signal?.throwIfAborted();
+            options.signal?.throwIfAborted();
             await link(staged, absolute);
           } finally {
             if (await ownsStagedEntry()) await unlink(staged);
@@ -320,7 +328,6 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         await options?.beforePublish?.();
         await this.assertPhysicalAccess(absolute);
         operation.assertCurrent();
-        options?.signal?.throwIfAborted();
         const handle = await open(absolute, 'wx', mode);
         try {
           await this.assertPhysicalAccess(absolute, handle);
@@ -351,7 +358,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     expectedRevision: string,
     text: string,
     byteOrderMark: boolean,
-    options?: WorkspaceMutationOptions,
+    options?: DiskPublicationOptions,
   ): Promise<WorkspaceTextSnapshot> {
     const operation = this.options.access.beginOperation();
     // POSIX filesystems do not expose compare-and-swap replacement by content
@@ -428,7 +435,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return this.read(target);
   }
 
-  async delete(input: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void> {
+  async delete(input: string, expectedRevision: string, options?: DiskPublicationOptions): Promise<void> {
     const operation = this.options.access.beginOperation();
     const path = this.normalizePath(input);
     await this.assertRevision(path, expectedRevision, options);
