@@ -8,7 +8,7 @@ import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { skillPackageId } from '#src/skills/skillPackageId.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -2340,4 +2340,17 @@ it('updates existing workspace boundaries when a shared profile alias is retarge
   expect(projected).toContain('old/skill-state.json');
   expect(projected).toContain('new/skill-state.json');
   await expect(client.request(request)).rejects.toThrow();
+});
+
+it('creates a new profile with owner-only access even under a group-writable process umask', async () => {
+  const fixture = await factoryFixture();
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  const mask = process.umask(0o002);
+  try {
+    const runtime = await fixture.create([await fixture.folder('project')]);
+    await runtime.snapshot();
+    expect((await stat(fixture.userDirectory)).mode & 0o777).toBe(0o700);
+  } finally {
+    process.umask(mask);
+  }
 });

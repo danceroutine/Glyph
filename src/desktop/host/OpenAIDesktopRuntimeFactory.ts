@@ -411,6 +411,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             },
             async maxFiles => {
               // The index root must obey the store's no-symlink rule too, not just its children.
+              await mkdir(userRuleRoot, { recursive: true, mode: 0o700 });
               await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
               await userInstructionStore.canonicalPath('rules');
               return listUserRuleFiles(userRuleIndex, maxFiles);
@@ -459,6 +460,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         binaryStore: userInstructionStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
         listFiles: async signal => {
+          await mkdir(userRuleRoot, { recursive: true, mode: 0o700 });
           await mkdir(skillRoot, { recursive: true });
           await userInstructionStore.canonicalPath('skills');
           const result = await userSkillIndex.listSkillPackages(null, signal);
@@ -750,7 +752,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                   filesystemMetadata,
                   openMutations,
                   undefined,
-                  input.hostWorkspaceRoots ?? roots.map(root => root.path),
+                  input.hostWorkspaceRoots ?? roots.map(workspaceRoot => workspaceRoot.path),
                 ),
               ),
             ]

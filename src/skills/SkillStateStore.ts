@@ -1,6 +1,5 @@
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { inspectOwnerControlledDirectory, inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
-import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
 import { constants } from 'node:fs';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
@@ -177,7 +176,6 @@ export class SkillStateStore {
   private async readPreferences() {
     await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
     const options = {
-      maxBytes: 1024 * 1024,
       metadata: { inspect: (handle: FileHandle) => this.inspectPreference(handle) },
     };
     return this.workspace.readOptional('skill-state.json', options);

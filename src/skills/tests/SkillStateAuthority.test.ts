@@ -49,7 +49,7 @@ describe(SkillStateStore, () => {
     } finally {
       current.mockRestore();
     }
-    expect(JSON.parse(await readFile(path, 'utf8')).enabled.example).toBe(false);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ enabled: { example: false } });
   });
 
   it('checks the opened preference inode before consuming bytes and rejects permission changes during a read', async () => {
