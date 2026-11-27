@@ -55,3 +55,25 @@ it('uses fixed system programs on Windows and rejects unavailable interpreters',
     Object.defineProperty(process, 'platform', descriptor);
   }
 });
+
+it.skipIf(process.platform !== 'darwin')(
+  'keeps configuration inside a Unicode-equivalent workspace route under project authority',
+  () => {
+    const base = mkdtempSync(join(tmpdir(), 'glyph-program-unicode-'));
+    try {
+      const home = join(base, 'home'),
+        project = join(base, 'caf\u00e9'),
+        alias = join(base, 'cafe\u0301');
+      mkdirSync(home);
+      mkdirSync(project);
+      const config = join(project, 'config');
+      writeFileSync(config, '[user]\nname = Workspace controlled\n');
+      vi.stubEnv('HOME', home);
+      vi.stubEnv('XDG_CONFIG_HOME', undefined);
+      vi.stubEnv('GIT_CONFIG_GLOBAL', config);
+      expect(() => repositoryEnvironment([alias])).toThrow('outside writable workspaces');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  },
+);

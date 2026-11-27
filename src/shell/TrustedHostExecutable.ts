@@ -11,7 +11,7 @@ function contains(root: string, path: string): boolean {
 
 export function outsideWorkspace(path: string, roots: readonly string[]): string {
   const physical = resolveAvailableIdentity(path);
-  if (roots.some(root => contains(realpathSync(root), physical))) {
+  if (roots.some(root => contains(realpathSync.native(root), physical))) {
     throw new Error('Host tools, configuration and temporary storage must reside outside writable workspaces.');
   }
   return physical;
@@ -19,7 +19,7 @@ export function outsideWorkspace(path: string, roots: readonly string[]): string
 
 /** Resolves the selected installation before it is displayed or passed to a child process. */
 export function trustedHostExecutable(name: HostExecutable, workspaceRoots: readonly string[]): string {
-  const roots = workspaceRoots.map(root => realpathSync(root));
+  const roots = workspaceRoots.map(root => realpathSync.native(root));
   const candidates =
     process.platform === 'win32'
       ? name === 'git'
@@ -32,7 +32,7 @@ export function trustedHostExecutable(name: HostExecutable, workspaceRoots: read
         ];
   for (const candidate of candidates) {
     try {
-      const path = realpathSync(candidate);
+      const path = realpathSync.native(candidate);
       if (roots.some(root => contains(root, path)) || !statSync(path).isFile()) continue;
       accessSync(path, constants.X_OK);
       return path;
