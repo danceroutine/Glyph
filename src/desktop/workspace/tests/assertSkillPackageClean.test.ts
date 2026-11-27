@@ -132,7 +132,7 @@ it('sends each recipient its physical mount route and rechecks mount changes bef
       'project',
       '/source/one',
       undefined,
-      [intersection, intersection],
+      [intersection, intersection, 'file:///owner/another'],
       undefined,
       ['/mount/one'],
     );
@@ -141,6 +141,7 @@ it('sends each recipient its physical mount route and rechecks mount changes bef
   expect(request.mock.calls.map(([, cmd]) => cmd)).toMatchObject([
     { physicalPackageUri: 'file:///source/one' },
     intersection,
+    { directoryUri: 'file:///owner/another', physicalPackageUri: 'file:///source/one' },
     { physicalPackageUri: peer.physicalPackageUri },
   ]);
   registry.mockReturnValueOnce([peer]).mockReturnValueOnce([{ ...peer, physicalPackageUri: 'file:///other/one' }]);

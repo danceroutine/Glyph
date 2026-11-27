@@ -277,6 +277,13 @@ it('preserves uncertain originals and distinguishes independent identical packag
   await journal.write(record);
   await manager.recover();
   expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
+  // A crashed install that never moved its staged, different candidate also preserves the new occupant.
+  await mkdir(stage, { mode: 0o700 });
+  await journal.write({ ...record, replacement: 'other-candidate' });
+  await expect(manager.recover()).rejects.toThrow('Preserved backups');
+  await mkdir(join(stage, 'package'));
+  await manager.recover();
+  expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
 });
 it('blocks changed physical destinations and failed journal writes before touching a package', async () => {
   const { root, store, location, manager } = await aSkillLifecycle();
