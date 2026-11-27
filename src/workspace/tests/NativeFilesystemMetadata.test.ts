@@ -57,10 +57,11 @@ it('passes physical exclusions and the opened identity to native path admission'
   const handle = await open(file);
   try {
     const stat = await handle.stat({ bigint: true });
-    await native.assertWorkspacePath(file, [root + '/private'], { handle });
+    await native.assertWorkspacePath(file, [root + '/private'], { handle, managedDirectories: [root + '/skills'] });
     expect(JSON.parse(await readFile(receipt, 'utf8'))).toEqual({
       path: file,
       privatePaths: [root + '/private'],
+      managedDirectories: [root + '/skills'],
       identity: [String(stat.dev), String(stat.ino)],
     });
     await native.assertWorkspacePath(file, []);

@@ -87,6 +87,38 @@ describe(FileSystemWorkspaceTextStore, () => {
     await expect(changed.read('public')).rejects.toThrow('changed');
   });
 
+  it('retains readable package files while checking each ordinary mutation against current managed directories', async () => {
+    const root = await realpath(await workspaceRoot('glyph-managed-admission-'));
+    const managed: string[] = [];
+    const physicalAccess = {
+      assertWorkspacePath: vi.fn(
+        async (
+          path: string,
+          _private: readonly string[],
+          options?: { readonly managedDirectories?: readonly string[] },
+        ) => {
+          if (options?.managedDirectories?.includes(path)) throw new Error('package review required');
+        },
+      ),
+    };
+    const disk = new FileSystemWorkspaceTextStore(root, { physicalAccess, managedDirectories: () => managed });
+    const example = await disk.create('guide', 'readable', false);
+    managed.push(join(root, 'guide'), join(root, 'new'));
+    expect((await disk.read('guide')).text).toBe('readable');
+    await disk.canonicalPath('guide');
+    await expect(disk.canonicalPath('guide', true)).rejects.toThrow('package review');
+    await expect(disk.validateAccess('new', true)).rejects.toThrow('package review');
+    await expect(disk.replace('guide', example.revision, 'changed', false)).rejects.toThrow('package review');
+    await expect(disk.rename('guide', 'new', example.revision)).rejects.toThrow('package review');
+    await expect(disk.delete('guide', example.revision)).rejects.toThrow('package review');
+    await expect(disk.create('new', 'new', false)).rejects.toThrow('package review');
+    const staticDisk = new FileSystemWorkspaceTextStore(root, {
+      physicalAccess,
+      managedDirectories: [join(root, 'guide')],
+    });
+    await expect(staticDisk.validateAccess('guide', true)).rejects.toThrow('package review');
+    expect(await readFile(join(root, 'guide'), 'utf8')).toBe('readable');
+  });
   it('checks ownership, current mode, and host access controls on the completed staging file', async () => {
     const root = await workspaceRoot('glyph-workspace-replacement-');
     const disk = new FileSystemWorkspaceTextStore(root);

@@ -16,30 +16,16 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, HostFilesys
     options?: { readonly handle?: FileHandle; readonly managedDirectories?: readonly string[] },
   ): Promise<void> {
     const inode = await options?.handle?.stat({ bigint: true });
-    const child = spawn(this.executable, ['--assert-workspace-path'], {
-      stdio: ['pipe', 'pipe', 'ignore'],
-      timeout: 5000,
-      env: {},
-    });
-    const input = new Promise<void>((resolve, reject) => {
-      child.stdin.once('error', reject);
-      child.stdin.end(
-        JSON.stringify({
-          path,
-          privatePaths,
-          managedDirectories: options?.managedDirectories,
-          identity: inode && [String(inode.dev), String(inode.ino)],
-        }),
-        resolve,
-      );
-    });
-    let acknowledgement = '';
-    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-      acknowledgement = (acknowledgement + chunk).slice(0, 10);
-    });
-    await Promise.all([input, once(child, 'close')]);
-    if (child.exitCode !== 0 || acknowledgement !== 'verified\n')
-      throw new Error('That path is excluded from project access or changed during inspection.');
+    await this.sendPathRequest(
+      '--assert-workspace-path',
+      {
+        path,
+        privatePaths,
+        managedDirectories: options?.managedDirectories,
+        identity: inode && [String(inode.dev), String(inode.ino)],
+      },
+      'That path is excluded from project access or changed during inspection.',
+    );
   }
 
   async inspect(handle: FileHandle, purpose: 'access' | 'replaceable'): Promise<void> {
@@ -55,16 +41,19 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, HostFilesys
   }
 
   async assertHostPaths(paths: readonly string[], workspaceRoots: readonly string[]): Promise<void> {
-    const child = spawn(this.executable, ['--assert-host-paths'], {
-      stdio: ['pipe', 'pipe', 'ignore'],
-      timeout: 5000,
-      env: {},
-    });
-    const failure = 'Could not establish host filesystem authority outside every workspace.';
+    await this.sendPathRequest(
+      '--assert-host-paths',
+      { paths, workspaceRoots },
+      'Could not establish host filesystem authority outside every workspace.',
+    );
+  }
+
+  private async sendPathRequest(flag: string, payload: object, failure: string): Promise<void> {
+    const child = spawn(this.executable, [flag], { stdio: ['pipe', 'pipe', 'ignore'], timeout: 5000, env: {} });
     // A helper that refuses its request can close the input before the whole frame is written.
     const input = new Promise<void>((resolve, reject) => {
       child.stdin.once('error', reject);
-      child.stdin.end(JSON.stringify({ paths, workspaceRoots }), resolve);
+      child.stdin.end(JSON.stringify(payload), resolve);
     });
     await Promise.all([input, this.acknowledge(child, failure)]);
   }

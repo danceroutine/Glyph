@@ -1961,3 +1961,32 @@ fn discards_lookups_if_an_explicit_private_location_is_redirected() {
     malformed.private_paths = vec!["relative".into()];
     assert!(ContextIndexService::new().initialize(malformed).is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn package_listing_rechecks_the_current_private_authority_of_resident_paths() {
+    let root = tempdir().unwrap();
+    let visible = root.path().join("workspace");
+    let private = root.path().join("private");
+    let permissions = root.path().join("permission-scope");
+    fs::create_dir(&private).unwrap();
+    let catalog = visible.join(".glyph/skills/documentation");
+    fs::create_dir_all(&catalog).unwrap();
+    fs::write(catalog.join("SKILL.md"), "fixture").unwrap();
+    std::os::unix::fs::symlink(&private, &permissions).unwrap();
+    let mut cfg = params(&visible);
+    cfg.private_paths = vec![permissions.clone()];
+    let mut service = ContextIndexService::new();
+    service.initialize(cfg).unwrap();
+    assert_eq!(
+        service.list_skill_packages(Some(".glyph")).unwrap().files,
+        vec![".glyph/skills/documentation/SKILL.md"]
+    );
+    fs::remove_file(&permissions).unwrap();
+    std::os::unix::fs::symlink(&catalog, &permissions).unwrap();
+    assert!(service
+        .list_skill_packages(Some(".glyph"))
+        .unwrap()
+        .files
+        .is_empty());
+}

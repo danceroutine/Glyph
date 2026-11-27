@@ -201,6 +201,11 @@ fn admits_a_workspace_path_and_rechecks_its_opened_identity() {
         })
     };
     assert_eq!(check(&request).stdout, b"verified\n");
+    let mut mutation = request.clone();
+    mutation["managedDirectories"] = serde_json::json!([root.path()]);
+    assert!(!check(&mutation).status.success());
+    mutation["managedDirectories"] = serde_json::json!(["relative"]);
+    assert!(!check(&mutation).status.success());
     let mut stale = request;
     stale["identity"] = serde_json::json!(["0", "0"]);
     assert!(!check(&stale).status.success());
