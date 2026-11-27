@@ -22,9 +22,11 @@ const schema = z
   .strict();
 
 /**
- * Canonical policy for paths that agents may discover or read. Project tools,
- * attachments, native search, and shell confinement must all receive the same
- * instance so a file cannot become accessible by switching capabilities.
+ * Owns agent-visible name filters and the current host-private path exclusions.
+ * Composition roots supply this policy to disk, editor and native adapters. A
+ * projection belongs to one root and one policy generation. A caller retaining
+ * asynchronous results must check the generation again before releasing them.
+ * The filesystem adapter verifies the underlying object at the operation itself.
  */
 export class WorkspaceAccessPolicy {
   readonly ignoredDirectories: readonly string[];

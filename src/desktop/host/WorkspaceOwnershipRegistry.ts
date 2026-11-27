@@ -35,7 +35,9 @@ export class WorkspaceOwnershipError extends Error {
 /**
  * Prevents two runtimes from mutating the same files through different windows
  * or workspace identities. Secondary windows may observe an existing runtime,
- * but only its owning window receives mutation authority.
+ * but only its owning window receives mutation authority. Ownership lasts until
+ * the owner releases its connection. For an in-flight mutation the host must
+ * also verify current ownership and coordinate with peer editor buffers.
  */
 export class WorkspaceOwnershipRegistry {
   private readonly owners = new Map<string, OwnerRecord>();
