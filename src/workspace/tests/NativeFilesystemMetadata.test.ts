@@ -1,4 +1,4 @@
-import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
@@ -43,4 +43,33 @@ it('requires the native host path check to acknowledge the requested paths and e
 `,
   );
   await check();
+});
+
+it('passes physical exclusions and the opened identity to native path admission', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'glyph-path-admission-'));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, 'document');
+  const script = join(root, 'inspector');
+  const receipt = join(root, 'request');
+  await writeFile(file, 'example');
+  await writeFile(script, '#!/bin/sh\n/bin/cat > "' + receipt + '"\necho verified\n', { mode: 0o700 });
+  const native = new NativeFilesystemMetadata(script);
+  const handle = await open(file);
+  try {
+    const stat = await handle.stat({ bigint: true });
+    await native.assertWorkspacePath(file, [root + '/private'], { handle });
+    expect(JSON.parse(await readFile(receipt, 'utf8'))).toEqual({
+      path: file,
+      privatePaths: [root + '/private'],
+      identity: [String(stat.dev), String(stat.ino)],
+    });
+    await native.assertWorkspacePath(file, []);
+    expect(JSON.parse(await readFile(receipt, 'utf8'))).toEqual({ path: file, privatePaths: [] });
+    await writeFile(script, '#!/bin/sh\n/bin/cat >/dev/null\necho refused\n');
+    await expect(native.assertWorkspacePath(file, [])).rejects.toThrow('excluded');
+    await writeFile(script, '#!/bin/sh\n/bin/cat >/dev/null\nexit 1\n');
+    await expect(native.assertWorkspacePath(file, [])).rejects.toThrow('excluded');
+  } finally {
+    await handle.close();
+  }
 });

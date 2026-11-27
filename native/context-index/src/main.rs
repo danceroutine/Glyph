@@ -1,3 +1,25 @@
+fn inspect_workspace_path() -> std::io::Result<()> {
+    use std::path::PathBuf;
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Request {
+        path: PathBuf,
+        private_paths: Vec<PathBuf>,
+        identity: Option<[String; 2]>,
+    }
+    let req: Request = serde_json::from_reader(std::io::stdin().lock())?;
+    let access =
+        glyph_filesystem_metadata::workspace_paths::WorkspacePaths::current(&req.private_paths)?;
+    access.assert_path(
+        &req.path,
+        req.identity
+            .as_ref()
+            .map(|[dev, ino]| (dev.as_str(), ino.as_str())),
+    )?;
+    println!("verified");
+    Ok(())
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn inspect(replacement: bool) -> std::io::Result<()> {
     if replacement {
@@ -46,6 +68,7 @@ fn main() {
         .and_then(|arg| arg.to_str())
     {
         Some("--assert-host-paths") => inspect_host_paths(),
+        Some("--assert-workspace-path") => inspect_workspace_path(),
         Some("--assert-access-metadata") => inspect(false),
         Some("--assert-replaceable-metadata") => inspect(true),
         _ => glyph_context_index::run().map_err(std::io::Error::other),

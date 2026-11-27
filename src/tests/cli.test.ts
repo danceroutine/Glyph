@@ -68,8 +68,15 @@ describe('glyph command line', () => {
     const excludedPaths = ['.glyph/state', 'target/release/glyph-context-index', 'target/release/glyph-shell-sandbox'];
     const [workspace] = cli.instances('FileSystemWorkspaceTextStore');
     const [accessPolicy] = cli.instances('WorkspaceAccessPolicy');
-    expect(workspace?.args).toEqual([root, { caseSensitive: true, excludedPaths, accessPolicy }]);
-    expect(accessPolicy?.args).toEqual([{}, ['/profiles/current/skill-state.json']]);
+    expect(workspace?.args).toEqual([
+      root,
+      {
+        caseSensitive: true,
+        excludedPaths,
+        accessPolicy,
+        physicalAccess: cli.instances('NativeFilesystemMetadata')[0],
+      },
+    ]);
     const mutationPolicy = cli.instances('ProjectToolRuntime')[0]?.args[5] as {
       getDenial(path: string): string | undefined;
     };
@@ -429,6 +436,7 @@ function prepareCli({
     '#src/terminal/ui/proposal/TerminalEditReviewer.js': 'TerminalEditReviewer',
     '#src/tools/ToolRegistry.js': 'ToolRegistry',
     '#src/workspace/FileSystemWorkspaceTextStore.js': 'FileSystemWorkspaceTextStore',
+    '#src/workspace/NativeFilesystemMetadata.js': 'NativeFilesystemMetadata',
     '#src/workspace/MultiRootWorkspaceTextStore.js': 'MultiRootWorkspaceTextStore',
     '#src/workspace/policy/WorkspaceAccessPolicy.js': 'WorkspaceAccessPolicy',
     '#src/shell/FileShellPermissionStore.js': 'FileShellPermissionStore',

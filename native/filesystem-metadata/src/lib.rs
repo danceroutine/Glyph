@@ -1,7 +1,9 @@
 //! Descriptor-bound inspection for private storage and mode-only filesystem replacements.
+#[path = "casing.rs"]
+pub mod filesystem_casing;
 #[cfg(target_os = "linux")]
 pub mod mount_table;
-
+pub mod workspace_paths;
 mod host_paths;
 pub use host_paths::assert_host_paths;
 use std::io;
