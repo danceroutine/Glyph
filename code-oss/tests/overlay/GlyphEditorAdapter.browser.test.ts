@@ -1,3 +1,4 @@
+import { extUri } from '#vs/base/common/resources.js';
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
 import { GlyphEditorAdapter } from '#vs/workbench/contrib/glyph/browser/GlyphEditorAdapter.js';
 import { URI } from '#vs/base/common/uri.js';
@@ -171,7 +172,7 @@ function editorServices() {
       stat: vi.fn(async (resource: URI): Promise<{ size?: number }> => ({ size: disk.get(resource.path)?.length })),
       readFile: vi.fn(async (resource: URI) => ({ value: VSBuffer.fromString(disk.get(resource.path) ?? '') })),
     },
-    uriIdentityService: { asCanonicalUri: (resource: URI) => resource },
+    uriIdentityService: { extUri, asCanonicalUri: (resource: URI) => resource },
     userDataProfileService: {
       get currentProfile() {
         return { id: state.profile };
