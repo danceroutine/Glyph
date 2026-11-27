@@ -89,9 +89,8 @@ export class GlyphDesktopHost {
           // After removing a package, a peer attached inside it still owns its logical working-copy URIs.
           if (
             current === undefined &&
-            observed.size > 0 &&
             !existsSync(projectDirectory) &&
-            [...observed].every(physical => projectIntersection(root, physical, projectDirectory) === root.uri)
+            [...observed].some(physical => projectIntersection(root, physical, projectDirectory) === root.uri)
           ) {
             directories.add(root.uri);
             continue;
