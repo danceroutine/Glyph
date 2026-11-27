@@ -7,7 +7,9 @@ import { matchesSkillManifest } from '../matchesSkillManifest.ts';
 
 it('admits an authorized root alias and checks the actual manifest and every containing directory', () => {
   const root = mkdtempSync(join(tmpdir(), 'glyph-skill-open-'));
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+  onTestFinished(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
   const project = join(root, 'project');
   const other = join(root, 'other');
   for (const dir of [project, other]) mkdirSync(join(dir, 'skills', 'one'), { recursive: true });
