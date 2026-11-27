@@ -309,7 +309,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       // Agent-facing sources cannot acquire the host's preference and credential authority.
       const userInstructionPolicy = new WorkspaceAccessPolicy(
         {},
-        [configuration.stateDirectory, configuration.traceFile, artifactRoot].map(resolveAvailableIdentity),
+        [
+          configuration.stateDirectory,
+          configuration.traceFile,
+          artifactRoot,
+          join(userRuleRoot, 'skill-state.json'),
+        ].map(resolveAvailableIdentity),
       );
       const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
         accessPolicy: userInstructionPolicy,
@@ -368,18 +373,19 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         binaryPath: indexExecutable,
         root: skillRoot,
         caseSensitive: userRuleStore.caseSensitive,
+        accessPolicy: userInstructionPolicy,
         respectGitIgnore: false,
       }));
       const userSkills = new FileSkillDiscoveryProvider({
         origin: { id: 'user:glyph', label: 'User skill', scope: 'user', compatibility: 'glyph' },
         directory: 'skills',
         captureFiles: (directory, signal) =>
-          listSkillPackageFiles(userRuleStore, directory, indexExecutable, false, signal),
-        workspace: userRuleStore,
-        binaryStore: userRuleStore,
+          listSkillPackageFiles(userInstructionStore, directory, indexExecutable, false, signal),
+        workspace: userInstructionStore,
+        binaryStore: userInstructionStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
         listFiles: async signal => {
-          await userRuleStore.canonicalPath('skills');
+          await userInstructionStore.canonicalPath('skills');
           const result = await userSkillIndex.glob('**/*', { limit: 10_000, ...(signal ? { signal } : {}) });
           return { ...result, files: result.files.map(path => `skills/${path}`) };
         },

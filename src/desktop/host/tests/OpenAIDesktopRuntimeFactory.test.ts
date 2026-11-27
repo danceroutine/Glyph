@@ -1222,14 +1222,26 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await mkdir(state);
       await writeFile(join(state, 'secret.md'), 'PRIVATE STATE CONTENT');
       await writeFile(trace, 'PRIVATE TRACE CONTENT');
+      await writeFile(
+        join(isolatedUserDirectory, 'skill-state.json'),
+        JSON.stringify({
+          enabled: {},
+          installations: { example: { source: 'PRIVATE PROFILE PROVENANCE', revision: 'retained' } },
+        }),
+      );
       const stateAlias = join(isolatedUserDirectory, 'state-alias');
       if (alias) await symlink(state, stateAlias);
-      const fixture = await factoryFixture({ stateDirectory: alias ? stateAlias : state, traceFile: trace });
-      const rules = join(isolatedUserDirectory, 'rules');
+      const fixture = await factoryFixture({
+        userDirectory: isolatedUserDirectory,
+        stateDirectory: alias ? stateAlias : state,
+        traceFile: trace,
+      });
+      const rules = join(fixture.userDirectory, 'rules');
       await mkdir(rules);
       for (const [name, reference] of [
         ['state', 'private-state/secret.md'],
         ['trace', 'trace.log'],
+        ['profile', 'skill-state.json'],
         ['public', 'notes.md'],
       ])
         await writeFile(join(rules, `${name}.mdc`), `---\nreferences: [${reference}]\nalwaysApply: true\n---\nRule`);
@@ -1250,6 +1262,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expect.arrayContaining([
           expect.objectContaining({ path: '~/.glyph/rules/state.mdc', status: 'error' }),
           expect.objectContaining({ path: '~/.glyph/rules/trace.mdc', status: 'error' }),
+          expect.objectContaining({ path: '~/.glyph/rules/profile.mdc', status: 'error' }),
           expect.objectContaining({
             path: '~/.glyph/rules/public.mdc',
             status: 'active',
@@ -1258,9 +1271,10 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         ]),
       );
       expect(JSON.stringify(snapshot.instructionSources)).not.toMatch(/PRIVATE (STATE|TRACE) CONTENT/u);
+      expect(JSON.stringify(snapshot.instructionSources)).not.toContain('PRIVATE PROFILE PROVENANCE');
       const source = snapshot.instructionSources!.find(source => source.path === '~/.glyph/rules/public.mdc')!;
       await runtime.handle({
-        type: GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED,
+        type: Command.SET_USER_RULE_ENABLED,
         path: 'rules/public.mdc',
         expectedRevision: source.managementRevision!,
         enabled: false,
@@ -1273,7 +1287,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const root = await fixture.folder('project');
       useFilesystemIndex();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
-      const rules = join(isolatedUserDirectory, 'rules');
+      const rules = join(fixture.userDirectory, 'rules');
+      await mkdir(fixture.userDirectory, { recursive: true });
       await writeFile(rules, 'occupied');
       const runtime = await fixture.create([root]);
       expect((await runtime.snapshot()).instructionSources).toEqual(
@@ -1917,7 +1932,12 @@ function useFilesystemIndex(): void {
 }
 
 async function factoryFixture(
-  options: { readonly transport?: typeof fetch; readonly stateDirectory?: string; readonly traceFile?: string } = {},
+  options: {
+    readonly transport?: typeof fetch;
+    readonly stateDirectory?: string;
+    readonly traceFile?: string;
+    readonly userDirectory?: string;
+  } = {},
 ) {
   for (const values of Object.values(captured)) values.length = 0;
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-')));
@@ -1925,7 +1945,7 @@ async function factoryFixture(
   vi.stubEnv('CHAT_TRACE_FILE', options.traceFile ?? join(directory, 'trace.log'));
   const initialize = vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
   const editors = new EditorRpcRouter();
-  const userDirectory = join(directory, 'user');
+  const userDirectory = options.userDirectory ?? join(directory, 'user');
   const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport, userDirectory);
   const runtimes: ProviderDesktopRuntime[] = [];
   onTestFinished(async () => {
@@ -1936,7 +1956,7 @@ async function factoryFixture(
     await rm(directory, { recursive: true, force: true });
   });
   return {
-    userDirectory: join(directory, 'user'),
+    userDirectory,
     factory,
     editors,
     initialize,
