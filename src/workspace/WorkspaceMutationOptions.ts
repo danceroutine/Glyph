@@ -1,3 +1,4 @@
+import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 /** Host-specific mutation metadata that does not affect editing-domain semantics. */
 export interface WorkspaceMutationOptions {
   /** Durable id used by remote/editor adapters to deduplicate mutation retries. */
@@ -5,4 +6,7 @@ export interface WorkspaceMutationOptions {
   readonly undoGroupId?: string;
   /** Save the edited working copy so commands see the applied change on disk. */
   readonly save?: boolean;
+  /** Recheck host-owned metadata immediately before publishing a staged filesystem replacement. */
+  readonly beforeReplace?: () => Promise<void>;
+  readonly interruptedRename?: NonNullable<WorkspaceReadOptions['interruptedRename']>;
 }

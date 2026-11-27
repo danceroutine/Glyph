@@ -515,6 +515,18 @@ describe(RustWorkspacePathIndex, () => {
     });
   });
 
+  it('checks replacement metadata through the initialized native authority', async () => {
+    const worker = new FakeWorker(request => {
+      if (request.method === 'initialize') return indexState(1);
+      if (request.method === 'assertReplaceableMetadata') return null;
+      return { shutdown: true };
+    });
+    const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/project' }, () => worker);
+    onTestFinished(() => index.dispose());
+    await index.assertReplaceableMetadata('rule.mdc');
+    expect(worker.requests.at(-1)?.params).toBe('rule.mdc');
+  });
+
   describe(RustWorkspacePathIndex.prototype.filterPaths, () => {
     it('initializes once and then intersects candidate paths with the catalog', async () => {
       const worker = new FakeWorker(request => {

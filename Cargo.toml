@@ -1,5 +1,5 @@
 [workspace]
-members = ["native/context-index", "native/shell-sandbox"]
+members = ["native/context-index", "native/filesystem-metadata", "native/shell-sandbox"]
 resolver = "2"
 
 [workspace.package]

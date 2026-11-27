@@ -531,6 +531,38 @@ impl ContextIndexService {
         ))
     }
 
+    /// The initialized authority is a single user-rule directory; only its immediate files can be replaced.
+    pub(crate) fn assert_replaceable_metadata(&self, name: String) -> Result<(), ServiceError> {
+        let initialized = self
+            .initialized
+            .as_ref()
+            .ok_or_else(ServiceError::not_initialized)?;
+        if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+            return Err(ServiceError::invalid_request(
+                "Expected one direct filename.",
+            ));
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+                .open(&initialized.root)
+                .and_then(|parent| {
+                    glyph_filesystem_metadata::assert_child_replaceable(&parent, &name)
+                })
+                .map_err(|error| ServiceError::internal(error.to_string()))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = initialized;
+            Err(ServiceError::internal(
+                "Access-control metadata inspection is unavailable.",
+            ))
+        }
+    }
+
     pub(crate) fn filter_paths(&self, paths: Vec<String>) -> Result<Vec<String>, ServiceError> {
         if paths.len() > 2_000
             || paths

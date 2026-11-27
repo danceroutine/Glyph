@@ -23,6 +23,7 @@ import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
 import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';
 import { WorkspaceAccessPolicy } from './policy/WorkspaceAccessPolicy.ts';
+import type { WorkspaceMutationOptions } from './WorkspaceMutationOptions.ts';
 import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import { WorkspaceReadLimitError } from './WorkspaceReadLimitError.ts';
 import { assertWellFormedWorkspacePath } from './assertWellFormedWorkspacePath.ts';
@@ -141,7 +142,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
-    const { path, resolvedFile, identity } = await this.inspectReadPath(input);
+    const { path, resolvedFile, identity } = await this.inspectReadPath(input, options.interruptedRename);
     // Inspection and open are separate operations. Do not follow a replacement
     // link or block opening a replacement FIFO before descriptor validation.
     const flags =
@@ -167,6 +168,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       if (!info.isFile()) {
         throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
       }
+      assertAllowedLinks(info.nlink, identity, path, options.interruptedRename);
       if (`${info.dev}:${info.ino}` !== identity) {
         throw new EditError(EditFailureReason.STALE, 'The file changed while opening it for reading.', { path });
       }
@@ -176,7 +178,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         options.maxBytes === undefined
           ? await handle.readFile()
           : await this.readBounded(handle, path, options.maxBytes, info.size);
-      return toSnapshot(path, bytes, info.mode & 0o777, identity);
+      const snapshot = toSnapshot(path, bytes, info.mode & 0o777, identity);
+      if (info.nlink !== 1 && snapshot.revision !== options.interruptedRename!.revision) {
+        throw new EditError(EditFailureReason.STALE, 'The interrupted rename no longer contains the reviewed bytes.', {
+          path,
+        });
+      }
+      return snapshot;
     } finally {
       await handle.close();
     }
@@ -252,6 +260,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     expectedRevision: string,
     text: string,
     byteOrderMark: boolean,
+    options?: WorkspaceMutationOptions,
   ): Promise<WorkspaceTextSnapshot> {
     // POSIX filesystems do not expose compare-and-swap replacement by content
     // revision. The second check narrows, but cannot eliminate, the interval in
@@ -265,6 +274,14 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       await writeFile(temporary, toBytes(text, byteOrderMark), { flag: 'wx', mode: current.mode });
       await chmod(temporary, current.mode);
       await this.assertRevision(path, expectedRevision);
+      const [source, staged] = await Promise.all([lstat(absolute), lstat(temporary)]);
+      if (source.uid !== staged.uid || source.gid !== staged.gid || (source.mode & 0o7777) !== (staged.mode & 0o7777))
+        throw new EditError(
+          EditFailureReason.UNSUPPORTED,
+          'Replacement cannot preserve the existing ownership and permissions.',
+          { path },
+        );
+      await options?.beforeReplace?.();
       await rename(temporary, absolute);
     } catch (error) {
       throw classifyPathError(error, path);
@@ -309,9 +326,9 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return this.read(target);
   }
 
-  async delete(input: string, expectedRevision: string): Promise<void> {
+  async delete(input: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void> {
     const path = this.normalizePath(input);
-    await this.assertRevision(path, expectedRevision);
+    await this.assertRevision(path, expectedRevision, options);
     try {
       await unlink(resolve(this.root, path));
     } catch (error) {
@@ -319,7 +336,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  private async inspectReadPath(input: string) {
+  private async inspectReadPath(input: string, checkpoint?: WorkspaceReadOptions['interruptedRename']) {
     const path = this.normalizePath(input);
     try {
       await this.assertNoSymlinkSegments(path, false);
@@ -330,11 +347,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       if (!linkStat.isFile())
         throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
       const resolvedRoot = await realpath(this.root);
+      const identity = `${linkStat.dev}:${linkStat.ino}`;
+      assertAllowedLinks(linkStat.nlink, identity, path, checkpoint);
       const resolvedFile = await realpath(absolute);
       assertInsideRoot(resolvedRoot, resolvedFile, path);
       // Check the filesystem's spelling too: aliases must not bypass the policy.
       this.normalizePath(relative(resolvedRoot, resolvedFile));
-      return { path, resolvedFile, identity: `${linkStat.dev}:${linkStat.ino}` };
+      return { path, resolvedFile, identity };
     } catch (error) {
       // An ancestor can change after its earlier inspection. Preserve that as
       // an unsupported resource, never as proof of an absent child or a delete.
@@ -360,8 +379,12 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     throw new WorkspaceReadLimitError(path, maxBytes, length);
   }
 
-  private async assertRevision(path: string, expected: string): Promise<WorkspaceTextSnapshot> {
-    const current = await this.readOptional(path);
+  private async assertRevision(
+    path: string,
+    expected: string,
+    options?: WorkspaceReadOptions,
+  ): Promise<WorkspaceTextSnapshot> {
+    const current = await this.readOptional(path, options);
     if (!current || current.revision !== expected) {
       throw new EditError(EditFailureReason.STALE, 'The file changed after the proposal was staged.', {
         path,
@@ -467,6 +490,18 @@ function toBytes(text: string, byteOrderMark: boolean): Buffer {
 function classifyPathError(error: unknown, path: string): unknown {
   if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'ENOTDIR') return error;
   return new EditError(EditFailureReason.UNSUPPORTED, 'A parent path is not a directory.', { path }, { cause: error });
+}
+
+function assertAllowedLinks(
+  count: number,
+  identity: string,
+  path: string,
+  checkpoint?: WorkspaceReadOptions['interruptedRename'],
+): void {
+  if (count !== 1 && !(count === 2 && checkpoint?.identity === identity))
+    throw new EditError(EditFailureReason.UNSUPPORTED, 'Unverified hard links are excluded from project access.', {
+      path,
+    });
 }
 
 function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string): WorkspaceTextSnapshot {

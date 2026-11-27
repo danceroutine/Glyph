@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+glyph-filesystem-metadata = { path = "../filesystem-metadata" }
 globset = "0.4.20"
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
