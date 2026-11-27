@@ -54,3 +54,20 @@ it('compares physical root prefixes using their volume policy and retains exact 
   expect(routes.normalizeName('other', nfd)).toBe(nfd);
   expect(new WorkspaceSourceRoutes([{ ...outer, normalizesUnicode: false }]).normalizeName('relative', nfd)).toBe(nfd);
 });
+
+it('applies full Unicode case folding only on volumes that support it', () => {
+  const groups = [
+    ['σ', 'ς', 'Σ'],
+    ['s', 'ſ', 'S'],
+    ['ß', 'SS', 'ẞ'],
+    ['K', 'K', 'k'],
+    ['ff', 'ﬀ'],
+  ];
+  const root = { name: 'root', path: '/work', normalizesUnicode: true, caseSensitive: false };
+  const routes = new WorkspaceSourceRoutes([{ ...root, foldsUnicode: true }]);
+  for (const group of groups) expect(new Set(group.map(name => routes.normalizeName('src', name))).size).toBe(1);
+  expect(routes.normalizeName('src', 'ı')).not.toBe(routes.normalizeName('src', 'i'));
+  expect(routes.normalizeName('src', 'İ')).not.toBe(routes.normalizeName('src', 'I'));
+  const sensitive = new WorkspaceSourceRoutes([{ ...root, caseSensitive: true }]);
+  expect(sensitive.normalizeName('src', 'ß')).not.toBe(sensitive.normalizeName('src', 'SS'));
+});

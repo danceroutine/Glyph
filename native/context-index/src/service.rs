@@ -1269,17 +1269,20 @@ pub(crate) fn filesystem_case_sensitive(path: &Path) -> Result<bool, ServiceErro
 pub(crate) struct FilesystemNamePolicy {
     pub case_sensitive: bool,
     pub normalizes_unicode: bool,
+    pub folds_unicode: bool,
 }
 
 pub(crate) fn filesystem_name_policy(path: &Path) -> Result<FilesystemNamePolicy, ServiceError> {
     let inspect = |error| {
         ServiceError::initialization(format!("Could not inspect filesystem name policy: {error}"))
     };
-    let normalizes_unicode = filesystem_casing::normalizes_unicode(path).map_err(inspect)?;
+    let (normalizes_unicode, full_fold) =
+        filesystem_casing::unicode_policy(path).map_err(inspect)?;
     let case_sensitive = filesystem_casing::detect(path).map_err(inspect)?;
     Ok(FilesystemNamePolicy {
         case_sensitive,
         normalizes_unicode,
+        folds_unicode: full_fold && !case_sensitive,
     })
 }
 
@@ -1292,18 +1295,19 @@ mod filesystem_casing {
         let value = unsafe { libc::fpathconf(file.as_raw_fd(), libc::_PC_CASE_SENSITIVE) };
         case_setting(value)
     }
-    pub(super) fn normalizes_unicode(path: &Path) -> io::Result<bool> {
+    pub(super) fn unicode_policy(path: &Path) -> io::Result<(bool, bool)> {
         let file = File::open(path)?;
         normalizing_volume(file.as_raw_fd())
     }
-    pub(super) fn normalizing_volume(fd: libc::c_int) -> io::Result<bool> {
+    pub(super) fn normalizing_volume(fd: libc::c_int) -> io::Result<(bool, bool)> {
         let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
         if unsafe { libc::fstatfs(fd, stat.as_mut_ptr()) } != 0 {
             return Err(io::Error::last_os_error());
         }
         let stat = unsafe { stat.assume_init() };
         let filesystem = unsafe { std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr()) };
-        Ok(matches!(filesystem.to_bytes(), b"apfs" | b"hfs"))
+        let name = filesystem.to_bytes();
+        Ok((matches!(name, b"apfs" | b"hfs"), name == b"apfs"))
     }
     pub(super) fn case_setting(value: libc::c_long) -> io::Result<bool> {
         match value {
@@ -1366,15 +1370,16 @@ mod filesystem_casing {
     }
 
     #[cfg(target_os = "linux")]
-    pub(super) fn normalizes_unicode(path: &Path) -> io::Result<bool> {
+    pub(super) fn unicode_policy(path: &Path) -> io::Result<(bool, bool)> {
         use std::os::fd::AsRawFd;
         let directory = fs::File::open(path)?;
-        Ok(casefold_directory(directory.as_raw_fd()))
+        let fold = casefold_directory(directory.as_raw_fd());
+        Ok((fold, fold))
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub(super) fn normalizes_unicode(_path: &Path) -> io::Result<bool> {
-        Ok(false)
+    pub(super) fn unicode_policy(_path: &Path) -> io::Result<(bool, bool)> {
+        Ok((false, false))
     }
 
     #[cfg(target_os = "linux")]
