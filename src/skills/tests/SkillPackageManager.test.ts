@@ -60,7 +60,11 @@ describe(SkillPackageManager, () => {
     user.discard(userPreview.id);
     const manager = new SkillPackageManager([{ ...location, scope: 'project' }], catalog, state);
     const install = await manager.prepare(location.id, draft);
-    const installedPaths = install.files.map(file => 'skills/example/' + file.path);
+    const installedPaths = [
+      ...install.files.map(file => 'skills/example/' + file.path),
+      'skills/example/assets',
+      'skills/example/references',
+    ];
     expect(manager.workspacePaths(install.id)).toEqual(installedPaths);
     await manager.apply(install.id);
     const skill = catalog.skills[0]!;

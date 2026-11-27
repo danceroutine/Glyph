@@ -203,10 +203,7 @@ export class SkillPackageManager {
     const { location, directory, preview } = this.requirePreview(id);
     if (location.scope === 'user') return [];
     const parent = location.scopePrefix ? location.scopePrefix + '/' + directory : directory;
-    const implicit = fileDirectories(preview.files.map(file => file.path));
-    return [...preview.files, ...preview.directories.filter(entry => !implicit.has(entry.path))].map(
-      entry => parent + '/' + entry.path,
-    );
+    return [...new Set([...preview.files, ...preview.directories].map(entry => parent + '/' + entry.path))];
   }
   async apply(id: string, signal?: AbortSignal): Promise<{ applied: true; refreshError?: string }> {
     const change = this.requirePreview(id);
