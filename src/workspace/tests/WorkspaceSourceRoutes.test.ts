@@ -5,7 +5,11 @@ import { expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { matchesAgentRulePath } from '#src/instructions/rules/matchesAgentRulePath.js';
-import type { AgentInstructionSource } from '#src/instructions/AgentInstructionSource.js';
+import {
+  type AgentInstructionSource,
+  AgentInstructionSourceKind,
+  AgentInstructionSourceStatus,
+} from '#src/instructions/AgentInstructionSource.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 
 it('keeps logical aliases and selects the most specific indexed route for each physical file', () => {
@@ -137,8 +141,17 @@ it('retains distinct existing entries when a filesystem uses a different Unicode
       expect(routes.scopeKey('ß/child', false)).toBe(distinct);
       expect(routes.scopeKey('SS/child', false)).not.toBe(distinct);
       const paths = new InstructionPaths(false, routes);
+      const rule = (glob: string): AgentInstructionSource => ({
+        id: 'rule',
+        kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+        label: 'Rule',
+        path: '.glyph/rules/rule.mdc',
+        status: AgentInstructionSourceStatus.ACTIVE,
+        scope: '.',
+        globs: [glob],
+      });
       for (const glob of ['ß/child', 'ß/**/*']) {
-        const source = { scope: '.', globs: [glob] } as AgentInstructionSource;
+        const source = rule(glob);
         expect(matchesAgentRulePath(source, 'ss/child', paths)).toBe(false);
         expect(matchesAgentRulePath(source, 'ß/child', paths)).toBe(true);
       }
@@ -151,9 +164,7 @@ it('retains distinct existing entries when a filesystem uses a different Unicode
         ]),
         overlapping,
       );
-      expect(
-        matchesAgentRulePath({ scope: '.', globs: ['ß/child'] } as AgentInstructionSource, 'volume/ss/child', routed),
-      ).toBe(false);
+      expect(matchesAgentRulePath(rule('ß/child'), 'volume/ss/child', routed)).toBe(false);
       const before = probe.mock.calls.length;
       await Promise.resolve();
       expect(routes.scopeKey('ß/child', false)).toBe(distinct);
