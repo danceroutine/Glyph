@@ -1,3 +1,4 @@
+import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { z } from 'zod';
 import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
@@ -6,7 +7,6 @@ const defaults = {
   respectGitIgnore: true,
   maxFiles: 2_000_000,
   maxContentSearchFileBytes: 8 * 1_024 * 1_024,
-  caseSensitive: process.platform !== 'darwin' && process.platform !== 'win32',
 } as const;
 
 /**
@@ -24,9 +24,13 @@ export const rustWorkspacePathIndexOptionsSchema = z
     respectGitIgnore: z.boolean().default(defaults.respectGitIgnore),
     maxFiles: z.number().int().positive().max(4_294_967_295).default(defaults.maxFiles),
     maxContentSearchFileBytes: z.number().int().positive().default(defaults.maxContentSearchFileBytes),
-    caseSensitive: z.boolean().default(defaults.caseSensitive),
+    caseSensitive: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .transform(options => ({
+    ...options,
+    caseSensitive: options.caseSensitive ?? workspaceCaseSensitivity(options.root),
+  }));
 
 export type RustWorkspacePathIndexOptions = z.input<typeof rustWorkspacePathIndexOptionsSchema>;
 

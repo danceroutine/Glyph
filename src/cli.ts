@@ -93,7 +93,7 @@ async function main(): Promise<void> {
     process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
   );
   const accessPolicy = new WorkspaceAccessPolicy();
-  const { workspace, pathIndex } = createProjectRuntime(
+  const { workspace, pathIndex } = await createProjectRuntime(
     projectContext,
     configuration.stateDirectory,
     configuration.traceFile,
@@ -229,15 +229,18 @@ function workspaceArgument(arguments_: readonly string[]): { workspaceFile?: str
   return { workspaceFile };
 }
 
-function createProjectRuntime(
+async function createProjectRuntime(
   context: ProjectContext,
   stateDirectory: string,
   traceFile: string,
   indexExecutable: string,
   shellSandboxExecutable: string,
   accessPolicy: WorkspaceAccessPolicy,
-): { workspace: WorkspaceTextStore; pathIndex: WorkspacePathIndex } {
-  const roots = context.roots.map(root => {
+): Promise<{ workspace: WorkspaceTextStore; pathIndex: WorkspacePathIndex }> {
+  const casing = await Promise.all(
+    context.roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
+  );
+  const roots = context.roots.map((root, i) => {
     const excludedPaths = [
       ...new Set(
         [
@@ -248,7 +251,11 @@ function createProjectRuntime(
         ].filter((path): path is string => path !== undefined),
       ),
     ];
-    const workspace = new FileSystemWorkspaceTextStore(root.path, { excludedPaths, accessPolicy });
+    const workspace = new FileSystemWorkspaceTextStore(root.path, {
+      caseSensitive: casing[i]!,
+      excludedPaths,
+      accessPolicy,
+    });
     const cacheName = createHash('sha256').update(`${context.id}\0${root.name}\0${root.path}`).digest('hex');
     const pathIndex = new RustWorkspacePathIndex({
       binaryPath: indexExecutable,

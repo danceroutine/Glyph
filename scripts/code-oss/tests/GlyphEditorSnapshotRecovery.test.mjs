@@ -65,7 +65,7 @@ beforeAll(async () => {
             loader: 'js',
             contents: `
               const service = () => {};
-              export { service as IModelService, service as IWorkspaceTrustManagementService,
+              export { service as IModelService, service as IWorkspaceTrustManagementService, service as IWorkingCopyService, service as IPathService,
                 service as IBulkEditService, service as ITextModelService, service as IWorkspaceContextService,
                 service as IUserDataProfileService, service as IInstantiationService };
         export const Progress = { None: {} };

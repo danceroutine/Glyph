@@ -50,7 +50,7 @@ async function adapterModule() {
             contents: `
         const service = () => {};
         export { service as IModelService,
-          service as IWorkspaceTrustManagementService, service as IBulkEditService,
+          service as IWorkspaceTrustManagementService, service as IWorkingCopyService, service as IPathService, service as IBulkEditService,
           service as ITextModelService, service as IWorkspaceContextService, service as IUriIdentityService,
           service as IUserDataProfileService, service as IInstantiationService };
         export const Progress = { None: {} };
