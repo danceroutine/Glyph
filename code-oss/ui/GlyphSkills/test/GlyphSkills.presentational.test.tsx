@@ -87,7 +87,9 @@ describe('Skill management', () => {
     fireEvent.input(screen.getByLabelText('Description', { exact: true }), { target: { value: 'Workflow' } });
     fireEvent.input(screen.getByLabelText('Instructions', { exact: true }), { target: { value: 'Steps' } });
     fireEvent.submit(screen.getByRole('button', { name: 'Preview package' }).closest('form')!);
-    await vi.waitFor(() => expect(previewDraft).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(previewDraft).toHaveBeenCalledOnce();
+    });
     expect(screen.queryByRole('alert')).toBeNull();
   });
   function actions() {

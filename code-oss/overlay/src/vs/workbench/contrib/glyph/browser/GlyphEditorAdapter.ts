@@ -1,7 +1,6 @@
 import { IWorkingCopyService } from '#vs/workbench/services/workingCopy/common/workingCopyService.js';
 import { IPathService } from '#vs/platform/path/common/pathService.js';
 import { env } from '#vs/base/common/process.js';
-import { dirname } from '#vs/base/common/resources.js';
 import type { GlyphSkillTarget } from '#glyph/protocol/events/GlyphSkillManagement.js';
 import { UNDO_REDO_SOURCE as EXPLORER_UNDO_REDO_SOURCE } from '#vs/workbench/contrib/files/browser/explorerService.js';
 import { VSBuffer } from '#vs/base/common/buffer.js';
@@ -14,8 +13,7 @@ import type { GlyphTextRange } from '#glyph/protocol/connection/GlyphTextRange.j
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { Progress } from '#vs/platform/progress/common/progress.js';
 import { BulkTextEdits } from '#vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.js';
-import { ExtUri } from '#vs/base/common/resources.js';
-import { extUri, extUriIgnorePathCase } from '#vs/base/common/resources.js';
+import { dirname, extUri, extUriIgnorePathCase } from '#vs/base/common/resources.js';
 import { URI } from '#vs/base/common/uri.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { generateUuid } from '#vs/base/common/uuid.js';

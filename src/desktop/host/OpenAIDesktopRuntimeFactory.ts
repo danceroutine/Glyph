@@ -337,7 +337,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           configuration.traceFile,
           artifactRoot,
           join(userRuleRoot, 'skill-state.json'),
-        ].map(resolveAvailableIdentity),
+        ].map(path => resolveAvailableIdentity(path)),
       );
       const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
         accessPolicy: userInstructionPolicy,

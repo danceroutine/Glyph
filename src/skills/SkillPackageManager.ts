@@ -1,5 +1,4 @@
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
-import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 import { SkillProjectMutationPolicy } from './SkillProjectMutationPolicy.ts';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
