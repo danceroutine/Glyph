@@ -1876,3 +1876,69 @@ it('checks exact rules and complete skill packages across configured, physical, 
   services.fileService.realpath.mockResolvedValueOnce(URI.file('/volume/profile')).mockResolvedValueOnce(undefined);
   expect((await check('skill', 'pkg')).ok).toBe(false);
 });
+
+it('matches dirty rule and package names using the native profile policy, including associated untitled files and attached aliases', async () => {
+  const services = editorServices();
+  const original = env['GLYPH_USER_DIRECTORY'];
+  env['GLYPH_USER_DIRECTORY'] = '/volume/profile';
+  onTestFinished(() => {
+    if (original === undefined) delete env['GLYPH_USER_DIRECTORY'];
+    else env['GLYPH_USER_DIRECTORY'] = original;
+  });
+  services.workspace.folders = [{ name: 'alias', uri: URI.file('/ß') }];
+  services.fileService.realpath.mockImplementation(async uri => (uri.path === '/ß' ? URI.file('/volume') : uri));
+  const adapter = createAdapter(services);
+  const policy = { caseSensitive: false, normalizesUnicode: true, foldsUnicode: true };
+  const sensitive = { caseSensitive: true, normalizesUnicode: false, foldsUnicode: false };
+  for (const [kind, name, path] of [
+    ['rule', 'café.mdc', '/volume/profile/rules/cafe\u0301.mdc'],
+    ['rule', 'ss.mdc', '/SS/profile/rules/ß.mdc'],
+    ['skill', 'ss', '/SS/profile/skills/ß/references/guide.md'],
+  ] as const) {
+    services.workingCopyService.dirtyWorkingCopies.splice(0, Infinity, {
+      resource: URI.file(path).with({ scheme: 'untitled' }),
+    });
+    const command = {
+      type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES as const,
+      operationId: 'working-copies',
+      kind,
+      name,
+      caseSensitive: false,
+    };
+    expect((await adapter.handle({ ...command, namePolicy: policy })).workingCopiesClean).toBe(false);
+    expect((await adapter.handle({ ...command, namePolicy: sensitive })).workingCopiesClean).toBe(true);
+  }
+});
+
+it('discovers an existing dirty instruction buffer through a filesystem alias and checks its resolved route', async () => {
+  const services = editorServices();
+  const adapter = createAdapter(services);
+  const model = services.open('cafe\u0301-ß.mdc', 'Edited guidance');
+  services.dirty.add(model.uri.path);
+  const path = 'café-SS.mdc';
+  const physical = URI.file('/workspace/' + path);
+  const command = {
+    type: GlyphEditorRequestType.READ_OPEN_SNAPSHOT as const,
+    operationId: 'source',
+    path,
+    physicalUri: physical.toString(),
+    namePolicy: { caseSensitive: false, normalizesUnicode: true, foldsUnicode: true },
+  };
+  const response = await adapter.handle(command);
+  expect(response.snapshot?.text).toBe('Edited guidance');
+  expect(response.snapshot?.uri).toBe(model.uri.toString());
+  expect(
+    (
+      await adapter.handle({
+        ...command,
+        namePolicy: { caseSensitive: true, normalizesUnicode: false, foldsUnicode: false },
+      })
+    ).snapshot,
+  ).toBeUndefined();
+  services.fileService.realpath.mockImplementation(async uri =>
+    uri.path === model.uri.path ? URI.file('/elsewhere') : uri,
+  );
+  expect((await adapter.handle(command)).ok).toBe(false);
+  services.fileService.realpath.mockResolvedValue(undefined);
+  expect((await adapter.handle(command)).ok).toBe(false);
+});
