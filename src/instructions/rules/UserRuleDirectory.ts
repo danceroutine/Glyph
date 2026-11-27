@@ -1,10 +1,11 @@
-import { basename, dirname, join, posix, relative, sep } from 'node:path';
+import { sameWorkspaceDirectory, WorkspaceDirectoryIdentity } from '#src/workspace/sameWorkspaceDirectory.js';
+import { dirname, join, posix, relative, sep } from 'node:path';
 import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
 import type { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 
 /** The profile owns rules even when a workspace also exposes the same native or compatibility directory. */
 export class UserRuleDirectory {
-  private readonly rules: string;
+  private readonly rules: WorkspaceDirectoryIdentity;
   private readonly project?: { kind: AgentInstructionSourceKind; directory: string; scope: string };
 
   constructor(
@@ -13,9 +14,11 @@ export class UserRuleDirectory {
     roots: readonly { name: string; path: string }[],
     private readonly paths: InstructionPaths,
   ) {
-    this.rules = this.key(join(root, 'rules'));
-    const marker = this.key(basename(root));
-    if (marker !== '.glyph' && marker !== '.cursor') return;
+    this.rules = new WorkspaceDirectoryIdentity(join(root, 'rules'), caseSensitive);
+    const marker = ['.glyph', '.cursor'].find(name =>
+      sameWorkspaceDirectory(root, join(dirname(root), name), this.caseSensitive),
+    );
+    if (!marker) return;
     // A workspace opened inside the marker cannot discover it as a project rule directory.
     for (const part of roots.toSorted((a, b) => b.path.length - a.path.length)) {
       const suffix = relative(part.path, root);
@@ -35,7 +38,7 @@ export class UserRuleDirectory {
 
   ownsProjectRule(path: string): boolean {
     const physical = this.paths.routes!.physicalPath(path);
-    return physical !== undefined && this.key(dirname(physical)) === this.rules;
+    return physical !== undefined && this.rules.matches(dirname(physical));
   }
 
   projectAlias(userPath: string) {
@@ -43,9 +46,5 @@ export class UserRuleDirectory {
     const { kind, directory, scope } = this.project;
     const identity = this.paths.sourceIdentity(kind, posix.join(directory, userPath));
     return { ...identity, scope, kind };
-  }
-
-  private key(path: string): string {
-    return this.caseSensitive ? path : path.toLowerCase();
   }
 }

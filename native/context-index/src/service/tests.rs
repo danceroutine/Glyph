@@ -1775,7 +1775,13 @@ fn direct_root_globs_observe_current_children_and_ignore_policy_with_a_truncated
     assert_eq!(
         direct("AGENTS.md").unwrap(),
         GlobResult {
-            files: vec!["agents.MD".into()],
+            files: root
+                .path()
+                .join("AGENTS.md")
+                .exists()
+                .then(|| "agents.MD".into())
+                .into_iter()
+                .collect(),
             truncated: false
         }
     );
@@ -1888,4 +1894,35 @@ fn private_directory_uses_the_entries_actual_filename_equivalence() {
         !equivalent
     );
     assert_eq!(fixture_policy(&params(&stored)).exclude_root, equivalent);
+}
+
+#[test]
+fn instruction_globs_use_stored_role_names_inside_the_admitted_index() {
+    let root = tempdir().unwrap();
+    create_dir_all(root.path().join("sub/.glyph/ruleſ")).unwrap();
+    write(root.path().join("sub/AGENTſ.md"), "guidance").unwrap();
+    write(root.path().join("sub/.glyph/ruleſ/guide.mdc"), "guide").unwrap();
+    let mut service = ContextIndexService::new();
+    service.initialize(params(root.path())).unwrap();
+    for (pattern, canonical, stored) in [
+        ("**/?*/AGENTS.md", "sub/AGENTS.md", "sub/AGENTſ.md"),
+        (
+            "**/.glyph/rules/*.mdc",
+            "sub/.glyph/rules/guide.mdc",
+            "sub/.glyph/ruleſ/guide.mdc",
+        ),
+    ] {
+        let result = service
+            .glob(GlobParams {
+                pattern: pattern.into(),
+                target_directory: None,
+                root_files_only: false,
+                limit: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            result.files.contains(&stored.to_owned()),
+            root.path().join(canonical).exists()
+        );
+    }
 }

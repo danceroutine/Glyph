@@ -20,17 +20,13 @@ export class InstructionPaths {
     };
     const physical = this.routes?.physicalPath(path);
     if (!physical) return { id: legacyId(path) };
-    const sensitive = this.caseSensitive(path);
-    const key = sensitive ? physical : physical.toLowerCase();
+    // The index returns stored entry spellings, and registered root aliases have physical anchors.
+    // A destination's current inode can change on save; its stored path remains its identity.
     const physicalId = (value: string) => kind + ':file:' + createHash('sha256').update(value).digest('hex');
     const legacyIds = this.routes!.legacyPaths(path).map(route => legacyId(route));
-    if (sensitive && this.historicallyInsensitive) {
-      // Earlier versions folded all Mac/Windows names. Disjoint IDs let an ambiguous historical
-      // selection fail closed even when one of the two current filenames is already lowercase.
-      legacyIds.push(physicalId(physical.toLowerCase()));
-      return { id: physicalId('case-sensitive\0' + key), legacyIds };
-    }
-    return { id: physicalId(key), legacyIds };
+    legacyIds.push(physicalId(physical.toLowerCase()), physicalId(physical));
+    if (this.historicallyInsensitive) legacyIds.push(physicalId('case-sensitive\0' + physical));
+    return { id: physicalId('stored\0' + physical), legacyIds: [...new Set(legacyIds)] };
   }
 
   equivalents(path: string): string[] {

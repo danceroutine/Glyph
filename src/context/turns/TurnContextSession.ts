@@ -11,7 +11,7 @@ import {
 import { resolveInstructionId } from '#src/instructions/resolveInstructionId.js';
 import { AgentInstructionSet, isUnavailableGuidance } from '#src/instructions/AgentInstructionSet.js';
 import { defaultInstructionPaths, type InstructionPaths } from '#src/instructions/InstructionPaths.js';
-import { matchesAgentRulePath, RuleGlobBudget } from '#src/instructions/rules/matchesAgentRulePath.js';
+import { RulePathBatch } from '#src/instructions/rules/matchesAgentRulePath.js';
 
 /** Immutable inputs used to create one frozen logical-turn context. */
 export interface TurnContextSessionInput {
@@ -47,8 +47,8 @@ export class TurnContextSession {
       throw new Error(
         `Required root instruction ${unreadable.path} could not be loaded. ${unreadable.message ?? ''}`.trimEnd(),
       );
-    const budget = new RuleGlobBudget();
     const attachments = unique(input.attachmentPaths);
+    const batch = new RulePathBatch(attachments, this.paths);
     const applicable = this.sourcesFor(attachments, this.scopeIndex.rootGuidance);
     const candidates = this.advertiseCandidates(applicable);
     for (const source of applicable) {
@@ -56,7 +56,7 @@ export class TurnContextSession {
       if (source.kind === AgentInstructionSourceKind.AGENTS_MD) {
         if (this.paths.isWorkspaceRoot(source.scope)) this.activate(source, AgentInstructionActivationReason.ALWAYS);
         else {
-          const paths = attachments.filter(path => this.paths.contains(source.scope, path));
+          const paths = batch.matching(source.scope);
           this.activate(source, AgentInstructionActivationReason.ATTACHMENT, paths);
         }
         continue;
@@ -64,7 +64,7 @@ export class TurnContextSession {
       if (source.activation === AgentInstructionActivationMode.ALWAYS)
         this.activate(source, AgentInstructionActivationReason.ALWAYS);
       if (source.activation === AgentInstructionActivationMode.FILE_PATTERN) {
-        const paths = attachments.filter(path => matchesAgentRulePath(source, path, this.paths, budget));
+        const paths = batch.matching(source.scope, source.globs ?? []);
         if (paths.length > 0) this.activate(source, AgentInstructionActivationReason.ATTACHMENT, paths);
       }
     }
@@ -143,20 +143,20 @@ export class TurnContextSession {
     paths: readonly string[],
     reason: AgentInstructionActivationReason.ATTACHMENT | AgentInstructionActivationReason.FILE_ACCESS,
   ): TurnContextEnvelope | undefined {
-    const budget = new RuleGlobBudget();
     const normalized = unique(paths);
+    const batch = new RulePathBatch(normalized, this.paths);
     const applicable = this.sourcesFor(normalized);
     const candidates = this.advertiseCandidates(applicable);
     const matched = new Map<AgentInstructionSource, readonly string[]>();
     for (const source of applicable) {
       if (!eligible(source) || this.activated.has(source.id)) continue;
-      const matching = normalized.filter(path =>
+      const matching =
         source.kind === AgentInstructionSourceKind.AGENTS_MD ||
         source.activation === AgentInstructionActivationMode.ALWAYS
-          ? this.paths.contains(source.scope, path)
-          : source.activation === AgentInstructionActivationMode.FILE_PATTERN &&
-            matchesAgentRulePath(source, path, this.paths, budget),
-      );
+          ? batch.matching(source.scope)
+          : source.activation === AgentInstructionActivationMode.FILE_PATTERN
+            ? batch.matching(source.scope, source.globs ?? [])
+            : [];
       if (matching.length > 0) matched.set(source, matching);
     }
     for (const [source, matching] of matched) this.activate(source, reason, matching);

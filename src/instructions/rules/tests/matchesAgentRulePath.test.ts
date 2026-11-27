@@ -5,7 +5,12 @@ import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { describe, expect, it } from 'vitest';
 import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
-import { globExpression, matchesAgentRulePath, RuleGlobBudget } from '#src/instructions/rules/matchesAgentRulePath.js';
+import {
+  RulePathBatch,
+  globExpression,
+  matchesAgentRulePath,
+  RuleGlobBudget,
+} from '#src/instructions/rules/matchesAgentRulePath.js';
 
 describe(matchesAgentRulePath, () => {
   it('matches recursive and single-segment patterns only within scope', () => {
@@ -133,4 +138,25 @@ it('reuses each evaluation across distinct rules and matches workspace-wide rule
   budget.spend(3_999_000);
   for (let i = 0; i < 500; i++)
     expect(matchesAgentRulePath({ ...rule, id: String(i) }, 'Repo/sub/src/file.ts', paths, budget)).toBe(true);
+});
+
+it('reuses scoped selections and overlapping patterns while retaining trigger path order', () => {
+  const routes = new WorkspaceSourceRoutes([
+    { name: 'App', path: '/repo' },
+    { name: 'Other', path: '/else' },
+  ]);
+  const paths = new InstructionPaths(
+    new Map([
+      ['App', false],
+      ['Other', true],
+    ]),
+    routes,
+  );
+  const batch = new RulePathBatch(['App/DOCS/B.md', 'Other/file', 'App/DOCS/a.md'], paths);
+  const first = batch.matching('.', ['docs/?.md']);
+  expect(first).toEqual(['App/DOCS/B.md', 'App/DOCS/a.md']);
+  expect(batch.matching('.', ['docs/?.md'])).toBe(first);
+  expect(batch.matching('.', ['docs/?.md', 'missing'])).toEqual(first);
+  expect(batch.matching('App', ['DOCS/?.md', '*.md'])).toEqual(first);
+  expect(batch.matching('App', ['DOCS/?.txt', 'DOCS/?.md'])).toEqual(first);
 });
