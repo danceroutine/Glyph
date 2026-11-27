@@ -78,7 +78,7 @@ describe(FileSkillDiscoveryProvider, () => {
         uriForPath: path => path,
         refreshIndex: fixture.refreshIndex,
       });
-      const catalog = new SkillCatalog([provider], undefined, routes);
+      const catalog = new SkillCatalog([provider], undefined, undefined, undefined, undefined, undefined, routes);
       const turn = await new SkillContextContributor(catalog).beginTurn({ turnId: 't', attachmentPaths: [] });
       expect(turn.disclosePaths([decomposed + '/file'])?.skillCandidates?.length).toBe(
         normalizesUnicode ? 1 : undefined,

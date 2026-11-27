@@ -61,9 +61,9 @@ it.skipIf(process.platform !== 'darwin')(
   () => {
     const base = mkdtempSync(join(tmpdir(), 'glyph-program-unicode-'));
     try {
-      const home = join(base, 'home'),
-        project = join(base, 'caf\u00e9'),
-        alias = join(base, 'cafe\u0301');
+      const alias = join(base, 'cafe\u0301'),
+        home = join(base, 'home'),
+        project = join(base, 'caf\u00E9');
       mkdirSync(home);
       mkdirSync(project);
       const config = join(project, 'config');
