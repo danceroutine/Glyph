@@ -60,6 +60,28 @@ describe(GlyphDesktopHost, () => {
     expect(input.assertTrusted).toThrow();
   });
 
+  it('revokes queued commands on disconnect and trust loss even when the same window reconnects', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    const list = { type: GlyphWorkbenchCommandType.LIST_CHATS } as const;
+    fixture.connect('first', owner);
+    await fixture.receive('first', owner, 'attach', attach);
+    await fixture.receive('first', owner, 'first-list', list);
+    const first = fixture.runtime.handle.mock.lastCall![1]!.signal;
+    expect(first.aborted).toBe(false);
+    await fixture.host.disconnect('first');
+    expect(first.aborted).toBe(true);
+    fixture.connect('next', owner);
+    await fixture.receive('next', owner, 'reattach', attach);
+    await fixture.receive('next', owner, 'next-list', list);
+    const next = fixture.runtime.handle.mock.lastCall![1]!.signal;
+    expect(next.aborted).toBe(false);
+    await fixture.receive('next', owner, 'revoke', { ...attach, trusted: false });
+    expect(next.aborted).toBe(true);
+    expect(first.aborted).toBe(true);
+  });
+
   it('returns rule identity lookups only to their authorized attached window', async () => {
     const fixture = new HostFixture();
     const command = {

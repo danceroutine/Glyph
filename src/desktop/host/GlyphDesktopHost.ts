@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url';
+import { WindowCommandAuthority } from './WindowCommandAuthority.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { projectIntersection } from '#src/workspace/WorkspaceSourceRoutes.js';
@@ -43,6 +44,7 @@ interface Connection {
   attachmentQueue: Promise<void>;
   pendingAttachments: number;
   authorityGeneration: number;
+  readonly commands: WindowCommandAuthority;
 }
 interface WorkspaceRuntimeRecord {
   readonly runtime: GlyphDesktopWorkspaceRuntime;
@@ -207,6 +209,7 @@ export class GlyphDesktopHost {
         attachmentQueue: Promise.resolve(),
         pendingAttachments: 0,
         authorityGeneration: 0,
+        commands: new WindowCommandAuthority(),
       };
       this.sessions.set(key, connection);
     }
@@ -229,6 +232,7 @@ export class GlyphDesktopHost {
     const connection = this.connections.get(connectionId);
     if (!connection) return;
     this.connections.delete(connectionId);
+    connection.commands.revoke();
     connection.send = undefined;
     connection.ready = false;
     connection.authorityKnown = false;
@@ -250,6 +254,7 @@ export class GlyphDesktopHost {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    for (const connection of this.sessions.values()) connection.commands.revoke();
     for (const timer of this.disconnectTimers.values()) clearTimeout(timer);
     this.disconnectTimers.clear();
     await Promise.allSettled(this.runtimeCreations.values());
@@ -334,6 +339,7 @@ export class GlyphDesktopHost {
     try {
       return await operation;
     } catch (error) {
+      connection.commands.revoke();
       connection.ready = false;
       throw error;
     } finally {
@@ -354,6 +360,7 @@ export class GlyphDesktopHost {
   ): Promise<readonly GlyphHostEvent[]> {
     const key = getWorkspaceKey(connection.identity);
     if (command.trusted !== connection.trusted || JSON.stringify(command.roots) !== JSON.stringify(connection.roots)) {
+      connection.commands.revoke();
       connection.journal.discard();
       connection.canReplay = false;
     }
@@ -552,10 +559,9 @@ export class GlyphDesktopHost {
       });
       return [toCommandResultGlyphHostEvent(requestId)];
     }
-    const controller = new AbortController();
     await record.runtime.handle(command, {
       windowId: connection.identity.windowId,
-      signal: controller.signal,
+      signal: connection.commands.signal,
       emit: event => {
         this.broadcast(getWorkspaceKey(connection.identity), event);
       },
@@ -600,6 +606,7 @@ export class GlyphDesktopHost {
     if (isOwner && pendingStop) return pendingStop;
     // The reservation can already exist while initialization is still pending.
     if (!connection.attached && !isOwner) return;
+    connection.commands.revoke();
     connection.authorityGeneration++;
     connection.attached = false;
     connection.ready = false;
@@ -612,6 +619,7 @@ export class GlyphDesktopHost {
     }
     for (const peer of this.sessions.values()) {
       if (getWorkspaceKey(peer.identity) !== key) continue;
+      peer.commands.revoke();
       peer.attached = false;
       peer.ready = false;
       peer.canReplay = false;
