@@ -26,6 +26,36 @@ function childTransaction(root: string, scenario: string) {
   });
   return child;
 }
+it('reopens the first preference after its writer exits immediately after publication', async () => {
+  const { root, state } = await aSkillLifecycle(openMutations);
+  const child = childTransaction(root, 'first-preference');
+  expect((await once(child, 'exit'))[0]).toBe(53);
+  expect((await stat(join(root, 'skill-state.json'))).nlink).toBe(1);
+  await state.initialize();
+  expect(state.enabled.get('example')).toBe(false);
+});
+
+it('preserves a preference file another writer creates before first publication', async () => {
+  const { state, root } = await aSkillLifecycle(async directory => {
+    const mutations = await openMutations(directory);
+    const publish = mutations.renameExclusive.bind(mutations);
+    vi.spyOn(mutations, 'renameExclusive').mockImplementation(async (source, destination) => {
+      await writeFile(join(directory, destination), JSON.stringify({ enabled: { peer: true }, installations: {} }), {
+        flag: 'wx',
+        mode: 0o600,
+      });
+      await publish(source, destination);
+    });
+    return mutations;
+  });
+  await expect(state.setEnabled('example', false, new AbortController().signal)).rejects.toMatchObject({
+    code: 'EEXIST',
+  });
+  await state.initialize();
+  expect([...state.enabled]).toEqual([['peer', true]]);
+  expect((await stat(join(root, 'skill-state.json'))).nlink).toBe(1);
+});
+
 it('recovers a process that exited after publishing the candidate and before recording its provenance', async () => {
   const { root, location, catalog, state, install } = await aSkillLifecycle(openMutations);
   const skill = await install();

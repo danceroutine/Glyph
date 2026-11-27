@@ -11,7 +11,16 @@ import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 const [root, scenario] = process.argv.slice(2);
 const store = fixtureWorkspace(root);
 const testFilesystemMetadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
-const state = new SkillStateStore(store.root, testFilesystemMetadata);
+const mutations = await NativeWorkspaceMutations.open(resolve('target/release/glyph-workspace-mutations'), root);
+const state = new SkillStateStore(store.root, testFilesystemMetadata, () => mutations);
+if (scenario === 'first-preference') {
+  const publish = mutations.renameExclusive.bind(mutations);
+  mutations.renameExclusive = async (...args) => {
+    await publish(...args);
+    process.exit(53);
+  };
+  await state.setEnabled('example', false, new AbortController().signal);
+}
 await state.initialize();
 const location = {
   id: 'user:glyph',
@@ -20,7 +29,7 @@ const location = {
   directory: 'skills',
   store,
   workspace: store,
-  mutations: await NativeWorkspaceMutations.open(resolve('target/release/glyph-workspace-mutations'), root),
+  mutations,
   listFiles: () => store.list(10000, 'skills/**/*'),
   refreshIndex: async () => {},
 };
