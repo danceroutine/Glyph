@@ -83,9 +83,9 @@ describe(GlyphDesktopHost, () => {
     expect(next.aborted).toBe(true);
     expect(first.aborted).toBe(true);
   });
-  it.each([false, true])(
-    'drains conflicting repository children before publishing a live peer attachment (disconnected %s)',
-    async disconnected => {
+  it.each(['connected', 'disconnected', 'reconnected'] as const)(
+    'drains conflicting repository children while the peer is %s',
+    async state => {
       const fixture = new HostFixture();
       onTestFinished(() => fixture.host.dispose());
       fixture.connect('first', owner);
@@ -121,9 +121,11 @@ describe(GlyphDesktopHost, () => {
       });
       const rejected = expect(child).rejects.toThrow('workspace is attaching');
       await started.promise;
+      const send = vi.fn();
+      const peerIdentity = (path: string) => ({ ...peer, windowId: path, workspaceId: path });
       const open = (path: string) => {
-        const identity = { ...peer, windowId: path, workspaceId: path };
-        fixture.connect(path, identity);
+        const identity = peerIdentity(path);
+        fixture.host.connect(path, identity, send);
         return fixture.receive(path, identity, 'attach', {
           ...attach,
           trusted: false,
@@ -135,7 +137,10 @@ describe(GlyphDesktopHost, () => {
       const admission = open(alias);
       await cancelled.promise;
       expect(input.hostWorkspaceRoots!()).not.toContain(alias);
-      if (disconnected) await fixture.host.disconnect(alias);
+      if (state !== 'connected') await fixture.host.disconnect(alias);
+      // A host may reuse its delivery callback on a fresh port for the same window.
+      if (state === 'reconnected') fixture.host.connect('next', peerIdentity(alias), send);
+      const delivered = send.mock.calls.length;
       const retry = vi.fn(async () => 'started');
       await expect(authority.run(signal, retry)).rejects.toThrow('Mounted host input');
       expect(retry).not.toHaveBeenCalled();
@@ -145,7 +150,8 @@ describe(GlyphDesktopHost, () => {
       close.resolve();
       await rejected;
       await admission;
-      if (disconnected) {
+      if (state !== 'connected') {
+        expect(send).toHaveBeenCalledTimes(delivered);
         expect(input.hostWorkspaceRoots!()).not.toContain(alias);
         await expect(authority.run(signal, retry)).resolves.toBe('started');
         return;
