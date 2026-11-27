@@ -26,6 +26,17 @@ describe(UserAgentRuleManager, () => {
     expect(await readFile(join(root, 'rules/full.mdc'))).toEqual(original);
   });
 
+  it('rejects an ACL change between preflight and publication while preserving the current rule', async () => {
+    const workspace = new FileSystemWorkspaceTextStore(root);
+    const original = await workspace.create('rules/secure.mdc', 'Protected', false);
+    const check = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('ACL changed'));
+    const index = { assertReplaceableMetadata: check, refresh: vi.fn() };
+    const manager = new UserAgentRuleManager(workspace, { refresh: async () => [] }, index);
+    await expect(manager.setEnabled(original.path, original.revision, false)).rejects.toThrow('ACL changed');
+    expect(check.mock.calls).toEqual([['secure.mdc'], ['secure.mdc']]);
+    expect((await workspace.read(original.path)).revision).toBe(original.revision);
+    expect(index.refresh).not.toHaveBeenCalled();
+  });
   it('serializes competing settings callers and rejects the losing reviewed revision', async () => {
     const workspace = new FileSystemWorkspaceTextStore(root);
     await workspace.create('rules/shared.mdc', 'Initial', false);
