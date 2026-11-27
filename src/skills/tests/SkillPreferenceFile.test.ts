@@ -20,12 +20,14 @@ describe(SkillPreferenceFile, () => {
   it('preserves the original when staging cannot reproduce the recorded group or authorization becomes stale', async () => {
     const { file, stage } = await fixture();
     const previous = (await file.read())!;
-    await expect(file.replace({ ...previous, gid: previous.gid + 1 }, 'new', stage, async () => {})).rejects.toThrow(
-      'ownership',
+    await expect(
+      file.replace({ ...previous, gid: previous.gid + 1 }, 'new', stage, async () => {}, undefined),
+    ).rejects.toThrow('ownership');
+    await expect(file.replace(previous, 'new', stage, () => chmod(file.path, 0o400), undefined)).rejects.toThrow(
+      'changed',
     );
-    await expect(file.replace(previous, 'new', stage, () => chmod(file.path, 0o400))).rejects.toThrow('changed');
     await expect(readFile(file.path, 'utf8')).resolves.toBe('first');
-    await expect(file.replace(previous, 'new', stage, () => rm(file.path))).rejects.toThrow('changed');
+    await expect(file.replace(previous, 'new', stage, () => rm(file.path), undefined)).rejects.toThrow('changed');
   });
 });
 

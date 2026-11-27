@@ -19,14 +19,14 @@ it('keeps the ID and profile provenance of the same package when a different anc
   expect(new ProjectSkillIdentity('/', '.glyph').legacyIds(directory)).toEqual([]);
   const aliases = new Map([[current, [old, 'other']]]);
   await state.migratePackageIds(aliases);
-  await state.setEnabled(old, true);
-  await state.setEnabled('other', false);
+  await state.setEnabled(old, true, new AbortController().signal);
+  await state.setEnabled('other', false, new AbortController().signal);
   await state.record(old, 'Original import', 'first');
   await state.migratePackageIds(aliases);
   expect(state.enabled.get(current)).toBe(false);
   expect(state.enabled.has(old)).toBe(false);
   expect(state.installations.get(current)).toEqual({ source: 'Original import', revision: 'first' });
-  await state.setEnabled(old, true);
+  await state.setEnabled(old, true, new AbortController().signal);
   await state.record(old, 'Other', 'second');
   await state.migratePackageIds(aliases);
   expect(state.enabled.get(current)).toBe(false);

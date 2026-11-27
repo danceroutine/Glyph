@@ -146,7 +146,7 @@ it('rejects stale removals when an indexed directory has vanished', async () => 
 });
 it('fails closed on malformed preferences, accepts repairs, and only publishes acknowledged writes', async () => {
   const { root, state } = await aSkillLifecycle();
-  await state.setEnabled('one', false);
+  await state.setEnabled('one', false, new AbortController().signal);
   const actual = state.preferences.replace.bind(state.preferences);
   let release!: () => void;
   const hold = new Promise<void>(accept => {
@@ -161,7 +161,7 @@ it('fails closed on malformed preferences, accepts repairs, and only publishes a
     await hold;
     return actual(...args);
   });
-  const write = state.setEnabled('one', true);
+  const write = state.setEnabled('one', true, new AbortController().signal);
   await started;
   expect(state.enabled.get('one')).toBe(false);
   release();
@@ -169,7 +169,7 @@ it('fails closed on malformed preferences, accepts repairs, and only publishes a
   expect(state.enabled.get('one')).toBe(true);
   await writeFile(join(root, 'skill-state.json'), '{');
   await expect(state.initialize()).rejects.toThrow();
-  await expect(state.setEnabled('new', true)).rejects.toThrow();
+  await expect(state.setEnabled('new', true, new AbortController().signal)).rejects.toThrow();
   expect(state.enabled.has('new')).toBe(false);
   await writeFile(join(root, 'skill-state.json'), JSON.stringify({ enabled: { one: false }, installations: {} }));
   await state.initialize();
@@ -194,13 +194,13 @@ it('blocks discovery, capture, management and stale approvals while preferences 
   await expect(catalog.capture(installed)).rejects.toThrow();
   await expect(manager.prepare(location.id, aSkillDraft())).rejects.toThrow();
   await expect(manager.prepareRemoval(installed.id)).rejects.toThrow();
-  await expect(manager.setEnabled(installed.id, true)).rejects.toThrow();
+  await expect(manager.setEnabled(installed.id, true, new AbortController().signal)).rejects.toThrow();
   await expect(manager.apply(change.id)).rejects.toThrow();
   expect(manager.hasPreview(change.id)).toBe(false);
   await writeFile(preferencePath, previous);
   expect(await catalog.refresh()).toMatchObject([{ id: installed.id, enabled: true }]);
   expect((await catalog.capture(installed)).descriptor.id).toBe(installed.id);
-  await manager.setEnabled(installed.id, false);
+  await manager.setEnabled(installed.id, false, new AbortController().signal);
   await expect(catalog.capture(installed)).rejects.toThrow('disabled');
   expect((await manager.prepareRemoval(installed.id)).action).toBe('remove');
 });
@@ -307,7 +307,7 @@ it('preserves the journal on uncertainty or post-commit changes, and refuses sta
   const { root, store, location, catalog, state, manager, install } = await aSkillLifecycle();
   const skill = await install();
   const plain = new SkillPackageManager([], catalog, state);
-  await plain.setEnabled(skill.id, false);
+  await plain.setEnabled(skill.id, false, new AbortController().signal);
   const draft = aSkillDraft('Update');
   const change = await manager.prepare(location.id, draft, skill.id);
   const save = state.record.bind(state);
@@ -326,28 +326,28 @@ it('preserves the journal on uncertainty or post-commit changes, and refuses sta
   await rm(join(root, skill.directory), { recursive: true });
   const journal = new SkillTransactionJournal(root, testFilesystemMetadata);
   await journal.finish(change.id);
-  await expect(separate.setEnabled(skill.id, true)).rejects.toThrow('missing');
+  await expect(separate.setEnabled(skill.id, true, new AbortController().signal)).rejects.toThrow('missing');
 });
 it('reconciles failed preference acknowledgements and reports unreadable or undurable outcomes', async () => {
   const { state, root } = await aSkillLifecycle();
-  await state.setEnabled('one', true);
+  await state.setEnabled('one', true, new AbortController().signal);
   const replace = state.preferences.replace.bind(state.preferences);
   vi.spyOn(state.preferences, 'replace').mockImplementationOnce(async (...args) => {
     await replace(...args);
     throw new Error('Lost acknowledgement');
   });
-  await state.setEnabled('one', false);
+  await state.setEnabled('one', false, new AbortController().signal);
   expect(state.enabled.get('one')).toBe(false);
   vi.spyOn(state.preferences, 'replace').mockImplementationOnce(async () => {
     vi.spyOn(state.preferences, 'read').mockRejectedValueOnce(new Error('Unreadable'));
     throw new Error('Uncertain write');
   });
-  await expect(state.setEnabled('one', true)).rejects.toThrow('needs recovery');
+  await expect(state.setEnabled('one', true, new AbortController().signal)).rejects.toThrow('needs recovery');
   vi.spyOn(state.preferences, 'replace').mockImplementationOnce(async (...args) => {
     await replace(...args);
     await rm(join(root, 'skill-state.json'));
   });
-  await expect(state.setEnabled('one', true)).rejects.toThrow('needs recovery');
+  await expect(state.setEnabled('one', true, new AbortController().signal)).rejects.toThrow('needs recovery');
   expect(state.enabled.get('one')).toBe(false);
 });
 it('round trips imported executable mode and compares non-UTF8 files without a NUL', async () => {

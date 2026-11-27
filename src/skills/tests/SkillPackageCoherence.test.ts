@@ -209,7 +209,7 @@ it('updates every subscribed catalog after a durable preference write and indepe
   await other.refresh();
   const changed = vi.fn();
   other.onDidChange(changed);
-  await state.setEnabled(skill.id, false);
+  await state.setEnabled(skill.id, false, new AbortController().signal);
   await state.initialize();
   expect(other.skills[0]?.enabled).toBe(false);
   expect(changed).toHaveBeenCalledTimes(1);
@@ -218,7 +218,7 @@ it('updates every subscribed catalog after a durable preference write and indepe
   expect(other.skills[0]?.installedFrom).toBeUndefined();
   other.dispose();
   new SkillCatalog([]).dispose();
-  await state.setEnabled(skill.id, false);
+  await state.setEnabled(skill.id, false, new AbortController().signal);
   expect(other.skills[0]?.enabled).toBe(true);
 });
 
@@ -261,7 +261,7 @@ it('reconciles an unfinished publication before accepting captured bytes and rec
   const guarded = new SkillCatalog([provider], state.enabled, state.installations, undefined, reconcile);
   await expect(guarded.capture(skill)).rejects.toThrow('skill changed');
   reconcile.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
-    await state.setEnabled(skill.id, false);
+    await state.setEnabled(skill.id, false, new AbortController().signal);
   });
   await expect(guarded.capture(catalog.skills[0]!)).rejects.toThrow('disabled during capture');
 });

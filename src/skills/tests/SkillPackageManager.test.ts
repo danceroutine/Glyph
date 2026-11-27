@@ -58,13 +58,15 @@ describe(SkillPackageManager, () => {
     const before = await readdir(root);
     await chmod(root, 0o555);
     try {
-      await manager.setEnabled(skill.id, false);
+      await manager.setEnabled(skill.id, false, new AbortController().signal);
       expect(catalog.skills[0]?.message).toBeUndefined();
       expect(catalog.skills[0]?.enabled).toBe(false);
       expect(await readdir(root)).toEqual(before);
       expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
       vi.spyOn(location.store, 'exists').mockResolvedValueOnce(false);
-      await expect(manager.setEnabled(skill.id, true)).rejects.toThrow('installed skill is missing');
+      await expect(manager.setEnabled(skill.id, true, new AbortController().signal)).rejects.toThrow(
+        'installed skill is missing',
+      );
       expect(state.enabled.get(skill.id)).toBe(false);
     } finally {
       await chmod(root, 0o755);
@@ -164,15 +166,15 @@ describe(SkillPackageManager, () => {
   it('persists enablement independently of package contents and restores it after reload', async () => {
     const { store, state, catalog, manager, install } = await aSkillLifecycle();
     const skill = await install();
-    await manager.setEnabled(skill.id, false);
+    await manager.setEnabled(skill.id, false, new AbortController().signal);
     expect(catalog.skills[0]?.enabled).toBe(false);
     const restored = new SkillStateStore(store.root, testFilesystemMetadata);
     await restored.initialize();
     expect(restored.enabled.get(skill.id)).toBe(false);
     expect(restored.installations.get(skill.id)?.revision).toBe(state.installations.get(skill.id)?.revision);
-    await manager.setEnabled(skill.id, true);
+    await manager.setEnabled(skill.id, true, new AbortController().signal);
     expect(catalog.skills[0]?.enabled).toBe(true);
-    await expect(manager.setEnabled('missing', false)).rejects.toThrow('unavailable');
+    await expect(manager.setEnabled('missing', false, new AbortController().signal)).rejects.toThrow('unavailable');
   });
   it('updates and removes only the approved package, and discards denied previews', async () => {
     const { root, manager, catalog, install } = await aSkillLifecycle();

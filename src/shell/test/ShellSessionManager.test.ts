@@ -34,7 +34,7 @@ describe(ShellSessionManager, () => {
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.output)).toEqual(args);
     expect(authorize).toHaveBeenCalledWith(
-      program.display,
+      program,
       expect.any(String),
       expect.any(AbortSignal),
       expect.objectContaining({ transient: true }),

@@ -112,14 +112,14 @@ it.skipIf(process.platform !== 'darwin')(
   'keeps the original preference inode for every writer when its ACL cannot be reproduced',
   async () => {
     const { root, state, store } = await aSkillLifecycle(openMutations, metadata);
-    await state.setEnabled('old', false);
+    await state.setEnabled('old', false, new AbortController().signal);
     const path = join(root, 'skill-state.json');
     const inode = (await stat(path)).ino;
     const contents = await readFile(path);
     chmodAcl(path, '+a', 'everyone deny write');
     try {
       const operations = [
-        () => state.setEnabled('old', true),
+        () => state.setEnabled('old', true, new AbortController().signal),
         () => state.record('old', 'fixture', '1'),
         () => state.forget('old'),
         () => state.migratePackageIds(new Map([['new', ['old']]])),
@@ -134,7 +134,7 @@ it.skipIf(process.platform !== 'darwin')(
     }
     chmodAcl(store.root, '+a', 'everyone deny delete_child');
     try {
-      await expect(state.setEnabled('old', true)).rejects.toThrow('metadata');
+      await expect(state.setEnabled('old', true, new AbortController().signal)).rejects.toThrow('metadata');
     } finally {
       chmodAcl(store.root, '-N');
     }

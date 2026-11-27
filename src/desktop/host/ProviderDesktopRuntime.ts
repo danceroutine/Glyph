@@ -422,7 +422,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         let message: string | undefined;
         try {
           if (command.type === GlyphWorkbenchCommandType.APPLY_SKILL)
-            message = (await manager.apply(command.previewId, this.discovery.signal)).refreshError;
+            message = (await manager.apply(command.previewId, commandSignal)).refreshError;
           manager.discard(command.previewId);
         } catch (error) {
           message = error instanceof Error ? error.message : 'Skill change failed. Preview the change again.';
@@ -443,7 +443,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       case GlyphWorkbenchCommandType.SET_SKILL_ENABLED:
         if (!this.options.skillManager) throw new Error('Skill management requires a trusted workspace.');
-        await this.options.skillManager.setEnabled(command.skillId, z.boolean().parse(command.enabled));
+        await this.options.skillManager.setEnabled(command.skillId, z.boolean().parse(command.enabled), commandSignal);
         return;
 
       case GlyphWorkbenchCommandType.CREATE_USER_RULE:

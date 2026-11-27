@@ -93,14 +93,17 @@ describe(SkillStateStore, () => {
     const store = fixtureWorkspace(root);
     const first = new SkillStateStore(store.root, testFilesystemMetadata);
     await first.initialize();
-    await Promise.all([first.setEnabled('one', false), first.setEnabled('two', true)]);
+    await Promise.all([
+      first.setEnabled('one', false, new AbortController().signal),
+      first.setEnabled('two', true, new AbortController().signal),
+    ]);
     const second = new SkillStateStore(store.root, testFilesystemMetadata);
     await second.initialize();
     await second.record('one', 'Repository @ pinned SHA', 'version');
-    await first.setEnabled('three', true);
+    await first.setEnabled('three', true, new AbortController().signal);
     expect(first.installations.get('one')?.revision).toBe('version');
     vi.spyOn(first.preferences, 'replace').mockRejectedValueOnce(new Error('Unavailable storage'));
-    await expect(first.setEnabled('one', true)).rejects.toThrow('Unavailable');
+    await expect(first.setEnabled('one', true, new AbortController().signal)).rejects.toThrow('Unavailable');
     expect(first.enabled.get('one')).toBe(false);
     expect(JSON.parse(await readFile(join(root, 'skill-state.json'), 'utf8'))).toMatchObject({
       enabled: { one: false },
