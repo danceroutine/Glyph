@@ -919,8 +919,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       });
       const privatePaths = captured.sandboxOptions[0]!.privatePaths;
       if (typeof privatePaths !== 'function') throw new Error('Expected dynamic host metadata masks');
-      expect(privatePaths()).toContain(fixture.userDirectory);
       const targets = (await runtime.snapshot()).skillTargets!;
+      expect(privatePaths()).toContain(fixture.userDirectory);
       for (const [index, target] of targets.entries()) {
         const draft = aSkillDraft('Reviewed factory workflow', `workflow-${index}`);
         await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: target.id, draft: draft.toJSON() });
@@ -1224,14 +1224,14 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const rules = join(isolatedUserDirectory, 'rules');
       await writeFile(rules, 'occupied');
       const runtime = await fixture.create([root]);
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
       expect((await runtime.snapshot()).instructionSources).toEqual(
         expect.arrayContaining([expect.objectContaining({ kind: 'glyph_user_rule', status: 'error' })]),
       );
       await rm(rules);
       await mkdir(rules);
       await writeFile(join(rules, 'restored.mdc'), 'Restored');
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
       expect((await runtime.snapshot()).instructionSources).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ kind: 'glyph_user_rule', status: 'active', content: 'Restored' }),
@@ -1358,11 +1358,20 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const skills = join(profile, 'skills');
       await mkdir(profile);
       await writeFile(skills, 'occupied');
+      const prior = new ProjectSkillIdentity(isolatedUserDirectory, '.glyph');
+      const previous = prior.forDirectory('.glyph/skills/demo');
+      await writeFile(
+        join(profile, 'skill-state.json'),
+        JSON.stringify({
+          enabled: { [previous]: false },
+          installations: { [previous]: { source: 'Old source', revision: 'Old revision' } },
+        }),
+      );
       const fixture = await factoryFixture({ userDirectory: profile });
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
       useFilesystemIndex();
       const runtime = await fixture.create([isolatedUserDirectory]);
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
       expect((await runtime.snapshot()).skills).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ origin: expect.objectContaining({ scope: 'user' }), status: 'discovery-error' }),
@@ -1374,11 +1383,21 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         join(skills, 'demo', 'SKILL.md'),
         '---\nname: demo\ndescription: Shared workflow\n---\nGuidance.',
       );
-      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
       const discovered = (await runtime.snapshot()).skills!;
       expect(discovered).toHaveLength(1);
       expect(discovered[0]).toMatchObject({ name: 'demo', origin: { scope: 'user' } });
-      const previous = new ProjectSkillIdentity(isolatedUserDirectory, '.glyph').forDirectory('.glyph/skills/demo');
+      expect(discovered[0]).toMatchObject({
+        enabled: false,
+        installedFrom: 'Old source',
+        packageRevision: 'Old revision',
+      });
+      expect((await runtime.snapshot()).skillTargets).toContainEqual(
+        expect.objectContaining({ id: prior.originId, updateOnly: true }),
+      );
+      await expect(
+        runtime.handle({ type: Command.PREVIEW_SKILL, targetId: prior.originId, draft: aSkillDraft().toJSON() }),
+      ).rejects.toThrow('user skill store');
       expect(runtime.resolveSkillReference(previous)).toBe(discovered[0]!.id);
     });
 

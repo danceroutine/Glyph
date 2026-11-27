@@ -49,7 +49,7 @@ export class SkillLifecycleToolRuntime implements ToolSource {
         activityPresentation: proposalActivityPresentation,
         allowedModes: [AgentModeID.AGENT],
         inputKind: ToolInputKind.JSON,
-        description: `Propose a complete skill package installation/update or removal. The human reviews every file before it changes. Native targets: ${JSON.stringify(manager.targets.slice(0, 32).map(({ id, label }) => ({ id, label })))}. Set unused nullable fields to null. Draft files replace the complete package, not individual hunks.`,
+        description: `Propose a complete skill package installation/update or removal. The human reviews every file before it changes. Native targets: ${JSON.stringify(manager.targets.slice(0, 32).map(({ id, label, updateOnly }) => ({ id, label, updateOnly })))}. Set unused nullable fields to null. Draft files replace the complete package, not individual hunks.`,
         parameters: parameters(changeSchema),
         validateInput: input => {
           changeSchema.parse(JSON.parse(input));

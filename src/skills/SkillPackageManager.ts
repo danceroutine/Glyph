@@ -31,6 +31,7 @@ export interface SkillPackageLocation {
   readonly listFiles: () => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly refreshIndex: () => Promise<void>;
   readonly packageId?: (directory: string) => string;
+  readonly updateOnly?: boolean;
   readonly assertClean?: (absolutePackageDirectory: string) => Promise<void>;
 }
 type PackageFiles = ReadonlyMap<string, SkillPackageFile>;
@@ -122,6 +123,7 @@ export class SkillPackageManager {
     return this.locations.map(location => ({
       id: location.id,
       scope: location.scope,
+      ...(location.updateOnly ? { updateOnly: true } : {}),
       label: location.label,
       uri: pathToFileURL(join(location.store.root, location.directory)).toString(),
     }));
@@ -138,6 +140,8 @@ export class SkillPackageManager {
   async prepare(targetId: string, draft: SkillPackageDraft, replaceId?: string): Promise<SkillPreview> {
     if (this.ensureReady) await this.ensureReady();
     const location = this.location(targetId);
+    if (!replaceId && location.updateOnly)
+      throw new Error('This installation directory belongs to the user skill store. Select User skills.');
     await this.recover(location.id);
     const existing = replaceId ? this.catalog.skills.find(skill => skill.id === replaceId) : undefined;
     if (replaceId && (!existing?.directory || existing.origin.id !== targetId || existing.name !== draft.name))
@@ -337,7 +341,7 @@ export class SkillPackageManager {
     return scope === location.store.root ? work() : withSkillLock(scope, 'destination', work, signal);
   }
   private async checkPendingOrigin(location: SkillPackageLocation, destination: string) {
-    if (location.scope === 'project' && (await this.journal.hasOtherProjectTransaction(location.id, destination)))
+    if (await this.journal.hasOtherProjectTransaction(location.id, destination))
       throw new Error(
         'An unfinished skill change belongs to another project root. Reopen the original project to recover it.',
       );

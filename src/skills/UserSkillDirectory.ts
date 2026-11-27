@@ -31,6 +31,12 @@ export class UserSkillDirectory {
     );
   }
 
+  previousPackageIds(directory: string): readonly string[] {
+    if (!this.projectIdentity) return [];
+    const projectDirectory = this.marker + '/' + directory;
+    return [this.projectIdentity.forDirectory(projectDirectory), ...this.projectIdentity.legacyIds(projectDirectory)];
+  }
+
   private key(path: string): string {
     return this.caseSensitive ? path : path.toLowerCase();
   }

@@ -86,10 +86,11 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
   const [url, setUrl] = useState('');
   const [revision, setRevision] = useState('');
   const [directory, setDirectory] = useState('');
-  const [replaceId, setReplaceId] = useState<string | undefined>();
+  const [replacement, setReplacement] = useState<{ id: string; target: string }>();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const selectedTarget = target || management?.targets[0]?.id || '';
+  const installTargets = management?.targets.filter(location => !location.updateOnly) ?? [];
+  const selectedTarget = target || installTargets[0]?.id || '';
   const perform = async (operation: () => Promise<void>) => {
     setBusy(true);
     setError('');
@@ -128,7 +129,7 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
                   setTarget(event.currentTarget.value);
                 }}
               >
-                {management.targets.map(item => (
+                {installTargets.map(item => (
                   <option key={item.id} value={item.id}>
                     {item.label}
                   </option>
@@ -154,7 +155,7 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
             <Button
               disabled={busy || !selectedTarget}
               onClick={() => {
-                setReplaceId(undefined);
+                setReplacement(undefined);
                 setForm('repository');
               }}
             >
@@ -188,9 +189,9 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
                   });
                 else
                   await management.previewRepository(
-                    selectedTarget,
+                    replacement?.target ?? selectedTarget,
                     { kind: 'repository', url, revision, directory },
-                    replaceId,
+                    replacement?.id,
                   );
                 setForm(undefined);
               });
@@ -383,8 +384,7 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
                           disabled={busy}
                           appearance={ButtonAppearance.BORDERLESS_GHOST}
                           onClick={() => {
-                            setTarget(skill.origin.id);
-                            setReplaceId(skill.id);
+                            setReplacement({ id: skill.id, target: skill.origin.id });
                             setForm('repository');
                           }}
                         >

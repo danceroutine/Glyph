@@ -300,7 +300,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
       const mutationRoots = new Map(
         await Promise.all(
-          [...new Set([userRuleStore.root, ...parts.map(part => part.disk.root)])].map(
+          [...new Set(parts.map(part => part.disk.root))].map(
             async physicalRoot =>
               [physicalRoot, await NativeWorkspaceMutations.open(workspaceMutationsExecutable, physicalRoot)] as const,
           ),
@@ -382,7 +382,21 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         },
       });
       const skillState = (this.skillState ??= new SkillStateStore(userRuleStore));
-      const ensureSkillsReady = () => skillState.initialize();
+      let userMutations = mutationRoots.get(userRuleRoot);
+      let openingUserMutations: Promise<NativeWorkspaceMutations> | undefined;
+      const ensureSkillsReady = async () => {
+        if (!userMutations) {
+          await mkdir(userRuleRoot, { recursive: true });
+          userMutations = await (openingUserMutations ??= NativeWorkspaceMutations.open(
+            workspaceMutationsExecutable,
+            userRuleRoot,
+          ).catch(error => {
+            openingUserMutations = undefined;
+            throw error;
+          }));
+        }
+        await skillState.initialize();
+      };
       const skillIdentities = new Map<string, ProjectSkillIdentity>();
       skills = new SkillCatalog(
         [
@@ -428,6 +442,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           skillState.migratePackageIds(
             new Map(
               descriptors.flatMap(skill => {
+                if (skill.origin.id === userSkills.id && skill.directory)
+                  return [[skill.id, userSkillDirectory.previousPackageIds(skill.directory)] as const];
                 const identity = skillIdentities.get(skill.origin.id);
                 return identity && skill.directory ? [[skill.id, identity.legacyIds(skill.directory)] as const] : [];
               }),
@@ -440,7 +456,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             id: 'user:glyph',
             label: 'User skills',
             scope: 'user',
-            mutations: mutationRoots.get(userRuleStore.root)!,
+            get mutations() {
+              return userMutations!;
+            },
             assertClean: path => assertSkillPackageClean(this.editors, input.identity, 'user', path),
             store: userRuleStore,
             workspace: userRuleStore,
@@ -460,6 +478,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               packageId: (directory: string) => identity.forDirectory(directory),
               label: `${part.name} project skills`,
               scope: 'project' as const,
+              updateOnly: userSkillDirectory.ownsStore(join(part.disk.root, '.glyph/skills')),
               ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
               mutations: mutationRoots.get(part.disk.root)!,
               assertClean: (path: string) => {
