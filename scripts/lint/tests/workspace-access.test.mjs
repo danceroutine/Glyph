@@ -12,6 +12,9 @@ it('enforces the production ownership map through Oxlint using the repository ov
   const directory = mkdtempSync(join(tmpdir(), 'glyph-lint-access-'));
   /** @type {[string, string, boolean][]} */
   const cases = [
+    ['src/skills/Outside.ts', 'const read = skill.inspectResource;', true],
+    ['src/skills/Other.ts', "selected['packageFiles']();", true],
+    ['src/skills/SkillScriptRunner.ts', 'selected.packageFiles();', false],
     ['src/chat/Raw.ts', "import { readFile as load } from 'node:fs/promises';", true],
     ['src/chat/Launch.ts', "export * from 'child_process';", true],
     ['src/chat/Lazy.ts', "const adapter = await import('#src/workspace/FileSystemWorkspaceTextStore.js');", true],

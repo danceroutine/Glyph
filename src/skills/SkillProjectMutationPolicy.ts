@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs';
+import { containsPhysicalDirectory } from '#src/workspace/sameWorkspaceDirectory.js';
 import { dirname, posix, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ProjectMutationPolicy } from '#src/editing/proposals/ProjectMutationPolicy.js';
@@ -13,7 +13,12 @@ interface PackageLocation {
 
 const denial = 'Skill packages require review. Use skills.propose_change or open Skills in Glyph Settings.';
 
-/** Covers new and existing native and compatibility packages, including packages nested inside project folders. */
+/**
+ * Reserves native and compatible skill packages for the reviewed package
+ * lifecycle. Ordinary project mutations consult this policy for both endpoints
+ * of a move, including enclosing directories. A native store supplies the
+ * verified spelling so catalog ancestors can be compared by filesystem identity.
+ */
 export class SkillProjectMutationPolicy implements ProjectMutationPolicy {
   private previous?: readonly SkillDescriptor[];
   private readonly ancestors = new Set<string>();
@@ -40,19 +45,7 @@ export class SkillProjectMutationPolicy implements ProjectMutationPolicy {
     // Native admission already covers configured stores, marker names and their mounted aliases.
     // The catalog additionally protects enclosing directories of packages in nested projects.
     if (verifiedPhysicalPath !== undefined) {
-      const target = statSync(verifiedPhysicalPath, { bigint: true, throwIfNoEntry: false });
-      if (target?.isDirectory()) {
-        const checked = new Set<string>();
-        for (const skill of this.catalog?.skills ?? []) {
-          if (!skill.uri.startsWith('file:')) continue;
-          for (let path = dirname(fileURLToPath(skill.uri)); !checked.has(path); path = dirname(path)) {
-            checked.add(path);
-            const parent = statSync(path, { bigint: true, throwIfNoEntry: false });
-            if (parent?.dev === target.dev && parent.ino === target.ino) return denial;
-          }
-        }
-      }
-      return undefined;
+      return containsPhysicalDirectory(verifiedPhysicalPath, this.installedDirectories()) ? denial : undefined;
     }
     const parts = canonicalPath.split('/');
     if (
@@ -67,9 +60,7 @@ export class SkillProjectMutationPolicy implements ProjectMutationPolicy {
     if (skills && skills !== this.previous) {
       this.ancestors.clear();
       for (const root of this.roots) this.addAncestors(root.directory);
-      for (const skill of skills) {
-        if (!skill.uri.startsWith('file:')) continue;
-        const directory = dirname(fileURLToPath(skill.uri));
+      for (const directory of this.installedDirectories()) {
         const root = this.roots.find(candidate => {
           const path = key(directory, candidate.sensitive);
           return contains(candidate.path, path);
@@ -79,6 +70,12 @@ export class SkillProjectMutationPolicy implements ProjectMutationPolicy {
       this.previous = skills;
     }
     return this.ancestors.has(canonicalPath) ? denial : undefined;
+  }
+
+  private *installedDirectories(): Iterable<string> {
+    for (const skill of this.catalog?.skills ?? []) {
+      if (skill.uri.startsWith('file:')) yield dirname(fileURLToPath(skill.uri));
+    }
   }
 
   private addAncestors(directory: string): void {

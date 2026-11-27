@@ -52,3 +52,22 @@ export class WorkspaceDirectoryIdentity {
     return matches;
   }
 }
+
+/**
+ * Checks whether the operation's verified directory contains any of the given
+ * directories, including through a mounted spelling. Reuse ancestor inspections
+ * within this call. The next mutation obtains its own observation.
+ */
+export function containsPhysicalDirectory(targetPath: string, directories: Iterable<string>): boolean {
+  const target = fs.statSync(targetPath, { bigint: true, throwIfNoEntry: false });
+  if (!target?.isDirectory()) return false;
+  const checked = new Set<string>();
+  for (const directory of directories) {
+    for (let path = directory; !checked.has(path); path = dirname(path)) {
+      checked.add(path);
+      const parent = fs.statSync(path, { bigint: true, throwIfNoEntry: false });
+      if (parent?.dev === target.dev && parent.ino === target.ino) return true;
+    }
+  }
+  return false;
+}

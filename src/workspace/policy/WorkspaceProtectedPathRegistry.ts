@@ -1,6 +1,11 @@
 import { resolve } from 'node:path';
 
-/** Host-lifetime private and managed-path reservations shared by all live workspace policies. Admitted paths remain protected after retargeting. */
+/**
+ * Owns the host's accumulated reservations across live windows. Retain both
+ * logical names and known physical paths for the host lifetime, including
+ * after a route disappears. Workspace policies read the current snapshot at
+ * use, and physical adapters check the target of the operation against it.
+ */
 export class WorkspaceProtectedPathRegistry {
   private readonly paths = new Set<string>();
   private snapshot: readonly string[] = [];

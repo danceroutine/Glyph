@@ -40,6 +40,19 @@ const filesystem = new Set([
   'src/skills/matchesSkillManifest.ts',
   'src/shell/ShellRuntimePathPolicy.ts',
   'src/shell/ShellWorkingDirectoryResolver.ts',
+  // Package intake, approval state and native transaction staging each own private host I/O.
+  'src/skills/SkillPackageManager.ts',
+  'src/skills/SkillPackageSource.ts',
+  'src/skills/SkillPackageStorage.ts',
+  'src/skills/SkillRepositoryConfiguration.ts',
+  'src/skills/SkillRepositoryGit.ts',
+  'src/skills/SkillScriptRunner.ts',
+  'src/skills/SkillStateStore.ts',
+  'src/skills/installedPackageModes.ts',
+  'src/skills/skillPackageInventory.ts',
+  'src/shell/TrustedHostExecutable.ts',
+  'src/shell/ShellContentStore.ts',
+  'src/workspace/NativeWorkspaceMutations.ts',
   'src/workspace/DirectoryNamePolicies.ts',
   'src/workspace/FilesystemMetadata.ts',
   'src/workspace/SourcePathAliases.ts',
@@ -53,6 +66,9 @@ const filesystem = new Set([
 ]);
 
 const subprocess = new Set([
+  'src/skills/SkillRepositoryConfiguration.ts',
+  'src/skills/SkillRepositoryGit.ts',
+  'src/workspace/NativeWorkspaceMutations.ts',
   nativeShell,
   nativeMetadata,
   nativeIndex,
@@ -76,7 +92,17 @@ const restrictedModules = new Map([
   [nativeMetadata, composition],
   [nativeIndex, composition],
   [nativeShell, shellComposition],
+  ['src/workspace/NativeWorkspaceMutations.ts', composition],
   ['src/workspace/policy/StartupUserProfile.ts', composition],
+]);
+
+// These inventory members expose a whole captured package or a resource before disclosure accounting.
+const packageInventory = new Set(['packageFiles', 'packageDirectories', 'inspectResource']);
+const inventoryConsumers = new Set([
+  'src/skills/SkillPackage.ts',
+  'src/skills/SkillPackageDraft.ts',
+  'src/skills/SkillPackageManager.ts',
+  'src/skills/SkillScriptRunner.ts',
 ]);
 
 // Workbench service modules also export ordinary enums and types. Restrict only service acquisition.
@@ -181,6 +207,15 @@ export default {
                 : [],
             );
             check(node, node.source.value, names.length > 0 && names.length === values.length ? names : undefined);
+          },
+          MemberExpression(node) {
+            if (inventoryConsumers.has(importer)) return;
+            const member = node.computed
+              ? node.property.type === 'Literal' && node.property.value
+              : node.property.type === 'Identifier' && node.property.name;
+            if (typeof member === 'string' && packageInventory.has(member)) {
+              context.report({ node, messageId: 'mediated', data: { capability: member } });
+            }
           },
           NewExpression(node) {
             const callee = node.callee;

@@ -16,6 +16,18 @@ process belong at the adapter.
 | Admit a window to mutate a workspace                                            | `WorkspaceOwnershipRegistry` and the desktop host                                        | When admitting the connection and when dispatching or completing work on its behalf              |
 | Authorize a shell command and launch it                                         | `ShellApprovalPolicy` and the configured `ShellProcessLauncher`                          | Match the command and working directory for approval, then enforce the granted profile at launch |
 
+The desktop factory pins the personal Glyph store's physical location at startup.
+The startup profile verifies that identity on access. Ordinary edits to a rule
+or skill in the admitted directory remain visible. A profile symlink retarget
+leaves the running host on its original directory. Replacing the pinned object
+invalidates access.
+
+A skill package change passes through the package manager. Its preview carries
+the reviewed revision and, for local intake, the source access check. At publication
+the manager checks the source, destination and peer editors again. Ordinary
+project edits consult `SkillProjectMutationPolicy` to reserve this workflow for
+managed paths.
+
 ## Choosing the boundary
 
 A normalized path is an address. A revision identifies reviewed content. An
