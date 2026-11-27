@@ -6,7 +6,7 @@ import type { StartupUserProfile } from './StartupUserProfile.ts';
  * The host selects one content policy per consumer. Automatic tools and discovery exclude the startup
  * profile's personal source directories, including their mounted aliases. A deliberate attachment can
  * read its selected file under the host-private exclusions. It grants no subsequent search or tool access.
- * The user catalog verifies the selected physical profile at the start and end of each operation.
+ * All views verify the physical profile when issuing authority and when releasing an operation result.
  */
 export class WorkspaceContentAccess {
   /** Automatic discovery, references and project tools use this view. */
@@ -21,16 +21,14 @@ export class WorkspaceContentAccess {
   constructor(profile: StartupUserProfile, hostPrivate: () => readonly string[], installation: readonly string[]) {
     const personal = [join(profile.path, 'rules'), join(profile.path, 'skills')];
     const projectPrivate = () => [...hostPrivate(), ...installation];
-    this.project = new WorkspaceAccessPolicy({}, () => [...projectPrivate(), ...personal]);
-    this.shell = new WorkspaceAccessPolicy({}, () => [
-      ...hostPrivate(),
-      ...personal,
-      join(profile.path, '.skill-staging'),
-    ]);
-    this.selectedFile = new WorkspaceAccessPolicy({}, projectPrivate);
-    this.userCatalog = new WorkspaceAccessPolicy({}, () => {
-      profile.verify();
-      return projectPrivate();
-    });
+    const verifyProfile = () => profile.verify();
+    this.project = new WorkspaceAccessPolicy({}, () => [...projectPrivate(), ...personal], verifyProfile);
+    this.shell = new WorkspaceAccessPolicy(
+      {},
+      () => [...hostPrivate(), ...personal, join(profile.path, '.skill-staging')],
+      verifyProfile,
+    );
+    this.selectedFile = new WorkspaceAccessPolicy({}, projectPrivate, verifyProfile);
+    this.userCatalog = new WorkspaceAccessPolicy({}, projectPrivate, verifyProfile);
   }
 }

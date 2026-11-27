@@ -10,6 +10,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 export class StartupUserProfile {
   readonly path: string;
   private anchor: string;
+  private revision = 0;
   private descriptor: number | undefined;
 
   constructor(configuredPath: string) {
@@ -19,9 +20,10 @@ export class StartupUserProfile {
     this.descriptor = this.open(this.anchor);
   }
 
-  /** Recheck the retained directory and pin each newly materialized physical child before it is consumed. */
-  verify(): void {
+  /** Verify the enrolled directory and return its current authority revision, pinning any newly created components. */
+  verify(): number {
     this.check(false);
+    return this.revision;
   }
 
   /** Create missing profile components beneath their verified parent using owner-only permissions. */
@@ -31,9 +33,9 @@ export class StartupUserProfile {
 
   /** Verify both sides of an asynchronous access before releasing its result. Writers also verify at publication. */
   async access<T>(operation: () => Promise<T>): Promise<T> {
-    this.verify();
+    const revision = this.verify();
     const result = await operation();
-    this.verify();
+    if (this.verify() !== revision) throw changed();
     return result;
   }
 
@@ -47,6 +49,16 @@ export class StartupUserProfile {
   }
 
   private check(create: boolean): void {
+    try {
+      this.inspectDirectory(create);
+    } catch (error) {
+      // Invalidate outstanding operations in every consumer, including after the original directory returns.
+      this.revision++;
+      throw error;
+    }
+  }
+
+  private inspectDirectory(create: boolean): void {
     if (this.descriptor === undefined) throw new Error('The user profile authority is closed.');
     const inspect = () => {
       const observed = fs.lstatSync(this.anchor, { bigint: true, throwIfNoEntry: false });
@@ -85,7 +97,9 @@ export class StartupUserProfile {
 }
 
 function changed(): Error {
-  return new Error('The startup user profile directory was removed or replaced. Restart Glyph to select a profile.');
+  return new Error(
+    'The startup user profile directory was removed or replaced. Restore it or restart Glyph to select a profile.',
+  );
 }
 
 function missingComponents(anchor: string, selected: string): string[] {
