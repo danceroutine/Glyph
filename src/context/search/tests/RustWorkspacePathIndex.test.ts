@@ -22,7 +22,7 @@ describe(RustWorkspacePathIndex, () => {
       }
     });
     it('obtains both filename policies from the native volume before indexing', async () => {
-      const value = { caseSensitive: true, normalizesUnicode: true };
+      const value = { caseSensitive: true, foldsUnicode: false, normalizesUnicode: true };
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : value));
       await expect(RustWorkspacePathIndex.filesystemNamePolicy('/fixture', '/volume', () => worker)).resolves.toEqual(
         value,
