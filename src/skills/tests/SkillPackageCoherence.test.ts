@@ -1,3 +1,4 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { chmod, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -148,7 +149,7 @@ it('keeps an installed package usable and retries retired backup cleanup indepen
   });
   await expect(manager.recover(location.id)).resolves.toBeUndefined();
   expect((await catalog.capture(catalog.skills[0]!)).body).toBe('Updated');
-  const journal = new SkillTransactionJournal(state.userDirectory);
+  const journal = new SkillTransactionJournal(state.userDirectory, testFilesystemMetadata);
   expect(await journal.entries(join(root, 'skills'), location.id)).toMatchObject([{ retired: true }]);
   cleanup.mockRestore();
   await manager.recover();
@@ -224,17 +225,17 @@ it('updates every subscribed catalog after a durable preference write and indepe
 it('keeps private locks and backups out of a normal Git add and validates the self-ignore marker', async () => {
   const { root } = await aSkillLifecycle();
   execFileSync('git', ['init', '-q', root]);
-  const staging = await privateSkillDirectory(root);
+  const staging = await privateSkillDirectory(testFilesystemMetadata, root);
   await mkdir(join(staging, 'retired'));
   await writeFile(join(staging, 'retired', 'notes'), 'Private');
   expect(execFileSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' })).toBe(
     '',
   );
   await writeFile(join(staging, '.gitignore'), '!\n');
-  await expect(privateSkillDirectory(root)).rejects.toThrow('.gitignore');
+  await expect(privateSkillDirectory(testFilesystemMetadata, root)).rejects.toThrow('.gitignore');
   await rm(join(staging, '.gitignore'));
   await mkdir(join(staging, '.gitignore'));
-  await expect(privateSkillDirectory(root)).rejects.toThrow('.gitignore');
+  await expect(privateSkillDirectory(testFilesystemMetadata, root)).rejects.toThrow('.gitignore');
 });
 
 it('rejects stale oversized index inventories before offering a removal', async () => {
@@ -294,11 +295,11 @@ it('serializes a nested destination with its direct project root and preserves a
   const manager = new SkillPackageManager([target], catalog, state);
   const [skill] = await catalog.refresh();
   const preview = await manager.prepareRemoval(skill!.id);
-  await withSkillLock(inner, 'destination', async () => {
+  await withSkillLock(testFilesystemMetadata, inner, 'destination', async () => {
     await expect(manager.apply(preview.id, AbortSignal.timeout(150))).rejects.toThrow(/aborted|timeout/iu);
   });
   expect(await store.exists(directory + '/SKILL.md')).toBe(true);
-  const journal = new SkillTransactionJournal(root);
+  const journal = new SkillTransactionJournal(root, testFilesystemMetadata);
   const entry = {
     id: randomUUID(),
     root: join(inner, '.glyph/skills'),

@@ -1,3 +1,4 @@
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { resolve } from 'node:path';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -9,7 +10,8 @@ import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 
 const [root, scenario] = process.argv.slice(2);
 const store = new FileSystemWorkspaceTextStore(root);
-const state = new SkillStateStore(store);
+const testFilesystemMetadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
+const state = new SkillStateStore(store, testFilesystemMetadata);
 await state.initialize();
 const location = {
   id: 'user:glyph',

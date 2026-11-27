@@ -52,8 +52,11 @@ pub(super) fn execute(request: &Request) -> Result<Option<String>, Failure> {
             ownership_reference,
         } => {
             let owner = if let Some(path) = ownership_reference {
-                let dir =
-                    open_directories(rustix::io::dup(&root)?, &relative_components(path)?, None)?;
+                let dir = open_relative_directories(
+                    rustix::io::dup(&root)?,
+                    &relative_components(path)?,
+                    None,
+                )?;
                 let stat = fstat(dir)?;
                 Some((stat.st_uid, stat.st_gid))
             } else {
@@ -74,7 +77,7 @@ pub(super) fn execute(request: &Request) -> Result<Option<String>, Failure> {
         }
         Operation::EnsureDirectory { relative, mode } => {
             let components = relative_components(relative)?;
-            open_directories(
+            open_relative_directories(
                 root,
                 &components,
                 Some(staging::mode(mode.unwrap_or(0o700))?),
@@ -108,6 +111,13 @@ pub(super) fn execute(request: &Request) -> Result<Option<String>, Failure> {
                 Ok((parent, name)) => {
                     let mut remaining = MAX_REMOVE_ENTRIES;
                     let leaf = CString::new(name).expect("validated path component");
+                    if let [".skill-staging", _] = components.as_slice() {
+                        match openat(&parent, &leaf, DIRECTORY, Mode::empty()) {
+                            Ok(stage) => staging::check_private(&stage)?,
+                            Err(Errno::NOENT) => return Ok(None),
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
                     remove_entry(&parent, &leaf, 0, &mut remaining)?;
                     fsync(&parent)?;
                 }
@@ -181,9 +191,29 @@ fn open_parent<'a>(root: &OwnedFd, components: &[&'a str]) -> Result<(OwnedFd, &
     // Validated paths contain a final non-empty name; the parent walk never includes that name.
     let (name, ancestors) = components.split_last().expect("validated relative path");
     Ok((
-        open_directories(rustix::io::dup(root)?, ancestors, None)?,
+        open_relative_directories(rustix::io::dup(root)?, ancestors, None)?,
         name,
     ))
+}
+
+fn open_relative_directories(
+    mut parent: OwnedFd,
+    path: &[&str],
+    create: Option<Mode>,
+) -> Result<OwnedFd, Failure> {
+    if path.first() != Some(&".skill-staging") {
+        return open_directories(parent, path, create);
+    }
+    let (private, contents) = path.split_at(path.len().min(2));
+    for component in private {
+        parent = open_directories(
+            parent,
+            std::slice::from_ref(component),
+            create.map(|_| Mode::RWXU),
+        )?;
+        staging::check_private(&parent)?;
+    }
+    open_directories(parent, contents, create)
 }
 
 fn rename_pinned(
@@ -252,8 +282,12 @@ fn inspect_metadata(
             "The replacement cannot preserve existing ownership or special permission bits.",
         ));
     }
-    glyph_filesystem_metadata::assert_replaceable(&fd)
-        .map_err(|error| Failure::new("ENOTSUP", error.to_string()))?;
+    let metadata = if recursive || kind != FileType::Directory {
+        glyph_filesystem_metadata::assert_replaceable(&fd)
+    } else {
+        glyph_filesystem_metadata::assert_access_metadata(&fd)
+    };
+    metadata.map_err(|error| Failure::new("ENOTSUP", error.to_string()))?;
     let mut hash = Sha256::new();
     hash.update(info.st_uid.to_le_bytes());
     hash.update(info.st_gid.to_le_bytes());

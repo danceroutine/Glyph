@@ -400,7 +400,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           await userSkillIndex.refresh();
         },
       });
-      const skillState = (this.skillState ??= new SkillStateStore(userRuleStore));
+      const skillState = (this.skillState ??= new SkillStateStore(userRuleStore, filesystemMetadata));
       let userMutations = mutationRoots.get(userRuleRoot);
       let openingUserMutations: Promise<NativeWorkspaceMutations> | undefined;
       const ensureSkillsReady = async () => {

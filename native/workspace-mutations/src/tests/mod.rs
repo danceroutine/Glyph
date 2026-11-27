@@ -235,6 +235,73 @@ mod supported {
     }
 
     #[test]
+    fn rejects_private_acl_grants_before_staging_moving_or_deleting_contents() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let op = |operation| run(&request(&root, operation));
+        let stage = |name: &str| json!({"operation":"create_stage","relative":format!(".skill-staging/{name}")});
+        assert_eq!(op(stage("id"))["ok"], true);
+        let staging = root.join(".skill-staging");
+        let transaction = staging.join("id");
+        fs::write(transaction.join("backup"), "preserved").unwrap();
+        fn grant(directory: &Path) {
+            #[cfg(target_os = "macos")]
+            assert!(std::process::Command::new("/bin/chmod")
+                .args([
+                    "+a",
+                    "everyone allow list,search,file_inherit,directory_inherit"
+                ])
+                .arg(directory)
+                .status()
+                .unwrap()
+                .success());
+            #[cfg(target_os = "linux")]
+            {
+                let mut acl = 2u32.to_le_bytes().to_vec();
+                for (tag, perm, id) in [
+                    (1u16, 7u16, u32::MAX),
+                    (2, 5, 42),
+                    (4, 0, u32::MAX),
+                    (16, 5, u32::MAX),
+                    (32, 0, u32::MAX),
+                ] {
+                    acl.extend(tag.to_le_bytes());
+                    acl.extend(perm.to_le_bytes());
+                    acl.extend(id.to_le_bytes());
+                }
+                rustix::fs::fsetxattr(
+                    fs::File::open(directory).unwrap(),
+                    c"system.posix_acl_default",
+                    &acl,
+                    rustix::fs::XattrFlags::empty(),
+                )
+                .unwrap();
+            }
+        }
+        assert_eq!(op(ensure(".skill-staging/safe/data"))["ok"], true);
+        assert_eq!(
+            op(
+                json!({"operation":"assert_replaceable_metadata","relative":".skill-staging/id/backup","recursive":true,"ownershipReference":".skill-staging/missing"})
+            )["code"],
+            "ENOENT"
+        );
+        grant(&transaction);
+        assert_eq!(op(ensure(".skill-staging/id/private"))["code"], "EACCES");
+        assert_eq!(
+            op(rename(".skill-staging/id/backup", "published"))["code"],
+            "EACCES"
+        );
+        assert_eq!(op(remove(".skill-staging/id"))["code"], "EACCES");
+        assert_eq!(fs::read(transaction.join("backup")).unwrap(), b"preserved");
+        assert_eq!(op(remove(".skill-staging/missing"))["ok"], true);
+        fs::write(staging.join("file"), "keep").unwrap();
+        assert_eq!(op(remove(".skill-staging/file"))["code"], "ENOTDIR");
+        grant(&staging);
+        assert_eq!(op(stage("next"))["code"], "EACCES");
+        assert!(!staging.join("next").exists());
+    }
+
+    #[test]
     fn refuses_unreadable_ambiguous_and_oversize_staged_entries() {
         let dir = tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();

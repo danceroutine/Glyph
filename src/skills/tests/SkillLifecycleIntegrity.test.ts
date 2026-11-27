@@ -1,4 +1,5 @@
 import { packageRevision } from '#src/skills/skillPackageRevision.js';
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { chmod, readFile, writeFile, mkdir, rename, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -42,7 +43,7 @@ it('binds equal-size binary updates, owner permissions and the physical target t
   const exact = await manager.prepare(skill.origin.id, replacement, skill.id);
   await manager.apply(exact.id);
   expect((await stat(join(root, 'skills/example/assets/image.bin'))).mode & 0o777).toBe(0o700);
-  const state = new SkillStateStore(store);
+  const state = new SkillStateStore(store, testFilesystemMetadata);
   await state.initialize();
   expect(state.installations.get(skill.id)?.revision).toBe(exact.revision);
 });
@@ -103,7 +104,7 @@ it('restores the original when a process stopped between moving the old package 
   const directory = 'skills/example';
   const expected = state.installations.get(skill.id)!.revision;
   await mkdir(stage, { mode: 0o700 });
-  const journal = new SkillTransactionJournal(root);
+  const journal = new SkillTransactionJournal(root, testFilesystemMetadata);
   await journal.write({
     id,
     root: await store.resolvePath('skills'),
@@ -194,7 +195,7 @@ it('recovers only authenticated committed publications and preserves changed ass
   const { root, store, location, state, manager, install } = await aSkillLifecycle();
   const skill = await install();
   const revision = state.installations.get(skill.id)!.revision;
-  const journal = new SkillTransactionJournal(root);
+  const journal = new SkillTransactionJournal(root, testFilesystemMetadata);
   const id = randomUUID(),
     stage = join(root, '.skill-staging', id);
   const record = {
@@ -235,7 +236,7 @@ it('preserves uncertain originals and distinguishes independent identical packag
   const { root, store, location, state, manager, install } = await aSkillLifecycle();
   const skill = await install();
   const revision = state.installations.get(skill.id)!.revision;
-  const journal = new SkillTransactionJournal(root);
+  const journal = new SkillTransactionJournal(root, testFilesystemMetadata);
   const id = randomUUID(),
     stage = join(root, '.skill-staging', id);
   const record = {
@@ -296,9 +297,9 @@ it('preserves the journal on uncertainty or post-commit changes, and refuses sta
   await expect(manager.apply(change.id)).rejects.toThrow('Published files changed');
   record.mockRestore();
   await expect(manager.recover()).rejects.toThrow('Published files changed');
-  const separate = new SkillPackageManager([location], catalog, new SkillStateStore(store));
+  const separate = new SkillPackageManager([location], catalog, new SkillStateStore(store, testFilesystemMetadata));
   await rm(join(root, skill.directory), { recursive: true });
-  const journal = new SkillTransactionJournal(root);
+  const journal = new SkillTransactionJournal(root, testFilesystemMetadata);
   await journal.finish(change.id);
   await expect(separate.setEnabled(skill.id, true)).rejects.toThrow('missing');
 });
@@ -317,7 +318,11 @@ it('reconciles failed preference acknowledgements and reports unreadable or undu
     throw new Error('Uncertain write');
   });
   await expect(state.setEnabled('one', true)).rejects.toThrow('needs recovery');
-  vi.spyOn(store, 'resolvePath').mockResolvedValueOnce(join(root, 'missing-after-commit'));
+  vi.spyOn(store, 'replace').mockImplementationOnce(async (...args) => {
+    const result = await replace(...args);
+    await rm(join(root, 'skill-state.json'));
+    return result;
+  });
   await expect(state.setEnabled('one', true)).rejects.toThrow('needs recovery');
   expect(state.enabled.get('one')).toBe(false);
 });

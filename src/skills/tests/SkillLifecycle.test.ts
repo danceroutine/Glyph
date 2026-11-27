@@ -1,3 +1,4 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import type { ShellProgram } from '#src/shell/ShellProgram.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
@@ -89,10 +90,10 @@ describe(SkillStateStore, () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-skill-state-'));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     const store = new FileSystemWorkspaceTextStore(root);
-    const first = new SkillStateStore(store);
+    const first = new SkillStateStore(store, testFilesystemMetadata);
     await first.initialize();
     await Promise.all([first.setEnabled('one', false), first.setEnabled('two', true)]);
-    const second = new SkillStateStore(store);
+    const second = new SkillStateStore(store, testFilesystemMetadata);
     await second.initialize();
     await second.record('one', 'Repository @ pinned SHA', 'version');
     await first.setEnabled('three', true);

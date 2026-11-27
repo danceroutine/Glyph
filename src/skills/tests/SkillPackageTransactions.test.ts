@@ -1,3 +1,4 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import * as fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -254,9 +255,9 @@ it('publishes the self-ignore marker exclusively and propagates a failed marker 
     await actual.link(from, to);
     throw Object.assign(new Error('Concurrent creator'), { code: 'EEXIST' });
   });
-  await expect(privateSkillDirectory(root)).resolves.toBe(join(root, '.skill-staging'));
+  await expect(privateSkillDirectory(testFilesystemMetadata, root)).resolves.toBe(join(root, '.skill-staging'));
   await actual.rm(marker);
   vi.mocked(fs.link).mockRejectedValueOnce(Object.assign(new Error('Disk full'), { code: 'ENOSPC' }));
-  await expect(privateSkillDirectory(root)).rejects.toThrow('Disk full');
+  await expect(privateSkillDirectory(testFilesystemMetadata, root)).rejects.toThrow('Disk full');
   await expect(actual.stat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
 });

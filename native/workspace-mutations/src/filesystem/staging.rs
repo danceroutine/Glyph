@@ -21,7 +21,7 @@ fn staging_root(root: &OwnedFd) -> Result<OwnedFd, Failure> {
     Ok(staging)
 }
 
-fn check_private(directory: &OwnedFd) -> Result<(), Failure> {
+pub(super) fn check_private(directory: &OwnedFd) -> Result<(), Failure> {
     let info = fstat(directory)?;
     if info.st_uid != rustix::process::geteuid().as_raw() || info.st_mode & 0o777 != 0o700 {
         return Err(Failure::new(
@@ -29,7 +29,8 @@ fn check_private(directory: &OwnedFd) -> Result<(), Failure> {
             "Skill staging requires a private, current-user-owned directory.",
         ));
     }
-    Ok(())
+    glyph_filesystem_metadata::assert_access_metadata(directory)
+        .map_err(|error| Failure::new("EACCES", error.to_string()))
 }
 
 pub(super) fn create_stage(root: &OwnedFd, relative: &str) -> Result<(), Failure> {
@@ -39,6 +40,7 @@ pub(super) fn create_stage(root: &OwnedFd, relative: &str) -> Result<(), Failure
     };
     let staging = staging_root(root)?;
     mkdirat(&staging, *id, Mode::RWXU)?;
+    check_private(&openat(&staging, *id, DIRECTORY, Mode::empty())?)?;
     fsync(staging)?;
     Ok(())
 }

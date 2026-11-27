@@ -1,3 +1,5 @@
+import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
+import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { link, open, rm } from 'node:fs/promises';
@@ -24,7 +26,10 @@ export class SkillStateStore {
   private readonly listeners = new Set<() => void>();
   readonly enabled = new Map<string, boolean>();
   readonly installations = new Map<string, { source: string; revision: string }>();
-  constructor(private readonly workspace: FileSystemWorkspaceTextStore) {}
+  constructor(
+    private readonly workspace: FileSystemWorkspaceTextStore,
+    readonly metadata: FilesystemMetadata,
+  ) {}
   get userDirectory(): string {
     return this.workspace.root;
   }
@@ -35,7 +40,7 @@ export class SkillStateStore {
     };
   }
   async initialize(): Promise<void> {
-    await withSkillLock(this.userDirectory, 'preferences', async () => {
+    await withSkillLock(this.metadata, this.userDirectory, 'preferences', async () => {
       this.publish(parsePreferences((await this.workspace.readOptional('skill-state.json'))?.text));
     });
   }
@@ -73,29 +78,45 @@ export class SkillStateStore {
     });
   }
   private async update(change: (data: Preferences) => void, verifySource?: () => Promise<void>): Promise<void> {
-    await withSkillLock(this.userDirectory, 'preferences', async () => {
+    await withSkillLock(this.metadata, this.userDirectory, 'preferences', async () => {
       const previous = await this.workspace.readOptional('skill-state.json');
       await verifySource?.();
       const next = parsePreferences(previous?.text);
       change(next);
       const text = JSON.stringify(next, null, 2);
       const destination = await this.workspace.resolvePath('skill-state.json');
+      const parent = dirname(destination);
+      const stage = join(parent, '.skill-staging');
+      const checkDirectories = async () => {
+        await inspectFileMetadata(this.metadata, parent, 'access');
+        await inspectPrivateDirectory(this.metadata, stage);
+      };
+      await checkDirectories();
+      if (previous) await inspectFileMetadata(this.metadata, destination, 'replaceable');
       try {
         if (previous)
           await this.workspace.replace('skill-state.json', previous.revision, text, false, {
-            temporaryDirectory: join(dirname(destination), '.skill-staging'),
+            temporaryDirectory: stage,
+            beforeReplace: async stagedPath => {
+              await checkDirectories();
+              await inspectFileMetadata(this.metadata, destination, 'replaceable');
+              await inspectFileMetadata(this.metadata, stagedPath, 'replaceable');
+            },
           });
         else {
           // An interrupted first write must leave either a complete JSON document or an absent preference file.
-          const temporary = join(dirname(destination), '.skill-staging', randomUUID() + '.json');
+          const temporary = join(stage, randomUUID() + '.json');
           try {
             const handle = await open(temporary, 'wx', 0o600);
             try {
+              await this.metadata.inspect(handle, 'replaceable');
               await handle.writeFile(text);
               await handle.sync();
             } finally {
               await handle.close();
             }
+            await checkDirectories();
+            await inspectFileMetadata(this.metadata, temporary, 'replaceable');
             await link(temporary, destination);
           } finally {
             await rm(temporary, { force: true });

@@ -21,11 +21,11 @@ export async function inspectPrivateDirectory(metadata: FilesystemMetadata, path
 export async function inspectPrivateDatabase(
   metadata: FilesystemMetadata,
   path: string,
-  empty: boolean,
+  role: 'lock' | 'journal' | 'sidecar',
 ): Promise<void> {
   const flags = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
   const handle = await open(path, flags).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT') throw error;
+    if (role === 'sidecar' || error.code !== 'ENOENT') throw error;
     return open(path, flags | constants.O_CREAT, 0o600);
   });
   try {
@@ -33,11 +33,11 @@ export async function inspectPrivateDatabase(
     if (
       !stat.isFile() ||
       stat.nlink !== 1 ||
-      (empty && stat.size > 0) ||
+      (role === 'lock' && stat.size > 0) ||
       (process.platform !== 'win32' && (stat.uid !== process.getuid!() || (stat.mode & 0o022) !== 0))
     )
-      throw new Error('Invalid lock file.');
-    await metadata.inspect(handle, 'access');
+      throw new Error(role === 'lock' ? 'Invalid lock file.' : 'Invalid skill transaction journal.');
+    await metadata.inspect(handle, role === 'sidecar' ? 'replaceable' : 'access');
     // Existing SQLite databases created by earlier versions may have inherited a more permissive umask.
     if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) await handle.chmod(stat.mode & 0o700);
   } finally {

@@ -1,3 +1,5 @@
+import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 import { SkillProjectMutationPolicy } from './SkillProjectMutationPolicy.ts';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -139,7 +141,7 @@ export class SkillPackageManager {
     private readonly state: SkillStateStore,
     private readonly ensureReady?: () => Promise<void>,
   ) {
-    this.journal = new SkillTransactionJournal(state.userDirectory);
+    this.journal = new SkillTransactionJournal(state.userDirectory, state.metadata);
     this.projectMutationPolicy = new SkillProjectMutationPolicy(locations, catalog);
   }
   get targets() {
@@ -156,7 +158,9 @@ export class SkillPackageManager {
       if (originId !== undefined && location.id !== originId) continue;
       const root = await location.store.resolvePath(location.directory);
       if ((await this.journal.entries(root, location.id)).length > 0)
-        await withSkillLock(location.store.root, 'destination', () => this.recoverLocation(location, root));
+        await withSkillLock(this.state.metadata, location.store.root, 'destination', () =>
+          this.recoverLocation(location, root),
+        );
       if (directory) await this.checkPendingOrigin(location, await this.target(location, directory));
     }
   }
@@ -210,6 +214,7 @@ export class SkillPackageManager {
     signal?.throwIfAborted();
     if (this.ensureReady) await this.ensureReady();
     const cleaned = await withSkillLock(
+      this.state.metadata,
       change.location.store.root,
       'destination',
       async () => {
@@ -355,7 +360,8 @@ export class SkillPackageManager {
           return;
         }
         const target = await this.target(location, entry.directory);
-        const stage = join(await privateSkillDirectory(location.store.root), entry.id);
+        const stage = join(await privateSkillDirectory(this.state.metadata, location.store.root), entry.id);
+        await inspectPrivateDirectory(this.state.metadata, stage);
         await location.assertClean?.(target);
         if (entry.published) {
           if ((await diskRevision(target, entry.treeVersion)) !== entry.replacement)
@@ -383,7 +389,9 @@ export class SkillPackageManager {
     let scope = dirname(target);
     for (const _ of location.directory.split('/')) scope = dirname(scope);
     // All callers already hold the attached-root lock. Nested scopes acquire their own physical lock second.
-    return scope === location.store.root ? work() : withSkillLock(scope, 'destination', work, signal);
+    return scope === location.store.root
+      ? work()
+      : withSkillLock(this.state.metadata, scope, 'destination', work, signal);
   }
   private async checkPendingOrigin(location: SkillPackageLocation, destination: string) {
     if (await this.journal.hasOtherProjectTransaction(location.id, destination))
@@ -473,8 +481,9 @@ export class SkillPackageManager {
     await location.mutations.ensureDirectory(posix.dirname(directory), location.scope === 'project' ? 0o777 : 0o700);
     const directoryMode = location.scope === 'project' ? (await lstat(dirname(target))).mode & 0o777 : 0o700;
     const relativeStage = '.skill-staging/' + preview.id;
-    const stage = join(await privateSkillDirectory(location.store.root), preview.id);
+    const stage = join(await privateSkillDirectory(this.state.metadata, location.store.root), preview.id);
     await location.mutations.createStage(relativeStage);
+    await inspectPrivateDirectory(this.state.metadata, stage);
     const entry: SkillTransaction = {
       id: preview.id,
       treeVersion: 2,

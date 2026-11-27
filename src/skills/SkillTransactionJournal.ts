@@ -1,3 +1,6 @@
+import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
+import { inspectPrivateDatabase } from '#src/workspace/privateStorageMetadata.js';
+import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 import Database from 'better-sqlite3';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
@@ -24,7 +27,10 @@ export type SkillTransaction = z.infer<typeof entrySchema>;
 
 /** Only host-owned user storage describes recoverable transactions. Workspace directory names cannot initiate recovery. */
 export class SkillTransactionJournal {
-  constructor(private readonly userDirectory: string) {}
+  constructor(
+    private readonly userDirectory: string,
+    private readonly metadata: FilesystemMetadata,
+  ) {}
   async entries(root: string, location: string): Promise<SkillTransaction[]> {
     if (!(await optionalStat(join(this.userDirectory, '.skill-staging', 'journal.sqlite')))) return [];
     return this.use(db =>
@@ -59,9 +65,15 @@ export class SkillTransactionJournal {
     await this.use(db => db.prepare('DELETE FROM transactions WHERE id = ?').run(id));
   }
   private async use<T>(operation: (db: Database.Database) => T): Promise<T> {
-    const path = join(await privateSkillDirectory(this.userDirectory), 'journal.sqlite');
-    const existing = await optionalStat(path);
-    if (existing && (!existing.isFile() || existing.nlink !== 1)) throw new Error('Invalid skill transaction journal.');
+    const path = join(await privateSkillDirectory(this.metadata, this.userDirectory), 'journal.sqlite');
+    await inspectPrivateDatabase(this.metadata, path, 'journal');
+    for (const suffix of ['-journal', '-shm', '-wal']) {
+      try {
+        await inspectPrivateDatabase(this.metadata, path + suffix, 'sidecar');
+      } catch (error) {
+        if (errorCodeOf(error) !== 'ENOENT') throw error;
+      }
+    }
     const db = new Database(path);
     try {
       db.exec(

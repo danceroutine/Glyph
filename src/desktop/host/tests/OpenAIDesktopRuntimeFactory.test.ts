@@ -1,4 +1,5 @@
 import { inventoryPackage } from '#src/skills/skillPackageInventory.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { testPackageMutations } from '#src/skills/tests/fixtures/testPackageMutations.js';
 import type { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
@@ -79,6 +80,7 @@ const captured = vi.hoisted(() => ({
 const openWorkspaceMutations = NativeWorkspaceMutations.open;
 let isolatedUserDirectory: string;
 beforeEach(async () => {
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
   isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
   onTestFinished(() => rm(isolatedUserDirectory, { recursive: true, force: true }));
   vi.spyOn(NativeWorkspaceMutations, 'open').mockImplementation(async (_executable, root) => {

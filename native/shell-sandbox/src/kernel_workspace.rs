@@ -334,6 +334,10 @@ fn user_controls(path: &Path) -> io::Result<bool> {
 }
 
 #[cfg(test)]
+#[path = "tests/kernel_mounts.rs"]
+mod kernel_mounts;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

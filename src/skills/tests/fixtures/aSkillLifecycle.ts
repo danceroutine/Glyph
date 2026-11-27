@@ -1,4 +1,6 @@
 import { inventoryPackage, readDirectoryModes } from '#src/skills/skillPackageInventory.js';
+import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,11 +33,12 @@ export async function aSkillLifecycle(
   openMutations: (
     root: string,
   ) => WorkspaceDirectoryMutations | Promise<WorkspaceDirectoryMutations> = testPackageMutations,
+  metadata: FilesystemMetadata = testFilesystemMetadata,
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-manager-')));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const store = new FileSystemWorkspaceTextStore(root);
-  const state = new SkillStateStore(store);
+  const state = new SkillStateStore(store, metadata);
   await state.initialize();
   const listFiles = () => store.list(10000, 'skills/**/*');
   const refreshIndex = vi.fn(async () => {});
