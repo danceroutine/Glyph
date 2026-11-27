@@ -1263,6 +1263,26 @@ pub(crate) fn filesystem_case_sensitive(path: &Path) -> Result<bool, ServiceErro
     })
 }
 
+/// Identify the name comparisons implemented by the attached filesystem.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FilesystemNamePolicy {
+    pub case_sensitive: bool,
+    pub normalizes_unicode: bool,
+}
+
+pub(crate) fn filesystem_name_policy(path: &Path) -> Result<FilesystemNamePolicy, ServiceError> {
+    let inspect = |error| {
+        ServiceError::initialization(format!("Could not inspect filesystem name policy: {error}"))
+    };
+    let normalizes_unicode = filesystem_casing::normalizes_unicode(path).map_err(inspect)?;
+    let case_sensitive = filesystem_casing::detect(path).map_err(inspect)?;
+    Ok(FilesystemNamePolicy {
+        case_sensitive,
+        normalizes_unicode,
+    })
+}
+
 #[cfg(target_os = "macos")]
 mod filesystem_casing {
     use std::{fs::File, io, os::fd::AsRawFd, path::Path};
@@ -1271,6 +1291,19 @@ mod filesystem_casing {
         // The open descriptor pins the volume even if a registered folder alias changes.
         let value = unsafe { libc::fpathconf(file.as_raw_fd(), libc::_PC_CASE_SENSITIVE) };
         case_setting(value)
+    }
+    pub(super) fn normalizes_unicode(path: &Path) -> io::Result<bool> {
+        let file = File::open(path)?;
+        normalizing_volume(file.as_raw_fd())
+    }
+    pub(super) fn normalizing_volume(fd: libc::c_int) -> io::Result<bool> {
+        let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        if unsafe { libc::fstatfs(fd, stat.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let stat = unsafe { stat.assume_init() };
+        let filesystem = unsafe { std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr()) };
+        Ok(matches!(filesystem.to_bytes(), b"apfs" | b"hfs"))
     }
     pub(super) fn case_setting(value: libc::c_long) -> io::Result<bool> {
         match value {
@@ -1333,19 +1366,33 @@ mod filesystem_casing {
     }
 
     #[cfg(target_os = "linux")]
+    pub(super) fn normalizes_unicode(path: &Path) -> io::Result<bool> {
+        use std::os::fd::AsRawFd;
+        let directory = fs::File::open(path)?;
+        Ok(casefold_directory(directory.as_raw_fd()))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn normalizes_unicode(_path: &Path) -> io::Result<bool> {
+        Ok(false)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn casefold_directory(fd: libc::c_int) -> bool {
+        let mut flags: libc::c_long = 0;
+        // ext4 and F2FS enable canonical Unicode equivalence with their directory casefold flag.
+        let result = unsafe { libc::ioctl(fd, libc::FS_IOC_GETFLAGS, &mut flags) };
+        result == 0 && flags & 0x4000_0000 != 0
+    }
+
+    #[cfg(target_os = "linux")]
     pub(super) fn empty_directory(path: &Path) -> io::Result<bool> {
         use std::os::fd::AsRawFd;
         let directory = fs::File::open(path)?;
-        let mut flags: libc::c_long = 0;
-        // ext4 and F2FS expose per-directory casefolding through FS_IOC_GETFLAGS.
-        let result =
-            unsafe { libc::ioctl(directory.as_raw_fd(), libc::FS_IOC_GETFLAGS, &mut flags) };
         // FAT and exFAT names remain case-insensitive even when the directory has no entries.
         let filesystem = filesystem_type(directory.as_raw_fd())?;
-        Ok(
-            !matches!(filesystem, 0x4d44 | 0x2011_bab0)
-                && (result != 0 || flags & 0x4000_0000 == 0),
-        )
+        Ok(!matches!(filesystem, 0x4d44 | 0x2011_bab0)
+            && !casefold_directory(directory.as_raw_fd()))
     }
 
     #[cfg(target_os = "linux")]

@@ -35,6 +35,7 @@ export class TurnContextSession {
 
   private readonly paths: InstructionPaths;
   private remainingBytes = 512 * 1024;
+  private remainingCandidateBytes = 32 * 1024;
 
   constructor(private readonly input: TurnContextSessionInput) {
     this.paths = input.paths ?? defaultInstructionPaths;
@@ -221,19 +222,11 @@ export class TurnContextSession {
         return instruction;
       }),
       activations: pending.map(([, activation]) => activation),
-      ...(candidates.length > 0 ? { candidates } : {}),
     };
     // Measure one bounded source at a time. A large set of applicable rules can exceed the turn
     // allowance before the adapter ever serializes a combined envelope.
-    let bytes = Buffer.byteLength(
-      JSON.stringify({
-        schema: envelope.schema,
-        sources: [],
-        activations: [],
-        ...(candidates.length > 0 ? { candidates: [] } : {}),
-      }),
-    );
-    for (const entries of [envelope.sources, envelope.activations!, candidates]) {
+    let bytes = Buffer.byteLength(JSON.stringify({ schema: envelope.schema, sources: [], activations: [] }));
+    for (const entries of [envelope.sources, envelope.activations!]) {
       for (const [index, entry] of entries.entries()) {
         bytes += Buffer.byteLength(JSON.stringify(entry)) + Number(index > 0);
         if (bytes > this.remainingBytes)
@@ -242,10 +235,21 @@ export class TurnContextSession {
           );
       }
     }
+    // Optional advertisements leave room for required guidance and later activation of their bodies.
+    const offered: AgentInstructionCandidate[] = [];
+    for (const candidate of candidates) {
+      if (this.advertisedCandidates.size + offered.length >= 50) break;
+      const size = Buffer.byteLength(JSON.stringify(candidate)) + (offered.length > 0 ? 1 : ',"candidates":[]'.length);
+      if (size > this.remainingCandidateBytes || bytes + size > this.remainingBytes) continue;
+      this.remainingCandidateBytes -= size;
+      bytes += size;
+      offered.push(candidate);
+    }
+    if (pending.length === 0 && offered.length === 0) return undefined;
     this.remainingBytes -= bytes;
     for (const [source, activation] of pending) this.activated.set(source.id, activation);
-    for (const candidate of candidates) this.advertisedCandidates.set(candidate.id, candidate);
-    return envelope;
+    for (const candidate of offered) this.advertisedCandidates.set(candidate.id, candidate);
+    return offered.length > 0 ? { ...envelope, candidates: offered } : envelope;
   }
 }
 

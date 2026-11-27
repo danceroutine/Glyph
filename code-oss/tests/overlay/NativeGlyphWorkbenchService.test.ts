@@ -428,6 +428,30 @@ describe(NativeGlyphWorkbenchService, () => {
     ]);
   });
 
+  it('sends a leading selected goal rule as a reference and recognizes a typed command before a later badge', async () => {
+    const { service, commands } = await workbench();
+    const reference = { kind: 'rule' as const, sourceId: 'manual', label: 'goal', revision: 'one', from: 0, to: 5 };
+    const options = { manualRuleIds: ['manual'], referenceSpans: [reference] };
+    await service.send('  /goal Ship the feature', [], options);
+    expect(commands()).toContainEqual(
+      expect.objectContaining({ type: GlyphWorkbenchCommandType.SEND, options: expect.objectContaining(options) }),
+    );
+    const later = await workbench();
+    await later.service.send('/goal use /goal', [], {
+      ...options,
+      referenceSpans: [{ ...reference, from: 10, to: 15 }],
+    });
+    expect(later.types()).toContain(GlyphWorkbenchCommandType.CREATE_GOAL);
+    const truncated = await workbench();
+    await expect(
+      truncated.service.send('/goal', [], { ...options, referenceSpans: [{ ...reference, to: 50 }] }),
+    ).rejects.toThrow('Usage:');
+    const stale = await workbench();
+    await expect(
+      stale.service.send('/goal', [], { ...options, referenceSpans: [{ ...reference, label: 'other' }] }),
+    ).rejects.toThrow('Usage:');
+  });
+
   it('continues an active goal after a terminal failure and reports a rejected continuation once', async () => {
     const goal = {
       id: 'goal',
