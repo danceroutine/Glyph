@@ -1681,9 +1681,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       ).rejects.toThrow('user skill store');
       const selected = discovered[0]!;
       expect(runtime.resolveSkillReference(previous)).toBe(selected.id);
-      expect(runtime.resolveSkillReference(selected.id,selected.uri)).toBe(selected.id);
-      expect(runtime.resolveSkillReference('absent',selected.uri)).toBeUndefined();
-      expect(runtime.resolveSkillReference(selected.id,pathToFileURL(join(profile,'other.md')).href)).toBeUndefined();
+      expect(runtime.resolveSkillReference(selected.id, selected.uri)).toBe(selected.id);
+      expect(runtime.resolveSkillReference('absent', selected.uri)).toBeUndefined();
+      expect(runtime.resolveSkillReference(selected.id, pathToFileURL(join(profile, 'other.md')).href)).toBeUndefined();
     });
 
     it('retains a physical skill ID and offers it once through overlapping and aliased folders', async () => {

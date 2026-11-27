@@ -20,13 +20,14 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
     dispose: vi.fn(async () => {}),
   };
   const editors = {
-    constructed:
-      vi.fn<
-        (
-          router: { trustedUserEditors: (identity: unknown, sourcePath: string, aliases?: readonly string[]) => unknown },
-          projectPeers: (owner: GlyphConnectionIdentity, projectDirectory?: string) => unknown,
-        ) => void
-      >(),
+    constructed: vi.fn<
+      (
+        router: {
+          trustedUserEditors: (identity: unknown, sourcePath: string, aliases?: readonly string[]) => unknown;
+        },
+        projectPeers: (owner: GlyphConnectionIdentity, projectDirectory?: string) => unknown,
+      ) => void
+    >(),
     connect: vi.fn(),
     receive: vi.fn(),
     disconnect: vi.fn(),
