@@ -546,18 +546,26 @@ fn security_private_staging_and_project_package_paths_stay_reserved() {
 
 #[test]
 #[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
-fn respects_filesystem_identity_for_stored_unicode_reservations() {
+fn enforces_stored_unicode_reservations_with_an_ordinary_workspace_control() {
     let fixture = Fixture::new();
     let stored = fixture.workspace.join("nested/.ſkill-ﬆaging");
     fs::create_dir_all(&stored).unwrap();
     let marker = stored.join("record");
     fs::write(&marker, "fixture record").unwrap();
-    let folded = fixture.workspace.join("nested/.skill-staging").exists();
+    let ordinary = fixture.workspace.join("ordinary.txt");
+    assert_success(
+        &fixture.run("read-only", r#"test -f "$FILE""#, &[("FILE", &ordinary)]),
+        "ordinary sibling",
+    );
+    // Seatbelt normalizes path filters on APFSX too. Linux reads distinct spellings
+    // according to their actual directory identity.
+    let reserved =
+        cfg!(target_os = "macos") || fixture.workspace.join("nested/.skill-staging").exists();
     let visible = fixture
         .run("read-only", r#"test -f "$FILE""#, &[("FILE", &marker)])
         .status
         .success();
-    assert_eq!(visible, !folded);
+    assert_eq!(visible, !reserved);
     let managed = fixture.workspace.join("nested/.glyph/ſKills");
     fs::create_dir_all(&managed).unwrap();
     let file = managed.join("sample");
@@ -572,7 +580,7 @@ fn respects_filesystem_identity_for_stored_unicode_reservations() {
         .success();
     assert_eq!(
         write,
-        !fixture.workspace.join("nested/.glyph/skills").exists()
+        !(cfg!(target_os = "macos") || fixture.workspace.join("nested/.glyph/skills").exists())
     );
 }
 

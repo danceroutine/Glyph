@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
@@ -77,5 +77,33 @@ it('keeps host state and transaction files private across containing, overlappin
     } finally {
       await index.dispose();
     }
+  }
+});
+
+it('admits a stored Unicode lookalike to text reads and broad search only when the directory is distinct', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-stored-name-')));
+  onTestFinished(() => rm(root, { force: true, recursive: true }));
+  const spelling = '.ſkill-ﬆaging';
+  const relative = spelling + '/marker.txt';
+  await mkdir(join(root, spelling));
+  await writeFile(join(root, relative), 'synthetic marker');
+  const actual = await stat(join(root, spelling), { bigint: true });
+  const ascii = await stat(join(root, '.skill-staging'), { bigint: true }).catch(() => undefined);
+  const same = actual.ino === ascii?.ino && actual.dev === ascii?.dev;
+  const store = new FileSystemWorkspaceTextStore(root);
+  const binaryPath = resolve(
+    'target',
+    'release',
+    process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
+  );
+  const index = new RustWorkspacePathIndex({ root, binaryPath, caseSensitive: store.caseSensitive });
+  try {
+    const expected = same ? [] : [relative];
+    await expect(store.list(10)).resolves.toMatchObject({ files: expected });
+    await expect(index.glob('**/*', { limit: 10 })).resolves.toMatchObject({ files: expected });
+    if (same) await expect(store.read(relative)).rejects.toThrow('excluded');
+    else await expect(store.read(relative)).resolves.toMatchObject({ text: 'synthetic marker' });
+  } finally {
+    await index.dispose();
   }
 });

@@ -785,8 +785,6 @@ pub mod macos {
             "(deny file-read* file-test-existence (require-all {}))\n",
             restrictions.join(" ")
         ));
-        #[cfg(target_os = "macos")]
-        super::macos_names::extend(&mut policy, request)?;
         // An independently opened workspace can install a skill below any previously ordinary directory.
         // Seatbelt evaluates rename at the directory being moved, so guard directory identities directly.
         for root in &request.workspace_roots {
@@ -851,7 +849,7 @@ pub mod macos {
         paths
     }
 
-    pub(super) fn seatbelt_string(path: &Path) -> String {
+    fn seatbelt_string(path: &Path) -> String {
         let value = path.to_string_lossy();
         let mut escaped = String::with_capacity(value.len() + 2);
         escaped.push('"');
@@ -885,8 +883,6 @@ pub mod macos {
 mod content_store;
 #[cfg(target_os = "linux")]
 mod kernel_workspace;
-#[cfg(target_os = "macos")]
-mod macos_names;
 #[cfg(target_os = "linux")]
 mod mount_aliases;
 #[cfg(any(target_os = "linux", all(test, unix)))]
