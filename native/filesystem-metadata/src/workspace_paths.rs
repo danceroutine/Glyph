@@ -256,6 +256,17 @@ mod tests {
         let sensitive = crate::filesystem_casing::detect(&dir).unwrap();
         assert_eq!(admitted.excludes(&absent_variant), !sensitive);
         assert!(same_location(&store, &store));
+        assert!(!same_location(&store, &visible));
+        // The snapshot must also reject a normal file when its authority input
+        // is redirected after the policy was assembled.
+        #[cfg(unix)]
+        {
+            let authority = dir.join("host-location");
+            std::os::unix::fs::symlink(&store, &authority).unwrap();
+            let prior = WorkspacePaths::current(std::slice::from_ref(&authority)).unwrap();
+            fs::remove_file(&authority).unwrap();
+            assert!(prior.assert_path(&visible, None).is_err());
+        }
         assert!(!same_location(&absent, &store.join("missing")));
         assert_eq!(future_name("e\u{301}", true, false, true), "é");
         assert_eq!(future_name("A", false, false, false), "a");
