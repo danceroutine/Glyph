@@ -275,10 +275,19 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
       const userRuleRoot = resolveAvailableIdentity(this.userDirectory);
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
+      // Agent-facing sources cannot acquire the host's preference and credential authority.
+      const userInstructionPolicy = new WorkspaceAccessPolicy(
+        {},
+        [configuration.stateDirectory, configuration.traceFile, artifactRoot].map(resolveAvailableIdentity),
+      );
+      const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
+        accessPolicy: userInstructionPolicy,
+      });
       const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
         root: join(userRuleRoot, 'rules'),
         caseSensitive: userRuleStore.caseSensitive,
+        accessPolicy: userInstructionPolicy,
         // User-owned rules retain their existing behavior regardless of home-directory Git ignores.
         respectGitIgnore: false,
       }));
@@ -289,7 +298,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       instructionCatalog = new AgentInstructionCatalog(
         [
           new AgentRuleInstructionProvider(
-            userRuleStore,
+            userInstructionStore,
             {
               kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
               directory: '.',
@@ -299,7 +308,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             async maxFiles => {
               // The index root must obey the store's no-symlink rule too, not just its children.
               await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
-              await userRuleStore.canonicalPath('rules');
+              await userInstructionStore.canonicalPath('rules');
               return listUserRuleFiles(userRuleIndex, maxFiles);
             },
           ),
