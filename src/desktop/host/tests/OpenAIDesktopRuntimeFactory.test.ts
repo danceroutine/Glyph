@@ -83,6 +83,7 @@ let isolatedUserDirectory: string;
 beforeEach(async () => {
   vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
   vi.spyOn(NativeFilesystemMetadata.prototype, 'assertHostPaths').mockResolvedValue(undefined);
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'assertWorkspacePath').mockResolvedValue(undefined);
   isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
   onTestFinished(() => rm(isolatedUserDirectory, { recursive: true, force: true }));
   vi.spyOn(NativeWorkspaceMutations, 'open').mockImplementation(async (_executable, root) => {
@@ -2301,4 +2302,42 @@ it('keeps an admitted physical profile private while its files are temporarily a
   expect(typeof paths === 'function' && paths()).toContain(fixture.userDirectory);
   await mkdir(fixture.userDirectory, { recursive: true });
   expect(typeof paths === 'function' && paths()).toContain(fixture.userDirectory);
+});
+
+it('updates existing workspace boundaries when a shared profile alias is retargeted during an editor read', async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'glyph-live-profile-boundary-')));
+  onTestFinished(() => rm(base, { recursive: true, force: true }));
+  const oldProfile = join(base, 'old');
+  const newProfile = join(base, 'new');
+  const alias = join(base, 'profile');
+  await mkdir(oldProfile);
+  await mkdir(newProfile);
+  await writeFile(join(newProfile, 'skill-state.json'), JSON.stringify({ enabled: {}, installations: {} }), {
+    mode: 0o600,
+  });
+  await symlink(oldProfile, alias);
+  const fixture = await factoryFixture({ userDirectory: alias });
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'assertWorkspacePath').mockImplementation(async (path, privatePaths) => {
+    if (privatePaths.includes(path)) throw new Error('Private profile path');
+  });
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  await fixture.create([base]);
+  const client = captured.editorClients[0]!;
+  const policy = captured.indexOptions[0]!.accessPolicy!;
+  const request = {
+    type: GlyphEditorRequestType.READ_SNAPSHOT,
+    operationId: 'in-flight',
+    path: 'new/skill-state.json',
+  } as const;
+  vi.spyOn(fixture.editors, 'request').mockImplementationOnce(async (_identity, wire) => {
+    await rm(alias);
+    await symlink(newProfile, alias);
+    await fixture.create([await fixture.folder('peer')]);
+    return editorResponse(wire, request.path, 'private preferences');
+  });
+  await expect(client.request(request)).rejects.toThrow();
+  const projected = policy.exclusionsFor(base, true).excludedPaths;
+  expect(projected).toContain('old/skill-state.json');
+  expect(projected).toContain('new/skill-state.json');
+  await expect(client.request(request)).rejects.toThrow();
 });

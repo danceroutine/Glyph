@@ -97,6 +97,7 @@ import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinato
 import { RuleToolRuntime } from '#src/instructions/rules/RuleToolRuntime.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { UserAgentRuleManager } from '#src/instructions/rules/UserAgentRuleManager.js';
+import { WorkspaceProtectedPathRegistry } from '#src/workspace/policy/WorkspaceProtectedPathRegistry.js';
 import { UserRuleDirectory } from '#src/instructions/rules/UserRuleDirectory.js';
 import { listUserRuleFiles } from '#src/instructions/rules/listUserRuleFiles.js';
 
@@ -106,6 +107,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   private readonly accounts = new OpenAIAccountService(new FileOpenAIAccountStore(this.configuration.stateDirectory));
   private initialized: Promise<void> | undefined;
   /** Runtime services are shared only by workspaces attached to the same physical profile. */
+  private readonly privatePaths = new WorkspaceProtectedPathRegistry();
+  private readonly managedSkillDirectories = new WorkspaceProtectedPathRegistry();
   private readonly skillStates = new Map<string, SkillStateStore>();
   private readonly userRuleIndexes = new Map<string, RustWorkspacePathIndex>();
   private readonly userSkillIndexes = new Map<string, RustWorkspacePathIndex>();
@@ -162,7 +165,17 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       configuration.traceFile,
     );
     const canonicalUserDirectory = resolveAvailableIdentity(this.userDirectory);
-    const policy = new WorkspaceAccessPolicy({}, [join(canonicalUserDirectory, 'skill-state.json')]);
+    this.privatePaths.admit(
+      [
+        configuration.stateDirectory,
+        configuration.traceFile,
+        artifactRoot,
+        join(this.userDirectory, 'skill-state.json'),
+        join(canonicalUserDirectory, 'skill-state.json'),
+      ].flatMap(path => [path, resolveAvailableIdentity(path)]),
+    );
+    this.managedSkillDirectories.admit([join(this.userDirectory, 'skills'), join(canonicalUserDirectory, 'skills')]);
+    const policy = new WorkspaceAccessPolicy({}, () => this.privatePaths.current);
     const logger = new FileLogger(configuration.traceFile);
     const namePolicies = await Promise.all(
       roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemNamePolicy(indexExecutable, workspaceRoot.path)),
@@ -178,6 +191,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         caseSensitive: namePolicies[i]!.caseSensitive,
         accessPolicy: policy,
         excludedPaths,
+        physicalAccess: filesystemMetadata,
+        managedDirectories: () => this.managedSkillDirectories.current,
       });
       const index: RustWorkspacePathIndex = new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
@@ -201,7 +216,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ),
       });
       const workspace = new EditorWorkspaceTextStore(workspaceRoot.path, disk.caseSensitive, {
-        canonicalPath: path => disk.canonicalPath(path),
+        canonicalPath: (path, mutation) => disk.canonicalPath(path, mutation),
         listPaths: (limit, glob = '**/*', targetDirectory) =>
           index.glob(glob, {
             limit,
@@ -212,14 +227,19 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           const path = this.requestPath(request);
           if (path !== undefined && path !== '') {
             if (request.type === GlyphEditorRequestType.EXISTS) await disk.exists(path);
-            else await disk.validateAccess(path);
+            else
+              await disk.validateAccess(
+                path,
+                request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION ||
+                  request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION,
+              );
           }
           if (
             request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
             'target' in request.mutation &&
             request.mutation.target
           ) {
-            await disk.validateAccess(request.mutation.target);
+            await disk.validateAccess(request.mutation.target, true);
           }
           const qualified =
             path !== undefined && path !== '' && roots.length > 1 ? `${workspaceRoot.name}/${path}` : path;
@@ -232,6 +252,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           )
             wire = { ...wire, mutation: { ...wire.mutation, target: `${workspaceRoot.name}/${wire.mutation.target}` } };
           const response = await this.editors.request(input.identity, wire, signal);
+          if (path !== undefined && path !== '') {
+            await disk.validateAccess(path);
+            if (
+              request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
+              'target' in request.mutation &&
+              request.mutation.target
+            )
+              await disk.validateAccess(request.mutation.target);
+          }
           return response.snapshot && path !== undefined && path !== ''
             ? {
                 ...response,
@@ -342,18 +371,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         foldsUnicode: true,
       };
       // Agent-facing sources cannot acquire the host's preference and credential authority.
-      const userInstructionPolicy = new WorkspaceAccessPolicy(
-        {},
-        [
-          configuration.stateDirectory,
-          configuration.traceFile,
-          artifactRoot,
-          join(userRuleRoot, 'skill-state.json'),
-        ].map(path => resolveAvailableIdentity(path)),
-      );
+      const userInstructionPolicy = new WorkspaceAccessPolicy({}, () => this.privatePaths.current);
       const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
         accessPolicy: userInstructionPolicy,
         caseSensitive: userRuleStore.caseSensitive,
+        physicalAccess: filesystemMetadata,
       });
       let userRuleIndex = this.userRuleIndexes.get(userRuleRoot);
       if (!userRuleIndex) {
@@ -455,7 +477,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       let openingUserMutations: Promise<NativeWorkspaceMutations> | undefined;
       const ensureSkillsReady = async () => {
         if (!userMutations) {
-          await mkdir(userRuleRoot, { recursive: true });
+          await mkdir(userRuleRoot, { recursive: true, mode: 0o700 });
           userMutations = await (openingUserMutations ??= openMutations(userRuleRoot).catch(error => {
             openingUserMutations = undefined;
             throw error;
@@ -727,6 +749,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                   })),
                   filesystemMetadata,
                   openMutations,
+                  undefined,
+                  input.hostWorkspaceRoots ?? roots.map(root => root.path),
                 ),
               ),
             ]
