@@ -105,7 +105,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   private readonly configuration = new EnvironmentConfigurationProvider();
   private readonly accounts = new OpenAIAccountService(new FileOpenAIAccountStore(this.configuration.stateDirectory));
   private initialized: Promise<void> | undefined;
-  /** User rules are shared across workspaces; the factory owns this lazy index's lifetime. */
+  /** Runtime services are shared only by workspaces attached to the same physical profile. */
   private readonly skillStates = new Map<string, SkillStateStore>();
   private readonly userRuleIndexes = new Map<string, RustWorkspacePathIndex>();
   private readonly userSkillIndexes = new Map<string, RustWorkspacePathIndex>();
@@ -311,12 +311,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       // Reuse each root's watched native index; instruction refreshes must not rescan the workspace.
       const listProjectInstructions = async (maxFiles: number, globPattern: string) => {
         const listed = await listInstructionFilesAcrossRoots(physicalParts, maxFiles, globPattern, parts.length > 1);
-        const indexed = routes.uniqueFiles(listed.files);
-        return {
-          ...listed,
-          files:
-            globPattern === '**/AGENTS.md' ? indexed : indexed.filter(path => !userRuleDirectory.ownsProjectRule(path)),
-        };
+        return { ...listed, files: routes.uniqueFiles(listed.files) };
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
       const userRuleRoot = canonicalUserDirectory;
@@ -366,6 +361,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         routes,
       );
       const userRuleDirectory = new UserRuleDirectory(userRuleRoot, userRuleStore.caseSensitive, roots, paths);
+      const listProjectRules = async (maxFiles: number, pattern: string) => {
+        const listed = await listProjectInstructions(maxFiles, pattern);
+        return { ...listed, files: listed.files.filter(path => !userRuleDirectory.ownsProjectRule(path)) };
+      };
       instructionCatalog = new AgentInstructionCatalog(
         [
           new AgentRuleInstructionProvider(
@@ -388,7 +387,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           new AgentRuleInstructionProvider(
             catalogWorkspace,
             { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', paths, uriForPath: projectUri },
-            listProjectInstructions,
+            listProjectRules,
           ),
           new AgentRuleInstructionProvider(
             catalogWorkspace,
@@ -398,7 +397,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               paths,
               uriForPath: projectUri,
             },
-            listProjectInstructions,
+            listProjectRules,
           ),
         ],
         paths,

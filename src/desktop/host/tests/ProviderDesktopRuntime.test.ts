@@ -969,6 +969,7 @@ describe(ProviderDesktopRuntime, () => {
       ],
     });
     const harness = await fixture(async () => {}, 'owner', undefined, { records: [record] });
+    expect(harness.runtime.resolveRuleReference('absent')).toBeUndefined();
     vi.spyOn(harness.runtime, 'resolveRuleReference').mockImplementation(id => (id === 'old' ? 'current' : undefined));
     try {
       await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'selected' });
