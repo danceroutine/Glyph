@@ -28,6 +28,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
       >(),
     connect: vi.fn(),
     receive: vi.fn(),
+    validateMutation: vi.fn(() => true),
     disconnect: vi.fn(),
   };
   const openai = { constructed: vi.fn(), dispose: vi.fn(async () => {}) };
@@ -56,6 +57,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   }));
   vi.doMock('#src/desktop/workspace/EditorRpcRouter.js', () => ({
     EditorRpcRouter: class {
+      readonly validateMutation = editors.validateMutation;
       constructor(
         readonly trustedUserEditors: (identity: unknown, sourcePath: string, aliases?: readonly string[]) => unknown,
       ) {
@@ -312,6 +314,15 @@ describe('utilityMain', () => {
     parent.emit('message', {
       data: { type: GlyphTransportMessageType.CONNECTION, connectionId: 'connection', identity },
       ports: [port],
+    });
+    port.emit('message', {
+      data: { type: GlyphTransportMessageType.CHECK_EDITOR_MUTATION, requestId: 'check', grantId: 'grant' },
+    });
+    expect(editors.validateMutation).toHaveBeenCalledWith('connection', 'grant');
+    expect(port.postMessage).toHaveBeenCalledWith({
+      type: GlyphTransportMessageType.EDITOR_MUTATION_CHECKED,
+      requestId: 'check',
+      ok: true,
     });
     const response = { operationId: 'op', ok: true };
     port.emit('message', { data: { type: GlyphTransportMessageType.EDITOR_RESPONSE, response } });

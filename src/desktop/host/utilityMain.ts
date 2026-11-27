@@ -82,6 +82,19 @@ parentPort.on('message', event => {
       const data = message.data;
       if (
         isRecord(data) &&
+        data.type === GlyphTransportMessageType.CHECK_EDITOR_MUTATION &&
+        typeof data.requestId === 'string' &&
+        typeof data.grantId === 'string'
+      ) {
+        port.postMessage({
+          type: GlyphTransportMessageType.EDITOR_MUTATION_CHECKED,
+          requestId: data.requestId,
+          ok: editors.validateMutation(connectionId, data.grantId),
+        });
+        return;
+      }
+      if (
+        isRecord(data) &&
         data.type === GlyphTransportMessageType.EDITOR_RESPONSE &&
         isEditorResponse(data.response)
       ) {

@@ -26,6 +26,12 @@ port that resumes the same window ID must finish its own handshake before it can
 receive a snapshot or run a command. Queued requests from the previous port expire
 on disconnect.
 
+When the host asks the workbench to edit a file, the editor RPC router holds
+the root and trust checks for that pending operation. The workbench asks the
+original port to run them again after native file-operation participants finish
+and before applying or saving edits. Completing the RPC or disconnecting the
+port retires its grant.
+
 ## Composing a host
 
 Select the consumer's policy through `WorkspaceContentAccess` at the CLI or

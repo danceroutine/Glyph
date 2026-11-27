@@ -5,6 +5,41 @@ import { GlyphFileMutationKind } from '#src/desktop/protocol/editor/GlyphFileMut
 
 const identity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'owner' };
 describe(EditorRpcRouter, () => {
+  it('rechecks a pending mutation on its original port and retires the grant on completion', async () => {
+    const router = new EditorRpcRouter();
+    let grant = '';
+    const root = new AbortController();
+    router.connect('first', identity, message => {
+      if ('grantId' in message && message.grantId) grant = message.grantId;
+    });
+    const result = router.request(
+      identity,
+      {
+        type: GlyphEditorRequestType.APPLY_FILE_MUTATION,
+        mutation: {
+          kind: GlyphFileMutationKind.CREATE,
+          path: 'notes.md',
+          text: 'notes',
+          operationId: 'create',
+          undoGroupId: 'create',
+          byteOrderMark: false,
+        },
+      },
+      undefined,
+      () => {
+        root.signal.throwIfAborted();
+      },
+    );
+    expect(grant).not.toBe('');
+    expect(router.validateMutation('first', grant)).toBe(true);
+    expect(router.validateMutation('peer', grant)).toBe(false);
+    root.abort();
+    expect(router.validateMutation('first', grant)).toBe(false);
+    router.receive('first', { operationId: 'create', ok: false });
+    await result;
+    expect(router.validateMutation('first', grant)).toBe(false);
+  });
+
   it('ignores editor responses from a connection that does not own the operation', async () => {
     const router = new EditorRpcRouter();
     expect(router.trustedUserEditors(identity)).toEqual([]);
