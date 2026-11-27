@@ -25,6 +25,7 @@ pub(crate) fn list(
     root: &Path,
     limit: usize,
     mut truncated: bool,
+    visible: impl Fn(&Path) -> bool,
 ) -> PackageListing {
     let mut names = CatalogNames::new(root);
     let mut packages = BTreeMap::new();
@@ -59,7 +60,17 @@ pub(crate) fn list(
             continue;
         }
         let directory = &path[..path.len() - remaining.as_os_str().len() - 1];
-        if packages.len() == limit && !packages.contains_key(directory) {
+        let manifest = remaining.components().count() == 1 && names.matches(relative, "SKILL.md");
+        let admitted = packages.contains_key(directory);
+        if admitted && !manifest {
+            continue;
+        }
+        // A package or its manifest may have become private since indexing. A denied entry
+        // contributes neither a directory nor a missing-manifest diagnostic to the result.
+        if (!admitted && !visible(Path::new(directory))) || !visible(relative) {
+            continue;
+        }
+        if !admitted && packages.len() == limit {
             truncated = true;
             break;
         }
@@ -67,7 +78,7 @@ pub(crate) fn list(
             directory: directory.to_owned(),
             manifest: None,
         });
-        if remaining.components().count() == 1 && names.matches(relative, "SKILL.md") {
+        if manifest {
             entry.manifest = Some(path.clone());
         }
     }
@@ -90,7 +101,7 @@ mod tests {
         paths.insert("src/.glyph/skills/p1/sub/SKILL.md".into());
         paths.insert("src/.glyph/skills/unpackaged.txt".into());
         paths.insert("src/.cursor/skills/other/SKILL.md".into());
-        let result = list(&paths, Some(".glyph"), Path::new("."), 40, false);
+        let result = list(&paths, Some(".glyph"), Path::new("."), 40, false, |_| true);
         assert!(!result.truncated);
         assert_eq!(result.packages.len(), 40);
         assert_eq!(
@@ -98,8 +109,28 @@ mod tests {
             Some("src/.glyph/skills/p0/SKILL.md")
         );
         assert!(result.packages[1].manifest.is_none());
-        assert!(list(&paths, Some(".glyph"), Path::new("."), 39, false).truncated);
-        assert!(list(&paths, Some(".glyph"), Path::new("."), 40, true).truncated);
+        assert!(list(&paths, Some(".glyph"), Path::new("."), 39, false, |_| true).truncated);
+        assert!(list(&paths, Some(".glyph"), Path::new("."), 40, true, |_| true).truncated);
+    }
+
+    #[test]
+    fn admits_only_visible_directories_and_files_before_the_package_limit() {
+        let paths = [
+            "a/SKILL.md",
+            "b/SKILL.md",
+            "c/0-asset",
+            "c/SKILL.md",
+            "d/SKILL.md",
+        ]
+        .map(String::from)
+        .into();
+        let visible =
+            |path: &Path| !matches!(path.to_str(), Some("a" | "b/SKILL.md" | "c/SKILL.md"));
+        let result = list(&paths, None, Path::new("."), 1, false, visible);
+        assert!(result.truncated);
+        assert_eq!(result.packages.len(), 1);
+        assert_eq!(result.packages[0].directory, "c");
+        assert!(result.packages[0].manifest.is_none());
     }
 
     #[test]
@@ -117,7 +148,7 @@ mod tests {
             std::fs::write(full, "data").unwrap();
         }
         let paths = files.map(String::from).into();
-        let project = list(&paths, Some(".glyph"), root.path(), 40, false);
+        let project = list(&paths, Some(".glyph"), root.path(), 40, false, |_| true);
         let expected = [
             "kelvin/.glyph/skills/example/SKILL.md",
             "sub/.glyph/skills/example/SKILL.md",
@@ -133,7 +164,7 @@ mod tests {
                 .count(),
             expected
         );
-        let user = list(&paths, None, root.path(), 40, false);
+        let user = list(&paths, None, root.path(), 40, false, |_| true);
         assert_eq!(user.packages.len(), 3);
         assert_eq!(
             user.packages.last().unwrap().manifest.as_deref(),
@@ -144,7 +175,8 @@ mod tests {
             Some(".glyph"),
             root.path(),
             40,
-            false
+            false,
+            |_| true
         )
         .packages
         .is_empty());

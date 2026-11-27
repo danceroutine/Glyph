@@ -705,16 +705,14 @@ impl ContextIndexService {
             .read()
             .map_err(|_| ServiceError::internal("The known-path set lock is poisoned."))?;
         let physical = initialized.policy.physical()?;
-        let mut result = crate::skill_packages::list(
+        let result = crate::skill_packages::list(
             &paths,
             marker,
             &initialized.root,
             MAX_GLOB_LIMIT as usize,
             initialized.truncated.load(Ordering::Acquire),
+            |path| !physical.excludes(&initialized.root.join(path)),
         );
-        result
-            .files
-            .retain(|name| !physical.excludes(&initialized.root.join(name)));
         stable_result(&physical, result)
     }
 
