@@ -22,6 +22,7 @@ export async function assertSkillPackageClean(
   const peers = editors.trustedSkillEditors(identity, absolutePackageDirectory);
   const physicalPackageUri = pathToFileURL(absolutePackageDirectory).toString();
   const operationId = randomUUID();
+  const comparison = namePolicy ? { namePolicy } : {};
   const checks = [
     {
       identity,
@@ -31,7 +32,7 @@ export async function assertSkillPackageClean(
         scope,
         directoryUri: logicalProjectDirectoryUri ?? physicalPackageUri,
         physicalPackageUri,
-        namePolicy,
+        ...comparison,
       } as const,
     },
     ...ownerIntersections.map(directoryUri => ({
@@ -43,7 +44,7 @@ export async function assertSkillPackageClean(
         peerWorkspaceIntersection: true,
         directoryUri,
         physicalPackageUri,
-        namePolicy,
+        ...comparison,
       } as const,
     })),
     ...peers.map(peer => ({
@@ -54,7 +55,7 @@ export async function assertSkillPackageClean(
         scope,
         peerWorkspaceIntersection: true,
         physicalPackageUri,
-        namePolicy,
+        ...comparison,
         directoryUri:
           peer.directoryUri ??
           (() => {
