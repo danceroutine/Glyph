@@ -310,9 +310,14 @@ describe(OpenAIProvider, () => {
     };
     const { provider, requests } = harness([() => sse([completed])], undefined, coordinator);
     const traces: string[] = [];
-    await expect(provider.send('First', { ...options(), onTrace: event => traces.push(event.kind) })).rejects.toThrow(
-      'Access revoked',
-    );
+    await expect(
+      provider.send('First', {
+        ...options(),
+        onTrace: event => {
+          traces.push(event.kind);
+        },
+      }),
+    ).rejects.toThrow('Access revoked');
     expect(traces).not.toContain('request.body');
     allowed = true;
     await expect(

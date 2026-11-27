@@ -144,6 +144,19 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     return (assertCurrent?: () => void) => this.streamStep(turn, context, client, assertCurrent);
   }
 
+  appendToolResults(turn: OpenAITurn, results: readonly AgentToolResult[]): OpenAITurn {
+    const outputs: ResponseInputItem[] = results.map(result =>
+      result.call.protocolData === 'custom_tool_call'
+        ? { type: 'custom_tool_call_output', call_id: result.call.id, output: result.output }
+        : { type: 'function_call_output', call_id: result.call.id, output: result.output },
+    );
+    return { ...turn, input: [...turn.input, ...outputs] };
+  }
+
+  snapshot(turn: OpenAITurn): ChatProviderState {
+    return stateFrom(turn.input);
+  }
+
   private async streamStep(
     turn: OpenAITurn,
     context: AgentTurnContext,
@@ -311,19 +324,6 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
         protocolData: call.type,
       })),
     };
-  }
-
-  appendToolResults(turn: OpenAITurn, results: readonly AgentToolResult[]): OpenAITurn {
-    const outputs: ResponseInputItem[] = results.map(result =>
-      result.call.protocolData === 'custom_tool_call'
-        ? { type: 'custom_tool_call_output', call_id: result.call.id, output: result.output }
-        : { type: 'function_call_output', call_id: result.call.id, output: result.output },
-    );
-    return { ...turn, input: [...turn.input, ...outputs] };
-  }
-
-  snapshot(turn: OpenAITurn): ChatProviderState {
-    return stateFrom(turn.input);
   }
 
   /** Tool execution and human decisions can outlive a token, so authenticate every model request. */

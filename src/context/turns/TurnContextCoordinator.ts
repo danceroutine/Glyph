@@ -96,21 +96,6 @@ export class TurnContextCoordinator {
     });
   }
 
-  private async disclose(
-    turnId: string,
-    operation: (session: TurnContextSession) => AgentInstructionContext | undefined,
-    signal?: AbortSignal,
-  ): Promise<AgentInstructionContext | undefined> {
-    const session = this.sessions.get(turnId);
-    if (!session) return undefined;
-    return this.disclosures.get(session)!.publish(
-      () => session.checkpointSteering(),
-      () => operation(session),
-      context => (context ? session.disclosurePins(context) : []),
-      signal,
-    );
-  }
-
   /** Snapshot a live turn without removing it, for durable checkpoints and inspection. */
   snapshot(turnId: string): AgentInstructionTurnSnapshot | undefined {
     return this.sessions.get(turnId)?.snapshot();
@@ -126,5 +111,20 @@ export class TurnContextCoordinator {
   /** Release context for a failed or cancelled turn without publishing a completed snapshot. */
   discardTurn(turnId: string): void {
     this.sessions.delete(turnId);
+  }
+
+  private async disclose(
+    turnId: string,
+    operation: (session: TurnContextSession) => AgentInstructionContext | undefined,
+    signal?: AbortSignal,
+  ): Promise<AgentInstructionContext | undefined> {
+    const session = this.sessions.get(turnId);
+    if (!session) return undefined;
+    return this.disclosures.get(session)!.publish(
+      () => session.checkpointSteering(),
+      () => operation(session),
+      context => (context ? session.disclosurePins(context) : []),
+      signal,
+    );
   }
 }

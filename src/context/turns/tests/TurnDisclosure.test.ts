@@ -31,7 +31,7 @@ function fixture() {
         ({ path, origin }) => denied.has(path) || !files.some(file => file.path === path && file.origin === origin),
       )
     )
-      throw Error('Source unavailable');
+      throw new Error('Source unavailable');
   });
   const source = {
     id: 'rule',
