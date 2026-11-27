@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 describe(WorkspaceAccessPolicy, () => {
+  it('revises immutable private-path snapshots when host reservations change', () => {
+    let paths = ['/first'];
+    const policy = new WorkspaceAccessPolicy({}, () => paths);
+    expect(policy.revision).toBe(1);
+    const initial = policy.privatePaths;
+    paths = ['/second'];
+    expect(policy.revision).toBe(2);
+    expect(policy.privatePaths).toEqual(['/second']);
+    expect(initial).toEqual(['/first']);
+    paths = [...paths, '/third'];
+    expect(policy.revision).toBe(3);
+    expect(Object.isFrozen(policy.privatePaths)).toBe(true);
+  });
+
   it('projects only actual host paths below the attached root and recognizes private ancestor roots', () => {
     const policy = new WorkspaceAccessPolicy({}, ['/Project/Profile/skill-state.json', '/Project/private']);
     expect(policy.exclusionsFor('/project', false)).toEqual({
