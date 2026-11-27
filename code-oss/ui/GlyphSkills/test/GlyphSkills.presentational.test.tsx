@@ -1,5 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parseDocument } from 'yaml';
+import type { GlyphSkillsManagement } from '#src/desktop/workbench/GlyphSkillsManagement.js';
 import type { GlyphSkill } from '#src/desktop/protocol/events/GlyphSkill.js';
 import { GlyphSkills } from '#code-oss/ui/GlyphSkills/GlyphSkills.presentational.tsx';
 
@@ -73,6 +75,21 @@ describe(GlyphSkills, () => {
 
 describe('Skill management', () => {
   afterEach(cleanup);
+  it.each(['2026', 'true', 'null', '1e3', '0x10'])('keeps the valid skill name %s a YAML string', async name => {
+    const previewDraft = vi.fn<GlyphSkillsManagement['previewDraft']>(async (_target, draft) => {
+      const content = draft.files[0]!.content;
+      const frontmatter = content.split('---')[1]!;
+      expect(parseDocument(frontmatter).toJS()).toMatchObject({ name, description: 'Workflow' });
+    });
+    render(<GlyphSkills skills={[]} edit={vi.fn()} management={{ ...actions(), previewDraft }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create skill', exact: true }));
+    fireEvent.input(screen.getByLabelText('Name', { exact: true }), { target: { value: name } });
+    fireEvent.input(screen.getByLabelText('Description', { exact: true }), { target: { value: 'Workflow' } });
+    fireEvent.input(screen.getByLabelText('Instructions', { exact: true }), { target: { value: 'Steps' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Preview package' }).closest('form')!);
+    await vi.waitFor(() => expect(previewDraft).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
   function actions() {
     return {
       targets: [{ id: 'project', label: 'Project skills' }],

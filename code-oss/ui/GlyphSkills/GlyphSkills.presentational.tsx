@@ -182,7 +182,7 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
                       {
                         path: 'SKILL.md',
                         encoding: 'utf8',
-                        content: `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n${body}`,
+                        content: `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n${body}`,
                       },
                     ],
                   });
