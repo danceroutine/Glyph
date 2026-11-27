@@ -2,7 +2,10 @@ import type { GlyphSkillPreview, GlyphSkillTarget } from './GlyphSkillManagement
 import type { GlyphSkill } from './GlyphSkill.ts';
 import type { AgentReview } from '#src/reviewing/AgentReview.js';
 import type { GlyphBackgroundShell } from './GlyphBackgroundShell.ts';
-import type { GlyphContextAttachment } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
+import type {
+  GlyphContextAttachment,
+  GlyphFolderListing,
+} from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import type { GlyphTurnOptions } from './GlyphAnnotation.ts';
 import type { GlyphProposalFilePreview } from './GlyphProposalFilePreview.ts';
 import type { GlyphHostStatus } from './GlyphHostStatus.ts';
@@ -39,6 +42,7 @@ export enum GlyphHostEventType {
   HOST_STATUS = 'host_status',
   SKILL_REFERENCE_RESOLVED = 'skill_reference_resolved',
   SKILLS_CHANGED = 'skills_changed',
+  ATTACHMENT_RESOURCE_RESOLVED = 'attachment_resource_resolved',
   RULE_REFERENCE_RESOLVED = 'rule_reference_resolved',
   INSTRUCTION_SOURCES_CHANGED = 'instruction_sources_changed',
   ERROR = 'error',
@@ -54,6 +58,11 @@ export type GlyphHostEvent =
     }
   | { readonly type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED; readonly lookupId: string; readonly skillId?: string }
   | { readonly type: GlyphHostEventType.SKILLS_CHANGED; readonly skills: readonly GlyphSkill[] }
+  | {
+      readonly type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED;
+      readonly lookupId: string;
+      readonly listing?: GlyphFolderListing;
+    }
   | { readonly type: GlyphHostEventType.RULE_REFERENCE_RESOLVED; readonly lookupId: string; readonly ruleId?: string }
   | {
       readonly type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED;

@@ -1,5 +1,5 @@
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
-import type { GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
+import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import type { GlyphHostEventEnvelope } from '#src/desktop/protocol/events/GlyphHostEventEnvelope.js';
 import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#src/desktop/protocol/GlyphDesktopProtocolVersion.js';
 
@@ -50,6 +50,11 @@ export class HostEventJournal {
       sequence: ++this.sequence,
       event,
     };
+    // A reconnecting renderer must request fresh authorization for a captured resource.
+    if (event.type === GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED) {
+      this.discard();
+      return envelope;
+    }
     const bytes = Buffer.byteLength(JSON.stringify(envelope));
     if (bytes > this.byteCapacity) {
       // The live recipient still receives the complete event. Reconnect uses the current snapshot,

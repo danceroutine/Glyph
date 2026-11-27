@@ -45,7 +45,9 @@ const transport =
     : undefined;
 const production = new OpenAIDesktopRuntimeFactory(editors, transport, process.env.GLYPH_USER_DIRECTORY);
 const host: GlyphDesktopHost = new GlyphDesktopHost(
-  process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'deterministic' ? new DeterministicDesktopRuntimeFactory() : production,
+  process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'deterministic'
+    ? new DeterministicDesktopRuntimeFactory(production)
+    : production,
 );
 parentPort.on('message', event => {
   const payload = event.data;

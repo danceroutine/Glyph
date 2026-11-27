@@ -181,6 +181,20 @@ describe(HostEventJournal, () => {
     expect(journal.after(3)).toEqual([]);
   });
 
+  it('requires a fresh snapshot when replay would include a previous attachment lookup', () => {
+    const journal = new HostEventJournal('generation');
+    journal.append(first, { type: GlyphHostEventType.HOST_STATUS, status: GlyphHostStatus.READY });
+    const live = journal.append(first, {
+      type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
+      lookupId: 'folder',
+      listing: { files: ['notes'], truncated: false },
+    });
+    expect(live.event).toMatchObject({ listing: { files: ['notes'] } });
+    journal.append(first, { type: GlyphHostEventType.HOST_STATUS, status: GlyphHostStatus.READY });
+    expect(journal.after(1)).toBeUndefined();
+    expect(journal.after(2)?.map(event => event.sequence)).toEqual([3]);
+  });
+
   it.each([0, -1, 1.5, Number.NaN])('rejects a capacity of %s', capacity => {
     expect(() => new HostEventJournal('generation', capacity)).toThrow('Event journal capacity must be positive.');
   });

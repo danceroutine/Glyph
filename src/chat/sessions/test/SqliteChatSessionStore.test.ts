@@ -83,7 +83,13 @@ describe(SqliteChatSessionStore, () => {
       revision: `hash-${kind}`,
       byteOrderMark: false,
       byteLength: 20,
-      source: { kind, uri: `glyph-${kind}:/original`, version: 3, revision: 'original-editor-revision' },
+      source: {
+        kind,
+        uri: `glyph-${kind}:/original`,
+        version: 3,
+        revision: 'original-editor-revision',
+        ...(kind === 'diff' && { projectFile: true as const }),
+      },
     }));
     const original = record(context.id);
     const saved = { ...original, transcript: original.transcript.map(turn => ({ ...turn, attachments })) };
@@ -414,7 +420,13 @@ describe(SqliteChatSessionStore, () => {
         revision: 'tree-hash',
         byteOrderMark: false,
         byteLength: 8,
-        source: { kind: 'folder' as const, uri: 'file:///project/src', version: 0, revision: 'tree-hash' },
+        source: {
+          kind: 'folder' as const,
+          uri: 'file:///project/src',
+          version: 0,
+          revision: 'tree-hash',
+          folderListing: { files: ['index.ts'], truncated: false },
+        },
       },
     ];
     for (let attempt = 0; attempt < 2; attempt++) {

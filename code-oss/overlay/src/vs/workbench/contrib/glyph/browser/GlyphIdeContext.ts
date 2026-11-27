@@ -1,6 +1,7 @@
 import type { IEditorService } from '#vs/workbench/services/editor/common/editorService.js';
 import { TerminalCapability } from '#vs/platform/terminal/common/capabilities/capabilities.js';
 import { buildTestUri, parseTestUri, TestUriType } from '#vs/workbench/contrib/testing/common/testingUri.js';
+import { extUri } from '#vs/base/common/resources.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import { URI } from '#vs/base/common/uri.js';
 import { CancellationTokenSource } from '#vs/base/common/cancellation.js';
@@ -26,6 +27,7 @@ import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
 import {
   GlyphContextAttachmentKind as Kind,
   type GlyphContextAttachment,
+  type GlyphAttachmentResource,
 } from '#glyph/protocol/connection/GlyphContextAttachment.js';
 
 const limit = 512 * 1024;
@@ -50,6 +52,7 @@ export class GlyphIdeContext {
   private readonly terminalCaptures = new Map<string, number>();
   constructor(
     private readonly adapter: GlyphEditorAdapter,
+    private readonly resolveResource: (resource: GlyphAttachmentResource) => Promise<unknown>,
     @IMarkerService private readonly markers: IMarkerService,
     @ILanguageFeaturesService private readonly languages: ILanguageFeaturesService,
     @ITextModelService private readonly resolver: ITextModelService,
@@ -238,6 +241,7 @@ export class GlyphIdeContext {
 
   async captureDiagnostic(marker: IMarker): Promise<readonly GlyphContextAttachment[]> {
     this.assertTrusted();
+    await this.admitFile(marker.resource);
     const reference = await this.resolver.createModelReference(marker.resource);
     try {
       const current = reference.object.textEditorModel;
@@ -270,14 +274,34 @@ export class GlyphIdeContext {
     after: URI | undefined,
     base: string,
     captured?: (before: string, after: string) => void,
+    projectFile = false,
   ): Promise<GlyphContextAttachment> {
     this.assertTrusted();
-    const path = this.adapter.contextPath(uri.with({ query: '', fragment: '' }));
+    const selected = uri.with({ query: '', fragment: '' });
+    const path = this.adapter.contextPath(selected);
+    const related = new Map<string, { uri: string; path: string }>();
+    const admit = async (file: URI) => {
+      const route = this.adapter.contextPath(file);
+      await this.admitFile(file, projectFile);
+      related.set(file.toString(), { uri: file.toString(), path: route });
+    };
+    await admit(selected);
     const read = async (resource: URI | undefined) => {
       if (!resource) return '';
       if (!['file', 'git'].includes(resource.scheme))
         throw new GlyphContextError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE, 'Unsupported Git comparison resource.');
-      this.adapter.contextPath(resource.with({ scheme: 'file', query: '', fragment: '' }));
+      const query: unknown = resource.scheme === 'git' && resource.query ? JSON.parse(resource.query) : undefined;
+      const file =
+        isRecord(query) && typeof query.path === 'string'
+          ? URI.file(query.path)
+          : resource.with({ scheme: 'file', query: '', fragment: '' });
+      if (isRecord(query) && typeof query.submoduleOf === 'string' && query.submoduleOf) {
+        const repository = URI.file(query.submoduleOf);
+        this.adapter.contextPath(repository);
+        if (!extUri.isEqualOrParent(file, repository))
+          throw new Error('The submodule is outside the selected repository.');
+      }
+      await admit(file);
       const reference = await this.resolver.createModelReference(resource);
       try {
         const target = reference.object.textEditorModel;
@@ -296,8 +320,15 @@ export class GlyphIdeContext {
         'The Git comparison changed during capture. Capture it again.',
       );
     const text = `Git diff: ${base}\nBase URI: ${before?.toString() ?? '/dev/null'}\nTarget URI: ${after?.toString() ?? '/dev/null'}\nBase SHA-256: ${await digest(oldText)}\nTarget SHA-256: ${await digest(newText)}\n\n--- ${before ? path : '/dev/null'}\n+++ ${after ? path : '/dev/null'}\n${this.diffBody(oldText, newText)}`;
+    const result = await this.snapshot(
+      Kind.DIFF,
+      { uri: selected.toString(), path, ...(projectFile && { projectFile: true }) },
+      text,
+    );
+    await Promise.all([...related.values()].map(file => this.resolveResource({ ...file, folder: false, projectFile })));
+    this.assertTrusted();
     captured?.(oldText, newText);
-    return this.snapshot(Kind.DIFF, { uri: uri.with({ query: '', fragment: '' }).toString(), path }, text);
+    return result;
   }
 
   async terminal(
@@ -331,6 +362,12 @@ export class GlyphIdeContext {
     ];
   }
 
+  private async admitFile(uri: URI, projectFile = false): Promise<void> {
+    const path = this.adapter.contextPath(uri);
+    if (uri.scheme === 'file') await this.resolveResource({ uri: uri.toString(), path, folder: false, projectFile });
+    this.assertTrusted();
+  }
+
   private assertTrusted(): void {
     if (!this.trust.isWorkspaceTrusted())
       throw new GlyphContextError(
@@ -356,6 +393,8 @@ export class GlyphIdeContext {
     )
       throw new GlyphContextError(GlyphDesktopErrorCode.STALE_DOCUMENT, 'The workspace changed during capture.');
     const contentRevision = await digest(text);
+    const uri = URI.parse(source.uri);
+    if (uri.scheme === 'file') await this.admitFile(uri, kind === Kind.SYMBOL || source.projectFile === true);
     this.assertTrusted();
     return { ...source, id: generateUuid(), kind, text, contentRevision };
   }
@@ -370,7 +409,11 @@ export class GlyphIdeContext {
         : [{ label: 'No context available', detail: message, attach: false }],
       { title: message },
     );
-    return choice?.attach === true && model ? [await this.adapter.captureContext(model)] : [];
+    if (!choice?.attach || !model) return [];
+    await this.admitFile(model.uri);
+    const capture = await this.adapter.captureContext(model);
+    await this.admitFile(model.uri);
+    return [capture];
   }
 
   private async diagnostic(model?: ITextModel): Promise<readonly GlyphContextAttachment[]> {
@@ -401,6 +444,13 @@ export class GlyphIdeContext {
     const hasReferences = this.languages.referenceProvider.has(model);
     if (!hasDefinitions && !hasReferences)
       return this.fallback('Language-service definitions and references are unavailable.', model);
+    const selectedVersion = model.getVersionId();
+    await this.admitFile(model.uri, true);
+    if (model.isDisposed() || model.getVersionId() !== selectedVersion)
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.STALE_DOCUMENT,
+        'The selected code changed before the symbol lookup. Select it again.',
+      );
     const source = await this.adapter.captureContext(model, rangeOf(selection));
     const version = source.token!.version;
     const cancellation = new CancellationTokenSource();
@@ -487,7 +537,7 @@ export class GlyphIdeContext {
               continue;
             }
             try {
-              this.adapter.contextPath(link.uri);
+              await this.admitFile(link.uri, true);
             } catch {
               omitted++;
               continue;
@@ -553,7 +603,9 @@ export class GlyphIdeContext {
         source,
         `Related symbols (${status})\nDefinitions: ${hasDefinitions ? 'available' : 'unavailable'}; references: ${hasReferences ? 'available' : 'unavailable'}\n${omitted} results omitted by workspace or count limits; ${unavailable} failed queries. Up to 20 selected identifiers are queried.\nEditor revision: ${source.sourceRevision}\n\nSelected code:\n${source.text}`,
       );
-      return [summary, ...(stale ? [] : results)];
+      const attachments = [summary, ...(stale ? [] : results)];
+      await Promise.all(attachments.map(attachment => this.admitFile(URI.parse(attachment.uri), true)));
+      return attachments;
     } finally {
       clearTimeout(timer);
       cancellation.dispose();
