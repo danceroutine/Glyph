@@ -8,6 +8,7 @@ export class InstructionPaths {
   constructor(
     private readonly casing: boolean | ReadonlyMap<string, boolean> = true,
     readonly routes?: WorkspaceSourceRoutes,
+    private readonly historicallyInsensitive = process.platform === 'darwin' || process.platform === 'win32',
   ) {}
 
   sourceIdentity(kind: AgentInstructionSourceKind, path: string) {
@@ -19,11 +20,17 @@ export class InstructionPaths {
     };
     const physical = this.routes?.physicalPath(path);
     if (!physical) return { id: legacyId(path) };
-    const key = this.caseSensitive(path) ? physical : physical.toLowerCase();
-    return {
-      id: kind + ':file:' + createHash('sha256').update(key).digest('hex'),
-      legacyIds: this.routes!.legacyPaths(path).map(route => legacyId(route)),
-    };
+    const sensitive = this.caseSensitive(path);
+    const key = sensitive ? physical : physical.toLowerCase();
+    const physicalId = (value: string) => kind + ':file:' + createHash('sha256').update(value).digest('hex');
+    const legacyIds = this.routes!.legacyPaths(path).map(route => legacyId(route));
+    if (sensitive && this.historicallyInsensitive) {
+      // Earlier versions folded all Mac/Windows names. Disjoint IDs let an ambiguous historical
+      // selection fail closed even when one of the two current filenames is already lowercase.
+      legacyIds.push(physicalId(physical.toLowerCase()));
+      return { id: physicalId('case-sensitive\0' + key), legacyIds };
+    }
+    return { id: physicalId(key), legacyIds };
   }
 
   equivalents(path: string): string[] {

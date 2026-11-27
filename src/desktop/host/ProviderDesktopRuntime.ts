@@ -128,7 +128,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       readonly refreshCatalogs?: (signal: AbortSignal) => Promise<void>;
       readonly referenceResources?: (path: string) => NonNullable<GlyphInstructionSource['referenceResources']>;
       readonly instructionWatchRoots?: readonly string[];
-      readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'>;
+      readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'> &
+        Partial<Pick<AgentInstructionCatalog, 'paths'>>;
       readonly userRules?: UserAgentRuleManager;
       readonly emit: (event: GlyphHostEvent) => void;
       readonly ownerWindowId: string;
@@ -157,7 +158,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     this.unsubscribeInstructions = options.instructionCatalog?.onDidChange(sources => {
       this.publish({
         type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED,
-        sources: toInstructionSources(sources, false, options.referenceResources),
+        sources: toInstructionSources(sources, false, options.referenceResources, options.instructionCatalog?.paths),
       });
     });
   }
@@ -173,7 +174,14 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       agentReviews: this.options.agentReviews?.reviews ?? [],
       ...(this.options.instructionWatchRoots ? { instructionWatchRoots: this.options.instructionWatchRoots } : {}),
       ...(instructionSources
-        ? { instructionSources: toInstructionSources(instructionSources, false, this.options.referenceResources) }
+        ? {
+            instructionSources: toInstructionSources(
+              instructionSources,
+              false,
+              this.options.referenceResources,
+              this.options.instructionCatalog?.paths,
+            ),
+          }
         : {}),
       ...(this.options.userRules?.directoryUri ? { userRulesDirectoryUri: this.options.userRules.directoryUri } : {}),
       accounts: this.options.glyph.accounts,
@@ -1381,6 +1389,7 @@ function toInstructionSources(
   sources: readonly AgentInstructionSource[],
   historical = false,
   referenceResources?: (path: string) => NonNullable<GlyphInstructionSource['referenceResources']>,
+  paths?: AgentInstructionCatalog['paths'],
 ): readonly GlyphInstructionSource[] {
   return sources.map(source => ({
     id: source.id,
@@ -1404,6 +1413,9 @@ function toInstructionSources(
       ? { content: source.content }
       : {}),
     ...(source.uri === undefined ? {} : { uri: source.uri }),
+    ...(paths && source.uri && source.kind !== AgentInstructionSourceKind.GLYPH_USER_RULE
+      ? { caseSensitive: paths.caseSensitive(source.path) }
+      : {}),
     ...(source.kind === AgentInstructionSourceKind.GLYPH_USER_RULE
       ? {
           managementPath: source.path.replace(/^~\/\.glyph\//u, ''),

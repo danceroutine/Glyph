@@ -85,6 +85,7 @@ function controllerServices() {
       description?: string;
       revision?: string;
       managementRevision?: string;
+      caseSensitive?: boolean;
       references?: readonly string[];
       referenceResources?: readonly { uri: string; caseSensitive: boolean }[];
       uri?: string;
@@ -1214,6 +1215,11 @@ describe(GlyphContextController, () => {
       resource: expect.objectContaining({ path: '/workspace/AGENTS.md' }),
       options: { pinned: true },
     });
+    services.files.realpath.mockResolvedValue(URI.file('/actual/agents.md'));
+    services.instructionSources[0] = { ...source, caseSensitive: false };
+    await controller.openInstruction('guidance');
+    services.instructionSources[0] = { ...source, caseSensitive: true };
+    await expect(controller.openInstruction('guidance')).rejects.toThrow('unavailable');
     services.files.realpath.mockResolvedValue(undefined);
     await expect(controller.openInstruction('guidance')).rejects.toThrow('unavailable');
     services.files.stat.mockResolvedValueOnce({ isFile: true, isSymbolicLink: true });

@@ -17,6 +17,7 @@ export interface GlyphInstructionSource {
   readonly revision?: string;
   readonly content?: string;
   readonly uri?: string;
+  readonly caseSensitive?: boolean;
   /** Store-relative mutation path. Present only for user-owned rules. */
   readonly managementPath?: string;
   /** Revision guard for mutating the user-owned rule file itself. */

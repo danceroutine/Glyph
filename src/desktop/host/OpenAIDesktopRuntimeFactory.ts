@@ -1,3 +1,4 @@
+import { filesystemPolicyDirectory, workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { assertUserWorkingCopiesClean } from '#src/desktop/workspace/assertUserWorkingCopiesClean.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
@@ -139,14 +140,21 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     );
     const policy = new WorkspaceAccessPolicy();
     const logger = new FileLogger(configuration.traceFile);
-    const parts = roots.map(workspaceRoot => {
+    const casing = await Promise.all(
+      roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
+    );
+    const parts = roots.map((workspaceRoot, i) => {
       const excludedPaths = [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(target => {
         const path = relative(workspaceRoot.path, target);
         return path && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
           ? [path.split(sep).join('/')]
           : [];
       });
-      const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, { accessPolicy: policy, excludedPaths });
+      const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, {
+        caseSensitive: casing[i]!,
+        accessPolicy: policy,
+        excludedPaths,
+      });
       const index: RustWorkspacePathIndex = new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
         root: workspaceRoot.path,
@@ -223,6 +231,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               operationId: randomUUID(),
               path: route,
               physicalUri: pathToFileURL(join(disk.root, request.path)).toString(),
+              caseSensitive: disk.caseSensitive,
             });
             if (!response.ok) throw new Error(response.error?.message ?? 'The editor catalog snapshot is unavailable.');
             if (response.snapshot && response.snapshot.path !== route)
@@ -282,7 +291,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
       const userRuleRoot = resolveAvailableIdentity(this.userDirectory);
-      const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
+      const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
+        caseSensitive: await RustWorkspacePathIndex.filesystemCaseSensitive(
+          indexExecutable,
+          filesystemPolicyDirectory(userRuleRoot),
+        ).catch(() => workspaceCaseSensitivity(userRuleRoot)),
+      });
       // Agent-facing sources cannot acquire the host's preference and credential authority.
       const userInstructionPolicy = new WorkspaceAccessPolicy(
         {},
@@ -290,6 +304,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       );
       const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
         accessPolicy: userInstructionPolicy,
+        caseSensitive: userRuleStore.caseSensitive,
       });
       const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
         binaryPath: indexExecutable,

@@ -1,3 +1,4 @@
+import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { EventEmitter, once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +12,15 @@ import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePa
 
 describe(RustWorkspacePathIndex, () => {
   describe('protocol', () => {
+    it('obtains the native filesystem case policy without starting indexing or a watcher', async () => {
+      for (const value of [false, true, null]) {
+        const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : value));
+        const result = RustWorkspacePathIndex.filesystemCaseSensitive('/fixture', '/volume', () => worker);
+        if (value === null) await expect(result).rejects.toThrow();
+        else await expect(result).resolves.toBe(value);
+        expect(worker.requests.map(request => request.method)).toEqual(['filesystemCaseSensitive', 'shutdown']);
+      }
+    });
     it('sends relative host exclusions and explicitly marks directly attached private roots', async () => {
       for (const [root, expected] of [
         ['/project', { excludedPaths: ['public/cache', 'profile/skill-state.json'] }],
@@ -217,7 +227,7 @@ describe(RustWorkspacePathIndex, () => {
             respectGitIgnore: true,
             maxFiles: 2_000_000,
             maxContentSearchFileBytes: 9_000_000,
-            caseSensitive: process.platform !== 'darwin' && process.platform !== 'win32',
+            caseSensitive: workspaceCaseSensitivity('/project'),
           },
         },
         { version: 1, id: 2, method: 'search', params: { query: 'app', generation: 7, limit: 20 } },
