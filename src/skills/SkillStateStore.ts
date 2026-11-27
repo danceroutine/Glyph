@@ -1,11 +1,10 @@
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { inspectOwnerControlledDirectory, inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
-import { constants } from 'node:fs';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { link, open, rm, type FileHandle } from 'node:fs/promises';
+import { link, open, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { SkillPreferenceFile } from './SkillPreferenceFile.ts';
 import { syncDirectory, withSkillLock } from './SkillPackageStorage.ts';
 
 const schema = z.object({
@@ -27,12 +26,12 @@ export class SkillStateStore {
   private readonly listeners = new Set<() => void>();
   readonly enabled = new Map<string, boolean>();
   readonly installations = new Map<string, { source: string; revision: string }>();
+  readonly preferences: SkillPreferenceFile;
   constructor(
-    private readonly workspace: FileSystemWorkspaceTextStore,
+    readonly userDirectory: string,
     readonly metadata: FilesystemMetadata,
-  ) {}
-  get userDirectory(): string {
-    return this.workspace.root;
+  ) {
+    this.preferences = new SkillPreferenceFile(userDirectory, metadata);
   }
   onDidChange(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -89,7 +88,7 @@ export class SkillStateStore {
       const next = parsePreferences(previous?.text);
       change(next);
       const text = JSON.stringify(next, null, 2);
-      const destination = await this.workspace.resolvePath('skill-state.json');
+      const destination = this.preferences.path;
       const parent = dirname(destination);
       const stage = join(parent, '.skill-staging');
       const checkDirectories = async () => {
@@ -97,17 +96,9 @@ export class SkillStateStore {
         await inspectPrivateDirectory(this.metadata, stage);
       };
       await checkDirectories();
-      if (previous) await this.inspectPreferencePath(destination);
+
       try {
-        if (previous)
-          await this.workspace.replace('skill-state.json', previous.revision, text, false, {
-            temporaryDirectory: stage,
-            beforeReplace: async stagedPath => {
-              await checkDirectories();
-              await this.inspectPreferencePath(destination);
-              await inspectFileMetadata(this.metadata, stagedPath, 'replaceable');
-            },
-          });
+        if (previous) await this.preferences.replace(previous, text, stage, checkDirectories);
         else {
           // An interrupted first write must leave either a complete JSON document or an absent preference file.
           const temporary = join(stage, randomUUID() + '.json');
@@ -141,7 +132,7 @@ export class SkillStateStore {
         await inspectOwnerControlledDirectory(this.metadata, parent);
         const handle = await open(destination, 'r');
         try {
-          await this.inspectPreference(handle);
+          await this.preferences.inspect(handle);
           await handle.sync();
         } finally {
           await handle.close();
@@ -153,32 +144,9 @@ export class SkillStateStore {
       this.publish(next);
     });
   }
-  private async inspectPreference(handle: FileHandle): Promise<void> {
-    const stat = await handle.stat();
-    if (
-      !stat.isFile() ||
-      stat.nlink !== 1 ||
-      (process.platform !== 'win32' && (stat.uid !== process.getuid!() || (stat.mode & 0o022) !== 0))
-    )
-      throw new Error('Skill preferences must belong to the current user and must not be writable by other users.');
-    await this.metadata.inspect(handle, 'replaceable');
-  }
-
-  private async inspectPreferencePath(path: string): Promise<void> {
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    try {
-      await this.inspectPreference(handle);
-    } finally {
-      await handle.close();
-    }
-  }
-
   private async readPreferences() {
     await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
-    const options = {
-      metadata: { inspect: (handle: FileHandle) => this.inspectPreference(handle) },
-    };
-    return this.workspace.readOptional('skill-state.json', options);
+    return this.preferences.read();
   }
 
   private publish(data: Preferences): void {

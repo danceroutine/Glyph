@@ -1,3 +1,4 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
@@ -17,7 +18,7 @@ const source = {
   revision: 'release',
   directory: '',
 };
-const reader = new SkillPackageSourceReader('unused', [], testFilesystemMetadata);
+const reader = new SkillPackageSourceReader('unused', [], testFilesystemMetadata, new WorkspaceAccessPolicy());
 
 function repository(entries = '100644 blob abc\tSKILL.md\0', blob = manifest) {
   git.mockImplementation(async args => {
@@ -29,7 +30,13 @@ describe('Repository package source boundary', () => {
   it('consults current host-wide roots when opening a repository preview', async () => {
     repository();
     const roots = vi.fn(() => []);
-    const sourceReader = new SkillPackageSourceReader('unused', [], testFilesystemMetadata, roots);
+    const sourceReader = new SkillPackageSourceReader(
+      'unused',
+      [],
+      testFilesystemMetadata,
+      new WorkspaceAccessPolicy(),
+      roots,
+    );
     expect((await sourceReader.read(source)).name).toBe('example');
     expect(roots).toHaveBeenCalled();
   });

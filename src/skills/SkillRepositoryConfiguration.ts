@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { access, constants, stat } from 'node:fs/promises';
 import { repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
 import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { readHostFile } from './readHostFile.ts';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 
@@ -123,8 +123,9 @@ export async function captureRepositoryEnvironment(
     let values = sources.get(origin);
     if (!values) {
       const path = authority.admit(resolve(cwd, origin.slice(5)));
-      const store = new FileSystemWorkspaceTextStore(dirname(path), { caseSensitive: true, allowPrivateRoot: true });
-      const snapshot = await store.readBytes(basename(path), { maxBytes: 1024 * 1024 - bytes });
+      await authority.validate();
+      const snapshot = await readHostFile(path, 1024 * 1024 - bytes);
+      await authority.validate();
       bytes += snapshot.bytes.length;
       values = new Set(
         (await config(['--no-includes', '--file', '-', '--list'], snapshot.bytes)).split('\0').slice(0, -1),

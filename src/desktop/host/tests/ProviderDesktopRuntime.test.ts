@@ -1,3 +1,4 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -4926,7 +4927,7 @@ describe('Skill lifecycle host commands', () => {
   });
   async function setup() {
     const lifecycle = await aSkillLifecycle();
-    const sources = new SkillPackageSourceReader('unused', [], testFilesystemMetadata);
+    const sources = new SkillPackageSourceReader('unused', [], testFilesystemMetadata, new WorkspaceAccessPolicy());
     const harness = await fixture(async () => {}, 'owner', undefined, {
       skillManager: lifecycle.manager,
       skillCatalog: lifecycle.catalog,

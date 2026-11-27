@@ -14,7 +14,7 @@ import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/Fil
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 import type { HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
 import type { WorkspacePathAccess } from '#src/workspace/WorkspacePathAccess.js';
-import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 
 export const skillPackageSourceSchema = z.discriminatedUnion('kind', [
@@ -35,8 +35,8 @@ export class SkillPackageSourceReader {
     private readonly binaryPath: string,
     workspaceRoots: readonly string[],
     private readonly metadata: FilesystemMetadata & HostFilesystemAuthority & WorkspacePathAccess,
+    private readonly accessPolicy: WorkspaceAccessPolicy,
     private readonly hostWorkspaceRoots: HostWorkspaceRoots = workspaceRoots,
-    private readonly accessPolicy = new WorkspaceAccessPolicy(),
   ) {}
   async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
     const source = skillPackageSourceSchema.parse(input);

@@ -38,7 +38,7 @@ export async function aSkillLifecycle(
   const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-manager-')));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const store = new FileSystemWorkspaceTextStore(root);
-  const state = new SkillStateStore(store, metadata);
+  const state = new SkillStateStore(store.root, metadata);
   await state.initialize();
   const listFiles = () => store.list(10000, 'skills/**/*');
   const refreshIndex = vi.fn(async () => {});

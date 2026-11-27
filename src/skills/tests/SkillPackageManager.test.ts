@@ -2,7 +2,6 @@ import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm as removeDirectory, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,7 +17,7 @@ describe(SkillPackageManager, () => {
     await removeDirectory(join(root, '.skill-staging'), { recursive: true, force: true });
     const profile = await mkdtemp(join(tmpdir(), 'glyph-readonly-skill-profile-'));
     onTestFinished(() => removeDirectory(profile, { recursive: true, force: true }));
-    const state = new SkillStateStore(new FileSystemWorkspaceTextStore(profile), testFilesystemMetadata);
+    const state = new SkillStateStore(profile, testFilesystemMetadata);
     const catalog = new SkillCatalog([provider], state.enabled, state.installations, () => state.initialize());
     await catalog.refresh();
     const skill = catalog.skills[0]!;
@@ -133,7 +132,7 @@ describe(SkillPackageManager, () => {
     const skill = await install();
     await manager.setEnabled(skill.id, false);
     expect(catalog.skills[0]?.enabled).toBe(false);
-    const restored = new SkillStateStore(store, testFilesystemMetadata);
+    const restored = new SkillStateStore(store.root, testFilesystemMetadata);
     await restored.initialize();
     expect(restored.enabled.get(skill.id)).toBe(false);
     expect(restored.installations.get(skill.id)?.revision).toBe(state.installations.get(skill.id)?.revision);

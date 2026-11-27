@@ -1,3 +1,4 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -29,7 +30,12 @@ it.skipIf(process.platform !== 'darwin')(
     const asset = join(root, 'asset');
     await writeFile(asset, '');
     await writeFile(join(asset, '..namedfork/rsrc'), 'secondary bytes');
-    const reader = new SkillPackageSourceReader(resolve('target/release/glyph-context-index'), [], metadata);
+    const reader = new SkillPackageSourceReader(
+      resolve('target/release/glyph-context-index'),
+      [],
+      metadata,
+      new WorkspaceAccessPolicy(),
+    );
     await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('metadata');
     expect(await readFile(join(asset, '..namedfork/rsrc'), 'utf8')).toBe('secondary bytes');
   },
@@ -61,7 +67,12 @@ it.skipIf(process.platform !== 'darwin')(
       expect(execute).not.toHaveBeenCalled();
       expect(await readdir(temporary)).toEqual([]);
       vi.stubEnv('TMPDIR', temporary);
-      const reader = new SkillPackageSourceReader(resolve('target/release/glyph-context-index'), [workspace], metadata);
+      const reader = new SkillPackageSourceReader(
+        resolve('target/release/glyph-context-index'),
+        [workspace],
+        metadata,
+        new WorkspaceAccessPolicy(),
+      );
       await expect(
         reader.read({
           kind: 'repository',

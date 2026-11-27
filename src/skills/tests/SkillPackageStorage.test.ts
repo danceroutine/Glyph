@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { expect, it, onTestFinished, vi } from 'vitest';
 import { privateSkillDirectory, syncDirectory, withSkillLock } from '#src/skills/SkillPackageStorage.js';
-import { inventoryFiles, readPackageFiles } from '#src/skills/skillPackageInventory.js';
+import { inventoryFiles, diskRevision } from '#src/skills/skillPackageInventory.js';
 import { SkillTransactionJournal } from '#src/skills/SkillTransactionJournal.js';
 
 async function fixture() {
@@ -101,5 +101,5 @@ it('bounds moved-package bytes and treats a missing physical package as absent',
   expect(await inventoryFiles(join(root, 'absent'))).toEqual([]);
   const files = Array.from({ length: 9 }, (_, i) => String(i));
   await Promise.all(files.map(path => writeFile(join(root, path), Buffer.alloc(1024 * 1024))));
-  await expect(readPackageFiles(root, files)).rejects.toThrow('8 MiB');
+  await expect(diskRevision(root)).rejects.toThrow('8 MiB');
 });

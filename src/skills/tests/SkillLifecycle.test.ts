@@ -91,15 +91,15 @@ describe(SkillStateStore, () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-skill-state-'));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     const store = new FileSystemWorkspaceTextStore(root);
-    const first = new SkillStateStore(store, testFilesystemMetadata);
+    const first = new SkillStateStore(store.root, testFilesystemMetadata);
     await first.initialize();
     await Promise.all([first.setEnabled('one', false), first.setEnabled('two', true)]);
-    const second = new SkillStateStore(store, testFilesystemMetadata);
+    const second = new SkillStateStore(store.root, testFilesystemMetadata);
     await second.initialize();
     await second.record('one', 'Repository @ pinned SHA', 'version');
     await first.setEnabled('three', true);
     expect(first.installations.get('one')?.revision).toBe('version');
-    vi.spyOn(store, 'replace').mockRejectedValueOnce(new Error('Unavailable storage'));
+    vi.spyOn(first.preferences, 'replace').mockRejectedValueOnce(new Error('Unavailable storage'));
     await expect(first.setEnabled('one', true)).rejects.toThrow('Unavailable');
     expect(first.enabled.get('one')).toBe(false);
     expect(JSON.parse(await readFile(join(root, 'skill-state.json'), 'utf8'))).toMatchObject({
