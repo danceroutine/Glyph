@@ -42,6 +42,7 @@ const filesystem = new Set([
   'src/shell/ShellWorkingDirectoryResolver.ts',
   // Package intake, approval state and native transaction staging each own private host I/O.
   'src/skills/SkillPackageManager.ts',
+  'src/skills/LocalSkillSourceAuthority.ts',
   'src/skills/SkillPackageSource.ts',
   'src/skills/SkillPackageStorage.ts',
   'src/skills/SkillRepositoryConfiguration.ts',
@@ -104,6 +105,7 @@ const restrictedModules = new Map([
     ]),
   ],
   ['src/skills/SkillPreferenceFile.ts', new Set(['src/skills/SkillStateStore.ts'])],
+  ['src/skills/LocalSkillSourceAuthority.ts', new Set(['src/skills/SkillPackageSource.ts'])],
   ['src/workspace/policy/StartupUserProfile.ts', composition],
 ]);
 
