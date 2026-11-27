@@ -83,9 +83,8 @@ describe(FileSkillDiscoveryProvider, () => {
     const read = () =>
       tool.execute(JSON.stringify({ id, path: 'guide.txt' }), new AbortController().signal, { turnId: 'turn' });
     denied.add(join(fixture.root, resourcePath));
-    await (
-      await turns.authorizeDisclosure('turn')
-    )();
+    const guard = await turns.authorizeDisclosure('turn');
+    guard();
     await expect(read()).rejects.toThrow('Read denied');
     expect(session.snapshot().skills![0]!.resources).toEqual([]);
     denied.clear();
