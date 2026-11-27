@@ -13,6 +13,8 @@ wiring, especially CLI, desktop, worker, and restored-session paths.
    Examine each new lint exemption and confirm the adapter needs that capability.
 2. Trace what crosses an async boundary. A search result can be consumed later,
    an approval outlive its window, and a cached body reach a different turn.
+   Disconnect and reconnect the initiating window while an operation is queued. The
+   prior signal must remain revoked after the new attachment is admitted.
    Locate the last authority check before the effect. Confirm revocation and
    unavailability produce an explicit failure or omission.
 3. For path handling, compare aliases and destination paths on the actual volume.

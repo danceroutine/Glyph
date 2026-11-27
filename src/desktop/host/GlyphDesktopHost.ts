@@ -1,3 +1,4 @@
+import { WindowCommandAuthority } from './WindowCommandAuthority.ts';
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
@@ -41,6 +42,7 @@ interface Connection {
   attachmentQueue: Promise<void>;
   pendingAttachments: number;
   authorityGeneration: number;
+  readonly commands: WindowCommandAuthority;
 }
 interface WorkspaceRuntimeRecord {
   readonly runtime: GlyphDesktopWorkspaceRuntime;
@@ -132,6 +134,7 @@ export class GlyphDesktopHost {
         attachmentQueue: Promise.resolve(),
         pendingAttachments: 0,
         authorityGeneration: 0,
+        commands: new WindowCommandAuthority(),
       };
       this.sessions.set(key, connection);
     }
@@ -154,6 +157,7 @@ export class GlyphDesktopHost {
     const connection = this.connections.get(connectionId);
     if (!connection) return;
     this.connections.delete(connectionId);
+    connection.commands.revoke();
     connection.send = undefined;
     connection.ready = false;
     // Preserve replay across a renderer reload, but never leave authority or
@@ -174,6 +178,7 @@ export class GlyphDesktopHost {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    for (const connection of this.sessions.values()) connection.commands.revoke();
     for (const timer of this.disconnectTimers.values()) clearTimeout(timer);
     this.disconnectTimers.clear();
     await Promise.allSettled(this.runtimeCreations.values());
@@ -219,12 +224,18 @@ export class GlyphDesktopHost {
       switch (request.command.type) {
         case GlyphWorkbenchCommandType.ATTACH_WORKSPACE: {
           const command = request.command;
+          if (
+            command.trusted !== connection.trusted ||
+            JSON.stringify(command.roots) !== JSON.stringify(connection.roots)
+          )
+            connection.commands.revoke();
           return await this.transitionAttachment(connection, () => this.attach(connection, request.requestId, command));
         }
         case GlyphWorkbenchCommandType.REQUEST_SNAPSHOT:
           await this.publishSnapshot(connection);
           return [toCommandResultGlyphHostEvent(request.requestId)];
         case GlyphWorkbenchCommandType.DETACH:
+          connection.commands.revoke();
           await this.transitionAttachment(connection, () => this.detach(connection));
           return [toCommandResultGlyphHostEvent(request.requestId)];
         default:
@@ -258,6 +269,7 @@ export class GlyphDesktopHost {
     try {
       return await operation;
     } catch (error) {
+      connection.commands.revoke();
       connection.ready = false;
       throw error;
     } finally {
@@ -461,11 +473,12 @@ export class GlyphDesktopHost {
       });
       return [toCommandResultGlyphHostEvent(requestId)];
     }
-    const controller = new AbortController();
+    const signal = connection.commands.signal;
     await record.runtime.handle(command, {
       windowId: connection.identity.windowId,
-      signal: controller.signal,
+      signal,
       emit: event => {
+        signal.throwIfAborted();
         this.broadcast(getWorkspaceKey(connection.identity), event);
       },
     });
@@ -478,12 +491,14 @@ export class GlyphDesktopHost {
     if (!record) throw new Error('The Glyph workspace runtime is unavailable.');
     if (!connection.attached || !connection.ready || record.trusted !== connection.trusted)
       throw new Error('Attach an authorized workspace before requesting a snapshot.');
+    const signal = connection.commands.signal;
     for (let attempt = 0; attempt < 8; attempt++) {
       const before = connection.journal.watermark;
       const state = await record.runtime.snapshot();
       this.assertCurrentConnection(connection);
       if (this.runtimes.get(getWorkspaceKey(connection.identity)) !== record || !connection.ready)
         throw new Error('The workspace detached during snapshot capture.');
+      signal.throwIfAborted();
       if (before !== connection.journal.watermark) continue;
       // Check and sequence synchronously: returning the snapshot through another
       // await would let a newer event overtake it again. Deduplication caches only
@@ -509,6 +524,7 @@ export class GlyphDesktopHost {
     if (isOwner && pendingStop) return pendingStop;
     // The reservation can already exist while initialization is still pending.
     if (!connection.attached && !isOwner) return;
+    connection.commands.revoke();
     connection.authorityGeneration++;
     connection.attached = false;
     connection.ready = false;
@@ -521,6 +537,7 @@ export class GlyphDesktopHost {
     }
     for (const peer of this.sessions.values()) {
       if (getWorkspaceKey(peer.identity) !== key) continue;
+      peer.commands.revoke();
       peer.attached = false;
       peer.ready = false;
       peer.canReplay = false;

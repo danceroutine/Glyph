@@ -222,12 +222,17 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   }
 
   /** Dispatch commands without holding the request acknowledgement open for an entire model turn. */
-  handle(command: GlyphRuntimeCommand, context?: { readonly windowId?: string }): Promise<void> {
+  handle(
+    command: GlyphRuntimeCommand,
+    context?: { readonly windowId?: string; readonly signal: AbortSignal },
+  ): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('The workspace runtime has stopped.'));
     const ownerCommand =
       context?.windowId === undefined || context?.windowId === '' || context.windowId === this.options.ownerWindowId;
     if (ownerCommand) this.connected = true;
-    const pending = this.dispatch(command);
+    const ownerSignal = this.discovery.signal;
+    const signal = context ? AbortSignal.any([context.signal, ownerSignal]) : ownerSignal;
+    const pending = this.dispatch(command, signal);
     this.commands.add(pending);
     void pending.then(
       () => {
@@ -353,24 +358,25 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     };
   }
 
-  private async dispatch(command: GlyphRuntimeCommand): Promise<void> {
+  private async dispatch(command: GlyphRuntimeCommand, commandSignal: AbortSignal): Promise<void> {
+    commandSignal.throwIfAborted();
     if (this.disposed) throw new Error('The workspace runtime has stopped.');
     const glyph = this.options.glyph;
     switch (command.type) {
       case GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS:
-        await this.options.refreshCatalogs?.(this.discovery.signal);
+        await this.options.refreshCatalogs?.(commandSignal);
         return;
       case GlyphWorkbenchCommandType.CREATE_USER_RULE:
         if (!this.options.userRules) throw new Error('User rules are unavailable.');
-        await this.options.userRules.create(command.name, command.activation, command.condition);
+        await this.options.userRules.create(commandSignal, command.name, command.activation, command.condition);
         return;
       case GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED:
         if (!this.options.userRules) throw new Error('User rules are unavailable.');
-        await this.options.userRules.setEnabled(command.path, command.expectedRevision, command.enabled);
+        await this.options.userRules.setEnabled(commandSignal, command.path, command.expectedRevision, command.enabled);
         return;
       case GlyphWorkbenchCommandType.DELETE_USER_RULE:
         if (!this.options.userRules) throw new Error('User rules are unavailable.');
-        await this.options.userRules.remove(command.path, command.expectedRevision);
+        await this.options.userRules.remove(commandSignal, command.path, command.expectedRevision);
         return;
       case GlyphWorkbenchCommandType.START_AGENT_REVIEW: {
         if (!this.options.agentReviews) throw new Error('Agent review is unavailable.');

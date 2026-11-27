@@ -30,6 +30,35 @@ it('resolves prospective names through their actual parent and rejects an inacce
   }
 });
 
+it('reserves a confirmed cycle of absolute and relative links and retries a repaired personal store', () => {
+  const root = storedSourcePath(mkdtempSync(join(tmpdir(), 'glyph-cyclic-store-')));
+  onTestFinished(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  const store = join(root, 'rules');
+  const alternate = join(root, 'alternate');
+  symlinkSync(alternate, store);
+  symlinkSync('rules', alternate);
+  expect(storedSourcePath(store)).toBe(store);
+  const routes = new UserStoreProjectRoutes(store, true);
+  expect(routes.ownsEntry(join(root, 'project', 'one.mdc'))).toBe(false);
+  rmSync(store);
+  mkdirSync(store);
+  routes.refresh();
+  expect(storedSourcePath(alternate)).toBe(store);
+  expect(routes.projectEntries('one.mdc')).toEqual([join(store, 'one.mdc')]);
+});
+
+it('keeps an unresolved chain unavailable when inspection cannot prove a cycle', () => {
+  const root = storedSourcePath(mkdtempSync(join(tmpdir(), 'glyph-long-store-')));
+  onTestFinished(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+  for (let i = 0; i < 130; i++) symlinkSync(String(i + 1), join(root, String(i)));
+  mkdirSync(join(root, '130'));
+  expect(() => storedSourcePath(join(root, '0'))).toThrow();
+});
+
 it('keeps an alias inspection failure local to the current discovery pass', () => {
   const lookup = vi
     .fn<() => string[]>()

@@ -14,6 +14,16 @@ const name = 'glyph-access/mediated-workspace-access';
 const cases = [
   ['src/skills/Feature.ts', "import { captureSkillPackage } from './SkillPackage.ts';", true],
   ['src/skills/Presenter.ts', "import type { SkillPackage } from './SkillPackage.ts';", false],
+  [
+    'src/desktop/host/GlyphDesktopHost.ts',
+    "import { WindowCommandAuthority } from './WindowCommandAuthority.ts';",
+    false,
+  ],
+  [
+    'src/desktop/host/ProviderDesktopRuntime.ts',
+    "import { WindowCommandAuthority } from './WindowCommandAuthority.ts';",
+    true,
+  ],
   ['src/cli.ts', "import { WorkspaceAccessPolicy } from './workspace/policy/WorkspaceAccessPolicy.js';", true],
   [
     'code-oss/overlay/src/vs/workbench/contrib/glyph/browser/Feature.ts',

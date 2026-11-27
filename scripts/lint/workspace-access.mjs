@@ -76,6 +76,7 @@ const restrictedModules = new Map([
   ['child_process', subprocess],
   ['worker_threads', subprocess],
   ['src/skills/SkillPackage.ts', new Set(['src/skills/FileSkillDiscoveryProvider.ts'])],
+  ['src/desktop/host/WindowCommandAuthority.ts', new Set(['src/desktop/host/GlyphDesktopHost.ts'])],
   [disk, composition],
   ['src/workspace/WorkspaceRootSelections.ts', composition],
   [contentPolicy, composition],

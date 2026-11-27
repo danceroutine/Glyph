@@ -16,6 +16,13 @@ process belong at the adapter.
 | Admit a window to mutate a workspace                                            | `WorkspaceOwnershipRegistry` and the desktop host                                        | When admitting the connection and when dispatching or completing work on its behalf              |
 | Authorize a shell command and launch it                                         | `ShellApprovalPolicy` and the configured `ShellProcessLauncher`                          | Match the command and working directory for approval, then enforce the granted profile at launch |
 
+A desktop command inherits a signal from the window's current workspace attachment.
+The desktop host grants access after checking ownership and trust. Its
+`WindowCommandAuthority` revokes outstanding commands on disconnect, detach,
+trust loss, or a change of roots. Reconnecting issues a fresh signal. Carry the
+original signal through approvals and lock waits, then check it alongside the
+resource policy before submitting the write or returning data to the window.
+
 ## Composing a host
 
 Select the consumer's policy through `WorkspaceContentAccess` at the CLI or
