@@ -48,8 +48,6 @@ export class GlyphWorkbenchProjection {
       case GlyphHostEventType.SKILLS_CHANGED:
         this.snapshot = { ...this.snapshot, skills: event.skills };
         return;
-      case GlyphHostEventType.RULE_REFERENCE_RESOLVED:
-        return;
       case GlyphHostEventType.AGENT_REVIEW_CHANGED:
         this.snapshot = {
           ...this.snapshot,
@@ -143,6 +141,7 @@ export class GlyphWorkbenchProjection {
         if (event.requestId === undefined || event.requestId === '') this.diagnostics.push(event.error.message);
         break;
       }
+      case GlyphHostEventType.RULE_REFERENCE_RESOLVED:
       case GlyphHostEventType.COMMAND_RESULT:
       case GlyphHostEventType.SKILL_REFERENCE_RESOLVED:
       case GlyphHostEventType.PROPOSAL_PREVIEW:
