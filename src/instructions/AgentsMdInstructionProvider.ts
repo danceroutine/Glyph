@@ -1,3 +1,4 @@
+import { defaultInstructionPaths, type InstructionPaths } from './InstructionPaths.ts';
 import { posix } from 'node:path';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import {
@@ -16,6 +17,8 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
     private readonly workspace: WorkspaceTextStore,
     private readonly options: {
       readonly maxFiles?: number;
+      readonly uriForPath?: (path: string) => string;
+      readonly paths?: InstructionPaths;
       readonly maxBytes?: number;
       readonly maxDiscoveryBytes?: number;
     } = {},
@@ -52,7 +55,10 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
       signal?.throwIfAborted();
       let normalized = path;
       const base = () => ({
-        id: `${AgentInstructionSourceKind.AGENTS_MD}:${normalized}`,
+        ...(this.options.paths ?? defaultInstructionPaths).sourceIdentity(
+          AgentInstructionSourceKind.AGENTS_MD,
+          normalized,
+        ),
         kind: AgentInstructionSourceKind.AGENTS_MD,
         label: 'AGENTS.md',
         path: normalized,
@@ -69,6 +75,7 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
         sources.push({
           ...base(),
           status: AgentInstructionSourceStatus.ACTIVE,
+          ...(this.options.uriForPath ? { uri: this.options.uriForPath(normalized) } : {}),
           content: snapshot.text,
           revision: snapshot.revision,
         });

@@ -3,7 +3,7 @@ import { testPackageMutations } from '#src/skills/tests/fixtures/testPackageMuta
 import type { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
-import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -1347,6 +1347,130 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await expect(
         coordinator.beginTurn({ turnId: 'incomplete', attachmentPaths: [], skillIds: [skills[0]!.id] }),
       ).rejects.toThrow('incomplete');
+    });
+
+    it('retains mandatory and manual instruction identity when an alias becomes a second workspace route', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
+      const root = await fixture.folder('actual', { 'AGENTS.md': 'Required body' });
+      await mkdir(join(root, '.glyph/rules'), { recursive: true });
+      await writeFile(join(root, '.glyph/rules/manual.mdc'), '---\nactivation: manual\n---\nManual body');
+      const alias = join(dirname(root), 'alias');
+      await symlink(root, alias);
+      const first = await (await fixture.create([root])).snapshot();
+      const current = await (await fixture.create([root, alias])).snapshot();
+      expect(current.instructionSources!.map(source => source.id)).toEqual(
+        first.instructionSources!.map(source => source.id),
+      );
+      const turn = await captured.providerFactories.at(-1)![4]!.beginTurn({
+        turnId: 'legacy',
+        attachmentPaths: [],
+        manualRuleIds: ['glyph_project_rule:.glyph/rules/manual.mdc'],
+      });
+      expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual(['Manual body', 'Required body']);
+    });
+
+    it('shares guidance and package preferences across aliases, nested roots, and root rebinds', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const outer = await fixture.folder('outer');
+      const inner = join(outer, 'inner');
+      await mkdir(join(inner, '.glyph/rules'), { recursive: true });
+      await mkdir(join(inner, '.glyph/skills/example'), { recursive: true });
+      await writeFile(join(inner, 'AGENTS.md'), 'Inner root instructions');
+      await writeFile(join(inner, '.glyph/rules/selected.mdc'), 'Manual guidance');
+      await writeFile(
+        join(inner, '.glyph/skills/example/SKILL.md'),
+        '---\nname: example\ndescription: physical package\n---\nBody',
+      );
+      const alias = join(outer, 'alias');
+      await symlink(inner, alias);
+      useFilesystemIndex();
+      const rpc = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          return { operationId: request.operationId, ok: true };
+        throw new Error('Unexpected editor request');
+      });
+      const single = await fixture.create([inner]);
+      const initial = await single.snapshot();
+      const rule = initial.instructionSources!.find(source => source.kind === 'glyph_project_rule')!;
+      const joined = await fixture.create([outer, inner, alias]);
+      const current = await joined.snapshot();
+      const skills = current.skills!;
+      expect(skills.map(skill => skill.id)).toEqual([initial.skills![0]!.id]);
+      expect(skills[0]?.scope).toBe('inner');
+      expect(current.instructionSources!.filter(source => source.kind === 'agents_md')).toHaveLength(1);
+      expect(current.instructionSources!.find(source => source.kind === 'glyph_project_rule')).toMatchObject({
+        id: rule.id,
+        legacyIds: expect.arrayContaining(['glyph_project_rule:.glyph/rules/selected.mdc']),
+      });
+      const turns = captured.providerFactories.at(-1)![4]!;
+      const turn = await turns.beginTurn(
+        { turnId: 'equivalent', attachmentPaths: ['outer/inner/file'], manualRuleIds: [rule.id] },
+        new AbortController().signal,
+      );
+      expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual(
+        expect.arrayContaining(['Inner root instructions', 'Manual guidance']),
+      );
+      expect(turn.initialEnvelope().sources.some(source => source.uri || source.legacyIds)).toBe(false);
+      expect(turn.initialEnvelope().skillCandidates?.map(skill => skill.id)).toEqual([skills[0]!.id]);
+      expect(turns.disclosePaths('equivalent', ['alias/file'])).toBeUndefined();
+      expect(
+        rpc.mock.calls
+          .filter(([, request]) => request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          .map(([, request]) => (request as { path: string }).path),
+      ).toEqual(expect.arrayContaining(['inner/AGENTS.md', 'outer/inner/AGENTS.md', 'alias/AGENTS.md']));
+      rpc.mockImplementation(async (_identity, request) => {
+        if (request.type === GlyphEditorRequestType.READ_SNAPSHOT)
+          return editorResponse(
+            request,
+            request.path,
+            await readFile(join(inner, '.glyph/skills/example/SKILL.md'), 'utf8'),
+          );
+        if (request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES)
+          return { operationId: request.operationId, ok: true, packageClean: true };
+        if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
+          return { operationId: request.operationId, ok: true };
+        throw new Error('Unexpected editor request');
+      });
+      await joined.handle({ type: Command.PREVIEW_SKILL, targetId: skills[0]!.origin.id, removeId: skills[0]!.id });
+      expect(
+        rpc.mock.calls.flatMap(([, req]) =>
+          req.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ? [req.directoryUri] : [],
+        ),
+      ).toEqual(
+        expect.arrayContaining([
+          'file://' + join(inner, '.glyph/skills/example'),
+          'file://' + join(alias, '.glyph/skills/example'),
+        ]),
+      );
+      rpc.mockImplementation(async (_identity, req) => {
+        if (req.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected catalog reads');
+        if (req.path.endsWith('AGENTS.md')) {
+          const response = editorResponse(req, req.path, req.path);
+          return { ...response, snapshot: { ...response.snapshot!, dirty: true } };
+        }
+        if (req.path.endsWith('.mdc'))
+          return {
+            operationId: req.operationId,
+            ok: false,
+            error: { code: GlyphDesktopErrorCode.INVALID_REQUEST, message: 'Editor disconnected', retryable: true },
+          };
+        return { operationId: req.operationId, ok: false };
+      });
+      const failed = await joined.snapshot();
+      expect(failed.instructionSources!.map(source => source.message)).toEqual(
+        expect.arrayContaining(['Editor disconnected', expect.stringContaining('conflicting unsaved edits')]),
+      );
+      expect(failed.skills![0]!.message).toContain('catalog snapshot is unavailable');
+      await expect(turns.beginTurn({ turnId: 'invalid-guidance', attachmentPaths: [] })).rejects.toThrow(
+        'Required root instruction',
+      );
     });
 
     it('reports an unsafe user rules directory without querying its native index', async () => {

@@ -1,0 +1,38 @@
+import { join } from 'node:path';
+import { expect, it } from 'vitest';
+import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
+import { skillPackageId } from '#src/skills/skillPackageId.js';
+import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
+
+it('keeps the ID and profile provenance of the same package when a different ancestor is attached', async () => {
+  const { root, state } = await aSkillLifecycle();
+  const outer = new ProjectSkillIdentity(root, '.glyph');
+  const inner = new ProjectSkillIdentity(join(root, 'sub'), '.glyph');
+  const directory = '.glyph/skills/example';
+  const current = inner.forDirectory(directory);
+  const old = skillPackageId(outer.originId, 'sub/' + directory);
+  expect(current).toBe(skillPackageId(inner.originId, directory));
+  expect(outer.forDirectory('sub/' + directory)).toBe(current);
+  expect(outer.forDirectory(directory)).not.toBe(current);
+  expect(inner.legacyIds(directory)).toContain(old);
+  expect(new ProjectSkillIdentity('/', '.glyph').legacyIds(directory)).toEqual([]);
+  const aliases = new Map([[current, [old, 'other']]]);
+  await state.migratePackageIds(aliases);
+  await state.setEnabled(old, true);
+  await state.setEnabled('other', false);
+  await state.record(old, 'Original import', 'first');
+  await state.migratePackageIds(aliases);
+  expect(state.enabled.get(current)).toBe(false);
+  expect(state.enabled.has(old)).toBe(false);
+  expect(state.installations.get(current)).toEqual({ source: 'Original import', revision: 'first' });
+  await state.setEnabled(old, true);
+  await state.record(old, 'Other', 'second');
+  await state.migratePackageIds(aliases);
+  expect(state.enabled.get(current)).toBe(false);
+  expect(state.installations.get(current)?.source).toBe('Original import');
+  await state.forget(current);
+  await state.record(old, 'Provenance only', 'revision');
+  await state.migratePackageIds(aliases);
+  expect(state.installations.get(current)?.source).toBe('Provenance only');
+  expect(state.enabled.has(current)).toBe(false);
+});

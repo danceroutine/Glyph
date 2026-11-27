@@ -55,6 +55,8 @@ import { GlyphEditorAdapterError } from './GlyphEditorAdapterError.js';
  * different model incarnation with coincidentally identical text.
  */
 export class GlyphEditorAdapter extends Disposable {
+  /** Registered roots can disappear during removal while their working copies remain open. */
+  private readonly verifiedSkillRoots = new Map<string, URI>();
   /** Weak keys let model disposal retire incarnation ids without manual cleanup. */
   private readonly incarnations = new WeakMap<ITextModel, string>();
   /** Receipts make operation ids idempotent across a lost renderer response. */
@@ -146,23 +148,34 @@ export class GlyphEditorAdapter extends Disposable {
           };
         }
         case GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES:
-          return { operationId, ok: true, packageClean: this.skillPackageClean(request, skillTargets) };
+          return { operationId, ok: true, packageClean: await this.skillPackageClean(request, skillTargets) };
         case GlyphEditorRequestType.EXISTS:
           return { operationId, ok: true, exists: await this.exists(request.path) };
         case GlyphEditorRequestType.READ_SNAPSHOT:
           return { operationId, ok: true, snapshot: await this.read(request.path, request.maxBytes) };
         case GlyphEditorRequestType.READ_OPEN_SNAPSHOT: {
           const resource = this.resolve(request.path);
-          const model = this.modelService.getModel(resource);
-          // Automatic metadata reads may inspect an existing dirty buffer but
-          // never open a pathname whose filesystem identity the host cannot pin.
-          return {
-            operationId,
-            ok: true,
-            ...(model && this.textFileService.isDirty(resource)
-              ? { snapshot: await this.snapshot(request.path, model, request.maxBytes) }
-              : {}),
-          };
+          const physical = request.physicalUri ? URI.parse(request.physicalUri, true) : resource;
+          const candidates = this.uriIdentityService.extUri.isEqual(resource, physical)
+            ? [resource]
+            : [resource, physical];
+          const dirty = candidates.filter(
+            candidate => this.textFileService.isDirty(candidate) && this.modelService.getModel(candidate),
+          );
+          if (
+            dirty.length > 0 &&
+            request.physicalUri &&
+            (await this.fileService.realpath(resource))?.toString() !== physical.toString()
+          )
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+          const snapshots = await Promise.all(
+            dirty.map(candidate =>
+              this.snapshot(request.path, this.modelService.getModel(candidate)!, request.maxBytes),
+            ),
+          );
+          if (new Set(snapshots.map(snapshot => snapshot.contentRevision)).size > 1)
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+          return { operationId, ok: true, ...(snapshots[0] ? { snapshot: snapshots[0] } : {}) };
         }
         case GlyphEditorRequestType.APPLY_FILE_MUTATION:
           return { operationId, ok: true, ...(await this.applyFile(request.mutation)) };
@@ -729,10 +742,10 @@ export class GlyphEditorAdapter extends Disposable {
   }
 
   /** Checks only dirty working copies under the authorized package or peer workspace intersection. */
-  private skillPackageClean(
+  private async skillPackageClean(
     request: Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES }>,
     targets: readonly GlyphSkillTarget[],
-  ): boolean {
+  ): Promise<boolean> {
     const directory = URI.parse(request.directoryUri, true);
     if (
       directory.scheme !== 'file' ||
@@ -763,10 +776,30 @@ export class GlyphEditorAdapter extends Disposable {
         request.scope !== 'project' ||
         !owner ||
         (!request.peerWorkspaceIntersection &&
-          (!identity.isEqualOrParent(scope, owner.uri) ||
+          (!this.workspaceContextService.getWorkspaceFolder(scope) ||
             !identity.isEqual(parent, URI.joinPath(scope, '.glyph', 'skills'))))
       )
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+      if (request.physicalPackageUri) {
+        const expected = URI.parse(request.physicalPackageUri, true);
+        const root = await this.fileService.realpath(owner.uri).catch(async (error: unknown) => {
+          // A removal can delete an attached package root while its editor still owns dirty copies.
+          if (this.errorCode(error) !== GlyphDesktopErrorCode.NOT_FOUND || (await this.fileService.exists(expected)))
+            throw error;
+          return this.verifiedSkillRoots.get(owner.uri.toString());
+        });
+        if (!root) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+        const physical = URI.joinPath(root, identity.relativePath(owner.uri, directory)!);
+        if (!(
+          identity.isEqual(physical, expected) ||
+          (request.peerWorkspaceIntersection &&
+            identity.isEqual(directory, owner.uri) &&
+            identity.isEqualOrParent(physical, expected))
+        ))
+          throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+        this.verifiedSkillRoots.set(owner.uri.toString(), root);
+        if (!this.packageWorkingCopiesClean(physical)) return false;
+      }
     }
     return this.packageWorkingCopiesClean(directory);
   }

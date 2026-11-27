@@ -30,6 +30,7 @@ export interface SkillPackageLocation {
   readonly directory: string;
   readonly listFiles: () => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly refreshIndex: () => Promise<void>;
+  readonly packageId?: (directory: string) => string;
   readonly assertClean?: (absolutePackageDirectory: string) => Promise<void>;
 }
 type PackageFiles = ReadonlyMap<string, SkillPackageFile>;
@@ -124,12 +125,13 @@ export class SkillPackageManager {
       uri: pathToFileURL(join(location.store.root, location.directory)).toString(),
     }));
   }
-  async recover(originId?: string): Promise<void> {
+  async recover(originId?: string, directory?: string): Promise<void> {
     for (const location of this.locations) {
       if (originId !== undefined && location.id !== originId) continue;
       const root = await location.store.resolvePath(location.directory);
       if ((await this.journal.entries(root, location.id)).length > 0)
         await withSkillLock(location.store.root, 'destination', () => this.recoverLocation(location, root));
+      if (directory) await this.checkPendingOrigin(location, await this.target(location, directory));
     }
   }
   async prepare(targetId: string, draft: SkillPackageDraft, replaceId?: string): Promise<SkillPreview> {
@@ -178,7 +180,10 @@ export class SkillPackageManager {
     const cleaned = await withSkillLock(
       change.location.store.root,
       'destination',
-      () => this.commit(change, signal),
+      async () => {
+        await this.recoverLocation(change.location, await change.location.store.resolvePath(change.location.directory));
+        return this.withPackageScope(change.location, change.directory, () => this.commit(change, signal), signal);
+      },
       signal,
     );
     try {
@@ -234,6 +239,7 @@ export class SkillPackageManager {
     draft?: SkillPackageDraft,
   ): Promise<SkillPreview> {
     const path = await this.target(location, directory);
+    await this.checkPendingOrigin(location, path);
     await location.assertClean?.(path);
     const after = draft?.packageFiles(before);
     const expected = before.size > 0 ? packageRevision(before) : null;
@@ -285,24 +291,46 @@ export class SkillPackageManager {
   }
   private async recoverLocation(location: SkillPackageLocation, root: string) {
     for (const entry of await this.journal.entries(root, location.id)) {
-      if (entry.retired) {
-        await this.cleanup(location, entry);
-        continue;
-      }
-      const target = await this.target(location, entry.directory);
-      const stage = join(await privateSkillDirectory(location.store.root), entry.id);
-      await location.assertClean?.(target);
-      if (entry.published) {
-        if ((await diskRevision(target)) !== entry.replacement)
-          throw new Error('Package recovery is required. Published files changed at ' + target);
-        await this.assertBackup(entry, stage);
-        await this.persist(entry);
-      } else {
-        await this.rollback(location, entry, stage, target);
-        await location.refreshIndex();
-      }
-      await this.finish(location, entry);
+      await this.withPackageScope(location, entry.directory, async () => {
+        if (entry.retired) {
+          await this.cleanup(location, entry);
+          return;
+        }
+        const target = await this.target(location, entry.directory);
+        const stage = join(await privateSkillDirectory(location.store.root), entry.id);
+        await location.assertClean?.(target);
+        if (entry.published) {
+          if ((await diskRevision(target)) !== entry.replacement)
+            throw new Error('Package recovery is required. Published files changed at ' + target);
+          await this.assertBackup(entry, stage);
+          await this.persist(entry);
+        } else {
+          await this.rollback(location, entry, stage, target);
+          await location.refreshIndex();
+        }
+        await this.finish(location, entry);
+      });
     }
+  }
+
+  private async withPackageScope<T>(
+    location: SkillPackageLocation,
+    directory: string,
+    work: () => Promise<T>,
+    signal?: AbortSignal,
+  ) {
+    if (location.scope !== 'project') return work();
+    const target = await this.target(location, directory);
+    let scope = dirname(target);
+    for (const _ of location.directory.split('/')) scope = dirname(scope);
+    // All callers already hold the attached-root lock. Nested scopes acquire their own physical lock second.
+    return scope === location.store.root ? work() : withSkillLock(scope, 'destination', work, signal);
+  }
+  private async checkPendingOrigin(location: SkillPackageLocation, destination: string) {
+    if (location.scope === 'project' && (await this.journal.hasOtherProjectTransaction(location.id, destination)))
+      throw new Error(
+        'An unfinished skill change belongs to another project root. Reopen the original project to recover it.',
+      );
   }
   private async assertBackup(entry: SkillTransaction, stage: string) {
     if (entry.expected && (await diskRevision(join(stage, 'previous'))) !== entry.expected)
@@ -362,12 +390,12 @@ export class SkillPackageManager {
   private async commit(change: Pending, signal?: AbortSignal) {
     const { location, directory, preview, files, expected } = change;
     const root = await location.store.resolvePath(location.directory);
-    await this.recoverLocation(location, root);
     await location.refreshIndex();
     const current = await this.read(location, directory);
     if ((current.size > 0 ? packageRevision(current) : null) !== expected)
       throw new Error('The skill changed after preview. Preview it again.');
     const target = await this.target(location, directory);
+    await this.checkPendingOrigin(location, target);
     if (preview.destination.path !== target) throw new Error('The skill destination changed after preview.');
     // mkdir applies the process umask to newly created project parents. The published tree
     // then inherits the actual parent permissions, including a checkout's deliberate sharing settings.
@@ -381,7 +409,7 @@ export class SkillPackageManager {
       root,
       location: location.id,
       directory,
-      skillId: skillPackageId(location.id, directory),
+      skillId: location.packageId?.(directory) ?? skillPackageId(location.id, directory),
       expected,
       replacement: files ? preview.revision : null,
       source: files ? preview.source : null,

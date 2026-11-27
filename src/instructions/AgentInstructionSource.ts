@@ -34,6 +34,8 @@ export enum AgentInstructionSourceStatus {
 export interface AgentInstructionSource {
   /** Provider-stable identity used to deduplicate and track disclosure within a turn. */
   readonly id: string;
+  /** Former path-based IDs used to resolve existing selections and historical navigation. */
+  readonly legacyIds?: readonly string[];
   /** Source family that determines discovery and precedence semantics. */
   readonly kind: AgentInstructionSourceKind;
   /** Human-readable source type shown in settings. */

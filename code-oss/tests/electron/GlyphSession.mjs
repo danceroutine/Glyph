@@ -1,6 +1,6 @@
 import { accumulateProcessCoverage, readProcessCoverage } from '#scripts/coverage/record-coverage.mjs';
 import { backgroundExecutablePath } from './backgroundApplication.mjs';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,7 +58,7 @@ async function restoreTree(root, contents) {
  * @property {Record<string, string>} workspaceFiles
  * @property {Record<string, unknown>} userSettings
  * @property {{ key: string, command: string, when?: string }[]} userKeybindings
- * @property {{ name: string, files: Record<string, string> }[]} additionalRoots
+ * @property {{ name: string, files: Record<string, string>, physicalWorkspace?: boolean }[]} additionalRoots
  * @property {string | undefined} extensionDevelopmentPath
  */
 
@@ -112,6 +112,12 @@ export class GlyphSession {
     this.workspaceTarget =
       options.additionalRoots.length > 0 ? join(this.sandbox, 'fixture.code-workspace') : this.workspace;
     this.userData = join(this.sandbox, 'user-data');
+    const physical = options.additionalRoots.find(root => root.physicalWorkspace);
+    if (physical) {
+      const target = join(this.sandbox, physical.name);
+      await mkdir(target, { recursive: true });
+      await symlink(target, this.workspace, 'dir');
+    }
     await this.restoreFiles();
     if (options.additionalRoots.length > 0)
       await writeFile(this.workspaceTarget, JSON.stringify({ folders: this.rootPaths.map(path => ({ path })) }));
@@ -278,7 +284,7 @@ export class GlyphSession {
   async restoreFiles() {
     await restoreTree(this.workspace, { 'example.txt': sentinel, ...this.options.workspaceFiles });
     for (const [index, root] of this.options.additionalRoots.entries())
-      await restoreTree(this.rootPaths[index + 1], root.files);
+      if (!root.physicalWorkspace) await restoreTree(this.rootPaths[index + 1], root.files);
   }
 
   async userFilesChanged() {

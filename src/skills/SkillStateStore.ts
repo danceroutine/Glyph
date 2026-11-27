@@ -39,6 +39,23 @@ export class SkillStateStore {
       this.publish(parsePreferences((await this.workspace.readOptional('skill-state.json'))?.text));
     });
   }
+  async migratePackageIds(aliases: ReadonlyMap<string, readonly string[]>): Promise<void> {
+    const pending = [...aliases].filter(([, ids]) =>
+      ids.some(id => this.enabled.has(id) || this.installations.has(id)),
+    );
+    if (pending.length === 0) return;
+    await this.update(next => {
+      for (const [current, ids] of pending) {
+        const choices = ids.flatMap(id => (id in next.enabled ? [next.enabled[id]!] : []));
+        if (!(current in next.enabled) && choices.length > 0) next.enabled[current] = choices.every(Boolean);
+        for (const id of ids) {
+          if (next.installations[id]) next.installations[current] ??= next.installations[id];
+          delete next.enabled[id];
+          delete next.installations[id];
+        }
+      }
+    });
+  }
   setEnabled(id: string, enabled: boolean, verifySource?: () => Promise<void>): Promise<void> {
     return this.update(next => {
       next.enabled[id] = enabled;

@@ -118,7 +118,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         signal,
       );
       return {
-        id: ruleId(this.options.kind, normalized),
+        ...this.paths.sourceIdentity(this.options.kind, normalized),
         kind: this.options.kind,
         label: label(this.options.kind),
         name: name ?? posix.parse(normalized).name,
@@ -224,7 +224,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
 
   private errorSource(path: string, scope: string, message: string): AgentInstructionSource {
     return {
-      id: ruleId(this.options.kind, path),
+      ...this.paths.sourceIdentity(this.options.kind, path),
       kind: this.options.kind,
       label: label(this.options.kind),
       name: posix.parse(path).name,
@@ -242,11 +242,6 @@ interface DiscoveryBudget {
   outputBytes: number;
   reads: number;
   edges: number;
-}
-
-function ruleId(kind: AgentInstructionSourceKind, path: string): string {
-  const id = `${kind}:${path}`;
-  return id.length <= 500 ? id : `${kind}:sha256:${createHash('sha256').update(path).digest('hex')}`;
 }
 
 function ruleScope(path: string, directory: '.glyph' | '.cursor' | '.', sensitive: boolean): string {

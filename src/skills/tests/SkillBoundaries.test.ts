@@ -253,3 +253,42 @@ it('keeps cancellation distinct from actionable resource failures, including non
     activation.execute(JSON.stringify({ id: 'example', reason: 'Relevant' }), controller.signal, { turnId: 'turn' }),
   ).rejects.toThrow('Cancelled instruction request');
 });
+
+it('keeps the preferred provider when an older catalog finishes its preference migration later', async () => {
+  const source = aSkillDescriptor();
+  const provider = {
+    origin: source.origin,
+    id: source.origin.id,
+    discover: async () => [source, { ...source, directory: 'nested/' + source.directory }],
+    capture: async () => aSkillPackage(),
+    refreshIndex: async () => {},
+  };
+  let resume!: () => void, started!: () => void;
+  const waiting = new Promise<void>(resolve => {
+    started = resolve;
+  });
+  const blocked = new Promise<void>(resolve => {
+    resume = resolve;
+  });
+  const migrate = vi
+    .fn(async () => {})
+    .mockImplementationOnce(async () => {
+      started();
+      await blocked;
+    });
+  const catalog = new SkillCatalog(
+    [provider],
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    migrate,
+  );
+  const first = catalog.refresh();
+  await waiting;
+  await catalog.refresh();
+  resume();
+  expect(await first).toEqual([source]);
+});

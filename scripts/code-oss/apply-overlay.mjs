@@ -34,12 +34,14 @@ for (const name of ['AgentMode.ts', 'ChatTurnOptions.ts']) {
   const source = join(repositoryRoot, 'src', 'chat', name);
   await writeFile(join(chatContractTarget, name), (await readFile(source, 'utf8')).replaceAll(".ts'", ".js'"));
 }
-const reviewContractTarget = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'reviewing');
-await mkdir(reviewContractTarget, { recursive: true });
-await writeFile(
-  join(reviewContractTarget, 'AgentReview.ts'),
-  await readFile(join(repositoryRoot, 'src/reviewing/AgentReview.ts'), 'utf8'),
-);
+for (const [directory, file] of [
+  ['reviewing', 'AgentReview.ts'],
+  ['instructions', 'resolveInstructionId.ts'],
+]) {
+  const target = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', directory);
+  await mkdir(target, { recursive: true });
+  await writeFile(join(target, file), await readFile(join(repositoryRoot, 'src', directory, file), 'utf8'));
+}
 // Request-envelope validation is shared with the host. Its generated relative
 // import must resolve inside Code OSS, just like the mode and review contracts.
 const validatorTarget = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', 'shared', 'validators');

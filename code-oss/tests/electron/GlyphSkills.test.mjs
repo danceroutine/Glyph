@@ -29,6 +29,64 @@ const contextSchema = z.object({
 /** @typedef {import('./GlyphWorkbench.mjs').GlyphWorkbench} GlyphWorkbench */
 /** @typedef {import('./ScriptedProvider.mjs').ScriptedProvider} ScriptedProvider */
 
+it.describe('Aliased and overlapping project skill roots', () => {
+  it.use({
+    scriptedProvider: true,
+    sharedLaunch: true,
+    userSettings: { 'files.autoSave': 'off' },
+    workspaceFiles: skillFiles,
+    additionalRoots: [
+      [
+        { name: 'physical-project', files: {}, physicalWorkspace: true },
+        {
+          name: 'physical-project/.glyph/skills/example',
+          files: { 'SKILL.md': skillFiles['.glyph/skills/example/SKILL.md'] },
+        },
+      ],
+      { scope: 'test' },
+    ],
+  });
+  it('opens one physical skill through its workspace alias and refuses removal while that editor is dirty', async ({
+    glyph,
+  }) => {
+    const settings = await openSkills(glyph);
+    const row = settings.getByRole('listitem').filter({ hasText: 'Use for UI fixture examples' });
+    await expect(row).toHaveCount(1);
+    await row.getByRole('button', { name: 'Uninstall', exact: true }).click();
+    const preview = settings.getByRole('region', { name: 'Skill change preview' });
+    await expect(preview).toBeVisible();
+    await preview.getByRole('button', { name: 'Discard preview' }).click();
+    await row.getByRole('button', { name: /Edit/u }).click();
+    const editor = glyph.page.locator('.editor-instance .monaco-editor').filter({ visible: true }).first();
+    await editor.click();
+    await glyph.page.keyboard.press('ControlOrMeta+a');
+    const saved = skillFiles['.glyph/skills/example/SKILL.md'];
+    await glyph.page.keyboard.insertText(saved.replace('Use for UI fixture examples', 'Unsaved aliased skill'));
+    await expect(glyph.page.locator('.tab.dirty').first()).toBeVisible();
+    const close = glyph.page.getByRole('button', { name: /^Close Modal Editor/u });
+    if (await close.isVisible()) await close.click();
+    await glyph.command('Focus Glyph');
+    await openSkills(glyph);
+    const dirty = settings.getByRole('listitem').filter({ hasText: 'Unsaved aliased skill' });
+    await expect(dirty).toHaveCount(1);
+    await dirty.getByRole('button', { name: 'Uninstall', exact: true }).click();
+    await expect(settings.getByRole('alert')).toContainText(/save|discard/iu);
+    await expect(preview).toHaveCount(0);
+    expect(await readFile(join(glyph.workspace, '.glyph/skills/example/SKILL.md'), 'utf8')).toBe(saved);
+    if (await close.isVisible()) await close.click();
+    await glyph.page.locator('.tab.dirty').first().click();
+    await glyph.command('View: Revert and Close Editor');
+    await glyph.command('Focus Glyph');
+    await openSkills(glyph);
+    await row.getByRole('button', { name: 'Uninstall', exact: true }).click();
+    await preview.getByRole('button', { name: 'Apply remove', exact: true }).click();
+    await expect(row).toHaveCount(0);
+    await expect(readFile(join(glyph.workspace, '.glyph/skills/example/SKILL.md'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+});
+
 it.describe('Agent skill discovery and activation', () => {
   it.describe.configure({ mode: 'default' });
   it.use({ sharedLaunch: true, scriptedProvider: true, workspaceFiles: skillFiles });

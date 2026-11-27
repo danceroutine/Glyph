@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { optionalStat, privateSkillDirectory } from './SkillPackageStorage.ts';
 
@@ -29,6 +29,20 @@ export class SkillTransactionJournal {
         .prepare<[string, string], { entry: string }>('SELECT entry FROM transactions WHERE root = ? AND location = ?')
         .all(root, location)
         .map(row => entrySchema.parse(JSON.parse(row.entry))),
+    );
+  }
+  async hasOtherProjectTransaction(location: string, destination: string): Promise<boolean> {
+    if (!(await optionalStat(join(this.userDirectory, '.skill-staging', 'journal.sqlite')))) return false;
+    return this.use(db =>
+      db
+        .prepare<[string], { entry: string }>(
+          "SELECT entry FROM transactions WHERE location != ? AND location LIKE 'project:%'",
+        )
+        .all(location)
+        .some(row => {
+          const entry = entrySchema.parse(JSON.parse(row.entry));
+          return !entry.retired && join(dirname(dirname(entry.root)), entry.directory) === destination;
+        }),
     );
   }
   async write(entry: SkillTransaction): Promise<void> {

@@ -25,6 +25,7 @@ function pristineCheckout() {
     [join(repositoryRoot, 'src/desktop/workbench/GlyphState.ts')]: 'export const state = 1;\n',
     [join(repositoryRoot, 'src/chat/AgentMode.ts')]: "import { x } from './x.ts';\nexport const AgentMode = x;\n",
     [join(repositoryRoot, 'src/chat/ChatTurnOptions.ts')]: "export type { AgentModeID } from './AgentMode.ts';\n",
+    [join(repositoryRoot, 'src/instructions/resolveInstructionId.ts')]: 'export function resolveInstructionId() {}',
     [join(repositoryRoot, 'src/reviewing/AgentReview.ts')]: "export const review = 'AgentReview.ts';\n",
     [join(repositoryRoot, 'src/shared/validators/isRecord.ts')]: 'export const isRecord = () => true;\n',
     [upstream('src/vs/workbench/workbench.desktop.main.ts')]:
@@ -161,6 +162,7 @@ describe('apply-overlay', () => {
       upstream('src/vs/platform/glyph/common/protocol/nested'),
       upstream('src/vs/platform/glyph/chat'),
       upstream('src/vs/platform/glyph/reviewing'),
+      upstream('src/vs/platform/glyph/instructions'),
       upstream('src/vs/platform/glyph/shared/validators'),
       upstream('src/vs/platform/glyph/common/workbench'),
     ]);

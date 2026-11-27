@@ -1,3 +1,5 @@
+import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
+import { projectIntersection, WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { SkillProjectMutationPolicy } from '#src/skills/SkillProjectMutationPolicy.js';
@@ -30,7 +32,7 @@ import { AgentMode } from '#src/chat/AgentMode.js';
 import { ModeSwitchToolRuntime } from '#src/interaction/modes/ModeSwitchToolRuntime.js';
 import { PlanToolRuntime } from '#src/planning/PlanToolRuntime.js';
 import { GoalToolRuntime } from '#src/goals/GoalToolRuntime.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import { mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -231,13 +233,32 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       });
       const catalog = createCatalogWorkspace(disk, workspace, async request => {
         const path = roots.length > 1 ? `${workspaceRoot.name}/${request.path}` : request.path;
-        const response = await this.editors.request(input.identity, { ...request, path });
-        if (response.snapshot && response.snapshot.path !== path)
-          throw new Error('The editor returned a catalog snapshot for a different path.');
-        return response.snapshot ? { ...response, snapshot: { ...response.snapshot, path: request.path } } : response;
+        const responses = await Promise.all(
+          routes.equivalents(path).map(async route => {
+            const response = await this.editors.request(input.identity, {
+              ...request,
+              operationId: randomUUID(),
+              path: route,
+              physicalUri: pathToFileURL(join(disk.root, request.path)).toString(),
+            });
+            if (!response.ok) throw new Error(response.error?.message ?? 'The editor catalog snapshot is unavailable.');
+            if (response.snapshot && response.snapshot.path !== route)
+              throw new Error('The editor returned a catalog snapshot for a different path.');
+            return response;
+          }),
+        );
+        const dirty = responses.filter(response => response.snapshot);
+        if (new Set(dirty.map(response => response.snapshot!.contentRevision)).size > 1)
+          throw new Error('Workspace aliases have conflicting unsaved edits. Save or discard one working copy.');
+        return dirty.length > 0
+          ? { ...dirty[0]!, snapshot: { ...dirty[0]!.snapshot!, path: request.path } }
+          : responses[0]!;
       });
       return { name: workspaceRoot.name, workspace, catalog, disk, index };
     });
+    const routes = new WorkspaceSourceRoutes(
+      parts.map(part => ({ name: part.name, path: part.disk.root, caseSensitive: part.disk.caseSensitive })),
+    );
     const workspace =
       roots.length === 1
         ? parts[0]!.workspace
@@ -265,9 +286,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               context,
               parts.map(part => ({ name: part.name, store: part.catalog })),
             );
+      const physicalParts = parts.filter(
+        (part, partIndex) => parts.findIndex(other => other.disk.root === part.disk.root) === partIndex,
+      );
       // Reuse each root's watched native index; instruction refreshes must not rescan the workspace.
-      const listProjectInstructions = (maxFiles: number, globPattern: string) =>
-        listInstructionFilesAcrossRoots(parts, maxFiles, globPattern);
+      const listProjectInstructions = async (maxFiles: number, globPattern: string) => {
+        const listed = await listInstructionFilesAcrossRoots(physicalParts, maxFiles, globPattern, parts.length > 1);
+        return { ...listed, files: routes.uniqueFiles(listed.files) };
+      };
+      const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
       await mkdir(join(this.userDirectory, 'rules'), { recursive: true });
       const userRuleRoot = await realpath(this.userDirectory);
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
@@ -289,6 +316,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       }));
       const paths = new InstructionPaths(
         parts.length === 1 ? workspace.caseSensitive : new Map(parts.map(part => [part.name, part.disk.caseSensitive])),
+        routes,
       );
       instructionCatalog = new AgentInstructionCatalog(
         [
@@ -306,15 +334,20 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               return listUserRuleFiles(userRuleIndex, maxFiles);
             },
           ),
-          new AgentsMdInstructionProvider(catalogWorkspace, {}, listProjectInstructions),
+          new AgentsMdInstructionProvider(catalogWorkspace, { paths, uriForPath: projectUri }, listProjectInstructions),
           new AgentRuleInstructionProvider(
             catalogWorkspace,
-            { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', paths },
+            { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', paths, uriForPath: projectUri },
             listProjectInstructions,
           ),
           new AgentRuleInstructionProvider(
             catalogWorkspace,
-            { kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, directory: '.cursor', paths },
+            {
+              kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+              directory: '.cursor',
+              paths,
+              uriForPath: projectUri,
+            },
             listProjectInstructions,
           ),
         ],
@@ -347,40 +380,53 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       });
       const skillState = (this.skillState ??= new SkillStateStore(userRuleStore));
       const ensureSkillsReady = () => skillState.initialize();
+      const skillIdentities = new Map<string, ProjectSkillIdentity>();
       skills = new SkillCatalog(
         [
           userSkills,
-          ...parts.flatMap(part =>
-            ['.glyph', '.cursor'].map(
-              location =>
-                new FileSkillDiscoveryProvider({
-                  origin: {
-                    id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:${location}`,
-                    label: `${part.name} ${location} skill`,
-                    scope: 'project',
-                    compatibility: location.slice(1),
-                  },
-                  directory: `${location}/skills`,
-                  captureFiles: (directory, signal) =>
-                    listSkillPackageFiles(part.disk, directory, indexExecutable, true, signal),
-                  workspace: part.catalog,
-                  binaryStore: part.disk,
-                  ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
-                  uriForPath: path => userRuleUri(part.disk.root, path),
-                  listFiles: signal =>
-                    part.index.glob(`**/${location}/skills/**/*`, { limit: 10_000, ...(signal ? { signal } : {}) }),
-                  refreshIndex: async () => {
-                    await part.index.refresh();
-                  },
-                }),
-            ),
+          ...physicalParts.flatMap(part =>
+            ['.glyph', '.cursor'].map(location => {
+              const identity = new ProjectSkillIdentity(part.disk.root, location);
+              skillIdentities.set(identity.originId, identity);
+              return new FileSkillDiscoveryProvider({
+                packageId: directory => identity.forDirectory(directory),
+                origin: {
+                  id: identity.originId,
+                  label: `${part.name} ${location} skill`,
+                  scope: 'project',
+                  compatibility: location.slice(1),
+                },
+                directory: `${location}/skills`,
+                captureFiles: (directory, signal) =>
+                  listSkillPackageFiles(part.disk, directory, indexExecutable, true, signal),
+                workspace: part.catalog,
+                binaryStore: part.disk,
+                ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
+                uriForPath: path => userRuleUri(part.disk.root, path),
+                listFiles: signal =>
+                  part.index.glob(`**/${location}/skills/**/*`, { limit: 10_000, ...(signal ? { signal } : {}) }),
+                refreshIndex: async () => {
+                  await part.index.refresh();
+                },
+              });
+            }),
           ),
         ],
         skillState.enabled,
         skillState.installations,
         ensureSkillsReady,
-        originId => skillManager!.recover(originId),
+        (originId, directory) => skillManager!.recover(originId, directory),
         skillState.onDidChange.bind(skillState),
+        routes,
+        descriptors =>
+          skillState.migratePackageIds(
+            new Map(
+              descriptors.flatMap(skill => {
+                const identity = skillIdentities.get(skill.origin.id);
+                return identity && skill.directory ? [[skill.id, identity.legacyIds(skill.directory)] as const] : [];
+              }),
+            ),
+          ),
       );
       skillManager = new SkillPackageManager(
         [
@@ -401,29 +447,44 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               await userSkillIndex.refresh();
             },
           },
-          ...parts.map(part => ({
-            id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:.glyph`,
-            label: `${part.name} project skills`,
-            scope: 'project' as const,
-            ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
-            mutations: mutationRoots.get(part.disk.root)!,
-            assertClean: (path: string) => {
-              const logicalRoot = input.roots.find(
-                candidate => getGlyphWorkspaceRootId(candidate, input.roots) === part.name,
-              )!;
-              const logicalDirectory = pathToFileURL(
-                join(fileURLToPath(logicalRoot.uri), relative(part.disk.root, path)),
-              ).toString();
-              return assertSkillPackageClean(this.editors, input.identity, 'project', path, logicalDirectory);
-            },
-            store: part.disk,
-            workspace: part.workspace,
-            directory: '.glyph/skills',
-            listFiles: () => part.index.glob('**/.glyph/skills/**/*', { limit: 10000 }),
-            refreshIndex: async () => {
-              await part.index.refresh();
-            },
-          })),
+          ...physicalParts.map(part => {
+            const identity = new ProjectSkillIdentity(part.disk.root, '.glyph');
+            return {
+              id: identity.originId,
+              packageId: (directory: string) => identity.forDirectory(directory),
+              label: `${part.name} project skills`,
+              scope: 'project' as const,
+              ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
+              mutations: mutationRoots.get(part.disk.root)!,
+              assertClean: (path: string) => {
+                const logicalRoot = input.roots.find(
+                  candidate => getGlyphWorkspaceRootId(candidate, input.roots) === part.name,
+                )!;
+                const logicalDirectory = pathToFileURL(
+                  join(fileURLToPath(logicalRoot.uri), relative(part.disk.root, path)),
+                ).toString();
+                const intersections = input.roots.flatMap((attached, rootIndex) => {
+                  const uri = projectIntersection(attached, roots[rootIndex]!.path, path);
+                  return uri && uri !== logicalDirectory ? [uri] : [];
+                });
+                return assertSkillPackageClean(
+                  this.editors,
+                  input.identity,
+                  'project',
+                  path,
+                  logicalDirectory,
+                  intersections,
+                );
+              },
+              store: part.disk,
+              workspace: part.workspace,
+              directory: '.glyph/skills',
+              listFiles: () => part.index.glob('**/.glyph/skills/**/*', { limit: 10000 }),
+              refreshIndex: async () => {
+                await part.index.refresh();
+              },
+            };
+          }),
         ],
         skills,
         skillState,
@@ -533,8 +594,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                     directory: part.disk.root,
                     workingDirectory: parts.length > 1 ? part.name : '.',
                     originIds: ['.glyph', '.cursor'].map(
-                      location =>
-                        `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:${location}`,
+                      location => new ProjectSkillIdentity(part.disk.root, location).originId,
                     ),
                   })),
                 ),
