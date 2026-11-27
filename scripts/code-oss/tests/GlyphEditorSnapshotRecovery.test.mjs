@@ -136,7 +136,7 @@ describe('Editor snapshot recovery', () => {
     const workspace = new api.EditorWorkspaceTextStore('/workspace', false, {
       canonicalPath: async path => `/workspace/${path}`,
       listPaths: async () => ({ files: ['a.ts'], truncated: false }),
-      request: request => fixture.adapter.handle(request, checkMutation),
+      request: request => fixture.adapter.handle(request, [], checkMutation),
     });
     try {
       const initial = await workspace.read('a.ts');
@@ -261,6 +261,7 @@ describe('Canonical editor snapshot identities', () => {
             expectedToken: before.token,
           },
         },
+        [],
         checkMutation,
       );
       expect(result).toMatchObject({ ok: true, snapshot: { text: 'edited' }, receipt: { state: 'applied' } });
@@ -316,6 +317,7 @@ describe('Canonical editor snapshot identities', () => {
             expectedToken: before.token,
           },
         },
+        [],
         checkMutation,
       );
       expect(result).toMatchObject({ ok: false, error: { code: 'STALE_DOCUMENT' } });

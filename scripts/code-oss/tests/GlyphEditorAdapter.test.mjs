@@ -342,6 +342,7 @@ describe('Editor workspace binding', () => {
               expectedToken: before.token,
             },
           },
+          [],
           checkMutation,
         );
         expect(model.getValue()).toBe(`${prefix}HELLO\n\nend`);
@@ -426,6 +427,7 @@ describe('Editor workspace binding', () => {
             expectedToken: before.token,
           },
         },
+        [],
         checkMutation,
       );
       expect(response).toMatchObject({ ok: true, snapshot: { text: 'café 🌳\n' }, receipt: { state: 'applied' } });
@@ -737,6 +739,7 @@ describe('Editor workspace binding', () => {
             expectedToken: before.token,
           },
         },
+        [],
         checkMutation,
       );
       expect.soft(read.ok).toBe(false);
@@ -941,6 +944,7 @@ async function pendingEdit({
             expectedToken: before.token,
           },
         },
+        [],
         checkMutation,
       ),
   };
@@ -991,6 +995,7 @@ it.each(['trust revoked', 'destination occupied'])(
             undoGroupId: 'create',
           },
         },
+        [],
         checkMutation,
       );
       expect(apply).toHaveBeenCalledOnce();
