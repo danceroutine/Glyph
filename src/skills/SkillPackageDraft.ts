@@ -42,7 +42,10 @@ export class SkillPackageDraft {
   private readonly directoryModes = new Map<string, number | undefined>();
   private readonly contents = new Map<string, Uint8Array>();
   private readonly modes = new Map<string, number>();
-  constructor(input: unknown) {
+  constructor(
+    input: unknown,
+    readonly assertSourceCurrent?: () => void,
+  ) {
     const validated = importedDraft.safeParse(input);
     if (!validated.success)
       throw new Error(

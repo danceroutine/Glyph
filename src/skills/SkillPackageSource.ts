@@ -13,6 +13,8 @@ import { optionalStat } from './SkillPackageStorage.ts';
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 import type { HostWorkspaceRoots } from '#src/shell/HostExecutionAuthority.js';
+import type { WorkspacePathAccess } from '#src/workspace/WorkspacePathAccess.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import type { HostFilesystemAuthority } from '#src/workspace/HostFilesystemAuthority.js';
 
 export const skillPackageSourceSchema = z.discriminatedUnion('kind', [
@@ -32,21 +34,32 @@ export class SkillPackageSourceReader {
   constructor(
     private readonly binaryPath: string,
     workspaceRoots: readonly string[],
-    private readonly metadata: FilesystemMetadata & HostFilesystemAuthority,
+    private readonly metadata: FilesystemMetadata & HostFilesystemAuthority & WorkspacePathAccess,
     private readonly hostWorkspaceRoots: HostWorkspaceRoots = workspaceRoots,
+    private readonly accessPolicy = new WorkspaceAccessPolicy(),
   ) {}
   async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
     const source = skillPackageSourceSchema.parse(input);
     if (source.kind === 'local') {
       const root = resolve(source.path);
+      const revision = this.accessPolicy.revision;
+      const assertSourceCurrent = () => {
+        if (revision !== this.accessPolicy.revision)
+          throw new Error('Host-private locations changed during this local import. Preview the source again.');
+      };
+      await this.metadata.assertWorkspacePath(root, this.accessPolicy.privatePaths);
       if ((await lstat(root)).isSymbolicLink()) throw new Error('Skill sources cannot be symlinked directories.');
       await inspectFileMetadata(this.metadata, root, 'replaceable');
-      const store = new FileSystemWorkspaceTextStore(root);
+      const store = new FileSystemWorkspaceTextStore(root, {
+        accessPolicy: this.accessPolicy,
+        physicalAccess: this.metadata,
+      });
       const index = new RustWorkspacePathIndex({
         root,
         maxFiles: 257,
         binaryPath: this.binaryPath,
         caseSensitive: store.caseSensitive,
+        accessPolicy: this.accessPolicy,
         respectGitIgnore: false,
       });
       try {
@@ -82,12 +95,16 @@ export class SkillPackageSourceReader {
             encoding: 'base64' as const,
           });
         }
-        return new SkillPackageDraft({
-          name: basename(root),
-          source: root,
-          files,
-          directories: [...modes].map(([path, mode]) => ({ path, mode })),
-        });
+        assertSourceCurrent();
+        return new SkillPackageDraft(
+          {
+            name: basename(root),
+            source: root,
+            files,
+            directories: [...modes].map(([path, mode]) => ({ path, mode })),
+          },
+          assertSourceCurrent,
+        );
       } finally {
         await index.dispose();
       }

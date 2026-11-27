@@ -48,6 +48,7 @@ interface PackageTree {
   directories: ReadonlyMap<string, number>;
 }
 interface Pending {
+  readonly assertSourceCurrent: (() => void) | undefined;
   readonly preview: SkillPreview & {
     directories: NonNullable<SkillPreview['directories']>;
     createdParentDirectories: readonly string[];
@@ -324,7 +325,9 @@ export class SkillPackageManager {
       directories: compareDirectories(before.directories, directories),
     };
     if (this.pending.size >= 32) throw new Error('Too many pending skill previews. Finish or discard a preview first.');
+    draft?.assertSourceCurrent?.();
     this.pending.set(preview.id, {
+      assertSourceCurrent: draft?.assertSourceCurrent,
       preview,
       location,
       directory,
@@ -497,6 +500,7 @@ export class SkillPackageManager {
   }
   private async commit(change: Pending, signal?: AbortSignal) {
     const { location, directory, preview, files, expected } = change;
+    change.assertSourceCurrent?.();
     const root = await location.store.resolvePath(location.directory);
     await location.refreshIndex();
     const current = await this.read(location, directory);
@@ -579,6 +583,7 @@ export class SkillPackageManager {
           throw new Error('The skill changed during replacement. Preview it again.');
       } else if (await optionalStat(target)) throw new Error('A skill appeared at the destination. Preview again.');
       signal?.throwIfAborted();
+      change.assertSourceCurrent?.();
       if (files) await location.mutations.renameExclusive(relativeStage + '/package', directory);
       if ((await diskRevision(target, entry.treeVersion)) !== entry.replacement)
         throw new Error('The skill changed during publication.');
@@ -596,6 +601,7 @@ export class SkillPackageManager {
       if (files) await this.checkMetadata(location, directory, entry.replacementMetadata);
       await this.assertBackup(location, entry, stage);
       signal?.throwIfAborted();
+      change.assertSourceCurrent?.();
       entry.published = true;
       await this.journal.write(entry);
       await this.persist(entry);
