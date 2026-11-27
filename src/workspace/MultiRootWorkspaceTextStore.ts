@@ -61,7 +61,9 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
     maxFiles: number,
     globPattern = '**/*',
     targetDirectory?: string,
+    signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }> {
+    signal?.throwIfAborted();
     const target = targetDirectory === undefined ? undefined : this.route(targetDirectory, true);
     const pattern = this.routePattern(globPattern);
     const candidates = [...this.stores].filter(
@@ -78,7 +80,9 @@ export class MultiRootWorkspaceTextStore implements WorkspaceTextStore {
         maxFiles - files.length,
         pattern?.pattern ?? globPattern,
         (target?.relativePath ?? '') || undefined,
+        signal,
       );
+      signal?.throwIfAborted();
       files.push(...result.files.map(path => this.join(name, path)));
       truncated ||= result.truncated;
     }

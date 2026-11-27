@@ -19,3 +19,15 @@ describe(listUserRuleFiles, () => {
     await expect(listUserRuleFiles(index, 10)).rejects.toThrow('Index unavailable');
   });
 });
+
+it('passes turn cancellation to the user index and stops after an aborted result', async () => {
+  const control = new AbortController();
+  const glob = vi.fn(async () => {
+    control.abort(new Error('user index cancelled'));
+    return { files: [], truncated: false };
+  });
+  await expect(listUserRuleFiles({ glob }, 5, control.signal)).rejects.toThrow('user index cancelled');
+  expect(glob).toHaveBeenCalledExactlyOnceWith('*.mdc', { limit: 5, rootFilesOnly: true, signal: control.signal });
+  await expect(listUserRuleFiles({ glob }, 5, control.signal)).rejects.toThrow('user index cancelled');
+  expect(glob).toHaveBeenCalledOnce();
+});

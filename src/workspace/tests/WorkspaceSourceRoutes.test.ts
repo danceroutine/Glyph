@@ -152,7 +152,7 @@ it('retains distinct existing entries when a filesystem uses a different Unicode
         scope: '.',
         globs: [glob],
       });
-      for (const glob of ['ß/child', 'ß/**/*']) {
+      for (const glob of ['ß/child', 'ß/**/*', '**/ß/child', '**/ß/*']) {
         const source = rule(glob);
         expect(matchesAgentRulePath(source, 'ss/child', paths)).toBe(false);
         expect(matchesAgentRulePath(source, 'ß/child', paths)).toBe(true);

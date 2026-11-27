@@ -4,6 +4,11 @@ export enum ShellPermissionMode {
   ALLOW_EVERYTHING = 'allow_everything',
 }
 
+/**
+ * Persisted shell approval preferences for a project context. The approval
+ * service consults these when deciding whether to prompt for a command. The
+ * launcher separately applies the selected execution profile at spawn.
+ */
 export interface ShellPermissionPolicy {
   readonly schemaVersion: 2;
   readonly projectContextId: string;

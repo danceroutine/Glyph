@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AgentInstructionSourceKind, AgentInstructionSourceStatus } from '#src/instructions/AgentInstructionSource.js';
 import {
   RulePathBatch,
@@ -159,4 +159,13 @@ it('reuses scoped selections and overlapping patterns while retaining trigger pa
   expect(batch.matching('.', ['docs/?.md', 'missing'])).toEqual(first);
   expect(batch.matching('App', ['DOCS/?.md', '*.md'])).toEqual(first);
   expect(batch.matching('App', ['DOCS/?.txt', 'DOCS/?.md'])).toEqual(first);
+});
+
+it('indexes each disclosed route once even when every input has a different matching rule scope', () => {
+  const paths = new InstructionPaths();
+  const comparisons = vi.spyOn(paths, 'key');
+  const inputs = Array.from({ length: 1000 }, (_, i) => 'group' + i + '/item.txt');
+  const batch = new RulePathBatch(inputs, paths);
+  for (const [i, input] of inputs.entries()) expect(batch.matching('group' + i)).toEqual([input]);
+  expect(comparisons).toHaveBeenCalledTimes(inputs.length * 2);
 });

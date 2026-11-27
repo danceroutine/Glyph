@@ -24,7 +24,9 @@ export async function listInstructionFilesAcrossRoots(
   maxFiles: number,
   globPattern: string,
   qualifyPaths = roots.length > 1,
+  signal?: AbortSignal,
 ): Promise<InstructionFileListing> {
+  signal?.throwIfAborted();
   const files: string[] = [];
   let truncated = false;
   const failures = new Map<InstructionDiscoveryRoot, string>();
@@ -34,10 +36,12 @@ export async function listInstructionFilesAcrossRoots(
     // Reserve mandatory guidance across every root before spending the shared allowance on nested files.
     for (const root of roots) {
       try {
-        const result = await root.index.glob('AGENTS.md', { limit: 1, rootFilesOnly: true });
+        const result = await root.index.glob('AGENTS.md', { limit: 1, rootFilesOnly: true, ...(signal && { signal }) });
+        signal?.throwIfAborted();
         if (result.truncated) throw new Error('Root guidance lookup is incomplete.');
         files.push(...result.files.map(path => qualify(root, path)));
       } catch (error) {
+        signal?.throwIfAborted();
         failures.set(root, error instanceof Error ? error.message : 'Root guidance lookup failed.');
       }
     }
@@ -51,10 +55,13 @@ export async function listInstructionFilesAcrossRoots(
     try {
       const result = await root.index.glob(agents ? '**/?*/AGENTS.md' : globPattern, {
         limit: maxFiles - files.length,
+        ...(signal && { signal }),
       });
+      signal?.throwIfAborted();
       files.push(...result.files.map(path => qualify(root, path)));
       truncated ||= result.truncated;
     } catch (error) {
+      signal?.throwIfAborted();
       if (!agents) throw error;
       failures.set(root, error instanceof Error ? error.message : 'Nested guidance lookup failed.');
     }

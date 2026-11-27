@@ -29,17 +29,29 @@ export class AgentInstructionSet {
     sources: readonly AgentInstructionSource[],
     private readonly paths = defaultInstructionPaths,
   ) {
+    paths.prepare(
+      sources.flatMap(({ scope, projectAlias }) => projectAlias ? [scope, projectAlias.scope, ...(projectAlias.additionalScopes ?? []).map(location => location.scope)] : [scope]),
+    );
+    const scopes = new Map<string, string>();
+    const scopeKey = (scope: string) => {
+      let key = scopes.get(scope);
+      if (key === undefined) {
+        key = paths.routes?.physicalScopeKey(scope) ?? paths.key(paths.equivalents(scope)[0]!);
+        scopes.set(scope, key);
+      }
+      return key;
+    };
     const native = new Set(
       sources
         .filter(source => source.kind === AgentInstructionSourceKind.GLYPH_PROJECT_RULE)
-        .map(source => compatibilityKey(source, paths.key(source.scope))),
+        .map(source => compatibilityKey(source, scopeKey(source.scope))),
     );
     for (const source of sources) {
       const alias = source.projectAlias;
       if (alias)
         for (const location of [alias, ...(alias.additionalScopes ?? [])]) {
           if (location.kind === AgentInstructionSourceKind.GLYPH_PROJECT_RULE)
-            native.add(compatibilityKey(source, paths.key(location.scope)));
+            native.add(compatibilityKey(source, scopeKey(location.scope)));
         }
     }
     const depth = new Map(
@@ -52,7 +64,7 @@ export class AgentInstructionSet {
       .filter(
         source =>
           source.kind !== AgentInstructionSourceKind.CURSOR_PROJECT_RULE ||
-          !native.has(compatibilityKey(source, paths.key(source.scope))),
+          !native.has(compatibilityKey(source, scopeKey(source.scope))),
       )
       .map(source => {
         if (!source.projectAlias) return source;
@@ -91,21 +103,20 @@ export class AgentInstructionSet {
     return this.forPaths([path], includeUnavailableGuidance);
   }
 
-  /** Resolve each applicable scope bucket once for an entire disclosure. */
   forPaths(paths: readonly string[], includeUnavailableGuidance: boolean): readonly AgentInstructionSource[] {
+    this.paths.prepare(paths);
+    return this.forScopes(
+      new Set(paths.flatMap(path => [...this.paths.ancestorKeys(path)])),
+      includeUnavailableGuidance,
+    );
+  }
+
+  /** Resolve the scope buckets already visited by this disclosure batch. */
+  forScopes(keys: Iterable<string>, includeUnavailableGuidance: boolean): readonly AgentInstructionSource[] {
     const result = new Set(this.byScope.get('.'));
-    const visited = new Set(['.']);
-    for (const path of paths) {
-      for (const route of this.paths.equivalents(path)) {
-        let scope = '';
-        for (const segment of this.paths.key(route).split('/')) {
-          scope = scope ? `${scope}/${segment}` : segment;
-          if (visited.has(scope)) continue;
-          visited.add(scope);
-          const bucket = this.byScope.get(scope);
-          if (bucket) for (const source of bucket) result.add(source);
-        }
-      }
+    for (const key of keys) {
+      const bucket = this.byScope.get(key);
+      if (bucket) for (const source of bucket) result.add(source);
     }
     const ordered = [...result].toSorted((left, right) => this.order.get(left)! - this.order.get(right)!);
     return includeUnavailableGuidance
