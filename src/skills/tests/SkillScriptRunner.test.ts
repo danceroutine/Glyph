@@ -1,6 +1,8 @@
 import { testPackageMutations } from './fixtures/testPackageMutations.ts';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
-import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import { Deferred } from '#src/shared/Deferred.js';
+import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
+import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -236,4 +238,47 @@ it('rechecks peer-window roots and native physical aliases before approval and a
   await expect(runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow(
     'outside writable workspaces',
   );
+});
+
+it('stops a reviewed script before launch when the native interpreter authority is revoked during approval', async () => {
+  const f = await fixture();
+  const pendingReview = new Deferred<void>();
+  const decision = new Deferred<{ sandboxProfile: ShellSandboxProfile }>();
+  const authorize = vi.fn(async () => {
+    pendingReview.resolve();
+    return decision.promise;
+  });
+  const launch = vi.fn(() => {
+    throw new Error('Unexpected process creation');
+  });
+  const shells = new ShellSessionManager({ authorize } as never, { resolve: async () => f.directory } as never, {
+    launch,
+  });
+  onTestFinished(() => shells.dispose());
+  const interpreter = await realpath('/bin/sh');
+  let nativeAdmits = true;
+  const assertHostPaths = vi.fn(async (paths: readonly string[], _roots: readonly string[]) => {
+    if (!nativeAdmits && paths.includes(interpreter)) throw new Error('Native interpreter authority changed');
+  });
+  const staging = join(f.directory, 'staging');
+  const runner = new SkillScriptRunner(
+    shells,
+    f.roots,
+    { ...testFilesystemMetadata, assertHostPaths },
+    async root => testPackageMutations(root),
+    staging,
+  );
+  const running = runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal);
+  await pendingReview.promise;
+  const before = assertHostPaths.mock.calls.length;
+  nativeAdmits = false;
+  decision.resolve({ sandboxProfile: ShellSandboxProfile.WORKSPACE_WRITE });
+  await expect(running).rejects.toThrow('Native interpreter authority changed');
+  expect(assertHostPaths).toHaveBeenCalledTimes(before + 1);
+  expect(assertHostPaths.mock.lastCall).toEqual([
+    expect.arrayContaining([interpreter, staging]),
+    f.roots.map(root => root.directory),
+  ]);
+  expect(launch).not.toHaveBeenCalled();
+  expect(shells.sessions).toEqual([]);
 });

@@ -32,7 +32,7 @@ describe(SkillStateStore, () => {
     expect(state.enabled.get('example')).toBe(true);
   });
 
-  it('refuses group-writable, world-writable and foreign-owned preference bytes without changing current enablement', async () => {
+  it('refuses group-writable and world-writable preference bytes without changing current enablement', async () => {
     const { path, state } = await fixture();
     await state.initialize();
     for (const mode of [0o660, 0o666]) {
@@ -50,6 +50,41 @@ describe(SkillStateStore, () => {
       current.mockRestore();
     }
     expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ enabled: { example: false } });
+  });
+
+  it('rejects a foreign-owned preference file inside an admitted owner-controlled directory', async () => {
+    const { root, path } = await fixture();
+    const disk = new FileSystemWorkspaceTextStore(root);
+    const state = new SkillStateStore(disk, testFilesystemMetadata);
+    await state.initialize();
+    const uid = (await stat(path)).uid;
+    const readOptional = disk.readOptional.bind(disk);
+    vi.spyOn(disk, 'readOptional').mockImplementation(async (...args) => {
+      const current = vi.spyOn(process, 'getuid').mockReturnValue(uid + 1);
+      try {
+        return await readOptional(...args);
+      } finally {
+        current.mockRestore();
+      }
+    });
+    await expect(state.initialize()).rejects.toThrow('Skill preferences must belong');
+    await expect(state.setEnabled('example', true)).rejects.toThrow('Skill preferences must belong');
+    expect(state.enabled.get('example')).toBe(false);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ enabled: { example: false } });
+  });
+
+  it('reopens and updates a valid preference store after its saved representation grows beyond one MiB', async () => {
+    const { path, state } = await fixture();
+    const prefix = 'project:1234567890abcdef:.glyph:.glyph/skills/';
+    const enabled = Object.fromEntries(Array.from({ length: 6900 }, (_, i) => [prefix + 'a'.repeat(88) + i, false]));
+    await writeFile(path, JSON.stringify({ enabled, installations: {} }));
+    expect((await stat(path)).size).toBeLessThan(1024 * 1024);
+    await state.setEnabled('example', true);
+    expect((await stat(path)).size).toBeGreaterThan(1024 * 1024);
+    await state.initialize();
+    await state.setEnabled('example', false);
+    expect(state.enabled.get('example')).toBe(false);
+    expect(state.enabled.size).toBe(6901);
   });
 
   it('checks the opened preference inode before consuming bytes and rejects permission changes during a read', async () => {

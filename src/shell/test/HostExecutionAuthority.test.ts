@@ -46,10 +46,10 @@ describe(HostExecutionAuthority, () => {
   });
 
   it('rejects root changes during native validation and propagates a physical alias rejection', async () => {
-    let roots: string[] = [];
+    const roots: string[] = [];
     const authority = new HostExecutionAuthority(() => roots, {
       assertHostPaths: async () => {
-        roots = ['new-workspace'];
+        roots.push('new-workspace');
       },
     });
     await expect(authority.validate()).rejects.toThrow('workspace authority changed');

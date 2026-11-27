@@ -29,7 +29,7 @@ export class HostExecutionAuthority {
   }
 
   async validate(): Promise<void> {
-    const roots = this.workspaceRoots;
+    const roots = [...this.workspaceRoots];
     for (const path of this.paths) outsideWorkspace(path, roots);
     await this.host.assertHostPaths([...this.paths], roots);
     if (roots.join('\0') !== this.workspaceRoots.join('\0'))
