@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { access, constants, stat } from 'node:fs/promises';
-import { repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
+import { assertNetworkProxy, repositoryEnvironment } from '#src/shell/TrustedHostExecutable.js';
 import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
 import { readHostFile } from './readHostFile.ts';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
@@ -28,6 +28,33 @@ function quote(text: string): string {
     ) +
     '"'
   );
+}
+
+/** Git and libcurl open these paths themselves after Git has parsed the configuration. */
+const httpPaths = new Set([
+  'cookiefile',
+  'pinnedpubkey',
+  'proxysslcainfo',
+  'proxysslcert',
+  'proxysslkey',
+  'sslcainfo',
+  'sslcert',
+  'sslkey',
+]);
+
+function httpPathValue(
+  key: string,
+  value: string,
+  home: string | undefined,
+  authority: HostExecutionAuthority,
+): string {
+  // libcurl also accepts a semicolon-separated list of public-key digests instead of a filename.
+  if (key === 'pinnedpubkey' && value.split(';').every(pin => /^sha256\/\/[A-Za-z0-9+/]{43}=$/u.test(pin)))
+    return value;
+  const path = home && value.startsWith('~/') ? join(home, value.slice(2)) : value;
+  if (!isAbsolute(path))
+    throw new Error('Git HTTP file settings require one absolute path or a path in the user home directory.');
+  return authority.admit(path);
 }
 
 async function pinCredentialHelper(
@@ -149,6 +176,17 @@ export async function captureRepositoryEnvironment(
       throw new Error(
         'Repository preview cannot run command-valued Git transport settings. Use a named credential helper or import a local package.',
       );
+    const option = key.slice(key.lastIndexOf('.') + 1);
+    if (parsed.value && key.startsWith('http.') && option === 'sslcapath')
+      throw new Error(
+        'Git HTTP CA directories can reference additional files. Configure an sslCAInfo certificate bundle or import a local package.',
+      );
+    if (parsed.value && option === 'proxy' && (key.startsWith('http.') || key.startsWith('remote.')))
+      assertNetworkProxy(parsed.value);
+    if (key.startsWith('http.') && httpPaths.has(option) && parsed.value) {
+      entries.push({ key: parsed.key, value: httpPathValue(option, parsed.value, environment.HOME, authority) });
+      continue;
+    }
     if (key.startsWith('credential.') && key.endsWith('.helper') && parsed.value) {
       entries.push({ key: parsed.key, value: await pinCredentialHelper(parsed.value, executionDirectory, authority) });
       continue;

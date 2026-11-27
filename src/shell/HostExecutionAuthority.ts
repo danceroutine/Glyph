@@ -8,7 +8,7 @@ export type { HostWorkspaceRoots } from './HostProcessLeases.ts';
  * Binds host tools and their inputs to locations outside attached workspaces.
  * Admission retains logical and physical paths. Repository children launch through
  * run so peer workspace admission covers deferred helper invocations through
- * child close. A storage lease covers allocation through cleanup. Other
+ * child close. A storage lease covers allocation through cleanup, including staged skill execution. Other
  * launchers consume the guard from validate at their handoff.
  */
 export class HostExecutionAuthority {
@@ -73,7 +73,7 @@ export class HostExecutionAuthority {
     await this.checkPaths(paths, roots);
     const assertCurrent = () => {
       if (roots.join('\0') !== this.workspaceRoots.join('\0'))
-        throw new Error('Attached workspace authority changed while validating host execution. Retry the preview.');
+        throw new Error('Attached workspace authority changed while validating host execution. Retry the operation.');
     };
     assertCurrent();
     return assertCurrent;

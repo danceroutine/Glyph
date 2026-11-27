@@ -1,8 +1,12 @@
 import { testPackageMutations } from './fixtures/testPackageMutations.ts';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
 import { Deferred } from '#src/shared/Deferred.js';
 import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { ShellSandboxProfile } from '#src/shell/ShellSandboxProfile.js';
+import { ChildProcess } from 'node:child_process';
+import { PassThrough } from 'node:stream';
+import { setImmediate } from 'node:timers/promises';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -115,7 +119,9 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
     async root => testPackageMutations(root),
     join(f.roots[1]!.directory, 'staged'),
   );
-  await expect(unsafe.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow('outside every');
+  await expect(unsafe.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow(
+    'outside writable workspaces',
+  );
   const same = new SkillScriptRunner(
     { executeProgram: execute },
     f.roots,
@@ -123,7 +129,9 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
     async root => testPackageMutations(root),
     f.roots[1]!.directory,
   );
-  await expect(same.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow('outside every');
+  await expect(same.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B')).rejects.toThrow(
+    'outside writable workspaces',
+  );
   expect(execute).toHaveBeenCalledTimes(2);
 });
 
@@ -281,7 +289,7 @@ it('stops a reviewed script before launch when the native interpreter authority 
   await expect(running).rejects.toThrow('Native interpreter authority changed');
   expect(assertHostPaths).toHaveBeenCalledTimes(before + 1);
   expect(assertHostPaths.mock.lastCall).toEqual([
-    expect.arrayContaining([interpreter, staging]),
+    expect.arrayContaining([interpreter, expect.stringContaining(staging + '/glyph-skill-run-')]),
     f.roots.map(root => root.directory),
   ]);
   expect(launch).not.toHaveBeenCalled();
@@ -333,3 +341,80 @@ it.each(['helper', 'turn'] as const)('withholds an approved process after its %s
   expect(authority.authorize).toHaveBeenCalledWith([origin], f.signal);
   expect(launch).not.toHaveBeenCalled();
 });
+
+it.each(['staging', 'execution'] as const)(
+  'holds an overlapping peer through %s cancellation and private cleanup',
+  async phase => {
+    const f = await fixture();
+    const staging = join(f.directory, 'staging');
+    const leases = new HostProcessLeases(f.roots.map(root => root.directory));
+    const started = new Deferred<void>();
+    const resume = new Deferred<void>();
+    const cleaning = new Deferred<void>();
+    const cleanupStarted = vi.fn();
+    const remove = new Deferred<void>();
+    const child = Object.assign(new ChildProcess(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    });
+    const launch = vi.fn(() => {
+      started.resolve();
+      return child;
+    });
+    const shells = new ShellSessionManager(
+      { authorize: async () => ({ sandboxProfile: ShellSandboxProfile.READ_ONLY }) } as never,
+      { resolve: async () => f.roots[1]!.directory } as never,
+      { launch },
+    );
+    onTestFinished(() => shells.dispose());
+    const runner = new SkillScriptRunner(
+      shells,
+      f.roots,
+      {
+        ...testFilesystemMetadata,
+        inspect: async handle => {
+          if (phase === 'staging' && (await handle.stat()).isFile()) {
+            started.resolve();
+            await resume.promise;
+          }
+        },
+      },
+      async root => ({
+        removeTree: async relative => {
+          cleanupStarted();
+          cleaning.resolve();
+          await remove.promise;
+          await testPackageMutations(root).removeTree(relative);
+        },
+      }),
+      staging,
+      leases,
+    );
+    const run = runner.run(f.skill, 'scripts/task.sh', [], 'chat', f.signal);
+    const rejected = expect(run).rejects.toThrow('workspace is attaching');
+    await started.promise;
+    const disjoint = vi.fn();
+    await leases.admitWorkspace(() => [join(f.directory, 'disjoint')], disjoint);
+    expect(disjoint).toHaveBeenCalledOnce();
+    const publish = vi.fn();
+    const admission = leases.admitWorkspace(() => [staging], publish);
+    // Dispose may race process cancellation when a window disconnects.
+    const disposed = phase === 'execution' ? shells.dispose() : undefined;
+    await setImmediate();
+    expect(publish).not.toHaveBeenCalled();
+    if (phase === 'execution') {
+      expect(launch).toHaveBeenCalledOnce();
+      expect(cleanupStarted).not.toHaveBeenCalled();
+      child.emit('close', 0, null);
+    } else {
+      resume.resolve();
+      expect(launch).not.toHaveBeenCalled();
+    }
+    await cleaning.promise;
+    expect(publish).not.toHaveBeenCalled();
+    remove.resolve();
+    await Promise.all([rejected, admission, disposed]);
+    expect(publish).toHaveBeenCalledOnce();
+  },
+);

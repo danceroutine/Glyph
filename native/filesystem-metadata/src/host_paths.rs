@@ -109,7 +109,8 @@ mod unix {
             let current = existing(fs::symlink_metadata(name))?.as_ref().map(id);
             unchanged(*expected, current)?;
         }
-        let directory = final_meta.as_ref().is_some_and(fs::Metadata::is_dir);
+        // A reserved future location may become a directory while its host lease is active.
+        let directory = final_meta.as_ref().is_none_or(fs::Metadata::is_dir);
         if let Some(meta) = final_meta {
             // A regular hard link can also be present under a workspace without any mount record.
             // Non-writable system multicall binaries legitimately have several installation names.
@@ -223,6 +224,11 @@ mod unix {
             assert!(assert_host_paths(
                 std::slice::from_ref(&missing),
                 std::slice::from_ref(&missing)
+            )
+            .is_err());
+            assert!(assert_host_paths(
+                std::slice::from_ref(&missing),
+                &[missing.join("future-root")]
             )
             .is_err());
             assert!(existing(Err(io::ErrorKind::PermissionDenied.into())).is_err());

@@ -45,6 +45,14 @@ export function trustedHostExecutable(name: HostExecutable, workspaceRoots: read
   throw new Error(`A trusted ${name} installation outside writable workspaces is required.`);
 }
 
+/** libcurl interprets a SOCKS proxy with a trailing path as a local Unix-domain socket. */
+export function assertNetworkProxy(proxy: string): void {
+  if (/^socks[\w+.-]*:\/\/[^/]*\//iu.test(proxy.trim()))
+    throw new Error(
+      'Repository preview supports network proxy endpoints. Import a local package when using a SOCKS socket path.',
+    );
+}
+
 /** Trusted Git configuration may define credential helpers and mirrors. Its location must be outside project authority. */
 export function repositoryEnvironment(roots: readonly string[]): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
@@ -77,7 +85,10 @@ export function repositoryEnvironment(roots: readonly string[]): NodeJS.ProcessE
     if (['HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL'].includes(key)) {
       if (!isAbsolute(value)) continue;
       environment[key] = outsideWorkspace(value, roots);
-    } else environment[key] = value;
+    } else {
+      if (['HTTP_PROXY', 'HTTPS_PROXY', 'https_proxy', 'http_proxy'].includes(key)) assertNetworkProxy(value);
+      environment[key] = value;
+    }
   }
   if (!environment.GIT_CONFIG_GLOBAL && environment.HOME) {
     outsideWorkspace(join(environment.HOME, '.gitconfig'), roots);

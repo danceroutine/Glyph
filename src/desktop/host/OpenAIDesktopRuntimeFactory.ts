@@ -210,6 +210,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       authority,
       roots,
     };
+    const hostProcesses =
+      input.repositoryProcesses ?? new HostProcessLeases(input.hostWorkspaceRoots ?? roots.map(root => root.path));
     const indexExecutable = nativeExecutable('glyph-context-index');
     const filesystemMetadata = new NativeFilesystemMetadata(indexExecutable);
     const sandboxExecutable = nativeExecutable('glyph-shell-sandbox');
@@ -916,7 +918,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                   filesystemMetadata,
                   openMutations,
                   undefined,
-                  input.hostWorkspaceRoots ?? roots.map(workspaceRoot => workspaceRoot.path),
+                  hostProcesses,
                 ),
               ),
             ]
@@ -1078,8 +1080,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               },
               filesystemMetadata,
               access.selectedFile,
-              input.repositoryProcesses ??
-                new HostProcessLeases(input.hostWorkspaceRoots ?? roots.map(workspaceRoot => workspaceRoot.path)),
+              hostProcesses,
             ),
           }
         : {}),

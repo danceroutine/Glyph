@@ -1,10 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { basename, join } from 'node:path';
 import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { captureRepositoryEnvironment } from '#src/skills/SkillRepositoryConfiguration.js';
+import { HostProcessLeases } from '#src/shell/HostProcessLeases.js';
+import { HostExecutionAuthority } from '#src/shell/HostExecutionAuthority.js';
+import { Deferred } from '#src/shared/Deferred.js';
 import { trustedHostExecutable } from '#src/shell/TrustedHostExecutable.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 
@@ -215,4 +218,95 @@ it('uses trusted HTTPS-to-file mirrors and rejects SSH rewrites when the SSH cli
   const lsRemote = (url: string) => spawnSync(git, ['ls-remote', url], { env, cwd: f.preview, encoding: 'utf8' });
   expect(lsRemote('https://mirror.invalid/fixture').status).toBe(0);
   expect(lsRemote('https://ssh.invalid/fixture').stderr).toContain("transport 'ssh' not allowed");
+});
+
+it.each([
+  'cookieFile',
+  'sslCert',
+  'sslKey',
+  'sslCAInfo',
+  'proxySSLCert',
+  'proxySSLKey',
+  'proxySSLCAInfo',
+  'pinnedPubkey',
+])('rejects URL-scoped HTTP %s controlled by a workspace', async option => {
+  const f = await fixture();
+  await writeFile(f.global, '[http "https://remote.invalid"]\n' + option + ' = ' + join(f.project, 'fixture') + '\n');
+  await expect(f.capture()).rejects.toThrow('outside writable workspaces');
+});
+
+it('retains hash pins and leases home-relative cookies from capture through the end of transport', async () => {
+  const f = await fixture();
+  const hashes = [Buffer.alloc(32, 1), Buffer.alloc(32, 2)]
+    .map(bytes => 'sha256//' + bytes.toString('base64'))
+    .join(';');
+  await writeFile(
+    f.global,
+    '[http]\npinnedPubkey = "' +
+      hashes +
+      '"\nsaveCookies = true\n[http "https://remote.invalid"]\ncookieFile = ~/jar\n',
+  );
+  const leases = new HostProcessLeases([f.project]);
+  const authority = new HostExecutionAuthority(leases, testFilesystemMetadata);
+  const signal = new AbortController().signal;
+  const env = await captureRepositoryEnvironment(
+    [f.project],
+    f.preview,
+    signal,
+    testFilesystemMetadata,
+    undefined,
+    authority,
+  );
+  const get = (key: string) =>
+    execFileSync(trustedHostExecutable('git', []), ['config', '--get', key], {
+      cwd: f.preview,
+      env,
+      encoding: 'utf8',
+    }).trim();
+  const jar = join(await realpath(f.home), 'jar');
+  expect(get('http.https://remote.invalid.cookieFile')).toBe(jar);
+  expect(get('http.saveCookies')).toBe('true');
+  expect(get('http.pinnedPubkey')).toBe(hashes);
+  const started = new Deferred<void>();
+  const stopped = new Deferred<void>();
+  const close = new Deferred<void>();
+  const transport = authority.run(signal, processSignal => {
+    processSignal.addEventListener(
+      'abort',
+      () => {
+        stopped.resolve();
+      },
+      { once: true },
+    );
+    started.resolve();
+    return close.promise;
+  });
+  const rejected = expect(transport).rejects.toThrow('workspace is attaching');
+  await started.promise;
+  const publish = vi.fn();
+  const admission = leases.admitWorkspace(() => [jar], publish);
+  await stopped.promise;
+  expect(publish).not.toHaveBeenCalled();
+  close.resolve();
+  await Promise.all([rejected, admission]);
+  expect(publish).toHaveBeenCalledOnce();
+});
+
+it.each([['cookieFile', 'relative']])('requires an unambiguous host path for HTTP %s', async (key, value) => {
+  const f = await fixture();
+  await writeFile(f.global, '[http]\n' + key + ' = ' + value + '\n');
+  await expect(f.capture()).rejects.toThrow('one absolute path');
+});
+
+it('requires an admitted CA bundle and a network endpoint for configured proxies', async () => {
+  const f = await fixture();
+  await writeFile(f.global, '[http]\nsslCAPath = ' + f.home + '\n');
+  await expect(f.capture()).rejects.toThrow('sslCAInfo certificate bundle');
+  for (const section of ['http "https://remote.invalid"', 'remote "origin"']) {
+    await writeFile(f.global, '[' + section + ']\nproxy = socks5h://localhost/socket\n');
+    await expect(f.capture()).rejects.toThrow('network proxy endpoints');
+  }
+  await writeFile(f.global, '');
+  vi.stubEnv('http_proxy', 'socks4a://localhost/socket');
+  await expect(f.capture()).rejects.toThrow('network proxy endpoints');
 });
