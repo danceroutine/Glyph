@@ -46,6 +46,8 @@ export class InstructionPaths {
   }
 
   key(path: string): string {
+    const confirmed = this.routes?.scopeKey(path, this.caseSensitive(path));
+    if (confirmed !== undefined) return confirmed;
     const relativeKey = (value: string) => {
       const normalized = this.routes?.normalizeName(path, value) ?? value;
       return this.caseSensitive(path) ? normalized : normalized.toLowerCase();
