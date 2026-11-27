@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, symlink, stat } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
@@ -90,6 +90,71 @@ it.describe('Aliased and overlapping project skill roots', () => {
       code: 'ENOENT',
     });
   });
+});
+
+it.describe('Dirty physical skill package names', () => {
+  it.use({ scriptedProvider: true, userSettings: { 'files.autoSave': 'off' } });
+  for (const scope of ['user', 'project']) {
+    it(
+      `rechecks a reviewed ${scope} removal against the dirty package spelling at Apply`,
+      isolatedLaunch('owns an unsaved skill buffer'),
+      async ({ glyph }) => {
+        const store =
+          scope === 'user'
+            ? join(dirname(glyph.workspace), 'glyph-user', 'skills')
+            : join(glyph.workspace, '.glyph', 'skills');
+        const target = join(store, 'ss', 'SKILL.md');
+        const alias = join(store, 'ß', 'SKILL.md');
+        const manifest = '---\nname: ss\ndescription: Reviewed filename fixture\n---\nOriginal skill body';
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, manifest);
+        // On a sensitive filesystem the other spelling is a separate package.
+        await mkdir(dirname(alias), { recursive: true });
+        await writeFile(alias, '---\nname: different\ndescription: Independent spelling\n---\nIndependent skill body', {
+          flag: 'wx',
+        }).catch(error => {
+          if (error.code !== 'EEXIST') throw error;
+        });
+        const [stored, opened] = await Promise.all([stat(target, { bigint: true }), stat(alias, { bigint: true })]);
+        const sameFile = stored.dev === opened.dev && stored.ino === opened.ino;
+        const original = await readFile(alias, 'utf8');
+        await glyph.reload();
+        const skills = await openSkills(glyph);
+        const row = skills.getByRole('listitem').filter({ hasText: 'Reviewed filename fixture' });
+        await row.getByRole('button', { name: 'Uninstall', exact: true }).click();
+        const preview = skills.getByRole('region', { name: 'Skill change preview' });
+        await expect(preview).toBeVisible();
+        await closeSkills(glyph);
+        const page = glyph.page;
+        await page.keyboard.press('ControlOrMeta+p');
+        await page.locator('.quick-input-widget input').fill(alias);
+        await expect(page.locator('.quick-input-list').getByRole('option').first()).toContainText('SKILL.md');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.quick-input-widget')).not.toBeVisible();
+        const editor = page.locator('.editor-instance .monaco-editor[data-uri]').filter({ visible: true }).last();
+        await expect(editor.locator('.view-lines')).toContainText(
+          sameFile ? 'Original skill body' : 'Independent skill body',
+        );
+        const uri = await editor.getAttribute('data-uri');
+        expect(decodeURIComponent(new URL(String(uri)).pathname)).toContain('/ß/SKILL.md');
+        await editor.locator('.view-lines').click({ position: { x: 4, y: 3 } });
+        await page.keyboard.press('ControlOrMeta+End');
+        await page.keyboard.insertText(' Unsaved skill edit');
+        await expect(editor.locator('.view-lines')).toContainText('Unsaved skill edit');
+        await expect(page.locator('.part.editor .tab.dirty').first()).toBeVisible();
+        await openSkills(glyph);
+        await preview.getByRole('button', { name: 'Apply remove', exact: true }).click();
+        if (sameFile) {
+          await expect(skills.getByRole('alert')).toContainText(/save|discard/iu);
+          expect(await readFile(target, 'utf8')).toBe(manifest);
+        } else {
+          await expect(row).toHaveCount(0);
+          await expect(readFile(target)).rejects.toMatchObject({ code: 'ENOENT' });
+        }
+        expect(await readFile(alias, 'utf8')).toBe(original);
+      },
+    );
+  }
 });
 
 it.describe('Agent skill discovery and activation', () => {
