@@ -15,6 +15,8 @@ it('enforces the production ownership map through Oxlint using the repository ov
     ['src/chat/Raw.ts', "import { readFile as load } from 'node:fs/promises';", true],
     ['src/chat/Launch.ts', "export * from 'child_process';", true],
     ['src/chat/Lazy.ts', "const adapter = await import('#src/workspace/FileSystemWorkspaceTextStore.js');", true],
+    ['src/skills/Feature.ts', "import { captureSkillPackage } from './SkillPackage.ts';", true],
+    ['src/skills/Presenter.ts', "import type { SkillPackage } from './SkillPackage.ts';", false],
     ['src/chat/Legacy.ts', "require('node:worker_threads');", true],
     [
       'src/chat/Forward.ts',
