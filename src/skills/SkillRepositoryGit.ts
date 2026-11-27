@@ -41,7 +41,19 @@ export class SkillRepositoryGit {
     private readonly workspaceRoots: readonly string[],
     private readonly metadata: FilesystemMetadata,
   ) {}
-  async run(args: string[], maxOutput = 2 * 1024 * 1024): Promise<Buffer> {
+  async initialize(url: string): Promise<void> {
+    const empty = {
+      ...repositoryEnvironment(this.workspaceRoots),
+      GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+    };
+    await this.execute(['init', '--bare', '--template=', 'source.git'], 1024 * 1024, empty);
+    await this.execute(['--git-dir=source.git', 'remote', 'add', 'origin', url], 1024 * 1024, empty);
+  }
+  run(args: string[], maxOutput = 2 * 1024 * 1024): Promise<Buffer> {
+    return this.execute(args, maxOutput);
+  }
+  private async execute(args: string[], maxOutput: number, initialization?: NodeJS.ProcessEnv): Promise<Buffer> {
     this.signal.throwIfAborted();
     await storageBytes(this.cwd);
     const gitArgs = [
@@ -60,22 +72,16 @@ export class SkillRepositoryGit {
       ...args,
     ];
     const windows = process.platform === 'win32';
-    // Initialize the host-owned bare store with no external settings. Conditional
-    // includes can then be evaluated against its actual identity before transport.
+    // Transport sees the initialized repository and its selected remote when evaluating conditional includes.
     const env =
-      args[0] === 'init'
-        ? {
-            ...repositoryEnvironment(this.workspaceRoots),
-            GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-            GIT_CONFIG_NOSYSTEM: '1',
-          }
-        : await (this.environment ??= captureRepositoryEnvironment(
-            this.workspaceRoots,
-            this.cwd,
-            this.signal,
-            this.metadata,
-            args.find(arg => arg.startsWith('--git-dir='))?.slice('--git-dir='.length),
-          ));
+      initialization ??
+      (await (this.environment ??= captureRepositoryEnvironment(
+        this.workspaceRoots,
+        this.cwd,
+        this.signal,
+        this.metadata,
+        args.find(arg => arg.startsWith('--git-dir='))?.slice('--git-dir='.length),
+      )));
     const executable = trustedHostExecutable('git', this.workspaceRoots);
     const used = await storageBytes(this.cwd);
     // POSIX sh specifies 512-byte blocks. Limit each incoming pack before it can fill the disk between polls.

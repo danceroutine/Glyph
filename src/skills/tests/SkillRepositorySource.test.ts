@@ -5,6 +5,7 @@ import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 const git = vi.hoisted(() => vi.fn<(args: string[], maxOutput?: number) => Promise<Buffer>>());
 vi.mock('#src/skills/SkillRepositoryGit.js', () => ({
   SkillRepositoryGit: class {
+    initialize = vi.fn();
     run = git;
   },
 }));

@@ -112,8 +112,7 @@ export class SkillPackageSourceReader {
         this.metadata,
       );
       const git = async (...args: string[]) => (await transport.run(args)).toString('utf8');
-      await git('init', '--bare', '--template=', 'source.git');
-      await git('--git-dir=source.git', 'remote', 'add', 'origin', source.url);
+      await transport.initialize(source.url);
       await git(
         '--git-dir=source.git',
         'fetch',

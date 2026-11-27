@@ -60,7 +60,7 @@ it('evaluates conditional includes against the initialized bare store before usi
   await writeFile(included, '[user]\nname = Conditional trusted identity\n');
   await writeFile(join(root, 'trusted.config'), '[includeIf "gitdir:**/source.git"]\npath = conditional.config\n');
   const git = new SkillRepositoryGit(root, new AbortController().signal, [], testFilesystemMetadata);
-  await git.run(['init', '--bare', '--template=', 'source.git']);
+  await git.initialize('https://example.invalid/selected.git');
   expect((await git.run(['--git-dir=source.git', 'config', '--get', 'user.name'])).toString()).toBe(
     'Conditional trusted identity\n',
   );
@@ -68,4 +68,23 @@ it('evaluates conditional includes against the initialized bare store before usi
   expect((await git.run(['--git-dir=source.git', 'config', '--get', 'user.name'])).toString()).toBe(
     'Conditional trusted identity\n',
   );
+});
+
+it('freezes URL-selected settings after recording the remote and before using transport', async () => {
+  const root = await fixture();
+  const included = join(root, 'company.config');
+  await writeFile(included, '[user]\nname = Selected remote identity\n');
+  await writeFile(
+    join(root, 'trusted.config'),
+    '[includeIf "hasconfig:remote.*.url:https://example.invalid/**"]\npath = company.config\n',
+  );
+  const git = new SkillRepositoryGit(root, new AbortController().signal, [], testFilesystemMetadata);
+  await git.initialize('https://example.invalid/selected.git');
+  expect((await git.run(['--git-dir=source.git', 'config', '--get-all', 'remote.origin.url'])).toString()).toBe(
+    'https://example.invalid/selected.git\n',
+  );
+  const name = () => git.run(['--git-dir=source.git', 'config', '--get', 'user.name']);
+  expect((await name()).toString().trim()).toBe('Selected remote identity');
+  await writeFile(included, '[user]\nname = Changed after capture\n');
+  expect((await name()).toString().trim()).toBe('Selected remote identity');
 });

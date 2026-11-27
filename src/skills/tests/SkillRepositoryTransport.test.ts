@@ -42,16 +42,22 @@ const git = (signal = new AbortController().signal) =>
   new SkillRepositoryGit('/temporary', signal, [], testFilesystemMetadata);
 it.each(['linux', 'win32'])('initializes a bare store without external Git configuration on %s', async os => {
   Object.defineProperty(process, 'platform', { ...platform, value: os });
-  const initialized = child(123);
-  io.spawn.mockImplementationOnce(() => {
-    queueMicrotask(() => initialized.emit('close', 0));
+  io.spawn.mockImplementation(() => {
+    const initialized = child(123);
+    queueMicrotask(() => {
+      initialized.emit('close', 0);
+    });
     return initialized;
   });
-  await git().run(['init', '--bare', '--template=', 'source.git']);
-  expect(io.spawn.mock.calls[0]![2].env).toMatchObject({
-    GIT_CONFIG_GLOBAL: os === 'win32' ? 'NUL' : '/dev/null',
-    GIT_CONFIG_NOSYSTEM: '1',
+  await git().initialize('https://example.invalid/resource');
+  expect(io.spawn).toHaveBeenCalledTimes(2);
+  const options = expect.objectContaining({
+    env: expect.objectContaining({
+      GIT_CONFIG_GLOBAL: os === 'win32' ? 'NUL' : '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+    }),
   });
+  for (const call of io.spawn.mock.calls) expect(call[2]).toEqual(options);
 });
 it('counts directories and disappearing loose objects against the shared storage budget', async () => {
   const missing = Object.assign(new Error('gone'), { code: 'ENOENT' });

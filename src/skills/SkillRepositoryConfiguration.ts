@@ -19,7 +19,7 @@ function entry(text: string): Entry {
 function quote(text: string): string {
   return (
     '"' +
-    text.replace(
+    text.replaceAll(
       /[\\"\n\t\b]/gu,
       character => ({ '\\': '\\\\', '"': '\\"', '\n': '\\n', '\t': '\\t', '\b': '\\b' })[character]!,
     ) +
@@ -43,7 +43,7 @@ export async function captureRepositoryEnvironment(
   const environment = repositoryEnvironment(roots);
   const executable = trustedHostExecutable('git', roots);
   const config = (args: string[], input?: Buffer) =>
-    new Promise<string>((resolve, reject) => {
+    new Promise<Buffer>((accept, reject) => {
       const child = execFile(
         executable,
         [...(gitDirectory && input === undefined ? ['--git-dir=' + gitDirectory] : []), 'config', '--null', ...args],
@@ -53,23 +53,27 @@ export async function captureRepositoryEnvironment(
           signal,
           timeout: 5000,
           maxBuffer: 1024 * 1024,
-          encoding: 'utf8',
+          encoding: 'buffer',
         },
-        (error, output) => (error ? reject(error) : resolve(output)),
+        (error, output) => {
+          if (error) reject(new Error(error.message, { cause: error }));
+          else accept(output);
+        },
       );
       child.stdin!.end(input);
-    });
+    }).then(bytes => new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes));
   // This command parses settings only. It does not contact a remote or run a configured helper.
-  const output = await config(['--show-origin', '--includes', '--list']);
+  const output = await config(['--show-scope', '--show-origin', '--includes', '--list']);
   if (output && !output.endsWith('\0')) throw new Error('Git returned invalid configuration origins.');
   const records = output.split('\0');
   records.pop();
-  if (records.length % 2 !== 0) throw new Error('Git returned invalid configuration origins.');
+  if (records.length % 3 !== 0) throw new Error('Git returned invalid configuration origins.');
   const sources = new Map<string, Set<string>>();
   const entries: Entry[] = [];
   let bytes = 0;
-  for (let index = 0; index < records.length; index += 2) {
-    const origin = records[index]!;
+  for (let index = 0; index < records.length; index += 3) {
+    const scope = records[index]!;
+    const origin = records[index + 1]!;
     if (!origin.startsWith('file:')) throw new Error('Git configuration must have a trusted file origin.');
     let values = sources.get(origin);
     if (!values) {
@@ -82,17 +86,21 @@ export async function captureRepositoryEnvironment(
       );
       sources.set(origin, values);
     }
-    const value = records[index + 1]!;
+    const value = records[index + 2]!;
     if (!values.has(value)) throw new Error('Git configuration changed during capture. Retry the preview.');
+    // Git continues to read the host-created local store. Copying its multivalues would duplicate the remote.
+    if (scope === 'local') continue;
     const parsed = entry(value);
-    if (!/^include(?:if\..*)?\.path$/iu.test(parsed.key)) entries.push(parsed);
+    const key = parsed.key.toLowerCase();
+    if (!(key === 'include.path' || (key.startsWith('includeif.') && key.endsWith('.path')))) entries.push(parsed);
   }
   const text = entries
     .map(({ key, value }) => {
       const first = key.indexOf('.'),
         last = key.lastIndexOf('.');
       const section = key.slice(0, first);
-      const subsection = first === last ? '' : ' ' + quote(key.slice(first + 1, last));
+      // Git subsection names escape only quotes and backslashes. Tabs and backspaces remain literal.
+      const subsection = first === last ? '' : ' "' + key.slice(first + 1, last).replaceAll(/[\\"]/gu, '\\$&') + '"';
       return `[${section}${subsection}]\n\t${key.slice(last + 1)}${value === undefined ? '' : ' = ' + quote(value)}\n`;
     })
     .join('');

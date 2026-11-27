@@ -11,9 +11,9 @@ afterEach(() => vi.unstubAllEnvs());
 async function fixture() {
   const base = await mkdtemp(join(tmpdir(), 'glyph-git-configuration-'));
   onTestFinished(() => rm(base, { recursive: true, force: true }));
-  const home = join(base, 'home'),
-    project = join(base, 'project'),
-    preview = join(base, 'preview');
+  const home = join(base, 'home');
+  const project = join(base, 'project');
+  const preview = join(base, 'preview');
   for (const path of [home, project, preview]) await mkdir(path, { mode: 0o700 });
   const global = join(home, 'global.config');
   await writeFile(global, '');
@@ -76,4 +76,44 @@ it('keeps an empty configuration private and propagates cancellation and metadat
   await expect(
     captureRepositoryEnvironment([f.project], f.preview, controller.signal, testFilesystemMetadata),
   ).rejects.toThrow();
+});
+
+it('removes conditional directives containing a Unicode line separator and retains literal subsection characters', async () => {
+  const f = await fixture();
+  const separator = String.fromCodePoint(0x2028);
+  const subsection = 'one\ttwo\bthree' + String.fromCodePoint(92) + 'four';
+  const repository = 'project' + separator + 'name.git';
+  const condition = 'gitdir:**/' + repository;
+  const git = trustedHostExecutable('git', [f.project]);
+  execFileSync(git, ['init', '--bare', '--quiet', '--template=', repository], { cwd: f.preview });
+  const included = join(f.home, 'future.config');
+  await writeFile(included, '[user]\nname = First\n');
+  const settings = ['config', '--file', f.global];
+  execFileSync(git, [...settings, 'includeif.' + condition + '.path', 'future.config']);
+  execFileSync(git, [...settings, 'example.' + subsection + '.value', 'preserved']);
+  const env = await captureRepositoryEnvironment(
+    [f.project],
+    f.preview,
+    new AbortController().signal,
+    testFilesystemMetadata,
+    repository,
+  );
+  await writeFile(included, '[user]\nname = Second\n');
+  expect(execFileSync(git, ['config', '--get', 'user.name'], { cwd: f.preview, env, encoding: 'utf8' }).trim()).toBe(
+    'First',
+  );
+  expect(await readFile(env.GIT_CONFIG_GLOBAL!, 'utf8')).not.toContain('future.config');
+  expect(
+    execFileSync(git, ['config', '--get', 'example.' + subsection + '.value'], {
+      cwd: f.preview,
+      env,
+      encoding: 'utf8',
+    }).trim(),
+  ).toBe('preserved');
+});
+
+it('rejects settings whose bytes cannot round-trip through a UTF-8 configuration snapshot', async () => {
+  const f = await fixture();
+  await writeFile(f.global, Buffer.concat([Buffer.from('[user]\nname = '), Buffer.from([0xff]), Buffer.from('\n')]));
+  await expect(f.capture()).rejects.toThrow(/utf-8/iu);
 });

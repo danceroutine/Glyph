@@ -11,12 +11,15 @@ vi.mock('node:child_process', () => ({
     _path: string,
     _args: string[],
     _options: unknown,
-    callback: (error: Error | null, output: string) => void,
+    callback: (error: Error | null, output: Buffer) => void,
   ) => ({
     stdin: {
       end: () => {
         const next = parser.replies.shift()!;
-        queueMicrotask(() => (next instanceof Error ? callback(next, '') : callback(null, next)));
+        queueMicrotask(() => {
+          if (next instanceof Error) callback(next, Buffer.alloc(0));
+          else callback(null, Buffer.from(next));
+        });
       },
     },
   }),
@@ -50,9 +53,9 @@ it('rejects malformed origins and values that changed between parser discovery a
   await expect(f.capture()).rejects.toThrow('invalid configuration origins');
   parser.replies.push('unterminated');
   await expect(f.capture()).rejects.toThrow('invalid configuration origins');
-  parser.replies.push('command line:\0core.editor\nuntrusted\0');
+  parser.replies.push('command\0command line:\0core.editor\nuntrusted\0');
   await expect(f.capture()).rejects.toThrow('trusted file origin');
-  parser.replies.push(`file:${f.config}\0core.editor\nuntrusted\0`, 'core.editor\ntrusted\0');
+  parser.replies.push(`global\0file:${f.config}\0core.editor\nuntrusted\0`, 'core.editor\ntrusted\0');
   await expect(f.capture()).rejects.toThrow('changed during capture');
   parser.replies.push(new Error('Malformed included config'));
   await expect(f.capture()).rejects.toThrow('Malformed included config');
@@ -61,7 +64,7 @@ it('bounds the flattened configuration even when repeated trusted includes expan
   const value = '\\'.repeat(8192);
   const f = await fixture('[custom]\nitem = "' + '\\\\'.repeat(8192) + '"\n');
   const entry = `custom.item\n${value}\0`;
-  parser.replies.push((`file:${f.config}\0` + entry).repeat(100), entry);
+  parser.replies.push((`global\0file:${f.config}\0` + entry).repeat(100), entry);
   await expect(f.capture()).rejects.toThrow('capture budget');
 });
 it('disables the system configuration explicitly on Windows too', async () => {
