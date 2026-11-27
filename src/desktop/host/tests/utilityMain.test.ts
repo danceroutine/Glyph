@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { Deferred } from '#src/shared/Deferred.js';
 import { GlyphTransportMessageType } from '#src/desktop/protocol/connection/GlyphTransportMessage.js';
 
 function messagePort() {
@@ -28,7 +29,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
       >(),
     connect: vi.fn(),
     receive: vi.fn(),
-    validateMutation: vi.fn(() => true),
+    validateMutation: vi.fn(async () => true),
     disconnect: vi.fn(),
   };
   const openai = { constructed: vi.fn(), dispose: vi.fn(async () => {}) };
@@ -307,6 +308,25 @@ describe('utilityMain', () => {
     expect(port.postMessage).toHaveBeenNthCalledWith(3, 'editor request');
   });
 
+  it('drops the result of an editor grant check when its port closes during validation', async () => {
+    const { loaded, parent, editors } = startUtilityHost();
+    await loaded;
+    const port = messagePort();
+    parent.emit('message', {
+      data: { type: GlyphTransportMessageType.CONNECTION, connectionId: 'connection', identity },
+      ports: [port],
+    });
+    const check = new Deferred<boolean>();
+    editors.validateMutation.mockReturnValueOnce(check.promise);
+    port.emit('message', {
+      data: { type: GlyphTransportMessageType.CHECK_EDITOR_MUTATION, requestId: 'check', grantId: 'grant' },
+    });
+    port.emit('close');
+    check.resolve(false);
+    await check.promise;
+    expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ requestId: 'check' }));
+  });
+
   it('routes editor responses to the editor and every other message to the host', async () => {
     const { loaded, parent, host, editors } = startUtilityHost();
     await loaded;
@@ -319,6 +339,7 @@ describe('utilityMain', () => {
       data: { type: GlyphTransportMessageType.CHECK_EDITOR_MUTATION, requestId: 'check', grantId: 'grant' },
     });
     expect(editors.validateMutation).toHaveBeenCalledWith('connection', 'grant');
+    await Promise.resolve();
     expect(port.postMessage).toHaveBeenCalledWith({
       type: GlyphTransportMessageType.EDITOR_MUTATION_CHECKED,
       requestId: 'check',
