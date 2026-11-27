@@ -583,7 +583,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   async dispose(): Promise<void> {
     await this.initialized;
     try {
-      await Promise.all([...this.userRuleIndexes.values()].map(index => index.dispose()));
+      const results = await Promise.allSettled([...this.userRuleIndexes.values()].map(index => index.dispose()));
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed) throw failed.reason;
     } finally {
       await this.accounts.dispose();
     }
