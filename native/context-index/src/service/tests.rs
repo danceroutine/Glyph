@@ -175,12 +175,44 @@ fn inspects_the_actual_directory_when_no_case_policy_is_specified() {
     write(root.path().join("Glyph"), "one").unwrap();
     let different = !root.path().join("glyph").exists();
     assert_eq!(different, filesystem_case_sensitive(root.path()).unwrap());
+    let mut configuration = params(root.path());
+    configuration.case_sensitive = None;
+    let mut service = ContextIndexService::new();
+    service
+        .initialize_with_workers(configuration, &MonitorWorkers { available: true })
+        .unwrap();
+    assert_eq!(
+        service.initialized.as_ref().unwrap().policy.case_sensitive,
+        different
+    );
+    service.shutdown();
     #[cfg(target_os = "macos")]
     {
         assert!(filesystem_casing::case_setting(-1).is_err());
         assert!(filesystem_casing::case_setting(1).unwrap());
         assert!(!filesystem_casing::case_setting(0).unwrap());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_case_policy_prevents_initialization_and_allows_a_retry() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempdir().unwrap();
+    let permissions = fs::metadata(root.path()).unwrap().permissions();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o111)).unwrap();
+    let mut configuration = params(root.path());
+    configuration.case_sensitive = None;
+    let mut service = ContextIndexService::new();
+    // Privileged test processes can still inspect a directory with read permission removed.
+    if fs::read_dir(root.path()).is_err() {
+        let error = service.initialize(configuration.clone()).err().unwrap();
+        assert!(error.message.contains("filesystem case sensitivity"));
+        assert!(service.initialized.is_none());
+    }
+    fs::set_permissions(root.path(), permissions).unwrap();
+    service.initialize(configuration).unwrap();
+    service.shutdown();
 }
 
 fn params(root: &Path) -> InitializeParams {
@@ -206,6 +238,15 @@ fn params(root: &Path) -> InitializeParams {
 fn each_directory_owns_its_existing_filename_spelling() {
     let root = tempdir().unwrap();
     let directory = root.path();
+    assert_eq!(
+        filesystem_casing::observed_names(directory, &["missing".to_owned()]),
+        None
+    );
+    #[cfg(target_os = "linux")]
+    {
+        assert!(filesystem_casing::empty_directory(&directory.join("missing")).is_err());
+        assert!(filesystem_casing::filesystem_type(-1).is_err());
+    }
     write(directory.join("LETTER"), "x").unwrap();
     write(directory.join("lETTER"), "y").unwrap();
     assert!(filesystem_case_sensitive(directory).unwrap());
@@ -506,6 +547,7 @@ fn editor_paths_use_catalog_spelling_and_preserve_case_and_exclusion_policy() {
         let directory = tempdir().unwrap();
         create_dir_all(directory.path().join("src")).unwrap();
         write(directory.path().join("src/Café.ts"), "text").unwrap();
+        write(directory.path().join("src/unrelated.ts"), "other").unwrap();
         write(directory.path().join(".env"), "secret").unwrap();
         let mut configuration = params(directory.path());
         configuration.case_sensitive = Some(case_sensitive);
