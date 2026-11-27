@@ -34,11 +34,17 @@ describe(StartupUserProfile, () => {
     expect(selected.path).toBe(physical);
     expect(fs.readFileSync(join(selected.path, 'edit'), 'utf8')).toBe('live');
     fs.renameSync(physical, join(base, 'old'));
-    expect(() => selected.ensureDirectory()).toThrow('removed or replaced');
+    expect(() => {
+      selected.ensureDirectory();
+    }).toThrow('removed or replaced');
     fs.mkdirSync(physical);
-    expect(() => selected.verify()).toThrow('removed or replaced');
+    expect(() => {
+      selected.verify();
+    }).toThrow('removed or replaced');
     selected.dispose();
-    expect(() => selected.verify()).toThrow('closed');
+    expect(() => {
+      selected.verify();
+    }).toThrow('closed');
   });
 
   it('creates a missing link target beneath the selected ancestor with private permissions', () => {
@@ -56,14 +62,18 @@ describe(StartupUserProfile, () => {
     expect(fs.statSync(selected.path).mode & 0o777).toBe(0o700);
     selected.ensureDirectory();
     fs.rmdirSync(selected.path);
-    expect(() => selected.ensureDirectory()).toThrow('removed or replaced');
+    expect(() => {
+      selected.ensureDirectory();
+    }).toThrow('removed or replaced');
   });
 
   it('rejects a new redirect below the verified ancestor and invalid startup selections', () => {
     const { base, configured, physical, select } = fixture();
     const selected = select();
     fs.symlinkSync(base, configured);
-    expect(() => selected.ensureDirectory()).toThrow('removed or replaced');
+    expect(() => {
+      selected.ensureDirectory();
+    }).toThrow('removed or replaced');
     fs.unlinkSync(configured);
     fs.writeFileSync(configured, 'file');
     expect(() => select()).toThrow('must select a directory');
@@ -85,7 +95,9 @@ describe(StartupUserProfile, () => {
       return handle;
     });
     try {
-      expect(() => selected.ensureDirectory()).toThrow('removed or replaced');
+      expect(() => {
+        selected.ensureDirectory();
+      }).toThrow('removed or replaced');
     } finally {
       swap.mockRestore();
     }
