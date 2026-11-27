@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { WebToolRuntime } from './web/WebToolRuntime.ts';
 import { AuthorizedWebTransport } from './web/AuthorizedWebTransport.ts';
 import { WebApprovalService } from './web/WebApprovalService.ts';
@@ -92,7 +93,12 @@ async function main(): Promise<void> {
     'release',
     process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
   );
-  const accessPolicy = new WorkspaceAccessPolicy();
+  const accessPolicy = new WorkspaceAccessPolicy({}, [
+    configuration.stateDirectory,
+    configuration.traceFile,
+    indexExecutable,
+    shellSandboxExecutable,
+  ]);
   const { workspace, pathIndex } = await createProjectRuntime(
     projectContext,
     configuration.stateDirectory,
@@ -252,6 +258,7 @@ async function createProjectRuntime(
       ),
     ];
     const workspace = new FileSystemWorkspaceTextStore(root.path, {
+      physicalAccess: new NativeFilesystemMetadata(indexExecutable),
       caseSensitive: casing[i]!,
       excludedPaths,
       accessPolicy,

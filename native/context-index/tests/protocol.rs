@@ -158,3 +158,26 @@ fn verifies_metadata_for_inherited_descriptors() {
         assert_eq!(result.stdout, b"verified\n");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn admits_a_workspace_path_and_rechecks_its_opened_identity() {
+    use std::os::unix::fs::MetadataExt;
+    let root = tempfile::tempdir().unwrap();
+    let ordinary = root.path().join("document");
+    fs::write(&ordinary, "example").unwrap();
+    let meta = fs::metadata(&ordinary).unwrap();
+    let request = serde_json::json!({
+        "path":ordinary, "privatePaths":[root.path().join("preferences")],
+        "identity":[meta.dev().to_string(),meta.ino().to_string()]
+    });
+    let check = |request: &Value| {
+        run_with_input(&request.to_string(), |cmd| {
+            cmd.arg("--assert-workspace-path");
+        })
+    };
+    assert_eq!(check(&request).stdout, b"verified\n");
+    let mut stale = request;
+    stale["identity"] = serde_json::json!(["0", "0"]);
+    assert!(!check(&stale).status.success());
+}

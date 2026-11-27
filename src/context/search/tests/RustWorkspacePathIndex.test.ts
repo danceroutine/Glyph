@@ -58,7 +58,7 @@ describe(RustWorkspacePathIndex, () => {
         try {
           await index.initialize();
           expect(worker.requests[0]?.params).toMatchObject(expected);
-          expect(JSON.stringify(worker.requests[0]?.params)).not.toContain('/PROJECT/profile');
+          expect(worker.requests[0]?.params).toMatchObject({ privatePaths: ['/PROJECT/profile/skill-state.json'] });
         } finally {
           await index.dispose();
         }

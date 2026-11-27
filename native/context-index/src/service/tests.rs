@@ -277,6 +277,7 @@ fn params(root: &Path) -> InitializeParams {
         sensitive_file_extensions: default_sensitive_file_extensions(),
         allowed_file_names: default_allowed_file_names(),
         excluded_paths: Vec::new(),
+        private_paths: Vec::new(),
         exclude_root: false,
         respect_git_ignore: true,
         max_files: DEFAULT_MAX_FILES,
@@ -1832,6 +1833,7 @@ fn private_directory_uses_the_entries_actual_filename_equivalence() {
     assert_eq!(policy.excludes(".ſkill-staging/fixture.txt"), equivalent);
     assert_eq!(
         workspace_walk(base.path(), &policy)
+            .unwrap()
             .build()
             .flatten()
             .any(|entry| entry.file_name() == "fixture.txt"),

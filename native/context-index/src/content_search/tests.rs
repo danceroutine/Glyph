@@ -1037,10 +1037,10 @@ fn excludes_unverified_hardlink_content_from_disk_searches() {
     let root = fixture.path().canonicalize().unwrap();
     std::fs::write(root.join("secret"), "fixture").unwrap();
     std::fs::hard_link(root.join("secret"), root.join("ordinary")).unwrap();
-    assert!(read_searchable_file(&root, "ordinary", 32).is_err());
+    assert!(read_searchable_file(&root, "ordinary", 32, &WorkspacePaths::default()).is_err());
     std::fs::remove_file(root.join("secret")).unwrap();
     assert_eq!(
-        read_searchable_file(&root, "ordinary", 32).unwrap(),
+        read_searchable_file(&root, "ordinary", 32, &WorkspacePaths::default()).unwrap(),
         "fixture"
     );
 }

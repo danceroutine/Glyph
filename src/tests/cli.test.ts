@@ -50,7 +50,15 @@ describe('glyph command line', () => {
     const excludedPaths = ['.glyph/state', 'target/release/glyph-context-index', 'target/release/glyph-shell-sandbox'];
     const [workspace] = cli.instances('FileSystemWorkspaceTextStore');
     const [accessPolicy] = cli.instances('WorkspaceAccessPolicy');
-    expect(workspace?.args).toEqual([root, { caseSensitive: true, excludedPaths, accessPolicy }]);
+    expect(workspace?.args).toEqual([
+      root,
+      {
+        caseSensitive: true,
+        excludedPaths,
+        accessPolicy,
+        physicalAccess: cli.instances('NativeFilesystemMetadata')[0],
+      },
+    ]);
     const cacheName = createHash('sha256').update(`${context.id}\0Repository\0${root}`).digest('hex');
     const [pathIndex] = cli.instances('RustWorkspacePathIndex');
     expect(pathIndex?.args).toEqual([
@@ -399,6 +407,7 @@ function prepareCli({
     '#src/terminal/ui/proposal/TerminalEditReviewer.js': 'TerminalEditReviewer',
     '#src/tools/ToolRegistry.js': 'ToolRegistry',
     '#src/workspace/FileSystemWorkspaceTextStore.js': 'FileSystemWorkspaceTextStore',
+    '#src/workspace/NativeFilesystemMetadata.js': 'NativeFilesystemMetadata',
     '#src/workspace/MultiRootWorkspaceTextStore.js': 'MultiRootWorkspaceTextStore',
     '#src/workspace/policy/WorkspaceAccessPolicy.js': 'WorkspaceAccessPolicy',
     '#src/shell/FileShellPermissionStore.js': 'FileShellPermissionStore',
