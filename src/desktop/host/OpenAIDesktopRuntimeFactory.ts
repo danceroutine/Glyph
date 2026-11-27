@@ -292,22 +292,19 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             const operation = admitted.beginOperation();
             // Reuse filesystem policy and symlink checks before granting editor access.
             const path = this.requestPath(request);
-            if (path !== undefined && path !== '') {
-              if (request.type === GlyphEditorRequestType.EXISTS) await admitted.exists(path);
-              else
-                await admitted.validateAccess(
-                  path,
-                  request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION ||
-                    request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION,
-                );
-            }
-            if (
-              request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
-              'target' in request.mutation &&
-              request.mutation.target
-            ) {
-              await admitted.validateAccess(request.mutation.target, true);
-            }
+            const mutation =
+              request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION ||
+              request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION;
+            const target =
+              request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION && 'target' in request.mutation
+                ? request.mutation.target
+                : undefined;
+            const validateEndpoints = async () => {
+              if (path !== undefined && path !== '') await admitted.validateAccess(path, mutation);
+              if (target) await admitted.validateAccess(target, true);
+            };
+            if (request.type === GlyphEditorRequestType.EXISTS) await admitted.exists(request.path);
+            else await validateEndpoints();
             const qualified =
               path !== undefined && path !== '' && roots.length > 1 ? `${workspaceRoot.name}/${path}` : path;
             let wire = this.withRequestPath(request, qualified);
@@ -322,28 +319,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 mutation: { ...wire.mutation, target: `${workspaceRoot.name}/${wire.mutation.target}` },
               };
             operation.assertCurrent();
-            const mutation =
-              wire.type === GlyphEditorRequestType.APPLY_FILE_MUTATION ||
-              wire.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION;
             const response = mutation
-              ? await this.editors.request(input.identity, wire, signal, () => {
+              ? await this.editors.request(input.identity, wire, signal, async () => {
+                  await validateEndpoints();
                   input.assertTrusted();
                   operation.assertCurrent();
                 })
               : await this.editors.request(input.identity, wire, signal);
-            if (path !== undefined && path !== '') {
-              await admitted.validateAccess(
-                path,
-                request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION ||
-                  request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION,
-              );
-              if (
-                request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
-                'target' in request.mutation &&
-                request.mutation.target
-              )
-                await admitted.validateAccess(request.mutation.target, true);
-            }
+            await validateEndpoints();
             operation.assertCurrent();
             retainAccess?.(operation.assertCurrent);
             return response.snapshot && path !== undefined && path !== ''

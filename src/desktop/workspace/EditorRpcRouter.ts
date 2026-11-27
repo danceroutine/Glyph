@@ -17,7 +17,7 @@ export class EditorRpcRouter {
 
   private readonly mutationGrants = new Map<
     string,
-    { readonly connectionId: string; readonly assertCurrent: () => void }
+    { readonly connectionId: string; readonly assertCurrent: () => Promise<void> }
   >();
 
   constructor(
@@ -38,13 +38,13 @@ export class EditorRpcRouter {
     ) => readonly { identity: GlyphConnectionIdentity; connectionId: string }[] = owner => trustedSkillEditors(owner),
   ) {}
 
-  /** Run the host's retained workspace check for a mutation still pending on the transport that received it. */
-  validateMutation(connectionId: string, grantId: string): boolean {
+  /** Revalidate the mutation endpoints and retain approval only while the issuing port still owns the pending RPC. */
+  async validateMutation(connectionId: string, grantId: string): Promise<boolean> {
     const grant = this.mutationGrants.get(grantId);
     if (!grant || grant.connectionId !== connectionId) return false;
     try {
-      grant.assertCurrent();
-      return true;
+      await grant.assertCurrent();
+      return this.mutationGrants.get(grantId) === grant;
     } catch {
       return false;
     }
@@ -73,7 +73,7 @@ export class EditorRpcRouter {
     identity: GlyphConnectionIdentity,
     request: GlyphEditorRequest,
     signal?: AbortSignal,
-    assertMutation?: () => void,
+    assertMutation?: () => Promise<void>,
   ): Promise<GlyphEditorResponse> {
     const port = this.ports.get(key(identity));
     if (!port) return Promise.reject(new Error('The owning editor is unavailable.'));

@@ -254,7 +254,7 @@ export class GlyphEditorAdapter extends Disposable {
     return resource.scheme === 'untitled' ? resource.path.replace(/^\//u, '') : this.pathFor(resource);
   }
 
-  isCurrentContext(model: ITextModel, attachment: GlyphContextAttachment): boolean {
+  isCurrentContext(model: ITextModel, attachment: Pick<GlyphContextAttachment, 'token'>): boolean {
     return (
       attachment.token?.workspaceGeneration === this.workspaceGeneration &&
       attachment.token.incarnation === this.incarnation(model) &&
@@ -853,6 +853,9 @@ export class GlyphEditorAdapter extends Disposable {
       this.assertWorkspaceBinding();
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
+      const model = this.modelService.getModel(resource);
+      if (!model || !this.isCurrentContext(model, current))
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
       const saved = await this.textFileService.save(resource, { skipSaveParticipants: true });
       if (!saved || this.textFileService.isDirty(resource))
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT, {

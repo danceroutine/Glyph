@@ -90,10 +90,9 @@ parentPort.on('message', event => {
         typeof data.requestId === 'string' &&
         typeof data.grantId === 'string'
       ) {
-        port.postMessage({
-          type: GlyphTransportMessageType.EDITOR_MUTATION_CHECKED,
-          requestId: data.requestId,
-          ok: editors.validateMutation(connectionId, data.grantId),
+        const requestId = data.requestId;
+        void editors.validateMutation(connectionId, data.grantId).then(ok => {
+          if (registered) port.postMessage({ type: GlyphTransportMessageType.EDITOR_MUTATION_CHECKED, requestId, ok });
         });
         return;
       }

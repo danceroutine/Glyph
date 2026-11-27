@@ -33,18 +33,21 @@ describe(EditorRpcRouter, () => {
         },
       },
       undefined,
-      () => {
+      async () => {
         root.signal.throwIfAborted();
       },
     );
     expect(grant).not.toBe('');
-    expect(router.validateMutation('first', grant)).toBe(true);
-    expect(router.validateMutation('peer', grant)).toBe(false);
+    expect(await router.validateMutation('first', grant)).toBe(true);
+    expect(await router.validateMutation('peer', grant)).toBe(false);
+    const checkingAtCompletion = router.validateMutation('first', grant);
     root.abort();
-    expect(router.validateMutation('first', grant)).toBe(false);
+    const revoked = router.validateMutation('first', grant);
     router.receive('first', { operationId: 'create', ok: false });
     await result;
-    expect(router.validateMutation('first', grant)).toBe(false);
+    expect(await checkingAtCompletion).toBe(false);
+    expect(await revoked).toBe(false);
+    expect(await router.validateMutation('first', grant)).toBe(false);
   });
 
   it('ignores editor responses from a connection that does not own the operation', async () => {
