@@ -597,7 +597,7 @@ function assertInsideRoot(root: string, candidate: string, path: string): void {
 /** Reject unsupported bytes before creating directories or opening a write handle. */
 function assertSupportedText(text: string, path: string): void {
   if (text.includes('\0'))
-    throw new WorkspaceTextDecodingError(path, 'Binary/NUL files are not supported.', bytes.length);
+    throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
   // In Unicode mode valid pairs are one code point and do not match. UTF-8
   // encoding must never silently replace a reviewed lone surrogate with U+FFFD.
   if (/[\uD800-\uDFFF]/u.test(text)) {

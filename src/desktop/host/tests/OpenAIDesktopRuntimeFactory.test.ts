@@ -797,9 +797,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           return { operationId: request.operationId, ok: true };
         if (
           request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ||
-          request.type === GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES
+          request.type === GlyphEditorRequestType.CHECK_USER_WORKING_COPIES
         )
-          return { operationId: request.operationId, ok: true, packageClean: true };
+          return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
         if (request.type === GlyphEditorRequestType.READ_SNAPSHOT) {
           expect(request.path).toBe('two/nested/.glyph/skills/example/SKILL.md');
           const file = await new FileSystemWorkspaceTextStore(two).read(request.path.slice('two/'.length));
@@ -912,9 +912,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
         if (
           request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ||
-          request.type === GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES
+          request.type === GlyphEditorRequestType.CHECK_USER_WORKING_COPIES
         )
-          return { operationId: request.operationId, ok: true, packageClean: true };
+          return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
         throw new Error('Only skill working-copy checks are expected');
       });
       const privatePaths = captured.sandboxOptions[0]!.privatePaths;
@@ -929,9 +929,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
         if (
           request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES ||
-          request.type === GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES
+          request.type === GlyphEditorRequestType.CHECK_USER_WORKING_COPIES
         )
-          return { operationId: request.operationId, ok: true, packageClean: true };
+          return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
         if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
           return { operationId: request.operationId, ok: true };
         if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Only read snapshots are expected');
@@ -1248,6 +1248,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await writeFile(join(isolatedUserDirectory, 'notes.md'), 'PUBLIC REFERENCE');
       useFilesystemIndex();
       vi.spyOn(RustWorkspacePathIndex.prototype, 'assertReplaceableMetadata').mockResolvedValue();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_owner, request) => {
+        if (request.type !== GlyphEditorRequestType.CHECK_USER_WORKING_COPIES)
+          throw new Error('Expected a user-rule working-copy check');
+        return { operationId: request.operationId, ok: true, workingCopiesClean: true };
+      });
       vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({
         root: rules,
         fileCount: 3,
@@ -1607,7 +1612,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
             await readFile(join(inner, '.glyph/skills/example/SKILL.md'), 'utf8'),
           );
         if (request.type === GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES)
-          return { operationId: request.operationId, ok: true, packageClean: true };
+          return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
         if (request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
           return { operationId: request.operationId, ok: true };
         throw new Error('Unexpected editor request');

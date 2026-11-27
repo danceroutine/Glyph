@@ -34,7 +34,6 @@ interface Connection {
   attached: boolean;
   ready: boolean;
   canReplay: boolean;
-  authorityKnown: boolean;
   trusted: boolean;
   readOnly: boolean;
   roots: readonly GlyphWorkspaceRoot[];
@@ -150,7 +149,6 @@ export class GlyphDesktopHost {
         attached: false,
         ready: false,
         canReplay: false,
-        authorityKnown: false,
         trusted: false,
         readOnly: true,
         roots: [],

@@ -37,7 +37,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import { mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, relative, isAbsolute, resolve, sep } from 'node:path';
+import { basename, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
@@ -453,7 +453,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             label: 'User skills',
             scope: 'user',
             mutations: mutationRoots.get(userRuleStore.root)!,
-            assertClean: path => assertSkillPackageClean(this.editors, input.identity, 'user', path),
+            assertClean: path =>
+              assertUserWorkingCopiesClean(
+                this.editors,
+                input.identity,
+                'skill',
+                basename(path),
+                userRuleStore.caseSensitive,
+              ),
             store: userRuleStore,
             workspace: userRuleStore,
             directory: 'skills',

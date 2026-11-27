@@ -160,8 +160,6 @@ function editorServices() {
       getModels: () => models,
       getModel: vi.fn((resource: URI) => find(resource) ?? null),
     },
-    workingCopyService: { dirtyWorkingCopies: [] as { resource: URI }[] },
-    pathService: { userHome: () => URI.file('/home/test') },
     textFileService: {
       untitled: { isUntitledWithAssociatedResource: (uri: URI) => uri.path.startsWith('/') },
       isDirty: vi.fn((resource: URI) => dirty.has(resource.path)),
@@ -1775,56 +1773,12 @@ describe('skill package working-copy checks', () => {
   });
 });
 
-it('uses independently authorized user directories at bootstrap and resolves only a peer package basename', async () => {
-  const services = editorServices();
-  const adapter = createAdapter(services);
-  const original = env['GLYPH_USER_DIRECTORY'];
-  const root = '/private/registered/skills';
-  const targets = [{ id: 'user:glyph', label: 'User skills', scope: 'user' as const, uri: URI.file(root).toString() }];
-  const peer = (packageName: string) => ({
-    type: GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES as const,
-    operationId: 'peer',
-    packageName,
-  });
-  try {
-    delete env['GLYPH_USER_DIRECTORY'];
-    expect(await adapter.handle(peer('example'))).toMatchObject({ ok: true, packageClean: true });
-    for (const [configure, directory] of [
-      [false, '/local-home/.glyph/skills/example'],
-      [true, '/configured/skills/example'],
-    ] as const) {
-      if (configure) env['GLYPH_USER_DIRECTORY'] = '/configured';
-      expect(
-        await adapter.handle({
-          type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
-          operationId: 'bootstrap',
-          scope: 'user',
-          directoryUri: URI.file(directory).toString(),
-        }),
-      ).toMatchObject({ ok: true, packageClean: true });
-    }
-    for (const name of ['', '.', '..', 'other/private', 'bad\\path'])
-      expect((await adapter.handle(peer(name), targets)).ok).toBe(false);
-    expect(await adapter.handle(peer('example'))).toMatchObject({ ok: true, packageClean: true });
-    services.pendingCopies.push({ resource: URI.file(root + '/example/new.md') });
-    expect(await adapter.handle(peer('example'), targets)).toEqual({
-      operationId: 'peer',
-      ok: true,
-      packageClean: false,
-    });
-    expect(services.fileService.readFile).not.toHaveBeenCalled();
-  } finally {
-    if (original === undefined) delete env['GLYPH_USER_DIRECTORY'];
-    else env['GLYPH_USER_DIRECTORY'] = original;
-  }
-});
-
 it('checks exact rules and complete skill packages across configured, physical, attached and associated-untitled routes', async () => {
   const services = editorServices();
   const adapter = createAdapter(services);
-  const copies = services.workingCopyService.dirtyWorkingCopies;
+  const copies = services.pendingCopies;
   services.fileService.realpath.mockImplementation(async resource => {
-    if (resource.path === '/home/test/.glyph') return URI.file('/volume/profile');
+    if (resource.path === '/local-home/.glyph') return URI.file('/volume/profile');
     if (resource.path === '/workspace') return URI.file('/volume');
     return undefined;
   });
@@ -1839,7 +1793,7 @@ it('checks exact rules and complete skill packages across configured, physical, 
   expect((await check('rule', 'one.mdc')).workingCopiesClean).toBe(true);
   for (const value of ['', '.', '..', 'test/one.mdc', 'one.txt']) expect((await check('rule', value)).ok).toBe(false);
   for (const path of [
-    '/home/test/.glyph/rules/one.mdc',
+    '/local-home/.glyph/rules/one.mdc',
     '/volume/profile/rules/one.mdc',
     '/workspace/profile/rules/one.mdc',
   ]) {

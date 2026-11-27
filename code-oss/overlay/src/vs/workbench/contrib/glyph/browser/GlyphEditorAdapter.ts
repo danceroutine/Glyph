@@ -14,10 +14,7 @@ import type { GlyphTextRange } from '#glyph/protocol/connection/GlyphTextRange.j
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { Progress } from '#vs/platform/progress/common/progress.js';
 import { BulkTextEdits } from '#vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.js';
-import { env } from '#vs/base/common/process.js';
 import { ExtUri } from '#vs/base/common/resources.js';
-import { IWorkingCopyService } from '#vs/workbench/services/workingCopy/common/workingCopyService.js';
-import { IPathService } from '#vs/platform/path/common/pathService.js';
 import { URI } from '#vs/base/common/uri.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
@@ -131,26 +128,6 @@ export class GlyphEditorAdapter extends Disposable {
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       switch (request.type) {
-        case GlyphEditorRequestType.CHECK_USER_SKILL_WORKING_COPIES: {
-          const root = skillTargets.find(target => target.scope === 'user')?.uri;
-          const name = request.packageName;
-          if (!name || name === '.' || name === '..' || /[/\\\0]/u.test(name))
-            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
-          const configured = env['GLYPH_USER_DIRECTORY'];
-          const localRoot = URI.joinPath(
-            configured
-              ? URI.file(configured)
-              : URI.joinPath(this.pathService.userHome({ preferLocal: true }), '.glyph'),
-            'skills',
-          );
-          return {
-            operationId,
-            ok: true,
-            packageClean:
-              this.packageWorkingCopiesClean(URI.joinPath(localRoot, name)) &&
-              (!root || this.packageWorkingCopiesClean(URI.joinPath(URI.parse(root, true), name))),
-          };
-        }
         case GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES:
           return { operationId, ok: true, packageClean: await this.skillPackageClean(request, skillTargets) };
         case GlyphEditorRequestType.CHECK_USER_WORKING_COPIES:
