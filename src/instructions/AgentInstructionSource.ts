@@ -1,3 +1,5 @@
+import type { SourceOrigin } from '#src/workspace/SourceDisclosure.js';
+
 /** Stable source families understood by the instruction catalog and settings UI. */
 export enum AgentInstructionSourceKind {
   /** Directory-scoped `AGENTS.md` repository guidance. */
@@ -31,7 +33,7 @@ export enum AgentInstructionSourceStatus {
 }
 
 /** One authoritative workspace instruction file discovered by a source provider. */
-export interface AgentInstructionSource {
+export interface AgentInstructionSource extends SourceOrigin {
   /** Provider-stable identity used to deduplicate and track disclosure within a turn. */
   readonly id: string;
   /** Former path-based IDs used to resolve existing selections and historical navigation. */
