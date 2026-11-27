@@ -1261,7 +1261,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.assertSessionBinding();
     const prompt = text.trim();
     const leadingReference = options.referenceSpans?.some(
-      span => span.from === 0 && prompt.slice(0, span.to) === '/' + span.label,
+      span => span.from === 0 && span.to === span.label.length + 1 && prompt.startsWith('/' + span.label),
     );
     const objective = options.planBuild || leadingReference ? undefined : parseGoalCommand(prompt);
     if (objective === '') throw new Error(GOAL_COMMAND_USAGE);
