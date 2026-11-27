@@ -112,7 +112,7 @@ describe(ProjectToolRuntime, () => {
       const structured = runtime.tools.find(tool => tool.name === 'propose_edits')!;
       expect(structured.activityPresentation?.show(reply.output)).toBe(false);
       expect(structured.activityPresentation?.show('{"error":{"code":"STALE"}}')).toBe(true);
-      expect(disclosePaths).toHaveBeenCalledWith('turn-1', ['src/new.ts']);
+      expect(disclosePaths).toHaveBeenCalledWith('turn-1', ['src/new.ts'], undefined);
     });
 
     it('reports an unknown tool as a failed tool call', async () => {

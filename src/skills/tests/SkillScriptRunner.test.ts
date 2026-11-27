@@ -287,3 +287,49 @@ it('stops a reviewed script before launch when the native interpreter authority 
   expect(launch).not.toHaveBeenCalled();
   expect(shells.sessions).toEqual([]);
 });
+
+it.each(['helper', 'turn'] as const)('withholds an approved process after its %s becomes unavailable', async reason => {
+  const f = await fixture();
+  const files = new Map(f.skill.packageFiles());
+  const origin = { path: '/source/helper', identity: '7:9', origin: 'selected route' };
+  files.set('helper', { ...files.get('helper')!, identity: origin.identity });
+  let approved = false;
+  const checkSource = vi.fn(() => {
+    if (approved && reason === 'helper') throw new Error('Helper is private');
+  });
+  const authority = { capture: vi.fn(), authorize: vi.fn(async () => checkSource) };
+  const skill = new SkillPackage(
+    f.skill.descriptor,
+    f.skill.body,
+    files,
+    undefined,
+    new Map([['helper', { authority, file: origin }]]),
+  );
+  const authorize = vi.fn(async () => {
+    approved = true;
+    return { sandboxProfile: ShellSandboxProfile.WORKSPACE_WRITE };
+  });
+  const launch = vi.fn(() => {
+    throw new Error('Unexpected launch');
+  });
+  const shells = new ShellSessionManager({ authorize } as never, { resolve: async () => f.directory } as never, {
+    launch,
+  });
+  onTestFinished(() => shells.dispose());
+  const runner = new SkillScriptRunner(
+    shells,
+    f.roots,
+    testFilesystemMetadata,
+    async root => testPackageMutations(root),
+    join(f.directory, 'staging'),
+  );
+  const checkTurn = () => {
+    if (approved && reason === 'turn') throw new Error('Turn ended');
+  };
+  await expect(runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B', checkTurn)).rejects.toThrow(
+    reason === 'helper' ? 'Helper is private' : 'Turn ended',
+  );
+  expect(authorize).toHaveBeenCalledOnce();
+  expect(authority.authorize).toHaveBeenCalledWith([origin], f.signal);
+  expect(launch).not.toHaveBeenCalled();
+});

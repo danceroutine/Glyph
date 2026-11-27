@@ -205,14 +205,14 @@ export class ProjectAccess {
         case ProjectToolName.READ_FILE: {
           const arguments_ = readProjectFileArguments.parse(JSON.parse(rawArguments));
           const result = await this.readFile(arguments_);
-          return this.withInstructions(result, [result.path], context);
+          return await this.withInstructions(result, [result.path], context, signal);
         }
         case ProjectToolName.SEARCH_CONTENTS: {
           const result = await this.searchContents(
             resolvedSearchProjectContentsArguments.parse(JSON.parse(rawArguments)),
             signal,
           );
-          return this.withInstructions(result, searchResultPaths(result), context);
+          return await this.withInstructions(result, searchResultPaths(result), context, signal);
         }
         default:
           throw new Error(`Unknown project tool: ${name}`);
@@ -237,8 +237,15 @@ export class ProjectAccess {
     }
   }
 
-  private withInstructions(result: object, paths: readonly string[], context?: ToolExecutionContext): string {
-    const instructions = context?.turnId ? this.turnContexts?.disclosePaths(context.turnId, paths) : undefined;
+  private async withInstructions(
+    result: object,
+    paths: readonly string[],
+    context?: ToolExecutionContext,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const instructions = context?.turnId
+      ? await this.turnContexts?.disclosePaths(context.turnId, paths, signal)
+      : undefined;
     return JSON.stringify(instructions ? { ...result, instructionContext: instructions } : result);
   }
 

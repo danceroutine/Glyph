@@ -183,13 +183,14 @@ export class ShellSessionManager implements ShellSessionRegistry {
     const workingDirectory = existing
       ? existing.snapshot.workingDirectory
       : await this.workingDirectories.resolve(options.workingDirectory);
-    await program?.assertAuthority();
+    const checkApproval = await program?.assertAuthority();
+    checkApproval?.();
     const authorization = await this.authorizer.authorize(command, workingDirectory, options.signal, {
       background: options.background === true,
       existingTerminal: existing !== undefined,
       ...(options.transient ? { transient: true } : {}),
     });
-    await program?.assertAuthority();
+    const checkLaunch = await program?.assertAuthority();
     options.signal.throwIfAborted();
     this.assertAvailable();
     if (existing && (this.terminals.get(existing.snapshot.id) !== existing || this.closing.has(existing.snapshot.id))) {
@@ -203,6 +204,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
     try {
       // Configuration can fail before launch too; it must release a newly
       // allocated terminal just like a synchronous process-launch failure.
+      checkLaunch?.();
       completion = terminal.execute({
         command,
         program,

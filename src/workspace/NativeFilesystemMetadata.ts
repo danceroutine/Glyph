@@ -1,5 +1,7 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
+import { z } from 'zod';
+import type { SourceOriginReader } from './PinnedSourceAuthority.ts';
 import type { FileHandle } from 'node:fs/promises';
 import type { WorkspacePathAccess } from './WorkspacePathAccess.ts';
 import type { FilesystemMetadata } from './FilesystemMetadata.ts';
@@ -12,8 +14,30 @@ import type { HostFilesystemAuthority } from './HostFilesystemAuthority.ts';
  * metadata inspection passes that handle directly to the inspector. Both
  * results describe the operation in progress and expire when its target changes.
  */
-export class NativeFilesystemMetadata implements FilesystemMetadata, HostFilesystemAuthority, WorkspacePathAccess {
+export class NativeFilesystemMetadata implements FilesystemMetadata, HostFilesystemAuthority, WorkspacePathAccess, SourceOriginReader {
   constructor(private readonly executable: string) {}
+
+  /** Inspect all source routes in a single native request, using the caller's operation reservations. */
+  async sourceOrigins(paths: readonly string[], privatePaths: readonly string[], signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    if (paths.length === 0) return [];
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = execFile(
+        this.executable,
+        ['--source-origins'],
+        { env: {}, signal, timeout: 30_000, maxBuffer: paths.length * 160 },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+      );
+      child.stdin!.on('error', reject);
+      child.stdin!.end(JSON.stringify({ paths, privatePaths }));
+    });
+    return z
+      .array(
+        z.object({ origin: z.string().regex(/^[a-f0-9]{64}$/u), identity: z.string().regex(/^\d+:\d+$/u) }).strict(),
+      )
+      .length(paths.length)
+      .parse(JSON.parse(output));
+  }
 
   async assertWorkspacePath(
     path: string,

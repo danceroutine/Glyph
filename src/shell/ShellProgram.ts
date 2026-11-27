@@ -8,7 +8,7 @@ export class ShellProgram {
     readonly executable: string,
     arguments_: readonly string[],
     readonly description: string,
-    private readonly validateAuthority?: () => Promise<void>,
+    private readonly validateAuthority?: () => Promise<void | (() => void)>,
   ) {
     if (!isAbsolute(executable) || executable.includes('\0') || arguments_.some(argument => argument.includes('\0')))
       throw new Error('A program requires an absolute executable and arguments without NUL characters.');
@@ -16,9 +16,13 @@ export class ShellProgram {
     Object.freeze(this);
   }
 
-  /** Revalidate host authority before approval and again before process creation. */
-  async assertAuthority(): Promise<void> {
-    await this.validateAuthority?.();
+  /**
+   * Obtain fresh authority before exposing the approval text or launching the
+   * process. Invoke the returned guard at synchronous handoff so revocation
+   * during async preparation takes effect before the command reaches its caller.
+   */
+  async assertAuthority(): Promise<void | (() => void)> {
+    return this.validateAuthority?.();
   }
 
   /** Approval text describes the exact argument boundaries; it is never parsed as a shell command. */

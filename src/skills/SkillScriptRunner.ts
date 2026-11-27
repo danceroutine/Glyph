@@ -1,3 +1,4 @@
+import { authorizeSources } from '#src/workspace/SourceDisclosure.js';
 import { resolveAvailableIdentity } from '#src/shell/ShellRuntimePathPolicy.js';
 import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';
 import type { HostExecutable } from '#src/shell/TrustedHostExecutable.js';
@@ -24,7 +25,12 @@ export interface SkillExecutionRoot {
   readonly originIds: readonly string[];
 }
 
-/** Executes pinned resources outside writable workspaces, with one-shot shell approval. */
+/**
+ * Executes a captured package through one-shot shell approval. The interpreter
+ * may load any staged resource. Check that every source remains authorized
+ * before staging, when showing the command for approval, and at launch. The
+ * staging directory and executable must also remain outside attached roots.
+ */
 export class SkillScriptRunner {
   constructor(
     private readonly shells: Pick<ShellSessionManager, 'executeProgram'>,
@@ -47,6 +53,7 @@ export class SkillScriptRunner {
     ownerChatId: string,
     signal: AbortSignal,
     workspaceRootId?: string,
+    assertActive?: () => void,
   ) {
     signal.throwIfAborted();
     if (!path.startsWith('scripts/')) throw new Error('Executable skill resources must be in scripts/.');
@@ -57,6 +64,17 @@ export class SkillScriptRunner {
       throw new Error('This skill does not declare permission to use the shell execution tool.');
     // Inspection does not claim that the model has read the resource.
     const files = skill.packageFiles();
+    const pins = skill.disclosurePins([...files.keys()]);
+    const authorizePackage = async () => {
+      const checkSources = await authorizeSources(pins, signal);
+      const assertCurrent = () => {
+        checkSources();
+        assertActive?.();
+      };
+      assertCurrent();
+      return assertCurrent;
+    };
+    const checkStaging = await authorizePackage();
     const resource = skill.inspectResource(path);
     if (resource.encoding !== 'utf8') throw new Error('Skill scripts must contain UTF-8 source.');
     const source = escapeDisplayControls(resource.content);
@@ -114,6 +132,7 @@ export class SkillScriptRunner {
         const handle = await open(destination, 'wx', 0o600);
         try {
           await this.metadata.inspect(handle, 'access');
+          checkStaging();
           await handle.writeFile(content.bytes);
           await handle.chmod(content.mode);
         } finally {
@@ -141,8 +160,16 @@ export class SkillScriptRunner {
         .split('\n')
         .map(line => `# ${line}`)
         .join('\n')}`;
+      const authorizeProgram = async () => {
+        const checkPackage = await authorizePackage();
+        const checkHost = await authority.validate();
+        return () => {
+          checkHost();
+          checkPackage();
+        };
+      };
       const result = await this.shells.executeProgram(
-        new ShellProgram(executable, [join(directory, path), ...args], description, () => authority.validate()),
+        new ShellProgram(executable, [join(directory, path), ...args], description, authorizeProgram),
         {
           ownerChatId,
           signal,

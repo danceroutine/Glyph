@@ -80,7 +80,7 @@ describe(SkillLifecycleToolRuntime, () => {
     const paths = ['two/.glyph/skills/example/SKILL.md', 'two/.glyph/skills/example/assets/icon.bin'];
     manager.workspacePaths.mockReturnValue(paths);
     const instructions = { schema: 'glyph.agent-instructions.v1' as const, sources: [] };
-    turns.disclosePaths.mockReturnValueOnce(instructions);
+    turns.disclosePaths.mockResolvedValueOnce(instructions);
     const input = JSON.stringify({
       target_id: 'user:glyph',
       replace_id: null,
@@ -92,7 +92,7 @@ describe(SkillLifecycleToolRuntime, () => {
       status: 'INSTRUCTION_CONTEXT_REQUIRED',
       instructionContext: instructions,
     });
-    expect(turns.disclosePaths).toHaveBeenCalledWith(context.turnId, paths);
+    expect(turns.disclosePaths).toHaveBeenCalledWith(context.turnId, paths, signal);
     expect(manager.workspacePaths).toHaveBeenCalledWith('preview');
     expect(tool.activityPresentation?.show(first)).toBe(false);
     expect(approve).not.toHaveBeenCalled();
@@ -191,6 +191,7 @@ describe(SkillLifecycleToolRuntime, () => {
       'chat',
       signal,
       undefined,
+      expect.any(Function),
     );
     session.release();
     await expect(script.execute(input, signal, context)).rejects.toThrow('ended');
@@ -227,5 +228,13 @@ it('preserves failed script exit status and process output as a failed tool oper
     code: 'SKILL_SCRIPT_FAILED',
     output: JSON.stringify({ exitCode: 7, output: 'Failed process output' }),
   });
-  expect(runner.run).toHaveBeenCalledWith(expect.anything(), 'scripts/task.sh', [], 'chat', signal, 'second');
+  expect(runner.run).toHaveBeenCalledWith(
+    expect.anything(),
+    'scripts/task.sh',
+    [],
+    'chat',
+    signal,
+    'second',
+    expect.any(Function),
+  );
 });

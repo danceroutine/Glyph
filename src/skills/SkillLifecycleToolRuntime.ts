@@ -14,7 +14,7 @@ import type { SkillPackageManager } from './SkillPackageManager.ts';
 import { SkillPackageDraft, skillPackageDraftSchema } from './SkillPackageDraft.ts';
 import type { SkillPreview } from './SkillLifecycle.ts';
 import type { SkillScriptRunner } from './SkillScriptRunner.ts';
-import { activeSkillPackage } from './activeSkillPackage.ts';
+import { acquireActiveSkillPackage } from './activeSkillPackage.ts';
 
 const changeSchema = z
   .object({
@@ -69,7 +69,8 @@ export class SkillLifecycleToolRuntime implements ToolSource {
           try {
             signal.throwIfAborted();
             const paths = manager.workspacePaths(preview.id);
-            const instructionContext = paths.length > 0 ? turns.disclosePaths(context.turnId, paths) : undefined;
+            const instructionContext =
+              paths.length > 0 ? await turns.disclosePaths(context.turnId, paths, signal) : undefined;
             if (instructionContext) return proposalInstructionContext(instructionContext);
             if (!(await approve(preview, signal))) return JSON.stringify({ applied: false, denied: true });
             signal.throwIfAborted();
@@ -98,14 +99,15 @@ export class SkillLifecycleToolRuntime implements ToolSource {
         execute: async (input, signal, context) => {
           if (!context.chat || !context.turnId) throw new Error('Skill execution requires an owning agent turn.');
           const request = runSchema.parse(JSON.parse(input));
-          const session = turns.contribution(context.turnId, 'skills');
+          const { pinned, assertActive } = acquireActiveSkillPackage(turns, context.turnId, request.id);
           const result = await runner.run(
-            activeSkillPackage(session, request.id),
+            pinned,
             request.path,
             request.args,
             context.chat.id,
             signal,
             request.workspace_root_id ?? undefined,
+            assertActive,
           );
           const output = JSON.stringify(result);
           if (result.exitCode !== 0)

@@ -47,13 +47,15 @@ describe('Turn context contributor lifetime', () => {
     await expect(coordinator.beginTurn({ turnId: 'same', attachmentPaths: [] })).rejects.toThrow('already');
     for (let i = 0; i < 31; i++) await coordinator.beginTurn({ turnId: `turn-${i}`, attachmentPaths: [] });
     await expect(coordinator.beginTurn({ turnId: 'excess', attachmentPaths: [] })).rejects.toThrow('32 turns');
+    expect(await coordinator.activateSource('absent', 'missing', 'missing', 'manual', 'selection')).toBeUndefined();
+    expect(await coordinator.steer({ turnId: 'absent', attachmentPaths: [] })).toBeUndefined();
     expect(coordinator.snapshot('same')).toBeDefined();
     expect(coordinator.snapshot('turn-0')).toBeDefined();
     expect(release).not.toHaveBeenCalled();
     coordinator.discardTurn('same');
     await coordinator.beginTurn({ turnId: 'replacement', attachmentPaths: [] });
     expect(release).toHaveBeenCalledOnce();
-    expect(coordinator.activateRule('replacement', 'missing')).toBeUndefined();
+    expect(await coordinator.activateRule('replacement', 'missing')).toBeUndefined();
     expect(await coordinator.activateSource('replacement', 'empty', 'missing', 'manual', 'Selected')).toBeUndefined();
   });
 });

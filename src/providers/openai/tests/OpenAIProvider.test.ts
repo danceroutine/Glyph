@@ -294,6 +294,40 @@ describe(OpenAIProvider, () => {
     expect(JSON.stringify(requests[2]!.input)).not.toContain('glyph.agent-instructions.v1');
   });
 
+  it('checks current source authority before tracing and at the HTTP transport handoff', async () => {
+    const coordinator = aTurnContextCoordinator(async () => ({
+      schema: 'glyph.agent-instructions.v1',
+      sources: [],
+    }));
+    let allowed = false;
+    const check = vi.fn(() => {
+      if (!allowed) throw new Error('Access revoked');
+    });
+    coordinator.authorizeDisclosure = async () => {
+      check();
+      return check;
+    };
+    const { provider, requests } = harness([() => sse([completed])], undefined, coordinator);
+    const traces: string[] = [];
+    await expect(provider.send('First', { ...options(), onTrace: event => traces.push(event.kind) })).rejects.toThrow(
+      'Access revoked',
+    );
+    expect(traces).not.toContain('request.body');
+    allowed = true;
+    await expect(
+      provider.send('Second', {
+        ...options(),
+        onTrace: event => {
+          if (event.kind === 'request.body') allowed = false;
+        },
+      }),
+    ).rejects.toThrow();
+    expect(requests).toHaveLength(0);
+    allowed = true;
+    await provider.send('Third', options());
+    expect(requests).toHaveLength(1);
+  });
+
   it('starts scoped instruction turns with the host turn id and attached paths', async () => {
     const instructionContext = aTurnContextCoordinator(async () => ({
       schema: 'glyph.agent-instructions.v1',

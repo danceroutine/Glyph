@@ -37,6 +37,9 @@ export interface AgentTurnContext {
   readonly round: number;
   /** Provider-neutral instructions prepared by the host for this boundary. */
   readonly instructionContext?: ModelTurnContext;
+  /** Called after preparing each model request to reauthorize the frozen sources in its input.
+   * The returned guard also runs at transport handoff and on any subsequent transport retry. */
+  readonly authorizeDisclosure?: () => Promise<() => void>;
   readonly onText: (delta: string) => void;
   readonly onReasoningSummary?: (delta: string) => void;
   readonly trace: (kind: string, data: unknown, round?: number) => void;

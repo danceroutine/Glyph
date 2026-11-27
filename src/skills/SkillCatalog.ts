@@ -22,6 +22,8 @@ export class SkillCatalog {
       prepare?(paths: readonly string[]): void;
     },
     private readonly migratePreferences?: (skills: readonly SkillDescriptor[]) => Promise<void>,
+    /** Refresh the host's physical user-store aliases before any provider enumerates package candidates. */
+    private readonly beforeDiscovery?: () => void,
   ) {
     this.byId = new Map(providers.map(provider => [provider.id, provider]));
     if (this.byId.size !== providers.length) throw new Error('Skill provider IDs must be unique.');
@@ -54,6 +56,7 @@ export class SkillCatalog {
     } catch (cause) {
       unavailable = { cause };
     }
+    this.beforeDiscovery?.();
     const discovered = (
       await Promise.all(
         this.providers.map(async provider => {
@@ -182,8 +185,10 @@ export class SkillCatalog {
         : {}),
       enabled: skill.status === 'active' && (this.enabled.get(skill.id) ?? skill.enabled),
     }));
-    if (JSON.stringify(projected) !== JSON.stringify(this.current)) {
-      this.current = projected;
+    // Source identities can change while the public settings metadata stays identical.
+    const changed = JSON.stringify(projected) !== JSON.stringify(this.current);
+    this.current = projected;
+    if (changed) {
       for (const listener of this.listeners) listener();
     }
   }

@@ -13,7 +13,7 @@ describe(RuleToolRuntime, () => {
       await runtime.tools[0]!.execute(JSON.stringify({ id: 'rule' }), new AbortController().signal, { turnId: 'turn' }),
     );
 
-    expect(activateRule).toHaveBeenCalledWith('turn', 'rule');
+    expect(activateRule).toHaveBeenCalledWith('turn', 'rule', expect.any(AbortSignal));
     expect(output).toMatchObject({ activated: true, instructionContext: { sources: [{ id: 'rule' }] } });
   });
 

@@ -93,7 +93,7 @@ describe(TurnContextCoordinator, () => {
     const coordinator = new TurnContextCoordinator({ refresh: async () => [rule] } as never);
     const turn = await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: ['one'] });
     expect(turn.initialEnvelope().sources).toEqual([]);
-    expect(coordinator.disclosePaths('turn', ['two'])).toBeUndefined();
+    expect(await coordinator.disclosePaths('turn', ['two'])).toBeUndefined();
   });
 
   it('prepares attachments, always-on sources, manual selections, and bounded candidates once', async () => {
@@ -121,19 +121,19 @@ describe(TurnContextCoordinator, () => {
       ['typescript', AgentInstructionActivationReason.ATTACHMENT],
       ['manual', AgentInstructionActivationReason.MANUAL],
     ]);
-    expect(coordinator.disclosePaths('turn', ['src/app.ts'])).toBeUndefined();
+    expect(await coordinator.disclosePaths('turn', ['src/app.ts'])).toBeUndefined();
   });
 
   it('discloses newly matching paths, activates model rules, and snapshots frozen revisions', async () => {
     const coordinator = new TurnContextCoordinator(catalog() as never);
     await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: [] });
 
-    expect(coordinator.disclosePaths('turn', ['src/app.ts'])).toMatchObject({
+    expect(await coordinator.disclosePaths('turn', ['src/app.ts'])).toMatchObject({
       sources: [{ id: 'nested-agents' }, { id: 'typescript' }],
     });
-    expect(coordinator.activateRule('turn', 'model')).toMatchObject({ sources: [{ id: 'model' }] });
-    expect(coordinator.activateRule('turn', 'model')).toBeUndefined();
-    expect(coordinator.activateRule('turn', 'manual')).toBeUndefined();
+    expect(await coordinator.activateRule('turn', 'model')).toMatchObject({ sources: [{ id: 'model' }] });
+    expect(await coordinator.activateRule('turn', 'model')).toBeUndefined();
+    expect(await coordinator.activateRule('turn', 'manual')).toBeUndefined();
     expect(coordinator.completeTurn('turn')).toMatchObject({
       schema: 'glyph.turn-context.v1',
       turnId: 'turn',
@@ -158,9 +158,9 @@ describe(TurnContextCoordinator, () => {
     const initial = turn.initialEnvelope();
     expect(initial.sources).toMatchObject([{ id: mandatory.id }]);
     expect(initial.candidates?.map(candidate => candidate.id)).toEqual(['small']);
-    expect(coordinator.activateRule('bytes', 'large-0')).toBeUndefined();
-    expect(coordinator.disclosePaths('bytes', ['file'])).toBeUndefined();
-    expect(coordinator.activateRule('bytes', 'small')?.sources[0]?.id).toBe('small');
+    expect(await coordinator.activateRule('bytes', 'large-0')).toBeUndefined();
+    expect(await coordinator.disclosePaths('bytes', ['file'])).toBeUndefined();
+    expect((await coordinator.activateRule('bytes', 'small'))?.sources[0]?.id).toBe('small');
     const bounded = await start('advertised-bytes', many);
     expect(Buffer.byteLength(JSON.stringify(bounded.turn.initialEnvelope().candidates))).toBeLessThanOrEqual(32 * 1024);
     expect(bounded.turn.initialEnvelope().candidates?.length).toBeGreaterThan(0);
@@ -169,7 +169,7 @@ describe(TurnContextCoordinator, () => {
       Array.from({ length: 65 }, (_, index) => model(String(index), 1)),
     );
     expect(count.turn.initialEnvelope().candidates).toHaveLength(50);
-    expect(count.coordinator.disclosePaths('count', ['file'])).toBeUndefined();
+    expect(await count.coordinator.disclosePaths('count', ['file'])).toBeUndefined();
   });
 
   it('selects nested guidance and literal globs for the name policy of each attached volume', async () => {
@@ -201,7 +201,7 @@ describe(TurnContextCoordinator, () => {
           .sources.map(item => item.id)
           .toSorted(),
       ).toEqual(normalizesUnicode ? ['glob', 'nested'] : []);
-      expect(coordinator.disclosePaths('unicode', [composed + '/file.txt'])?.sources.length).toBe(
+      expect((await coordinator.disclosePaths('unicode', [composed + '/file.txt']))?.sources.length).toBe(
         normalizesUnicode ? undefined : 2,
       );
     }
@@ -285,8 +285,12 @@ describe(TurnContextCoordinator, () => {
     expect(turn.snapshot().activations.every(value => value.reason === AgentInstructionActivationReason.ALWAYS)).toBe(
       true,
     );
-    expect(coordinator.disclosePaths('roots', ['Api/SRC/readme'])?.sources.map(value => value.id)).toEqual(['nested']);
-    expect(coordinator.disclosePaths('roots', ['api/readme'])?.sources.map(value => value.id)).toEqual(['on-entry']);
+    expect((await coordinator.disclosePaths('roots', ['Api/SRC/readme']))?.sources.map(value => value.id)).toEqual([
+      'nested',
+    ]);
+    expect((await coordinator.disclosePaths('roots', ['api/readme']))?.sources.map(value => value.id)).toEqual([
+      'on-entry',
+    ]);
   });
 
   it('evaluates global user patterns relative to the accessed root and bounds aggregate matching atomically', async () => {
@@ -319,12 +323,12 @@ describe(TurnContextCoordinator, () => {
       new AgentInstructionCatalog([{ discover: async () => rules }], paths),
     );
     const turn = await coordinator.beginTurn({ turnId: 'bounded', attachmentPaths: [] });
-    expect(() => coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS', 'web/' + 'a'.repeat(1000)])).toThrow(
+    await expect(coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS', 'web/' + 'a'.repeat(1000)])).rejects.toThrow(
       'per-disclosure work limit',
     );
     expect(turn.snapshot().activations).toEqual([]);
-    expect(coordinator.disclosePaths('bounded', ['web/SRC/ENTRY.TS'])).toBeUndefined();
-    expect(coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS'])?.sources.map(value => value.id)).toEqual([
+    expect(await coordinator.disclosePaths('bounded', ['web/SRC/ENTRY.TS'])).toBeUndefined();
+    expect((await coordinator.disclosePaths('bounded', ['api/SRC/ENTRY.TS']))?.sources.map(value => value.id)).toEqual([
       'glob',
       'literal',
     ]);
@@ -348,9 +352,9 @@ describe(TurnContextCoordinator, () => {
       );
       const turn = await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: ['src-other/file'] });
       expect(turn.initialEnvelope().sources).toHaveLength(1);
-      expect(() => coordinator.discloseAttachments('turn', ['src/test'])).toThrow(sourcePath);
-      expect(() => coordinator.disclosePaths('turn', ['src/file'])).toThrow(sourcePath);
-      expect(coordinator.disclosePaths('turn', ['docs/file'])).toBeUndefined();
+      await expect(coordinator.discloseAttachments('turn', ['src/test'])).rejects.toThrow(sourcePath);
+      await expect(coordinator.disclosePaths('turn', ['src/file'])).rejects.toThrow(sourcePath);
+      expect(await coordinator.disclosePaths('turn', ['docs/file'])).toBeUndefined();
     }
   });
   it('identifies unreadable required guidance before starting a turn', async () => {
@@ -394,13 +398,13 @@ describe(TurnContextCoordinator, () => {
       new AgentInstructionCatalog([{ discover: async () => discovered }], paths),
     );
     await coordinator.beginTurn({ turnId: 'case', attachmentPaths: [] });
-    expect(coordinator.disclosePaths('case', ['root/src/app.ts'])).toBeUndefined();
-    expect(coordinator.disclosePaths('case', ['Root/src/app.ts'])?.sources.map(value => value.id)).toEqual([
+    expect(await coordinator.disclosePaths('case', ['root/src/app.ts'])).toBeUndefined();
+    expect((await coordinator.disclosePaths('case', ['Root/src/app.ts']))?.sources.map(value => value.id)).toEqual([
       'always',
       'files',
       'agents',
     ]);
-    expect(coordinator.discloseAttachments('case', ['Root/SRC/app.ts'])).toBeUndefined();
+    expect(await coordinator.discloseAttachments('case', ['Root/SRC/app.ts'])).toBeUndefined();
   });
 
   it('retains a user rule’s editor URI for inspection without sending it to the model', async () => {
@@ -419,10 +423,10 @@ describe(TurnContextCoordinator, () => {
     const coordinator = new TurnContextCoordinator(new AgentInstructionCatalog([{ discover: async () => [large] }]));
     await coordinator.beginTurn({ turnId: 'budget', attachmentPaths: [] });
     for (let attempt = 0; attempt < 2; attempt++) {
-      expect(() => coordinator.disclosePaths('budget', ['large/a'])).toThrow('512 KiB');
+      await expect(coordinator.disclosePaths('budget', ['large/a'])).rejects.toThrow('512 KiB');
       expect(coordinator.snapshot('budget')?.sources).toEqual([]);
     }
-    expect(coordinator.disclosePaths('budget', ['other/a'])).toBeUndefined();
+    expect(await coordinator.disclosePaths('budget', ['other/a'])).toBeUndefined();
   });
 
   it('reserves capacity before discovery and releases a failed admission', async () => {
@@ -460,7 +464,7 @@ describe(TurnContextCoordinator, () => {
     coordinator.completeTurn('turn-0');
     await coordinator.beginTurn({ turnId: 'turn-32', attachmentPaths: [] });
     expect(coordinator.snapshot('turn-32')?.turnId).toBe('turn-32');
-    expect(coordinator.disclosePaths('missing', ['src/app.ts'])).toBeUndefined();
+    expect(await coordinator.disclosePaths('missing', ['src/app.ts'])).toBeUndefined();
   });
 
   it('advertises and activates rules only for participating multi-root paths', async () => {
@@ -480,26 +484,29 @@ describe(TurnContextCoordinator, () => {
     const session = await coordinator.beginTurn({ turnId: 'roots', attachmentPaths: ['api/src/app.ts'] });
 
     expect(session.initialEnvelope().candidates?.map(candidate => candidate.id)).toEqual(['api-model']);
-    expect(coordinator.activateRule('roots', 'web-model')).toBeUndefined();
-    expect(coordinator.disclosePaths('roots', ['web/src/app.ts'])?.candidates?.map(candidate => candidate.id)).toEqual([
+    expect(await coordinator.activateRule('roots', 'web-model')).toBeUndefined();
+    expect(
+      (await coordinator.disclosePaths('roots', ['web/src/app.ts']))?.candidates?.map(candidate => candidate.id),
+    ).toEqual(['web-model']);
+    expect((await coordinator.activateRule('roots', 'web-model'))?.sources.map(value => value.id)).toEqual([
       'web-model',
     ]);
-    expect(coordinator.activateRule('roots', 'web-model')?.sources.map(value => value.id)).toEqual(['web-model']);
   });
 
   it('handles steering attachments, manual activation, empty turns, and explicit disposal', async () => {
     const coordinator = new TurnContextCoordinator(catalog() as never);
     await coordinator.beginTurn({ turnId: 'steering', attachmentPaths: [] });
 
-    expect(coordinator.discloseAttachments('steering', ['src/app.ts'])?.sources.map(value => value.id)).toEqual([
-      'nested-agents',
-      'typescript',
+    expect((await coordinator.discloseAttachments('steering', ['src/app.ts']))?.sources.map(value => value.id)).toEqual(
+      ['nested-agents', 'typescript'],
+    );
+    expect((await coordinator.activateManualRules('steering', ['manual']))?.sources.map(value => value.id)).toEqual([
+      'manual',
     ]);
-    expect(coordinator.activateManualRules('steering', ['manual'])?.sources.map(value => value.id)).toEqual(['manual']);
-    expect(coordinator.activateManualRules('steering', ['manual'])).toBeUndefined();
+    expect(await coordinator.activateManualRules('steering', ['manual'])).toBeUndefined();
     coordinator.discardTurn('steering');
-    expect(coordinator.discloseAttachments('steering', ['src/app.ts'])).toBeUndefined();
-    expect(coordinator.activateManualRules('steering', ['manual'])).toBeUndefined();
+    expect(await coordinator.discloseAttachments('steering', ['src/app.ts'])).toBeUndefined();
+    expect(await coordinator.activateManualRules('steering', ['manual'])).toBeUndefined();
 
     const empty = new TurnContextCoordinator({ refresh: vi.fn(async () => []) } as never);
     expect((await empty.beginTurn({ turnId: 'empty', attachmentPaths: [] })).initialEnvelope()).toEqual({
@@ -527,10 +534,12 @@ describe(TurnContextCoordinator, () => {
     const session = await coordinator.beginTurn({ turnId: 'ineligible', attachmentPaths: [] });
 
     expect(session.initialEnvelope().candidates).toEqual([expect.objectContaining({ id: 'unnamed', name: 'unnamed' })]);
-    expect(() => coordinator.activateManualRules('ineligible', ['disabled', 'missing'])).toThrow('manual activation');
-    expect(() => coordinator.activateManualRules('ineligible', ['missing'])).toThrow('unavailable');
-    expect(coordinator.activateRule('ineligible', 'disabled')).toBeUndefined();
-    expect(() => coordinator.activateManualRules('ineligible', ['unnamed'])).toThrow('manual activation');
+    await expect(coordinator.activateManualRules('ineligible', ['disabled', 'missing'])).rejects.toThrow(
+      'manual activation',
+    );
+    await expect(coordinator.activateManualRules('ineligible', ['missing'])).rejects.toThrow('unavailable');
+    expect(await coordinator.activateRule('ineligible', 'disabled')).toBeUndefined();
+    await expect(coordinator.activateManualRules('ineligible', ['unnamed'])).rejects.toThrow('manual activation');
     await expect(
       coordinator.beginTurn({ turnId: 'queued', attachmentPaths: [], manualRuleIds: ['unnamed'] }),
     ).rejects.toThrow('manual activation');

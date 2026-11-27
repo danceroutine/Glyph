@@ -48,6 +48,8 @@ const filesystem = new Set([
   'src/skills/SkillRepositoryGit.ts',
   'src/skills/SkillScriptRunner.ts',
   'src/skills/SkillStateStore.ts',
+  'src/skills/SkillPreferenceFile.ts',
+  'src/skills/readHostFile.ts',
   'src/skills/installedPackageModes.ts',
   'src/skills/skillPackageInventory.ts',
   'src/shell/TrustedHostExecutable.ts',
@@ -93,6 +95,15 @@ const restrictedModules = new Map([
   [nativeIndex, composition],
   [nativeShell, shellComposition],
   ['src/workspace/NativeWorkspaceMutations.ts', composition],
+  [
+    'src/skills/readHostFile.ts',
+    new Set([
+      'src/skills/SkillPreferenceFile.ts',
+      'src/skills/SkillRepositoryConfiguration.ts',
+      'src/skills/skillPackageInventory.ts',
+    ]),
+  ],
+  ['src/skills/SkillPreferenceFile.ts', new Set(['src/skills/SkillStateStore.ts'])],
   ['src/workspace/policy/StartupUserProfile.ts', composition],
 ]);
 

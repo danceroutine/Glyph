@@ -1,3 +1,4 @@
+import type { SourcePin } from '#src/workspace/SourceDisclosure.js';
 import type { TurnContextEnvelope, TurnContextSnapshot } from './TurnContextEnvelope.ts';
 import type { AgentInstructionActivationReason } from '#src/instructions/AgentInstructionSource.js';
 
@@ -11,6 +12,8 @@ export interface TurnContextInput {
 
 /** Frozen contribution. A domain owns activation semantics; the coordinator owns turn lifetime and composition. */
 export interface TurnContextContribution {
+  /** The selected source origins for one delta, or every origin replayed in the current provider input. */
+  disclosurePins?(context?: TurnContextEnvelope): readonly SourcePin[];
   initialEnvelope(): TurnContextEnvelope;
   snapshot(): TurnContextSnapshot;
   disclosePaths?(paths: readonly string[]): TurnContextEnvelope | undefined;

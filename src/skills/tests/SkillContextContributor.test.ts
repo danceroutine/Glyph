@@ -199,9 +199,11 @@ describe(SkillContextContributor, () => {
     const session = await coordinator.beginTurn({ turnId: 'nested', attachmentPaths: [] });
     expect(session.initialEnvelope().skillCandidates).toBeUndefined();
     expect(await coordinator.activateSource('nested', 'skills', source.id, 'model', 'guess')).toBeUndefined();
-    expect(coordinator.disclosePaths('nested', ['packages/web/index.ts'])).toBeUndefined();
-    expect(coordinator.disclosePaths('nested', ['packages/api/index.ts'])?.skillCandidates?.[0]?.id).toBe(source.id);
-    expect(coordinator.discloseAttachments('nested', ['packages/api/other.ts'])).toBeUndefined();
+    expect(await coordinator.disclosePaths('nested', ['packages/web/index.ts'])).toBeUndefined();
+    expect((await coordinator.disclosePaths('nested', ['packages/api/index.ts']))?.skillCandidates?.[0]?.id).toBe(
+      source.id,
+    );
+    expect(await coordinator.discloseAttachments('nested', ['packages/api/other.ts'])).toBeUndefined();
     expect(
       (await coordinator.activateSource('nested', 'skills', source.id, 'model', 'API task'))?.skills?.[0]?.body,
     ).toBe('Skill instructions');
@@ -231,7 +233,7 @@ describe(SkillContextContributor, () => {
     await catalog.refresh();
     const active = coordinator.contribution('first', 'skills');
     expect(active).toBeInstanceOf(SkillTurnContext);
-    expect((active as SkillTurnContext).readResource(source.id, 'reference.md').content).toBe('FIRST BODY');
+    expect((await (active as SkillTurnContext).readResource(source.id, 'reference.md')).content).toBe('FIRST BODY');
     const second = await coordinator.beginTurn({ turnId: 'second', attachmentPaths: [], skillIds: [source.id] });
     expect(second.initialEnvelope().skills?.[0]?.body).toBe('SECOND BODY');
     expect(capture).toHaveBeenCalledTimes(2);

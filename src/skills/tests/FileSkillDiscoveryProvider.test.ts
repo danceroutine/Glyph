@@ -1,7 +1,9 @@
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { WorkspaceReadFailure } from '#src/workspace/WorkspaceReadFailure.js';
-import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
+import type { PinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import { mkdtemp, mkdir, rm, writeFile, symlink, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -42,10 +44,90 @@ it('retains missing manifest diagnostics and the stored path of a physically cla
 });
 
 describe(FileSkillDiscoveryProvider, () => {
+  it('discloses pinned resource bytes only while the manifest and selected file remain authorized', async () => {
+    const fixture = await skillFixture();
+    const manifestPath = '.glyph/skills/example/SKILL.md';
+    const resourcePath = '.glyph/skills/example/guide.txt';
+    await fixture.write(manifestPath, manifest());
+    await fixture.write(resourcePath, 'frozen resource');
+    const denied = new Set<string>();
+    let mismatch = false;
+    const authority: PinnedSourceAuthority = {
+      capture: async paths =>
+        Promise.all(
+          paths.map(async path => {
+            const file = await stat(path);
+            return { path, identity: mismatch ? 'replacement' : file.dev + ':' + file.ino, origin: path };
+          }),
+        ),
+      authorize: async pins => () => {
+        if (pins.some(pin => denied.has(pin.path))) throw new Error('Read denied');
+      },
+    };
+    const provider = fixture.provider([manifestPath, resourcePath], 'project', authority);
+    const catalog = new SkillCatalog([provider]);
+    const turns = new TurnContextCoordinator([new SkillContextContributor(catalog)]);
+    const session = await turns.beginTurn({ turnId: 'turn', attachmentPaths: [] });
+    const id = session.initialEnvelope().skillCandidates![0]!.id;
+    denied.add(join(fixture.root, manifestPath));
+    await expect(turns.activateSource('turn', 'skills', id, 'model', 'use it')).rejects.toThrow('Read denied');
+    expect(session.snapshot().skills).toBeUndefined();
+    denied.clear();
+    mismatch = true;
+    await expect(turns.activateSource('turn', 'skills', id, 'model', 'use it')).rejects.toThrow(
+      'changed during capture',
+    );
+    mismatch = false;
+    await turns.activateSource('turn', 'skills', id, 'model', 'use it');
+    const tool = new SkillToolRuntime(turns).tools[1]!;
+    const read = () =>
+      tool.execute(JSON.stringify({ id, path: 'guide.txt' }), new AbortController().signal, { turnId: 'turn' });
+    denied.add(join(fixture.root, resourcePath));
+    await (
+      await turns.authorizeDisclosure('turn')
+    )();
+    await expect(read()).rejects.toThrow('Read denied');
+    expect(session.snapshot().skills![0]!.resources).toEqual([]);
+    denied.clear();
+    await fixture.write(resourcePath, 'new revision');
+    expect(await read()).toContain('frozen resource');
+    denied.add(join(fixture.root, resourcePath));
+    await expect(turns.authorizeDisclosure('turn')).rejects.toThrow('Read denied');
+  });
+
   it('leaves historical IDs unresolved when a location provides no legacy identity scheme', async () => {
     const fixture = await skillFixture();
     const provider = fixture.provider([]);
     expect(provider.matchesLegacyId('.glyph/skills/example', 'previous', { remaining: 1 })).toBe(false);
+  });
+  it('uses user scope for indexed packages and keeps the most specific route when providers overlap', async () => {
+    const fixture = await skillFixture();
+    const manifestPath = 'skills/example/SKILL.md';
+    await fixture.write(manifestPath, manifest());
+    const provider = (id: string, directory: string) =>
+      new FileSkillDiscoveryProvider({
+        origin: { id, label: id, scope: 'user', compatibility: 'glyph' },
+        directory: 'skills',
+        workspace: fixture.store,
+        packageId: () => 'same',
+        listPackages: async () => ({ truncated: false, packages: [{ directory, manifest: manifestPath }] }),
+        captureFiles: async () => ({ truncated: false, files: [] }),
+        uriForPath: path => pathToFileURL(join(fixture.root, path)).href,
+        refreshIndex: async () => {},
+      });
+    const refresh = vi.fn();
+    const catalog = new SkillCatalog(
+      [
+        provider('long', 'prefix/skills/example'),
+        provider('owner', 'skills/example'),
+        provider('alias', 'root/skills/example'),
+      ],
+      undefined,
+      undefined,
+      refresh,
+    );
+    expect(await catalog.refresh()).toMatchObject([{ id: 'same', scope: '.', origin: { id: 'owner' } }]);
+    expect(refresh).toHaveBeenCalledOnce();
   });
   it('charges actual bytes for rejected reads and retains later valid manifests', async () => {
     const fixture = await skillFixture();
@@ -172,10 +254,10 @@ describe(FileSkillDiscoveryProvider, () => {
     expect(snapshot.body).toBe('BODY');
     expect(snapshot.resources()).toEqual([]);
     await fixture.write('.glyph/skills/example/references/notes.md', 'CHANGED');
-    expect(snapshot.readResource('references/notes.md').content).toBe('REFERENCE');
-    expect(snapshot.readResource('assets/data.bin')).toMatchObject({ encoding: 'base64', content: 'AP8=' });
-    expect(() => snapshot.readResource('../private.md')).toThrow('inside');
-    expect(() => snapshot.readResource('missing.md')).toThrow('missing');
+    expect((await snapshot.readResource('references/notes.md')).content).toBe('REFERENCE');
+    expect(await snapshot.readResource('assets/data.bin')).toMatchObject({ encoding: 'base64', content: 'AP8=' });
+    await expect(snapshot.readResource('../private.md')).rejects.toThrow('inside');
+    await expect(snapshot.readResource('missing.md')).rejects.toThrow('missing');
     await fixture.write('.glyph/skills/example/SKILL.md', manifest('CHANGED'));
     await expect(provider.capture(sources[0]!)).rejects.toThrow('changed');
     const user = fixture.provider(['.glyph/skills/example/SKILL.md'], 'future-claude');
@@ -380,9 +462,10 @@ async function skillFixture() {
       await mkdir(dirname(join(root, path)), { recursive: true });
       await writeFile(join(root, path), content);
     },
-    provider(paths: readonly string[], id = 'project') {
+    provider(paths: readonly string[], id = 'project', authority?: PinnedSourceAuthority) {
       return new FileSkillDiscoveryProvider({
         origin: { id, label: id, scope: 'project', compatibility: id },
+        ...(authority ? { authority } : {}),
         directory: '.glyph/skills',
         workspace: store,
         binaryStore: store,
@@ -478,5 +561,5 @@ it('checks every resource again after reconciling a concurrent publication', asy
   await expect(provider.capture(skill!, undefined, () => fixture.write(resource, 'updated'))).rejects.toThrow(
     'changed during capture',
   );
-  expect((await provider.capture(skill!)).readResource('references/notes.md').content).toBe('updated');
+  expect((await (await provider.capture(skill!)).readResource('references/notes.md')).content).toBe('updated');
 });

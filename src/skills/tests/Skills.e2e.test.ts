@@ -46,7 +46,9 @@ describe('Native skills discovery and model disclosure', () => {
     const session = coordinator.contribution('first', 'skills');
     if (!session || !('readResource' in session) || typeof session.readResource !== 'function')
       throw new Error('Missing skill session');
-    expect(session.readResource(source.id, 'references/notes.md')).toMatchObject({ content: 'ORIGINAL RESOURCE' });
+    expect(await session.readResource(source.id, 'references/notes.md')).toMatchObject({
+      content: 'ORIGINAL RESOURCE',
+    });
     const second = await coordinator.beginTurn({ turnId: 'second', attachmentPaths: [], skillIds: [source.id] });
     expect(second.initialEnvelope().skills?.[0]?.body).toContain('UPDATED BODY');
     await fixture.write('new/.glyph/skills/example/SKILL.md', entry);
