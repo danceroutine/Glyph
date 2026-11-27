@@ -36,6 +36,7 @@ pub struct SandboxRequest {
     pub state_directory: PathBuf,
     pub workspace_roots: Vec<PathBuf>,
     pub protected_paths: Vec<PathBuf>,
+    pub private_paths: Vec<PathBuf>,
     pub workspace_policy: WorkspaceAccessPolicy,
     pub command: Vec<OsString>,
 }
@@ -113,6 +114,7 @@ where
     let mut state_directory = None;
     let mut workspace_roots = Vec::new();
     let mut protected_paths = Vec::new();
+    let mut private_paths = Vec::new();
     let mut workspace_policy = None;
     let mut index = 0;
 
@@ -140,6 +142,7 @@ where
                 state_directory = Some(PathBuf::from(value))
             }
             "--workspace-root" => workspace_roots.push(PathBuf::from(value)),
+            "--private-path" => private_paths.push(PathBuf::from(value)),
             "--protected-path" => protected_paths.push(PathBuf::from(value)),
             "--workspace-policy" if workspace_policy.is_none() => {
                 workspace_policy = Some(
@@ -186,6 +189,7 @@ where
             .ok_or_else(|| SandboxError::Usage("--state-directory is required".to_owned()))?,
         workspace_roots,
         protected_paths,
+        private_paths,
         workspace_policy: workspace_policy
             .ok_or_else(|| SandboxError::Usage("--workspace-policy is required".to_owned()))?,
         command,
@@ -210,10 +214,18 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
         .collect::<Result<Vec<_>, _>>()?;
     request.protected_paths.sort();
     request.protected_paths.dedup();
+    let reserved = request
+        .private_paths
+        .iter()
+        .map(|path| canonical_private_path(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let access = glyph_filesystem_metadata::workspace_paths::WorkspacePaths::current(&reserved)?;
+    request.private_paths = access.private_locations().cloned().collect();
+    access.finish_batch()?;
 
     let home_directory = std::env::var_os("HOME").and_then(|path| fs::canonicalize(path).ok());
     for root in &request.workspace_roots {
-        if is_unsafe_workspace_root(root, home_directory.as_deref()) {
+        if access.excludes(root) || is_unsafe_workspace_root(root, home_directory.as_deref()) {
             return Err(SandboxError::InvalidPath(format!(
                 "workspace root is too broad to sandbox safely: {}",
                 root.display()
@@ -278,6 +290,26 @@ fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, SandboxError
         )));
     }
     Ok(canonical)
+}
+
+/// Reserve the first absent component so a trace created after launch remains private.
+fn canonical_private_path(path: &Path) -> Result<PathBuf, SandboxError> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+    {
+        return Err(SandboxError::InvalidPath(
+            "private path must be absolute and normalized".to_owned(),
+        ));
+    }
+    let existing = path.ancestors().find(|part| {
+        !matches!(fs::symlink_metadata(part), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    }).expect("an absolute path contains the filesystem root");
+    let mut resolved = canonical_path(existing, "private path")?;
+    let missing = path.strip_prefix(existing).expect("ancestor prefix");
+    resolved.extend(missing.iter().next());
+    Ok(resolved)
 }
 
 fn canonical_path(path: &Path, label: &str) -> Result<PathBuf, SandboxError> {
@@ -511,8 +543,10 @@ pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
 #[cfg(target_os = "linux")]
 pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
     let home_directory = std::env::var_os("HOME").and_then(|path| fs::canonicalize(path).ok());
-    let arguments = linux::bubblewrap_arguments(request, home_directory.as_deref())?;
-    Command::new(linux::bubblewrap_executable()?)
+    let executable = linux::bubblewrap_executable()?;
+    let mut mounts = kernel_workspace::KernelWorkspace::open()?;
+    let arguments = linux::arguments(request, home_directory.as_deref(), &mut mounts)?;
+    Command::new(executable)
         .args(arguments)
         .args(&request.command)
         .current_dir(&request.working_directory)
@@ -625,6 +659,23 @@ pub mod macos {
             seatbelt_string(&request.state_directory),
             seatbelt_string(&request.state_directory)
         ));
+        for path in &request.private_paths {
+            policy.push_str(&format!(
+                "(deny file-read* file-write* file-test-existence (subpath {}))\n",
+                seatbelt_string(path)
+            ));
+            for ancestor in path.ancestors().skip(1).take_while(|parent| {
+                request
+                    .workspace_roots
+                    .iter()
+                    .any(|root| parent.starts_with(root))
+            }) {
+                policy.push_str(&format!(
+                    "(deny file-write-unlink (literal {}))\n",
+                    seatbelt_string(ancestor)
+                ));
+            }
+        }
         Ok(policy)
     }
 
@@ -687,8 +738,14 @@ pub mod macos {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod kernel_workspace;
+#[cfg(any(target_os = "linux", test))]
+mod projection;
+
 #[cfg(any(target_os = "linux", test))]
 pub mod linux {
+    use super::projection::{Mounts, WorkspaceView};
     use super::{SandboxError, SandboxProfile, SandboxRequest};
     use std::ffi::OsString;
     use std::path::Path;
@@ -736,9 +793,22 @@ pub mod linux {
         &BUBBLEWRAP_EXECUTABLES
     }
 
+    #[cfg(test)]
     pub fn bubblewrap_arguments(
         request: &SandboxRequest,
         home_directory: Option<&Path>,
+    ) -> Result<Vec<OsString>, SandboxError> {
+        arguments(
+            request,
+            home_directory,
+            super::projection::MountTrace::default(),
+        )
+    }
+
+    pub(super) fn arguments(
+        request: &SandboxRequest,
+        home_directory: Option<&Path>,
+        mounts: impl Mounts,
     ) -> Result<Vec<OsString>, SandboxError> {
         let mut arguments = strings(&[
             "--die-with-parent",
@@ -776,7 +846,28 @@ pub mod linux {
             }
         }
 
+        let mut view = WorkspaceView::new(mounts);
+        let mut projected = Vec::new();
+        let mut protected = super::protected_paths(request)?;
         for root in &request.workspace_roots {
+            if request
+                .private_paths
+                .iter()
+                .any(|path| path.starts_with(root))
+            {
+                protected.extend(super::repository_metadata_paths(
+                    root,
+                    &request.workspace_policy,
+                )?);
+                arguments.extend(view.workspace(
+                    root,
+                    request,
+                    &protected,
+                    &request.private_paths,
+                )?);
+                projected.push(root);
+                continue;
+            }
             let option = if request.profile == SandboxProfile::WorkspaceWrite {
                 "--bind"
             } else {
@@ -787,10 +878,11 @@ pub mod linux {
 
         for root in &request.workspace_roots {
             for metadata in super::repository_metadata_paths(root, &request.workspace_policy)? {
-                if request
-                    .workspace_roots
-                    .iter()
-                    .any(|workspace_root| metadata.starts_with(workspace_root))
+                if !projected.contains(&root)
+                    && request
+                        .workspace_roots
+                        .iter()
+                        .any(|workspace_root| metadata.starts_with(workspace_root))
                 {
                     push_path_mount(&mut arguments, "--ro-bind", &metadata, &metadata);
                 }
@@ -798,6 +890,9 @@ pub mod linux {
         }
         for path in super::protected_paths(request)? {
             for root in &request.workspace_roots {
+                if projected.contains(&root) {
+                    continue;
+                }
                 // Protect only the exposed intersection. Binding an ancestor
                 // installation itself would grant access to unrelated siblings.
                 if path.starts_with(root) {
@@ -808,6 +903,9 @@ pub mod linux {
             }
         }
         for path in super::workspace_sensitive_paths(request)? {
+            if projected.iter().any(|root| path.starts_with(root)) {
+                continue;
+            }
             push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), &path);
         }
 
@@ -831,6 +929,23 @@ pub mod linux {
                 arguments.push(path.as_os_str().to_owned());
             } else if path.is_file() {
                 push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), &path);
+            }
+        }
+        for path in &request.private_paths {
+            if projected.iter().any(|root| path.starts_with(root))
+                || path.starts_with(&request.state_directory)
+            {
+                continue;
+            }
+            if path.is_dir() {
+                arguments.extend([
+                    "--tmpfs".into(),
+                    path.into(),
+                    "--remount-ro".into(),
+                    path.into(),
+                ]);
+            } else {
+                push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), path);
             }
         }
         arguments.push("--chdir".into());

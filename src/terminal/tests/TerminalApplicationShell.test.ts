@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { installShutdownHandlers } from '#src/terminal/installShutdownHandlers.js';
@@ -60,7 +61,7 @@ describe(TerminalApplication, () => {
         logout: async () => true,
         redact: value => value,
       };
-      const reviews = new ProposalReviewManager(new FileSystemWorkspaceTextStore('/inert'), {
+      const reviews = new ProposalReviewManager(fixtureWorkspace('/inert'), {
         load: async () => [],
         save: async () => {},
         clear: async () => {},

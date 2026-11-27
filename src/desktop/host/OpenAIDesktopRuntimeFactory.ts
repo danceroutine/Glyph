@@ -1,3 +1,4 @@
+import { readSourcePathAliases } from '#src/workspace/SourcePathAliases.js';
 import { readDirectoryNamePolicies } from '#src/workspace/readDirectoryNamePolicies.js';
 import { filesystemPolicyDirectory, workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
@@ -23,7 +24,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import { mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, relative, isAbsolute, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
@@ -62,7 +63,10 @@ import { TodoToolRuntime } from '#src/todos/TodoToolRuntime.js';
 import { GlyphHostEventType } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTextStore.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
-import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { NativePinnedSourceAuthority } from '#src/workspace/PinnedSourceAuthority.js';
+import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
+import { StartupUserProfile } from '#src/workspace/policy/StartupUserProfile.js';
+import { WorkspaceContentAccess } from '#src/workspace/policy/WorkspaceContentAccess.js';
 import { EditorWorkspaceTextStore } from '#src/desktop/workspace/EditorWorkspaceTextStore.js';
 import { readEditorContentOverrides } from '#src/desktop/workspace/readEditorContentOverrides.js';
 import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
@@ -92,11 +96,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
   /** Runtimes attached to the same physical user directory share its rule index. */
   private readonly userRuleIndexes = new Map<string, RustWorkspacePathIndex>();
 
+  private readonly profile: StartupUserProfile;
+
   constructor(
     private readonly editors: EditorRpcRouter,
     private readonly transport?: typeof fetch,
-    private readonly userDirectory = join(homedir(), '.glyph'),
-  ) {}
+    userDirectory = join(homedir(), '.glyph'),
+  ) {
+    this.profile = new StartupUserProfile(userDirectory);
+  }
 
   async create(input: Parameters<GlyphDesktopWorkspaceRuntimeFactory['create']>[0]): Promise<ProviderDesktopRuntime> {
     await (this.initialized ??= this.accounts.initialize().catch(error => {
@@ -134,48 +142,45 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const suffix = process.platform === 'win32' ? '.exe' : '';
     const indexExecutable = join(native, `glyph-context-index${suffix}`);
     const filesystemMetadata = new NativeFilesystemMetadata(indexExecutable);
+    const sourcePathAliases = readSourcePathAliases.bind(undefined, indexExecutable);
     const sandboxExecutable = join(native, `glyph-shell-sandbox${suffix}`);
     assertShellRuntimePathIsolation(
       roots.map(workspaceRoot => workspaceRoot.path),
       configuration.stateDirectory,
       configuration.traceFile,
     );
-    const policy = new WorkspaceAccessPolicy(
-      {},
-      [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(path => [
-        path,
-        resolveAvailableIdentity(path),
-      ]),
-    );
+    const privatePaths = [configuration.stateDirectory, configuration.traceFile].flatMap(path => [
+      path,
+      resolveAvailableIdentity(path),
+    ]);
+    const access = new WorkspaceContentAccess(this.profile, () => privatePaths, [
+      artifactRoot,
+      resolveAvailableIdentity(artifactRoot),
+    ]);
+    const policy = access.project;
     const logger = new FileLogger(configuration.traceFile);
     const namePolicies = await Promise.all(
       roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemNamePolicy(indexExecutable, workspaceRoot.path)),
     );
     const parts = roots.map((workspaceRoot, i) => {
-      const excludedPaths = [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(target => {
-        const path = relative(workspaceRoot.path, target);
-        return path && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
-          ? [path.split(sep).join('/')]
-          : [];
-      });
+      const bound = new WorkspaceRootAccess(policy, workspaceRoot.path, namePolicies[i]!.caseSensitive);
       const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, {
-        caseSensitive: namePolicies[i]!.caseSensitive,
-        accessPolicy: policy,
-        excludedPaths,
+        access: bound,
+        physicalAccess: filesystemMetadata,
+      });
+      const selectedDisk = new FileSystemWorkspaceTextStore(workspaceRoot.path, {
+        access: new WorkspaceRootAccess(access.selectedFile, workspaceRoot.path, namePolicies[i]!.caseSensitive),
         physicalAccess: filesystemMetadata,
       });
       const index: RustWorkspacePathIndex = new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
-        root: workspaceRoot.path,
+        access: bound,
         cachePath: join(
           configuration.stateDirectory,
           `desktop-index-${createHash('sha256')
             .update(context.id + workspaceRoot.path)
             .digest('hex')}.bin`,
         ),
-        accessPolicy: policy,
-        excludedPaths,
-        caseSensitive: disk.caseSensitive,
         readContentOverrides: signal =>
           readEditorContentOverrides(
             disk,
@@ -185,62 +190,71 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             signal,
           ),
       });
-      const workspace = new EditorWorkspaceTextStore(workspaceRoot.path, disk.caseSensitive, {
-        canonicalPath: path => disk.canonicalPath(path),
-        listPaths: (limit, glob = '**/*', targetDirectory, signal) =>
-          index.glob(glob, {
-            limit,
-            ...(signal && { signal }),
-            ...(targetDirectory !== undefined && targetDirectory !== '' ? { targetDirectory } : {}),
-          }),
-        request: async (request, signal) => {
-          // Reuse filesystem policy and symlink checks before granting editor access.
-          const path = this.requestPath(request);
-          if (path !== undefined && path !== '') {
-            if (request.type === GlyphEditorRequestType.EXISTS) await disk.exists(path);
-            else await disk.validateAccess(path);
-          }
-          if (
-            request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
-            'target' in request.mutation &&
-            request.mutation.target
-          ) {
-            await disk.validateAccess(request.mutation.target);
-          }
-          const qualified =
-            path !== undefined && path !== '' && roots.length > 1 ? `${workspaceRoot.name}/${path}` : path;
-          let wire = this.withRequestPath(request, qualified);
-          if (
-            wire.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
-            'target' in wire.mutation &&
-            wire.mutation.target &&
-            roots.length > 1
-          )
-            wire = { ...wire, mutation: { ...wire.mutation, target: `${workspaceRoot.name}/${wire.mutation.target}` } };
-          const response = await this.editors.request(input.identity, wire, signal);
-          if (path !== undefined && path !== '') {
-            await disk.validateAccess(path);
+      const editorStore = (admitted: FileSystemWorkspaceTextStore) =>
+        new EditorWorkspaceTextStore(workspaceRoot.path, admitted.caseSensitive, {
+          canonicalPath: path => admitted.canonicalPath(path),
+          listPaths: (limit, glob = '**/*', targetDirectory, signal) =>
+            index.glob(glob, {
+              limit,
+              ...(signal && { signal }),
+              ...(targetDirectory !== undefined && targetDirectory !== '' ? { targetDirectory } : {}),
+            }),
+          request: async (request, signal) => {
+            const operation = admitted.beginOperation();
+            // Reuse filesystem policy and symlink checks before granting editor access.
+            const path = this.requestPath(request);
+            if (path !== undefined && path !== '') {
+              if (request.type === GlyphEditorRequestType.EXISTS) await admitted.exists(path);
+              else await admitted.validateAccess(path);
+            }
             if (
               request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
               'target' in request.mutation &&
               request.mutation.target
+            ) {
+              await admitted.validateAccess(request.mutation.target);
+            }
+            const qualified =
+              path !== undefined && path !== '' && roots.length > 1 ? `${workspaceRoot.name}/${path}` : path;
+            let wire = this.withRequestPath(request, qualified);
+            if (
+              wire.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
+              'target' in wire.mutation &&
+              wire.mutation.target &&
+              roots.length > 1
             )
-              await disk.validateAccess(request.mutation.target);
-          }
-          return response.snapshot && path !== undefined && path !== ''
-            ? {
-                ...response,
-                snapshot: {
-                  ...response.snapshot,
-                  path:
-                    request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION && 'target' in request.mutation
-                      ? (request.mutation.target ?? path)
-                      : path,
-                },
-              }
-            : response;
-        },
-      });
+              wire = {
+                ...wire,
+                mutation: { ...wire.mutation, target: `${workspaceRoot.name}/${wire.mutation.target}` },
+              };
+            operation.assertCurrent();
+            const response = await this.editors.request(input.identity, wire, signal);
+            if (path !== undefined && path !== '') {
+              await admitted.validateAccess(path);
+              if (
+                request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
+                'target' in request.mutation &&
+                request.mutation.target
+              )
+                await admitted.validateAccess(request.mutation.target);
+            }
+            operation.assertCurrent();
+            return response.snapshot && path !== undefined && path !== ''
+              ? {
+                  ...response,
+                  snapshot: {
+                    ...response.snapshot,
+                    path:
+                      request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION && 'target' in request.mutation
+                        ? (request.mutation.target ?? path)
+                        : path,
+                  },
+                }
+              : response;
+          },
+        });
+      const workspace = editorStore(disk);
+      const selectedFiles = editorStore(selectedDisk);
       const catalog = createCatalogWorkspace(disk, workspace, async request => {
         const path = roots.length > 1 ? `${workspaceRoot.name}/${request.path}` : request.path;
         const responses = await Promise.all(
@@ -266,7 +280,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ? { ...dirty[0]!, snapshot: { ...dirty[0]!.snapshot!, path: request.path } }
           : responses[0]!;
       });
-      return { name: workspaceRoot.name, workspace, catalog, disk, index };
+      return { name: workspaceRoot.name, workspace, selectedFiles, catalog, disk, index };
     });
     const routes = new WorkspaceSourceRoutes(
       parts.map((part, index) => ({
@@ -293,7 +307,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             context.id,
             parts.map(part => ({ name: part.name, index: part.index })),
           );
-    const userRuleRoot = resolveAvailableIdentity(this.userDirectory);
+    const selectedFiles =
+      parts.length === 1
+        ? parts[0]!.selectedFiles
+        : new MultiRootWorkspaceTextStore(
+            context,
+            parts.map(part => ({ name: part.name, store: part.selectedFiles })),
+          );
+    const userRuleRoot = this.profile.path;
     let instructionCatalog: AgentInstructionCatalog | undefined;
     let turnContexts: TurnContextCoordinator | undefined;
     let userRules: UserAgentRuleManager | undefined;
@@ -324,8 +345,10 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         indexExecutable,
         filesystemPolicyDirectory(userRuleRoot),
       ).catch(() => undefined);
+      const userCaseSensitive = userNamePolicy?.caseSensitive ?? workspaceCaseSensitivity(userRuleRoot);
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
-        caseSensitive: userNamePolicy?.caseSensitive ?? workspaceCaseSensitivity(userRuleRoot),
+        access: new WorkspaceRootAccess(access.userCatalog, userRuleRoot, userCaseSensitive),
+        physicalAccess: filesystemMetadata,
       });
       // A failed probe must still protect edits made through insensitive filename aliases.
       const userWorkingCopyPolicy = userNamePolicy ?? {
@@ -333,25 +356,17 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         normalizesUnicode: true,
         foldsUnicode: true,
       };
-      // Agent-facing sources cannot acquire the host's preference and credential authority.
-      const userInstructionPolicy = new WorkspaceAccessPolicy(
-        {},
-        [configuration.stateDirectory, configuration.traceFile, artifactRoot].map(path =>
-          resolveAvailableIdentity(path),
-        ),
+      const projectSourceAuthority = new NativePinnedSourceAuthority(filesystemMetadata, policy, input.assertTrusted);
+      const userSourceAuthority = new NativePinnedSourceAuthority(
+        filesystemMetadata,
+        access.userCatalog,
+        input.assertTrusted,
       );
-      const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
-        accessPolicy: userInstructionPolicy,
-        caseSensitive: userRuleStore.caseSensitive,
-        physicalAccess: filesystemMetadata,
-      });
       let userRuleIndex = this.userRuleIndexes.get(userRuleRoot);
       if (!userRuleIndex) {
         userRuleIndex = new RustWorkspacePathIndex({
           binaryPath: indexExecutable,
-          root: join(userRuleRoot, 'rules'),
-          caseSensitive: userRuleStore.caseSensitive,
-          accessPolicy: userInstructionPolicy,
+          access: new WorkspaceRootAccess(access.userCatalog, join(userRuleRoot, 'rules'), userCaseSensitive),
           // User-owned rules retain their existing behavior regardless of home-directory Git ignores.
           respectGitIgnore: false,
         });
@@ -361,7 +376,13 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         parts.length === 1 ? workspace.caseSensitive : new Map(parts.map(part => [part.name, part.disk.caseSensitive])),
         routes,
       );
-      const userRuleDirectory = new UserRuleDirectory(userRuleRoot, userRuleStore.caseSensitive, roots, paths);
+      const userRuleDirectory = new UserRuleDirectory(
+        userRuleRoot,
+        userRuleStore.caseSensitive,
+        roots,
+        paths,
+        sourcePathAliases,
+      );
       const listProjectRules = async (maxFiles: number, pattern: string, signal?: AbortSignal) => {
         const listed = await listProjectInstructions(maxFiles, pattern, signal);
         return { ...listed, files: listed.files.filter(path => !userRuleDirectory.ownsProjectRule(path)) };
@@ -369,8 +390,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       instructionCatalog = new AgentInstructionCatalog(
         [
           new AgentRuleInstructionProvider(
-            userInstructionStore,
+            userRuleStore,
             {
+              authority: userSourceAuthority,
               kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
               directory: '.',
               displayPrefix: '~/.glyph/',
@@ -379,20 +401,34 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             },
             async (maxFiles, _pattern, signal) => {
               // The index root must obey the store's no-symlink rule too, not just its children.
-              await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
-              await userInstructionStore.canonicalPath('rules');
-              return listUserRuleFiles(userRuleIndex, maxFiles, signal);
+              this.profile.ensureDirectory();
+              return this.profile.access(async () => {
+                await userRuleStore.canonicalPath('rules');
+                await mkdir(join(userRuleRoot, 'rules'), { recursive: true, mode: 0o700 });
+                return listUserRuleFiles(userRuleIndex, maxFiles, signal);
+              });
             },
           ),
-          new AgentsMdInstructionProvider(catalogWorkspace, { paths, uriForPath: projectUri }, listProjectInstructions),
+          new AgentsMdInstructionProvider(
+            catalogWorkspace,
+            { paths, authority: projectSourceAuthority, uriForPath: projectUri },
+            listProjectInstructions,
+          ),
           new AgentRuleInstructionProvider(
             catalogWorkspace,
-            { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', paths, uriForPath: projectUri },
+            {
+              authority: projectSourceAuthority,
+              kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+              directory: '.glyph',
+              paths,
+              uriForPath: projectUri,
+            },
             listProjectRules,
           ),
           new AgentRuleInstructionProvider(
             catalogWorkspace,
             {
+              authority: projectSourceAuthority,
               kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
               directory: '.cursor',
               paths,
@@ -402,6 +438,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ),
         ],
         paths,
+        () => userRuleDirectory.refresh(),
       );
       turnContexts = new TurnContextCoordinator(instructionCatalog);
       userRules = new UserAgentRuleManager(
@@ -417,8 +454,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             filename,
             userWorkingCopyPolicy,
             join(userRuleRoot, 'rules', filename),
-            this.userDirectory,
+            this.profile.path,
           ),
+        () => this.profile.ensureDirectory(),
       );
     }
     const reviews = new ProposalReviewManager(
@@ -447,8 +485,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         binaryPath: sandboxExecutable,
         workspaceRoots: roots.map(workspaceRoot => workspaceRoot.path),
         stateDirectory: configuration.stateDirectory,
-        protectedPaths: input.trusted ? [...new Set([artifactRoot, userRuleRoot, this.userDirectory])] : [artifactRoot],
-        accessPolicy: policy,
+        protectedPaths: [artifactRoot],
+        accessPolicy: access.shell,
       }),
     );
     const sessions = new ChatSessionManager(
@@ -486,7 +524,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           return summary.plans?.at(-1);
         }),
         new ProjectToolRuntime(
-          new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, turnContexts),
+          new ProjectAccess(workspace, index, {}, turnContexts),
           new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
           reviews,
           logger,
@@ -539,7 +577,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       store,
       authentication,
       catalog,
-      new OpenAIProviderFactory(root.path, configuration, tools, client, turnContexts),
+      new OpenAIProviderFactory(configuration, tools, client, turnContexts),
       configuration.openAI,
     );
     const glyph = new GlyphService(
@@ -547,7 +585,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       logger,
       { traceEnabled: configuration.traceEnabled },
       reviews,
-      new ContextAttachmentService(workspace, configuration.contextAttachments),
+      new ContextAttachmentService(selectedFiles, configuration.contextAttachments),
       index,
       sessions,
     );
@@ -559,7 +597,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     }
     // Share the account lifetime, but expose only project read/search tools to
     // reviews. No shell, proposal, mode-switch, or interactive tools are registered.
-    const reviewProjectAccess = new ProjectAccess(root.path, { accessPolicy: policy }, workspace, index, turnContexts);
+    const reviewProjectAccess = new ProjectAccess(workspace, index, {}, turnContexts);
     const reviewTools = turnContexts
       ? new ToolRegistry([...reviewProjectAccess.tools, ...new RuleToolRuntime(turnContexts).tools])
       : reviewProjectAccess;
@@ -567,7 +605,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       store,
       authentication,
       catalog,
-      new OpenAIProviderFactory(root.path, configuration, reviewTools, client, turnContexts),
+      new OpenAIProviderFactory(configuration, reviewTools, client, turnContexts),
       configuration.openAI,
     );
     const agentReviews = new AgentReviewService(
@@ -623,6 +661,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       if (failed) throw failed.reason;
     } finally {
+      this.profile.dispose();
       await this.accounts.dispose();
     }
   }

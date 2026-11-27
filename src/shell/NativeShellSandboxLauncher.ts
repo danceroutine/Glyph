@@ -4,7 +4,7 @@ import { basename, delimiter, isAbsolute, relative, sep } from 'node:path';
 import type { ShellExecutionAuthorization } from './ShellExecutionAuthorization.ts';
 import type { ShellProcessLauncher } from './ShellProcessLauncher.ts';
 import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
-import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 export interface NativeShellSandboxLauncherOptions {
   readonly binaryPath: string;
@@ -12,7 +12,7 @@ export interface NativeShellSandboxLauncherOptions {
   readonly stateDirectory: string;
   readonly protectedPaths?: readonly string[];
   readonly environment?: NodeJS.ProcessEnv;
-  readonly accessPolicy?: WorkspaceAccessPolicy;
+  readonly accessPolicy: WorkspaceAccessPolicy;
 }
 
 type SpawnProcess = (command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -42,7 +42,8 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       });
     }
     const shell = sandboxShell(environment);
-    const accessPolicy = this.options.accessPolicy ?? new WorkspaceAccessPolicy();
+    const accessPolicy = this.options.accessPolicy;
+    const operation = accessPolicy.beginOperation();
     const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
     const arguments_ = [
       '--profile',
@@ -54,12 +55,14 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       '--workspace-root',
       workspaceRoot,
       ...(this.options.protectedPaths ?? []).flatMap(path => ['--protected-path', path]),
+      ...operation.privatePaths.flatMap(path => ['--private-path', path]),
       '--workspace-policy',
       JSON.stringify(accessPolicy.toJSON()),
       '--',
       shell.executable,
       ...shell.arguments(command),
     ];
+    operation.assertCurrent();
     return this.spawnProcess(this.options.binaryPath, arguments_, {
       ...common,
       env: sandboxEnvironment(authorization.sandboxProfile, shell.executable, environment),

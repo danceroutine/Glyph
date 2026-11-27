@@ -58,8 +58,15 @@ fn directory_origin(path: &Path, cache: &mut HashMap<PathBuf, [u8; 32]>) -> io::
     if let Some(parent) = path.parent() {
         hash.update(directory_origin(parent, cache)?);
     }
-    let directory = fs::File::open(path)?;
+    #[cfg(target_os = "linux")]
+    let directory = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_DIRECTORY)
+        .open(path)?;
+    #[cfg(target_os = "linux")]
     let meta = directory.metadata()?;
+    #[cfg(not(target_os = "linux"))]
+    let meta = fs::metadata(path)?;
     hash.update(meta.dev().to_le_bytes());
     hash.update(meta.ino().to_le_bytes());
     // Birth time distinguishes recycled directory inodes on filesystems that expose it.
@@ -69,6 +76,7 @@ fn directory_origin(path: &Path, cache: &mut HashMap<PathBuf, [u8; 32]>) -> io::
             .map_err(io::Error::other)?;
         hash.update(time.as_nanos().to_le_bytes());
     }
+    #[cfg(target_os = "linux")]
     mount_identity(&directory, &mut hash)?;
     let origin = hash.finalize().into();
     cache.insert(path.to_owned(), origin);

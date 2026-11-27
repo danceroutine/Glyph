@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -433,7 +434,7 @@ async function fixture(files: Readonly<Record<string, string>>, maxActiveReviews
   const state = join(root, '.state');
   directories.push(root);
   for (const [path, text] of Object.entries(files)) await writeFile(join(root, path), text);
-  const workspace = new ControllableWorkspaceTextStore(new FileSystemWorkspaceTextStore(root));
+  const workspace = new ControllableWorkspaceTextStore(fixtureWorkspace(root));
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
   const manager = new ProposalReviewManager(
     workspace,

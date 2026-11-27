@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { posix } from 'node:path';
 import { join } from 'node:path';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -247,7 +248,7 @@ describe(ContextAttachmentService, () => {
       const root = await mkdtemp(join(tmpdir(), 'glyph-attachment-file-limit-'));
       onTestFinished(() => rm(root, { recursive: true, force: true }));
       await writeFile(join(root, 'large.ts'), '12345');
-      const service = new ContextAttachmentService(new FileSystemWorkspaceTextStore(root), {
+      const service = new ContextAttachmentService(fixtureWorkspace(root), {
         maxFileBytes: 4,
         maxTotalBytes: 10,
       });
@@ -266,7 +267,7 @@ describe(ContextAttachmentService, () => {
       onTestFinished(() => rm(root, { recursive: true, force: true }));
       await writeFile(join(root, 'one.ts'), '123');
       await writeFile(join(root, 'two.ts'), '45');
-      const service = new ContextAttachmentService(new FileSystemWorkspaceTextStore(root), {
+      const service = new ContextAttachmentService(fixtureWorkspace(root), {
         maxFileBytes: 4,
         maxTotalBytes: 4,
       });
@@ -284,7 +285,7 @@ describe(ContextAttachmentService, () => {
       const root = await mkdtemp(join(tmpdir(), 'glyph-attachment-policy-'));
       try {
         await writeFile(join(root, '.git-credentials'), 'https://user:synthetic@example.test');
-        const service = new ContextAttachmentService(new FileSystemWorkspaceTextStore(root));
+        const service = new ContextAttachmentService(fixtureWorkspace(root));
 
         await expect(service.resolve([{ path: '.git-credentials' }])).rejects.toMatchObject({
           reason: ContextAttachmentFailureReason.INVALID_REFERENCE,

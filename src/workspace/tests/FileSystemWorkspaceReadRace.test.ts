@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { constants } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
@@ -140,5 +141,5 @@ function readFixture(bytes = Buffer.from('body')) {
   filesystem.realpath.mockImplementation(async (path: string) => path);
   filesystem.readFile.mockResolvedValue(bytes);
   filesystem.open.mockResolvedValue(handle);
-  return { store: new FileSystemWorkspaceTextStore('/fixture'), handle, info };
+  return { store: fixtureWorkspace('/fixture'), handle, info };
 }

@@ -1,3 +1,4 @@
+import { fixtureWorkspace, fixtureIndex, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -11,7 +12,7 @@ describe(RustWorkspacePathIndex, () => {
   describe('workspace path queries', () => {
     it('returns escaped context within the multi-root response budget through the real Rust process', async () => {
       const root = await mkdtemp(join(tmpdir(), 'context-index-escaped-'));
-      const native = new RustWorkspacePathIndex({
+      const native = fixtureIndex({
         root,
         binaryPath: resolve(
           'target',
@@ -68,7 +69,7 @@ describe(RustWorkspacePathIndex, () => {
       await writeFile(join(project, '.env'), 'SECRET=never-index-this\n');
       await writeFile(join(project, '.git-credentials'), 'https://user:never-index-this@example.test\n');
       await writeFile(join(project, '.glyph-state', 'accounts.json'), '{"refreshToken":"never-index-this"}\n');
-      let search = new RustWorkspacePathIndex({
+      let search = fixtureIndex({
         binaryPath,
         root: project,
         cachePath: join(state, 'paths.bin'),
@@ -126,7 +127,7 @@ describe(RustWorkspacePathIndex, () => {
             offset: 0,
           }),
         ).resolves.toMatchObject({ files: [] });
-        const access = new ProjectAccess(project, {}, new FileSystemWorkspaceTextStore(project), search);
+        const access = fixtureProjectAccess(project, {}, fixtureWorkspace(project), search);
         const toolResult = JSON.parse(
           await access.execute(
             'search_project_contents',
@@ -176,7 +177,7 @@ describe(RustWorkspacePathIndex, () => {
         });
         await search.dispose();
 
-        search = new RustWorkspacePathIndex({
+        search = fixtureIndex({
           binaryPath,
           root: project,
           cachePath: join(state, 'paths.bin'),

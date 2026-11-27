@@ -31,13 +31,14 @@ type ResolvedConfiguration = z.output<typeof configurationSchema>;
 /**
  * Resolves draft file references into fresh, exact workspace snapshots.
  * Hosts should call resolve after the prompt draft is complete and immediately
- * before invoking the selected inference provider.
+ * before invoking the selected inference provider. Inject only the deliberate-file reader. Its selection grants
+ * access to the named file for this request, while enumeration and later agent reads use their project authority.
  */
 export class ContextAttachmentService {
   private readonly configuration: ResolvedConfiguration;
 
   constructor(
-    private readonly workspace: WorkspaceTextStore,
+    private readonly workspace: Pick<WorkspaceTextStore, 'caseSensitive' | 'normalizePath' | 'read'>,
     configuration: ContextAttachmentConfiguration = {},
   ) {
     const result = configurationSchema.safeParse(configuration);

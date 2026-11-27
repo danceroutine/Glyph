@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -88,7 +89,7 @@ describe(TurnContextCoordinator, () => {
     await writeFile(join(root, 'AGENTS.md'), 'root guidance');
     await writeFile(join(root, 'guide.md'), 'reference');
     await writeFile(join(root, '.glyph', 'rules', 'one.mdc'), '---\nreferences: [guide.md]\n---\nrule');
-    const store = new FileSystemWorkspaceTextStore(root);
+    const store = fixtureWorkspace(root);
     const authority = {
       capture: vi.fn(async (paths: readonly string[]) =>
         Promise.all(

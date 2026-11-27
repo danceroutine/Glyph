@@ -19,12 +19,20 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, WorkspacePa
         this.executable,
         ['--source-origins'],
         { env: {}, signal, timeout: 30_000, maxBuffer: paths.length * 160 },
-        (error, stdout) => error ? reject(error) : resolve(stdout),
+        (error, stdout) => {
+          if (error) reject(new Error('The instruction source inspection failed.', { cause: error }));
+          else resolve(stdout);
+        },
       );
       child.stdin!.on('error', reject);
       child.stdin!.end(JSON.stringify({ paths, privatePaths }));
     });
-    return z.array(z.object({ origin: z.string().regex(/^[a-f0-9]{64}$/u), identity: z.string().regex(/^\d+:\d+$/u) }).strict()).length(paths.length).parse(JSON.parse(output));
+    return z
+      .array(
+        z.object({ origin: z.string().regex(/^[a-f0-9]{64}$/u), identity: z.string().regex(/^\d+:\d+$/u) }).strict(),
+      )
+      .length(paths.length)
+      .parse(JSON.parse(output));
   }
 
   async assertWorkspacePath(

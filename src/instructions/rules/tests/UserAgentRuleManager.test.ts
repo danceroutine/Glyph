@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { mkdtemp, rm, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -18,7 +19,7 @@ describe(UserAgentRuleManager, () => {
     await rm(root, { recursive: true, force: true });
   });
   it('requires the completed temporary rule to pass its own metadata check before publishing', async () => {
-    const workspace = new FileSystemWorkspaceTextStore(root);
+    const workspace = fixtureWorkspace(root);
     const metadata = {
       inspect: vi.fn(testFilesystemMetadata.inspect).mockImplementation(async (handle, purpose) => {
         if (purpose === 'replaceable') {
@@ -35,7 +36,7 @@ describe(UserAgentRuleManager, () => {
   });
 
   it('keeps the existing file and revision when an enablement edit would exceed the byte limit', async () => {
-    const workspace = new FileSystemWorkspaceTextStore(root);
+    const workspace = fixtureWorkspace(root);
     await mkdir(join(root, 'rules'));
     const original = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.alloc(65533, 0x61)]);
     await writeFile(join(root, 'rules/full.mdc'), original);
@@ -46,7 +47,7 @@ describe(UserAgentRuleManager, () => {
   });
 
   it.each(['create', 'remove', 'disable'])('rechecks working copies before publishing %s', async action => {
-    const workspace = new FileSystemWorkspaceTextStore(root);
+    const workspace = fixtureWorkspace(root);
     const check = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('unsaved editor'));
     const manager = new UserAgentRuleManager(
       workspace,
@@ -68,7 +69,7 @@ describe(UserAgentRuleManager, () => {
     expect((await workspace.readOptional(file))?.revision).toEqual(before?.revision);
   });
   it('rejects an ACL change between preflight and publication while preserving the current rule', async () => {
-    const workspace = new FileSystemWorkspaceTextStore(root);
+    const workspace = fixtureWorkspace(root);
     const original = await workspace.create('rules/secure.mdc', 'Protected', false);
     const check = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('ACL changed'));
     const index = { assertReplaceableMetadata: check, refresh: vi.fn() };
@@ -80,7 +81,7 @@ describe(UserAgentRuleManager, () => {
   });
   it('keeps the user-rule lock private when a workspace contains the user directory or directly attaches its staging directory', async () => {
     const profile = join(root, 'profile');
-    const workspace = new FileSystemWorkspaceTextStore(profile);
+    const workspace = fixtureWorkspace(profile);
     const manager = new UserAgentRuleManager(workspace, { refresh: async () => [] }, files, testFilesystemMetadata);
     await manager.create('Protected', 'manual');
     expect((await stat(join(profile, 'rules/protected.mdc'))).mode & 0o777).toBe(0o600);
@@ -91,7 +92,7 @@ describe(UserAgentRuleManager, () => {
       [root, 'profile/.skill-staging/' + lock],
       [staging, lock],
     ] as const) {
-      const project = new FileSystemWorkspaceTextStore(attachedRoot);
+      const project = fixtureWorkspace(attachedRoot);
       await expect(project.delete(name, 'stale')).rejects.toThrow('excluded');
       await expect(project.create(name, 'replacement', true)).rejects.toThrow('excluded');
       expect((await project.list(20)).files).not.toContain(name);
@@ -99,17 +100,12 @@ describe(UserAgentRuleManager, () => {
   });
 
   it('serializes competing settings callers and rejects the losing reviewed revision', async () => {
-    const workspace = new FileSystemWorkspaceTextStore(root);
+    const workspace = fixtureWorkspace(root);
     await workspace.create('rules/shared.mdc', 'Initial', false);
     const { revision } = await workspace.read('rules/shared.mdc');
     const managers = [true, false].map(
       () =>
-        new UserAgentRuleManager(
-          new FileSystemWorkspaceTextStore(root),
-          { refresh: async () => [] },
-          files,
-          testFilesystemMetadata,
-        ),
+        new UserAgentRuleManager(fixtureWorkspace(root), { refresh: async () => [] }, files, testFilesystemMetadata),
     );
     const result = await Promise.allSettled(
       managers.map((manager, i) => manager.setEnabled('rules/shared.mdc', revision, i === 0)),
@@ -211,7 +207,7 @@ describe(UserAgentRuleManager, () => {
     }
   });
   it('toggles only physical metadata lines and preserves embedded Unicode separators in comments', async () => {
-    const workspace = new FileSystemWorkspaceTextStore(root);
+    const workspace = fixtureWorkspace(root);
     const manager = new UserAgentRuleManager(workspace, { refresh: async () => [] }, files, testFilesystemMetadata);
     const example = '# example\u2028enabled: false\u2029---';
     const text = ['---', example, 'activation: always', 'enabled: true', '---', 'RETAIN ME'].join('\r\n');

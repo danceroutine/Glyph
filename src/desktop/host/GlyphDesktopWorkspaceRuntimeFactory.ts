@@ -11,6 +11,8 @@ export interface GlyphDesktopWorkspaceRuntimeFactory {
     readonly identity: GlyphConnectionIdentity;
     readonly roots: readonly GlyphWorkspaceRoot[];
     readonly trusted: boolean;
+    /** Recheck the owning connection, attached roots and live trust before releasing model context. */
+    readonly assertTrusted: () => void;
     readonly emit: (event: GlyphHostEvent) => void;
   }): Promise<GlyphDesktopWorkspaceRuntime>;
 }

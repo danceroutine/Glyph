@@ -25,6 +25,7 @@ export class UserAgentRuleManager {
     private readonly files: UserRuleFileAuthority,
     private readonly metadata: FilesystemMetadata,
     private readonly assertClean?: (filename: string) => Promise<void>,
+    private readonly prepareProfile?: () => void,
   ) {}
 
   get directoryUri(): string {
@@ -109,6 +110,7 @@ export class UserAgentRuleManager {
   }
 
   private mutate<T>(work: () => Promise<T>): Promise<T> {
+    this.prepareProfile?.();
     return withPrivateFileLock(this.metadata, join(this.workspace.root, '.skill-staging', 'user-rules.sqlite'), work);
   }
 

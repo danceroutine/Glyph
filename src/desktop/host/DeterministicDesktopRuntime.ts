@@ -1,3 +1,4 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -163,6 +164,7 @@ async function probePackagedRuntime(workspaceRoot: string): Promise<void> {
       workspaceRoots: [workspaceRoot],
       stateDirectory,
       protectedPaths: [artifactRoot],
+      accessPolicy: new WorkspaceAccessPolicy({}, [stateDirectory, artifactRoot]),
     }).launch('true', workspaceRoot, { sandboxProfile: ShellSandboxProfile.READ_ONLY });
     child.stdin?.end();
     await childResult(child);
