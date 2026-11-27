@@ -11,6 +11,113 @@ import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexE
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 
 describe(RustWorkspacePathIndex, () => {
+  describe('live host boundaries', () => {
+    it('rebuilds cached workers and rejects old in-flight results when another profile is admitted', async () => {
+      let privatePaths = ['/private/old.json'];
+      const policy = new WorkspaceAccessPolicy({}, () => privatePaths);
+      const state = { root: '/project', fileCount: 1, fromCache: false, truncated: false, durationMilliseconds: 1 };
+      const workers: FakeWorker[] = [];
+      const index = new RustWorkspacePathIndex(
+        { binaryPath: '/fixture', root: '/project', accessPolicy: policy, excludedPaths: ['cache'] },
+        () => {
+          const worker = new FakeWorker(request =>
+            request.method === 'shutdown' ? { shutdown: true } : request.method === 'initialize' ? state : NO_RESPONSE,
+          );
+          workers.push(worker);
+          return worker;
+        },
+      );
+      try {
+        await index.initialize();
+        const pending = index.glob('**', { limit: 10 }).catch((error: unknown) => error);
+        privatePaths = [...privatePaths, '/project/profile/skill-state.json'];
+        const next = index.initialize();
+        await expect(pending).resolves.toMatchObject({ message: expect.stringContaining('private paths changed') });
+        await next;
+        expect(workers).toHaveLength(2);
+        expect(workers[1]!.requests[0]!.params).toMatchObject({
+          excludedPaths: ['cache', 'profile/skill-state.json'],
+          privatePaths,
+        });
+        privatePaths = ['/project'];
+        await index.initialize();
+        expect(workers[2]!.requests[0]!.params).toMatchObject({ excludeRoot: true });
+        privatePaths = [];
+        await index.refresh();
+        expect(workers[3]!.requests[0]!.params).not.toHaveProperty('excludeRoot');
+      } finally {
+        await index.dispose();
+      }
+    });
+
+    it('discards a response and editor overrides captured under a superseded policy', async () => {
+      let paths: string[] = [];
+      const state = { root: '/project', fileCount: 0, fromCache: false, truncated: false, durationMilliseconds: 1 };
+      const workers: FakeWorker[] = [];
+      const index = new RustWorkspacePathIndex(
+        {
+          binaryPath: '/fixture',
+          root: '/project',
+          accessPolicy: new WorkspaceAccessPolicy({}, () => paths),
+          readContentOverrides: async () => {
+            paths = ['/project/new-private'];
+            return {};
+          },
+        },
+        () => {
+          const worker = new FakeWorker(request =>
+            request.method === 'shutdown' ? { shutdown: true } : request.method === 'initialize' ? state : NO_RESPONSE,
+          );
+          workers.push(worker);
+          return worker;
+        },
+      );
+      try {
+        await index.initialize();
+        const result = index.glob('**', { limit: 10 });
+        const request = workers[0]!.requests.at(-1)!;
+        paths = ['/project/secret'];
+        workers[0]!.stdout.write(
+          JSON.stringify({ version: 1, id: request.id, result: { files: ['secret'], truncated: false } }) + '\n',
+        );
+        await expect(result).rejects.toThrow('private paths changed');
+        await expect(index.searchContents('text', { outputMode: 'content' })).rejects.toThrow('private paths changed');
+        expect(workers[1]!.requests.map(request => request.method)).toEqual(['initialize']);
+      } finally {
+        await index.dispose();
+      }
+    });
+
+    it('does not let a superseded initialization clear or publish its replacement', async () => {
+      let paths: string[] = [];
+      const state = { root: '/project', fileCount: 0, fromCache: false, truncated: false, durationMilliseconds: 1 };
+      const workers: FakeWorker[] = [];
+      const index = new RustWorkspacePathIndex(
+        { binaryPath: '/fixture', root: '/project', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+        () => {
+          const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
+          workers.push(worker);
+          return worker;
+        },
+      );
+      try {
+        const first = index.initialize().catch((error: unknown) => error);
+        paths = ['/project/profile'];
+        const replacement = index.initialize();
+        await expect(first).resolves.toBeInstanceOf(Error);
+        const duplicate = index.initialize();
+        expect(workers).toHaveLength(2);
+        expect(workers[1]!.requests).toHaveLength(1);
+        const request = workers[1]!.requests[0]!;
+        workers[1]!.stdout.write(JSON.stringify({ version: 1, id: request.id, result: state }) + '\n');
+        await expect(replacement).resolves.toEqual(state);
+        await expect(duplicate).resolves.toEqual(state);
+      } finally {
+        await index.dispose();
+      }
+    });
+  });
+
   describe('protocol', () => {
     it('obtains the native filesystem case policy without starting indexing or a watcher', async () => {
       for (const value of [false, true, null]) {
@@ -58,7 +165,7 @@ describe(RustWorkspacePathIndex, () => {
         try {
           await index.initialize();
           expect(worker.requests[0]?.params).toMatchObject(expected);
-          expect(JSON.stringify(worker.requests[0]?.params)).not.toContain('/PROJECT/profile');
+          expect(worker.requests[0]?.params).toMatchObject({ privatePaths: ['/PROJECT/profile/skill-state.json'] });
         } finally {
           await index.dispose();
         }
