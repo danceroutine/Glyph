@@ -21,6 +21,10 @@ The desktop host grants access after checking ownership and trust. Its
 trust loss, or a change of roots. Reconnecting issues a fresh signal. Carry the
 original signal through approvals and lock waits, then check it alongside the
 resource policy before submitting the write or returning data to the window.
+Attachment negotiation also belongs to the submitting renderer port. A replacement
+port that resumes the same window ID must finish its own handshake before it can
+receive a snapshot or run a command. Queued requests from the previous port expire
+on disconnect.
 
 ## Composing a host
 
