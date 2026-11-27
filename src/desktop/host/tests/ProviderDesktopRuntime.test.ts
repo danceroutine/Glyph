@@ -4951,7 +4951,9 @@ describe('Skill lifecycle host commands', () => {
     await withSkillLock(state.metadata, state.userDirectory, 'preferences', async () => {
       const pending = runtime.handle({ type: Command.SET_SKILL_ENABLED, skillId: skill.id, enabled: false });
       const rejected = expect(pending).rejects.toThrow();
-      await vi.waitFor(() => expect(setEnabled).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        expect(setEnabled).toHaveBeenCalledOnce();
+      });
       await runtime.connectionLost('owner');
       await rejected;
     });
