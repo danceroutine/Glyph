@@ -77,7 +77,7 @@ export interface AgentModelAdapter<TTurn> {
   prepareStep(
     turn: TTurn,
     context: AgentTurnContext,
-  ): Promise<(assertCurrent?: () => void, authorize?: () => Promise<() => void>) => Promise<AgentTurnStep<TTurn>>>;
+  ): Promise<(assertCurrent: () => void, authorize: () => Promise<() => void>) => Promise<AgentTurnStep<TTurn>>>;
   /** Return a new turn containing the outcomes, preserving the prior turn for recovery projection. */
   appendToolResults(turn: TTurn, results: readonly AgentToolResult[]): TTurn;
   /** Snapshot live wire state. The runtime projects it into durable history before storing or publishing it. */
