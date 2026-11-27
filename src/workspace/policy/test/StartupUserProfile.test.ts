@@ -47,6 +47,19 @@ describe(StartupUserProfile, () => {
     }).toThrow('closed');
   });
 
+  it('withholds an asynchronous result if the selected directory changed during access', async () => {
+    const { base, configured, select } = fixture();
+    fs.mkdirSync(configured);
+    const selected = select();
+    await expect(selected.access(async () => 'live')).resolves.toBe('live');
+    await expect(
+      selected.access(async () => {
+        fs.renameSync(configured, join(base, 'moved'));
+        return 'discarded';
+      }),
+    ).rejects.toThrow('removed or replaced');
+  });
+
   it('creates a missing link target beneath the selected ancestor with private permissions', () => {
     const { base, configured, physical, select } = fixture();
     fs.symlinkSync('physical/profile', configured);

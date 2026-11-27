@@ -29,6 +29,14 @@ export class StartupUserProfile {
     this.check(true);
   }
 
+  /** Verify both sides of an asynchronous access before releasing its result. Writers also verify at publication. */
+  async access<T>(operation: () => Promise<T>): Promise<T> {
+    this.verify();
+    const result = await operation();
+    this.verify();
+    return result;
+  }
+
   dispose(): void {
     if (this.descriptor !== undefined) fs.closeSync(this.descriptor);
     this.descriptor = undefined;
