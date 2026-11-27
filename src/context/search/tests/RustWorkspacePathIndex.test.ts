@@ -5,11 +5,47 @@ import { join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexError.js';
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 
 describe(RustWorkspacePathIndex, () => {
   describe('protocol', () => {
+    it('sends relative host exclusions and explicitly marks directly attached private roots', async () => {
+      for (const [root, expected] of [
+        ['/project', { excludedPaths: ['public/cache', 'profile/skill-state.json'] }],
+        ['/project/.skill-staging/backup', { excludeRoot: true, excludedPaths: ['public/cache'] }],
+      ] as const) {
+        const worker = new FakeWorker(request =>
+          request.method === 'shutdown'
+            ? { shutdown: true }
+            : {
+                root,
+                fileCount: 0,
+                fromCache: false,
+                truncated: false,
+                durationMilliseconds: 1,
+              },
+        );
+        const index = new RustWorkspacePathIndex(
+          {
+            root,
+            binaryPath: '/fixture',
+            caseSensitive: false,
+            excludedPaths: ['public/cache'],
+            accessPolicy: new WorkspaceAccessPolicy({}, ['/PROJECT/profile/skill-state.json']),
+          },
+          () => worker,
+        );
+        try {
+          await index.initialize();
+          expect(worker.requests[0]?.params).toMatchObject(expected);
+          expect(JSON.stringify(worker.requests[0]?.params)).not.toContain('/PROJECT/profile');
+        } finally {
+          await index.dispose();
+        }
+      }
+    });
     it('starts a clean response stream after a worker dies mid-message and ignores late old-worker data', async () => {
       const old = new FakeWorker(() => NO_RESPONSE);
       const next = new FakeWorker(request =>
@@ -171,6 +207,7 @@ describe(RustWorkspacePathIndex, () => {
               'dist',
               'node_modules',
               'target',
+              '.skill-staging',
             ],
             excludedPaths: ['.glyph-state', 'logs/provider.jsonl'],
             sensitiveFileNames: ['.git-credentials', '.netrc', '.npmrc', '.pypirc'],

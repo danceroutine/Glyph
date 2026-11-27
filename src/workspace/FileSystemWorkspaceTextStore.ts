@@ -32,34 +32,49 @@ import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
     caseSensitive: z.boolean().optional(),
+    /** A host-owned transaction may verify files in its own rollback directory. */
+    allowPrivateRoot: z.boolean().default(false),
     excludedPaths: z.array(z.string().min(1)).default([]),
     accessPolicy: z.instanceof(WorkspaceAccessPolicy).default(() => new WorkspaceAccessPolicy()),
   })
   .strict();
 
 type FileSystemWorkspaceTextStoreOptions = z.input<typeof fileSystemWorkspaceTextStoreOptionsSchema>;
-type ResolvedOptions = Omit<z.output<typeof fileSystemWorkspaceTextStoreOptionsSchema>, 'caseSensitive'>;
+type ResolvedOptions = Omit<
+  z.output<typeof fileSystemWorkspaceTextStoreOptionsSchema>,
+  'caseSensitive' | 'allowPrivateRoot'
+>;
 
 export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   readonly root: string;
   readonly caseSensitive: boolean;
   readonly mutationConsistency = WorkspaceMutationConsistency.BEST_EFFORT_FILESYSTEM;
   private readonly options: ResolvedOptions;
+  private readonly privateRoot: boolean;
 
   constructor(root: string, options: FileSystemWorkspaceTextStoreOptions = {}) {
     assertWellFormedWorkspacePath(root);
-    const { caseSensitive, excludedPaths, accessPolicy } = fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
+    const { caseSensitive, excludedPaths, accessPolicy, allowPrivateRoot } =
+      fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
     this.root = resolve(root);
     this.caseSensitive = caseSensitive ?? (process.platform !== 'win32' && process.platform !== 'darwin');
+    const projected = accessPolicy.exclusionsFor(this.root, this.caseSensitive);
+    this.privateRoot = projected.privateRoot && !allowPrivateRoot;
     this.options = {
-      excludedPaths: [...new Set(excludedPaths.map(path => normalizeProjectPath(this.root, path)))],
+      excludedPaths: [
+        ...new Set([...excludedPaths, ...projected.excludedPaths].map(path => normalizeProjectPath(this.root, path))),
+      ],
       accessPolicy,
     };
   }
 
   normalizePath(input: string): string {
     const normalized = normalizeProjectPath(this.root, input);
-    if (normalized.split('/').some(part => this.isIgnoredDirectory(part)) || this.isExcluded(normalized)) {
+    if (
+      this.privateRoot ||
+      normalized.split('/').some(part => this.isIgnoredDirectory(part)) ||
+      this.isExcluded(normalized)
+    ) {
       throw new EditError(EditFailureReason.UNSUPPORTED, 'That path is excluded from project access.', {
         path: normalized,
       });
@@ -98,6 +113,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     globPattern = '**/*',
     targetDirectory?: string,
   ): Promise<{ files: string[]; truncated: boolean }> {
+    if (this.privateRoot) return { files: [], truncated: false };
     const root = await realpath(this.root);
     const normalizedTarget = targetDirectory === undefined ? undefined : this.normalizePath(targetDirectory);
     if (normalizedTarget !== undefined && normalizedTarget !== '')
@@ -127,7 +143,11 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         } else if (entry.isFile()) {
           const pathWithinTarget = relative(searchRoot, absolute).split(sep).join('/');
           const matchCandidate = this.caseSensitive ? pathWithinTarget : pathWithinTarget.toLowerCase();
-          if (!this.isExcluded(path) && matchesGlob(matchCandidate, matchPattern)) {
+          if (
+            !this.isIgnoredDirectory(entry.name) &&
+            !this.isExcluded(path) &&
+            matchesGlob(matchCandidate, matchPattern)
+          ) {
             if (files.length === maxFiles) {
               truncated = true;
               return;

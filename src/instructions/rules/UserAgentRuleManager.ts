@@ -5,7 +5,11 @@ import { MAX_AGENT_RULE_BYTES, parseAgentRuleFile } from './parseAgentRuleFile.t
 import { withRuleEnabled } from './ruleFrontmatter.ts';
 import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
-import type { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+
+interface UserRuleFileAuthority {
+  refresh(): Promise<unknown>;
+  assertReplaceableMetadata(filename: string): Promise<void>;
+}
 
 export type UserAgentRuleActivation = 'always' | 'file_pattern' | 'model' | 'manual';
 
@@ -17,7 +21,7 @@ export class UserAgentRuleManager {
       'root' | 'caseSensitive' | 'read' | 'create' | 'delete' | 'normalizePath' | 'replace'
     >,
     private readonly catalog: Pick<AgentInstructionCatalog, 'refresh'>,
-    private readonly pathIndex?: Pick<RustWorkspacePathIndex, 'refresh' | 'assertReplaceableMetadata'>,
+    private readonly files: UserRuleFileAuthority,
   ) {}
 
   get directoryUri(): string {
@@ -62,12 +66,9 @@ export class UserAgentRuleManager {
       const text = withRuleEnabled(current.text, enabled);
       if (Buffer.byteLength(text) + (current.byteOrderMark ? 3 : 0) > MAX_AGENT_RULE_BYTES)
         throw new Error('User rules can contain at most 64 KiB. Shorten the rule before changing its enablement.');
-      const index = this.pathIndex;
-      const metadata = index && {
-        beforeReplace: () => index.assertReplaceableMetadata(normalized.slice('rules/'.length)),
-      };
-      await metadata?.beforeReplace();
-      await this.workspace.replace(normalized, expectedRevision, text, current.byteOrderMark, metadata);
+      const beforeReplace = () => this.files.assertReplaceableMetadata(normalized.slice('rules/'.length));
+      await beforeReplace();
+      await this.workspace.replace(normalized, expectedRevision, text, current.byteOrderMark, { beforeReplace });
     });
     await this.refreshDiscovery();
   }
@@ -79,13 +80,13 @@ export class UserAgentRuleManager {
   }
 
   private mutate<T>(work: () => Promise<T>): Promise<T> {
-    return withPrivateFileLock(join(this.workspace.root, '.locks', 'user-rules.sqlite'), work);
+    return withPrivateFileLock(join(this.workspace.root, '.skill-staging', 'user-rules.sqlite'), work);
   }
 
   /** Publish managed mutations immediately, without waiting for native watcher reconciliation. */
   private async refreshDiscovery(): Promise<void> {
     try {
-      await this.pathIndex?.refresh();
+      await this.files.refresh();
       await this.catalog.refresh();
     } catch (error) {
       throw new Error(

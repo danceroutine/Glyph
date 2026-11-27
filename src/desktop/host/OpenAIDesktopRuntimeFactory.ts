@@ -351,7 +351,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         binaryPath: sandboxExecutable,
         workspaceRoots: roots.map(workspaceRoot => workspaceRoot.path),
         stateDirectory: configuration.stateDirectory,
-        protectedPaths: [artifactRoot],
+        protectedPaths: input.trusted ? [artifactRoot, this.userDirectory] : [artifactRoot],
         accessPolicy: policy,
       }),
     );

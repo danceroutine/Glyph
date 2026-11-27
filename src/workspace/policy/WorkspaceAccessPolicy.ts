@@ -1,5 +1,8 @@
+import { posix, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { WorkspaceAccessPolicyOptions } from './WorkspaceAccessPolicyOptions.ts';
+
+const skillStagingDirectory = '.skill-staging';
 
 const defaults = {
   ignoredDirectories: ['.artifacts', '.code-oss', '.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
@@ -31,13 +34,35 @@ export class WorkspaceAccessPolicy {
   readonly sensitiveFileExtensions: readonly string[];
   readonly allowedFileNames: readonly string[];
 
-  constructor(options: WorkspaceAccessPolicyOptions = {}) {
+  constructor(
+    options: WorkspaceAccessPolicyOptions = {},
+    private readonly privatePaths: readonly string[] = [],
+  ) {
     const resolved = schema.parse(options);
-    this.ignoredDirectories = resolved.ignoredDirectories;
+    // Transaction journals, locks and rollback copies remain host-private under customized policies too.
+    this.ignoredDirectories = [...new Set([...resolved.ignoredDirectories, skillStagingDirectory])];
     this.sensitiveFileNames = resolved.sensitiveFileNames;
     this.sensitiveFilePrefixes = resolved.sensitiveFilePrefixes;
     this.sensitiveFileExtensions = resolved.sensitiveFileExtensions;
     this.allowedFileNames = resolved.allowedFileNames;
+  }
+
+  /** Project absolute host exclusions into the namespace of a single attached filesystem root. */
+  exclusionsFor(root: string, caseSensitive: boolean): { privateRoot: boolean; excludedPaths: string[] } {
+    const key = (path: string): string => {
+      const normalized = resolve(path).split(sep).join('/');
+      return caseSensitive ? normalized : normalized.toLowerCase();
+    };
+    const rootKey = key(root);
+    let privateRoot = rootKey.split('/').includes(skillStagingDirectory);
+    const excludedPaths: string[] = [];
+    for (const path of this.privatePaths) {
+      const pathKey = key(path);
+      const relative = posix.relative(rootKey, pathKey);
+      if (relative === '' || rootKey.startsWith(pathKey.endsWith('/') ? pathKey : pathKey + '/')) privateRoot = true;
+      else if (relative !== '..' && !relative.startsWith('../')) excludedPaths.push(relative);
+    }
+    return { privateRoot, excludedPaths };
   }
 
   isSensitiveFileName(name: string, caseSensitive = true): boolean {

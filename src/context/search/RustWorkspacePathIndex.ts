@@ -137,7 +137,7 @@ type ProcessFactory = (binaryPath: string) => SidecarProcess;
 
 /** Persistent JSONL transport for the native cached workspace path index. */
 export class RustWorkspacePathIndex implements WorkspacePathIndex {
-  private readonly options: ResolvedRustWorkspacePathIndexOptions;
+  private readonly options: ResolvedRustWorkspacePathIndexOptions & { excludeRoot?: true };
   private readonly processFactory: ProcessFactory;
   private process: SidecarProcess | undefined;
   private readonly pending = new Map<number, PendingRequest>();
@@ -154,9 +154,12 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     const { accessPolicy = new WorkspaceAccessPolicy(), readContentOverrides, ...rawOptions } = options;
     this.readContentOverrides = readContentOverrides;
     const parsed = rustWorkspacePathIndexOptionsSchema.parse(rawOptions);
+    const projected = accessPolicy.exclusionsFor(parsed.root, parsed.caseSensitive);
     this.options = {
       ...parsed,
       ...accessPolicy.toJSON(),
+      excludedPaths: [...new Set([...parsed.excludedPaths, ...projected.excludedPaths])],
+      ...(projected.privateRoot ? { excludeRoot: true } : {}),
       binaryPath: resolve(parsed.binaryPath),
       root: resolve(parsed.root),
       cachePath: parsed.cachePath === null ? null : resolve(parsed.cachePath),
