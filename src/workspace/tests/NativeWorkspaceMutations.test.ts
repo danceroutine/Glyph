@@ -36,6 +36,14 @@ it('sends the same pinned root identity and relative paths for every native oper
   });
   await mutations.ensureDirectory('a/b', 0o755);
   expect(JSON.parse(await readFile(request, 'utf8'))).toMatchObject({ mode: 0o755 });
+  await writeFile(reply, JSON.stringify({ ok: true, digest: '0'.repeat(64) }));
+  await mutations.assertReplaceableMetadata('a/b', true, 'staging');
+  await expect(mutations.assertReplaceableMetadata('a/b', true)).resolves.toBe('0'.repeat(64));
+  expect(JSON.parse(await readFile(request, 'utf8'))).toMatchObject({
+    operation: 'assert_replaceable_metadata',
+    recursive: true,
+  });
+  await writeFile(reply, '{"ok":true}');
   await mutations.createStage('.skill-staging/id');
   expect(JSON.parse(await readFile(request, 'utf8'))).toMatchObject({ operation: 'create_stage' });
   await mutations.stagePackage(

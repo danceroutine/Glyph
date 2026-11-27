@@ -72,6 +72,17 @@ it('rejects prefix collisions, deep resources and non-activatable manifests befo
     expect(() => aSkillDraft(body)).toThrow();
   }
 });
+it('rejects a metadata-only change between preview and replacement without retiring the original tree', async () => {
+  const { root, location, manager, install } = await aSkillLifecycle();
+  const skill = await install();
+  const preview = await manager.prepare(skill.origin.id, aSkillDraft('Updated'), skill.id);
+  const inspect = location.mutations.assertReplaceableMetadata.bind(location.mutations);
+  vi.spyOn(location.mutations, 'assertReplaceableMetadata').mockImplementation((path, tree, reference) =>
+    path === skill.directory ? Promise.resolve('1'.repeat(64)) : inspect(path, tree, reference),
+  );
+  await expect(manager.apply(preview.id)).rejects.toThrow('access metadata changed');
+  expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
+});
 it('preserves installed files when a fresh working-copy check sees an unsaved edit after staging', async () => {
   const { root, location, catalog, state, install } = await aSkillLifecycle();
   const skill = await install();
@@ -202,6 +213,8 @@ it('recovers only authenticated committed publications and preserves changed ass
   await expect(manager.recover()).rejects.toThrow('Published files changed');
   await journal.write({ ...record, expected: revision });
   await expect(manager.recover()).rejects.toThrow('Inspect retained staging');
+  await journal.write({ ...record, replacementMetadata: '1'.repeat(64) });
+  await expect(manager.recover()).rejects.toThrow('access metadata changed');
   await journal.write(record);
   await manager.recover();
   expect(state.installations.get(skill.id)?.source).toBe('Approved import');
@@ -210,6 +223,11 @@ it('recovers only authenticated committed publications and preserves changed ass
   await journal.write({ ...record, retired: true });
   await manager.recover();
   await expect(stat(stage)).rejects.toMatchObject({ code: 'ENOENT' });
+  await mkdir(stage, { mode: 0o700 });
+  await rename(join(root, skill.directory), join(stage, 'previous'));
+  await journal.write({ ...record, expected: revision, replacement: null });
+  await manager.recover();
+  expect(state.installations.has(skill.id)).toBe(false);
 });
 it('preserves uncertain originals and distinguishes independent identical packages from a published candidate', async () => {
   const { root, store, location, state, manager, install } = await aSkillLifecycle();

@@ -138,3 +138,30 @@ fn reports_stream_write_failures() {
         "EIO"
     );
 }
+
+#[test]
+fn bounds_metadata_inspection_and_rejects_special_files() {
+    let base = tempdir().unwrap();
+    let fd = open(base.path(), DIRECTORY, Mode::empty()).unwrap();
+    fs::write(base.path().join("different"), "fixture").unwrap();
+    assert_eq!(
+        inspect_metadata(
+            &fd,
+            c"different",
+            true,
+            0,
+            &mut 1,
+            Some((u32::MAX, u32::MAX))
+        )
+        .unwrap_err()
+        .code,
+        "ENOTSUP"
+    );
+    assert!(inspect_metadata(&fd, c"file", true, 0, &mut 0, None).is_err());
+    assert!(inspect_metadata(&fd, c"file", true, MAX_REMOVE_DEPTH + 1, &mut 1, None).is_err());
+    std::process::Command::new("mkfifo")
+        .arg(base.path().join("fifo"))
+        .status()
+        .unwrap();
+    assert!(inspect_metadata(&fd, c"fifo", true, 0, &mut 1, None).is_err());
+}

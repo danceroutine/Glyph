@@ -1,10 +1,10 @@
-import { fork } from 'node:child_process';
+import { execFileSync, fork } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { it, expect, onTestFinished } from 'vitest';
+import { it, expect, onTestFinished, vi } from 'vitest';
 import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 
@@ -123,3 +123,39 @@ it('retains readable directory permissions while reclaiming the old read-only ba
     await chmod(refs, 0o755);
   }
 });
+
+it('rejects changed directory permissions after preview without replacing the installed package', async () => {
+  const { root, manager, install } = await aSkillLifecycle(openMutations);
+  const skill = await install();
+  const directory = join(root, skill.directory, 'references');
+  const update = await manager.prepare(skill.origin.id, aSkillDraft('Updated'), skill.id);
+  await chmod(directory, 0o711);
+  await expect(manager.apply(update.id)).rejects.toThrow('access metadata changed');
+  expect((await stat(directory)).mode & 0o777).toBe(0o711);
+  expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
+});
+
+it.skipIf(process.platform !== 'darwin')(
+  'retains an ACL added to an unchanged resource during replacement',
+  async () => {
+    const { root, location, manager, install } = await aSkillLifecycle(openMutations);
+    const skill = await install();
+    const update = await manager.prepare(skill.origin.id, aSkillDraft('Updated'), skill.id);
+    const original = location.mutations.renameExclusive.bind(location.mutations);
+    const asset = 'assets/image.bin';
+    const renameWithMetadata = vi.spyOn(location.mutations, 'renameExclusive').mockImplementation(async (from, to) => {
+      await original(from, to);
+      if (to.endsWith('/previous')) execFileSync('/bin/chmod', ['+a', 'everyone deny write', join(root, to, asset)]);
+    });
+    try {
+      await expect(manager.apply(update.id)).rejects.toThrow('access-control metadata');
+      expect(execFileSync('/bin/ls', ['-le', join(root, skill.directory, asset)], { encoding: 'utf8' })).toContain(
+        'everyone deny write',
+      );
+      expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
+    } finally {
+      renameWithMetadata.mockRestore();
+      execFileSync('/bin/chmod', ['-N', join(root, skill.directory, asset)]);
+    }
+  },
+);

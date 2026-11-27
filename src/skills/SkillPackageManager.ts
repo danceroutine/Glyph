@@ -40,6 +40,7 @@ interface Pending {
   readonly directory: string;
   readonly files?: PackageFiles;
   readonly expected: string | null;
+  readonly expectedMetadata?: string;
 }
 
 function textContent(bytes: Uint8Array): string | undefined {
@@ -243,6 +244,7 @@ export class SkillPackageManager {
     await location.assertClean?.(path);
     const after = draft?.packageFiles(before);
     const expected = before.size > 0 ? packageRevision(before) : null;
+    const expectedMetadata = expected ? await location.mutations.assertReplaceableMetadata(directory, true) : undefined;
     const preview: SkillPreview = {
       id: randomUUID(),
       action: draft ? (before.size > 0 ? 'update' : 'install') : 'remove',
@@ -254,7 +256,14 @@ export class SkillPackageManager {
       files: compareFiles(before, after ?? new Map()),
     };
     if (this.pending.size >= 32) throw new Error('Too many pending skill previews. Finish or discard a preview first.');
-    this.pending.set(preview.id, { preview, location, directory, expected, ...(after ? { files: after } : {}) });
+    this.pending.set(preview.id, {
+      preview,
+      location,
+      directory,
+      expected,
+      ...(expectedMetadata ? { expectedMetadata } : {}),
+      ...(after ? { files: after } : {}),
+    });
     return structuredClone(preview);
   }
   private async read(location: SkillPackageLocation, directory: string): Promise<PackageFiles> {
@@ -302,7 +311,8 @@ export class SkillPackageManager {
         if (entry.published) {
           if ((await diskRevision(target)) !== entry.replacement)
             throw new Error('Package recovery is required. Published files changed at ' + target);
-          await this.assertBackup(entry, stage);
+          if (entry.replacement) await this.checkMetadata(location, entry.directory, entry.replacementMetadata);
+          await this.assertBackup(location, entry, stage);
           await this.persist(entry);
         } else {
           await this.rollback(location, entry, stage, target);
@@ -332,7 +342,18 @@ export class SkillPackageManager {
         'An unfinished skill change belongs to another project root. Reopen the original project to recover it.',
       );
   }
-  private async assertBackup(entry: SkillTransaction, stage: string) {
+  private async checkMetadata(
+    location: SkillPackageLocation,
+    path: string,
+    expected?: string,
+    ownershipReference?: string,
+  ) {
+    const current = await location.mutations.assertReplaceableMetadata(path, true, ownershipReference);
+    if (expected && current !== expected) throw new Error('Skill access metadata changed. Review the package again.');
+  }
+  private async assertBackup(location: SkillPackageLocation, entry: SkillTransaction, stage: string) {
+    if (entry.expected)
+      await this.checkMetadata(location, '.skill-staging/' + entry.id + '/previous', entry.expectedMetadata);
     if (entry.expected && (await diskRevision(join(stage, 'previous'))) !== entry.expected)
       throw new Error('Package recovery is required. Inspect retained staging at ' + stage);
   }
@@ -381,6 +402,7 @@ export class SkillPackageManager {
         if (!saved) return;
         throw new Error('Package recovery is required. Preserved backups at ' + backup);
       }
+      await this.checkMetadata(location, entry.directory, entry.replacementMetadata);
       await location.mutations.renameExclusive(entry.directory, relativeStage + '/reverted');
       if ((await diskRevision(reverted)) !== entry.replacement)
         throw new Error('Package recovery is required. Inspect the changed candidate at ' + reverted);
@@ -411,6 +433,7 @@ export class SkillPackageManager {
       directory,
       skillId: location.packageId?.(directory) ?? skillPackageId(location.id, directory),
       expected,
+      ...(change.expectedMetadata ? { expectedMetadata: change.expectedMetadata } : {}),
       replacement: files ? preview.revision : null,
       source: files ? preview.source : null,
       published: false,
@@ -429,13 +452,34 @@ export class SkillPackageManager {
           files,
           await packageDirectoryModes(target, files, directoryMode),
         );
+        entry.replacementMetadata = await location.mutations.assertReplaceableMetadata(
+          relativeStage + '/package',
+          true,
+          relativeStage + '/package',
+        );
+        await this.journal.write(entry);
         if ((await diskRevision(join(stage, 'package'))) !== preview.revision)
           throw new Error('The staged skill is unreadable or changed. Preview it again.');
       }
       await location.assertClean?.(target);
       signal?.throwIfAborted();
+      // The staging directory has its own inheritance. Check the actual destination parent as well as the saved tree.
+      if (files)
+        await location.mutations.assertReplaceableMetadata(posix.dirname(directory), false, relativeStage + '/package');
       if (expected) {
+        await this.checkMetadata(
+          location,
+          directory,
+          change.expectedMetadata,
+          files ? relativeStage + '/package' : undefined,
+        );
         await location.mutations.renameExclusive(directory, relativeStage + '/previous');
+        await this.checkMetadata(
+          location,
+          relativeStage + '/previous',
+          change.expectedMetadata,
+          files ? relativeStage + '/package' : undefined,
+        );
         if ((await diskRevision(backup)) !== expected)
           throw new Error('The skill changed during replacement. Preview it again.');
       } else if (await optionalStat(target)) throw new Error('A skill appeared at the destination. Preview again.');
@@ -445,7 +489,8 @@ export class SkillPackageManager {
       await location.refreshIndex();
       if (files) await this.assertIndexed(location, directory, [...files.keys()]);
       await location.assertClean?.(target);
-      await this.assertBackup(entry, stage);
+      if (files) await this.checkMetadata(location, directory, entry.replacementMetadata);
+      await this.assertBackup(location, entry, stage);
       signal?.throwIfAborted();
       entry.published = true;
       await this.journal.write(entry);
@@ -453,7 +498,8 @@ export class SkillPackageManager {
       preferencesCommitted = true;
       if ((await diskRevision(target)) !== entry.replacement)
         throw new Error('Published files changed. Package recovery is required at ' + target);
-      await this.assertBackup(entry, stage);
+      if (files) await this.checkMetadata(location, directory, entry.replacementMetadata);
+      await this.assertBackup(location, entry, stage);
     } catch (error) {
       if (preferencesCommitted || error instanceof SkillPreferenceCommitUncertain) throw error;
       if (recorded) {

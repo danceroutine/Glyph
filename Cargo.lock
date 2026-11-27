@@ -210,9 +210,11 @@ name = "glyph-workspace-mutations"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "glyph-filesystem-metadata",
  "rustix",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

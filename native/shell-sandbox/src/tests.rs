@@ -88,7 +88,7 @@ fn sensitive_file_policy_rejects_case_variants() {
     );
 }
 
-fn request(profile: SandboxProfile, root: &Path, state: &Path) -> SandboxRequest {
+pub(super) fn request(profile: SandboxProfile, root: &Path, state: &Path) -> SandboxRequest {
     SandboxRequest {
         profile,
         working_directory: root.to_owned(),
@@ -838,6 +838,18 @@ fn workspace_scans_skip_links_descend_directories_and_enforce_limits() {
     std::os::unix::fs::symlink(fixture.path(), root.join("linked")).expect("symlink");
     let policy = WorkspaceAccessPolicy::default();
 
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let blocked = root.join("unsearchable");
+        create_dir(&blocked).unwrap();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(
+            visit_workspace_with_limits(&root, &policy, 16, 1, &mut descend_into_directories)
+                .is_ok()
+        );
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let bounded = visit_workspace_with_limits(&root, &policy, 16, 1, &mut descend_into_directories);
     let too_many_entries =
         visit_workspace_with_limits(&root, &policy, 1, 1, &mut descend_into_directories);

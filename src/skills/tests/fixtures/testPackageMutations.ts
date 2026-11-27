@@ -6,6 +6,7 @@ import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 /** Local fault-injection double. Integration tests exercise the actual descriptor-relative helper. */
 export function testPackageMutations(root: string): WorkspaceDirectoryMutations {
   return {
+    assertReplaceableMetadata: async () => '0'.repeat(64),
     async ensureDirectory(relative, mode = 0o700) {
       await mkdir(join(root, relative), { recursive: true, mode });
     },

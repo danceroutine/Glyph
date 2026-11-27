@@ -12,6 +12,8 @@ const entrySchema = z
     skillId: z.string(),
     expected: z.string().nullable(),
     replacement: z.string().nullable(),
+    expectedMetadata: z.hash('sha256').optional(),
+    replacementMetadata: z.hash('sha256').optional(),
     source: z.string().nullable(),
     published: z.boolean(),
     retired: z.boolean().default(false),

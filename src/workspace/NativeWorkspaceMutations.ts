@@ -5,9 +5,15 @@ import { z } from 'zod';
 import type { WorkspaceDirectoryMutations } from './WorkspaceDirectoryMutations.ts';
 
 const replySchema = z.discriminatedUnion('ok', [
-  z.strictObject({ ok: z.literal(true) }),
+  z.strictObject({ ok: z.literal(true), digest: z.string().optional() }),
   z.strictObject({ ok: z.literal(false), code: z.string(), message: z.string() }),
 ]);
+type MetadataInspection = {
+  operation: 'assert_replaceable_metadata';
+  relative: string;
+  recursive: boolean;
+  ownershipReference?: string;
+};
 type Operation =
   | { operation: 'ensure_directory' | 'remove_tree' | 'create_stage'; relative: string; mode?: number }
   | {
@@ -39,6 +45,14 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
       await handle.close();
     }
   }
+  assertReplaceableMetadata(relative: string, recursive: boolean, ownershipReference?: string): Promise<string> {
+    return this.run({
+      operation: 'assert_replaceable_metadata',
+      relative,
+      recursive,
+      ...(ownershipReference === undefined ? {} : { ownershipReference }),
+    });
+  }
   ensureDirectory(relative: string, mode?: number): Promise<void> {
     return this.run({ operation: 'ensure_directory', relative, ...(mode === undefined ? {} : { mode }) });
   }
@@ -67,7 +81,9 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
   removeTree(relative: string): Promise<void> {
     return this.run({ operation: 'remove_tree', relative });
   }
-  private async run(operation: Operation): Promise<void> {
+  private run(operation: MetadataInspection): Promise<string>;
+  private run(operation: Operation): Promise<void>;
+  private async run(operation: Operation | MetadataInspection): Promise<string | void> {
     const request = JSON.stringify({ ...operation, root: this.root, rootIdentity: this.rootIdentity });
     const maxBytes = operation.operation === 'stage_package' ? 24 * 1024 * 1024 : 32 * 1024;
     if (Buffer.byteLength(request) > maxBytes)
@@ -86,5 +102,6 @@ export class NativeWorkspaceMutations implements WorkspaceDirectoryMutations {
     });
     const reply = replySchema.parse(JSON.parse(stdout));
     if (!reply.ok) throw Object.assign(new Error(reply.message), { code: reply.code });
+    if (operation.operation === 'assert_replaceable_metadata') return z.hash('sha256').parse(reply.digest);
   }
 }

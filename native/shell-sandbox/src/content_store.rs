@@ -14,7 +14,7 @@ const MAX_REQUEST_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 pub(super) struct VerifiedStores {
     stores: Vec<(OwnedFd, String)>,
-    remaining_bytes: u64,
+    remaining_bytes: Option<u64>,
 }
 
 impl VerifiedStores {
@@ -42,7 +42,7 @@ impl VerifiedStores {
             .collect();
         Self {
             stores,
-            remaining_bytes: MAX_REQUEST_BYTES,
+            remaining_bytes: Some(MAX_REQUEST_BYTES),
         }
     }
 
@@ -56,12 +56,14 @@ impl VerifiedStores {
         }
         let length = source.st_size as u64;
         // Charge the bounded read even when the candidate has no trusted object.
-        self.remaining_bytes = self
-            .remaining_bytes
-            .checked_sub(length + 1)
-            .ok_or_else(|| {
-                io::Error::other("Content store verification exceeds the sandbox byte limit.")
-            })?;
+        let Some(previous) = self.remaining_bytes else {
+            return Ok(());
+        };
+        self.remaining_bytes = previous.checked_sub(length + 1);
+        if self.remaining_bytes.is_none() {
+            eprintln!("glyph-shell-sandbox: additional dependency hard links were omitted after the verification byte limit.");
+            return Ok(());
+        }
         let mut bytes = Vec::new();
         File::from(rustix::io::dup(candidate)?)
             .take(length + 1)

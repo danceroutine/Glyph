@@ -502,6 +502,20 @@ fn visit_workspace_bounded(
             "workspace scan exceeds the maximum depth of {max_depth}"
         )));
     }
+    // The Linux view cannot admit children of a directory the caller cannot search. Its preliminary
+    // Git metadata walk must likewise leave that subtree out, without preventing unrelated commands.
+    #[cfg(target_os = "linux")]
+    if depth > 0
+        && matches!(
+            rustix::fs::access(
+                directory,
+                rustix::fs::Access::READ_OK | rustix::fs::Access::EXEC_OK
+            ),
+            Err(rustix::io::Errno::ACCESS | rustix::io::Errno::PERM)
+        )
+    {
+        return Ok(());
+    }
     for entry in fs::read_dir(directory)? {
         *entries += 1;
         if *entries > max_entries {

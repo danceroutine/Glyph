@@ -43,9 +43,35 @@ impl From<Errno> for Failure {
     }
 }
 
-pub(super) fn execute(request: &Request) -> Result<(), Failure> {
+pub(super) fn execute(request: &Request) -> Result<Option<String>, Failure> {
     let root = open_root(&request.root, &request.root_identity)?;
     match &request.operation {
+        Operation::AssertReplaceableMetadata {
+            relative,
+            recursive,
+            ownership_reference,
+        } => {
+            let owner = if let Some(path) = ownership_reference {
+                let dir =
+                    open_directories(rustix::io::dup(&root)?, &relative_components(path)?, None)?;
+                let stat = fstat(dir)?;
+                Some((stat.st_uid, stat.st_gid))
+            } else {
+                None
+            };
+            let parts = relative_components(relative)?;
+            let (parent, name) = open_parent(&root, &parts)?;
+            let mut remaining = MAX_REMOVE_ENTRIES;
+            let digest = inspect_metadata(
+                &parent,
+                &CString::new(name).expect("validated name"),
+                *recursive,
+                0,
+                &mut remaining,
+                owner,
+            )?;
+            return Ok(Some(format!("{digest:x}")));
+        }
         Operation::EnsureDirectory { relative, mode } => {
             let components = relative_components(relative)?;
             open_directories(
@@ -77,7 +103,7 @@ pub(super) fn execute(request: &Request) -> Result<(), Failure> {
         Operation::RemoveTree { relative } => {
             let components = relative_components(relative)?;
             match open_parent(&root, &components) {
-                Err(error) if error.code == "ENOENT" => return Ok(()),
+                Err(error) if error.code == "ENOENT" => return Ok(None),
                 Err(error) => return Err(error),
                 Ok((parent, name)) => {
                     let mut remaining = MAX_REMOVE_ENTRIES;
@@ -88,7 +114,7 @@ pub(super) fn execute(request: &Request) -> Result<(), Failure> {
             }
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn open_root(root: &str, expected: &Identity) -> Result<OwnedFd, Failure> {
@@ -193,6 +219,61 @@ fn check_cleanup_identity(opened: &Stat, current: &Stat) -> Result<(), Failure> 
         ));
     }
     Ok(())
+}
+
+fn inspect_metadata(
+    parent: &OwnedFd,
+    name: &CStr,
+    recursive: bool,
+    depth: usize,
+    remaining: &mut usize,
+    owner: Option<(u32, u32)>,
+) -> Result<sha2::digest::Output<sha2::Sha256>, Failure> {
+    use rustix::fs::FileType;
+    use sha2::{Digest, Sha256};
+    if depth > MAX_REMOVE_DEPTH || *remaining == 0 {
+        return Err(Failure::invalid());
+    }
+    *remaining -= 1;
+    let fd = openat(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let info = fstat(&fd)?;
+    let kind = FileType::from_raw_mode(info.st_mode);
+    if !matches!(kind, FileType::RegularFile | FileType::Directory) {
+        return Err(Failure::invalid());
+    }
+    if owner.is_some_and(|(uid, gid)| info.st_gid != gid || (recursive && info.st_uid != uid)) {
+        return Err(Failure::new(
+            "ENOTSUP",
+            "The replacement cannot preserve existing ownership or special permission bits.",
+        ));
+    }
+    glyph_filesystem_metadata::assert_replaceable(&fd)
+        .map_err(|error| Failure::new("ENOTSUP", error.to_string()))?;
+    let mut hash = Sha256::new();
+    hash.update(info.st_uid.to_le_bytes());
+    hash.update(info.st_gid.to_le_bytes());
+    hash.update(info.st_mode.to_le_bytes());
+    if recursive && kind == FileType::Directory {
+        let mut children = std::collections::BTreeMap::new();
+        for entry in Dir::read_from(&fd)? {
+            let entry = entry?;
+            let child = entry.file_name();
+            if child.to_bytes() != b"." && child.to_bytes() != b".." {
+                let digest = inspect_metadata(&fd, child, true, depth + 1, remaining, owner)?;
+                children.insert(child.to_owned(), digest);
+            }
+        }
+        for (name, digest) in children {
+            hash.update(name.as_bytes_with_nul());
+            hash.update(digest);
+        }
+    }
+    Ok(hash.finalize())
 }
 
 fn remove_entry(

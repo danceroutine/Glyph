@@ -49,6 +49,11 @@ struct Identity {
     deny_unknown_fields
 )]
 enum Operation {
+    AssertReplaceableMetadata {
+        relative: String,
+        recursive: bool,
+        ownership_reference: Option<String>,
+    },
     EnsureDirectory {
         relative: String,
         mode: Option<u32>,
@@ -112,7 +117,8 @@ pub fn serve(input: impl Read, mut output: impl Write) -> io::Result<()> {
             execute(&request)
         });
     let reply = match result {
-        Ok(()) => serde_json::json!({ "ok": true }),
+        Ok(Some(digest)) => serde_json::json!({ "ok": true, "digest": digest }),
+        Ok(None) => serde_json::json!({ "ok": true }),
         Err(error) => {
             serde_json::json!({ "ok": false, "code": error.code, "message": error.message })
         }
@@ -125,7 +131,7 @@ pub fn serve(input: impl Read, mut output: impl Write) -> io::Result<()> {
 use filesystem::execute;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn execute(_: &Request) -> Result<(), Failure> {
+fn execute(_: &Request) -> Result<Option<String>, Failure> {
     Err(Failure::new(
         "ENOTSUP",
         "Descriptor-relative package mutations are unavailable on this platform.",

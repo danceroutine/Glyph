@@ -83,6 +83,7 @@ beforeEach(async () => {
     // client to this runner rather than requiring a packaged app installation.
     const instance = await openWorkspaceMutations(process.execPath, root);
     const mutations = testPackageMutations(root);
+    vi.spyOn(instance, 'assertReplaceableMetadata').mockImplementation(mutations.assertReplaceableMetadata);
     vi.spyOn(instance, 'ensureDirectory').mockImplementation(mutations.ensureDirectory);
     vi.spyOn(instance, 'renameExclusive').mockImplementation(mutations.renameExclusive);
     vi.spyOn(instance, 'removeTree').mockImplementation(mutations.removeTree);

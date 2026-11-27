@@ -582,6 +582,22 @@ fn security_private_data_stays_hidden_through_sibling_and_toolchain_paths() {
         ),
         "two admitted toolchain aliases",
     );
+    #[cfg(target_os = "linux")]
+    {
+        fs::remove_file(&duplicate).unwrap();
+        let hidden = alias.join("other/.skill-staging");
+        fs::create_dir(&hidden).unwrap();
+        fs::write(hidden.join("private"), "fixture").unwrap();
+        std::os::unix::fs::symlink(&hidden, &duplicate).unwrap();
+        assert_success(
+            &fixture.run(
+                "read-only",
+                "cat ordinary.txt && test ! -e \"$FILE\"",
+                &[("FILE", &duplicate.join("private"))],
+            ),
+            "an omitted runtime alias must not prevent unrelated commands",
+        );
+    }
     assert_denied(
         &fixture.run(
             "read-only",
@@ -644,5 +660,82 @@ fn verified_dependency_hardlinks_are_readable_immutable_copies() {
             assert_success(&probe, "unverified alias stays absent");
         }
         assert_eq!(fs::read_to_string(&object).unwrap(), payload);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Bubblewrap and a disposable user namespace"]
+fn bounded_toolchain_and_dependency_views_admit_unrelated_commands() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let tools = fixture.home.join(".local/bin");
+    let dependencies = fixture.workspace.join("node_modules");
+    fs::create_dir_all(tools.join(".skill-staging")).unwrap();
+    let blocked_tool = tools.join("unreadable-tool");
+    fs::write(&blocked_tool, "fixture").unwrap();
+    fs::set_permissions(&blocked_tool, fs::Permissions::from_mode(0o000)).unwrap();
+    fs::create_dir(&dependencies).unwrap();
+    let hidden = fixture.workspace.join("private-build-dir");
+    fs::create_dir(&hidden).unwrap();
+    fs::write(hidden.join("file"), "fixture").unwrap();
+    fs::set_permissions(&hidden, fs::Permissions::from_mode(0o400)).unwrap();
+    let unreadable = fixture.workspace.join("private-build-output");
+    fs::write(&unreadable, "fixture").unwrap();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+    for i in 0..52_000 {
+        fs::File::create_new(tools.join(i.to_string())).unwrap();
+    }
+    for i in 0..100_100 {
+        fs::File::create_new(dependencies.join(i.to_string())).unwrap();
+    }
+    let output = fixture.run(
+        "workspace-write",
+        r#"set -ex
+test -f "$TOOLS/17"
+test ! -e "$TOOLS/.skill-staging"
+test ! -e "$TOOLS/unreadable-tool"
+test ! -e private-build-output
+test ! -e private-build-dir/file
+test ! -e .env
+printf updated > ordinary.txt
+wc -l </proc/self/mountinfo"#,
+        &[("TOOLS", &tools)],
+    );
+    assert_success(&output, "large optional trees and unreadable file");
+    let mounts: usize = String::from_utf8(output.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(mounts < 32_000, "unexpected mount count: {mounts}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("snapshot reached its resource limit"));
+    assert_eq!(
+        fs::read_to_string(fixture.workspace.join("ordinary.txt")).unwrap(),
+        "updated"
+    );
+    fs::set_permissions(&hidden, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Bubblewrap and a disposable user namespace"]
+fn preserves_protection_when_the_workspace_starts_below_a_managed_directory() {
+    let mut fixture = Fixture::new();
+    let parent = fixture.workspace;
+    for suffix in [".glyph/skills/package", ".cursor/skills", ".git/objects"] {
+        fixture.workspace = parent.join(suffix);
+        fs::create_dir_all(&fixture.workspace).unwrap();
+        fs::write(fixture.workspace.join("resource"), "fixture").unwrap();
+        let output = fixture.run(
+            "workspace-write",
+            "cat resource && if printf changed > resource; then exit 32; fi",
+            &[],
+        );
+        assert_success(&output, "protected workspace ancestry");
+        assert_eq!(
+            fs::read_to_string(fixture.workspace.join("resource")).unwrap(),
+            "fixture"
+        );
     }
 }

@@ -75,12 +75,14 @@ fn copied_bytes_match_the_trusted_object_and_obey_modes_size_and_work_bounds() {
     let target = base.join("copy");
     let mut stores = VerifiedStores {
         stores: vec![],
-        remaining_bytes: 0,
+        remaining_bytes: Some(0),
     };
     stores.copy_object(&source(), &target).unwrap();
     stores.stores.push(open_store(&store).unwrap());
-    assert!(stores.copy_object(&source(), &target).is_err());
-    stores.remaining_bytes = MAX_REQUEST_BYTES;
+    stores.copy_object(&source(), &target).unwrap();
+    stores.copy_object(&source(), &target).unwrap();
+    assert!(!target.exists());
+    stores.remaining_bytes = Some(MAX_REQUEST_BYTES);
     let mut short = File::open(&fixture).unwrap();
     short.seek(SeekFrom::Start(1)).unwrap();
     stores.copy_object(&short.into(), &target).unwrap();

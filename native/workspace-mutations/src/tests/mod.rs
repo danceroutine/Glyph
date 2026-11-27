@@ -56,6 +56,66 @@ mod supported {
     }
 
     #[test]
+    fn checks_file_and_directory_metadata_before_publication() {
+        let fixture = tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        fs::create_dir(root.join("package")).unwrap();
+        fs::write(root.join("package/file"), "fixture").unwrap();
+        for recursive in [false, true] {
+            assert_eq!(
+                run(&request(
+                    &root,
+                    json!({"operation":"assert_replaceable_metadata","relative":"package","recursive":recursive})
+                ))["ok"],
+                true
+            );
+        }
+        assert_eq!(
+            run(&request(
+                &root,
+                json!({"operation":"assert_replaceable_metadata","relative":"package","recursive":true,"ownershipReference":"package"})
+            ))["ok"],
+            true
+        );
+        fs::set_permissions(
+            root.join("package/file"),
+            fs::Permissions::from_mode(0o4644),
+        )
+        .unwrap();
+        assert_eq!(
+            run(&request(
+                &root,
+                json!({"operation":"assert_replaceable_metadata","relative":"package","recursive":true})
+            ))["code"],
+            "ENOTSUP"
+        );
+        fs::set_permissions(root.join("package/file"), fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            run(&request(
+                &root,
+                json!({"operation":"assert_replaceable_metadata","relative":"absent","recursive":true})
+            ))["code"],
+            "ENOENT"
+        );
+        #[cfg(target_os = "macos")]
+        {
+            assert!(std::process::Command::new("/bin/chmod")
+                .args(["+a", "everyone deny write"])
+                .arg(root.join("package/file"))
+                .status()
+                .unwrap()
+                .success());
+            assert_eq!(
+                run(&request(
+                    &root,
+                    json!({"operation":"assert_replaceable_metadata","relative":"package","recursive":true})
+                ))["code"],
+                "ENOTSUP"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_ambiguous_or_unexpected_paths_and_fields() {
         let dir = tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
