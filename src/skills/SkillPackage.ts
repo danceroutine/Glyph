@@ -6,7 +6,7 @@ import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import type { SkillDescriptor, SkillResourceUse } from './SkillDescriptor.ts';
 import { parseSkillManifest } from './SkillManifest.ts';
 
-/** Immutable package revision pinned when a skill first activates. Resources are disclosed individually. */
+/** Bytes, mode and source identity observed for one file during package capture. */
 export interface SkillPackageFile {
   readonly bytes: Uint8Array;
   /** Disk descriptor identity used to enroll the captured revision under the package's source authority. */
@@ -15,6 +15,12 @@ export interface SkillPackageFile {
   readonly mode: number;
 }
 
+/**
+ * Owns the turn's captured package revision and its resource-use history. A
+ * stable revision lets an active skill keep reading the same bytes across
+ * ordinary edits. A later disclosure checks the live source authority and
+ * active turn before recording which resources reached the model.
+ */
 export class SkillPackage {
   private readonly used = new Map<string, SkillResourceUse>();
   readonly revision: string;
@@ -53,6 +59,7 @@ export class SkillPackage {
     });
   }
 
+  /** Disclose one pinned resource, recording its use only after both source and turn checks succeed. */
   async readResource(path: string, signal?: AbortSignal, assertActive?: () => void): Promise<SkillResourceUse> {
     const resource = this.inspectResource(path);
     const check = await authorizeSources(this.disclosurePins([resource.path]), signal);

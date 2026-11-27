@@ -30,7 +30,10 @@ export async function enrollSources(
     const origin = source[sourceReads];
     if (!origin) continue;
     let batch = batches.get(origin.authority);
-    if (!batch) batches.set(origin.authority, (batch = new Map()));
+    if (!batch) {
+      batch = new Map();
+      batches.set(origin.authority, batch);
+    }
     for (const read of origin.files) batch.set(read.uri, undefined);
   }
   await Promise.all(
@@ -40,7 +43,9 @@ export async function enrollSources(
         uris.map(uri => fileURLToPath(uri)),
         signal,
       );
-      uris.forEach((uri, index) => batch.set(uri, { authority, file: pins[index]! }));
+      uris.forEach((uri, index) => {
+        batch.set(uri, { authority, file: pins[index]! });
+      });
     }),
   );
   const origins = new Map<string, readonly SourcePin[]>();

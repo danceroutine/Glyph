@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,7 +30,7 @@ describe(MultiRootWorkspaceTextStore, () => {
             authority: 'file',
             roots: [{ name, path: root }],
           },
-          [{ name, store: new FileSystemWorkspaceTextStore(root) }],
+          [{ name, store: fixtureWorkspace(root) }],
         ),
     ).toThrow();
     const store = workspaceStore(root, root, root);
@@ -118,8 +119,8 @@ describe(MultiRootWorkspaceTextStore, () => {
     expect(
       () =>
         new MultiRootWorkspaceTextStore(context, [
-          { name: 'api', store: new FileSystemWorkspaceTextStore(root) },
-          { name: 'api', store: new FileSystemWorkspaceTextStore(root) },
+          { name: 'api', store: fixtureWorkspace(root) },
+          { name: 'api', store: fixtureWorkspace(root) },
         ]),
     ).toThrow('Workspace folder names must be unique.');
   });
@@ -135,16 +136,14 @@ describe(MultiRootWorkspaceTextStore, () => {
       roots: [{ name: 'api', path: root }],
     };
 
-    const store = new MultiRootWorkspaceTextStore(context, [
-      { name: 'api', store: new FileSystemWorkspaceTextStore(root) },
-    ]);
+    const store = new MultiRootWorkspaceTextStore(context, [{ name: 'api', store: fixtureWorkspace(root) }]);
 
-    expect(store.root).toBe(new FileSystemWorkspaceTextStore(root).root);
+    expect(store.root).toBe(fixtureWorkspace(root).root);
   });
 
   it('offers atomic versioned mutations only when every folder does', async () => {
     const root = await fixture();
-    const atomic = new FileSystemWorkspaceTextStore(root);
+    const atomic = fixtureWorkspace(root);
     Object.defineProperty(atomic, 'mutationConsistency', { value: WorkspaceMutationConsistency.ATOMIC_VERSIONED });
     const context: ProjectContext = {
       id: 'workspace',
@@ -304,8 +303,8 @@ function workspaceStore(root: string, api: string, web: string): MultiRootWorksp
     ],
   };
   return new MultiRootWorkspaceTextStore(context, [
-    { name: 'api', store: new FileSystemWorkspaceTextStore(api) },
-    { name: 'web', store: new FileSystemWorkspaceTextStore(web) },
+    { name: 'api', store: fixtureWorkspace(api) },
+    { name: 'web', store: fixtureWorkspace(web) },
   ]);
 }
 

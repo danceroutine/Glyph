@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,7 +19,7 @@ afterEach(async () => {
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'plan-edits-'));
   directories.push(root);
-  const workspace = new FileSystemWorkspaceTextStore(root);
+  const workspace = fixtureWorkspace(root);
   const proposals = new EditProposalService(workspace, new JsDiffTextDiffer(), {
     maxRawProposalBytes: 1024 * 1024,
     maxChangedBytes: 1024 * 1024,

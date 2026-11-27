@@ -253,13 +253,15 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
         .collect::<Result<Vec<_>, _>>()?;
     request.read_only_paths.sort();
     request.read_only_paths.dedup();
-    request.private_paths = request
+    let reserved = request
         .private_paths
         .iter()
         .map(|path| canonical_private_path(path))
         .collect::<Result<Vec<_>, _>>()?;
-    request.private_paths.sort();
-    request.private_paths.dedup();
+    // Use the same physical reservations as workspace reads. Linux additionally
+    // projects host resources after entering its private mount namespace.
+    let access = glyph_filesystem_metadata::workspace_paths::WorkspacePaths::current(&reserved)?;
+    request.private_paths = access.private_locations().cloned().collect();
     for path in &request.read_only_paths {
         if request
             .workspace_roots
@@ -289,10 +291,7 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
     }
     for root in &request.workspace_roots {
         if private_component(root)
-            || request
-                .private_paths
-                .iter()
-                .any(|private| root.starts_with(private))
+            || access.excludes(root)
             || is_unsafe_workspace_root(root, home_directory.as_deref())
         {
             return Err(SandboxError::InvalidPath(format!(
@@ -317,6 +316,7 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
         ));
     }
 
+    access.finish_batch()?;
     Ok(request)
 }
 
@@ -750,7 +750,7 @@ pub mod macos {
         ));
         for path in &request.private_paths {
             policy.push_str(&format!(
-                "(deny file-read* file-write* (subpath {}))\n",
+                "(deny file-read* file-write* file-test-existence (subpath {}))\n",
                 seatbelt_string(path)
             ));
         }

@@ -1,3 +1,4 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { ChildProcess } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -968,6 +969,7 @@ async function fixture(profile = ShellSandboxProfile.FULL_ACCESS): Promise<{
 
 function launcher(root: string): NativeShellSandboxLauncher {
   return new NativeShellSandboxLauncher({
+    accessPolicy: new WorkspaceAccessPolicy(),
     binaryPath: join(root, 'unused-sandbox-helper'),
     workspaceRoots: [root],
     stateDirectory: join(root, 'state'),

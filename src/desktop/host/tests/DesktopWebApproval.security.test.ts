@@ -99,6 +99,7 @@ describe('security: production desktop web consent', () => {
           identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
           roots: [{ name: 'workspace', canonicalPath: path, uri: `file://${path}` }],
           trusted: true,
+          assertTrusted: () => {},
           emit: () => {},
         }),
       );

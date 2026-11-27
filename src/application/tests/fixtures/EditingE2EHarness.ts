@@ -1,3 +1,4 @@
+import { fixtureWorkspace, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -57,7 +58,7 @@ export class EditingE2EHarness {
     readonly stateRoot: string,
     rounds: readonly ScriptedResponseRound[],
   ) {
-    this.workspace = new FileSystemWorkspaceTextStore(projectRoot);
+    this.workspace = fixtureWorkspace(projectRoot);
     this.reviews = new ProposalReviewManager(
       this.workspace,
       new FileProposalReviewStore(stateRoot),
@@ -73,7 +74,7 @@ export class EditingE2EHarness {
       () => new Date(0),
     );
     const runtime = new ProjectToolRuntime(
-      new ProjectAccess(projectRoot, {}, this.workspace),
+      fixtureProjectAccess(projectRoot, {}, this.workspace),
       proposals,
       this.reviews,
       this.logger,

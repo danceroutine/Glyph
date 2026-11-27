@@ -4,8 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import OpenAI from 'openai';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
-import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+import { fixtureWorkspace, fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
@@ -167,8 +166,8 @@ describe('Native skills discovery and model disclosure', () => {
 
 async function nativeSkillFixture(caseSensitive?: boolean) {
   const root = await mkdtemp(join(tmpdir(), 'glyph-native-skills-'));
-  const store = new FileSystemWorkspaceTextStore(root, caseSensitive !== undefined ? { caseSensitive } : {});
-  const index = new RustWorkspacePathIndex({
+  const store = fixtureWorkspace(root, caseSensitive !== undefined ? { caseSensitive } : {});
+  const index = fixtureIndex({
     root,
     caseSensitive: store.caseSensitive,
     binaryPath: resolve(

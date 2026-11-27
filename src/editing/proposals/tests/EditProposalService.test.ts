@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1540,7 +1541,7 @@ describe(EditProposalService, () => {
       const root = await mkdtemp(join(tmpdir(), 'proposal-service-diff-budget-'));
       directories.push(root);
       await writeFile(join(root, 'file.txt'), 'base\n');
-      const workspace = new FileSystemWorkspaceTextStore(root);
+      const workspace = fixtureWorkspace(root);
       const base = await workspace.read('file.txt');
       let now = 0;
       const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
@@ -1587,7 +1588,7 @@ async function fixture(
   const root = await mkdtemp(join(tmpdir(), 'proposal-service-'));
   directories.push(root);
   await writeFile(join(root, 'file.txt'), text);
-  const workspace = new FileSystemWorkspaceTextStore(root, workspaceOptions);
+  const workspace = fixtureWorkspace(root, workspaceOptions);
   return {
     workspace,
     service: new EditProposalService(

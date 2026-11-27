@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -443,7 +444,7 @@ describe('staged editing loop', () => {
       await writeFile(join(harness.projectRoot, 'file.txt'), 'collaborator\n');
       await writeFile(join(harness.projectRoot, 'unrelated.txt'), 'collaborator unrelated\n');
       const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(harness.projectRoot),
+        fixtureWorkspace(harness.projectRoot),
         new FileProposalReviewStore(harness.stateRoot),
         harness.logger,
       );

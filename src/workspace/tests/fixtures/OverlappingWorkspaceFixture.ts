@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { join } from 'node:path';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
@@ -18,7 +19,7 @@ export class OverlappingWorkspaceFixture extends MultiRootWorkspaceTextStore {
         authority: 'file',
         roots,
       },
-      roots.map(({ name, path }) => ({ name, store: new FileSystemWorkspaceTextStore(path, { caseSensitive }) })),
+      roots.map(({ name, path }) => ({ name, store: fixtureWorkspace(path, { caseSensitive }) })),
     );
   }
 }

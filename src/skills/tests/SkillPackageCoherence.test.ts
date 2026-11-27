@@ -1,9 +1,9 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { chmod, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { expect, it, vi } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
@@ -161,7 +161,7 @@ it('reads idle project roots without creating private state and isolates provide
   const skill = await install();
   const project = join(root, 'readonly-checkout');
   await mkdir(project, { mode: 0o555 });
-  const other = { ...location, id: 'project:readonly', store: new FileSystemWorkspaceTextStore(project) };
+  const other = { ...location, id: 'project:readonly', store: fixtureWorkspace(project) };
   const manager = new SkillPackageManager([location, other], catalog, state);
   await manager.recover(other.id);
   await expect(lstat(join(project, '.skill-staging'))).rejects.toMatchObject({ code: 'ENOENT' });

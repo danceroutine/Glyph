@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +11,6 @@ import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewM
 import type { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ProjectToolName } from '#src/project/ProjectToolName.js';
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { SkillProjectMutationPolicy } from '#src/skills/SkillProjectMutationPolicy.js';
 import { aSkillDescriptor } from './fixtures/aSkillDescriptor.ts';
 import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
@@ -76,7 +76,7 @@ describe(SkillProjectMutationPolicy, () => {
       skills: [aSkillDescriptor({ uri: '' }), aSkillDescriptor({ uri: pathToFileURL(manifest).href })],
     };
     const guard = new SkillProjectMutationPolicy([], catalog);
-    const workspace = new FileSystemWorkspaceTextStore(root, {
+    const workspace = fixtureWorkspace(root, {
       physicalAccess: { assertWorkspacePath: async () => {} },
       managedDirectories: [],
       caseSensitive: false,
@@ -141,7 +141,7 @@ describe(SkillProjectMutationPolicy, () => {
     await mkdir(join(root, 'service/.cursor/skills/example'), { recursive: true });
     await writeFile(join(root, packagePath), 'existing');
     await writeFile(join(root, 'neighbor.md'), 'existing');
-    const workspace = new FileSystemWorkspaceTextStore(root, { caseSensitive: false });
+    const workspace = fixtureWorkspace(root, { caseSensitive: false });
     const catalog = { skills: [aSkillDescriptor({ uri: pathToFileURL(join(root, packagePath)).href })] };
     const guard = new SkillProjectMutationPolicy([{ store: workspace, directory: '.glyph/skills' }], catalog);
     const stage = vi.fn();

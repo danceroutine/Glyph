@@ -1,26 +1,7 @@
-import { lstatSync } from 'node:fs';
-import { basename, dirname, join, posix, resolve, sep } from 'node:path';
-import { normalizeVolumeName } from '../FilesystemNamePolicy.ts';
-import { workspaceCaseSensitivity } from '../workspaceCaseSensitivity.ts';
+import { basename, dirname, posix, resolve, sep } from 'node:path';
+import { isPrivateDirectory, privateDirectories } from '../ReservedWorkspaceDirectory.ts';
 import { z } from 'zod';
 import type { WorkspaceAccessPolicyOptions } from './WorkspaceAccessPolicyOptions.ts';
-
-export const skillExecutionDirectory = '.glyph-skill-run';
-const privateDirectories = ['.skill-staging', skillExecutionDirectory];
-
-function isPrivateDirectory(name: string, caseSensitive: boolean, path?: string, physicalGuard = false): boolean {
-  if (privateDirectories.includes(name)) return true;
-  // Only possible aliases require a filesystem lookup. Ordinary components stay on the fast path.
-  if (!name.startsWith('.')) return false;
-  const reserved = normalizeVolumeName(name, { normalizesUnicode: true, foldsUnicode: true });
-  if (!privateDirectories.includes(reserved)) return false;
-  if (path === undefined) return !caseSensitive;
-  const entry = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-  const other = lstatSync(join(dirname(path), reserved), { bigint: true, throwIfNoEntry: false });
-  if (entry || other) return entry?.dev === other?.dev && entry?.ino === other?.ino;
-  // Native path admission verifies prospective names on their nearest existing ancestor.
-  return !physicalGuard && !workspaceCaseSensitivity(dirname(path));
-}
 
 const defaults = {
   ignoredDirectories: ['.artifacts', '.code-oss', '.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
@@ -111,7 +92,7 @@ export class WorkspaceAccessPolicy {
   ): { privateRoot: boolean; excludedPaths: string[] } {
     const key = (path: string): string => {
       const normalized = resolve(path).split(sep).join('/');
-      return caseSensitive ? normalized : normalized.toLowerCase();
+      return caseSensitive || filesystem === 'native' ? normalized : normalized.toLowerCase();
     };
     const rootKey = key(root);
     let privateRoot = false;
@@ -132,6 +113,7 @@ export class WorkspaceAccessPolicy {
     return { privateRoot, excludedPaths };
   }
 
+  /** Screen one project name during normalization or discovery. Physical admission must follow for a routed path. */
   isIgnoredDirectory(name: string, caseSensitive: boolean, path?: string, physicalGuard = false): boolean {
     if (isPrivateDirectory(name, caseSensitive, path, physicalGuard)) return true;
     return this.configuredIgnoredDirectories.some(value =>
@@ -139,6 +121,7 @@ export class WorkspaceAccessPolicy {
     );
   }
 
+  /** Screen the final component before reading or listing project content. Apply to the admitted filesystem spelling. */
   isSensitiveFileName(name: string, caseSensitive = true): boolean {
     const normalize = (value: string): string => (caseSensitive ? value : value.toLowerCase());
     name = normalize(name);
@@ -150,6 +133,7 @@ export class WorkspaceAccessPolicy {
     );
   }
 
+  /** Copy name filters for one native worker or shell launch. Pass physical reservations through its native port. */
   toJSON(): Required<WorkspaceAccessPolicyOptions> {
     return {
       ignoredDirectories: [...this.ignoredDirectories],

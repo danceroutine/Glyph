@@ -203,7 +203,7 @@ fn private_metadata_is_masked_and_cannot_be_admitted_as_a_readable_resource() {
     );
     let policy = macos::seatbelt_policy(&prepared, fixture.path(), None).unwrap();
     assert!(policy.contains(&format!(
-        "(deny file-read* file-write* (subpath \"{}\"))",
+        "(deny file-read* file-write* file-test-existence (subpath \"{}\"))",
         private.display()
     )));
     let mounts = linux::bubblewrap_arguments(&prepared, None).unwrap();
@@ -1306,4 +1306,39 @@ fn content_store_arguments_are_host_capabilities_with_strict_layouts() {
         parsed.content_stores[0].root,
         PathBuf::from("/outside/files")
     );
+}
+
+#[test]
+fn confines_personal_sources_and_keeps_ordinary_project_files_available() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().canonicalize().unwrap();
+    let root = base.join("work");
+    let state = base.join("state");
+    let profile = root.join("personal");
+    let rules = profile.join("rules");
+    let ordinary = root.join("ordinary");
+    fs::create_dir_all(&rules).unwrap();
+    fs::create_dir(&state).unwrap();
+    fs::write(&ordinary, "ordinary").unwrap();
+    fs::write(rules.join("selected"), "personal").unwrap();
+    let mut input = request(SandboxProfile::WorkspaceWrite, &root, &state);
+    input.private_paths = vec![rules.clone(), profile.join("missing/skills")];
+    let prepared = prepare_request(input).unwrap();
+    assert!(prepared.private_paths.contains(&profile.join("missing")));
+    let policy = macos::seatbelt_policy(&prepared, &base.join("scratch"), None).unwrap();
+    assert!(policy.contains(&format!(
+        "(deny file-read* file-write* file-test-existence (subpath \"{}\"))",
+        rules.display()
+    )));
+    let mounts = linux::bubblewrap_arguments(&prepared, None).unwrap();
+    assert!(mounts.iter().any(|arg| arg == ordinary.as_os_str()));
+    assert!(!mounts
+        .iter()
+        .any(|arg| arg == rules.join("selected").as_os_str()));
+    let mut inside = request(SandboxProfile::ReadOnly, &rules, &state);
+    inside.private_paths = vec![rules.clone()];
+    assert!(prepare_request(inside).is_err());
+    let mut invalid = request(SandboxProfile::ReadOnly, &root, &state);
+    invalid.private_paths = vec!["relative".into()];
+    assert!(prepare_request(invalid).is_err());
 }

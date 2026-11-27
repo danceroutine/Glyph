@@ -1,3 +1,4 @@
+import { fixtureWorkspace, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,9 +26,9 @@ describe('Workspace read budgets', () => {
         // enormous allocation, sparse-file trick, or actual memory exhaustion.
         await writeFile(join(root, 'data', 'large.txt'), 'first line\n' + 'x'.repeat(128));
         vi.mocked(readFile).mockClear();
-        const workspace = new FileSystemWorkspaceTextStore(root);
+        const workspace = fixtureWorkspace(root);
         if (operation === 'line-range read') {
-          const access = new ProjectAccess(root, { maxFileBytes: 32 }, workspace);
+          const access = fixtureProjectAccess(root, { maxFileBytes: 32 }, workspace);
           const result = JSON.parse(
             await access.execute(
               'read_project_file',

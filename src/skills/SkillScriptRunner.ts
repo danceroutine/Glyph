@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import type { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import type { SkillPackage } from './SkillPackage.ts';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
-import { skillExecutionDirectory } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { skillExecutionDirectory } from '#src/workspace/ReservedWorkspaceDirectory.js';
 import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 

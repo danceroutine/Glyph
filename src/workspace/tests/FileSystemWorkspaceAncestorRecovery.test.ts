@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { dirname } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EnvironmentConfigurationProvider } from '#src/configuration/EnvironmentConfigurationProvider.js';
@@ -218,5 +219,5 @@ function virtualWorkspace() {
       },
     };
   });
-  return { nodes, workspace: new FileSystemWorkspaceTextStore('/fixture') };
+  return { nodes, workspace: fixtureWorkspace('/fixture') };
 }

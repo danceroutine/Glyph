@@ -123,6 +123,9 @@ class ClaudeShapedAdapter implements AgentModelAdapter<ClaudeTurn> {
     return { ...turn, messages: [...turn.messages, { role: 'user', content: request.text }] };
   }
 
+  async prepareStep(turn: ClaudeTurn, context: AgentTurnContext) {
+    return () => this.streamStep(turn, context);
+  }
   async streamStep(turn: ClaudeTurn, context: AgentTurnContext): Promise<AgentTurnStep<ClaudeTurn>> {
     this.requests.push(structuredClone(turn));
     if (turn.round === 0) {
@@ -242,6 +245,36 @@ describe(AgentRuntime, () => {
     });
     expect(admitted).toHaveBeenCalledOnce();
   });
+  it('requires live source authority after any provider prepares its request and before its sender runs', async () => {
+    const contexts = new TurnContextCoordinator(new AgentInstructionCatalog([]));
+    const adapter = new ClaudeShapedAdapter();
+    let allowed = true;
+    const check = vi.spyOn(contexts, 'authorizeDisclosure').mockImplementation(async () => () => {
+      if (!allowed) throw new Error('Source access changed');
+    });
+    const prepared = adapter.prepareStep.bind(adapter);
+    adapter.prepareStep = async (turn, context) => {
+      const send = await prepared(turn, context);
+      allowed = false;
+      return send;
+    };
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10_000 },
+      mockTools(async () => ''),
+      undefined,
+      contexts,
+    );
+    await expect(
+      runtime.send(
+        { text: 'Read', attachments: [], turnId: 'guard' },
+        { signal: new AbortController().signal, onText: () => {} },
+      ),
+    ).rejects.toThrow('Source access changed');
+    expect(check).toHaveBeenCalledOnce();
+    expect(adapter.requests).toEqual([]);
+  });
+
   it('releases its own failed turn while preserving an already admitted turn with the same id', async () => {
     const contexts = new TurnContextCoordinator(new AgentInstructionCatalog([]));
     await contexts.beginTurn({ turnId: 'shared', attachmentPaths: [] });

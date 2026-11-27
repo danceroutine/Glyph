@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -348,7 +349,7 @@ describe(ProposalReviewManager, () => {
       expect(file.applicability).toBe(EditApplicabilityState.STALE);
 
       const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(root),
+        fixtureWorkspace(root),
         new FileProposalReviewStore(state),
         new NullLogger(),
         8,
@@ -420,10 +421,7 @@ describe(ProposalReviewManager, () => {
       await manager.stage(proposal);
       await writeFile(join(root, 'file.txt'), 'FIRST\nmiddle\nlast\n');
 
-      const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(root),
-        new FileProposalReviewStore(state),
-      );
+      const recovered = new ProposalReviewManager(fixtureWorkspace(root), new FileProposalReviewStore(state));
       await recovered.initialize();
       const recoveredProposal = recovered.activeReviews[0]!;
       await recovered.accept(recoveredProposal.files[0]!.items[0]!.id);
@@ -463,7 +461,7 @@ async function fixture(text: string) {
   const state = await mkdtemp(join(tmpdir(), 'proposal-transform-state-'));
   directories.push(root, state);
   await writeFile(join(root, 'file.txt'), text);
-  const workspace = new FileSystemWorkspaceTextStore(root);
+  const workspace = fixtureWorkspace(root);
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
   const store = new FileProposalReviewStore(state);
   const manager = new ProposalReviewManager(workspace, store, new NullLogger(), 8);

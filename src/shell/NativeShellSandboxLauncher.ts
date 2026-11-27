@@ -7,7 +7,7 @@ import type { ShellProgram } from './ShellProgram.ts';
 import { externalShellContentStores, type ShellContentStore } from './ShellContentStore.ts';
 import { pnpmContentStore } from './pnpmContentStore.ts';
 import { ShellSandboxProfile } from './ShellSandboxProfile.ts';
-import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 export interface NativeShellSandboxLauncherOptions {
   readonly binaryPath: string;
@@ -18,7 +18,7 @@ export interface NativeShellSandboxLauncherOptions {
   /** Host metadata that must be neither readable nor writable by sandboxed commands. */
   readonly privatePaths?: readonly string[] | (() => readonly string[]);
   readonly environment?: NodeJS.ProcessEnv;
-  readonly accessPolicy?: WorkspaceAccessPolicy;
+  readonly accessPolicy: WorkspaceAccessPolicy;
 }
 
 type SpawnProcess = (command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -53,9 +53,11 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       });
     }
     const shell = sandboxShell(environment);
-    const accessPolicy = this.options.accessPolicy ?? new WorkspaceAccessPolicy();
+    const accessPolicy = this.options.accessPolicy;
+    const operation = accessPolicy.beginOperation();
     const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
     const stores = (this.options.contentStores ?? pnpmContentStore)(environment);
+    const privatePaths = typeof this.options.privatePaths === 'function' ? this.options.privatePaths() : (this.options.privatePaths ?? []);
     const arguments_ = [
       '--profile',
       authorization.sandboxProfile === ShellSandboxProfile.READ_ONLY ? 'read-only' : 'workspace-write',
@@ -66,10 +68,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       '--workspace-root',
       workspaceRoot,
       ...(this.options.protectedPaths ?? []).flatMap(path => ['--protected-path', path]),
-      ...(typeof this.options.privatePaths === 'function'
-        ? this.options.privatePaths()
-        : (this.options.privatePaths ?? [])
-      ).flatMap(path => ['--private-path', path]),
+      ...[...new Set([...operation.privatePaths, ...privatePaths])].flatMap(path => ['--private-path', path]),
       ...(authorization.readOnlyPaths ?? []).flatMap(path => ['--read-only-path', path]),
       ...externalShellContentStores(stores, this.options.workspaceRoots).flatMap(store => [
         '--content-store',
@@ -80,6 +79,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       '--',
       ...(program ? [program.executable, ...program.arguments] : [shell.executable, ...shell.arguments(command)]),
     ];
+    operation.assertCurrent();
     return this.spawnProcess(this.options.binaryPath, arguments_, {
       ...common,
       env: sandboxEnvironment(authorization.sandboxProfile, shell.executable, environment),

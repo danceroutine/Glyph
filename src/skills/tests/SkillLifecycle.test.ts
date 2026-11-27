@@ -1,7 +1,7 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { testPackageMutations } from './fixtures/testPackageMutations.ts';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import type { ShellProgram } from '#src/shell/ShellProgram.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { mkdtemp, realpath, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -90,7 +90,7 @@ describe(SkillStateStore, () => {
   it('serializes preference writes, merges disk state, and rolls back memory after a write failure', async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-state-')));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
-    const store = new FileSystemWorkspaceTextStore(root);
+    const store = fixtureWorkspace(root);
     const first = new SkillStateStore(store.root, testFilesystemMetadata);
     await first.initialize();
     await Promise.all([first.setEnabled('one', false), first.setEnabled('two', true)]);

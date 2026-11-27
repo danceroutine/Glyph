@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { packageRevision } from '#src/skills/skillPackageRevision.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { chmod, readFile, writeFile, mkdir, rename, stat, rm } from 'node:fs/promises';
@@ -8,7 +9,6 @@ import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
 import { SkillTransactionJournal } from '#src/skills/SkillTransactionJournal.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 
 it('binds equal-size binary updates, owner permissions and the physical target to each review', async () => {
@@ -50,7 +50,7 @@ it('binds equal-size binary updates, owner permissions and the physical target t
 it('preserves the physical spelling on a case-folded comparison store', async () => {
   const { root } = await aSkillLifecycle();
   await mkdir(join(root, 'Some Folder'));
-  const store = new FileSystemWorkspaceTextStore(root, { caseSensitive: false });
+  const store = fixtureWorkspace(root, { caseSensitive: false });
   expect(await store.resolvePath('Some Folder/New File')).toBe(join(root, 'Some Folder', 'New File'));
   expect(await store.canonicalPath('Some Folder/New File')).toBe(join(root, 'Some Folder', 'New File').toLowerCase());
 });
@@ -410,7 +410,7 @@ it('manages nested project markers with their physical spelling and keeps user i
     ...location,
     scope: 'project' as const,
     directory: '.glyph/skills',
-    store: new FileSystemWorkspaceTextStore(root, { caseSensitive: false }),
+    store: fixtureWorkspace(root, { caseSensitive: false }),
     listFiles: async () => ({ files: paths, truncated: false }),
   };
   vi.spyOn(provider, 'discover').mockResolvedValue([{ ...skill, directory, path: paths[0]! }]);
@@ -421,7 +421,7 @@ it('manages nested project markers with their physical spelling and keeps user i
   const userManager = new SkillPackageManager([{ ...project, scope: 'user' }], catalog, state);
   await expect(userManager.prepareRemoval(skill.id)).rejects.toThrow('outside its managed location');
   const sensitive = new SkillPackageManager(
-    [{ ...project, store: new FileSystemWorkspaceTextStore(root, { caseSensitive: true }) }],
+    [{ ...project, store: fixtureWorkspace(root, { caseSensitive: true }) }],
     catalog,
     state,
   );

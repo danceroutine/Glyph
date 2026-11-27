@@ -1,7 +1,7 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { resolve } from 'node:path';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
@@ -9,7 +9,7 @@ import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 
 const [root, scenario] = process.argv.slice(2);
-const store = new FileSystemWorkspaceTextStore(root);
+const store = fixtureWorkspace(root);
 const testFilesystemMetadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
 const state = new SkillStateStore(store.root, testFilesystemMetadata);
 await state.initialize();

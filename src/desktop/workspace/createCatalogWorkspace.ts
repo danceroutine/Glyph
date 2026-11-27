@@ -57,7 +57,7 @@ export function createCatalogWorkspace(
       if (
         modelFile.dev !== sourceFile.dev ||
         modelFile.ino !== sourceFile.ino ||
-        `${Number(sourceFile.dev)}:${Number(sourceFile.ino)}` !== after.identity
+        `${sourceFile.dev}:${sourceFile.ino}` !== after.identity
       )
         throw new Error('The dirty editor model belongs to a different instruction file.');
       return {

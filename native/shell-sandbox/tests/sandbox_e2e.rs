@@ -878,3 +878,33 @@ fn preserves_protection_when_the_workspace_starts_below_a_managed_directory() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires the platform sandbox"]
+fn shell_reserves_personal_sources_and_keeps_ordinary_files_readable() {
+    let fixture = Fixture::new();
+    let rules = fixture.workspace.join("personal/rules");
+    fs::create_dir_all(&rules).unwrap();
+    let selected = rules.join("selected.mdc");
+    fs::write(&selected, "personal fixture").unwrap();
+    for profile in ["read-only", "workspace-write"] {
+        let check = |path: &Path| {
+            fixture
+                .command(
+                    profile,
+                    "cat \"$GLYPH_TEST_TARGET\"",
+                    &[("GLYPH_TEST_TARGET", path)],
+                    &[],
+                    &[&rules],
+                )
+                .output()
+                .unwrap()
+        };
+        let ordinary = check(&fixture.workspace.join("ordinary.txt"));
+        assert_success(&ordinary, "ordinary workspace file");
+        assert_eq!(ordinary.stdout, b"ordinary fixture");
+        let reserved = check(&selected);
+        assert_denied(&reserved, "personal source");
+        assert!(reserved.stdout.is_empty());
+    }
+}

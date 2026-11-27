@@ -254,6 +254,11 @@ impl WorkspacePaths {
                 .all(|(path, target)| canonical_location(path).is_ok_and(|now| &now == target))
     }
 
+    /// All reserved physical locations in this namespace, including mounted descendants and aliases.
+    pub fn private_locations(&self) -> impl Iterator<Item = &PathBuf> {
+        self.private.iter()
+    }
+
     pub fn excludes(&self, path: &Path) -> bool {
         path.ancestors().any(private_name)
             || self.private.iter().any(|p| contains(p, path))

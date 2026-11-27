@@ -10,9 +10,8 @@ import { WebHttpClient } from './web/WebHttpClient.ts';
 import { WebFetchService } from './web/WebFetchService.ts';
 import { DuckDuckGoSearch } from './web/DuckDuckGoSearch.ts';
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
 import { SkillProjectMutationPolicy } from './skills/SkillProjectMutationPolicy.ts';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { GlyphService } from './application/GlyphService.ts';
 import { ChatSessionManager } from './chat/sessions/ChatSessionManager.ts';
 import { SqliteChatSessionStore } from './chat/sessions/SqliteChatSessionStore.ts';
@@ -51,11 +50,14 @@ import { ToolRegistry } from './tools/ToolRegistry.ts';
 import { FileSystemWorkspaceTextStore } from './workspace/FileSystemWorkspaceTextStore.ts';
 import { MultiRootWorkspaceTextStore } from './workspace/MultiRootWorkspaceTextStore.ts';
 import type { WorkspaceTextStore } from './workspace/WorkspaceTextStore.ts';
-import { WorkspaceAccessPolicy } from './workspace/policy/WorkspaceAccessPolicy.ts';
+import { StartupUserProfile } from './workspace/policy/StartupUserProfile.ts';
+import { WorkspaceContentAccess } from './workspace/policy/WorkspaceContentAccess.ts';
+import { WorkspaceRootAccess } from './workspace/policy/WorkspaceRootAccess.ts';
+import { homedir } from 'node:os';
 import { NativeShellSandboxLauncher } from './shell/NativeShellSandboxLauncher.ts';
 import { ShellCommandAuthorizer } from './shell/ShellCommandAuthorizer.ts';
 import { ShellSessionManager } from './shell/ShellSessionManager.ts';
-import { assertShellRuntimePathIsolation, resolveAvailableIdentity } from './shell/ShellRuntimePathPolicy.ts';
+import { assertShellRuntimePathIsolation } from './shell/ShellRuntimePathPolicy.ts';
 import { ShellToolRuntime } from './shell/ShellToolRuntime.ts';
 import { ShellWorkingDirectoryResolver } from './shell/ShellWorkingDirectoryResolver.ts';
 
@@ -96,22 +98,22 @@ async function main(): Promise<void> {
     'release',
     process.platform === 'win32' ? 'glyph-shell-sandbox.exe' : 'glyph-shell-sandbox',
   );
-  const userDirectory = resolveAvailableIdentity(process.env.GLYPH_USER_DIRECTORY ?? join(homedir(), '.glyph'));
-  const accessPolicy = new WorkspaceAccessPolicy({}, [
-    join(userDirectory, 'skill-state.json'),
-    configuration.stateDirectory,
-    configuration.traceFile,
-    indexExecutable,
-    shellSandboxExecutable,
-  ]);
-  const { workspace, pathIndex } = await createProjectRuntime(
+  using profile = new StartupUserProfile(process.env.GLYPH_USER_DIRECTORY ?? join(homedir(), '.glyph'));
+  const hostPrivate = [configuration.stateDirectory, configuration.traceFile, join(profile.path, 'skill-state.json')];
+  const installation = [indexExecutable, shellSandboxExecutable];
+  if (
+    projectContext.roots.some(root =>
+      [...hostPrivate, ...installation].some(path => resolve(path) === resolve(root.path)),
+    )
+  )
+    throw new ConfigurationError('Glyph state, trace, and native-worker paths must not be the project root.');
+  const access = new WorkspaceContentAccess(profile, () => hostPrivate, installation);
+  const { workspace, selectedFiles, pathIndex } = await createProjectRuntime(
     projectContext,
     configuration.stateDirectory,
-    configuration.traceFile,
     indexExecutable,
-    shellSandboxExecutable,
-    accessPolicy,
-    join(userDirectory, 'skills'),
+    access,
+    profile.path,
   );
   const ui = new TerminalUI(process.stdin, process.stdout, process.stderr, pathIndex);
   const shellAuthorizer = new ShellCommandAuthorizer(
@@ -127,8 +129,8 @@ async function main(): Promise<void> {
       workspaceRoots: projectContext.roots.map(root => root.path),
       stateDirectory: configuration.stateDirectory,
       protectedPaths: [packageRoot, indexExecutable, shellSandboxExecutable],
-      privatePaths: () => [configuration.traceFile, ...(existsSync(userDirectory) ? [userDirectory] : [])],
-      accessPolicy,
+      privatePaths: () => existsSync(profile.path) ? [profile.path] : [],
+      accessPolicy: access.shell,
     }),
   );
   ui.connectShellSessions(shellSessions);
@@ -145,13 +147,13 @@ async function main(): Promise<void> {
     { maxReadBytes: getEditingReadBudget(configuration.editing), autoApply: true },
   );
   const projectTools = new ProjectToolRuntime(
-    new ProjectAccess(projectContext.roots[0]!.path, {}, workspace, pathIndex),
+    new ProjectAccess(workspace, pathIndex),
     new EditProposalService(workspace, new JsDiffTextDiffer(), configuration.editing, logger),
     proposalReviews,
     logger,
     undefined,
     new SkillProjectMutationPolicy([
-      { store: { root: userDirectory, caseSensitive: workspace.caseSensitive }, directory: 'skills' },
+      { store: { root: profile.path, caseSensitive: workspace.caseSensitive }, directory: 'skills' },
     ]),
   );
   const webApproval = new WebApprovalService(
@@ -174,7 +176,7 @@ async function main(): Promise<void> {
     store,
     session,
     new OpenAIModelCatalog(configuration.openAI, http),
-    new OpenAIProviderFactory(projectContext.roots[0]!.path, configuration, tools),
+    new OpenAIProviderFactory(configuration, tools),
     configuration.openAI,
   );
   const glyph = new GlyphService(
@@ -182,7 +184,7 @@ async function main(): Promise<void> {
     logger,
     { traceEnabled: configuration.traceEnabled },
     proposalReviews,
-    new ContextAttachmentService(workspace, configuration.contextAttachments),
+    new ContextAttachmentService(selectedFiles, configuration.contextAttachments),
     pathIndex,
     new ChatSessionManager(new SqliteChatSessionStore(configuration.stateDirectory), projectContext),
   );
@@ -249,67 +251,47 @@ function workspaceArgument(arguments_: readonly string[]): { workspaceFile?: str
 async function createProjectRuntime(
   context: ProjectContext,
   stateDirectory: string,
-  traceFile: string,
   indexExecutable: string,
-  shellSandboxExecutable: string,
-  accessPolicy: WorkspaceAccessPolicy,
-  managedDirectory: string,
-): Promise<{ workspace: WorkspaceTextStore; pathIndex: WorkspacePathIndex }> {
+  policy: WorkspaceContentAccess,
+  profilePath: string,
+): Promise<{ workspace: WorkspaceTextStore; selectedFiles: WorkspaceTextStore; pathIndex: WorkspacePathIndex }> {
+  const physicalAccess = new NativeFilesystemMetadata(indexExecutable);
   const casing = await Promise.all(
     context.roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
   );
   const roots = context.roots.map((root, i) => {
-    const excludedPaths = [
-      ...new Set(
-        [
-          projectRelativeExclusion(root.path, stateDirectory),
-          projectRelativeExclusion(root.path, traceFile),
-          projectRelativeExclusion(root.path, indexExecutable),
-          projectRelativeExclusion(root.path, shellSandboxExecutable),
-        ].filter((path): path is string => path !== undefined),
-      ),
-    ];
-    const workspace = new FileSystemWorkspaceTextStore(root.path, {
-      physicalAccess: new NativeFilesystemMetadata(indexExecutable),
-      managedDirectories: [managedDirectory],
-      caseSensitive: casing[i]!,
-      excludedPaths,
-      accessPolicy,
+    const access = new WorkspaceRootAccess(policy.project, root.path, casing[i]!);
+    const workspace = new FileSystemWorkspaceTextStore(root.path, { access, physicalAccess, managedDirectories: [join(profilePath, 'skills')] });
+    const selectedFiles = new FileSystemWorkspaceTextStore(root.path, {
+      access: new WorkspaceRootAccess(policy.selectedFile, root.path, casing[i]!),
+      physicalAccess,
     });
     const cacheName = createHash('sha256').update(`${context.id}\0${root.name}\0${root.path}`).digest('hex');
     const pathIndex = new RustWorkspacePathIndex({
       binaryPath: indexExecutable,
-      root: root.path,
+      access,
       cachePath: join(stateDirectory, `context-index-${cacheName}.bin`),
-      excludedPaths,
-      accessPolicy,
-      caseSensitive: workspace.caseSensitive,
     });
-    return { name: root.name, workspace, pathIndex };
+    return { name: root.name, workspace, selectedFiles, pathIndex };
   });
   if (context.kind === ProjectContextKind.FOLDER) {
     const root = roots[0]!;
-    return { workspace: root.workspace, pathIndex: root.pathIndex };
+    return { workspace: root.workspace, selectedFiles: root.selectedFiles, pathIndex: root.pathIndex };
   }
   return {
     workspace: new MultiRootWorkspaceTextStore(
       context,
       roots.map(root => ({ name: root.name, store: root.workspace })),
     ),
+    selectedFiles: new MultiRootWorkspaceTextStore(
+      context,
+      roots.map(root => ({ name: root.name, store: root.selectedFiles })),
+    ),
     pathIndex: new MultiRootWorkspacePathIndex(
       context.id,
       roots.map(root => ({ name: root.name, index: root.pathIndex })),
     ),
   };
-}
-
-function projectRelativeExclusion(root: string, target: string): string | undefined {
-  const fromRoot = relative(resolve(root), resolve(target));
-  if (!fromRoot) {
-    throw new ConfigurationError('Glyph state, trace, and native-worker paths must not be the project root.');
-  }
-  if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) return undefined;
-  return fromRoot.split(sep).join('/');
 }
 
 try {

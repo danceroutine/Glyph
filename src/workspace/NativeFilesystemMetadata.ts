@@ -33,7 +33,10 @@ export class NativeFilesystemMetadata
         this.executable,
         ['--source-origins'],
         { env: {}, signal, timeout: 30_000, maxBuffer: paths.length * 160 },
-        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        (error, stdout) => {
+          if (error) reject(new Error('The instruction source inspection failed.', { cause: error }));
+          else resolve(stdout);
+        },
       );
       child.stdin!.on('error', reject);
       child.stdin!.end(JSON.stringify({ paths, privatePaths, ...(directories ? { directories } : {}) }));

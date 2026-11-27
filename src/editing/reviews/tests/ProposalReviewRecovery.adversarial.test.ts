@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { link, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -466,7 +467,7 @@ describe(ProposalReviewManager, () => {
       expect(fixture.workspace.replaceCalls).toBe(1);
       expect(fixture.manager.activeReviews).toStrictEqual([]);
 
-      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recoveredWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(fixture.root));
       const recovered = new ProposalReviewManager(
         recoveredWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -518,7 +519,7 @@ describe(ProposalReviewManager, () => {
       expect(fixture.workspace.replaceCalls).toBe(1);
       expect(fixture.manager.activeReviews).toStrictEqual([]);
 
-      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recoveredWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(fixture.root));
       const recovered = new ProposalReviewManager(
         recoveredWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -567,7 +568,7 @@ describe(ProposalReviewManager, () => {
       expect(await readFile(join(fixture.root, 'file.txt'), 'utf8')).toBe('base');
 
       const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(fixture.root),
+        fixtureWorkspace(fixture.root),
         new FileProposalReviewStore(fixture.state),
         new NullLogger(),
         8,
@@ -592,7 +593,7 @@ describe(ProposalReviewManager, () => {
 
       await fixture.manager.rejectAll();
       const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(fixture.root),
+        fixtureWorkspace(fixture.root),
         new FileProposalReviewStore(fixture.state),
         new NullLogger(),
         8,
@@ -623,7 +624,7 @@ describe(ProposalReviewManager, () => {
 
       expect(fixture.manager.activeReviews).toStrictEqual([]);
       const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(fixture.root),
+        fixtureWorkspace(fixture.root),
         new FileProposalReviewStore(fixture.state),
         new NullLogger(),
         8,
@@ -685,7 +686,7 @@ describe(ProposalReviewManager, () => {
       ]);
 
       const recovered = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(fixture.root),
+        fixtureWorkspace(fixture.root),
         new FileProposalReviewStore(fixture.state),
         new NullLogger(),
         8,
@@ -712,7 +713,7 @@ describe(ProposalReviewManager, () => {
       const otherRoot = await mkdtemp(join(tmpdir(), 'proposal-recovery-other-root-'));
       directories.push(otherRoot);
       await writeFile(join(otherRoot, 'file.txt'), 'base');
-      const otherWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(otherRoot));
+      const otherWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(otherRoot));
       const otherManager = new ProposalReviewManager(
         otherWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -734,7 +735,7 @@ describe(ProposalReviewManager, () => {
       file.applyingItemId = file.items[0]!.id;
       await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
 
-      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recoveredWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(fixture.root));
       const recovered = new ProposalReviewManager(
         recoveredWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -767,16 +768,11 @@ describe(ProposalReviewManager, () => {
 
       const firstStore = new FaultInjectingProposalReviewStore(new FileProposalReviewStore(fixture.state));
       firstStore.failSaveCall(1);
-      const firstRecovery = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(fixture.root),
-        firstStore,
-        new NullLogger(),
-        8,
-      );
+      const firstRecovery = new ProposalReviewManager(fixtureWorkspace(fixture.root), firstStore, new NullLogger(), 8);
       await expect(firstRecovery.initialize()).rejects.toMatchObject({ reason: EditFailureReason.PERSISTENCE });
 
       const secondRecovery = new ProposalReviewManager(
-        new FileSystemWorkspaceTextStore(fixture.root),
+        fixtureWorkspace(fixture.root),
         new FileProposalReviewStore(fixture.state),
         new NullLogger(),
         8,
@@ -804,9 +800,9 @@ describe(ProposalReviewManager, () => {
       });
       markApplying(proposal);
       await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
-      await new FileSystemWorkspaceTextStore(fixture.root).create('created.txt', 'created', false);
+      await fixtureWorkspace(fixture.root).create('created.txt', 'created', false);
 
-      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recoveredWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(fixture.root));
       const recovered = new ProposalReviewManager(
         recoveredWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -838,9 +834,9 @@ describe(ProposalReviewManager, () => {
       });
       markApplying(proposal);
       await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
-      await new FileSystemWorkspaceTextStore(fixture.root).delete('file.txt', base.revision);
+      await fixtureWorkspace(fixture.root).delete('file.txt', base.revision);
 
-      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recoveredWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(fixture.root));
       const recovered = new ProposalReviewManager(
         recoveredWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -860,13 +856,9 @@ describe(ProposalReviewManager, () => {
       const file = proposal.files[0]!;
       markApplying(proposal);
       await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
-      await new FileSystemWorkspaceTextStore(fixture.root).rename(
-        file.sourcePath,
-        file.targetPath,
-        file.currentRevision!,
-      );
+      await fixtureWorkspace(fixture.root).rename(file.sourcePath, file.targetPath, file.currentRevision!);
 
-      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recoveredWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(fixture.root));
       const recovered = new ProposalReviewManager(
         recoveredWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -888,7 +880,7 @@ describe(ProposalReviewManager, () => {
       await new FileProposalReviewStore(fixture.state).save([proposal], fixture.root);
       await link(join(fixture.root, 'file.txt'), join(fixture.root, 'renamed.txt'));
 
-      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recoveredWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(fixture.root));
       const recovered = new ProposalReviewManager(
         recoveredWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -973,7 +965,7 @@ describe(ProposalReviewManager, () => {
       const fixture = await createFixture();
       await writeFile(join(fixture.state, 'active-proposal-review.json'), '{"schemaVersion":2,"proposals":[');
 
-      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recoveredWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(fixture.root));
       const recovered = new ProposalReviewManager(
         recoveredWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -994,7 +986,7 @@ describe(ProposalReviewManager, () => {
         JSON.stringify({ schemaVersion: 2, proposals: [{ schemaVersion: 1, id: 'broken', files: [{}] }] }),
       );
 
-      const recoveredWorkspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(fixture.root));
+      const recoveredWorkspace = new CountingWorkspaceTextStore(fixtureWorkspace(fixture.root));
       const recovered = new ProposalReviewManager(
         recoveredWorkspace,
         new FileProposalReviewStore(fixture.state),
@@ -1157,7 +1149,7 @@ async function createFixture() {
   const state = await mkdtemp(join(tmpdir(), 'proposal-recovery-state-'));
   directories.push(root, state);
   await writeFile(join(root, 'file.txt'), 'base');
-  const workspace = new CountingWorkspaceTextStore(new FileSystemWorkspaceTextStore(root));
+  const workspace = new CountingWorkspaceTextStore(fixtureWorkspace(root));
   const store = new FaultInjectingProposalReviewStore(new FileProposalReviewStore(state));
   const service = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration, new NullLogger());
   const manager = new ProposalReviewManager(workspace, store, new NullLogger(), 8);

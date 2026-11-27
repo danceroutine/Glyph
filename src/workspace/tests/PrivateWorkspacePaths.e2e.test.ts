@@ -1,9 +1,9 @@
+import { fixtureWorkspace, fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 it('keeps host state and transaction files private across containing, overlapping and directly attached roots', async () => {
@@ -50,8 +50,8 @@ it('keeps host state and transaction files private across containing, overlappin
     [stagedRoot, [privateName, 'future.md'], []],
     [run, ['script.sh', 'future.md'], []],
   ] as const) {
-    const store = new FileSystemWorkspaceTextStore(root, { caseSensitive: false, accessPolicy: policy });
-    const index = new RustWorkspacePathIndex({ root, binaryPath, caseSensitive: false, accessPolicy: policy });
+    const store = fixtureWorkspace(root, { caseSensitive: false, accessPolicy: policy });
+    const index = fixtureIndex({ root, binaryPath, caseSensitive: false, accessPolicy: policy });
     try {
       await expect(store.list(20)).resolves.toEqual({ files: expected, truncated: false });
       await expect(index.glob('**/*', { limit: 20 })).resolves.toEqual({ files: expected, truncated: false });
@@ -90,13 +90,13 @@ it('admits a stored Unicode lookalike to text reads and broad search only when t
   const actual = await stat(join(root, spelling), { bigint: true });
   const ascii = await stat(join(root, '.skill-staging'), { bigint: true }).catch(() => undefined);
   const same = actual.ino === ascii?.ino && actual.dev === ascii?.dev;
-  const store = new FileSystemWorkspaceTextStore(root);
+  const store = fixtureWorkspace(root);
   const binaryPath = resolve(
     'target',
     'release',
     process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
   );
-  const index = new RustWorkspacePathIndex({ root, binaryPath, caseSensitive: store.caseSensitive });
+  const index = fixtureIndex({ root, binaryPath, caseSensitive: store.caseSensitive });
   try {
     const expected = same ? [] : [relative];
     await expect(store.list(10, spelling + '/*')).resolves.toMatchObject({ files: expected });

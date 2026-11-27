@@ -1,3 +1,4 @@
+import { fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { execFileSync, fork } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
@@ -96,7 +97,7 @@ it('refuses a package omitted by repository ignore rules before recording instal
   const { RustWorkspacePathIndex } = await import('#src/context/search/RustWorkspacePathIndex.js');
   execFileSync('git', ['init', '-q', root]);
   await writeFile(join(root, '.gitignore'), '*.bin\n');
-  const index = new RustWorkspacePathIndex({
+  const index = fixtureIndex({
     root,
     binaryPath: resolve('target/release/glyph-context-index'),
     caseSensitive: location.store.caseSensitive,

@@ -1,5 +1,6 @@
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { pathToFileURL } from 'node:url';
 import { inventoryPackage } from '#src/skills/skillPackageInventory.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
@@ -176,7 +177,7 @@ vi.mock('#src/context/search/RustWorkspacePathIndex.js', async importOriginal =>
         };
       }
       static override async filesystemCaseSensitive(_binary: string, root: string) {
-        return new FileSystemWorkspaceTextStore(root).caseSensitive;
+        return fixtureWorkspace(root).caseSensitive;
       }
     },
   };
@@ -316,7 +317,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       authority: 'file',
       roots,
     };
-    const disk = new FileSystemWorkspaceTextStore(root);
+    const disk = fixtureWorkspace(root);
     const base = await disk.read('file.txt');
     const proposal = await new EditProposalService(
       disk,
@@ -409,6 +410,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           identity,
           roots: [{ name: 'workspace', canonicalPath: root, uri: `file://${root}` }],
           trusted,
+          assertTrusted: () => {},
           emit: () => {},
         };
         runtime = await factory.create(input);
@@ -446,7 +448,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await this.proposalReviews?.initialize();
       recoveredIds = this.proposalReviews!.activeReviews.map(review => review.id);
     });
-    const workspace = new FileSystemWorkspaceTextStore(root);
+    const workspace = fixtureWorkspace(root);
     const service = new EditProposalService(
       workspace,
       new JsDiffTextDiffer(),
@@ -502,6 +504,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       runtime = await factory.create({
         identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
         roots: [{ name, canonicalPath: root, uri: `file://${root}` }],
+        assertTrusted: () => {},
         trusted: true,
         emit: () => {},
       });
@@ -531,6 +534,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       runtime = await factory.create({
         identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
         roots,
+        assertTrusted: () => {},
         trusted: true,
         emit: () => {},
       });
@@ -605,6 +609,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         await store.dispose();
         for (const count of [2, 1, 2]) {
           runtime = await factory.create({
+            assertTrusted: () => {},
             trusted: true,
             identity: { profileId: 'profile', workspaceId: 'saved-workspace', windowId: 'window' },
             roots: roots
@@ -690,6 +695,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     const runtimes: Awaited<ReturnType<typeof factory.create>>[] = [];
     const open = async (names: string[]) => {
       const runtime = await factory.create({
+        assertTrusted: () => {},
         trusted: true,
         identity: { profileId: 'profile', workspaceId: 'saved-workspace', windowId: 'window' },
         roots: names.map(name => ({ name, canonicalPath: join(project, name), uri: `file://${project}/${name}` })),
@@ -699,7 +705,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       return runtime;
     };
     try {
-      const workspace = new FileSystemWorkspaceTextStore(project);
+      const workspace = fixtureWorkspace(project);
       const service = new EditProposalService(
         workspace,
         new JsDiffTextDiffer(),
@@ -790,6 +796,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       runtime = await factory.create({
         identity: { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' },
         roots: [{ name: 'workspace', canonicalPath: root, uri: `file://${root}` }],
+        assertTrusted: () => {},
         trusted: true,
         emit: () => {},
       });
@@ -847,7 +854,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
         if (request.type === GlyphEditorRequestType.READ_SNAPSHOT) {
           expect(request.path).toBe('two/nested/.glyph/skills/example/SKILL.md');
-          const file = await new FileSystemWorkspaceTextStore(two).read(request.path.slice('two/'.length));
+          const file = await fixtureWorkspace(two).read(request.path.slice('two/'.length));
           return editorResponse(request, request.path, file.text);
         }
         throw new Error('Unexpected editor request for package removal.');
@@ -859,7 +866,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const state = await runtime.snapshot();
       const installed = state.skills!.find(skill => skill.name === 'example')!;
       const user = state.skillTargets!.find(target => target.scope === 'user')!;
-      const [, , registry, , turns] = captured.providerFactories[0]!;
+      const [, registry, , turns] = captured.providerFactories[0]!;
       const turnId = 'project-removal';
       const turn = await turns!.beginTurn({ turnId, attachmentPaths: [] }, new AbortController().signal);
       expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual([
@@ -989,7 +996,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           return { operationId: request.operationId, ok: true };
         if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Only read snapshots are expected');
         for (const root of roots) {
-          const store = new FileSystemWorkspaceTextStore(root);
+          const store = fixtureWorkspace(root);
           const path = request.path.startsWith(`${basename(root)}/`)
             ? request.path.slice(basename(root).length + 1)
             : request.path;
@@ -1003,7 +1010,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         skills.map(() => ({ status: 'active', message: undefined })),
       );
       expect(skills.every(skill => skill.installedFrom === 'Local fixture')).toBe(true);
-      const [, , toolSource, , turns] = captured.providerFactories[0]!;
+      const [, toolSource, , turns] = captured.providerFactories[0]!;
       const prepared = await turns!.beginTurn(
         {
           turnId: 'skills-turn',
@@ -1073,7 +1080,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await fixture.create([await fixture.folder('two')]);
       expect(captured.indexOptions).toHaveLength(4);
       expect(captured.indexOptions[1]).toMatchObject({
-        root: join(fixture.userDirectory, 'rules'),
+        access: { root: join(fixture.userDirectory, 'rules') },
         respectGitIgnore: false,
       });
       const userIndex = captured.indexes[1]!;
@@ -1127,7 +1134,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     it('excludes packaged artifacts from a workspace root that contains them', async () => {
       const fixture = await factoryFixture();
       await fixture.create([dirname(repositoryRoot)]);
-      expect(captured.indexOptions[0]?.excludedPaths).toEqual([basename(repositoryRoot)]);
+      expect(captured.indexOptions[0]?.access.beginOperation().excludedPaths).toEqual([basename(repositoryRoot)]);
     });
 
     it('routes single-root editor requests through filesystem policy before the editor', async () => {
@@ -1266,7 +1273,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await client.listPaths(5, '*.txt', 'src', signal);
       expect(glob).toHaveBeenLastCalledWith('*.txt', { limit: 5, targetDirectory: 'src', signal });
       await expect(client.canonicalPath('file.txt')).resolves.toBe(
-        await new FileSystemWorkspaceTextStore(root).canonicalPath('file.txt'),
+        await fixtureWorkspace(root).canonicalPath('file.txt'),
       );
     });
 
@@ -1567,7 +1574,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         expect(user.legacyIds).toBeUndefined();
         if (root === first) expect(runtime.resolveRuleReference(old)).toBe(user.id);
         const turn = await captured.providerFactories
-          .at(-1)![4]!
+          .at(-1)![3]!
           .beginTurn({ turnId: 'manual', attachmentPaths: [], manualRuleIds: [root === first ? old : user.id] });
         const bodies = turn.initialEnvelope().sources.map(source => source.content);
         expect(bodies).toHaveLength(1);
@@ -1595,7 +1602,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(current.instructionSources!.map(source => source.id)).toEqual(
         first.instructionSources!.map(source => source.id),
       );
-      const turn = await captured.providerFactories.at(-1)![4]!.beginTurn({
+      const turn = await captured.providerFactories.at(-1)![3]!.beginTurn({
         turnId: 'legacy',
         attachmentPaths: [],
         manualRuleIds: ['glyph_project_rule:.glyph/rules/manual.mdc'],
@@ -1723,7 +1730,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         const skills = (await runtime.snapshot()).skills!;
         expect(runtime.resolveSkillReference(old)).toBe(original[0]!.id);
         expect(skills).toMatchObject([{ id: original[0]!.id, name: 'workflow', scope: 'inner' }]);
-        const turn = await captured.providerFactories.at(-1)![4]!.beginTurn({
+        const turn = await captured.providerFactories.at(-1)![3]!.beginTurn({
           turnId: 'skill-scope',
           skillIds: [old, original[0]!.id],
           attachmentPaths: ['alias/inner/src/file.ts'],
@@ -1755,7 +1762,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         this: RustWorkspacePathIndex,
         pattern,
       ) {
-        const rootPath = captured.indexOptions[captured.indexes.indexOf(this)]!.root;
+        const rootPath = captured.indexOptions[captured.indexes.indexOf(this)]!.access.root;
         const files =
           pattern === '**/.glyph/skills/**/*'
             ? ['.glyph/skills/workflow/SKILL.md']
@@ -1772,7 +1779,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const runtime = await fixture.create([root]);
       const skills = (await runtime.snapshot()).skills!;
       expect(skills.map(s => s.name).toSorted()).toEqual(['default', 'workflow']);
-      const coordinator = captured.providerFactories[0]![4]!;
+      const coordinator = captured.providerFactories[0]![3]!;
       const turn = await coordinator.beginTurn(
         {
           turnId: 'select',
@@ -1815,7 +1822,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(current.instructionSources!.map(source => source.id)).toEqual(
         first.instructionSources!.map(source => source.id),
       );
-      const turn = await captured.providerFactories.at(-1)![4]!.beginTurn({
+      const turn = await captured.providerFactories.at(-1)![3]!.beginTurn({
         turnId: 'legacy',
         attachmentPaths: [],
         manualRuleIds: ['glyph_project_rule:.glyph/rules/manual.mdc'],
@@ -1857,7 +1864,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         id: rule.id,
         legacyIds: expect.arrayContaining(['glyph_project_rule:.glyph/rules/selected.mdc']),
       });
-      const turns = captured.providerFactories.at(-1)![4]!;
+      const turns = captured.providerFactories.at(-1)![3]!;
       const turn = await turns.beginTurn(
         { turnId: 'equivalent', attachmentPaths: ['outer/inner/file'], manualRuleIds: [rule.id] },
         new AbortController().signal,
@@ -1867,7 +1874,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       );
       expect(turn.initialEnvelope().sources.some(source => source.uri || source.legacyIds)).toBe(false);
       expect(turn.initialEnvelope().skillCandidates?.map(skill => skill.id)).toEqual([skills[0]!.id]);
-      expect(turns.disclosePaths('equivalent', ['alias/file'])).toBeUndefined();
+      await expect(turns.disclosePaths('equivalent', ['alias/file'])).resolves.toBeUndefined();
       expect(
         rpc.mock.calls
           .filter(([, request]) => request.type === GlyphEditorRequestType.READ_OPEN_SNAPSHOT)
@@ -1919,6 +1926,68 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await expect(turns.beginTurn({ turnId: 'invalid-guidance', attachmentPaths: [] })).rejects.toThrow(
         'Required root instruction',
       );
+    });
+
+    it('uses the physical profile for discovery and resolves a formerly shared project rule only through its user owner', async () => {
+      const profile = join(isolatedUserDirectory, 'current');
+      const first = join(isolatedUserDirectory, 'first');
+      const second = join(isolatedUserDirectory, 'second');
+      await mkdir(join(first, '.glyph'), { recursive: true });
+      await symlink(join(first, '.glyph'), profile);
+      const fixture = await factoryFixture({ userDirectory: profile });
+      useFilesystemIndex();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
+      for (const root of [first, second]) {
+        const skill = basename(root);
+        await mkdir(join(root, '.glyph/skills', skill), { recursive: true });
+        await writeFile(
+          join(root, '.glyph/skills', skill, 'SKILL.md'),
+          '---\nname: ' + skill + '\ndescription: Example\n---\nWorkflow',
+        );
+        await mkdir(join(root, '.glyph/rules'), { recursive: true });
+        await writeFile(
+          join(root, '.glyph/rules/shared.mdc'),
+          '---\nactivation: manual\nreferences: [context.md]\n---\nShared',
+        );
+        await writeFile(join(root, '.glyph/context.md'), basename(root) + ' profile context');
+        await writeFile(join(root, 'context.md'), 'Project context');
+      }
+      const old = 'glyph_project_rule:.glyph/rules/shared.mdc';
+      for (const root of [first, second]) {
+        if (root === second) {
+          await rm(profile);
+          await symlink(join(second, '.glyph'), profile);
+          await writeFile(join(second, '.glyph/rules/new.mdc'), 'New');
+        }
+        const runtime = await fixture.create([root]);
+        const snapshot = await runtime.snapshot();
+        expect(snapshot.skills!.map(skill => skill.name)).toEqual(
+          root === first ? [basename(first)] : [basename(first), basename(second)].toSorted(),
+        );
+        expect(snapshot.instructionWatchRoots).toContain(pathToFileURL(join(first, '.glyph/skills')).href);
+        const sources = snapshot.instructionSources!;
+        const user = sources.find(source => source.kind === 'glyph_user_rule')!;
+        expect(sources).toHaveLength(root === first ? 1 : 3);
+        expect(user.kind).toBe('glyph_user_rule');
+        expect(user.legacyIds).toBeUndefined();
+        expect(runtime.resolveRuleReference(old)).toBe(
+          root === first
+            ? user.id
+            : sources.find(source => source.kind === 'glyph_project_rule' && source.path.endsWith('shared.mdc'))!.id,
+        );
+        const turn = await captured.providerFactories
+          .at(-1)![3]!
+          .beginTurn({ turnId: 'manual', attachmentPaths: [], manualRuleIds: [old] });
+        const bodies = turn.initialEnvelope().sources.map(source => source.content);
+        expect(bodies).toHaveLength(1);
+        expect(bodies[0]).toContain(root === first ? 'first profile context' : 'Project context');
+        if (root === first) expect(bodies[0]).not.toContain('Project context');
+      }
     });
 
     it('reports an unsafe user rules directory without querying its native index', async () => {
@@ -2100,7 +2169,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
     it('runs agent reviews only through an available account with inference access', async () => {
       const fixture = await factoryFixture();
       await fixture.create([await fixture.folder('workspace')]);
-      const reviewTools = captured.providerFactories.at(-1)![2]!.tools;
+      const reviewTools = captured.providerFactories.at(-1)![1].tools;
       expect(reviewTools.filter(tool => tool.namespace === 'skills').map(tool => tool.name)).toEqual([
         'activate',
         'read_resource',
@@ -2169,7 +2238,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const transport = vi.fn<typeof fetch>();
       const fixture = await factoryFixture({ transport });
       await fixture.create([await fixture.folder('workspace')]);
-      const clients = captured.providerFactories.map(([, , , client]) => client);
+      const clients = captured.providerFactories.map(([, , client]) => client);
       expect(clients).toHaveLength(2);
       expect(clients[0]).toBeInstanceOf(OpenAI);
       expect(clients[1]).toBe(clients[0]);
@@ -2199,9 +2268,9 @@ function useFilesystemIndex(): void {
     this: RustWorkspacePathIndex,
   ) {
     const config = captured.indexOptions[captured.indexes.indexOf(this)]!;
-    const directories = (await inventoryPackage(config.root)).directories;
+    const directories = (await inventoryPackage(config.access.root)).directories;
     return directories.filter(
-      path => !config.accessPolicy?.exclusionsFor(join(config.root, path), config.caseSensitive ?? true).privateRoot,
+      path => !config.access.policy.exclusionsFor(join(config.access.root, path), config.access.caseSensitive ?? true).privateRoot,
     );
   });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
@@ -2210,10 +2279,7 @@ function useFilesystemIndex(): void {
     options,
   ) {
     const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
-    const store = new FileSystemWorkspaceTextStore(configuration.root, {
-      accessPolicy: configuration.accessPolicy,
-      caseSensitive: configuration.caseSensitive,
-    });
+    const store = fixtureWorkspace(configuration.access.root, { accessPolicy: configuration.access.policy, caseSensitive: configuration.access.caseSensitive });
     if (!options.rootFilesOnly) return store.list(options.limit, pattern, options.targetDirectory);
     const listed = await store.list(10_000, pattern);
     const direct = listed.files.filter(path => !path.includes('/'));
@@ -2261,6 +2327,7 @@ async function factoryFixture(
         identity: factoryIdentity,
         roots: paths.map(path => ({ name: basename(path), canonicalPath: path, uri: `file://${path}` })),
         trusted,
+        assertTrusted: () => {},
         emit,
       });
       runtimes.push(runtime);
@@ -2351,7 +2418,7 @@ it('keeps the startup boundaries across a profile alias change during an editor 
   vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
   await fixture.create([base]);
   const client = captured.editorClients[0]!;
-  const policy = captured.indexOptions[0]!.accessPolicy!;
+  const policy = captured.indexOptions[0]!.access.policy;
   const request = {
     type: GlyphEditorRequestType.READ_SNAPSHOT,
     operationId: 'in-flight',
@@ -2402,8 +2469,9 @@ it('previews local skill bytes through the private policy chosen for this host',
     targetId: 'user:glyph',
     source: { kind: 'local', path: source },
   });
-  const index = captured.indexOptions.find(value => value.root === source)!;
-  expect(index.accessPolicy).toBe(captured.indexOptions[0]!.accessPolicy);
+  const index = captured.indexOptions.find(value => value.access.root === source)!;
+  expect(index.access.policy.privatePaths).toContain(join(fixture.userDirectory, 'skill-state.json'));
+  expect(index.access.policy.privatePaths).not.toContain(join(fixture.userDirectory, 'skills'));
   expect(NativeFilesystemMetadata.prototype.assertHostPaths).toHaveBeenCalledWith(
     [source],
     expect.arrayContaining([join(fixture.userDirectory, 'skill-state.json')]),

@@ -1,3 +1,5 @@
+import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
+import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
@@ -9,10 +11,8 @@ import type { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMe
 export function testPackageIndex(binaryPath: string, accessPolicy = new WorkspaceAccessPolicy()): OpenSkillIndex {
   return (root, caseSensitive, respectGitIgnore) =>
     new RustWorkspacePathIndex({
-      root,
+      access: new WorkspaceRootAccess(accessPolicy, root, caseSensitive),
       binaryPath,
-      accessPolicy,
-      caseSensitive,
       maxFiles: 257,
       respectGitIgnore,
     });
@@ -28,11 +28,11 @@ export function testSkillSource(
   policy: WorkspaceAccessPolicy,
   hostWorkspaceRoots: HostWorkspaceRoots = workspaceRoots,
 ): SkillPackageSourceReader {
-  const createIndex = testPackageIndex(binaryPath, policy);
   return new SkillPackageSourceReader(
     root => {
-      const store = new FileSystemWorkspaceTextStore(root, { accessPolicy: policy, physicalAccess: metadata });
-      return { store, index: createIndex(root, store.caseSensitive, false) };
+      const access = new WorkspaceRootAccess(policy, root, workspaceCaseSensitivity(root));
+      const store = new FileSystemWorkspaceTextStore(root, { access, physicalAccess: metadata });
+      return { store, index: new RustWorkspacePathIndex({binaryPath, access, maxFiles: 257, respectGitIgnore: false}) };
     },
     metadata,
     policy,

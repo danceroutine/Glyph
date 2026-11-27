@@ -1,5 +1,4 @@
 import type { WorkspacePathAccess } from './WorkspacePathAccess.ts';
-import { workspaceCaseSensitivity } from './workspaceCaseSensitivity.ts';
 import { WorkspaceTextDecodingError } from './WorkspaceTextDecodingError.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -25,7 +24,7 @@ import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import type { WorkspaceTextSnapshot } from './WorkspaceTextSnapshot.ts';
 import type { WorkspaceTextStore } from './WorkspaceTextStore.ts';
 import { WorkspaceMutationConsistency } from './WorkspaceMutationConsistency.ts';
-import { WorkspaceAccessPolicy } from './policy/WorkspaceAccessPolicy.ts';
+import { WorkspaceRootAccess } from './policy/WorkspaceRootAccess.ts';
 import type { WorkspaceMutationOptions } from './WorkspaceMutationOptions.ts';
 import type { WorkspaceReadOptions } from './WorkspaceReadOptions.ts';
 import { WorkspaceReadLimitError } from './WorkspaceReadLimitError.ts';
@@ -35,56 +34,39 @@ import type { FilesystemMetadata } from './FilesystemMetadata.ts';
 
 const fileSystemWorkspaceTextStoreOptionsSchema = z
   .object({
-    caseSensitive: z.boolean().optional(),
+    access: z.instanceof(WorkspaceRootAccess),
+    physicalAccess: z.custom<WorkspacePathAccess>(
+      value => !!value && typeof (value as WorkspacePathAccess)?.assertWorkspacePath === 'function',
+    ),
     managedDirectories: z.custom<readonly string[] | (() => readonly string[])>().optional(),
-    physicalAccess: z.custom<WorkspacePathAccess>().optional(),
-    /** A host-owned transaction may verify files in its own rollback directory. */
-    allowPrivateRoot: z.boolean().default(false),
-    excludedPaths: z.array(z.string().min(1)).default([]),
-    accessPolicy: z.instanceof(WorkspaceAccessPolicy).default(() => new WorkspaceAccessPolicy()),
   })
   .strict();
-
-type FileSystemWorkspaceTextStoreOptions = z.input<typeof fileSystemWorkspaceTextStoreOptionsSchema>;
-type ResolvedOptions = Omit<
-  z.output<typeof fileSystemWorkspaceTextStoreOptionsSchema>,
-  'caseSensitive' | 'allowPrivateRoot'
->;
 
 export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   readonly root: string;
   readonly caseSensitive: boolean;
   readonly mutationConsistency = WorkspaceMutationConsistency.BEST_EFFORT_FILESYSTEM;
-  private readonly options: ResolvedOptions;
-  private readonly privateRoot: boolean;
+  private readonly options: z.output<typeof fileSystemWorkspaceTextStoreOptionsSchema>;
 
-  constructor(root: string, options: FileSystemWorkspaceTextStoreOptions = {}) {
+  constructor(root: string, options: z.input<typeof fileSystemWorkspaceTextStoreOptionsSchema>) {
     assertWellFormedWorkspacePath(root);
-    const { caseSensitive, excludedPaths, accessPolicy, allowPrivateRoot, physicalAccess, managedDirectories } =
-      fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
     this.root = resolve(root);
-    this.caseSensitive = caseSensitive ?? workspaceCaseSensitivity(this.root);
-    const projected = accessPolicy.exclusionsFor(
-      this.root,
-      this.caseSensitive,
-      physicalAccess ? 'native' : 'standalone',
-    );
-    this.privateRoot = projected.privateRoot && !allowPrivateRoot;
-    this.options = {
-      ...(physicalAccess ? { physicalAccess } : {}),
-      managedDirectories,
-      excludedPaths: [
-        ...new Set([...excludedPaths, ...projected.excludedPaths].map(path => normalizeProjectPath(this.root, path))),
-      ],
-      accessPolicy,
-    };
+    this.options = fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
+    if (resolve(this.options.access.root) !== this.root)
+      throw new Error('Workspace authority belongs to a different root.');
+    this.caseSensitive = this.options.access.caseSensitive;
+  }
+
+  /** Hold this guard across an editor request or other composite read. Check before publishing or delivering its result. */
+  beginOperation() {
+    return this.options.access.beginOperation();
   }
 
   normalizePath(input: string): string {
     const normalized = normalizeProjectPath(this.root, input);
     let path = this.root;
     if (
-      this.privateRoot ||
+      this.options.access.beginOperation().privateRoot ||
       normalized.split('/').some(part => {
         path = join(path, part);
         return this.isIgnoredDirectory(part, path);
@@ -104,12 +86,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     onManagedPathAdmitted?: (physicalPath: string) => void,
   ): Promise<string> {
     const key = (await this.resolvePath(input, mutation)).split(sep).join('/');
-    if (mutation && this.options.physicalAccess && this.options.managedDirectories) onManagedPathAdmitted?.(key);
+    if (mutation && this.options.managedDirectories) onManagedPathAdmitted?.(key);
     return this.caseSensitive ? key : key.toLocaleLowerCase('en-US');
   }
 
   /** Authorized physical path with the spelling required by filesystem operations. */
   async resolvePath(input: string, mutation = false): Promise<string> {
+    const operation = this.options.access.beginOperation();
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const root = await realpath(this.root);
@@ -124,6 +107,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         assertInsideRoot(root, canonical, path);
         await this.assertPhysicalAccess(canonical, undefined, mutation);
         this.normalizePath(relative(root, canonical));
+        operation.assertCurrent();
         return canonical;
       } catch (error) {
         if (errorCodeOf(error) !== 'ENOENT' || cursor === this.root) {
@@ -135,14 +119,17 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
+  /** Standalone disk enumeration for callers without a native catalog. Production tool and catalog queries use the
+   * root's shared native index to apply ignore rules and avoid a filesystem inspection process for each entry. */
   async list(
     maxFiles: number,
     globPattern = '**/*',
     targetDirectory?: string,
     signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }> {
+    const operation = this.options.access.beginOperation();
     signal?.throwIfAborted();
-    if (this.privateRoot) return { files: [], truncated: false };
+    if (operation.privateRoot) return { files: [], truncated: false };
     const root = await realpath(this.root);
     const normalizedTarget = targetDirectory === undefined ? undefined : this.normalizePath(targetDirectory);
     if (normalizedTarget !== undefined && normalizedTarget !== '')
@@ -168,12 +155,10 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         signal?.throwIfAborted();
         if (entry.isSymbolicLink()) continue;
         const absolute = resolve(directory, entry.name);
-        if (this.options.physicalAccess) {
-          try {
-            await this.assertPhysicalAccess(absolute);
-          } catch {
-            continue;
-          }
+        try {
+          await this.assertPhysicalAccess(absolute);
+        } catch {
+          continue;
         }
         const path = relative(root, absolute).split(sep).join('/');
         if (entry.isDirectory()) {
@@ -197,6 +182,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       }
     };
     await visit(searchRoot);
+    operation.assertCurrent();
     signal?.throwIfAborted();
     return { files, truncated };
   }
@@ -214,6 +200,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     input: string,
     options: WorkspaceReadOptions & { readonly metadata?: FilesystemMetadata } = {},
   ): Promise<{ path: string; bytes: Buffer; mode: number; identity: string; revision: string }> {
+    const operation = this.options.access.beginOperation();
     const { path, resolvedFile, identity } = await this.inspectReadPath(input, options.interruptedRename);
     // Inspection and open are separate operations. Do not follow a replacement
     // link or block opening a replacement FIFO before descriptor validation.
@@ -236,11 +223,11 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       throw classifyPathError(error, path);
     }
     try {
-      const info = await handle.stat();
+      const info = await handle.stat({ bigint: true });
       if (!info.isFile()) {
         throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
       }
-      assertAllowedLinks(info.nlink, identity, path, options.interruptedRename);
+      assertAllowedLinks(Number(info.nlink), identity, path, options.interruptedRename);
       if (`${info.dev}:${info.ino}` !== identity) {
         throw new EditError(EditFailureReason.STALE, 'The file changed while opening it for reading.', { path });
       }
@@ -251,11 +238,11 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       const bytes =
         options.maxBytes === undefined
           ? await handle.readFile()
-          : await this.readBounded(handle, path, options.maxBytes, info.size);
+          : await this.readBounded(handle, path, options.maxBytes, Number(info.size));
       await this.assertPhysicalAccess(resolvedFile, handle);
       const revision = createHash('sha256').update(bytes).digest('hex');
       await options.metadata?.inspect(handle, 'replaceable');
-      if (info.nlink !== 1 && revision !== options.interruptedRename!.revision) {
+      if (info.nlink !== 1n && revision !== options.interruptedRename!.revision) {
         throw new EditError(EditFailureReason.STALE, 'The interrupted rename no longer contains the reviewed bytes.', {
           path,
         });
@@ -263,12 +250,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       return {
         path,
         bytes,
-        mode: info.mode & 0o777,
+        mode: Number(info.mode) & 0o777,
         identity,
         revision,
       };
     } finally {
       await handle.close();
+      operation.assertCurrent();
     }
   }
 
@@ -321,12 +309,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     mode = 0o644,
     options?: WorkspaceMutationOptions & { readonly inspectBeforeWrite?: (file: FileHandle) => Promise<void> },
   ): Promise<WorkspaceTextSnapshot> {
+    const operation = this.options.access.beginOperation();
     assertSupportedText(text, input);
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const absolute = resolve(this.root, path);
     await this.assertPhysicalAccess(absolute, undefined, true);
-    const created = await this.createParents(dirname(absolute));
+    const created = await this.createParents(dirname(absolute), operation.assertCurrent);
     try {
       if (options?.inspectBeforeWrite) {
         // Inherit metadata from the destination directory, admit the empty inode, then publish without overwriting.
@@ -344,10 +333,12 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           try {
             await handle.chmod(mode);
             await options.inspectBeforeWrite(handle);
+            operation.assertCurrent();
             await handle.writeFile(toBytes(text, byteOrderMark));
             await options.beforePublish?.();
             if (!(await ownsStagedEntry())) throw new Error('The staged create file changed before publication.');
             await this.assertPhysicalAccess(absolute, undefined, true);
+            operation.assertCurrent();
             await link(staged, absolute);
           } finally {
             if (await ownsStagedEntry()) await unlink(staged);
@@ -358,10 +349,12 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       } else {
         await options?.beforePublish?.();
         await this.assertPhysicalAccess(absolute, undefined, true);
+        operation.assertCurrent();
         const handle = await open(absolute, 'wx', mode);
         try {
           await this.assertPhysicalAccess(absolute, handle, true);
           await handle.chmod(mode);
+          operation.assertCurrent();
           await handle.writeFile(toBytes(text, byteOrderMark));
         } finally {
           await handle.close();
@@ -389,6 +382,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     byteOrderMark: boolean,
     options?: WorkspaceMutationOptions & { readonly temporaryDirectory?: string },
   ): Promise<WorkspaceTextSnapshot> {
+    const operation = this.options.access.beginOperation();
     // POSIX filesystems do not expose compare-and-swap replacement by content
     // revision. The second check narrows, but cannot eliminate, the interval in
     // which a non-cooperating external writer can be overwritten by rename(2).
@@ -404,6 +398,8 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
     const temporary = resolve(options?.temporaryDirectory ?? dirname(absolute), `.${randomUUID()}.glyph.tmp`);
     try {
+      await this.assertPhysicalAccess(absolute);
+      operation.assertCurrent();
       await writeFile(temporary, toBytes(text, byteOrderMark), { flag: 'wx', mode: current.mode });
       await chmod(temporary, current.mode);
       await this.assertRevision(path, expectedRevision);
@@ -416,6 +412,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         );
       await options?.beforeReplace?.(temporary);
       await this.assertPhysicalAccess(absolute, undefined, true);
+      operation.assertCurrent();
       await rename(temporary, absolute);
     } catch (error) {
       throw classifyPathError(error, path);
@@ -428,6 +425,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async rename(sourceInput: string, targetInput: string, expectedRevision: string): Promise<WorkspaceTextSnapshot> {
+    const operation = this.options.access.beginOperation();
     const source = this.normalizePath(sourceInput);
     const target = this.normalizePath(targetInput);
     await this.assertRevision(source, expectedRevision);
@@ -439,13 +437,14 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       });
     }
     await this.assertPhysicalAccess(resolve(this.root, target), undefined, true);
-    const created = await this.createParents(dirname(resolve(this.root, target)));
+    const created = await this.createParents(dirname(resolve(this.root, target)), operation.assertCurrent);
     try {
       await this.assertRevision(source, expectedRevision);
       // link(2) is exclusive at the target, unlike rename(2), which would
       // silently overwrite a collaborator-created target on POSIX.
       await this.assertPhysicalAccess(resolve(this.root, source), undefined, true);
       await this.assertPhysicalAccess(resolve(this.root, target), undefined, true);
+      operation.assertCurrent();
       await link(resolve(this.root, source), resolve(this.root, target));
       await unlink(resolve(this.root, source));
     } catch (error) {
@@ -464,11 +463,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   async delete(input: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void> {
+    const operation = this.options.access.beginOperation();
     const path = this.normalizePath(input);
     await this.assertRevision(path, expectedRevision, options);
     await options?.beforePublish?.();
     try {
       await this.assertPhysicalAccess(resolve(this.root, path), undefined, true);
+      operation.assertCurrent();
       await unlink(resolve(this.root, path));
     } catch (error) {
       throw classifyPathError(error, path);
@@ -476,13 +477,15 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   private async assertPhysicalAccess(absolute: string, handle?: FileHandle, mutation = false): Promise<void> {
+    const access = this.options.access.beginOperation();
     const managed = mutation ? this.options.managedDirectories : undefined;
     const managedDirectories = typeof managed === 'function' ? managed() : managed;
-    await this.options.physicalAccess?.assertWorkspacePath(
+    await this.options.physicalAccess.assertWorkspacePath(
       absolute,
-      [...this.options.accessPolicy.privatePaths, ...this.options.excludedPaths.map(path => resolve(this.root, path))],
+      access.privatePaths,
       { ...(handle ? { handle } : {}), ...(managedDirectories ? { managedDirectories } : {}) },
     );
+    access.assertCurrent();
   }
 
   private async inspectReadPath(input: string, checkpoint?: WorkspaceReadOptions['interruptedRename']) {
@@ -490,14 +493,14 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     try {
       await this.assertNoSymlinkSegments(path, false);
       const absolute = resolve(this.root, path);
-      const linkStat = await lstat(absolute);
+      const linkStat = await lstat(absolute, { bigint: true });
       if (linkStat.isSymbolicLink())
         throw new EditError(EditFailureReason.UNSUPPORTED, 'Symbolic links are not supported.', { path });
       if (!linkStat.isFile())
         throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
       const resolvedRoot = await realpath(this.root);
       const identity = `${linkStat.dev}:${linkStat.ino}`;
-      assertAllowedLinks(linkStat.nlink, identity, path, checkpoint);
+      assertAllowedLinks(Number(linkStat.nlink), identity, path, checkpoint);
       const resolvedFile = await realpath(absolute);
       assertInsideRoot(resolvedRoot, resolvedFile, path);
       // Check the filesystem's spelling too: aliases must not bypass the policy.
@@ -544,7 +547,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return current;
   }
 
-  private async createParents(directory: string): Promise<string[]> {
+  private async createParents(directory: string, assertCurrent: () => void): Promise<string[]> {
     const missing: string[] = [];
     let cursor = directory;
     while (cursor !== this.root) {
@@ -564,6 +567,8 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const created = missing.toReversed();
     for (const path of created) {
       try {
+        await this.assertPhysicalAccess(path);
+        assertCurrent();
         await mkdir(path);
       } catch (error) {
         throw classifyPathError(error, relative(this.root, path));
@@ -596,25 +601,17 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
 
   private isExcluded(path: string): boolean {
     if (this.isExcludedPath(path)) return true;
-    return this.options.accessPolicy.isSensitiveFileName(path.split('/').at(-1) ?? '', this.caseSensitive);
+    return this.options.access.policy.isSensitiveFileName(path.split('/').at(-1) ?? '', this.caseSensitive);
   }
 
   private isIgnoredDirectory(name: string, path: string): boolean {
-    return this.options.accessPolicy.isIgnoredDirectory(
-      name,
-      this.caseSensitive,
-      path,
-      this.options.physicalAccess !== undefined,
-    );
+    return this.options.access.policy.isIgnoredDirectory(name, this.caseSensitive, path, true);
   }
 
   private isExcludedPath(path: string): boolean {
-    const literal = this.caseSensitive || this.options.physicalAccess !== undefined;
-    const candidate = literal ? path : path.toLowerCase();
-    return this.options.excludedPaths.some(excludedPath => {
-      const excluded = literal ? excludedPath : excludedPath.toLowerCase();
-      return candidate === excluded || candidate.startsWith(`${excluded}/`);
-    });
+    return this.options.access
+      .beginOperation()
+      .excludedPaths.some(excluded => path === excluded || path.startsWith(`${excluded}/`));
   }
 }
 

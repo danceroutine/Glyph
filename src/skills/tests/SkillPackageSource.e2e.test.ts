@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { SkillPackageSourceReader } from '../SkillPackageSource.ts';
 import { testSkillSource, testPackageIndex } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
@@ -177,7 +178,7 @@ describe(SkillPackageSourceReader, () => {
 it('reconciles a selected package after resources change and bounds discovery to 257 files', async () => {
   const { root, directory, reader } = await fixture();
   const { FileSystemWorkspaceTextStore } = await import('#src/workspace/FileSystemWorkspaceTextStore.js');
-  const store = new FileSystemWorkspaceTextStore(root);
+  const store = fixtureWorkspace(root);
   const binary = resolve('target/release/glyph-context-index');
   const signal = new AbortController().signal;
   expect((await listSkillPackageFiles(store, 'example', testPackageIndex(binary), false, signal)).files).toEqual([

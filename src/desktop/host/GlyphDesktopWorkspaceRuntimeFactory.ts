@@ -13,6 +13,8 @@ export interface GlyphDesktopWorkspaceRuntimeFactory {
     readonly trusted: boolean;
     /** Fresh host-wide workspace authority, including peers retained during reconnection. */
     readonly hostWorkspaceRoots?: () => readonly string[];
+    /** Recheck the owning connection, attached roots and live trust before releasing model context. */
+    readonly assertTrusted: () => void;
     readonly emit: (event: GlyphHostEvent) => void;
   }): Promise<GlyphDesktopWorkspaceRuntime>;
 }

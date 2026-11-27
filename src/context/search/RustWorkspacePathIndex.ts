@@ -8,6 +8,7 @@ import {
   type ResolvedRustWorkspacePathIndexOptions,
   type RustWorkspacePathIndexConfiguration,
 } from './RustWorkspacePathIndexOptions.ts';
+import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import {
   workspaceContentSearchOptionsSchema,
@@ -152,8 +153,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     excludeRoot?: true;
     privatePaths?: readonly string[];
   };
-  private readonly accessPolicy: WorkspaceAccessPolicy;
-  private readonly explicitExcludedPaths: readonly string[];
+  private readonly access: WorkspaceRootAccess;
   private policyRevision: number;
   private readonly processFactory: ProcessFactory;
   private process: SidecarProcess | undefined;
@@ -168,20 +168,23 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   private readonly readContentOverrides: RustWorkspacePathIndexConfiguration['readContentOverrides'];
 
   constructor(options: RustWorkspacePathIndexConfiguration, processFactory: ProcessFactory = startProcess) {
-    const { accessPolicy = new WorkspaceAccessPolicy(), readContentOverrides, ...rawOptions } = options;
+    const { access, readContentOverrides, ...rawOptions } = options;
     this.readContentOverrides = readContentOverrides;
-    this.accessPolicy = accessPolicy;
-    this.policyRevision = accessPolicy.revision;
-    const parsed = rustWorkspacePathIndexOptionsSchema.parse(rawOptions);
-    this.explicitExcludedPaths = parsed.excludedPaths;
-    const projected = accessPolicy.exclusionsFor(parsed.root, parsed.caseSensitive, 'native');
+    this.access = access;
+    const operation = access.beginOperation();
+    this.policyRevision = operation.revision;
+    const parsed = rustWorkspacePathIndexOptionsSchema.parse({
+      ...rawOptions,
+      root: access.root,
+      caseSensitive: access.caseSensitive,
+    });
     this.options = {
       ...parsed,
-      ...accessPolicy.toJSON(),
-      ignoredDirectories: [...accessPolicy.configuredIgnoredDirectories],
-      ...(accessPolicy.privatePaths.length > 0 ? { privatePaths: [...accessPolicy.privatePaths] } : {}),
-      excludedPaths: [...new Set([...parsed.excludedPaths, ...projected.excludedPaths])],
-      ...(projected.privateRoot ? { excludeRoot: true } : {}),
+      ...access.policy.toJSON(),
+      ignoredDirectories: [...access.policy.configuredIgnoredDirectories],
+      ...(operation.privatePaths.length > 0 ? { privatePaths: operation.privatePaths } : {}),
+      excludedPaths: operation.excludedPaths,
+      ...(operation.privateRoot ? { excludeRoot: true } : {}),
       binaryPath: resolve(parsed.binaryPath),
       root: resolve(parsed.root),
       cachePath: parsed.cachePath === null ? null : resolve(parsed.cachePath),
@@ -195,7 +198,10 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     root: string,
     processFactory: ProcessFactory = startProcess,
   ): Promise<boolean> {
-    const probe = new RustWorkspacePathIndex({ binaryPath, root, caseSensitive: true }, processFactory);
+    const probe = new RustWorkspacePathIndex(
+      { binaryPath, access: new WorkspaceRootAccess(new WorkspaceAccessPolicy({}, [root]), root, true) },
+      processFactory,
+    );
     try {
       return z.boolean().parse(await probe.request(PathIndexMethod.FILESYSTEM_CASE_SENSITIVE, root));
     } finally {
@@ -204,7 +210,10 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   static async filesystemNamePolicy(binaryPath: string, root: string, processFactory: ProcessFactory = startProcess) {
-    const probe = new RustWorkspacePathIndex({ binaryPath, root, caseSensitive: true }, processFactory);
+    const probe = new RustWorkspacePathIndex(
+      { binaryPath, access: new WorkspaceRootAccess(new WorkspaceAccessPolicy({}, [root]), root, true) },
+      processFactory,
+    );
     try {
       return z
         .object({ caseSensitive: z.boolean(), normalizesUnicode: z.boolean(), foldsUnicode: z.boolean() })
@@ -277,7 +286,9 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     const resolvedOptions = workspaceContentSearchOptionsSchema.parse(serializableOptions);
     this.synchronizePolicy();
     if (!this.initialized) await this.initialize(signal);
+    const operation = this.access.beginOperation();
     const overrides = await this.readContentOverrides?.(signal);
+    operation.assertCurrent();
     signal?.throwIfAborted();
     const params = { pattern, ...resolvedOptions, ...(overrides ? { overrides } : {}) };
     if (Buffer.byteLength(JSON.stringify(params)) > 900 * 1024)
@@ -326,7 +337,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     const worker = this.process;
     const result = indexStateSchema.parse(await response);
     // A decoded reply can resume after another caller rotates the worker or its policy.
-    if (worker !== this.process || revision !== this.accessPolicy.revision)
+    if (worker !== this.process || revision !== this.access.policy.revision)
       throw new Error('Workspace index changed while loading state. Retry the request.');
     this.initialized = result;
     return result;
@@ -355,14 +366,14 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 
   /** Rotate a cached worker before accepting work under newly admitted host-private paths. */
   private synchronizePolicy(): void {
-    if (this.policyRevision === this.accessPolicy.revision) return;
+    if (this.policyRevision === this.access.policy.revision) return;
     this.fail(new Error('Workspace private paths changed. Retry the request.'));
     this.initializing = undefined;
-    this.policyRevision = this.accessPolicy.revision;
-    const projected = this.accessPolicy.exclusionsFor(this.options.root, this.options.caseSensitive, 'native');
-    this.options.excludedPaths = [...new Set([...this.explicitExcludedPaths, ...projected.excludedPaths])];
-    this.options.privatePaths = [...this.accessPolicy.privatePaths];
-    if (projected.privateRoot) this.options.excludeRoot = true;
+    this.policyRevision = this.access.policy.revision;
+    const operation = this.access.beginOperation();
+    this.options.excludedPaths = operation.excludedPaths;
+    this.options.privatePaths = operation.privatePaths;
+    if (operation.privateRoot) this.options.excludeRoot = true;
     else delete this.options.excludeRoot;
   }
 
@@ -372,7 +383,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
       return Promise.reject(new Error('The workspace path index is shutting down.'));
     }
     if (signal?.aborted === true) return Promise.reject(toAbortError(signal));
-    if (method !== PathIndexMethod.SHUTDOWN && this.policyRevision !== this.accessPolicy.revision) {
+    if (method !== PathIndexMethod.SHUTDOWN && this.policyRevision !== this.access.policy.revision) {
       this.synchronizePolicy();
       return Promise.reject(new Error('Workspace private paths changed. Retry the request.'));
     }
@@ -388,7 +399,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
       const removeAbortListener = (): void => signal?.removeEventListener('abort', onAbort);
       this.pending.set(id, {
         resolve: value => {
-          if (method !== PathIndexMethod.SHUTDOWN && this.policyRevision !== this.accessPolicy.revision) {
+          if (method !== PathIndexMethod.SHUTDOWN && this.policyRevision !== this.access.policy.revision) {
             this.synchronizePolicy();
             rejectRequest(new Error('Workspace private paths changed. Retry the request.'));
           } else resolveRequest(value);

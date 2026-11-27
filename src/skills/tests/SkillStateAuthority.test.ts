@@ -1,9 +1,9 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 
 async function fixture() {
@@ -54,7 +54,7 @@ describe(SkillStateStore, () => {
 
   it('rejects a foreign-owned preference file inside an admitted owner-controlled directory', async () => {
     const { root, path } = await fixture();
-    const disk = new FileSystemWorkspaceTextStore(root);
+    const disk = fixtureWorkspace(root);
     const state = new SkillStateStore(disk.root, testFilesystemMetadata);
     await state.initialize();
     const uid = (await stat(path)).uid;

@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { inventoryPackage, readDirectoryModes } from '#src/skills/skillPackageInventory.js';
 import type { FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
@@ -7,7 +8,6 @@ import { join } from 'node:path';
 import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
 import { testPackageMutations } from './testPackageMutations.ts';
 import { onTestFinished, vi } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
@@ -37,7 +37,7 @@ export async function aSkillLifecycle(
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-manager-')));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
-  const store = new FileSystemWorkspaceTextStore(root);
+  const store = fixtureWorkspace(root);
   const state = new SkillStateStore(store.root, metadata);
   await state.initialize();
   const listFiles = () => store.list(10000, 'skills/**/*');

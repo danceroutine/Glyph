@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { testSkillSource, testPackageIndex } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
@@ -6,7 +7,6 @@ import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { aSkillDescriptor } from './fixtures/aSkillDescriptor.ts';
 import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
@@ -171,7 +171,7 @@ describe('Skill package inventory boundaries', () => {
     expect(native.dispose).toHaveBeenCalledOnce();
   });
   it('qualifies fresh native package paths and disposes the index on truncation and failure', async () => {
-    const workspace = new FileSystemWorkspaceTextStore('/workspace');
+    const workspace = fixtureWorkspace('/workspace');
     vi.spyOn(workspace, 'resolvePath').mockResolvedValue('/workspace/example');
     native.glob.mockResolvedValueOnce({ files: ['SKILL.md'], truncated: false });
     expect(
@@ -211,7 +211,7 @@ describe('Skill package inventory boundaries', () => {
     expect(native.dispose).toHaveBeenCalledOnce();
   });
   it('rejects truncated activation inventory before reading resource bodies', async () => {
-    const workspace = new FileSystemWorkspaceTextStore('/not-read');
+    const workspace = fixtureWorkspace('/not-read');
     const read = vi.spyOn(workspace, 'read');
     const provider = new FileSkillDiscoveryProvider({
       origin: aSkillDescriptor().origin,
