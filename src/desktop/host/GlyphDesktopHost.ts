@@ -74,6 +74,7 @@ export class GlyphDesktopHost {
   trustedUserEditors(
     owner: GlyphConnectionIdentity,
     sourcePath?: string,
+    sourceAliases: readonly string[] = [],
   ): readonly { identity: GlyphConnectionIdentity; connectionId: string }[] {
     const peers = [];
     for (const peer of this.sessions.values()) {
@@ -89,7 +90,7 @@ export class GlyphDesktopHost {
                 current === undefined &&
                 sourcePath &&
                 !existsSync(sourcePath) &&
-                (previous === sourcePath || previous.startsWith(sourcePath + sep))
+                [sourcePath, ...sourceAliases].some(alias => previous === alias || previous.startsWith(alias + sep))
               ),
           )
         )
@@ -563,7 +564,7 @@ export class GlyphDesktopHost {
 
 function physicalRoot(root: GlyphWorkspaceRoot): string | undefined {
   try {
-    return realpathSync(root.canonicalPath);
+    return realpathSync.native(root.canonicalPath);
   } catch {
     return undefined;
   }

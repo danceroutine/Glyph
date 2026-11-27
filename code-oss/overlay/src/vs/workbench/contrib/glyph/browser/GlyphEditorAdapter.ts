@@ -857,7 +857,9 @@ export class GlyphEditorAdapter extends Disposable {
     const target = (root: URI) => URI.joinPath(root, kind === 'rule' ? 'rules' : 'skills', name);
     const contains = (directory: URI, resource: URI) =>
       kind === 'rule' ? identity.isEqual(resource, directory) : identity.isEqualOrParent(resource, directory);
-    if (dirty.some(resource => contains(target(profile), resource))) return false;
+    const projected = (request.sourceUris ?? []).map(uri => URI.parse(uri, true));
+    if (dirty.some(resource => contains(target(profile), resource) || projected.some(path => contains(path, resource))))
+      return false;
     const canonical = await this.fileService.realpath(profile);
     if (!canonical) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
     const physical = target(canonical);
@@ -868,7 +870,12 @@ export class GlyphEditorAdapter extends Disposable {
       if (owned.length === 0) continue;
       const root = await this.fileService.realpath(folder.uri);
       if (!root) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-      if (owned.some(resource => contains(physical, URI.joinPath(root, identity.relativePath(folder.uri, resource)!))))
+      if (
+        owned.some(resource => {
+          const path = URI.joinPath(root, identity.relativePath(folder.uri, resource)!);
+          return contains(physical, path) || projected.some(alias => contains(alias, path));
+        })
+      )
         return false;
     }
     return true;

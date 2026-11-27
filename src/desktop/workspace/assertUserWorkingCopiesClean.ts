@@ -1,3 +1,5 @@
+import type { SourcePathAliases } from '#src/workspace/SourcePathAliases.js';
+import { pathToFileURL } from 'node:url';
 import type { FilesystemNamePolicy } from '#src/workspace/FilesystemNamePolicy.js';
 import { resolveAvailableIdentity } from '#src/shell/ShellRuntimePathPolicy.js';
 import { dirname } from 'node:path';
@@ -15,6 +17,8 @@ export async function assertUserWorkingCopiesClean(
   namePolicy: FilesystemNamePolicy,
   sourcePath?: string,
   configuredProfile?: string,
+  sourceAliases?: SourcePathAliases,
+  retainedAliases: readonly string[] = [],
 ): Promise<void> {
   const verifyProfile = () => {
     if (configuredProfile && sourcePath && resolveAvailableIdentity(configuredProfile) !== dirname(dirname(sourcePath)))
@@ -23,7 +27,13 @@ export async function assertUserWorkingCopiesClean(
       );
   };
   verifyProfile();
-  const peers = editors.trustedUserEditors(owner, sourcePath);
+  const aliases = () =>
+    sourcePath && sourceAliases
+      ? [...new Set([...sourceAliases(sourcePath, kind === 'skill'), ...retainedAliases])]
+      : undefined;
+  const before = aliases();
+  const sourceUris = before?.map(path => pathToFileURL(path).toString());
+  const peers = editors.trustedUserEditors(owner, sourcePath, before);
   await Promise.all(
     [owner, ...peers.map(peer => peer.identity)].map(async identity => {
       const operationId = randomUUID();
@@ -34,6 +44,7 @@ export async function assertUserWorkingCopiesClean(
         name,
         caseSensitive: namePolicy.caseSensitive,
         namePolicy,
+        ...(sourceUris ? { sourceUris } : {}),
       });
       if (!result.ok || result.operationId !== operationId || result.workingCopiesClean !== true)
         throw new Error(
@@ -42,8 +53,10 @@ export async function assertUserWorkingCopiesClean(
     }),
   );
   verifyProfile();
-  const current = editors.trustedUserEditors(owner, sourcePath);
+  const after = aliases();
+  const current = editors.trustedUserEditors(owner, sourcePath, after);
   if (
+    JSON.stringify(after) !== JSON.stringify(before) ||
     current.length !== peers.length ||
     current.some(peer => !peers.some(previous => previous.connectionId === peer.connectionId))
   )

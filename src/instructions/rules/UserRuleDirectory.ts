@@ -1,50 +1,61 @@
-import { sameWorkspaceDirectory, WorkspaceDirectoryIdentity } from '#src/workspace/sameWorkspaceDirectory.js';
-import { dirname, join, posix, relative, sep } from 'node:path';
+import { UserStoreProjectRoutes } from '#src/workspace/UserStoreProjectRoutes.js';
+import type { SourcePathAliases } from '#src/workspace/SourcePathAliases.js';
+import { basename, dirname, isAbsolute, join, posix, relative, sep } from 'node:path';
 import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
 import type { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 
 /** The profile owns rules even when a workspace also exposes the same native or compatibility directory. */
 export class UserRuleDirectory {
-  private readonly rules: WorkspaceDirectoryIdentity;
-  private readonly project?: { kind: AgentInstructionSourceKind; directory: string; scope: string };
+  private readonly store: UserStoreProjectRoutes;
+  private readonly roots: readonly { name: string; path: string }[];
 
   constructor(
     root: string,
-    private readonly caseSensitive: boolean,
+    caseSensitive: boolean,
     roots: readonly { name: string; path: string }[],
     private readonly paths: InstructionPaths,
+    aliases?: SourcePathAliases,
   ) {
-    this.rules = new WorkspaceDirectoryIdentity(join(root, 'rules'), caseSensitive);
-    const marker = ['.glyph', '.cursor'].find(name =>
-      sameWorkspaceDirectory(root, join(dirname(root), name), this.caseSensitive),
-    );
-    if (!marker) return;
-    // A workspace opened inside the marker cannot discover it as a project rule directory.
-    for (const part of roots.toSorted((a, b) => b.path.length - a.path.length)) {
-      const suffix = relative(part.path, root);
-      if (!suffix || suffix === '..' || suffix.startsWith('..' + sep)) continue;
-      const directory = posix.join(roots.length > 1 ? part.name : '', suffix.split(sep).join('/'));
-      this.project = {
-        kind:
-          marker === '.glyph'
-            ? AgentInstructionSourceKind.GLYPH_PROJECT_RULE
-            : AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
-        directory,
-        scope: posix.dirname(directory),
-      };
-      break;
-    }
+    this.roots = roots.toSorted((a, b) => b.path.length - a.path.length);
+    this.store = new UserStoreProjectRoutes(join(root, 'rules'), caseSensitive, aliases);
+  }
+
+  refresh(): void {
+    this.store.refresh();
   }
 
   ownsProjectRule(path: string): boolean {
     const physical = this.paths.routes!.physicalPath(path);
-    return physical !== undefined && this.rules.matches(dirname(physical));
+    return physical !== undefined && this.store.ownsEntry(physical);
   }
 
   projectAlias(userPath: string) {
-    if (!this.project || !userPath.startsWith('rules/')) return undefined;
-    const { kind, directory, scope } = this.project;
-    const identity = this.paths.sourceIdentity(kind, posix.join(directory, userPath));
-    return { ...identity, scope, kind };
+    if (!userPath.startsWith('rules/')) return undefined;
+    const aliases = this.store.projectEntries(basename(userPath)).flatMap(path => {
+      const marker = this.store.projectMarker(path);
+      if (!marker) return [];
+      const kind =
+        marker === '.glyph'
+          ? AgentInstructionSourceKind.GLYPH_PROJECT_RULE
+          : AgentInstructionSourceKind.CURSOR_PROJECT_RULE;
+      const scope = dirname(dirname(dirname(path)));
+      const project = this.roots.find(part => {
+        const tail = relative(part.path, scope);
+        return tail !== '..' && !tail.startsWith('..' + sep) && !isAbsolute(tail);
+      });
+      if (!project) return [];
+      const prefix = this.roots.length > 1 ? project.name : '';
+      const route = (physical: string) => posix.join(prefix, relative(project.path, physical).split(sep).join('/'));
+      return [{ ...this.paths.sourceIdentity(kind, route(path)), kind, scope: route(scope) }];
+    });
+    const [first, ...others] = aliases;
+    if (!first || others.length === 0) return first;
+    return {
+      ...first,
+      additionalScopes: others.map(({ kind, scope }) => ({ kind, scope })),
+      legacyIds: [
+        ...new Set([...(first.legacyIds ?? []), ...others.flatMap(alias => [alias.id, ...(alias.legacyIds ?? [])])]),
+      ],
+    };
   }
 }

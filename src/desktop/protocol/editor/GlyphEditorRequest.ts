@@ -23,6 +23,7 @@ export type GlyphEditorRequest =
       readonly type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES;
       readonly operationId: string;
       readonly kind: 'rule' | 'skill';
+      readonly sourceUris?: readonly string[];
       readonly name: string;
       readonly caseSensitive: boolean;
       readonly namePolicy?: FilesystemNamePolicy;

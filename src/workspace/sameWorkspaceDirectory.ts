@@ -1,21 +1,34 @@
-import fs from 'node:fs';
+import { basename, dirname } from 'node:path';
 import { normalizeVolumeName } from './FilesystemNamePolicy.ts';
+import fs from 'node:fs';
 
 /** Match configured and indexed spellings of one directory, including a mount below the workspace.
  * An absent target can use its configured casing until there is an entry to compare.
  */
 export function sameWorkspaceDirectory(first: string, second: string, caseSensitive: boolean): boolean {
   if (first === second) return true;
-  const folding = { normalizesUnicode: true, foldsUnicode: true };
-  if (normalizeVolumeName(first, folding) !== normalizeVolumeName(second, folding)) return false;
   try {
     const a = fs.lstatSync(first, { bigint: true, throwIfNoEntry: false });
     const b = fs.lstatSync(second, { bigint: true, throwIfNoEntry: false });
-    if (!a && !b) return !caseSensitive && first.toLowerCase() === second.toLowerCase();
+    if (!a && !b)
+      return (
+        (basename(first) === basename(second) ||
+          (!caseSensitive && basename(first).toLowerCase() === basename(second).toLowerCase())) &&
+        sameWorkspaceDirectory(dirname(first), dirname(second), caseSensitive)
+      );
     return a?.dev === b?.dev && a?.ino === b?.ino;
   } catch {
     return false;
   }
+}
+
+/** Managed marker syntax admits filesystem-equivalent spellings of its reserved names. */
+export function sameWorkspaceDirectorySpelling(first: string, second: string, caseSensitive: boolean): boolean {
+  const folding = { normalizesUnicode: true, foldsUnicode: true };
+  return (
+    normalizeVolumeName(first, folding) === normalizeVolumeName(second, folding) &&
+    sameWorkspaceDirectory(first, second, caseSensitive)
+  );
 }
 
 /** A catalog can encounter the same profile directory for every package or rule in one listing.

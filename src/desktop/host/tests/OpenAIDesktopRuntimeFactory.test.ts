@@ -971,8 +971,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         .mockResolvedValue({ files: ['file.txt'], truncated: false });
       await expect(client.listPaths(10)).resolves.toEqual({ files: ['file.txt'], truncated: false });
       expect(glob).toHaveBeenLastCalledWith('**/*', { limit: 10 });
-      await client.listPaths(5, '*.txt', 'src');
-      expect(glob).toHaveBeenLastCalledWith('*.txt', { limit: 5, targetDirectory: 'src' });
+      const signal = new AbortController().signal;
+      await client.listPaths(5, '*.txt', 'src', signal);
+      expect(glob).toHaveBeenLastCalledWith('*.txt', { limit: 5, targetDirectory: 'src', signal });
       await expect(client.canonicalPath('file.txt')).resolves.toBe(
         await new FileSystemWorkspaceTextStore(root).canonicalPath('file.txt'),
       );

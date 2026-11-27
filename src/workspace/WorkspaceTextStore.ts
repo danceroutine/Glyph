@@ -46,6 +46,7 @@ export interface WorkspaceTextStore {
     maxFiles: number,
     globPattern?: string,
     targetDirectory?: string,
+    signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }>;
   /**
    * Converts agent- or user-supplied input into the single project-relative spelling used everywhere else,
