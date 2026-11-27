@@ -65,7 +65,7 @@ const subprocess = new Set([
 // Runtime access to concrete adapters belongs to composition. Feature code imports their ports.
 const composition = new Set([cli, host]);
 const shellComposition = new Set([...composition, deterministicHost]);
-const policyConstruction = new Set([...shellComposition, contentPolicy, rootPolicy]);
+const policyConstruction = new Set([deterministicHost, contentPolicy, rootPolicy]);
 const restrictedModules = new Map([
   ['fs', filesystem],
   ['fs/promises', filesystem],
@@ -119,9 +119,12 @@ function repoPath(path) {
 /** @param {string} importer @param {string} specifier */
 function moduleKey(importer, specifier) {
   if (specifier.startsWith('node:')) return specifier.slice(5);
-  if (specifier.startsWith('#src/')) return specifier.slice(1).replace(/\.js$/u, '.ts');
+  if (specifier.startsWith('#src/')) return repoPath(resolve(root, specifier.slice(1))).replace(/\.js$/u, '.ts');
   if (specifier.startsWith('.') || specifier.startsWith('/')) {
-    return repoPath(resolve(dirname(importer), specifier)).replace(/\.js$/u, '.ts');
+    const path = repoPath(resolve(dirname(importer), specifier));
+    const overlay = 'code-oss/overlay/src/vs/';
+    if (path.startsWith(overlay)) return '#vs/' + path.slice(overlay.length).replace(/\.ts$/u, '.js');
+    return path.replace(/\.js$/u, '.ts');
   }
   return specifier;
 }
