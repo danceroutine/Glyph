@@ -9,14 +9,14 @@ import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutation
 import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { execFileSync } from 'node:child_process';
-import { chmod, lstat, mkdir, mkdtemp, rm, writeFile, symlink, rename } from 'node:fs/promises';
+import { realpath, chmod, lstat, mkdir, mkdtemp, rm, writeFile, symlink, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 const manifest = '---\nname: example\ndescription: Example workflow\n---\nPinned instructions';
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'glyph-skill-source-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-source-')));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const home = join(root, 'home');
   await mkdir(home);
@@ -84,6 +84,20 @@ describe(SkillPackageSourceReader, () => {
     const draft = await reader.read({ ...source, revision: commit(Buffer.from('asset.bin')) });
     expect(draft.name).toBe('example');
     expect(draft.files().get('asset.bin')).toEqual(Uint8Array.from([0xa5]));
+  });
+  it.each([false, true])('rejects a renamed local source after preview with replacement %s', async replace => {
+    const { directory, reader } = await fixture();
+    const draft = await reader.read({ kind: 'local', path: directory });
+    const { manager, location, store } = await aSkillLifecycle();
+    const preview = await manager.prepare(location.id, draft);
+    await rename(directory, directory + '-moved');
+    if (replace) {
+      await mkdir(directory);
+      await writeFile(join(directory, 'SKILL.md'), manifest);
+    }
+    await expect(manager.apply(preview.id)).rejects.toThrow(/source.*(moved|changed)/iu);
+    expect(await store.exists('skills/example')).toBe(false);
+    expect(manager.hasPreview(preview.id)).toBe(false);
   });
   it('uses the Rust index for selected local packages and preserves binary resource bytes', async () => {
     const { directory, reader } = await fixture();

@@ -46,10 +46,12 @@ export class LocalSkillSourceAuthority implements SkillSourceAccess {
   async retain(): Promise<PendingSkillSourceAccess> {
     await this.verify();
     const descriptor = openSync(this.root, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
-    const stat = fstatSync(descriptor, { bigint: true });
-    if (`${stat.dev}:${stat.ino}` !== this.directories[1]!.identity) {
+    try {
+      const stat = fstatSync(descriptor, { bigint: true });
+      if (`${stat.dev}:${stat.ino}` !== this.directories[1]!.identity) throw changed();
+    } catch (error) {
       closeSync(descriptor);
-      throw changed();
+      throw error;
     }
     return {
       assertCurrent: relocation => this.verify(descriptor, relocation),
