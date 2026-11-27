@@ -1196,6 +1196,36 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect((await joined.snapshot()).instructionSources![0]!.message).toContain('catalog snapshot is unavailable');
     });
 
+    it('rechecks a selected project folder alias while retaining the physical Settings URI', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      const rpc = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a catalog read');
+        return { operationId: request.operationId, ok: true };
+      });
+      const first = await fixture.folder('first', { 'AGENTS.md': 'Original' });
+      const other = await fixture.folder('other', { 'AGENTS.md': 'Replacement' });
+      const alias = join(dirname(first), 'attached');
+      await symlink(first, alias);
+      const runtime = await fixture.create([alias]);
+      expect((await runtime.snapshot()).instructionSources![0]!.uri).toBe(pathToFileURL(join(first, 'AGENTS.md')).href);
+      const coordinator = captured.providerFactories.at(-1)![3]!;
+      await coordinator.beginTurn({ turnId: 'attached', attachmentPaths: [] });
+      const allowed = await coordinator.authorizeDisclosure('attached');
+      allowed();
+      const pending = captured.indexOptions[0]!.access.beginOperation();
+      await rm(alias);
+      await symlink(other, alias);
+      await expect(coordinator.authorizeDisclosure('attached')).rejects.toThrow('location changed');
+      expect(pending.assertCurrent).toThrow('workspace folder changed');
+      rpc.mockClear();
+      const read = { type: GlyphEditorRequestType.READ_SNAPSHOT, operationId: 'file', path: 'AGENTS.md' } as const;
+      for (const editor of captured.editorClients)
+        await expect(editor.request(read)).rejects.toThrow('workspace folder changed');
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
     it('uses the physical profile for discovery and resolves a formerly shared project rule only through its user owner', async () => {
       const profile = join(isolatedUserDirectory, 'current');
       const first = join(isolatedUserDirectory, 'first');
