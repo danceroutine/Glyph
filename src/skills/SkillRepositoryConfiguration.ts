@@ -32,9 +32,8 @@ function quote(text: string): string {
 
 async function pinCredentialHelper(
   value: string,
-  git: string,
+  directory: string,
   authority: SkillRepositoryAuthority,
-  signal: AbortSignal,
 ): Promise<string> {
   if (value.startsWith('!') || (!isAbsolute(value) && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(value)))
     throw new Error(
@@ -42,24 +41,6 @@ async function pinCredentialHelper(
     );
   let path = value;
   if (!isAbsolute(path)) {
-    await authority.validate();
-    const directory = await new Promise<string>((accept, reject) => {
-      execFile(
-        git,
-        ['--exec-path'],
-        {
-          signal,
-          timeout: 5000,
-          maxBuffer: 16 * 1024,
-          encoding: 'utf8',
-          env: repositoryEnvironment(authority.workspaceRoots),
-        },
-        (error, output) => {
-          if (error) reject(new Error(error.message, { cause: error }));
-          else accept(output.trim());
-        },
-      );
-    });
     path = join(directory, `git-credential-${value}`);
   }
   // Git installations can dispatch multicall helpers through their symlink's basename.
@@ -88,6 +69,22 @@ export async function captureRepositoryEnvironment(
   const environment = repositoryEnvironment(authority.workspaceRoots);
   const executable = authority.executable('git');
   authority.admit(cwd);
+  await authority.validate();
+  const executionDirectory = await new Promise<string>((accept, reject) => {
+    execFile(
+      executable,
+      ['--exec-path'],
+      { signal, timeout: 5000, maxBuffer: 16 * 1024, encoding: 'utf8', env: environment },
+      (error, output) => {
+        if (error) reject(new Error(error.message, { cause: error }));
+        else accept(output.trim());
+      },
+    );
+  });
+  authority.admit(executionDirectory);
+  for (const helper of ['git-remote-https', 'git-upload-pack'])
+    authority.admit(join(executionDirectory, helper + (process.platform === 'win32' ? '.exe' : '')));
+  environment.GIT_EXEC_PATH = executionDirectory;
   const config = async (args: string[], input?: Buffer) => {
     await authority.validate();
     return new Promise<Buffer>((accept, reject) => {
@@ -145,7 +142,7 @@ export async function captureRepositoryEnvironment(
         'Repository preview cannot run command-valued Git transport settings. Use a named credential helper or import a local package.',
       );
     if (key.startsWith('credential.') && key.endsWith('.helper') && parsed.value) {
-      entries.push({ key: parsed.key, value: await pinCredentialHelper(parsed.value, executable, authority, signal) });
+      entries.push({ key: parsed.key, value: await pinCredentialHelper(parsed.value, executionDirectory, authority) });
       continue;
     }
     if (!(key === 'include.path' || (key.startsWith('includeif.') && key.endsWith('.path')))) entries.push(parsed);
@@ -180,6 +177,7 @@ export async function captureRepositoryEnvironment(
     GIT_CONFIG_NOSYSTEM: '1',
     // SSH config may itself contain executable ProxyCommand/LocalCommand directives.
     // Use the admitted system client with its default keys/agent and no command-bearing config.
-    GIT_SSH_COMMAND: "'" + ssh.replaceAll("'", "'\\''") + "' -F /dev/null",
+    GIT_SSH_COMMAND:
+      "'" + ssh.replaceAll("'", "'\\''") + "' -F " + (process.platform === 'win32' ? 'NUL' : '/dev/null'),
   };
 }

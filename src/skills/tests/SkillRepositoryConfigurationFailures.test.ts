@@ -5,19 +5,22 @@ import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { captureRepositoryEnvironment } from '#src/skills/SkillRepositoryConfiguration.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 
-const parser = vi.hoisted(() => ({ replies: [] as (string | Error)[] }));
+const parser = vi.hoisted(() => ({
+  replies: [] as (string | Error)[],
+  executionDirectory: '/fixture/git-core' as string | Error,
+}));
 vi.mock('node:child_process', () => ({
   execFile: (
     _path: string,
     args: string[],
     _options: unknown,
-    callback: (error: Error | null, output: Buffer) => void,
+    callback: (error: Error | null, output: Buffer | string) => void,
   ) => {
     const complete = () => {
-      const next = parser.replies.shift()!;
+      const next = args.includes('--exec-path') ? parser.executionDirectory : parser.replies.shift()!;
       queueMicrotask(() => {
         if (next instanceof Error) callback(next, Buffer.alloc(0));
-        else callback(null, Buffer.from(next));
+        else callback(null, args.includes('--exec-path') ? next : Buffer.from(next));
       });
     };
     if (args.includes('--exec-path')) complete();
@@ -42,6 +45,7 @@ async function fixture(contents = '[core]\neditor = trusted\n') {
   vi.stubEnv('GIT_CONFIG_GLOBAL', config);
   vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
   parser.replies = [];
+  parser.executionDirectory = '/fixture/git-core';
   return {
     config,
     capture: () => captureRepositoryEnvironment([], root, new AbortController().signal, testFilesystemMetadata),
@@ -77,6 +81,7 @@ it('disables the system configuration explicitly on Windows too', async () => {
 it('stops capture when Git cannot resolve its credential helper installation', async () => {
   const f = await fixture('[credential]\nhelper = store\n');
   const value = 'credential.helper\nstore\0';
-  parser.replies.push(`global\0file:${f.config}\0${value}`, value, new Error('Git installation unavailable'));
+  parser.replies.push(`global\0file:${f.config}\0${value}`, value);
+  parser.executionDirectory = new Error('Git installation unavailable');
   await expect(f.capture()).rejects.toThrow('Git installation unavailable');
 });

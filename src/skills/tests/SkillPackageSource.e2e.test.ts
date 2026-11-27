@@ -22,7 +22,9 @@ async function fixture() {
   vi.stubEnv('XDG_CONFIG_HOME', undefined);
   vi.stubEnv('GIT_CONFIG_GLOBAL', config);
   vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
-  onTestFinished(() => vi.unstubAllEnvs());
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
   const directory = join(root, 'example');
   await mkdir(directory);
   await writeFile(join(directory, 'SKILL.md'), manifest);
