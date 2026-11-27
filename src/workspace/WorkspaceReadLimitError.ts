@@ -4,6 +4,7 @@ export class WorkspaceReadLimitError extends Error {
     readonly path: string,
     readonly maxBytes: number,
     readonly actualBytes: number,
+    readonly bytesRead = 0,
   ) {
     super(`File exceeds the ${maxBytes}-byte read limit.`);
     this.name = 'WorkspaceReadLimitError';

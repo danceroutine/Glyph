@@ -1,3 +1,4 @@
+import { WorkspaceTextDecodingError } from './WorkspaceTextDecodingError.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import {
@@ -413,10 +414,10 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       const { bytesRead } = await handle.read(buffer);
       if (bytesRead === 0) return Buffer.concat(chunks, length);
       length += bytesRead;
-      if (length > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, length);
+      if (length > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, length, length);
       chunks.push(buffer.subarray(0, bytesRead));
     }
-    throw new WorkspaceReadLimitError(path, maxBytes, length);
+    throw new WorkspaceReadLimitError(path, maxBytes, length, length);
   }
 
   private async assertRevision(
@@ -552,7 +553,7 @@ function toSnapshot(
   revision = createHash('sha256').update(bytes).digest('hex'),
 ): WorkspaceTextSnapshot {
   if (bytes.includes(0))
-    throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
+    throw new WorkspaceTextDecodingError(path, 'Binary/NUL files are not supported.', bytes.length);
   const byteOrderMark = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   const content = byteOrderMark ? bytes.subarray(3) : bytes;
   let text: string;
@@ -560,7 +561,7 @@ function toSnapshot(
     // The encoding marker was removed above; a second U+FEFF is document text.
     text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
   } catch (error) {
-    throw new EditError(EditFailureReason.UNSUPPORTED, 'File is not valid UTF-8.', { path }, { cause: error });
+    throw new WorkspaceTextDecodingError(path, 'File is not valid UTF-8.', bytes.length, { cause: error });
   }
   return {
     path,

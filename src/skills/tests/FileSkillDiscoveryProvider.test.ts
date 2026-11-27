@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
@@ -12,6 +13,35 @@ import { packageRevision, fileRevision } from '#src/skills/skillPackageRevision.
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 
 describe(FileSkillDiscoveryProvider, () => {
+  it('charges actual bytes for rejected reads and retains later valid manifests', async () => {
+    const fixture = await skillFixture();
+    const names = Array.from({ length: 32 }, (_, i) => 'bad-' + String(i).padStart(2, '0'));
+    const paths = names.map(name => '.glyph/skills/' + name + '/SKILL.md');
+    await Promise.all(paths.map((path, i) => fixture.write(path, Buffer.from([i % 2 === 0 ? 255 : 0]))));
+    const good = '.glyph/skills/example/SKILL.md';
+    await fixture.write(good, manifest());
+    const missing = '.glyph/skills/absent/SKILL.md';
+    const read = fixture.store.read.bind(fixture.store);
+    vi.spyOn(fixture.store, 'read').mockImplementation((path, options) => {
+      if (path === missing) return Promise.reject(new WorkspaceReadLimitError(path, 10, 11, 11));
+      return read(path, options);
+    });
+    const found = await fixture.provider([...paths, missing, '.glyph/skills/deleted/SKILL.md', good]).discover();
+    expect(found.filter(skill => skill.status === 'active').map(skill => skill.name)).toEqual(['example']);
+    expect(found.filter(skill => skill.message?.includes('8 MiB'))).toEqual([]);
+  });
+  it('folds single-root scope keys independently of the platform running the tests', async () => {
+    const fixture = await skillFixture();
+    const provider = new FileSkillDiscoveryProvider({
+      origin: { id: 'a', label: 'a', scope: 'project', compatibility: 'glyph' },
+      directory: '.glyph/skills',
+      workspace: new FileSystemWorkspaceTextStore(fixture.root, { caseSensitive: false }),
+      listFiles: async () => ({ files: [], truncated: false }),
+      uriForPath: path => path,
+      refreshIndex: async () => {},
+    });
+    expect(provider.scopePathKey('Src/Index')).toBe('src/index');
+  });
   it('discovers a larger catalog with bounded simultaneous metadata reads', async () => {
     const fixture = await skillFixture();
     const paths = Array.from({ length: 19 }, (_, i) => `.glyph/skills/example-${i}/SKILL.md`);

@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, test as it } from './GlyphWorkbench.fixture.mjs';
+import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
 import { z } from 'zod';
 
@@ -31,6 +31,20 @@ it.describe('Agent skill discovery and activation', () => {
     'discovers valid user and project skills and shows each skill’s name, description, origin, and enabled state',
     async () => {},
   );
+  it(
+    'preserves a selected skill through a new-chat draft reload',
+    isolatedLaunch('reloads a new-chat skill draft'),
+    async ({ glyph, provider }) => {
+      await glyph.composer.fill('/example');
+      await glyph.page.getByRole('option').filter({ hasText: 'Use for UI fixture examples' }).click();
+      await glyph.reload();
+      provider.enqueue({ chunks: ['Applied.'] });
+      await glyph.sendButton.click();
+      await expect.poll(() => provider.requests.length).toBe(1);
+      expect(JSON.stringify(provider.requests[0].body.input)).toContain('EXAMPLE SKILL BODY');
+    },
+  );
+
   it('reports malformed SKILL.md metadata and missing entry files without suppressing other valid skills', async ({
     glyph,
     provider,

@@ -1555,10 +1555,10 @@ describe(NativeGlyphWorkbenchService, () => {
         text: '',
       });
       const skill = attachment({
-        kind: GlyphContextAttachmentKind.RULE,
-        ruleId: 'selected',
+        kind: GlyphContextAttachmentKind.SKILL,
+        skillId: 'selected',
         path: 'Same',
-        uri: 'glyph-rule:selected',
+        uri: 'glyph-skill:selected',
         contentRevision: 's1',
         text: '',
       });
@@ -1576,7 +1576,7 @@ describe(NativeGlyphWorkbenchService, () => {
         text: '/Same and /Same',
         references: [
           { kind: 'rule', from: 0, to: 5 },
-          { kind: 'rule', from: 10, to: 15 },
+          { kind: 'skill', from: 10, to: 15 },
         ],
       });
       const second = await workbench({ saved: { 'glyph.selectedChat': '', 'glyph.newChatDraft': saved } });
@@ -1586,11 +1586,11 @@ describe(NativeGlyphWorkbenchService, () => {
         '/Same and /Same',
         [],
         expect.objectContaining({
-          manualRuleIds: ['manual', 'selected'],
-
+          manualRuleIds: ['manual'],
+          skillIds: ['selected'],
           referenceSpans: [
             { kind: 'rule', sourceId: 'manual', label: 'Same', revision: 'r1', from: 0, to: 5 },
-            { kind: 'rule', sourceId: 'selected', label: 'Same', revision: 's1', from: 10, to: 15 },
+            { kind: 'skill', sourceId: 'selected', label: 'Same', revision: 's1', from: 10, to: 15 },
           ],
         }),
       );

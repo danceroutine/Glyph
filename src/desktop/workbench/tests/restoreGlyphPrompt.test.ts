@@ -186,7 +186,7 @@ describe(restoreGlyphPrompt, () => {
 it('restores only exact, ordered and bounded local draft selections', () => {
   const text = '  /Use /Use';
   const valid = { kind: 'rule', sourceId: 'a', label: 'Use', revision: 'rev', from: 2, to: 6 };
-  const second = { kind: 'rule', sourceId: 'b', label: 'Use', revision: 'rev2', from: 7, to: 11 };
+  const skill = { kind: 'skill', sourceId: 'b', label: 'Use', revision: 'rev2', from: 7, to: 11 };
   const invalid = [
     null,
     {},
@@ -201,7 +201,7 @@ it('restores only exact, ordered and bounded local draft selections', () => {
     { ...valid, to: 5 },
     { ...valid, from: 1, to: 5 },
   ];
-  const document = restoreGlyphDraftReferences(text, [...invalid, valid, valid, second], () => 'badge');
+  const document = restoreGlyphDraftReferences(text, [...invalid, valid, valid, skill], () => 'badge');
   expect(document.parts.map(part => (part.type === 'text' ? part.text : part.attachment.contentRevision))).toEqual([
     '  ',
     'rev',

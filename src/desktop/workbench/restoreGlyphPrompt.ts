@@ -95,7 +95,7 @@ export function restoreGlyphDraftReferences(text: string, saved: unknown, create
     for (const ref of entries) {
       if (
         !isRecord(ref) ||
-        ref.kind !== 'rule' ||
+        (ref.kind !== 'rule' && ref.kind !== 'skill') ||
         !boundedField(ref.sourceId, 500) ||
         !boundedField(ref.label, 1000) ||
         !boundedField(ref.revision, 500) ||
