@@ -18,8 +18,10 @@ fn inspect(fd: impl std::os::fd::AsFd, replacement: bool) -> io::Result<()> {
     let special = stat.st_mode & 0o7000 != 0;
     #[cfg(target_os = "macos")]
     let special = {
-        // Darwin immutable, append-only, Data Vault, restricted and no-unlink flags.
+        // Mode-only publication cannot restore BSD flags, including Finder visibility and backup preferences.
+        // Access-only inspection still admits ordinary presentation flags.
         special
+            || (replacement && stat.st_flags != 0)
             || stat.st_flags & 0x001e_0086 != 0
             || darwin_acl(std::os::fd::AsRawFd::as_raw_fd(&fd))?
     };
@@ -101,6 +103,31 @@ fn xattr_length(result: rustix::io::Result<usize>) -> io::Result<usize> {
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rejects_mode_only_replacement_of_files_and_folders_with_user_flags() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rule");
+        let file = std::fs::File::create(&path).unwrap();
+        let folder = std::fs::File::open(directory.path()).unwrap();
+        for (path, handle, flag) in [
+            (path.as_path(), &file, "nodump"),
+            (directory.path(), &folder, "hidden"),
+        ] {
+            assert!(std::process::Command::new("/usr/bin/chflags")
+                .arg(flag)
+                .arg(path)
+                .status()
+                .unwrap()
+                .success());
+            assert_access_metadata(handle).unwrap();
+            assert_eq!(
+                assert_replaceable(handle).unwrap_err().kind(),
+                io::ErrorKind::Unsupported
+            );
+        }
+    }
+
     #[test]
     fn refuses_extended_access_controls_on_the_opened_file() {
         assert_eq!(xattr_length(Err(rustix::io::Errno::NOTSUP)).unwrap(), 0);
