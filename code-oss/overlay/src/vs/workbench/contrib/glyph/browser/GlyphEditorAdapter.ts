@@ -10,7 +10,8 @@ import { IInstantiationService } from '#vs/platform/instantiation/common/instant
 import { Progress } from '#vs/platform/progress/common/progress.js';
 import { BulkTextEdits } from '#vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.js';
 import { env } from '#vs/base/common/process.js';
-import { extUri, extUriIgnorePathCase } from '#vs/base/common/resources.js';
+import { normalizeVolumeName, type FilesystemNamePolicy } from '#vs/platform/glyph/workspace/FilesystemNamePolicy.js';
+import { extUri, extUriIgnorePathCase, type IExtUri } from '#vs/base/common/resources.js';
 import { IWorkingCopyService } from '#vs/workbench/services/workingCopy/common/workingCopyService.js';
 import { IPathService } from '#vs/platform/path/common/pathService.js';
 import { URI } from '#vs/base/common/uri.js';
@@ -128,26 +129,41 @@ export class GlyphEditorAdapter extends Disposable {
         case GlyphEditorRequestType.READ_SNAPSHOT:
           return { operationId, ok: true, snapshot: await this.read(request.path, request.maxBytes) };
         case GlyphEditorRequestType.READ_OPEN_SNAPSHOT: {
-          const resource = this.resolve(request.path);
+          const resource = this.resolve(request.path, !request.namePolicy);
           const physical = request.physicalUri ? URI.parse(request.physicalUri, true) : resource;
-          const identity =
-            request.caseSensitive === undefined
-              ? this.uriIdentityService.extUri
-              : request.caseSensitive
-                ? extUri
-                : extUriIgnorePathCase;
+          const identity = filesystemUriIdentity(request, this.uriIdentityService.extUri);
           const candidates = identity.isEqual(resource, physical) ? [resource] : [resource, physical];
           const dirty = candidates.flatMap(candidate => {
             if (!this.textFileService.isDirty(candidate)) return [];
             const model = this.modelService.getModel(candidate);
             return model && identity.isEqual(candidate, model.uri) ? [model] : [];
           });
-          if (
-            dirty.length > 0 &&
-            request.physicalUri &&
-            !identity.isEqual(await this.fileService.realpath(resource), physical)
-          )
-            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+          if (request.namePolicy) {
+            for (const model of this.modelService.getModels()) {
+              if (
+                candidates.some(uri => identity.isEqual(uri, model.uri)) &&
+                this.textFileService.isDirty(model.uri) &&
+                !dirty.includes(model)
+              )
+                dirty.push(model);
+            }
+          }
+          if (dirty.length > 0 && request.physicalUri) {
+            const actual = await this.fileService.realpath(resource);
+            if (!identity.isEqual(actual, physical))
+              throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+            // Check the provider-resolved route here. The host verifies the inode of the returned model URI.
+            if (request.namePolicy) {
+              for (const model of dirty) {
+                if (
+                  !extUri.isEqual(model.uri, resource) &&
+                  !extUri.isEqual(model.uri, physical) &&
+                  !identity.isEqual(await this.fileService.realpath(model.uri), actual)
+                )
+                  throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+              }
+            }
+          }
           const snapshots = await Promise.all(dirty.map(model => this.snapshot(request.path, model, request.maxBytes)));
           if (new Set(snapshots.map(snapshot => snapshot.contentRevision)).size > 1)
             throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
@@ -824,7 +840,7 @@ export class GlyphEditorAdapter extends Disposable {
   private async userWorkingCopiesClean(
     request: Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES }>,
   ): Promise<boolean> {
-    const { kind, name, caseSensitive } = request;
+    const { kind, name } = request;
     if (!name || name === '.' || name === '..' || /[/\\\0]/u.test(name) || (kind === 'rule' && !/\.mdc$/iu.test(name)))
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
     const dirty = this.workingCopyService.dirtyWorkingCopies.flatMap(({ resource }) => {
@@ -837,7 +853,7 @@ export class GlyphEditorAdapter extends Disposable {
     const profile = configured
       ? URI.file(configured)
       : URI.joinPath(this.pathService.userHome({ preferLocal: true }), '.glyph');
-    const identity = caseSensitive ? extUri : extUriIgnorePathCase;
+    const identity = filesystemUriIdentity(request, this.uriIdentityService.extUri);
     const target = (root: URI) => URI.joinPath(root, kind === 'rule' ? 'rules' : 'skills', name);
     const contains = (directory: URI, resource: URI) =>
       kind === 'rule' ? identity.isEqual(resource, directory) : identity.isEqualOrParent(resource, directory);
@@ -858,7 +874,7 @@ export class GlyphEditorAdapter extends Disposable {
     return true;
   }
 
-  private resolve(path: string): URI {
+  private resolve(path: string, canonical = true): URI {
     this.assertWorkspaceBinding();
     const folders = this.workspaceContextService.getWorkspace().folders.filter(folder => folder.uri.scheme === 'file');
     const segments = path.split('/');
@@ -882,9 +898,8 @@ export class GlyphEditorAdapter extends Disposable {
     // Match the model resolver's canonical identity before any cache, occupancy,
     // or byte-budget lookup. A dirty model is authoritative even when the caller
     // uses another spelling on a case-insensitive filesystem.
-    const resource = this.uriIdentityService.asCanonicalUri(
-      URI.joinPath(folder.uri, folders.length > 1 ? segments.join('/') : path),
-    );
+    const logical = URI.joinPath(folder.uri, folders.length > 1 ? segments.join('/') : path);
+    const resource = canonical ? this.uriIdentityService.asCanonicalUri(logical) : logical;
     if (!this.workspaceContextService.isInsideWorkspace(resource)) {
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE);
     }
@@ -1015,4 +1030,23 @@ async function sha256(text: string, byteOrderMark: boolean): Promise<string> {
   const bytes = byteOrderMark ? Uint8Array.from([0xef, 0xbb, 0xbf, ...textBytes]) : textBytes;
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** Apply the owning volume's filename rules to URI paths while preserving scheme and authority. */
+function filesystemUriIdentity(
+  request: { readonly caseSensitive?: boolean; readonly namePolicy?: FilesystemNamePolicy },
+  fallback: IExtUri,
+): Pick<IExtUri, 'isEqual' | 'isEqualOrParent' | 'relativePath'> {
+  const policy = request.namePolicy;
+  const sensitive = policy?.caseSensitive ?? request.caseSensitive;
+  const identity = sensitive === undefined ? fallback : sensitive ? extUri : extUriIgnorePathCase;
+  if (!policy?.normalizesUnicode) return identity;
+  const key = (resource: URI): URI => resource.with({ path: normalizeVolumeName(resource.path, policy) });
+  return {
+    isEqual: (left, right) => (left && right ? identity.isEqual(key(left), key(right)) : left === right),
+    isEqualOrParent: (child, parent) => identity.isEqualOrParent(key(child), key(parent)),
+    // Relative routes must retain their original spelling even when a folded parent changes length.
+    relativePath: (parent, child) =>
+      child.path.split('/').filter(Boolean).slice(parent.path.split('/').filter(Boolean).length).join('/'),
+  };
 }
