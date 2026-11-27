@@ -13,6 +13,7 @@ export class AgentInstructionCatalog {
   constructor(
     private readonly providers: readonly AgentInstructionSourceProvider[],
     readonly paths = defaultInstructionPaths,
+    private readonly beforeDiscovery?: () => void,
   ) {}
 
   get sources(): readonly AgentInstructionSource[] {
@@ -29,6 +30,7 @@ export class AgentInstructionCatalog {
   async refresh(signal?: AbortSignal): Promise<readonly AgentInstructionSource[]> {
     signal?.throwIfAborted();
     const generation = ++this.generation;
+    this.beforeDiscovery?.();
     const discovered = new AgentInstructionSet(
       (await Promise.all(this.providers.map(provider => provider.discover(signal)))).flat(),
       this.paths,

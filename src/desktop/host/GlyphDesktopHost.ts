@@ -40,6 +40,7 @@ interface Connection {
   physicalRoots: Map<GlyphWorkspaceRoot, Set<string>>;
   attachmentQueue: Promise<void>;
   pendingAttachments: number;
+  authorityGeneration: number;
 }
 interface WorkspaceRuntimeRecord {
   readonly runtime: GlyphDesktopWorkspaceRuntime;
@@ -130,6 +131,7 @@ export class GlyphDesktopHost {
         physicalRoots: new Map(),
         attachmentQueue: Promise.resolve(),
         pendingAttachments: 0,
+        authorityGeneration: 0,
       };
       this.sessions.set(key, connection);
     }
@@ -305,11 +307,24 @@ export class GlyphDesktopHost {
       if (!creating) {
         // Factory initialization includes async persistence/native setup. Peers
         // must await the owner's runtime instead of creating a second writer.
+        const generation = connection.authorityGeneration;
+        const rootSelection = JSON.stringify(command.roots);
         creating = this.runtimeFactory
           .create({
             identity: connection.identity,
             roots: command.roots,
             trusted: command.trusted,
+            assertTrusted: () => {
+              this.assertCurrentConnection(connection);
+              if (
+                !connection.trusted ||
+                !connection.authorityKnown ||
+                !connection.send ||
+                generation !== connection.authorityGeneration ||
+                JSON.stringify(connection.roots) !== rootSelection
+              )
+                throw new Error('Workspace trust or ownership changed before disclosure.');
+            },
             emit: event => {
               this.broadcast(key, event);
             },
@@ -494,6 +509,7 @@ export class GlyphDesktopHost {
     if (isOwner && pendingStop) return pendingStop;
     // The reservation can already exist while initialization is still pending.
     if (!connection.attached && !isOwner) return;
+    connection.authorityGeneration++;
     connection.attached = false;
     connection.ready = false;
     connection.canReplay = false;

@@ -204,6 +204,17 @@ impl Fixture {
         environment: &[(&str, &Path)],
         protected: &[&Path],
     ) -> Output {
+        self.run_with_paths(profile, script, environment, protected, &[])
+    }
+
+    fn run_with_paths(
+        &self,
+        profile: &str,
+        script: &str,
+        environment: &[(&str, &Path)],
+        protected: &[&Path],
+        private: &[&Path],
+    ) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_glyph-shell-sandbox"));
         command
             .args(["--profile", profile, "--working-directory"])
@@ -216,6 +227,10 @@ impl Fixture {
                 "--workspace-policy",
                 r#"{"ignoredDirectories":[".git",".next","coverage","dist","node_modules","target"],"sensitiveFileNames":[".git-credentials",".netrc",".npmrc",".pypirc"],"sensitiveFilePrefixes":[".env"],"sensitiveFileExtensions":[".key",".pem",".p12",".pfx"],"allowedFileNames":[".env.example"]}"#,
             ]);
+        for path in private {
+            assert!(path.starts_with(&self.root));
+            command.arg("--private-path").arg(path);
+        }
         for path in protected {
             assert!(path.starts_with(&self.root));
             command.arg("--protected-path").arg(path);
@@ -318,4 +333,31 @@ fn assert_denied(output: &Output, description: &str) {
         !output.status.success(),
         "{description} unexpectedly escaped the sandbox"
     );
+}
+
+#[test]
+#[ignore = "requires the platform sandbox"]
+fn shell_reserves_personal_sources_and_keeps_ordinary_files_readable() {
+    let fixture = Fixture::new();
+    let rules = fixture.workspace.join("personal/rules");
+    fs::create_dir_all(&rules).unwrap();
+    let selected = rules.join("selected.mdc");
+    fs::write(&selected, "personal fixture").unwrap();
+    for profile in ["read-only", "workspace-write"] {
+        let check = |path: &Path| {
+            fixture.run_with_paths(
+                profile,
+                "cat \"$GLYPH_TEST_TARGET\"",
+                &[("GLYPH_TEST_TARGET", path)],
+                &[],
+                &[&rules],
+            )
+        };
+        let ordinary = check(&fixture.workspace.join("ordinary.txt"));
+        assert_success(&ordinary, "ordinary workspace file");
+        assert_eq!(ordinary.stdout, b"ordinary fixture");
+        let reserved = check(&selected);
+        assert_denied(&reserved, "personal source");
+        assert!(reserved.stdout.is_empty());
+    }
 }

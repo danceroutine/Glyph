@@ -1,5 +1,6 @@
 import { workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
 import { z } from 'zod';
+import type { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
 import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 const defaults = {
@@ -34,8 +35,11 @@ export const rustWorkspacePathIndexOptionsSchema = z
 
 export type RustWorkspacePathIndexOptions = z.input<typeof rustWorkspacePathIndexOptionsSchema>;
 
-export type RustWorkspacePathIndexConfiguration = RustWorkspacePathIndexOptions & {
-  readonly accessPolicy?: WorkspaceAccessPolicy;
+export type RustWorkspacePathIndexConfiguration = Omit<
+  RustWorkspacePathIndexOptions,
+  'root' | 'caseSensitive' | 'excludedPaths'
+> & {
+  readonly access: WorkspaceRootAccess;
   /** Authorized, transient editor text keyed by indexed project-relative path. */
   readonly readContentOverrides?: (signal?: AbortSignal) => Promise<Readonly<Record<string, string>>>;
 };

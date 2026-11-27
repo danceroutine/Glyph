@@ -1,3 +1,4 @@
+import { fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -92,7 +93,7 @@ function harness(
       configuration,
       async () => 'oauth-test-token',
       client,
-      tools ?? new ProjectAccess(process.cwd()),
+      tools ?? fixtureProjectAccess(process.cwd()),
       undefined,
       turnContexts,
     ),
@@ -903,7 +904,7 @@ describe(OpenAIProvider, () => {
       );
       const { provider, requests } = harness(
         [() => sse([completed])],
-        new ToolRegistry([...new ProjectAccess(process.cwd()).tools, ...interaction.tools]),
+        new ToolRegistry([...fixtureProjectAccess(process.cwd()).tools, ...interaction.tools]),
       );
 
       await provider.send('hello', options());
@@ -1148,7 +1149,7 @@ describe(OpenAIProvider, () => {
       };
       const { provider, requests } = harness(
         [() => sse([toolResponse]), () => sse([completed]), () => sse([completed])],
-        new ProjectAccess(root),
+        fixtureProjectAccess(root),
       );
 
       const result = await provider.send('What is the answer?', options());
@@ -1249,7 +1250,7 @@ describe(OpenAIProvider, () => {
               emptyTerminal('resp_buffered_message'),
             ]),
         ],
-        new ProjectAccess(root),
+        fixtureProjectAccess(root),
       );
       let text = '';
       const activity: { phase: string; name: string }[] = [];

@@ -37,6 +37,10 @@ export class StartupUserProfile {
     return result;
   }
 
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+
   dispose(): void {
     if (this.descriptor !== undefined) fs.closeSync(this.descriptor);
     this.descriptor = undefined;

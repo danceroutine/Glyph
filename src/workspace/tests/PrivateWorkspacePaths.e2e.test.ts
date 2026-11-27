@@ -1,3 +1,4 @@
+import { fixtureWorkspace, fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -40,8 +41,8 @@ it('keeps host state and transaction files private across containing, overlappin
     [profile, ['SKILL-STATE.JSON', '.Skill-Staging/transaction/journal.json'], []],
     [stagedRoot, [privateName, 'future.md'], []],
   ] as const) {
-    const store = new FileSystemWorkspaceTextStore(root, { caseSensitive: false, accessPolicy: policy });
-    const index = new RustWorkspacePathIndex({ root, binaryPath, caseSensitive: false, accessPolicy: policy });
+    const store = fixtureWorkspace(root, { caseSensitive: false, accessPolicy: policy });
+    const index = fixtureIndex({ root, binaryPath, caseSensitive: false, accessPolicy: policy });
     try {
       await expect(store.list(20)).resolves.toEqual({ files: expected, truncated: false });
       await expect(index.glob('**/*', { limit: 20 })).resolves.toEqual({ files: expected, truncated: false });

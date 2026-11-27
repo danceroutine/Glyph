@@ -5,9 +5,7 @@ import { WorkspacePathIndexError } from '#src/context/search/WorkspacePathIndexE
 import { WorkspacePathIndexFailureReason } from '#src/context/search/WorkspacePathIndexFailureReason.js';
 import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
-import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { ProjectToolName } from './ProjectToolName.ts';
@@ -19,22 +17,17 @@ import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoord
 interface ProjectAccessOptions {
   maxFiles?: number;
   maxFileBytes?: number;
-  excludedPaths?: string[];
-  accessPolicy?: WorkspaceAccessPolicy;
 }
 
 const defaults = {
   maxFiles: 2_000,
   maxFileBytes: 512 * 1024,
-  excludedPaths: [],
 } as const;
 
 const projectAccessOptionsSchema = z
   .object({
     maxFiles: z.number().int().positive().default(defaults.maxFiles),
     maxFileBytes: z.number().int().positive().default(defaults.maxFileBytes),
-    excludedPaths: z.array(z.string().min(1)).default([...defaults.excludedPaths]),
-    accessPolicy: z.instanceof(WorkspaceAccessPolicy).default(() => new WorkspaceAccessPolicy()),
   })
   .strict();
 
@@ -131,17 +124,13 @@ type ReadArguments = z.infer<typeof readProjectFileArguments>;
 export class ProjectAccess {
   private readonly options: ResolvedProjectAccessOptions;
 
-  private readonly workspace: WorkspaceTextStore;
   constructor(
-    root: string,
+    private readonly workspace: Pick<WorkspaceTextStore, 'read' | 'normalizePath'>,
+    private readonly pathIndex: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
     options: ProjectAccessOptions = {},
-    workspace?: WorkspaceTextStore,
-    private readonly pathIndex?: Pick<WorkspacePathIndex, 'glob'> & Partial<Pick<WorkspacePathIndex, 'searchContents'>>,
     private readonly turnContexts?: Pick<TurnContextCoordinator, 'disclosePaths'>,
   ) {
-    const { maxFiles, maxFileBytes, excludedPaths, accessPolicy } = projectAccessOptionsSchema.parse(options);
-    this.options = { maxFiles, maxFileBytes, excludedPaths, accessPolicy };
-    this.workspace = workspace ?? new FileSystemWorkspaceTextStore(root, { excludedPaths, accessPolicy });
+    this.options = projectAccessOptionsSchema.parse(options);
   }
 
   get tools(): readonly Tool[] {
@@ -173,7 +162,7 @@ export class ProjectAccess {
         execute: (input, signal, context) => this.execute(ProjectToolName.READ_FILE, input, signal, context),
       },
     ];
-    if (this.pathIndex?.searchContents)
+    if (this.pathIndex.searchContents)
       tools.push({
         namespace: ProjectToolNamespace.PROJECT,
         name: ProjectToolName.SEARCH_CONTENTS,
@@ -254,7 +243,7 @@ export class ProjectAccess {
     signal?: AbortSignal,
   ) {
     const pathIndex = this.pathIndex;
-    if (!pathIndex?.searchContents) throw new Error('Native project content search is unavailable.');
+    if (!pathIndex.searchContents) throw new Error('Native project content search is unavailable.');
     return pathIndex.searchContents(pattern, {
       ...options,
       path: options.path === null ? null : this.workspace.normalizePath(options.path),
@@ -268,14 +257,11 @@ export class ProjectAccess {
   ): Promise<{ files: string[]; truncated: boolean }> {
     signal?.throwIfAborted();
     const normalizedTarget = targetDirectory === null ? undefined : this.workspace.normalizePath(targetDirectory);
-    if (this.pathIndex) {
-      return this.pathIndex.glob(globPattern, {
-        ...(normalizedTarget === undefined ? {} : { targetDirectory: normalizedTarget }),
-        limit: this.options.maxFiles,
-        ...(signal ? { signal } : {}),
-      });
-    }
-    return this.workspace.list(this.options.maxFiles, globPattern, normalizedTarget);
+    return this.pathIndex.glob(globPattern, {
+      ...(normalizedTarget === undefined ? {} : { targetDirectory: normalizedTarget }),
+      limit: this.options.maxFiles,
+      ...(signal ? { signal } : {}),
+    });
   }
 
   private async readFile({ path, start_line: requestedStart, end_line: requestedEnd }: ReadArguments): Promise<{

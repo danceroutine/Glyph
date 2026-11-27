@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
 import { SkillToolRuntime } from '#src/skills/SkillToolRuntime.js';
@@ -160,7 +160,7 @@ describe(FileSkillDiscoveryProvider, () => {
     const provider = new FileSkillDiscoveryProvider({
       origin: { id: 'a', label: 'a', scope: 'project', compatibility: 'glyph' },
       directory: '.glyph/skills',
-      workspace: new FileSystemWorkspaceTextStore(fixture.root, { caseSensitive: false }),
+      workspace: fixtureWorkspace(fixture.root, { caseSensitive: false }),
       listFiles: async () => ({ files: [], truncated: false }),
       uriForPath: path => path,
       refreshIndex: async () => {},
@@ -293,7 +293,7 @@ describe(FileSkillDiscoveryProvider, () => {
       await fixture.write(path, manifest());
       const exact = 'Exact/.glyph/skills/example/SKILL.md';
       await fixture.write(exact, manifest());
-      const workspace = new FileSystemWorkspaceTextStore(fixture.root, { caseSensitive });
+      const workspace = fixtureWorkspace(fixture.root, { caseSensitive });
       const provider = new FileSkillDiscoveryProvider({
         origin: { id: 'one', label: 'One', scope: 'project', compatibility: 'glyph' },
         directory: '.glyph/skills',
@@ -451,7 +451,7 @@ describe(FileSkillDiscoveryProvider, () => {
 async function skillFixture() {
   const root = await mkdtemp(join(tmpdir(), 'glyph-skill-package-'));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
-  const store = new FileSystemWorkspaceTextStore(root);
+  const store = fixtureWorkspace(root);
   const refreshIndex = vi.fn(async () => {});
   return {
     root,

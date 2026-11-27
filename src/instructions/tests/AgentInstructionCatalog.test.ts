@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,9 +26,7 @@ async function fixture() {
   await writeFile(join(root, 'AGENTS.md'), 'root guidance');
   await writeFile(join(root, 'src', 'AGENTS.md'), 'source guidance');
   await writeFile(join(root, 'docs', 'AGENTS.md'), 'docs guidance');
-  const catalog = new AgentInstructionCatalog([
-    new AgentsMdInstructionProvider(new FileSystemWorkspaceTextStore(root)),
-  ]);
+  const catalog = new AgentInstructionCatalog([new AgentsMdInstructionProvider(fixtureWorkspace(root))]);
   return { root, catalog };
 }
 
@@ -121,7 +120,7 @@ describe(AgentInstructionCatalog, () => {
     await writeFile(join(root, 'outside.md'), 'outside');
     await symlink(join(root, 'outside.md'), join(root, 'linked', 'AGENTS.md'));
     const catalog = new AgentInstructionCatalog([
-      new AgentsMdInstructionProvider(new FileSystemWorkspaceTextStore(root), { maxBytes: 3 }),
+      new AgentsMdInstructionProvider(fixtureWorkspace(root), { maxBytes: 3 }),
     ]);
 
     expect((await catalog.refresh()).map(source => source.path)).toEqual(['AGENTS.md']);

@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { Duplex, PassThrough } from 'node:stream';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -52,7 +53,7 @@ describe(TerminalEditReviewer, () => {
       const state = await mkdtemp(join(tmpdir(), 'terminal-review-state-'));
       paths.push(root, state);
       await writeFile(join(root, 'file.ts'), 'const answer: number = 1;\n');
-      const workspace = new FileSystemWorkspaceTextStore(root);
+      const workspace = fixtureWorkspace(root);
       const base = await workspace.read('file.ts');
       const proposals = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
       const proposal = await proposals.proposeStructured({
@@ -106,7 +107,7 @@ describe(TerminalEditReviewer, () => {
         'a\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nfar-away-context\nline 9\nline 10\nz\n',
       );
       await writeFile(join(root, 'b.txt'), 'b\n');
-      const workspace = new FileSystemWorkspaceTextStore(root);
+      const workspace = fixtureWorkspace(root);
       const [a, b] = await Promise.all([workspace.read('a.txt'), workspace.read('b.txt')]);
       const proposals = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
       const proposal = await proposals.proposeStructured({
@@ -206,7 +207,7 @@ describe(TerminalEditReviewer, () => {
       const state = await mkdtemp(join(tmpdir(), 'terminal-stale-state-'));
       paths.push(root, state);
       await writeFile(join(root, 'file.txt'), 'base');
-      const workspace = new FileSystemWorkspaceTextStore(root);
+      const workspace = fixtureWorkspace(root);
       const base = await workspace.read('file.txt');
       const proposals = new EditProposalService(workspace, new JsDiffTextDiffer(), configuration);
       const proposal = await proposals.proposeStructured({

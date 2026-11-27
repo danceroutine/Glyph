@@ -1,25 +1,15 @@
-import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
-import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
+import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 
 /** Reconcile only the activated package's bounded inventory so a newly added resource cannot be omitted by watcher lag. */
 export async function listSkillPackageFiles(
-  workspace: Pick<FileSystemWorkspaceTextStore, 'resolvePath' | 'caseSensitive'>,
+  workspace: Pick<FileSystemWorkspaceTextStore, 'resolvePath'>,
   directory: string,
-  binaryPath: string,
-  respectGitIgnore: boolean,
+  createIndex: (root: string, maxFiles: number) => Pick<WorkspacePathIndex, 'refresh' | 'glob' | 'dispose'>,
   signal?: AbortSignal,
-  accessPolicy?: WorkspaceAccessPolicy,
 ) {
   const root = await workspace.resolvePath(directory);
-  const index = new RustWorkspacePathIndex({
-    root,
-    ...(accessPolicy ? { accessPolicy } : {}),
-    binaryPath,
-    caseSensitive: workspace.caseSensitive,
-    maxFiles: 257,
-    respectGitIgnore,
-  });
+  const index = createIndex(root, 257);
   try {
     const state = await index.refresh(signal);
     if (state.truncated) return { files: [], truncated: true };

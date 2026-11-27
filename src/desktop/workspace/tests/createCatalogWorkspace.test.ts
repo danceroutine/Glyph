@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdtemp, rm, writeFile, rename } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'glyph-catalog-read-'));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   await writeFile(join(root, 'AGENTS.md'), 'Disk');
-  const disk = new FileSystemWorkspaceTextStore(root);
+  const disk = fixtureWorkspace(root);
   const request = vi.fn(async (): Promise<GlyphEditorResponse> => ({ operationId: 'read', ok: true }));
   const workspace = createCatalogWorkspace(disk, disk, request);
   return { root, disk, request, workspace };

@@ -1,3 +1,4 @@
+import { fixtureWorkspace, fixtureIndex, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -47,8 +48,8 @@ describe(ProjectAccess, () => {
         { name: 'web', path: webRoot },
       ],
     };
-    const apiStore = new FileSystemWorkspaceTextStore(apiRoot);
-    const webStore = new FileSystemWorkspaceTextStore(webRoot);
+    const apiStore = fixtureWorkspace(apiRoot);
+    const webStore = fixtureWorkspace(webRoot);
     const workspace = new MultiRootWorkspaceTextStore(context, [
       { name: 'api', store: apiStore },
       { name: 'web', store: webStore },
@@ -56,7 +57,7 @@ describe(ProjectAccess, () => {
     const index = new MultiRootWorkspacePathIndex(context.id, [
       {
         name: 'api',
-        index: new RustWorkspacePathIndex({
+        index: fixtureIndex({
           binaryPath,
           root: apiRoot,
           cachePath: join(state, 'api.bin'),
@@ -65,7 +66,7 @@ describe(ProjectAccess, () => {
       },
       {
         name: 'web',
-        index: new RustWorkspacePathIndex({
+        index: fixtureIndex({
           binaryPath,
           root: webRoot,
           cachePath: join(state, 'web.bin'),
@@ -73,7 +74,7 @@ describe(ProjectAccess, () => {
         }),
       },
     ]);
-    const access = new ProjectAccess(apiRoot, {}, workspace, index);
+    const access = fixtureProjectAccess(apiRoot, {}, workspace, index);
 
     try {
       await index.initialize();

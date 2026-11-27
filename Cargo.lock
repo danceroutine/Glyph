@@ -194,6 +194,8 @@ dependencies = [
 name = "glyph-shell-sandbox"
 version = "0.1.0"
 dependencies = [
+ "glyph-filesystem-metadata",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

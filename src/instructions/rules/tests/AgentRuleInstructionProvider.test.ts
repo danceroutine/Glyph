@@ -1,3 +1,4 @@
+import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { pathToFileURL } from 'node:url';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
@@ -29,7 +30,7 @@ async function fixture() {
     mkdir(join(root, 'packages', 'api', '.cursor', 'rules'), { recursive: true }),
     mkdir(join(root, 'packages', 'api', 'docs'), { recursive: true }),
   ]);
-  return { root, workspace: new FileSystemWorkspaceTextStore(root) };
+  return { root, workspace: fixtureWorkspace(root) };
 }
 
 describe(AgentRuleInstructionProvider, () => {
@@ -509,7 +510,7 @@ it('preserves distinct source identities on a case-sensitive project filesystem'
   const paths = new InstructionPaths(true, new WorkspaceSourceRoutes([{ name: 'App', path: root }]));
   await mkdir(join(root, '.glyph/rules'), { recursive: true });
   await writeFile(join(root, '.glyph/rules/Rule.mdc'), 'Rules');
-  const provider = new AgentRuleInstructionProvider(new FileSystemWorkspaceTextStore(root), {
+  const provider = new AgentRuleInstructionProvider(fixtureWorkspace(root), {
     kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
     directory: '.glyph',
     paths,

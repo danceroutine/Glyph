@@ -1,3 +1,4 @@
+import { fixtureWorkspace, fixtureIndex } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
@@ -20,7 +21,7 @@ describe('Native instruction discovery', () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-rules-casing-'));
     await mkdir(join(root, 'Src/.GLYPH/RULES'), { recursive: true });
     await writeFile(join(root, 'Src/.GLYPH/RULES/Style.MDC'), 'Use clear names.');
-    const index = new RustWorkspacePathIndex({
+    const index = fixtureIndex({
       root,
       caseSensitive: false,
       binaryPath: resolve(
@@ -34,7 +35,7 @@ describe('Native instruction discovery', () => {
     });
     const paths = new InstructionPaths(false);
     const provider = new AgentRuleInstructionProvider(
-      new FileSystemWorkspaceTextStore(root),
+      fixtureWorkspace(root),
       { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', paths },
       (limit, pattern) => index.glob(pattern, { limit }),
     );
@@ -53,7 +54,7 @@ describe('Native instruction discovery', () => {
       const catalog = { refresh: vi.fn() };
       const files = { refresh: vi.fn(), assertReplaceableMetadata: vi.fn() };
       const metadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
-      const manager = new UserAgentRuleManager(new FileSystemWorkspaceTextStore(root), catalog, files, metadata);
+      const manager = new UserAgentRuleManager(fixtureWorkspace(root), catalog, files, metadata);
       await expect(manager.create('Example', 'model', 'Local fixture')).rejects.toThrow('access controls');
       expect(await readdir(rules)).toEqual([]);
       expect(catalog.refresh).not.toHaveBeenCalled();
@@ -64,8 +65,8 @@ describe('Native instruction discovery', () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-user-rules-index-'));
     const rulesRoot = join(root, 'rules');
     await mkdir(join(rulesRoot, 'nested'), { recursive: true });
-    const workspace = new FileSystemWorkspaceTextStore(root);
-    const index = new RustWorkspacePathIndex({
+    const workspace = fixtureWorkspace(root);
+    const index = fixtureIndex({
       root: rulesRoot,
       binaryPath: resolve(
         'target',
@@ -205,8 +206,8 @@ describe('Native instruction discovery', () => {
 async function instructionFixture() {
   const root = await mkdtemp(join(tmpdir(), 'glyph-instruction-index-'));
   const excludedPaths = ['private'];
-  const workspace = new FileSystemWorkspaceTextStore(root, { excludedPaths });
-  const index = new RustWorkspacePathIndex({
+  const workspace = fixtureWorkspace(root, { excludedPaths });
+  const index = fixtureIndex({
     root,
     excludedPaths,
     binaryPath: resolve(
