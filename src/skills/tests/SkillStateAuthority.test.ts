@@ -40,6 +40,22 @@ describe(SkillStateStore, () => {
       else await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
     },
   );
+  it('reconciles a committed toggle when the window closes before a failed rename acknowledgement', async () => {
+    const { path, state } = await fixture();
+    await state.initialize();
+    const owner = new AbortController();
+    const replace = state.preferences.replace.bind(state.preferences);
+    vi.spyOn(state.preferences, 'replace').mockImplementationOnce(async (...args) => {
+      await replace(...args);
+      owner.abort(new Error('Window closed'));
+      throw new Error('Rename acknowledgement lost');
+    });
+
+    await state.setEnabled('example', true, owner.signal);
+    expect(state.enabled.get('example')).toBe(true);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ enabled: { example: true } });
+  });
+
   it('retains owner-controlled traversable profiles but refuses foreign-writable profiles before creating locks', async () => {
     const { root, state } = await fixture();
     await chmod(root, 0o755);
