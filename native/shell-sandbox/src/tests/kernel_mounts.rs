@@ -111,6 +111,44 @@ fn workspace_bindings_pin_the_file_and_enforce_the_selected_write_permission() {
     fs::write(&writable_target, b"saved edit").unwrap();
     assert_eq!(fs::read(&writable_source).unwrap(), b"saved edit");
     unmount(&writable_target, UnmountFlags::empty()).unwrap();
+
+    let resource = root.join("template");
+    fs::write(&resource, b"pinned resource").unwrap();
+    fs::set_permissions(&resource, fs::Permissions::from_mode(0o640)).unwrap();
+    (&mut view)
+        .file(
+            &resource,
+            &fs::File::open(&resource).unwrap().into(),
+            false,
+            Scope::Resource,
+        )
+        .unwrap();
+    let copy = view.target(&resource);
+    assert_eq!(fs::read(&copy).unwrap(), b"pinned resource");
+    assert_eq!(fs::metadata(&copy).unwrap().mode() & 0o777, 0o640);
+    assert_ne!(
+        fs::metadata(&copy).unwrap().ino(),
+        fs::metadata(&resource).unwrap().ino()
+    );
+
+    // A private runtime root produces a sealed, empty overlay. A reserved run
+    // name is omitted before any overlay can be allocated.
+    fs::create_dir(&view.scratch).unwrap();
+    let reserved = root.join(".glyph-skill-run");
+    fs::create_dir(&reserved).unwrap();
+    assert!((&mut view)
+        .runtime(&reserved, &reserved, &request, &[])
+        .unwrap()
+        .is_empty());
+    let hidden = root.join("private-runtime");
+    fs::create_dir(&hidden).unwrap();
+    let arguments = (&mut view)
+        .runtime(&hidden, &hidden, &request, std::slice::from_ref(&hidden))
+        .unwrap();
+    assert!(!arguments.is_empty());
+    assert_eq!(fs::read_dir(&view.target).unwrap().count(), 0);
+    assert!(fs::write(view.target.join("denied"), b"fixture").is_err());
+    unmount(&view.target, UnmountFlags::empty()).unwrap();
 }
 
 #[test]
