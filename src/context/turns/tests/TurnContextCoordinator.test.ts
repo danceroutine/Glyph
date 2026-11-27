@@ -160,6 +160,29 @@ describe(TurnContextCoordinator, () => {
     expect(turn.disclosePaths(['api/SRC/ENTRY.TS'])?.sources.map(value => value.id)).toEqual(['glob', 'literal']);
   });
 
+  it('blocks only attachments, reads and mutations below an unreadable guidance source', async () => {
+    const sourcePath = 'src/AGENTS.md';
+    for (const message of [undefined, 'Too large']) {
+      const bad = {
+        ...source('unreadable', AgentInstructionSourceKind.AGENTS_MD, 'src'),
+        path: sourcePath,
+        status: AgentInstructionSourceStatus.ERROR,
+        ...(message ? { message } : {}),
+      };
+      const root = source('root', AgentInstructionSourceKind.AGENTS_MD, '.');
+      const coordinator = new TurnContextCoordinator(
+        new AgentInstructionCatalog([{ discover: async () => [root, bad] }]),
+      );
+      await expect(coordinator.beginTurn({ turnId: 'attached', attachmentPaths: ['src/file'] })).rejects.toThrow(
+        sourcePath,
+      );
+      const turn = await coordinator.beginTurn({ turnId: 'turn', attachmentPaths: ['src-other/file'] });
+      expect(turn.initialEnvelope().sources).toHaveLength(1);
+      expect(() => coordinator.discloseAttachments('turn', ['src/test'])).toThrow(sourcePath);
+      expect(() => coordinator.disclosePaths('turn', ['src/file'])).toThrow(sourcePath);
+      expect(coordinator.disclosePaths('turn', ['docs/file'])).toBeUndefined();
+    }
+  });
   it('identifies unreadable required guidance before starting a turn', async () => {
     const bad = {
       ...source('agents_md:AGENTS.md', AgentInstructionSourceKind.AGENTS_MD, '.'),

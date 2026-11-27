@@ -21,7 +21,7 @@ export class AgentInstructionSet {
   /** Effective sources in precedence order, including disabled sources and discovery errors. */
   readonly sources: readonly AgentInstructionSource[];
   readonly rootGuidance: readonly AgentInstructionSource[];
-  private readonly activeByScope = new Map<string, AgentInstructionSource[]>();
+  private readonly byScope = new Map<string, AgentInstructionSource[]>();
 
   /** Native project rules shadow same-name Cursor rules only within the same scope. */
   constructor(
@@ -52,11 +52,11 @@ export class AgentInstructionSet {
         paths.isWorkspaceRoot(source.scope),
     );
     for (const source of this.sources) {
-      if (source.status !== AgentInstructionSourceStatus.ACTIVE) continue;
+      if (source.status !== AgentInstructionSourceStatus.ACTIVE && !isUnavailableGuidance(source)) continue;
       const scope = paths.key(source.scope);
-      const bucket = this.activeByScope.get(scope);
+      const bucket = this.byScope.get(scope);
       if (bucket) bucket.push(source);
-      else this.activeByScope.set(scope, [source]);
+      else this.byScope.set(scope, [source]);
     }
   }
 
@@ -67,17 +67,28 @@ export class AgentInstructionSet {
    * Visits only ancestor scope buckets, with O(depth + matches) lookup work instead
    * of scanning the catalog. The returned array does not expose the stored buckets.
    */
-  forPath(path: string): readonly AgentInstructionSource[] {
-    const result = [...(this.activeByScope.get('.') ?? [])];
+  forPath(path: string, includeUnavailableGuidance = false): readonly AgentInstructionSource[] {
+    const result = [...(this.byScope.get('.') ?? [])];
     let scope = '';
     for (const segment of this.paths.key(path).split('/')) {
       scope = scope ? `${scope}/${segment}` : segment;
       if (scope === '.') continue;
-      const bucket = this.activeByScope.get(scope);
+      const bucket = this.byScope.get(scope);
       if (bucket) for (const source of bucket) result.push(source);
     }
-    return result;
+    return includeUnavailableGuidance
+      ? result
+      : result.filter(source => source.status === AgentInstructionSourceStatus.ACTIVE);
   }
+}
+
+/** A catalog count diagnostic describes partial nested discovery. A failed source or lookup carries mandatory scope. */
+export function isUnavailableGuidance(source: AgentInstructionSource): boolean {
+  return (
+    source.kind === AgentInstructionSourceKind.AGENTS_MD &&
+    source.status === AgentInstructionSourceStatus.ERROR &&
+    source.id !== 'agents_md:discovery-limit'
+  );
 }
 
 function compatibilityKey(source: AgentInstructionSource, scope: string): string {

@@ -965,7 +965,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(glob).toHaveBeenCalledTimes(5);
       expect(glob.mock.calls).toEqual(
         expect.arrayContaining([
-          ['*.mdc', { limit: 10_000 }],
+          ['*.mdc', { limit: 10_000, rootFilesOnly: true }],
           ['AGENTS.md', { limit: 1, rootFilesOnly: true }],
           ['**/?*/AGENTS.md', { limit: 9_999 }],
           ['**/.glyph/rules/*.mdc', { limit: 10_000 }],

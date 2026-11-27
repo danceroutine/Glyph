@@ -21,8 +21,8 @@ describe(listInstructionFilesAcrossRoots, () => {
     const index = {
       glob: vi
         .fn()
-        .mockResolvedValueOnce({ files: ['AGENTS.md'], truncated: true })
-        .mockResolvedValueOnce({ files: ['src/AGENTS.md'], truncated: false }),
+        .mockResolvedValueOnce({ files: ['AGENTS.md'], truncated: false })
+        .mockResolvedValueOnce({ files: ['src/AGENTS.md'], truncated: true }),
     };
     await expect(listInstructionFilesAcrossRoots([{ name: 'one', index }], 2, '**/AGENTS.md')).resolves.toEqual({
       files: ['AGENTS.md', 'src/AGENTS.md'],
@@ -63,9 +63,41 @@ describe(listInstructionFilesAcrossRoots, () => {
     expect(index.glob).not.toHaveBeenCalled();
   });
 
-  it('propagates native failure for the provider to report without a filesystem fallback', async () => {
-    const error = new Error('Index unavailable');
-    const index = { glob: vi.fn().mockRejectedValue(error) };
-    await expect(listInstructionFilesAcrossRoots([{ name: 'one', index }], 10, '**/AGENTS.md')).rejects.toBe(error);
+  it('reports required lookup failures per root and retains healthy roots', async () => {
+    const glob = vi
+      .fn()
+      .mockResolvedValueOnce({ files: ['AGENTS.md'], truncated: false })
+      .mockResolvedValueOnce({ files: ['nested/AGENTS.md'], truncated: false });
+    const roots = [
+      { name: 'healthy', index: { glob } },
+      { name: 'broken', index: { glob: vi.fn().mockRejectedValue(new Error('Unavailable')) } },
+      { name: 'unknown', index: { glob: vi.fn().mockRejectedValue('failed') } },
+      { name: 'incomplete', index: { glob: vi.fn().mockResolvedValue({ files: [], truncated: true }) } },
+      {
+        name: 'nested',
+        index: { glob: vi.fn().mockResolvedValueOnce({ files: [], truncated: false }).mockRejectedValue('failed') },
+      },
+      {
+        name: 'other',
+        index: {
+          glob: vi
+            .fn()
+            .mockResolvedValueOnce({ files: [], truncated: false })
+            .mockRejectedValue(new Error('Nested unavailable')),
+        },
+      },
+    ];
+    expect(await listInstructionFilesAcrossRoots(roots, 10, '**/AGENTS.md')).toEqual({
+      files: ['healthy/AGENTS.md', 'healthy/nested/AGENTS.md'],
+      truncated: false,
+      failures: [
+        { path: 'broken/AGENTS.md', message: 'Unavailable' },
+        { path: 'unknown/AGENTS.md', message: 'Root guidance lookup failed.' },
+        { path: 'incomplete/AGENTS.md', message: 'Root guidance lookup is incomplete.' },
+        { path: 'nested/AGENTS.md', message: 'Nested guidance lookup failed.' },
+        { path: 'other/AGENTS.md', message: 'Nested unavailable' },
+      ],
+    });
+    await expect(listInstructionFilesAcrossRoots([roots[1]!], 10, '**/*.mdc')).rejects.toThrow('Unavailable');
   });
 });

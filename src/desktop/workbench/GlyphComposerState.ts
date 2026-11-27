@@ -336,10 +336,31 @@ export class GlyphComposerState {
 /** Both queued and direct sends preserve the same exact captures and UTF-16 spans. */
 async function sendDocument(document: GlyphPromptDocument, send: SendMessage): Promise<void> {
   const draft = toGlyphPromptText(document.parts);
+  const { attachments, attachmentSpans, referenceSpans } = captureGlyphPrompt(
+    document,
+    draft.trimStart().length - draft.length,
+  );
+  // Both direct and queued submissions carry options from stamp().
+  const {
+    manualRuleIds: _ruleIds,
+    referenceSpans: _references,
+    attachmentSpans: _spans,
+    ...options
+  } = document.options!;
+  await send(draft, attachments, {
+    ...options,
+    ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}),
+    ...(referenceSpans.length > 0
+      ? { referenceSpans, manualRuleIds: [...new Set(referenceSpans.map(ref => ref.sourceId))] }
+      : {}),
+  });
+}
+
+/** Collect source identities and exact UTF-16 mention positions, independently of selected text or captured file bodies. */
+export function captureGlyphPrompt(document: GlyphPromptDocument, offset = 0) {
   const attachments: GlyphContextAttachment[] = [];
   const attachmentSpans: { from: number; to: number }[] = [];
   const referenceSpans: ChatReferenceSpan[] = [];
-  let offset = -(draft.length - draft.trimStart().length);
   for (const part of document.parts) {
     const from = offset;
     offset += toGlyphPromptText([part]).length;
@@ -360,18 +381,5 @@ async function sendDocument(document: GlyphPromptDocument, send: SendMessage): P
       attachmentSpans.push({ from, to: offset });
     }
   }
-  // Both direct and queued submissions carry options from stamp().
-  const {
-    manualRuleIds: _ruleIds,
-    referenceSpans: _references,
-    attachmentSpans: _spans,
-    ...options
-  } = document.options!;
-  await send(draft, attachments, {
-    ...options,
-    ...(attachmentSpans.length > 0 ? { attachmentSpans } : {}),
-    ...(referenceSpans.length > 0
-      ? { referenceSpans, manualRuleIds: [...new Set(referenceSpans.map(ref => ref.sourceId))] }
-      : {}),
-  });
+  return { attachments, attachmentSpans, referenceSpans };
 }

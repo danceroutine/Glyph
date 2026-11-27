@@ -9,7 +9,7 @@ export async function listUserRuleFiles(
   index: Pick<WorkspacePathIndex, 'glob'>,
   maxFiles: number,
 ): Promise<{ files: string[]; truncated: boolean }> {
-  const result = await index.glob('*.mdc', { limit: maxFiles });
+  const result = await index.glob('*.mdc', { limit: maxFiles, rootFilesOnly: true });
   return {
     files: result.files.filter(path => !path.includes('/')).map(path => `rules/${path}`),
     truncated: result.truncated,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { restoreGlyphPrompt } from '#src/desktop/workbench/restoreGlyphPrompt.js';
+import { restoreGlyphDraftReferences, restoreGlyphPrompt } from '#src/desktop/workbench/restoreGlyphPrompt.js';
 import { GlyphComposerState } from '#src/desktop/workbench/GlyphComposerState.js';
 import { toGlyphPromptText, type GlyphPromptPart } from '#src/desktop/workbench/GlyphPromptDocument.js';
 import {
@@ -123,4 +123,33 @@ describe(restoreGlyphPrompt, () => {
       expect(restored.parts.at(-1)).toMatchObject({ type: 'attachment', attachment: { ruleId: 'rule' } });
     }
   });
+});
+
+it('restores only exact, ordered and bounded local draft selections', () => {
+  const text = '  /Use /Use';
+  const valid = { kind: 'rule', sourceId: 'a', label: 'Use', revision: 'rev', from: 2, to: 6 };
+  const second = { kind: 'rule', sourceId: 'b', label: 'Use', revision: 'rev2', from: 7, to: 11 };
+  const invalid = [
+    null,
+    {},
+    { ...valid, kind: 'file' },
+    { ...valid, sourceId: '' },
+    { ...valid, sourceId: 'x'.repeat(501) },
+    { ...valid, label: 3 },
+    { ...valid, revision: null },
+    { ...valid, from: '2' },
+    { ...valid, from: 0.5 },
+    { ...valid, from: -1 },
+    { ...valid, to: 5 },
+    { ...valid, from: 1, to: 5 },
+  ];
+  const document = restoreGlyphDraftReferences(text, [...invalid, valid, valid, second], () => 'badge');
+  expect(document.parts.map(part => (part.type === 'text' ? part.text : part.attachment.contentRevision))).toEqual([
+    '  ',
+    'rev',
+    ' ',
+    'rev2',
+  ]);
+  for (const corrupt of [undefined, Array.from({ length: 257 }, () => valid)])
+    expect(restoreGlyphDraftReferences(text, corrupt, () => 'badge').parts).toEqual([{ type: 'text', text }]);
 });

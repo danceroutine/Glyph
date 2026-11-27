@@ -214,7 +214,16 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     if (maxBytes <= 0 || (!dependencies && --budget.reads < 0))
       throw new Error('Instruction discovery read budget exhausted.');
     const snapshot = dependencies
-      ? await this.workspace.readOptional(path, { maxBytes })
+      ? await this.workspace.readOptional(path, { maxBytes }).catch(async (error: unknown) => {
+          // Preserve repair notifications only for paths the workspace authorizes independently of their contents.
+          try {
+            await this.workspace.canonicalPath(path);
+            dependencies.add(path);
+          } catch {
+            // A forbidden reference must not cause a watch outside this rule's authority.
+          }
+          throw error;
+        })
       : await this.workspace.read(path, { maxBytes });
     dependencies?.add(path);
     if (!snapshot) throw new Error(`Missing rule reference: ${path}`);
