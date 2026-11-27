@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
+import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
+import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
+import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
+import {
+  AgentInstructionSourceKind,
+  AgentInstructionSourceStatus,
+  AgentInstructionActivationMode,
+} from '#src/instructions/AgentInstructionSource.js';
+import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import { SkillLifecycleToolRuntime } from '#src/skills/SkillLifecycleToolRuntime.js';
 import { SkillTurnContext } from '#src/skills/SkillContextContributor.js';
@@ -96,6 +104,48 @@ describe(SkillLifecycleToolRuntime, () => {
     expect(approve).toHaveBeenCalledOnce();
     expect(manager.apply).toHaveBeenCalledOnce();
     expect(manager.discard).toHaveBeenCalledTimes(2);
+  });
+  it('discloses a populated directory’s literal rule before approving its package', async () => {
+    const { location, catalog, state } = await aSkillLifecycle();
+    const manager = new SkillPackageManager([{ ...location, scope: 'project' }], catalog, state);
+    const target = 'skills/example/references';
+    const turns = new TurnContextCoordinator(
+      new AgentInstructionCatalog([
+        {
+          discover: async () => [
+            {
+              id: 'directory',
+              label: 'directory',
+              kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+              path: '.glyph/rules/directory.md',
+              scope: '.',
+              content: 'Review directory changes',
+              revision: 'one',
+              status: AgentInstructionSourceStatus.ACTIVE,
+              activation: AgentInstructionActivationMode.FILE_PATTERN,
+              globs: [target],
+            },
+          ],
+        },
+      ]),
+    );
+    const { approve, context, signal, runner } = fixture();
+    await turns.beginTurn({ turnId: context.turnId, attachmentPaths: [] });
+    const tool = new SkillLifecycleToolRuntime(manager, approve, turns, runner as never).tools[0]!;
+    const input = JSON.stringify({
+      target_id: location.id,
+      replace_id: null,
+      remove_id: null,
+      draft: aSkillDraft().toJSON(),
+    });
+    const first = JSON.parse(await tool.execute(input, signal, context));
+    expect(first).toMatchObject({
+      status: 'INSTRUCTION_CONTEXT_REQUIRED',
+      instructionContext: { sources: [{ id: 'directory' }], activations: [{ paths: [target] }] },
+    });
+    expect(approve).not.toHaveBeenCalled();
+    expect(JSON.parse(await tool.execute(input, signal, context))).toMatchObject({ applied: true });
+    expect(approve).toHaveBeenCalledOnce();
   });
   it('discards the pending preview if instruction disclosure fails before review', async () => {
     const { manager, approve, turns, tool, context, signal } = fixture();
