@@ -1443,6 +1443,31 @@ describe(GlyphEditorAdapter, () => {
       expect(services.bulkEditService.apply).not.toHaveBeenCalled();
     });
 
+    it.each(['typed', 'reopened', 'closed'] as const)(
+      'preserves a working copy that was %s while the host checked its save',
+      async change => {
+        const services = editorServices();
+        const model = services.open('a.ts', 'text');
+        const adapter = createAdapter(services);
+        const before = await adapter.read('a.ts');
+        await applyText(adapter, textMutation(before, 'changed'));
+        const check = async () => {
+          if (change === 'typed') model.write('user draft');
+          else {
+            services.models.splice(0);
+            if (change === 'reopened') {
+              const replacement = services.open('a.ts', 'independent working copy');
+              replacement.version = model.version;
+            }
+          }
+        };
+        await expect(adapter.apply(textMutation(before, 'changed', { save: true }), check)).rejects.toMatchObject({
+          code: GlyphDesktopErrorCode.STALE_DOCUMENT,
+        });
+        expect(services.textFileService.save).not.toHaveBeenCalled();
+      },
+    );
+
     it('keeps an applied edit unsaved if trust changes during the host check for its save', async () => {
       const services = editorServices();
       services.open('a.ts', 'text');

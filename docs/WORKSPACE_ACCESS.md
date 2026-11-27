@@ -27,10 +27,11 @@ receive a snapshot or run a command. Queued requests from the previous port expi
 on disconnect.
 
 When the host asks the workbench to edit a file, the editor RPC router holds
-the root and trust checks for that pending operation. The workbench asks the
-original port to run them again after native file-operation participants finish
-and before applying or saving edits. Completing the RPC or disconnecting the
-port retires its grant.
+the root, source and destination paths, and window authority for that operation.
+The workbench asks the original port to validate those paths again after native
+file-operation participants finish. Before saving, it also checks that the open
+model and its version still match the edit. Completing the RPC or disconnecting
+the port retires its grant, including checks still waiting on the filesystem.
 
 ## Composing a host
 
