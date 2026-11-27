@@ -218,15 +218,9 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     if (this.initialized) return this.initialized;
     if (!this.initializing) {
       const { binaryPath: _, ...configuration } = this.options;
-      const operation = this.request(PathIndexMethod.INITIALIZE, configuration)
-        .then(value => {
-          const result = indexStateSchema.parse(value);
-          this.initialized = result;
-          return result;
-        })
-        .finally(() => {
-          if (this.initializing === operation) this.initializing = undefined;
-        });
+      const operation = this.requestState(PathIndexMethod.INITIALIZE, configuration).finally(() => {
+        if (this.initializing === operation) this.initializing = undefined;
+      });
       this.initializing = operation;
     }
     return withAbortSignal(this.initializing, signal);
@@ -312,15 +306,29 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   async refresh(signal?: AbortSignal): Promise<WorkspacePathIndexState> {
     this.synchronizePolicy();
     if (!this.initialized) return this.initialize(signal);
-    const result = indexStateSchema.parse(await this.request(PathIndexMethod.REFRESH, {}, signal));
-    this.initialized = result;
-    return result;
+    return this.requestState(PathIndexMethod.REFRESH, {}, signal);
   }
 
   dispose(): Promise<void> {
     if (this.disposed) return Promise.resolve();
     this.disposing ??= this.shutdown();
     return this.disposing;
+  }
+
+  private async requestState(
+    method: PathIndexMethod.INITIALIZE | PathIndexMethod.REFRESH,
+    params: unknown,
+    signal?: AbortSignal,
+  ): Promise<WorkspacePathIndexState> {
+    const revision = this.policyRevision;
+    const response = this.request(method, params, signal);
+    const worker = this.process;
+    const result = indexStateSchema.parse(await response);
+    // A decoded reply can resume after another caller rotates the worker or its policy.
+    if (worker !== this.process || revision !== this.accessPolicy.revision)
+      throw new Error('Workspace index changed while loading state. Retry the request.');
+    this.initialized = result;
+    return result;
   }
 
   private async shutdown(): Promise<void> {
