@@ -48,7 +48,7 @@ export class WorkspaceAccessPolicy {
 
   constructor(
     options: WorkspaceAccessPolicyOptions = {},
-    private readonly privatePaths: readonly string[] = [],
+    readonly privatePaths: readonly string[] = [],
   ) {
     const resolved = schema.parse(options);
     // Transaction journals, locks and rollback copies remain host-private under customized policies too.
