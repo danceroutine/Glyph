@@ -52,11 +52,12 @@ it('resolves old physical rule IDs only when the current filesystem identifies a
   const paths = new InstructionPaths(true, routes, true);
   const upper = paths.sourceIdentity(kind, 'API.mdc');
   const lower = paths.sourceIdentity(kind, 'api.mdc');
-  const old = new InstructionPaths(false, routes, true).sourceIdentity(kind, 'API.mdc').id;
+  const { createHash } = await import('node:crypto');
+  const old = kind + ':file:' + createHash('sha256').update('/physical/api.mdc').digest('hex');
   expect(upper.id).not.toBe(lower.id);
   expect(resolveInstructionId([upper, lower], old)).toBeUndefined();
   expect(resolveInstructionId([upper], old)).toBe(upper);
   expect(resolveInstructionId([upper, lower], lower.id)).toBe(lower);
-  expect(new InstructionPaths(true, routes, false).sourceIdentity(kind, 'api.mdc').id).toBe(old);
-  expect(new InstructionPaths(false, routes, false).sourceIdentity(kind, 'API.mdc').id).toBe(old);
+  expect(new InstructionPaths(true, routes, false).sourceIdentity(kind, 'api.mdc').id).toBe(lower.id);
+  expect(new InstructionPaths(false, routes, false).sourceIdentity(kind, 'API.mdc').id).toBe(upper.id);
 });

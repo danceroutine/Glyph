@@ -680,6 +680,27 @@ impl ContextIndexService {
             .read()
             .map_err(|_| ServiceError::internal("The known-path set lock is poisoned."))?;
         let physical = initialized.policy.physical()?;
+        if let Some(query) = crate::catalog_names::InstructionQuery::from_pattern(&params.pattern)
+            .filter(|_| params.target_directory.is_none())
+        {
+            let mut names = crate::catalog_names::CatalogNames::new(&initialized.root);
+            let mut matches = paths.iter().filter(|path| {
+                !physical.excludes(&initialized.root.join(path)) && query.matches(&mut names, path)
+            });
+            let files = matches
+                .by_ref()
+                .take(params.limit as usize)
+                .cloned()
+                .collect();
+            return stable_result(
+                &physical,
+                GlobResult {
+                    files,
+                    truncated: initialized.truncated.load(Ordering::Acquire)
+                        || matches.next().is_some(),
+                },
+            );
+        }
         let mut result = find_matches(
             &paths,
             &params.pattern,
@@ -1128,6 +1149,8 @@ fn glob_root_files(
     let matcher =
         crate::path_glob::compile_matcher(&params.pattern, initialized.policy.case_sensitive)
             .map_err(ServiceError::invalid_request)?;
+    let mut names = crate::catalog_names::CatalogNames::new(&initialized.root);
+    let query = crate::catalog_names::InstructionQuery::from_pattern(&params.pattern);
     let mut files = BTreeSet::new();
     let mut truncated = false;
     if !initialized.policy.exclude_root {
@@ -1145,11 +1168,12 @@ fn glob_root_files(
             {
                 continue;
             }
-            if let Some(name) = entry
-                .file_name()
-                .to_str()
-                .filter(|name| matcher.is_match(name) && !initialized.policy.excludes(name))
-            {
+            if let Some(name) = entry.file_name().to_str().filter(|name| {
+                !initialized.policy.excludes(name)
+                    && query
+                        .as_ref()
+                        .map_or_else(|| matcher.is_match(name), |q| q.matches(&mut names, name))
+            }) {
                 files.insert(name.to_owned());
                 if files.len() > params.limit as usize {
                     files.pop_last();
