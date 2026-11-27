@@ -23,6 +23,7 @@ export interface SkillDiscoveryLocation {
   readonly listFiles: (
     signal?: AbortSignal,
   ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+  readonly includeDirectory?: (directory: string) => boolean;
   readonly packageId?: (directory: string) => string;
   readonly matchesLegacyId?: (directory: string, id: string, budget: { remaining: number }) => boolean;
   readonly uriForPath: (path: string) => string;
@@ -146,7 +147,9 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
         };
       }
     };
-    const ordered = [...directories.values()].toSorted((left, right) => left.directory.localeCompare(right.directory));
+    const ordered = [...directories.values()]
+      .filter(entry => this.location.includeDirectory?.(entry.directory) !== false)
+      .toSorted((left, right) => left.directory.localeCompare(right.directory));
     const descriptors: SkillDescriptor[] = [];
     for (let offset = 0; offset < ordered.length;) {
       const width = Math.min(8, Math.max(1, Math.floor(remainingBytes / maxManifestBytes)));

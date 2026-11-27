@@ -1,3 +1,4 @@
+import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
@@ -33,4 +34,21 @@ it('verifies exactly one stored plain or hashed ID within a shared ancestor budg
   expect(nested.matchesLegacyId(deep, hashed, { remaining: 200 })).toBe(true);
   expect(nested.matchesLegacyId(deep, 'skill-sha256:' + '0'.repeat(64), { remaining: 200 })).toBe(false);
   expect(nested.matchesLegacyId(directory, hashed, budget)).toBe(false);
+});
+
+it('keeps user packages reachable through their former project references across root changes', () => {
+  const profile = new UserSkillDirectory('/repo/sub/.Glyph', false);
+  const source = 'skills/example';
+  const nested = new ProjectSkillIdentity('/repo/sub', '.glyph');
+  const outer = new ProjectSkillIdentity('/repo', '.glyph');
+  expect(profile.ownsStore('/repo/sub/.glyph/skills')).toBe(true);
+  expect(profile.matchesProjectReference(source, nested.forDirectory('.Glyph/' + source), { remaining: 32 })).toBe(
+    true,
+  );
+  const previous = skillPackageId(outer.originId, 'sub/.Glyph/' + source);
+  expect(profile.matchesProjectReference(source, previous, { remaining: 32 })).toBe(true);
+  expect(profile.matchesProjectReference('skills/other', previous, { remaining: 32 })).toBe(false);
+  const distinct = new UserSkillDirectory('/repo/sub/.Glyph', true);
+  expect(distinct.ownsStore('/repo/sub/.glyph/skills')).toBe(false);
+  expect(distinct.matchesProjectReference(source, previous, { remaining: 32 })).toBe(false);
 });
