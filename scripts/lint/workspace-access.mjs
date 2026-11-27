@@ -72,6 +72,7 @@ const restrictedModules = new Map([
   ['fs/promises', filesystem],
   ['child_process', subprocess],
   ['worker_threads', subprocess],
+  ['src/desktop/host/WindowCommandAuthority.ts', new Set(['src/desktop/host/GlyphDesktopHost.ts'])],
   [disk, composition],
   ['src/workspace/WorkspaceRootSelections.ts', composition],
   [contentPolicy, composition],
