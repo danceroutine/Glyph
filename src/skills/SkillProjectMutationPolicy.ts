@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { dirname, posix, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ProjectMutationPolicy } from '#src/editing/proposals/ProjectMutationPolicy.js';
@@ -35,7 +36,24 @@ export class SkillProjectMutationPolicy implements ProjectMutationPolicy {
     for (const root of this.roots) this.addAncestors(root.directory);
   }
 
-  getDenial(canonicalPath: string): string | undefined {
+  getDenial(canonicalPath: string, verifiedPhysicalPath?: string): string | undefined {
+    // Native admission already covers configured stores, marker names and their mounted aliases.
+    // The catalog additionally protects enclosing directories of packages in nested projects.
+    if (verifiedPhysicalPath !== undefined) {
+      const target = statSync(verifiedPhysicalPath, { bigint: true, throwIfNoEntry: false });
+      if (target?.isDirectory()) {
+        const checked = new Set<string>();
+        for (const skill of this.catalog?.skills ?? []) {
+          if (!skill.uri.startsWith('file:')) continue;
+          for (let path = dirname(fileURLToPath(skill.uri)); !checked.has(path); path = dirname(path)) {
+            checked.add(path);
+            const parent = statSync(path, { bigint: true, throwIfNoEntry: false });
+            if (parent?.dev === target.dev && parent.ino === target.ino) return denial;
+          }
+        }
+      }
+      return undefined;
+    }
     const parts = canonicalPath.split('/');
     if (
       parts.some(

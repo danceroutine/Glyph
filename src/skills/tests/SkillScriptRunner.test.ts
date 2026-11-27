@@ -94,7 +94,12 @@ it('requires an explicit root for multi-root user skills and rejects staging ins
     join(f.directory, 'private'),
   );
   await expect(runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal)).rejects.toThrow('explicit root');
+  await rm(f.roots[0]!.directory, { recursive: true });
   await runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'B');
+  await expect(runner.run(skill, 'scripts/task.sh', [], 'chat', f.signal, 'A')).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  await mkdir(f.roots[0]!.directory);
   const single = new SkillScriptRunner(
     { executeProgram: execute },
     [f.roots[0]!],

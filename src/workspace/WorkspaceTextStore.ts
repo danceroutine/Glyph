@@ -67,8 +67,13 @@ export interface WorkspaceTextStore {
    *
    * Canonical paths are absolute, so policies must accept both forms. Symlinks never reach this point
    * because the filesystem store rejects them. The filesystem read boundary rejects unverified hard links.
+   * The optional callback receives the stored filename after native managed-path admission.
    */
-  canonicalPath(path: string, mutation?: boolean): Promise<string>;
+  canonicalPath(
+    path: string,
+    mutation?: boolean,
+    onManagedPathAdmitted?: (physicalPath: string) => void,
+  ): Promise<string>;
   /**
    * Checks occupancy without reading content; directories and binary files also occupy a target.
    *

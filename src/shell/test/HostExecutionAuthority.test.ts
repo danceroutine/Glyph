@@ -27,6 +27,19 @@ describe(HostExecutionAuthority, () => {
     );
   });
 
+  it('retains missing workspace exclusions while admitting unrelated host locations', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'glyph-retained-workspace-'));
+    onTestFinished(() => rm(base, { recursive: true, force: true }));
+    const peer = join(base, 'missing');
+    const path = join(base, 'host');
+    await writeFile(path, '');
+    const authority = new HostExecutionAuthority([peer], testFilesystemMetadata);
+    authority.admit(path);
+    expect(authority.executable('git')).toContain('git');
+    await expect(authority.validate()).resolves.toBeUndefined();
+    expect(() => authority.admit(join(peer, 'future'))).toThrow('outside writable workspaces');
+  });
+
   it('tracks a logical helper alias as well as its original target', async () => {
     const base = await mkdtemp(join(tmpdir(), 'glyph-repository-alias-'));
     onTestFinished(() => rm(base, { recursive: true, force: true }));

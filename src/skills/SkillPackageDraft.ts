@@ -33,6 +33,11 @@ const importedDraft = skillPackageDraftSchema.extend({
 });
 export type SkillPackageDraftInput = z.input<typeof importedDraft>;
 
+export interface SkillSourceAccess {
+  assertCurrent(): void;
+  readonly acquire: ((signal?: AbortSignal) => Promise<() => void>) | undefined;
+}
+
 /** Complete immutable candidate package. Its revision binds previews and approvals to every reviewed byte. */
 export class SkillPackageDraft {
   readonly name: string;
@@ -42,7 +47,10 @@ export class SkillPackageDraft {
   private readonly directoryModes = new Map<string, number | undefined>();
   private readonly contents = new Map<string, Uint8Array>();
   private readonly modes = new Map<string, number>();
-  constructor(input: unknown) {
+  constructor(
+    input: unknown,
+    readonly sourceAccess?: SkillSourceAccess,
+  ) {
     const validated = importedDraft.safeParse(input);
     if (!validated.success)
       throw new Error(

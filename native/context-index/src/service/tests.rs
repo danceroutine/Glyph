@@ -1898,6 +1898,31 @@ fn private_directory_uses_the_entries_actual_filename_equivalence() {
 }
 
 #[test]
+fn indexes_private_lookalikes_using_the_entry_volume_and_preserves_configured_ignores() {
+    let base = tempdir().unwrap();
+    let stored = base.path().join(".SKILL-STAGING");
+    create_dir_all(&stored).unwrap();
+    write(stored.join("note.md"), "fixture").unwrap();
+    let aliases = base.path().join(".skill-staging").is_dir();
+    let mut config = params(base.path());
+    config.case_sensitive = Some(false);
+    config.ignored_directories = default_ignored_directories();
+    let ordinary = IndexPolicy::new(&config, false, base.path());
+    assert_eq!(ordinary.excludes(".SKILL-STAGING/note.md"), aliases);
+    assert_eq!(
+        workspace_walk(base.path(), &ordinary)
+            .unwrap()
+            .0
+            .build()
+            .flatten()
+            .any(|entry| entry.file_name() == "note.md"),
+        !aliases
+    );
+    config.ignored_directories.push(".skill-staging".to_owned());
+    assert!(IndexPolicy::new(&config, false, base.path()).excludes(".SKILL-STAGING/note.md"));
+}
+
+#[test]
 fn instruction_globs_use_stored_role_names_inside_the_admitted_index() {
     let root = tempdir().unwrap();
     create_dir_all(root.path().join("sub/.glyph/ruleſ")).unwrap();

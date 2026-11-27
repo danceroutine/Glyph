@@ -15,7 +15,7 @@ import type { SkillCatalog } from './SkillCatalog.ts';
 import { SkillPreferenceCommitUncertain, type SkillStateStore } from './SkillStateStore.ts';
 import type { SkillPreview, SkillPreviewFile, SkillPreviewFileInfo } from './SkillLifecycle.ts';
 import { installedPackageModes } from './installedPackageModes.ts';
-import { SkillPackageDraft } from './SkillPackageDraft.ts';
+import { SkillPackageDraft, type SkillSourceAccess } from './SkillPackageDraft.ts';
 import type { SkillPackageFile } from './SkillPackage.ts';
 import { packageRevision, fileDirectories } from './skillPackageRevision.ts';
 import { skillPackageId } from './skillPackageId.ts';
@@ -52,6 +52,7 @@ interface PackageTree {
   directories: ReadonlyMap<string, number>;
 }
 interface Pending {
+  readonly sourceAccess: SkillSourceAccess | undefined;
   readonly preview: SkillPreview & {
     directories: NonNullable<SkillPreview['directories']>;
     createdParentDirectories: readonly string[];
@@ -239,16 +240,25 @@ export class SkillPackageManager {
     this.pending.delete(id);
     signal?.throwIfAborted();
     if (this.ensureReady) await this.ensureReady();
-    const cleaned = await withSkillLock(
-      this.state.metadata,
-      change.location.store.root,
-      'destination',
-      async () => {
-        await this.recoverLocation(change.location, await change.location.store.resolvePath(change.location.directory));
-        return this.withPackageScope(change.location, change.directory, () => this.commit(change, signal), signal);
-      },
-      signal,
-    );
+    const release = await change.sourceAccess?.acquire?.(signal);
+    let cleaned: boolean;
+    try {
+      cleaned = await withSkillLock(
+        this.state.metadata,
+        change.location.store.root,
+        'destination',
+        async () => {
+          await this.recoverLocation(
+            change.location,
+            await change.location.store.resolvePath(change.location.directory),
+          );
+          return this.withPackageScope(change.location, change.directory, () => this.commit(change, signal), signal);
+        },
+        signal,
+      );
+    } finally {
+      release?.();
+    }
     try {
       await this.catalog.refresh();
       return cleaned
@@ -335,7 +345,9 @@ export class SkillPackageManager {
       directories: compareDirectories(before.directories, directories),
     };
     if (this.pending.size >= 32) throw new Error('Too many pending skill previews. Finish or discard a preview first.');
+    draft?.sourceAccess?.assertCurrent();
     this.pending.set(preview.id, {
+      sourceAccess: draft?.sourceAccess,
       preview,
       location,
       directory,
@@ -517,6 +529,7 @@ export class SkillPackageManager {
   }
   private async commit(change: Pending, signal?: AbortSignal) {
     const { location, directory, preview, files, expected } = change;
+    change.sourceAccess?.assertCurrent();
     const root = await location.store.resolvePath(location.directory);
     await location.refreshIndex();
     const current = await this.read(location, directory);
@@ -603,6 +616,7 @@ export class SkillPackageManager {
           throw new Error('The skill changed during replacement. Preview it again.');
       } else if (await optionalStat(target)) throw new Error('A skill appeared at the destination. Preview again.');
       signal?.throwIfAborted();
+      change.sourceAccess?.assertCurrent();
       if (files) {
         this.assertAdmitted(location, target);
         swapStarted = true;
@@ -624,6 +638,7 @@ export class SkillPackageManager {
       if (files) await this.checkMetadata(location, directory, entry.replacementMetadata);
       await this.assertBackup(location, entry, stage);
       signal?.throwIfAborted();
+      change.sourceAccess?.assertCurrent();
       entry.published = true;
       await this.journal.write(entry);
       await this.persist(entry);

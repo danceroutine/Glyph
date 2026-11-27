@@ -1,3 +1,5 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
+import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -55,6 +57,66 @@ describe('Skill package inventory boundaries', () => {
       new SkillPackageSourceReader('native', [], testFilesystemMetadata).read({ kind: 'local', path: linked }),
     ).rejects.toThrow('symlink');
   });
+  it('checks a local resource against the host policy even when a stale index supplies its path', async () => {
+    const temporary = await mkdtemp(join(tmpdir(), 'glyph-private-import-'));
+    onTestFinished(() => rm(temporary, { recursive: true, force: true }));
+    const root = join(temporary, 'example');
+    await mkdir(root);
+    await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nExample');
+    await writeFile(join(root, 'trace'), 'fixture');
+    const policy = new WorkspaceAccessPolicy({}, [join(root, 'trace')]);
+    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, [], policy);
+    native.glob.mockResolvedValueOnce({ files: ['SKILL.md', 'trace'], truncated: false });
+    await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('excluded');
+  });
+
+  it('rejects changes to private reservations during resource capture and after preview approval', async () => {
+    const temporary = await mkdtemp(join(tmpdir(), 'glyph-source-generation-'));
+    onTestFinished(() => rm(temporary, { recursive: true, force: true }));
+    const root = join(temporary, 'example');
+    await mkdir(root);
+    await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nExample');
+    let paths: string[] = [];
+    const policy = new WorkspaceAccessPolicy({}, () => paths);
+    const release = vi.fn();
+    const acquire = vi.fn(async () => release);
+    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, [], policy, acquire);
+    const listing = { files: ['SKILL.md'], truncated: false };
+    native.glob.mockImplementationOnce(async () => {
+      paths = [join(root, 'future-private')];
+      return listing;
+    });
+    await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('Host-private locations changed');
+    native.glob.mockResolvedValue(listing);
+    const draft = await reader.read({ kind: 'local', path: root });
+    const { manager, location, store } = await aSkillLifecycle();
+    const preview = await manager.prepare(location.id, draft);
+    paths = [join(root, 'SKILL.md')];
+    const signal = new AbortController().signal;
+    await expect(manager.apply(preview.id, signal)).rejects.toThrow('Host-private locations changed');
+    expect(acquire).toHaveBeenCalledWith(root, signal);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(await store.exists('skills/example')).toBe(false);
+
+    paths = [];
+    const admitted = await reader.read({ kind: 'local', path: root });
+    const pending = await manager.prepare(location.id, admitted);
+    const stage = location.mutations.stagePackage.bind(location.mutations);
+    vi.spyOn(location.mutations, 'stagePackage').mockImplementationOnce(async (...args) => {
+      await stage(...args);
+      paths = [join(root, 'SKILL.md')];
+    });
+    await expect(manager.apply(pending.id)).rejects.toThrow('Host-private locations changed');
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(await store.exists('skills/example')).toBe(false);
+
+    paths = [];
+    const current = await reader.read({ kind: 'local', path: root });
+    const allowed = await manager.prepare(location.id, current);
+    await expect(manager.apply(allowed.id)).resolves.toMatchObject({ applied: true });
+    expect(release).toHaveBeenCalledTimes(3);
+  });
+
   it('rejects a truncated local index before requesting file bodies', async () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-skill-inventory-'));
     onTestFinished(() => rm(root, { recursive: true, force: true }));

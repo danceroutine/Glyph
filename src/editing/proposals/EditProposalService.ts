@@ -518,8 +518,11 @@ export class EditProposalService {
   }
 
   private async checkedPath(path: string, policy?: ProjectMutationPolicy): Promise<string> {
-    const canonical = await this.workspace.canonicalPath(path, policy !== undefined);
-    const denial = policy?.getDenial(canonical);
+    let verifiedPhysicalPath: string | undefined;
+    const canonical = await this.workspace.canonicalPath(path, policy !== undefined, physical => {
+      verifiedPhysicalPath = physical;
+    });
+    const denial = policy?.getDenial(canonical, verifiedPhysicalPath);
     if (denial) throw new EditError(EditFailureReason.UNSUPPORTED, denial, { path });
     return canonical;
   }
