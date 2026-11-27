@@ -937,6 +937,27 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       );
     });
 
+    it('keeps an unavailable user rule location separate and retries after repair', async () => {
+      const fixture = await factoryFixture();
+      const root = await fixture.folder('project');
+      useFilesystemIndex();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const rules = join(isolatedUserDirectory, 'rules');
+      await writeFile(rules, 'occupied');
+      const runtime = await fixture.create([root]);
+      expect((await runtime.snapshot()).instructionSources).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: 'glyph_user_rule', status: 'error' })]),
+      );
+      await rm(rules);
+      await mkdir(rules);
+      await writeFile(join(rules, 'restored.mdc'), 'Restored');
+      expect((await runtime.snapshot()).instructionSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'glyph_user_rule', status: 'active', content: 'Restored' }),
+        ]),
+      );
+    });
+
     it('discovers project instructions through the native index while reading current editor text', async () => {
       const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
