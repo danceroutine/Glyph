@@ -11,7 +11,7 @@ import { skillPackageId } from './skillPackageId.ts';
 import { parseSkillManifest } from './SkillManifest.ts';
 
 /** Native and compatibility directories share a format but keep distinct location identities. */
-export interface SkillDiscoveryLocation {
+interface FileSkillLocation {
   readonly origin: SkillOrigin;
   readonly scopePrefix?: string;
   readonly scopePathKey?: (path: string) => string;
@@ -20,20 +20,35 @@ export interface SkillDiscoveryLocation {
   readonly workspace: WorkspaceTextStore;
   readonly binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'> &
     Partial<Pick<FileSystemWorkspaceTextStore, 'resolvePath'>>;
-  readonly listFiles: (
-    signal?: AbortSignal,
-  ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly includeDirectory?: (directory: string) => boolean;
   readonly packageId?: (directory: string) => string;
   readonly matchesLegacyId?: (directory: string, id: string, budget: { remaining: number }) => boolean;
   readonly uriForPath: (path: string) => string;
-  /** Optional package-scoped inventory for native indexes. */
-  readonly captureFiles?: (
-    directory: string,
-    signal?: AbortSignal,
-  ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
   readonly refreshIndex: () => Promise<void>;
 }
+
+export type SkillDiscoveryLocation = FileSkillLocation &
+  (
+    | {
+        readonly listFiles: (
+          signal?: AbortSignal,
+        ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+        readonly captureFiles?: (
+          directory: string,
+          signal?: AbortSignal,
+        ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+      }
+    | {
+        readonly listPackages: (signal?: AbortSignal) => Promise<{
+          readonly packages: readonly { readonly directory: string; readonly manifest: string | null }[];
+          readonly truncated: boolean;
+        }>;
+        readonly captureFiles: (
+          directory: string,
+          signal?: AbortSignal,
+        ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+      }
+  );
 
 interface IndexedSkillDirectory {
   readonly directory: string;
@@ -64,29 +79,21 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
 
   async discover(signal?: AbortSignal): Promise<readonly SkillDescriptor[]> {
     signal?.throwIfAborted();
-    const listed = await this.location.listFiles(signal);
-    if (listed.truncated) throw new Error(`Skill discovery is incomplete for ${this.location.origin.label}.`);
-    const marker = this.location.directory === '.' ? [] : this.location.directory.split('/');
-    const key = (name: string) => (this.location.workspace.caseSensitive ? name : name.toLowerCase());
-    const directories = new Map<string, IndexedSkillDirectory>();
-    for (const path of listed.files) {
-      const segments = path.split('/');
-      const start =
-        marker.length === 0
-          ? 0
-          : segments.findIndex((_, i) => marker.every((segment, j) => key(segments[i + j] ?? '') === key(segment)));
-      const packageIndex = start + marker.length;
-      if (start < 0 || !segments[packageIndex] || segments.length < packageIndex + 2) continue;
-      const directory = segments.slice(0, packageIndex + 1).join('/');
-      const scope = this.origin.scope === 'project' ? segments.slice(0, start).join('/') : '';
-      const entry = directories.get(directory) ?? {
-        directory,
-        scope: [this.location.scopePrefix, scope].filter(Boolean).join('/') || '.',
-      };
-      if (segments.length === packageIndex + 2 && key(segments[packageIndex + 1]!) === key('SKILL.md'))
-        entry.manifest = path;
-      directories.set(directory, entry);
-    }
+    const location = this.location;
+    const listed = 'listPackages' in location ? await location.listPackages(signal) : await location.listFiles(signal);
+    if (listed.truncated) throw new Error(`Skill discovery is incomplete for ${location.origin.label}.`);
+    const directories =
+      'packages' in listed
+        ? listed.packages.map(({ directory, manifest }) => {
+            const parent = posix.dirname(posix.dirname(posix.dirname(directory)));
+            const scope = this.origin.scope === 'project' && parent !== '.' ? parent : '';
+            return {
+              directory,
+              scope: [location.scopePrefix, scope].filter(Boolean).join('/') || '.',
+              ...(manifest ? { manifest } : {}),
+            };
+          })
+        : this.indexedDirectories(listed.files);
     // Bound metadata reads across large native catalogs.
     let remainingBytes = 8 * 1024 * 1024;
     const maxManifestBytes = 256 * 1024;
@@ -150,7 +157,7 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
         };
       }
     };
-    const ordered = [...directories.values()]
+    const ordered = directories
       .filter(entry => this.location.includeDirectory?.(entry.directory) !== false)
       .toSorted((left, right) => left.directory.localeCompare(right.directory));
     const descriptors: SkillDescriptor[] = [];
@@ -164,11 +171,39 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
     return descriptors;
   }
 
+  /** Adapt file-only discovery locations to package entries under their declared casing policy. */
+  private indexedDirectories(files: readonly string[]): IndexedSkillDirectory[] {
+    const marker = this.location.directory === '.' ? [] : this.location.directory.split('/');
+    const key = (name: string) => (this.location.workspace.caseSensitive ? name : name.toLowerCase());
+    const directories = new Map<string, IndexedSkillDirectory>();
+    for (const path of files) {
+      const segments = path.split('/');
+      const start =
+        marker.length === 0
+          ? 0
+          : segments.findIndex((_, i) => marker.every((segment, j) => key(segments[i + j] ?? '') === key(segment)));
+      const packageIndex = start + marker.length;
+      if (start < 0 || !segments[packageIndex] || segments.length < packageIndex + 2) continue;
+      const directory = segments.slice(0, packageIndex + 1).join('/');
+      const scope = this.origin.scope === 'project' ? segments.slice(0, start).join('/') : '';
+      const entry = directories.get(directory) ?? {
+        directory,
+        scope: [this.location.scopePrefix, scope].filter(Boolean).join('/') || '.',
+      };
+      if (segments.length === packageIndex + 2 && key(segments[packageIndex + 1]!) === key('SKILL.md'))
+        entry.manifest = path;
+      directories.set(directory, entry);
+    }
+    return [...directories.values()];
+  }
+
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal, reconcile?: () => Promise<void>) {
     const inventory = async () => {
-      if (!this.location.captureFiles) await this.location.refreshIndex();
-      const listed = await (this.location.captureFiles?.(descriptor.directory, signal) ??
-        this.location.listFiles(signal));
+      const location = this.location;
+      const listed =
+        'listFiles' in location && !location.captureFiles
+          ? await location.refreshIndex().then(() => location.listFiles(signal))
+          : await location.captureFiles!(descriptor.directory, signal);
       if (listed.truncated) throw new Error('Skill package inventory is incomplete.');
       return listed.files.filter(path => path.startsWith(descriptor.directory + '/')).toSorted();
     };

@@ -1,3 +1,4 @@
+import { sameWorkspaceDirectory, WorkspaceDirectoryIdentity } from '#src/workspace/sameWorkspaceDirectory.js';
 import { basename, dirname, join } from 'node:path';
 import { ProjectSkillIdentity } from './ProjectSkillIdentity.ts';
 
@@ -6,20 +7,20 @@ export class UserSkillDirectory {
   readonly path: string;
   private readonly projectIdentity?: ProjectSkillIdentity;
   private readonly marker: string;
+  private readonly store: WorkspaceDirectoryIdentity;
 
-  constructor(
-    userDirectory: string,
-    private readonly caseSensitive: boolean,
-  ) {
+  constructor(userDirectory: string, caseSensitive: boolean) {
     this.path = join(userDirectory, 'skills');
+    this.store = new WorkspaceDirectoryIdentity(this.path, caseSensitive);
     this.marker = basename(userDirectory);
-    const location = this.key(this.marker);
-    if (location === '.glyph' || location === '.cursor')
-      this.projectIdentity = new ProjectSkillIdentity(dirname(userDirectory), location);
+    const location = ['.glyph', '.cursor'].find(name =>
+      sameWorkspaceDirectory(userDirectory, join(dirname(userDirectory), name), caseSensitive),
+    );
+    if (location) this.projectIdentity = new ProjectSkillIdentity(dirname(userDirectory), location);
   }
 
   ownsStore(directory: string): boolean {
-    return this.key(directory) === this.key(this.path);
+    return this.store.matches(directory);
   }
 
   matchesProjectReference(directory: string, id: string, budget: { remaining: number }): boolean {
@@ -29,9 +30,5 @@ export class UserSkillDirectory {
       this.projectIdentity.forDirectory(projectDirectory) === id ||
       this.projectIdentity.matchesLegacyId(projectDirectory, id, budget)
     );
-  }
-
-  private key(path: string): string {
-    return this.caseSensitive ? path : path.toLowerCase();
   }
 }

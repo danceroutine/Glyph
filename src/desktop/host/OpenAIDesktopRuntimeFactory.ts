@@ -427,11 +427,17 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           listSkillPackageFiles(userInstructionStore, directory, indexExecutable, false, signal, userInstructionPolicy),
         binaryStore: userInstructionStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
-        listFiles: async signal => {
+        listPackages: async signal => {
           await mkdir(skillRoot, { recursive: true });
           await userInstructionStore.canonicalPath('skills');
           const result = await userSkillIndex.listSkillPackages(null, signal);
-          return { ...result, files: result.files.map(path => `skills/${path}`) };
+          return {
+            truncated: result.truncated,
+            packages: result.packages.map(({ directory, manifest }) => ({
+              directory: 'skills/' + directory,
+              manifest: manifest && 'skills/' + manifest,
+            })),
+          };
         },
         refreshIndex: async () => {
           await userSkillIndex.refresh();
@@ -462,7 +468,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 binaryStore: part.disk,
                 ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
                 uriForPath: path => userRuleUri(part.disk.root, path),
-                listFiles: signal => part.index.listSkillPackages(location, signal),
+                listPackages: signal => part.index.listSkillPackages(location, signal),
                 refreshIndex: async () => {
                   await part.index.refresh();
                 },

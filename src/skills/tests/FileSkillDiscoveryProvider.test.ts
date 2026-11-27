@@ -15,6 +15,32 @@ import { chatTurnOptionsSchema } from '#src/chat/ChatTurnOptionsSchema.js';
 import { packageRevision, fileRevision } from '#src/skills/skillPackageRevision.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 
+it('retains missing manifest diagnostics and the stored path of a physically classified package', async () => {
+  const fixture = await skillFixture();
+  const stored = 'nested/.glyph/ſkills/example/ſKILL.md';
+  await fixture.write(stored, manifest());
+  const provider = new FileSkillDiscoveryProvider({
+    origin: { id: 'project', label: 'Project', scope: 'project', compatibility: 'glyph' },
+    directory: '.glyph/skills',
+    workspace: fixture.store,
+    scopePrefix: 'repo',
+    listPackages: async () => ({
+      truncated: false,
+      packages: [
+        { directory: 'nested/.glyph/ſkills/example', manifest: stored },
+        { directory: 'nested/.glyph/ſkills/missing', manifest: null },
+      ],
+    }),
+    captureFiles: async () => ({ files: [stored], truncated: false }),
+    uriForPath: path => path,
+    refreshIndex: async () => {},
+  });
+  expect(await provider.discover()).toMatchObject([
+    { path: stored, scope: 'repo/nested', status: 'active' },
+    { path: 'nested/.glyph/ſkills/missing/SKILL.md', scope: 'repo/nested', status: 'error' },
+  ]);
+});
+
 describe(FileSkillDiscoveryProvider, () => {
   it('leaves historical IDs unresolved when a location provides no legacy identity scheme', async () => {
     const fixture = await skillFixture();

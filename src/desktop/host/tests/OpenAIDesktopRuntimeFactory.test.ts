@@ -72,12 +72,25 @@ const captured = vi.hoisted(() => ({
 }));
 
 beforeEach(() => {
-  vi.spyOn(RustWorkspacePathIndex.prototype, 'listSkillPackages').mockImplementation(function (
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'listSkillPackages').mockImplementation(async function (
     this: RustWorkspacePathIndex,
     marker,
     signal,
   ) {
-    return this.glob(marker ? `**/${marker}/skills/**/*` : '**/*', { limit: 10_000, ...(signal ? { signal } : {}) });
+    const { files, truncated } = await this.glob(marker ? `**/${marker}/skills/**/*` : '**/*', {
+      limit: 10_000,
+      ...(signal ? { signal } : {}),
+    });
+
+    const packages = new Map<string, { directory: string; manifest: string | null }>();
+    for (const path of files) {
+      const segments = path.split('/');
+      const start = marker ? segments.indexOf(marker) + 2 : 0;
+      const directory = segments.slice(0, start + 1).join('/');
+      if (!packages.has(directory)) packages.set(directory, { directory, manifest: null });
+      if (path === directory + '/SKILL.md') packages.get(directory)!.manifest = path;
+    }
+    return { packages: [...packages.values()], truncated };
   });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });
 });
