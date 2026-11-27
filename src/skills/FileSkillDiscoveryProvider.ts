@@ -171,32 +171,6 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
     return descriptors;
   }
 
-  /** Adapt file-only discovery locations to package entries under their declared casing policy. */
-  private indexedDirectories(files: readonly string[]): IndexedSkillDirectory[] {
-    const marker = this.location.directory === '.' ? [] : this.location.directory.split('/');
-    const key = (name: string) => (this.location.workspace.caseSensitive ? name : name.toLowerCase());
-    const directories = new Map<string, IndexedSkillDirectory>();
-    for (const path of files) {
-      const segments = path.split('/');
-      const start =
-        marker.length === 0
-          ? 0
-          : segments.findIndex((_, i) => marker.every((segment, j) => key(segments[i + j] ?? '') === key(segment)));
-      const packageIndex = start + marker.length;
-      if (start < 0 || !segments[packageIndex] || segments.length < packageIndex + 2) continue;
-      const directory = segments.slice(0, packageIndex + 1).join('/');
-      const scope = this.origin.scope === 'project' ? segments.slice(0, start).join('/') : '';
-      const entry = directories.get(directory) ?? {
-        directory,
-        scope: [this.location.scopePrefix, scope].filter(Boolean).join('/') || '.',
-      };
-      if (segments.length === packageIndex + 2 && key(segments[packageIndex + 1]!) === key('SKILL.md'))
-        entry.manifest = path;
-      directories.set(directory, entry);
-    }
-    return [...directories.values()];
-  }
-
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal, reconcile?: () => Promise<void>) {
     const inventory = async () => {
       const location = this.location;
@@ -244,5 +218,31 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
 
   refreshIndex(): Promise<void> {
     return this.location.refreshIndex();
+  }
+
+  /** Adapt file-only discovery locations to package entries under their declared casing policy. */
+  private indexedDirectories(files: readonly string[]): IndexedSkillDirectory[] {
+    const marker = this.location.directory === '.' ? [] : this.location.directory.split('/');
+    const key = (name: string) => (this.location.workspace.caseSensitive ? name : name.toLowerCase());
+    const directories = new Map<string, IndexedSkillDirectory>();
+    for (const path of files) {
+      const segments = path.split('/');
+      const start =
+        marker.length === 0
+          ? 0
+          : segments.findIndex((_, i) => marker.every((segment, j) => key(segments[i + j] ?? '') === key(segment)));
+      const packageIndex = start + marker.length;
+      if (start < 0 || !segments[packageIndex] || segments.length < packageIndex + 2) continue;
+      const directory = segments.slice(0, packageIndex + 1).join('/');
+      const scope = this.origin.scope === 'project' ? segments.slice(0, start).join('/') : '';
+      const entry = directories.get(directory) ?? {
+        directory,
+        scope: [this.location.scopePrefix, scope].filter(Boolean).join('/') || '.',
+      };
+      if (segments.length === packageIndex + 2 && key(segments[packageIndex + 1]!) === key('SKILL.md'))
+        entry.manifest = path;
+      directories.set(directory, entry);
+    }
+    return [...directories.values()];
   }
 }
