@@ -614,6 +614,44 @@ impl ContextIndexService {
         Ok(selected.into_iter().collect())
     }
 
+    /// Enumerate a package-scoped tree with the same ignore and access policy as its file inventory.
+    pub(crate) fn list_directories(&self) -> Result<Vec<String>, ServiceError> {
+        let index = self
+            .initialized
+            .as_ref()
+            .ok_or_else(ServiceError::not_initialized)?;
+        let mut directories = Vec::new();
+        if !index.policy.exclude_root {
+            let mut walk = workspace_walk(&index.root, &index.policy);
+            for (offset, entry) in walk.max_depth(Some(33)).build().enumerate() {
+                let entry = entry.map_err(|error| ServiceError::internal(error.to_string()))?;
+                if let Some(error) = entry.error() {
+                    return Err(ServiceError::internal(error.to_string()));
+                }
+                if offset > 8450 {
+                    return Err(ServiceError::invalid_request(
+                        "Skill package exceeds its directory budget.",
+                    ));
+                }
+                if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                    continue;
+                }
+                if entry.depth() > 32 {
+                    return Err(ServiceError::invalid_request(
+                        "Skill package nesting exceeds 32 levels.",
+                    ));
+                }
+                if let Some(name) = normalize_relative_path(&index.root, entry.path())
+                    .filter(|name| !index.policy.excludes(name))
+                {
+                    directories.push(name);
+                }
+            }
+        }
+        directories.sort();
+        Ok(directories)
+    }
+
     pub(crate) fn glob(&self, params: GlobParams) -> Result<GlobResult, ServiceError> {
         if params.limit == 0 || params.limit > MAX_GLOB_LIMIT {
             return Err(ServiceError::invalid_request(format!(

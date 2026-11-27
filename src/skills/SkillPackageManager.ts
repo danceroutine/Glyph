@@ -1,4 +1,3 @@
-import { errorCodeOf } from '#src/shared/mappers/errorCodeOf.js';
 import { SkillProjectMutationPolicy } from './SkillProjectMutationPolicy.ts';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -12,9 +11,9 @@ import { SkillPreferenceCommitUncertain, type SkillStateStore } from './SkillSta
 import type { SkillPreview, SkillPreviewFile, SkillPreviewFileInfo } from './SkillLifecycle.ts';
 import { SkillPackageDraft } from './SkillPackageDraft.ts';
 import type { SkillPackageFile } from './SkillPackage.ts';
-import { packageRevision } from './skillPackageRevision.ts';
+import { packageRevision, fileDirectories } from './skillPackageRevision.ts';
 import { skillPackageId } from './skillPackageId.ts';
-import { inventoryFiles, readPackageFiles } from './skillPackageInventory.ts';
+import { inventoryPackage, readDirectoryModes, readPackageFiles } from './skillPackageInventory.ts';
 import { optionalStat, privateSkillDirectory, withSkillLock } from './SkillPackageStorage.ts';
 import { SkillTransactionJournal, type SkillTransaction } from './SkillTransactionJournal.ts';
 
@@ -29,17 +28,24 @@ export interface SkillPackageLocation {
   readonly mutations: WorkspaceDirectoryMutations;
   readonly directory: string;
   readonly listFiles: () => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+  readonly listPackageDirectories?: (directory: string) => Promise<ReadonlyMap<string, number>>;
   readonly refreshIndex: () => Promise<void>;
   readonly packageId?: (directory: string) => string;
   readonly updateOnly?: boolean;
   readonly assertClean?: (absolutePackageDirectory: string) => Promise<void>;
 }
 type PackageFiles = ReadonlyMap<string, SkillPackageFile>;
+interface PackageTree {
+  rootMode?: number;
+  files: PackageFiles;
+  directories: ReadonlyMap<string, number>;
+}
 interface Pending {
-  readonly preview: SkillPreview;
+  readonly preview: SkillPreview & { directories: NonNullable<SkillPreview['directories']> };
   readonly location: SkillPackageLocation;
   readonly directory: string;
   readonly files?: PackageFiles;
+  readonly directories: ReadonlyMap<string, number>;
   readonly expected: string | null;
   readonly expectedMetadata?: string;
 }
@@ -82,29 +88,33 @@ function compareFiles(before: PackageFiles, after: PackageFiles): SkillPreviewFi
     };
   });
 }
-async function diskRevision(directory: string): Promise<string | null> {
+function compareDirectories(before: ReadonlyMap<string, number>, after: ReadonlyMap<string, number>) {
+  const names = new Set([...before.keys(), ...after.keys()]);
+  return [...names].toSorted().map(path => {
+    const beforeMode = before.get(path);
+    const afterMode = after.get(path);
+    const status =
+      beforeMode === undefined
+        ? 'added'
+        : afterMode === undefined
+          ? 'removed'
+          : beforeMode === afterMode
+            ? 'unchanged'
+            : 'modified';
+    return {
+      path,
+      status,
+      ...(beforeMode === undefined ? {} : { beforeMode }),
+      ...(afterMode === undefined ? {} : { afterMode }),
+    } as const;
+  });
+}
+async function diskRevision(directory: string, treeVersion?: 2): Promise<string | null> {
   if (!(await optionalStat(directory))) return null;
-  return packageRevision(await readPackageFiles(directory, await inventoryFiles(directory)));
+  const { files, directories } = await inventoryPackage(directory);
+  const modes = treeVersion && (await readDirectoryModes(directories, async path => join(directory, path)));
+  return packageRevision(await readPackageFiles(directory, files), modes);
 }
-async function packageDirectoryModes(target: string, files: PackageFiles, defaultMode: number) {
-  const names = new Set(['']);
-  for (const path of files.keys()) {
-    const parts = path.split('/');
-    for (let i = 1; i < parts.length; i++) names.add(parts.slice(0, i).join('/'));
-  }
-  const modes = new Map<string, number>();
-  for (const name of names) {
-    // A draft can legitimately replace a file with a directory or vice versa.
-    const stat = await optionalStat(join(target, name)).catch(error => {
-      if (errorCodeOf(error) !== 'ENOTDIR') throw error;
-      return undefined;
-    });
-    const parent = name.includes('/') ? posix.dirname(name) : '';
-    modes.set(name, stat?.isDirectory() ? stat.mode & 0o777 : (modes.get(parent) ?? defaultMode));
-  }
-  return modes;
-}
-
 /** Stages immutable packages, serializes each destination and recovers interrupted publication before discovery. */
 export class SkillPackageManager {
   readonly projectMutationPolicy: SkillProjectMutationPolicy;
@@ -147,11 +157,12 @@ export class SkillPackageManager {
     if (replaceId && (!existing?.directory || existing.origin.id !== targetId || existing.name !== draft.name))
       throw new Error('The update must target the selected installed skill.');
     const directory = existing?.directory ?? location.directory + '/' + draft.name;
-    for (const path of draft.files().keys()) location.store.normalizePath(directory + '/' + path);
+    for (const path of [...draft.files().keys(), ...draft.packageDirectories().keys()])
+      location.store.normalizePath(directory + '/' + path);
     const before = await this.read(location, directory);
-    if (!replaceId && (before.size > 0 || (await location.store.exists(directory))))
+    if (!replaceId && (before.files.size > 0 || (await location.store.exists(directory))))
       throw new Error('A skill already occupies this destination. Select Update.');
-    if (replaceId && before.size === 0) throw new Error('The installed skill is missing. Refresh Settings.');
+    if (replaceId && before.files.size === 0) throw new Error('The installed skill is missing. Refresh Settings.');
     return this.remember(location, directory, before, draft);
   }
   async prepareRemoval(id: string): Promise<SkillPreview> {
@@ -161,7 +172,7 @@ export class SkillPackageManager {
     const location = this.location(descriptor.origin.id);
     await this.recover(location.id);
     const before = await this.read(location, descriptor.directory);
-    if (before.size === 0) throw new Error('The installed skill is missing. Refresh Settings.');
+    if (before.files.size === 0) throw new Error('The installed skill is missing. Refresh Settings.');
     return this.remember(location, descriptor.directory, before);
   }
   discard(id: string): void {
@@ -175,7 +186,10 @@ export class SkillPackageManager {
     const { location, directory, preview } = this.requirePreview(id);
     if (location.scope === 'user') return [];
     const parent = location.scopePrefix ? location.scopePrefix + '/' + directory : directory;
-    return preview.files.map(file => parent + '/' + file.path);
+    const implicit = fileDirectories(preview.files.map(file => file.path));
+    return [...preview.files, ...preview.directories.filter(directory => !implicit.has(directory.path))].map(
+      entry => parent + '/' + entry.path,
+    );
   }
   async apply(id: string, signal?: AbortSignal): Promise<{ applied: true; refreshError?: string }> {
     const change = this.requirePreview(id);
@@ -240,24 +254,28 @@ export class SkillPackageManager {
   private async remember(
     location: SkillPackageLocation,
     directory: string,
-    before: PackageFiles,
+    before: PackageTree,
     draft?: SkillPackageDraft,
   ): Promise<SkillPreview> {
     const path = await this.target(location, directory);
     await this.checkPendingOrigin(location, path);
     await location.assertClean?.(path);
-    const after = draft?.packageFiles(before);
-    const expected = before.size > 0 ? packageRevision(before) : null;
+    const after = draft?.packageFiles(before.files);
+    const parentMode = location.scope === 'project' ? (await optionalStat(dirname(path)))?.mode : 0o700;
+    const rootMode = before.rootMode ?? (parentMode ?? 0o777 & ~process.umask()) & 0o777;
+    const directories = draft?.packageDirectories(before.directories, rootMode) ?? new Map<string, number>();
+    const expected = before.files.size > 0 ? packageRevision(before.files, before.directories) : null;
     const expectedMetadata = expected ? await location.mutations.assertReplaceableMetadata(directory, true) : undefined;
-    const preview: SkillPreview = {
+    const preview: Pending['preview'] = {
       id: randomUUID(),
-      action: draft ? (before.size > 0 ? 'update' : 'install') : 'remove',
+      action: draft ? (before.files.size > 0 ? 'update' : 'install') : 'remove',
       targetId: location.id,
       destination: { label: location.label, scope: location.scope, path },
       name: posix.basename(directory),
       source: draft?.source ?? 'Installed package',
-      revision: after ? packageRevision(after) : expected!,
-      files: compareFiles(before, after ?? new Map()),
+      revision: after ? packageRevision(after, directories) : expected!,
+      files: compareFiles(before.files, after ?? new Map()),
+      directories: compareDirectories(before.directories, directories),
     };
     if (this.pending.size >= 32) throw new Error('Too many pending skill previews. Finish or discard a preview first.');
     this.pending.set(preview.id, {
@@ -265,20 +283,28 @@ export class SkillPackageManager {
       location,
       directory,
       expected,
+      directories,
       ...(expectedMetadata ? { expectedMetadata } : {}),
       ...(after ? { files: after } : {}),
     });
     return structuredClone(preview);
   }
-  private async read(location: SkillPackageLocation, directory: string): Promise<PackageFiles> {
+  private async read(location: SkillPackageLocation, directory: string): Promise<PackageTree> {
     const root = await this.target(location, directory);
-    if (!(await optionalStat(root))) return new Map();
+    const stat = await optionalStat(root);
+    if (!stat) return { files: new Map(), directories: new Map() };
     const prefix = directory + '/';
-    const inventory = await inventoryFiles(root);
-    await this.assertIndexed(location, directory, inventory);
+    const inventory = await inventoryPackage(root);
+    await this.assertIndexed(location, directory, inventory.files);
+    const implicit = fileDirectories(inventory.files);
+    const extra = inventory.directories.filter(path => !implicit.has(path));
+    await this.assertDirectories(location, directory, extra);
+    const directories = await readDirectoryModes(inventory.directories, path =>
+      location.store.resolvePath(prefix + path),
+    );
     const files = new Map<string, SkillPackageFile>();
     let total = 0;
-    for (const path of inventory) {
+    for (const path of inventory.files) {
       const raw = await location.store.readBytes(prefix + path, { maxBytes: 1024 * 1024 });
       if ((total += raw.bytes.length) > 8 * 1024 * 1024) throw new Error('Skill package exceeds 8 MiB.');
       if (textContent(raw.bytes) !== undefined) {
@@ -287,7 +313,13 @@ export class SkillPackageManager {
       }
       files.set(path, raw);
     }
-    return files;
+    return { files, directories, rootMode: stat.mode & 0o777 };
+  }
+  private async assertDirectories(location: SkillPackageLocation, directory: string, extra: readonly string[]) {
+    if (!extra.length) return;
+    const indexed = await location.listPackageDirectories?.(directory);
+    if (!indexed || extra.some(path => !indexed.has(path)))
+      throw new Error('Package contains unindexed or unauthorized directories. Refresh before managing it.');
   }
   private async assertIndexed(location: SkillPackageLocation, directory: string, inventory: readonly string[]) {
     const listed = await location.listFiles();
@@ -313,7 +345,7 @@ export class SkillPackageManager {
         const stage = join(await privateSkillDirectory(location.store.root), entry.id);
         await location.assertClean?.(target);
         if (entry.published) {
-          if ((await diskRevision(target)) !== entry.replacement)
+          if ((await diskRevision(target, entry.treeVersion)) !== entry.replacement)
             throw new Error('Package recovery is required. Published files changed at ' + target);
           if (entry.replacement) await this.checkMetadata(location, entry.directory, entry.replacementMetadata);
           await this.assertBackup(location, entry, stage);
@@ -358,7 +390,7 @@ export class SkillPackageManager {
   private async assertBackup(location: SkillPackageLocation, entry: SkillTransaction, stage: string) {
     if (entry.expected)
       await this.checkMetadata(location, '.skill-staging/' + entry.id + '/previous', entry.expectedMetadata);
-    if (entry.expected && (await diskRevision(join(stage, 'previous'))) !== entry.expected)
+    if (entry.expected && (await diskRevision(join(stage, 'previous'), entry.treeVersion)) !== entry.expected)
       throw new Error('Package recovery is required. Inspect retained staging at ' + stage);
   }
   private async finish(location: SkillPackageLocation, entry: SkillTransaction) {
@@ -386,10 +418,10 @@ export class SkillPackageManager {
     }
     const relativeStage = '.skill-staging/' + entry.id;
     const reverted = join(stage, 'reverted');
-    const retained = await diskRevision(reverted);
+    const retained = await diskRevision(reverted, entry.treeVersion);
     if (retained !== null && retained !== entry.replacement)
       throw new Error('Package recovery is required. Inspect the changed candidate at ' + reverted);
-    const actual = await diskRevision(target);
+    const actual = await diskRevision(target, entry.treeVersion);
     // An initial occupant that never moved remains authoritative, including concurrent edits.
     if (entry.expected && !saved) {
       if (actual !== entry.expected)
@@ -408,7 +440,7 @@ export class SkillPackageManager {
       }
       await this.checkMetadata(location, entry.directory, entry.replacementMetadata);
       await location.mutations.renameExclusive(entry.directory, relativeStage + '/reverted');
-      if ((await diskRevision(reverted)) !== entry.replacement)
+      if ((await diskRevision(reverted, entry.treeVersion)) !== entry.replacement)
         throw new Error('Package recovery is required. Inspect the changed candidate at ' + reverted);
     }
     if (saved) await location.mutations.renameExclusive(relativeStage + '/previous', entry.directory);
@@ -418,7 +450,7 @@ export class SkillPackageManager {
     const root = await location.store.resolvePath(location.directory);
     await location.refreshIndex();
     const current = await this.read(location, directory);
-    if ((current.size > 0 ? packageRevision(current) : null) !== expected)
+    if ((current.files.size > 0 ? packageRevision(current.files, current.directories) : null) !== expected)
       throw new Error('The skill changed after preview. Preview it again.');
     const target = await this.target(location, directory);
     await this.checkPendingOrigin(location, target);
@@ -432,6 +464,7 @@ export class SkillPackageManager {
     await location.mutations.createStage(relativeStage);
     const entry: SkillTransaction = {
       id: preview.id,
+      treeVersion: 2,
       root,
       location: location.id,
       directory,
@@ -451,18 +484,17 @@ export class SkillPackageManager {
       recorded = true;
       if (files) {
         signal?.throwIfAborted();
-        await location.mutations.stagePackage(
-          relativeStage + '/package',
-          files,
-          await packageDirectoryModes(target, files, directoryMode),
-        );
+        const installed = await optionalStat(target);
+        const modes = new Map(change.directories);
+        modes.set('', installed?.isDirectory() ? installed.mode & 0o777 : directoryMode);
+        await location.mutations.stagePackage(relativeStage + '/package', files, modes);
         entry.replacementMetadata = await location.mutations.assertReplaceableMetadata(
           relativeStage + '/package',
           true,
           relativeStage + '/package',
         );
         await this.journal.write(entry);
-        if ((await diskRevision(join(stage, 'package'))) !== preview.revision)
+        if ((await diskRevision(join(stage, 'package'), entry.treeVersion)) !== preview.revision)
           throw new Error('The staged skill is unreadable or changed. Preview it again.');
       }
       await location.assertClean?.(target);
@@ -484,14 +516,23 @@ export class SkillPackageManager {
           change.expectedMetadata,
           files ? relativeStage + '/package' : undefined,
         );
-        if ((await diskRevision(backup)) !== expected)
+        if ((await diskRevision(backup, entry.treeVersion)) !== expected)
           throw new Error('The skill changed during replacement. Preview it again.');
       } else if (await optionalStat(target)) throw new Error('A skill appeared at the destination. Preview again.');
       signal?.throwIfAborted();
       if (files) await location.mutations.renameExclusive(relativeStage + '/package', directory);
-      if ((await diskRevision(target)) !== entry.replacement) throw new Error('The skill changed during publication.');
+      if ((await diskRevision(target, entry.treeVersion)) !== entry.replacement)
+        throw new Error('The skill changed during publication.');
       await location.refreshIndex();
-      if (files) await this.assertIndexed(location, directory, [...files.keys()]);
+      if (files) {
+        await this.assertIndexed(location, directory, [...files.keys()]);
+        const implicit = fileDirectories(files.keys());
+        await this.assertDirectories(
+          location,
+          directory,
+          [...change.directories.keys()].filter(path => !implicit.has(path)),
+        );
+      }
       await location.assertClean?.(target);
       if (files) await this.checkMetadata(location, directory, entry.replacementMetadata);
       await this.assertBackup(location, entry, stage);
@@ -500,7 +541,7 @@ export class SkillPackageManager {
       await this.journal.write(entry);
       await this.persist(entry);
       preferencesCommitted = true;
-      if ((await diskRevision(target)) !== entry.replacement)
+      if ((await diskRevision(target, entry.treeVersion)) !== entry.replacement)
         throw new Error('Published files changed. Package recovery is required at ' + target);
       if (files) await this.checkMetadata(location, directory, entry.replacementMetadata);
       await this.assertBackup(location, entry, stage);

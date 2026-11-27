@@ -30,6 +30,7 @@ describe(DesktopInteractionBroker, () => {
       action: 'install' as const,
       source: 'Repository @ pinned',
       revision: 'revision',
+      directories: [{ path: 'templates/empty', status: 'added' as const, afterMode: 0o750 }],
       files: [
         {
           path: 'SKILL.md',
@@ -54,6 +55,8 @@ describe(DesktopInteractionBroker, () => {
         expect(event.approval.skillChange).toEqual(preview);
         expect(event.approval.detail).toContain('Revision: revision');
         expect(event.approval.detail).toContain('/user/skills/example');
+        expect(event.approval.detail).toContain('templates/empty/ (added)');
+        expect(event.approval.detail).toContain('directory mode 750');
         expect(event.approval.detail).toContain('reviewed-digest');
         expect(event.approval.detail).toContain('(removed)');
         expect(event.approval.detail).not.toContain('Reviewed instructions');
@@ -74,8 +77,9 @@ describe(DesktopInteractionBroker, () => {
     it('cancels an unanswered package proposal with its owning run', async () => {
       const broker = new DesktopInteractionBroker(() => {});
       const controller = new AbortController();
+      const { directories: _directories, ...fileOnlyPreview } = preview;
       const pending = broker.run({ chatId: 'chat', runId: 'run' }, () =>
-        broker.presentSkillChange(preview, controller.signal),
+        broker.presentSkillChange(fileOnlyPreview, controller.signal),
       );
       const rejected = expect(pending).rejects.toThrow('Stopped');
       controller.abort(new Error('Stopped'));

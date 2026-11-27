@@ -1667,3 +1667,47 @@ fn direct_root_globs_exclude_private_roots_cache_files_and_reject_unreadable_ign
     write(root.path().join(".gitignore"), "[z-a]\n").unwrap();
     assert!(other.glob(query()).is_err());
 }
+
+#[test]
+fn package_directory_inventory_observes_policy_changes_and_bounds_empty_branches() {
+    let root = tempdir().unwrap();
+    let mut service = ContextIndexService::new();
+    assert!(service.list_directories().is_err());
+    for path in [".git", "templates/empty", "ignored", "secret.pem"] {
+        create_dir_all(root.path().join(path)).unwrap();
+    }
+    write(root.path().join(".gitignore"), "ignored/\n").unwrap();
+    let mut config = params(root.path());
+    service.initialize(config.clone()).unwrap();
+    assert_eq!(
+        service.list_directories().unwrap(),
+        ["templates", "templates/empty"]
+    );
+    write(root.path().join(".gitignore"), "[z-a]\n").unwrap();
+    assert!(service.list_directories().is_err());
+    write(root.path().join(".gitignore"), "").unwrap();
+    create_dir_all(root.path().join("d/".repeat(33))).unwrap();
+    assert!(service
+        .list_directories()
+        .unwrap_err()
+        .message
+        .contains("32 levels"));
+    fs::remove_dir_all(root.path().join("d")).unwrap();
+    for n in 0..8451 {
+        write(root.path().join(n.to_string()), "").unwrap();
+    }
+    assert!(service
+        .list_directories()
+        .unwrap_err()
+        .message
+        .contains("budget"));
+    fs::remove_dir_all(root.path()).unwrap();
+    assert!(service.list_directories().is_err());
+    service.shutdown();
+    let private = tempdir().unwrap();
+    config.root = private.path().to_str().unwrap().to_owned();
+    config.exclude_root = true;
+    let mut service = ContextIndexService::new();
+    service.initialize(config).unwrap();
+    assert!(service.list_directories().unwrap().is_empty());
+}

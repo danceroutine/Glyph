@@ -1,3 +1,4 @@
+import { inventoryPackage } from '#src/skills/skillPackageInventory.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { testPackageMutations } from '#src/skills/tests/fixtures/testPackageMutations.js';
 import type { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
@@ -94,6 +95,7 @@ beforeEach(async () => {
     return instance;
   });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockResolvedValue({ files: [], truncated: false });
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'listDirectories').mockResolvedValue([]);
 });
 
 it('resolves user rule URIs below the dedicated user rule root', () => {
@@ -923,7 +925,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(privatePaths()).toContain(fixture.userDirectory);
       for (const [index, target] of targets.entries()) {
         const draft = aSkillDraft('Reviewed factory workflow', `workflow-${index}`);
-        await runtime.handle({ type: Command.PREVIEW_SKILL, targetId: target.id, draft: draft.toJSON() });
+        await runtime.handle({
+          type: Command.PREVIEW_SKILL,
+          targetId: target.id,
+          draft: { ...draft.toJSON(), directories: [{ path: 'templates/empty' }] },
+        });
         await runtime.handle({ type: Command.APPLY_SKILL, previewId: (await runtime.snapshot()).skillPreview!.id });
       }
       vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
@@ -1352,6 +1358,27 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         return { operationId: request.operationId, ok: false };
       });
       expect((await joined.snapshot()).instructionSources![0]!.message).toContain('catalog snapshot is unavailable');
+    });
+    it('diagnoses an unavailable profile mutation authority and retries it on the next catalog refresh', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const open = vi.mocked(NativeWorkspaceMutations.open);
+      const normal = open.getMockImplementation()!;
+      let blocked = true;
+      open.mockImplementation((binary, root) =>
+        root === fixture.userDirectory && blocked
+          ? Promise.reject(new Error('Profile authority unavailable'))
+          : normal(binary, root),
+      );
+      const runtime = await fixture.create([await fixture.folder('project')]);
+      expect((await runtime.snapshot()).skills).toContainEqual(
+        expect.objectContaining({ status: 'discovery-error', message: 'Profile authority unavailable' }),
+      );
+      blocked = false;
+      await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
+      expect((await runtime.snapshot()).skills).not.toContainEqual(
+        expect.objectContaining({ message: 'Profile authority unavailable' }),
+      );
     });
     it('recovers the user skill store and keeps ownership through a project that contains it', async () => {
       const profile = join(isolatedUserDirectory, '.glyph');
@@ -1900,6 +1927,12 @@ const repositoryRoot = resolve(import.meta.dirname, '..', '..', '..', '..');
 const factoryIdentity: GlyphConnectionIdentity = { profileId: 'profile', workspaceId: 'workspace', windowId: 'window' };
 
 function useFilesystemIndex(): void {
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'listDirectories').mockImplementation(async function (
+    this: RustWorkspacePathIndex,
+  ) {
+    const config = captured.indexOptions[captured.indexes.indexOf(this)]!;
+    return (await inventoryPackage(config.root)).directories;
+  });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
     this: RustWorkspacePathIndex,
     pattern,

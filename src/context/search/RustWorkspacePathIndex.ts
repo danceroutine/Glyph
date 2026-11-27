@@ -29,6 +29,7 @@ enum PathIndexMethod {
   SEARCH = 'search',
   GLOB = 'glob',
   FILTER_PATHS = 'filterPaths',
+  LIST_DIRECTORIES = 'listDirectories',
   ASSERT_REPLACEABLE_METADATA = 'assertReplaceableMetadata',
   CONTENT_SEARCH = 'contentSearch',
   CANCEL = 'cancel',
@@ -237,6 +238,12 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   async assertReplaceableMetadata(name: string): Promise<void> {
     await this.initialize();
     z.null().parse(await this.request(PathIndexMethod.ASSERT_REPLACEABLE_METADATA, name));
+  }
+
+  /** Fresh package directories admitted by the same native ignore policy as file capture. */
+  async listDirectories(signal?: AbortSignal): Promise<readonly string[]> {
+    await this.initialize(signal);
+    return z.array(z.string()).parse(await this.request(PathIndexMethod.LIST_DIRECTORIES, {}, signal));
   }
 
   /** Metadata-only intersection with the catalog, including ignore and sensitive-file exclusions. */

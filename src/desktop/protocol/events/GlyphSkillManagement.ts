@@ -7,6 +7,12 @@ export interface GlyphSkillPreview {
   readonly name: string;
   readonly source: string;
   readonly revision: string;
+  readonly directories?: readonly {
+    readonly path: string;
+    readonly status: 'added' | 'modified' | 'removed' | 'unchanged';
+    readonly beforeMode?: number;
+    readonly afterMode?: number;
+  }[];
   readonly files: readonly {
     readonly path: string;
     readonly before?: string;
@@ -30,6 +36,7 @@ export interface GlyphSkillTarget {
   readonly label: string;
 }
 export interface GlyphSkillDraft {
+  readonly directories?: readonly { readonly path: string; readonly mode?: number | undefined }[] | null | undefined;
   readonly name: string;
   readonly source: string;
   readonly files: readonly {

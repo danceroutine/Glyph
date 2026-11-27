@@ -467,6 +467,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               const result = await userSkillIndex.glob('**/*', { limit: 10000 });
               return { ...result, files: result.files.map(path => `skills/${path}`) };
             },
+            listPackageDirectories: async directory =>
+              (await listSkillPackageFiles(userRuleStore, directory, indexExecutable, false)).directories,
             refreshIndex: async () => {
               await userSkillIndex.refresh();
             },
@@ -505,6 +507,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               workspace: part.workspace,
               directory: '.glyph/skills',
               listFiles: () => part.index.glob('**/.glyph/skills/**/*', { limit: 10000 }),
+              listPackageDirectories: async (directory: string) =>
+                (await listSkillPackageFiles(part.disk, directory, indexExecutable, true)).directories,
               refreshIndex: async () => {
                 await part.index.refresh();
               },

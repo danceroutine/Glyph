@@ -84,3 +84,10 @@ it('rejects unsafe revision expressions before spawning Git and preserves execut
   repository('100755 blob abc\tSKILL.md\0');
   expect((await reader.read(source)).packageFiles().get('SKILL.md')?.mode).toBe(0o755);
 });
+
+it('retains explicit Git trees without blobs and bounds the total tree entry count', async () => {
+  repository('100644 blob abc\tSKILL.md\0' + '040000 tree abc\ttemplates\0');
+  expect((await reader.read(source)).packageDirectories()).toEqual(new Map([['templates', 0o755]]));
+  repository('040000 tree abc\tdirectory\0'.repeat(8451));
+  await expect(reader.read(source)).rejects.toThrow('directory budget');
+});

@@ -21,7 +21,7 @@ const changeSchema = z
     target_id: z.string().min(1),
     replace_id: z.string().nullable(),
     remove_id: z.string().nullable(),
-    draft: skillPackageDraftSchema.nullable(),
+    draft: skillPackageDraftSchema.partial({ directories: true }).nullable(),
   })
   .strict();
 const runSchema = z
@@ -49,8 +49,8 @@ export class SkillLifecycleToolRuntime implements ToolSource {
         activityPresentation: proposalActivityPresentation,
         allowedModes: [AgentModeID.AGENT],
         inputKind: ToolInputKind.JSON,
-        description: `Propose a complete skill package installation/update or removal. The human reviews every file before it changes. Native targets: ${JSON.stringify(manager.targets.slice(0, 32).map(({ id, label, updateOnly }) => ({ id, label, updateOnly })))}. Set unused nullable fields to null. Draft files replace the complete package, not individual hunks.`,
-        parameters: parameters(changeSchema),
+        description: `Propose a complete skill package installation/update or removal. The human reviews files and directories before they change. Native targets: ${JSON.stringify(manager.targets.slice(0, 32).map(({ id, label, updateOnly }) => ({ id, label, updateOnly })))}. Set unused nullable fields to null. Draft files and directories replace the complete package. List empty directory paths explicitly.`,
+        parameters: parameters(changeSchema.extend({ draft: skillPackageDraftSchema.nullable() })),
         validateInput: input => {
           changeSchema.parse(JSON.parse(input));
         },

@@ -42,6 +42,7 @@ enum Request {
     Search(SearchParams),
     Glob(GlobParams),
     FilterPaths(Vec<String>),
+    ListDirectories,
     AssertReplaceableMetadata(String),
     ContentSearch(ContentSearchParams),
     Cancel(CancelParams),
@@ -292,6 +293,9 @@ fn service_loop(
                     Request::FilterPaths(paths) => {
                         (result_response(id, service.filter_paths(paths)), false)
                     }
+                    Request::ListDirectories => {
+                        (result_response(id, service.list_directories()), false)
+                    }
                     Request::Glob(params) => (result_response(id, service.glob(params)), false),
                     Request::ContentSearch(params) => {
                         let context = match service.content_search_context() {
@@ -433,6 +437,14 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
             envelope.params,
             Some(envelope.id.clone()),
         )?),
+        "listDirectories" => {
+            let _: EmptyParams = decode_params(
+                "listDirectories",
+                envelope.params,
+                Some(envelope.id.clone()),
+            )?;
+            Request::ListDirectories
+        }
         "refresh" => {
             let _: EmptyParams =
                 decode_params("refresh", envelope.params, Some(envelope.id.clone()))?;

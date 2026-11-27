@@ -1,6 +1,7 @@
 import { outsideWorkspace } from '#src/shell/TrustedHostExecutable.js';
 import { SkillRepositoryGit } from './SkillRepositoryGit.ts';
-import { inventoryFiles } from './skillPackageInventory.ts';
+import { indexedPackageDirectories } from './listSkillPackageFiles.ts';
+import { inventoryPackage } from './skillPackageInventory.ts';
 import { basename, join, resolve } from 'node:path';
 import { mkdtemp, rm, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -45,9 +46,14 @@ export class SkillPackageSourceReader {
         if (state.truncated) throw new Error('Skill source exceeds the file budget.');
         const list = await index.glob('**/*', { limit: 257, ...(signal ? { signal } : {}) });
         if (list.truncated) throw new Error('Skill source exceeds the file budget.');
-        const inventory = await inventoryFiles(root, signal);
+        const inventory = await inventoryPackage(root, signal);
+        const modes = await indexedPackageDirectories(index, path => store.resolvePath(path), signal);
         const indexed = new Set(list.files);
-        if (indexed.size !== inventory.length || inventory.some(path => !indexed.has(path)))
+        if (
+          indexed.size !== inventory.files.length ||
+          inventory.files.some(path => !indexed.has(path)) ||
+          inventory.directories.some(path => !modes.has(path))
+        )
           throw new Error('Skill source contains excluded or unindexed files.');
         const files = [];
         let bytes = 0;
@@ -63,7 +69,12 @@ export class SkillPackageSourceReader {
             encoding: 'base64' as const,
           });
         }
-        return new SkillPackageDraft({ name: basename(root), source: root, files });
+        return new SkillPackageDraft({
+          name: basename(root),
+          source: root,
+          files,
+          directories: [...modes].map(([path, mode]) => ({ path, mode })),
+        });
       } finally {
         await index.dispose();
       }
@@ -106,11 +117,21 @@ export class SkillPackageSourceReader {
         await git('--git-dir=source.git', 'rev-parse', '--verify', '--end-of-options', 'FETCH_HEAD^{commit}')
       ).trim();
       const tree = source.directory ? `${revision}:${source.directory.replace(/\/$/u, '')}` : revision;
-      const entries = (await git('--git-dir=source.git', 'ls-tree', '-r', '-z', tree)).split('\0').filter(Boolean);
-      if (entries.length > 256) throw new Error('Skill source exceeds 256 files.');
+      const entries = (await git('--git-dir=source.git', 'ls-tree', '-r', '-t', '-z', tree))
+        .split('\0')
+        .filter(Boolean);
+      if (entries.length > 8450) throw new Error('Skill source exceeds its directory budget.');
+      const directories = [];
+      const blobs = [];
+      for (const entry of entries) {
+        const tree = /^040000 tree [a-f0-9]+\t(.+)$/su.exec(entry);
+        if (tree) directories.push({ path: tree[1]!, mode: 0o755 });
+        else blobs.push(entry);
+      }
+      if (blobs.length > 256) throw new Error('Skill source exceeds 256 files.');
       const files = [];
       let bytes = 0;
-      for (const entry of entries) {
+      for (const entry of blobs) {
         const match = /^(100644|100755) blob ([a-f0-9]+)\t(.+)$/su.exec(entry);
         if (!match) throw new Error('Skill repositories cannot contain symlinks or submodules.');
         const blob = await transport.run(['--git-dir=source.git', 'cat-file', 'blob', match[2]!], 1024 * 1024);
@@ -127,6 +148,7 @@ export class SkillPackageSourceReader {
         name: basename(source.directory || source.url.replace(/\.git$/u, '')),
         source: `Requested repository ${source.url}@${revision}${source.directory ? `:${source.directory}` : ''}`,
         files,
+        directories,
       });
     } finally {
       await rm(temporary, { recursive: true, force: true });

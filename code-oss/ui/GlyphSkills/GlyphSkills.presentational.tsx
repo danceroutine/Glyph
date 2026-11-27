@@ -296,7 +296,7 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
                 <code>{escapeDisplayControls(management.preview.destination.path, true)}</code>
               </p>
             )}
-            <GlyphSkillFileComparison files={management.preview.files} />
+            <GlyphSkillFileComparison {...management.preview} />
             <div class={styles.toolbar}>
               <Button
                 disabled={busy}
