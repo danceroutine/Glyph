@@ -67,7 +67,9 @@ including explicit selections and unsaved edits, stays at the selected revision.
 `WorkspaceDisclosure` retains the access checks returned by the stores and indexes
 that supplied the result. The agent checks them after asynchronous instruction lookup
 and provider preparation. Folder outlines and comparison resources repeat their live
-checks at model handoff, including transport retries. These checks belong to the
+checks at model handoff, including transport retries. Before the provider receives a protected read, a recovery
+checkpoint records its completion and lets the next turn read it again. Steering with
+undelivered captures enters provider history after the handoff. These checks belong to the
 current turn and stay in host memory.
 
 Native search and the shell run outside the JavaScript process. Pass the host's

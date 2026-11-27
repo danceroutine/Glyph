@@ -188,6 +188,14 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       let totalUsage: Usage | null = null;
       let usageIncomplete = false;
       let round = 0;
+      let pendingWorkspaceInput = request.disclosure?.hasSources ?? false;
+      const checkpointSteering = async (current: TTurn) => {
+        // Until a provider has received these bytes, recovery must keep the last delivered input.
+        if (pendingWorkspaceInput) return;
+        this.state = this.persistentState(this.adapter.snapshot(current));
+        hasToolCheckpoint = true;
+        await options.onStateCheckpoint?.(structuredClone(this.state));
+      };
       const applySteering = async (steeringRequest: ChatRequest): Promise<boolean> => {
         try {
           (await steeringRequest.disclosure?.authorize(signal))?.();
@@ -201,7 +209,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         }
         try {
           turn = await this.adapter.steerTurn(turn!, modelInput(steeringRequest), context(round));
-          if (steeringRequest.disclosure) disclosures.add(steeringRequest.disclosure);
+          if (steeringRequest.disclosure) {
+            disclosures.add(steeringRequest.disclosure);
+            pendingWorkspaceInput ||= steeringRequest.disclosure.hasSources;
+          }
         } finally {
           boundaryInstructions = undefined;
         }
@@ -211,9 +222,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
           if (!(await applySteering(steering))) continue;
-          this.state = this.persistentState(this.adapter.snapshot(turn));
-          hasToolCheckpoint = true;
-          await options.onStateCheckpoint?.(structuredClone(this.state));
+          await checkpointSteering(turn);
         }
         round += 1;
         const send = await this.adapter.prepareStep(turn, context(round));
@@ -230,6 +239,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         const assertCurrent = await authorize();
         assertCurrent();
         const step = await send(assertCurrent, authorize);
+        pendingWorkspaceInput = false;
         turn = step.turn;
         usageIncomplete ||= step.usage === null;
         totalUsage = addUsage(totalUsage, step.usage);
@@ -245,9 +255,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
             if (appliedSteering) break;
           }
           if (appliedSteering) {
-            this.state = this.persistentState(this.adapter.snapshot(turn));
-            hasToolCheckpoint = true;
-            await options.onStateCheckpoint?.(structuredClone(this.state));
+            await checkpointSteering(turn);
             continue;
           }
           if (!step.hasVisibleOutput) {
@@ -272,6 +280,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
 
         const roundMode = mode;
         const toolRound = round;
+        const workspaceResults = new Set<string>();
         const interruptions: unknown[] = signal.aborted ? [signal.reason] : [];
         const results = signal.aborted
           ? step.toolCalls.map(call => ({
@@ -292,7 +301,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                     turnId,
                     mode: roundMode,
                     onModeChanged: setMode,
-                    retainResultAccess: toolAccess.retain,
+                    retainResultAccess: check => {
+                      workspaceResults.add(call.id);
+                      toolAccess.retain(check);
+                    },
                   },
                   onActivity: reportToolActivity,
                   trace: (kind, data) => {
@@ -304,8 +316,25 @@ export class AgentRuntime<TTurn> implements ChatProvider {
               }),
             );
         if (signal.aborted) interruptions.push(signal.reason);
-        turn = this.adapter.appendToolResults(turn, results);
-        this.state = this.persistentState(this.adapter.snapshot(turn));
+        // Preserve the outcome of every tool, including unrelated writes. A read which has not
+        // reached the model can be performed again after recovery under the new turn's authority.
+        const live = this.adapter.appendToolResults(turn, results);
+        pendingWorkspaceInput = workspaceResults.size > 0;
+        const checkpoint = pendingWorkspaceInput
+          ? this.adapter.appendToolResults(
+              turn,
+              results.map(result =>
+                workspaceResults.has(result.call.id)
+                  ? {
+                      ...result,
+                      output: JSON.stringify({ status: 'Read completed. Read again for current workspace contents.' }),
+                    }
+                  : result,
+              ),
+            )
+          : live;
+        turn = live;
+        this.state = this.persistentState(this.adapter.snapshot(checkpoint));
         await options.onStateCheckpoint?.(structuredClone(this.state));
         trace('tool.outcomes_checkpointed', { callIds: results.map(result => result.call.id) }, round);
         if (interruptions.length > 0) throw interruptions[0];
