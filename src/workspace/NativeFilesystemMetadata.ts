@@ -6,7 +6,12 @@ import type { FileHandle } from 'node:fs/promises';
 import type { WorkspacePathAccess } from './WorkspacePathAccess.ts';
 import type { FilesystemMetadata } from './FilesystemMetadata.ts';
 
-/** The native inspector receives the caller's already-open inode on standard input. */
+/**
+ * Bridges host operations to the native physical identity and metadata checks.
+ * Workspace path admission can bind a route to the caller's open handle. File
+ * metadata inspection passes that handle directly to the inspector. Both
+ * results describe the operation in progress and expire when its target changes.
+ */
 export class NativeFilesystemMetadata implements FilesystemMetadata, WorkspacePathAccess, SourceOriginReader {
   constructor(private readonly executable: string) {}
 
