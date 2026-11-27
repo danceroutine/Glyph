@@ -110,10 +110,9 @@ impl<'a> MountTable<'a> {
                 .filter(|source| source.starts_with(path))
             {
                 for entry in [&source, &candidate] {
-                    if let Err(error) = entry.metadata()
-                        && error.kind() != io::ErrorKind::NotFound
-                    {
-                        return Err(error);
+                    match entry.metadata() {
+                        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                        _ => {}
                     }
                 }
                 if crate::workspace_paths::same_location(&source, &candidate) {

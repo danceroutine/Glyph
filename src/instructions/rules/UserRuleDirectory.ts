@@ -49,7 +49,7 @@ export class UserRuleDirectory {
       return [{ ...this.paths.sourceIdentity(kind, route(path)), kind, scope: route(scope) }];
     });
     const [first, ...others] = aliases;
-    if (!first || !others.length) return first;
+    if (!first || others.length === 0) return first;
     return {
       ...first,
       additionalScopes: others.map(({ kind, scope }) => ({ kind, scope })),
