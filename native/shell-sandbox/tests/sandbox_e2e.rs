@@ -215,7 +215,7 @@ impl Fixture {
         environment: &[(&str, &Path)],
         protected: &[&Path],
     ) -> Output {
-        self.command(profile, script, environment, protected)
+        self.command(profile, script, environment, protected, &[])
             .output()
             .expect("run native sandbox helper")
     }
@@ -226,6 +226,7 @@ impl Fixture {
         script: &str,
         environment: &[(&str, &Path)],
         protected: &[&Path],
+        private: &[&Path],
     ) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_glyph-shell-sandbox"));
         command
@@ -251,6 +252,10 @@ impl Fixture {
         for path in protected {
             assert!(path.starts_with(&self.root));
             command.arg("--protected-path").arg(path);
+        }
+        for path in private {
+            assert!(path.starts_with(&self.root));
+            command.arg("--private-path").arg(path);
         }
         command
             .args(["--", "/bin/sh", "-c", script])
@@ -360,6 +365,17 @@ fn security_admitted_package_is_readable_but_immutable_outside_the_workspace() {
     fs::create_dir(&package).unwrap();
     let script = package.join("task.sh");
     fs::write(&script, "echo pinned").unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = package.join("templates");
+        let template = directory.join("example");
+        fs::create_dir(&directory).unwrap();
+        fs::write(&template, "reviewed").unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o750)).unwrap();
+        fs::set_permissions(&template, fs::Permissions::from_mode(0o640)).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let run = |admit: bool, code: &str| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_glyph-shell-sandbox"));
         command
@@ -393,6 +409,22 @@ fn security_admitted_package_is_readable_but_immutable_outside_the_workspace() {
     );
     #[cfg(target_os = "linux")]
     fs::write(fixture.workspace.join("result.txt"), "initial").unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        let modes = run(
+            true,
+            r#"dir=${GLYPH_RESOURCE%/*}/templates; stat -c '%a' "$dir" "$dir/example" "$GLYPH_RESOURCE"; printf changed >"$dir/example""#,
+        );
+        assert!(!modes.status.success());
+        assert_eq!(String::from_utf8(modes.stdout).unwrap(), "750\n640\n755\n");
+        assert!(String::from_utf8_lossy(&modes.stderr)
+            .to_lowercase()
+            .contains("read-only"));
+        assert_eq!(
+            fs::read(package.join("templates/example")).unwrap(),
+            b"reviewed"
+        );
+    }
     let output = run(
         true,
         "cat \"$GLYPH_RESOURCE\"; printf 'I win' > \"$GLYPH_OUTPUT\"",
@@ -472,16 +504,24 @@ fn security_private_staging_and_project_package_paths_stay_reserved() {
 
 #[test]
 #[ignore = "requires the host sandbox backend; run with pnpm test:security:native"]
-fn security_running_shell_cannot_read_a_new_nested_private_transaction() {
+fn security_running_shell_keeps_existing_and_future_host_files_private() {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::process::Stdio;
     let fixture = Fixture::new();
     let future = fixture.workspace.join("nested/.skill-staging/transaction");
+    let runtime = fixture.home.join(".cargo/bin");
+    fs::create_dir_all(&runtime).unwrap();
+    let ordinary = runtime.join("public");
+    let existing = runtime.join("provider.log");
+    let new_trace = runtime.join("later.log");
+    fs::write(&ordinary, "public control").unwrap();
+    fs::write(&existing, "private marker").unwrap();
     let mut command = fixture.command(
         "workspace-write",
-        "echo ready; read line; cat \"$FILE\"",
-        &[("FILE", &future)],
+        r#"echo ready; read line; cat "$PUBLIC" || exit 1; ! cat "$TRACE" && ! cat "$NEW_TRACE" && ! cat "$FILE""#,
+        &[("FILE", &future), ("PUBLIC", &ordinary), ("TRACE", &existing), ("NEW_TRACE", &new_trace)],
         &[],
+        &[&existing, &new_trace],
     );
     let mut child = command
         .stdin(Stdio::piped())
@@ -495,6 +535,7 @@ fn security_running_shell_cannot_read_a_new_nested_private_transaction() {
     assert_eq!(ready.trim(), "ready");
     fs::create_dir_all(future.parent().unwrap()).unwrap();
     fs::write(&future, "private").unwrap();
+    fs::write(&new_trace, "new private marker").unwrap();
     child
         .stdin
         .take()
@@ -503,8 +544,8 @@ fn security_running_shell_cannot_read_a_new_nested_private_transaction() {
         .unwrap();
     let mut content = String::new();
     output.read_to_string(&mut content).unwrap();
-    assert!(content.is_empty());
-    assert!(!child.wait().unwrap().success());
+    assert_eq!(content, "public control");
+    assert!(child.wait().unwrap().success());
 }
 
 #[cfg(target_os = "linux")]

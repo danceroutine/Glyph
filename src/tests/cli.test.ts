@@ -24,7 +24,7 @@ describe('glyph command line', () => {
     await cli.finished;
     const [launcher] = cli.instances('NativeShellSandboxLauncher');
     const options = launcher!.args[0] as { privatePaths: () => readonly string[] };
-    expect(options.privatePaths()).toEqual([directory]);
+    expect(options.privatePaths()).toEqual(['/state/glyph/trace.log', directory]);
   });
   it('prints usage help without starting a terminal session', async () => {
     const cli = prepareCli({ argv: ['--help'] });
@@ -108,7 +108,7 @@ describe('glyph command line', () => {
       },
     ]);
     const privatePaths = (launcher!.args[0] as { privatePaths: () => readonly string[] }).privatePaths;
-    expect(privatePaths()).toEqual([]);
+    expect(privatePaths()).toEqual([traceFile]);
     const [registry] = cli.instances('ToolRegistry');
     expect(registry?.args).toEqual([
       ['ProjectToolRuntime', 'WebToolRuntime', 'ProposeQuestionToolRuntime', 'ShellToolRuntime'],

@@ -119,7 +119,7 @@ async function main(): Promise<void> {
       workspaceRoots: projectContext.roots.map(root => root.path),
       stateDirectory: configuration.stateDirectory,
       protectedPaths: [packageRoot, indexExecutable, shellSandboxExecutable],
-      privatePaths: () => (existsSync(userDirectory) ? [userDirectory] : []),
+      privatePaths: () => [configuration.traceFile, ...(existsSync(userDirectory) ? [userDirectory] : [])],
       accessPolicy,
     }),
   );

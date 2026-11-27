@@ -256,7 +256,7 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
     request.private_paths = request
         .private_paths
         .iter()
-        .map(|path| canonical_path(path, "private path"))
+        .map(|path| canonical_private_path(path))
         .collect::<Result<Vec<_>, _>>()?;
     request.private_paths.sort();
     request.private_paths.dedup();
@@ -376,6 +376,26 @@ fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, SandboxError
         )));
     }
     Ok(canonical)
+}
+
+/// Reserve the first absent component so a trace created after launch remains private.
+fn canonical_private_path(path: &Path) -> Result<PathBuf, SandboxError> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+    {
+        return Err(SandboxError::InvalidPath(
+            "private path must be absolute and normalized".to_owned(),
+        ));
+    }
+    let existing = path.ancestors().find(|part| {
+        !matches!(fs::symlink_metadata(part), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    }).expect("an absolute path contains the filesystem root");
+    let mut resolved = canonical_path(existing, "private path")?;
+    let missing = path.strip_prefix(existing).expect("ancestor prefix");
+    resolved.extend(missing.iter().next());
+    Ok(resolved)
 }
 
 fn canonical_path(path: &Path, label: &str) -> Result<PathBuf, SandboxError> {
@@ -933,8 +953,11 @@ pub mod linux {
                 if request
                     .workspace_roots
                     .iter()
-                    .chain(&request.private_paths)
                     .any(|root| physical.starts_with(root) || root.starts_with(&physical))
+                    || request
+                        .private_paths
+                        .iter()
+                        .any(|root| physical.starts_with(root))
                 {
                     continue;
                 }
@@ -975,7 +998,9 @@ pub mod linux {
 
         arguments.extend(resource_mounts);
         for path in &request.private_paths {
-            if filtered_roots.iter().any(|root| path.starts_with(root)) {
+            if path.starts_with(&request.state_directory)
+                || filtered_roots.iter().any(|root| path.starts_with(root))
+            {
                 continue;
             }
             if path.is_dir() {

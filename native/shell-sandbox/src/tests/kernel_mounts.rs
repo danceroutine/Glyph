@@ -54,13 +54,13 @@ fn linked_file_materializes_verified_bytes_on_a_distinct_read_only_inode() {
 
 #[test]
 #[ignore = "requires an unprivileged Linux user and mount namespace"]
-fn read_only_binding_pins_the_source_inode_and_rejects_writes() {
+fn workspace_bindings_pin_the_file_and_enforce_the_selected_write_permission() {
     // The mount namespace is created before the child test harness starts any threads.
     const CHILD: &str = "GLYPH_TEST_READ_ONLY_BIND";
     if std::env::var_os(CHILD).is_none() {
         let result = std::process::Command::new("unshare")
             .arg("-Urm").arg(std::env::current_exe().unwrap())
-            .args(["--exact", "kernel_workspace::kernel_mounts::read_only_binding_pins_the_source_inode_and_rejects_writes", "--ignored"])
+            .args(["--exact", "kernel_workspace::kernel_mounts::workspace_bindings_pin_the_file_and_enforce_the_selected_write_permission", "--ignored"])
             .env(CHILD, "1").output().unwrap();
         assert!(result.status.success(), "{result:?}");
         assert!(
@@ -96,4 +96,19 @@ fn read_only_binding_pins_the_source_inode_and_rejects_writes() {
     );
     assert_eq!(fs::read(&source).unwrap(), b"live source");
     unmount(&target, UnmountFlags::empty()).unwrap();
+
+    let writable_source = root.join("editable");
+    fs::write(&writable_source, b"original").unwrap();
+    let writable_target = view.target(&writable_source);
+    (&mut view)
+        .file(
+            &writable_source,
+            &fs::File::open(&writable_source).unwrap().into(),
+            true,
+            Scope::Workspace,
+        )
+        .unwrap();
+    fs::write(&writable_target, b"saved edit").unwrap();
+    assert_eq!(fs::read(&writable_source).unwrap(), b"saved edit");
+    unmount(&writable_target, UnmountFlags::empty()).unwrap();
 }

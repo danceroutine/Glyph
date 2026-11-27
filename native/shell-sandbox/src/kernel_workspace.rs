@@ -69,7 +69,7 @@ impl KernelWorkspace {
 impl SnapshotBudget {
     fn take_mount(&mut self, scope: Scope) -> bool {
         let remaining = match scope {
-            Scope::Runtime => &mut self.runtime_mounts,
+            Scope::Runtime | Scope::Resource => &mut self.runtime_mounts,
             Scope::Dependency => &mut self.dependency_mounts,
             Scope::Workspace => &mut self.workspace_mounts,
         };
@@ -156,6 +156,10 @@ impl Mounts for &mut KernelWorkspace {
     fn directory(&mut self, path: &Path) -> io::Result<()> {
         fs::create_dir(self.target(path))
     }
+    fn restore_directory_mode(&mut self, path: &Path, directory: &OwnedFd) -> io::Result<()> {
+        let mode = rustix::fs::fstat(directory)?.st_mode & 0o777;
+        fs::set_permissions(self.target(path), fs::Permissions::from_mode(mode))
+    }
     fn symlink(&mut self, target: &OsStr, path: &Path) -> io::Result<()> {
         std::os::unix::fs::symlink(target, self.target(path))
     }
@@ -169,9 +173,17 @@ impl Mounts for &mut KernelWorkspace {
         let length = source.st_size as u64;
         // Small read-only files share the sealed tmpfs. Reserve mounts for large binaries and live writes.
         let charge = length.saturating_add(4095) / 4096 * 4096 + 512;
-        if scope == Scope::Runtime && length <= 1024 * 1024 && charge <= self.budget.runtime_bytes {
+        if matches!(scope, Scope::Runtime | Scope::Resource)
+            && length <= 1024 * 1024
+            && charge <= self.budget.runtime_bytes
+        {
             self.budget.runtime_bytes -= charge;
-            return copy_runtime_file(fd, &target, length);
+            return copy_runtime_file(
+                fd,
+                &target,
+                length,
+                (scope == Scope::Resource).then_some(source.st_mode & 0o777),
+            );
         }
         if !self.budget.take_mount(scope) {
             return Ok(());
@@ -223,15 +235,25 @@ fn runtime_arguments(
     result
 }
 
-fn copy_runtime_file(fd: &OwnedFd, target: &Path, length: u64) -> io::Result<()> {
+fn copy_runtime_file(
+    fd: &OwnedFd,
+    target: &Path,
+    length: u64,
+    resource_mode: Option<u32>,
+) -> io::Result<()> {
     let mut copy = fs::File::create_new(target)?;
     let mut source_file = fs::File::from(rustix::io::dup(fd)?).take(length + 1);
     if io::copy(&mut source_file, &mut copy)? != length || rustix::fs::fstat(fd)?.st_nlink != 1 {
         return fs::remove_file(target);
     }
-    let descriptor = format!("/proc/self/fd/{}", fd.as_raw_fd());
-    let executable = rustix::fs::access(descriptor, rustix::fs::Access::EXEC_OK).is_ok();
-    let mode = if executable { 0o500 } else { 0o400 };
+    let mode = resource_mode.unwrap_or_else(|| {
+        let descriptor = format!("/proc/self/fd/{}", fd.as_raw_fd());
+        if rustix::fs::access(descriptor, rustix::fs::Access::EXEC_OK).is_ok() {
+            0o500
+        } else {
+            0o400
+        }
+    });
     copy.set_permissions(fs::Permissions::from_mode(mode))
 }
 
@@ -298,6 +320,10 @@ fn public_subdirectories(
     private: &[PathBuf],
     remaining: &mut usize,
 ) -> io::Result<Option<Vec<PathBuf>>> {
+    // Seal the parent view even if the reserved trace pathname has not appeared yet.
+    if private.iter().any(|child| child.parent() == Some(path)) {
+        return Ok(None);
+    }
     let mut children = Vec::new();
     for entry in fs::read_dir(path)? {
         if *remaining == 0 {
@@ -306,7 +332,7 @@ fn public_subdirectories(
         *remaining -= 1;
         let entry = entry?;
         let child = entry.path();
-        if super::private_component(&child) || private.contains(&child) {
+        if super::private_component(&child) {
             return Ok(None);
         }
         if entry.file_type()?.is_dir() {
@@ -380,6 +406,13 @@ mod tests {
         assert!(public_subdirectories(base.path(), &[], &mut 0)
             .unwrap()
             .is_none());
+        let future_trace = base.path().join("provider.log");
+        assert!(!future_trace.exists());
+        assert!(
+            public_subdirectories(base.path(), &[future_trace], &mut 10_000)
+                .unwrap()
+                .is_none()
+        );
         let many = base.path().join("many");
         fs::create_dir(&many).unwrap();
         for id in 0..513 {
@@ -446,14 +479,14 @@ mod tests {
         fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
         let copy = base.path().join("read-only");
         let read = || fs::File::open(&program).unwrap().into();
-        copy_runtime_file(&read(), &copy, 7).unwrap();
+        copy_runtime_file(&read(), &copy, 7, None).unwrap();
         assert_eq!(fs::symlink_metadata(&copy).unwrap().mode() & 0o777, 0o500);
         fs::remove_file(&copy).unwrap();
-        copy_runtime_file(&read(), &copy, 3).unwrap();
+        copy_runtime_file(&read(), &copy, 3, None).unwrap();
         assert!(!copy.exists());
         let occupied = base.path().join("occupied");
         fs::write(&occupied, "fixture").unwrap();
-        assert!(copy_runtime_file(&read(), &occupied, 7).is_err());
+        assert!(copy_runtime_file(&read(), &occupied, 7, None).is_err());
         let program = std::env::current_exe().unwrap();
         assert!((&mut view)
             .runtime(&program, &program, &request, &[])

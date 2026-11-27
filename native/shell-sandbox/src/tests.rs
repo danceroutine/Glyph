@@ -229,8 +229,17 @@ fn private_metadata_is_masked_and_cannot_be_admitted_as_a_readable_resource() {
     invalid.read_only_paths = vec![child];
     assert!(prepare_request(invalid).is_err());
     let mut invalid = prepared;
-    invalid.private_paths = vec![private.join("missing")];
-    assert!(prepare_request(invalid).is_err());
+    let future = private.join("future");
+    invalid.private_paths = vec![future.join("provider.log")];
+    let prepared = prepare_request(invalid).unwrap();
+    assert_eq!(prepared.private_paths, vec![future.clone()]);
+    let policy = macos::seatbelt_policy(&prepared, fixture.path(), None).unwrap();
+    assert!(policy.contains(&format!(
+        "(deny file-read* file-write* (subpath \"{}\"))",
+        future.display()
+    )));
+    assert!(canonical_private_path(Path::new("relative")).is_err());
+    assert!(canonical_private_path(&private.join("../trace")).is_err());
 }
 
 #[test]
@@ -1096,16 +1105,15 @@ fn bubblewrap_exposes_existing_home_toolchains_read_only() {
 
     fs::create_dir_all(home.join(".local")).unwrap();
     std::os::unix::fs::symlink(&root, home.join(".local/bin")).unwrap();
-    let arguments = linux::bubblewrap_arguments(
-        &request(
-            SandboxProfile::ReadOnly,
-            &root,
-            &fixture.path().join("state"),
-        ),
-        Some(&home),
-    )
-    .expect("arguments");
-
+    let mut source = request(
+        SandboxProfile::ReadOnly,
+        &root,
+        &fixture.path().join("state"),
+    );
+    source
+        .private_paths
+        .push(home.join(".cargo/bin/provider.log"));
+    let arguments = linux::bubblewrap_arguments(&source, Some(&home)).expect("arguments");
     assert!(!arguments
         .iter()
         .any(|arg| arg == home.join(".local/bin").as_os_str()));

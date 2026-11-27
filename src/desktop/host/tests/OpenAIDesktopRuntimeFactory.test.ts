@@ -377,6 +377,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           emit: () => {},
         };
         runtime = await factory.create(input);
+        const privatePaths = captured.sandboxOptions.at(-1)!.privatePaths;
+        if (typeof privatePaths !== 'function') throw new Error('Expected dynamic host metadata masks');
+        expect(privatePaths()).toContain(join(directory, 'trace.log'));
         expect((await runtime.snapshot()).chats.map(chat => chat.id)).toEqual(['saved-chat']);
         expect((await runtime.snapshot()).proposals.map(value => value.id)).toEqual([proposal.id]);
         if (!trusted) await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });

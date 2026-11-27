@@ -61,6 +61,7 @@ pub(super) enum Scope {
     Workspace,
     Dependency,
     Runtime,
+    Resource,
 }
 
 pub(super) trait Mounts {
@@ -74,6 +75,7 @@ pub(super) trait Mounts {
     ) -> Result<Vec<OsString>, SandboxError>;
     fn start(&mut self, root: &Path) -> io::Result<()>;
     fn directory(&mut self, path: &Path) -> io::Result<()>;
+    fn restore_directory_mode(&mut self, path: &Path, directory: &OwnedFd) -> io::Result<()>;
     fn symlink(&mut self, target: &OsStr, path: &Path) -> io::Result<()>;
     fn linked_file(&mut self, path: &Path, fd: &OwnedFd) -> io::Result<()>;
     fn file(&mut self, path: &Path, fd: &OwnedFd, writable: bool, scope: Scope) -> io::Result<()>;
@@ -136,6 +138,16 @@ impl<M: Mounts> WorkspaceView<M> {
                         .is_some_and(|n| n.eq_ignore_ascii_case(".git"))
             })
             && !protected.iter().any(|path| root.starts_with(path));
+        let scope = if self.scope == Scope::Runtime
+            && request
+                .read_only_paths
+                .iter()
+                .any(|resource| root.starts_with(resource))
+        {
+            Scope::Resource
+        } else {
+            self.scope
+        };
         self.directory(
             root,
             directory,
@@ -145,7 +157,7 @@ impl<M: Mounts> WorkspaceView<M> {
                 private,
             },
             writable,
-            self.scope,
+            scope,
             0,
         )?;
         Ok(self.mounts.finish(root)?)
@@ -181,7 +193,7 @@ impl<M: Mounts> WorkspaceView<M> {
             let remaining = match scope {
                 Scope::Workspace => None,
                 Scope::Dependency => Some(&mut self.mounts.budget().dependency_entries),
-                Scope::Runtime => Some(&mut self.mounts.budget().runtime_entries),
+                Scope::Runtime | Scope::Resource => Some(&mut self.mounts.budget().runtime_entries),
             };
             if let Some(remaining) = remaining {
                 if *remaining == 0 {
@@ -245,6 +257,9 @@ impl<M: Mounts> WorkspaceView<M> {
                 _ => {}
             }
         }
+        if scope == Scope::Resource {
+            self.mounts.restore_directory_mode(path, &directory)?;
+        }
         Ok(())
     }
 }
@@ -303,6 +318,10 @@ impl Mounts for MountTrace {
     }
     fn directory(&mut self, path: &Path) -> io::Result<()> {
         self.0.extend(["--dir".into(), path.into()]);
+        Ok(())
+    }
+    fn restore_directory_mode(&mut self, path: &Path, _directory: &OwnedFd) -> io::Result<()> {
+        self.0.extend(["--chmod".into(), path.into()]);
         Ok(())
     }
     fn symlink(&mut self, target: &OsStr, path: &Path) -> io::Result<()> {
@@ -404,6 +423,12 @@ mod tests {
         );
         std::fs::set_permissions(&inaccessible_dir, std::fs::Permissions::from_mode(0o700))
             .unwrap();
+        request.read_only_paths.push(root.clone());
+        let resource = optional.workspace(&root, &request, &[], &[]).unwrap();
+        assert!(resource
+            .windows(2)
+            .any(|args| args[0] == "--chmod" && args[1] == root.as_os_str()));
+        request.read_only_paths.clear();
         optional.mounts.budget().runtime_entries = 0;
         assert!(!optional
             .workspace(&root, &request, &[], &[])
