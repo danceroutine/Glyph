@@ -13,11 +13,10 @@ export class SkillContextContributor implements TurnContextContributor {
   readonly id = 'skills';
   constructor(private readonly catalog: SkillCatalog) {}
   async beginTurn(input: TurnContextInput, signal?: AbortSignal): Promise<SkillTurnContext> {
-    const descriptors = (await this.catalog.refresh(signal)).filter(
-      skill => skill.enabled && skill.status === 'active',
-    );
+    const sources = await this.catalog.refresh(signal);
+    const descriptors = sources.filter(skill => skill.enabled && skill.status === 'active');
     const candidates = descriptors.filter(skill => this.catalog.appliesTo(skill, input.attachmentPaths));
-    const session = new SkillTurnContext(input.turnId, descriptors, candidates, this.catalog);
+    const session = new SkillTurnContext(input.turnId, descriptors, candidates, this.catalog, sources);
     try {
       await session.initialize(input.skillIds ?? [], signal);
     } catch (error) {
@@ -41,6 +40,7 @@ export class SkillTurnContext implements TurnContextContribution {
     private readonly descriptors: readonly SkillDescriptor[],
     initial: readonly SkillDescriptor[],
     private readonly catalog: SkillCatalog,
+    private readonly sources = descriptors,
   ) {
     this.initialCandidates = this.offerCandidates(initial);
   }
@@ -87,7 +87,7 @@ export class SkillTurnContext implements TurnContextContribution {
     return activation && candidates ? { ...activation, ...candidates } : (activation ?? candidates);
   }
   activateManualSkills(ids: readonly string[], explanation: string, signal?: AbortSignal) {
-    return this.activate([...new Set(ids)], 'manual', explanation, signal);
+    return this.activate(ids, 'manual', explanation, signal);
   }
   activateSource(id: string, reason: 'manual' | 'model', explanation: string, signal?: AbortSignal) {
     return this.activate([id], reason, explanation, signal);
@@ -124,11 +124,15 @@ export class SkillTurnContext implements TurnContextContribution {
     this.advertised.clear();
   }
   private async activate(
-    ids: readonly string[],
+    requested: readonly string[],
     reason: SkillActivation['reason'],
     explanation: string,
     signal?: AbortSignal,
   ): Promise<TurnContextEnvelope | undefined> {
+    const ids =
+      reason === 'manual'
+        ? [...new Set(requested.map(id => this.catalog.resolveReference(id, this.sources)?.id ?? id))]
+        : requested;
     // A batch validates against all earlier committed selections and publishes its captures together.
     while (this.pending) {
       const pending = this.pending;

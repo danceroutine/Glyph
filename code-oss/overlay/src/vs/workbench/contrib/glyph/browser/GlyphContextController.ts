@@ -36,6 +36,7 @@ import type { GlyphInstructionSource } from '#glyph/protocol/events/GlyphInstruc
 
 /** Capture context only from explicit file selection, search, or selected editor text. */
 export class GlyphContextController extends Disposable implements GlyphContextActions {
+  private resolveHistoricalSkill: ((id: string) => Promise<string | undefined>) | undefined;
   private skillSources: () => readonly GlyphSkill[] = () => [];
   private readonly instructionsChanged = this._register(new Emitter<void>());
   private readonly resourceIdentity = new ExtUri(
@@ -76,7 +77,12 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (const editor of codeEditors.listCodeEditors()) watch(editor);
     this._register(codeEditors.onCodeEditorAdd(watch));
   }
-  setSkillSources(source: () => readonly GlyphSkill[], refresh?: () => Promise<void>): void {
+  setSkillSources(
+    source: () => readonly GlyphSkill[],
+    refresh?: () => Promise<void>,
+    resolveHistorical?: (id: string) => Promise<string | undefined>,
+  ): void {
+    this.resolveHistoricalSkill = resolveHistorical;
     this.skillSources = source;
     if (refresh) this.setInstructionRefresh(refresh);
   }
@@ -438,14 +444,20 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }
     if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
       this.assertTrusted();
-      const source = this.skillSource(attachment.uri);
+      const source = await this.skillSource(attachment.uri);
       if (!source || source.status !== 'active' || !source.enabled)
         throw new GlyphContextError(
           GlyphDesktopErrorCode.NOT_FOUND,
           'Selected instruction is unavailable. Choose it again.',
         );
       const { unavailable: _, ...reference } = attachment;
-      return { ...reference, path: source.name, contentRevision: source.revision ?? source.id };
+      return {
+        ...reference,
+        skillId: source.id,
+        uri: `glyph-skill:${encodeURIComponent(source.id)}`,
+        path: source.name,
+        contentRevision: source.revision ?? source.id,
+      };
     }
 
     if (!['file', 'selection', 'folder'].includes(attachment.kind))
@@ -466,7 +478,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   }
   async checkAttachment(attachment: GlyphContextAttachment): Promise<string | undefined> {
     if (attachment.kind === GlyphContextAttachmentKind.SKILL) {
-      const source = this.skillSource(attachment.uri);
+      const source = await this.skillSource(attachment.uri);
       if (!source || source.status !== 'active' || !source.enabled)
         return 'Selected instruction is unavailable. Remove it or choose it again.';
       return source.revision && source.revision !== attachment.contentRevision
@@ -649,7 +661,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     this.assertTrusted();
     await this.refreshInstructionSources?.();
     this.assertTrusted();
-    const source = this.skillSource(reference);
+    const source = await this.skillSource(reference);
     if (!source?.uri) throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
     const selectedUri = source.uri;
     const physical = URI.parse(selectedUri);
@@ -678,16 +690,21 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     this.assertTrusted();
     if (
       (root && !this.workspace.getWorkspace().folders.some(folder => folder.uri.toString() === root.toString())) ||
-      this.skillSource(reference)?.uri !== selectedUri
+      this.skillSources().find(candidate => candidate.id === source.id)?.uri !== selectedUri
     )
       throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
     await this.editors.openEditor({ resource, options: { pinned: true } });
   }
 
-  private skillSource(value: string): GlyphSkill | undefined {
+  private async skillSource(value: string): Promise<GlyphSkill | undefined> {
     if (!value.startsWith('glyph-skill:')) return undefined;
     const id = decodeURIComponent(value.slice('glyph-skill:'.length));
-    return this.skillSources().find(source => source.id === id);
+    const source = this.skillSources().find(skill => skill.id === id);
+    if (source || !this.resolveHistoricalSkill) return source;
+    this.assertTrusted();
+    const current = await this.resolveHistoricalSkill(id);
+    this.assertTrusted();
+    return this.skillSources().find(skill => skill.id === current);
   }
 
   private activeEditor(): ICodeEditor | undefined {

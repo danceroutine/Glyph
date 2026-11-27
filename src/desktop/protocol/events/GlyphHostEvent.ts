@@ -35,6 +35,7 @@ export enum GlyphHostEventType {
   RUN_STATE = 'run_state',
   CHAT_RESTORED = 'chat_restored',
   HOST_STATUS = 'host_status',
+  SKILL_REFERENCE_RESOLVED = 'skill_reference_resolved',
   SKILLS_CHANGED = 'skills_changed',
   INSTRUCTION_SOURCES_CHANGED = 'instruction_sources_changed',
   ERROR = 'error',
@@ -42,6 +43,7 @@ export enum GlyphHostEventType {
 
 /** Closed event union used to keep every host-to-renderer transition exhaustively typed. */
 export type GlyphHostEvent =
+  | { readonly type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED; readonly lookupId: string; readonly skillId?: string }
   | { readonly type: GlyphHostEventType.SKILLS_CHANGED; readonly skills: readonly GlyphSkill[] }
   | {
       readonly type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED;

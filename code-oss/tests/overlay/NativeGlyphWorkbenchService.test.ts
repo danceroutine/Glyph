@@ -661,6 +661,25 @@ describe(NativeGlyphWorkbenchService, () => {
       });
     });
 
+    it('correlates a targeted historical skill lookup with the attached workspace generation', async () => {
+      const { host, context, changeFolders } = await workbench();
+      const resolve = context.setSkillSources.mock.calls[0][2] as (id: string) => Promise<string | undefined>;
+      host.handler = command => {
+        if (command.type !== GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE) return;
+        emit(host, { type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED, lookupId: 'unrelated', skillId: 'wrong' });
+        emit(host, {
+          type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED,
+          lookupId: command.lookupId,
+          skillId: 'canonical',
+        });
+      };
+      await expect(resolve('old')).resolves.toBe('canonical');
+      host.handler = () => {
+        changeFolders([folder('other')]);
+      };
+      await expect(resolve('old')).rejects.toThrow();
+    });
+
     it('restores a removable skill badge when the catalog is unavailable', async () => {
       const { service, host, context } = await workbench();
       const [catalog] = context.setSkillSources.mock.calls[0];

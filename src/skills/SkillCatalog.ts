@@ -3,6 +3,7 @@ import type { SkillDiscoveryProvider } from './SkillDiscoveryProvider.ts';
 
 /** Aggregates compatibility providers without hiding same-name packages from different origins. */
 export class SkillCatalog {
+  private readonly byId: ReadonlyMap<string, SkillDiscoveryProvider>;
   private generation = 0;
   private published = 0;
   private current: readonly SkillDescriptor[] = [];
@@ -12,8 +13,8 @@ export class SkillCatalog {
     private readonly enabled: ReadonlyMap<string, boolean> = new Map(),
     private readonly workspaceRoutes?: { equivalents(path: string): string[] },
   ) {
-    if (new Set(providers.map(provider => provider.id)).size !== providers.length)
-      throw new Error('Skill provider IDs must be unique.');
+    this.byId = new Map(providers.map(provider => [provider.id, provider]));
+    if (this.byId.size !== providers.length) throw new Error('Skill provider IDs must be unique.');
   }
   get skills(): readonly SkillDescriptor[] {
     return this.current;
@@ -72,9 +73,29 @@ export class SkillCatalog {
     }
     return this.current;
   }
+  /** Current IDs take precedence. Historical references must identify a single current package. */
+  resolveReference(id: string, sources: readonly SkillDescriptor[] = this.current): SkillDescriptor | undefined {
+    if (typeof id !== 'string' || !id || id.length > 500) return undefined;
+    let source = sources.find(skill => skill.id === id);
+    if (!source) {
+      // Share a fixed probe allowance across every package and hashed ancestor in this lookup.
+      const budget = { remaining: 32_768 };
+      for (const skill of sources) {
+        budget.remaining--;
+        const provider = this.byId.get(skill.origin.id);
+        const matched = provider?.matchesLegacyId?.(skill.directory, id, budget);
+        if (budget.remaining <= 0) return undefined;
+        if (!matched) continue;
+        if (source) return undefined;
+        source = skill;
+      }
+    }
+    return source;
+  }
+
   appliesTo(skill: SkillDescriptor, paths: readonly string[]): boolean {
     if (skill.scope === '.') return true;
-    const provider = this.providers.find(candidate => candidate.id === skill.origin.id);
+    const provider = this.byId.get(skill.origin.id);
     const scope = provider?.scopePathKey?.(skill.scope) ?? skill.scope;
     return paths
       .flatMap(path => this.workspaceRoutes?.equivalents(path) ?? [path])
@@ -86,7 +107,7 @@ export class SkillCatalog {
 
   async capture(descriptor: SkillDescriptor, signal?: AbortSignal) {
     if (!descriptor.enabled || descriptor.status !== 'active') throw new Error('Skill is disabled or unavailable.');
-    const provider = this.providers.find(candidate => candidate.id === descriptor.origin.id);
+    const provider = this.byId.get(descriptor.origin.id);
     if (!provider) throw new Error('Skill provider is unavailable.');
     return provider.capture(descriptor, signal);
   }

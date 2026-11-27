@@ -132,6 +132,7 @@ export class GlyphWorkbenchProjection {
         break;
       }
       case GlyphHostEventType.COMMAND_RESULT:
+      case GlyphHostEventType.SKILL_REFERENCE_RESOLVED:
       case GlyphHostEventType.PROPOSAL_PREVIEW:
         return;
       case GlyphHostEventType.RESPONSE_DELTA: {

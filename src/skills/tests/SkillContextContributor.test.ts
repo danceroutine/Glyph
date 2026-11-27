@@ -9,6 +9,40 @@ import { SkillToolRuntime } from '#src/skills/SkillToolRuntime.js';
 import { aSkillDescriptor, aSkillPackage } from './fixtures/aSkillDescriptor.ts';
 
 describe(SkillContextContributor, () => {
+  it('resolves only unambiguous manual references without exposing old identities to the model', async () => {
+    const skill = aSkillDescriptor();
+    const other = aSkillDescriptor({ id: 'other', name: 'other', directory: 'other' });
+    const inactive = aSkillDescriptor({ id: 'disabled', directory: 'disabled', enabled: false });
+    const capture = vi.fn(async () => aSkillPackage(skill));
+    const catalog = new SkillCatalog([
+      {
+        id: skill.origin.id,
+        origin: skill.origin,
+        capture,
+        refreshIndex: async () => {},
+        discover: async () => [skill, other, inactive],
+        matchesLegacyId: (directory, id, budget) => {
+          if (id === 'exhausted') budget.remaining = 0;
+          return id === 'ambiguous' || (id === 'historical' && directory === skill.directory);
+        },
+      },
+    ]);
+    const session = await new SkillContextContributor(catalog).beginTurn({ turnId: 'turn', attachmentPaths: [] });
+    for (const id of [null, '', 'x'.repeat(501), 'ambiguous', 'exhausted']) {
+      expect(catalog.resolveReference(id as string)).toBeUndefined();
+    }
+    expect(catalog.resolveReference('disabled')).toMatchObject({ enabled: false });
+    await expect(session.activateManualSkills(['disabled'], 'select')).rejects.toThrow('unavailable');
+    expect(
+      catalog.resolveReference('missing', [aSkillDescriptor({ origin: { ...skill.origin, id: 'gone' } })]),
+    ).toBeUndefined();
+    expect(await session.activateSource('historical', 'model', 'try')).toBeUndefined();
+    expect(await session.activateManualSkills(['historical', skill.id], 'Selected')).toMatchObject({
+      skills: [{ descriptor: { id: skill.id } }],
+    });
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify([session.initialEnvelope(), session.snapshot()])).not.toContain('historical');
+  });
   it('advertises metadata, loads only a selected body, and records only accessed resources', async () => {
     const descriptor = aSkillDescriptor();
     const capture = vi.fn<SkillDiscoveryProvider['capture']>(async source =>

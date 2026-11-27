@@ -214,6 +214,31 @@ describe(GlyphContextController, () => {
         isDirectory: !resource.path.endsWith('SKILL.md'),
       }));
       if (kind === GlyphContextAttachmentKind.SKILL) {
+        const resolveOld = vi.fn(async (id: string) => (id === 'old' ? source.id : undefined));
+        controller.setSkillSources(() => sources, undefined, resolveOld);
+        const old = { ...badge, uri: 'glyph-skill:old', skillId: 'old' };
+        expect(await controller.checkAttachment(old)).toContain('latest version');
+        expect(await controller.refreshAttachment(old)).toMatchObject({
+          uri,
+          skillId: source.id,
+          contentRevision: 'two',
+        });
+        await controller.openAttachment(old);
+        expect(services.editors.openEditor.mock.calls.at(-1)?.[0].resource.toString()).toBe(source.uri);
+        source.enabled = false;
+        await controller.openAttachment(old);
+        expect(await controller.checkAttachment(old)).toContain('unavailable');
+        source.enabled = true;
+        source.status = 'error';
+        expect(await controller.checkAttachment(old)).toContain('unavailable');
+        source.status = 'active';
+        expect(await controller.checkAttachment({ ...old, uri: 'glyph-skill:absent' })).toContain('unavailable');
+        resolveOld.mockImplementationOnce(async () => {
+          services.trust.isWorkspaceTrusted.mockReturnValue(false);
+          return source.id;
+        });
+        await expect(controller.refreshAttachment(old)).rejects.toThrow(/trust/iu);
+        services.trust.isWorkspaceTrusted.mockReturnValue(true);
         const { revision: _revision, ...unversioned } = source;
         controller.setSkillSources(() => [unversioned]);
         expect((await controller.refreshAttachment(badge)).contentRevision).toBe(source.id);

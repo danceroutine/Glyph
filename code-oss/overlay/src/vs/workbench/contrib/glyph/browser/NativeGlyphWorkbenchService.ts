@@ -163,7 +163,11 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         () => this.state.instructionSources ?? [],
       ),
     );
-    this.context.setSkillSources(() => this.state.skills ?? []);
+    this.context.setSkillSources(
+      () => this.state.skills ?? [],
+      undefined,
+      id => this.resolveHistoricalSkill(id),
+    );
     this.context.setInstructionRefresh(
       invalidate => this.refreshInstructionSources(invalidate),
       () => this.state.instructionWatchRoots ?? [],
@@ -242,6 +246,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.client.onDidReceiveEvent(envelope => {
         if (this.invalidateChangedSession()) return;
         const event = envelope.event;
+        if (event.type === GlyphHostEventType.SKILL_REFERENCE_RESOLVED) return;
         if (event.type === GlyphHostEventType.PROPOSAL_PREVIEW) {
           this.proposalEditor.acceptPreview(event.preview);
           return;
@@ -1159,6 +1164,23 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       !this.projection.state.runs.some(run => run.chatId === this.selectedChatId)
     ) {
       await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
+    }
+  }
+
+  private async resolveHistoricalSkill(skillId: string): Promise<string | undefined> {
+    const revision = this.workspaceRevision;
+    const lookupId = generateUuid();
+    let current: string | undefined;
+    const listener = this.client.onDidReceiveEvent(({ event }) => {
+      if (event.type === GlyphHostEventType.SKILL_REFERENCE_RESOLVED && event.lookupId === lookupId)
+        current = event.skillId;
+    });
+    try {
+      await this.request({ type: GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE, lookupId, skillId });
+      this.assertWorkspaceRevision(revision);
+      return current;
+    } finally {
+      listener.dispose();
     }
   }
 
