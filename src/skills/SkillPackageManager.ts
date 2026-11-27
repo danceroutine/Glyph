@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix, sep } from 'node:path';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import type { WorkspaceDirectoryMutations } from '#src/workspace/WorkspaceDirectoryMutations.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
@@ -29,7 +29,9 @@ export interface SkillPackageLocation {
   readonly scope: 'user' | 'project';
   /** Workspace routing prefix for project packages in a multi-root window. */
   readonly scopePrefix?: string;
-  readonly store: FileSystemWorkspaceTextStore;
+  /** The installed tree is read through the destination's policy-bound disk adapter. */
+  readonly store: Pick<WorkspaceTextStore, 'root' | 'caseSensitive' | 'normalizePath' | 'exists'> &
+    Pick<FileSystemWorkspaceTextStore, 'readBytes' | 'resolvePath'>;
   readonly workspace: WorkspaceTextStore;
   readonly mutations: WorkspaceDirectoryMutations;
   readonly directory: string;
@@ -174,13 +176,6 @@ export class SkillPackageManager {
       uri: pathToFileURL(join(location.store.root, location.directory)).toString(),
     }));
   }
-  /** Journal keys identify the installation location. A project that contains the personal store can still
-   * own packages below other nested collection directories. Every recovered target passes through target(). */
-  private async journalRoot(location: SkillPackageLocation): Promise<string> {
-    return location.updateOnly
-      ? join(location.store.root, location.directory)
-      : location.store.resolvePath(location.directory);
-  }
   async recover(originId?: string, directory?: string): Promise<void> {
     for (const location of this.locations) {
       if (originId !== undefined && location.id !== originId) continue;
@@ -284,6 +279,13 @@ export class SkillPackageManager {
       });
     else await this.state.setEnabled(id, enabled);
     await this.catalog.refresh();
+  }
+  /** Journal keys identify the installation location. A project that contains the personal store can still
+   * own packages below other nested collection directories. Every recovered target passes through target(). */
+  private async journalRoot(location: SkillPackageLocation): Promise<string> {
+    return location.updateOnly
+      ? join(location.store.root, location.directory)
+      : location.store.resolvePath(location.directory);
   }
   private requirePreview(id: string) {
     const change = this.pending.get(id);

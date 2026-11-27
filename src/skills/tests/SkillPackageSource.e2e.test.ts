@@ -3,7 +3,6 @@ import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadat
 import { SkillPackageSourceReader } from '../SkillPackageSource.ts';
 import { testSkillSource, testPackageIndex } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
-import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
@@ -191,7 +190,6 @@ describe(SkillPackageSourceReader, () => {
 
 it('reconciles a selected package after resources change and bounds discovery to 257 files', async () => {
   const { root, directory, reader } = await fixture();
-  const { FileSystemWorkspaceTextStore } = await import('#src/workspace/FileSystemWorkspaceTextStore.js');
   const store = fixtureWorkspace(root);
   const binary = resolve('target/release/glyph-context-index');
   const signal = new AbortController().signal;

@@ -94,7 +94,6 @@ it('refuses a different directory mounted at the same configured path and preser
 
 it('refuses a package omitted by repository ignore rules before recording installation', async () => {
   const { root, catalog, state, location } = await aSkillLifecycle(openMutations);
-  const { RustWorkspacePathIndex } = await import('#src/context/search/RustWorkspacePathIndex.js');
   execFileSync('git', ['init', '-q', root]);
   await writeFile(join(root, '.gitignore'), '*.bin\n');
   const index = fixtureIndex({

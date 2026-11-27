@@ -8,7 +8,6 @@ import { filesystemPolicyDirectory, workspaceCaseSensitivity } from '#src/worksp
 import { assertUserWorkingCopiesClean } from '#src/desktop/workspace/assertUserWorkingCopiesClean.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { SkillProjectMutationPolicy } from '#src/skills/SkillProjectMutationPolicy.js';
-import { existsSync } from 'node:fs';
 import { assertSkillPackageClean } from '#src/desktop/workspace/assertSkillPackageClean.js';
 import { listSkillPackageFiles, type OpenSkillIndex } from '#src/skills/listSkillPackageFiles.js';
 import { SkillScriptRunner } from '#src/skills/SkillScriptRunner.js';
@@ -41,7 +40,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import { mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join, relative, isAbsolute, resolve, sep } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
@@ -161,8 +160,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         path: await realpath(root.canonicalPath),
       })),
     );
-    const root = roots[0];
-    if (!root) throw new Error('A local workspace root is required.');
+    if (roots.length === 0) throw new Error('A local workspace root is required.');
     const kind = roots.length === 1 ? ProjectContextKind.FOLDER : ProjectContextKind.WORKSPACE;
     const authority = 'file';
     const containerIdentity = `${input.identity.profileId}:${input.identity.workspaceId}`;
@@ -192,10 +190,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       configuration.traceFile,
     );
     const canonicalUserDirectory = this.profile.path;
-    const access = new WorkspaceContentAccess(this.profile, () => this.privatePaths, [
-      artifactRoot,
-      resolveAvailableIdentity(artifactRoot),
-    ]);
+    const access = new WorkspaceContentAccess(
+      this.profile,
+      () => this.privatePaths,
+      [artifactRoot, resolveAvailableIdentity(artifactRoot)],
+      roots.map(root => root.path),
+    );
     const policy = access.project;
     const packageIndex =
       (accessPolicy: typeof policy): OpenSkillIndex =>
@@ -384,7 +384,6 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             context,
             parts.map(part => ({ name: part.name, store: part.selectedFiles })),
           );
-    const userRuleRoot = this.profile.path;
     let instructionCatalog: AgentInstructionCatalog | undefined;
     let turnContexts: TurnContextCoordinator | undefined;
     let userRules: UserAgentRuleManager | undefined;
@@ -797,11 +796,6 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         workspaceRoots: roots.map(workspaceRoot => workspaceRoot.path),
         stateDirectory: configuration.stateDirectory,
         protectedPaths: [artifactRoot],
-        privatePaths: () => [
-          configuration.traceFile,
-          canonicalUserDirectory,
-          ...parts.map(part => join(part.disk.root, '.skill-staging')).filter(path => existsSync(path)),
-        ],
         accessPolicy: access.shell,
       }),
     );

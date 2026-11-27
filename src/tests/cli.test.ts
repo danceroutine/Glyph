@@ -23,11 +23,8 @@ describe('glyph command line', () => {
     await cli.start();
     await cli.finished;
     const [launcher] = cli.instances('NativeShellSandboxLauncher');
-    const options = launcher!.args[0] as { privatePaths: () => readonly string[] };
-    expect(options.privatePaths()).toEqual([directory]);
-    expect((launcher!.args[0] as { accessPolicy: { privatePaths: string[] } }).accessPolicy.privatePaths).toContain(
-      '/state/glyph/trace.log',
-    );
+    const options = launcher!.args[0] as { accessPolicy: { privatePaths: readonly string[] } };
+    expect(options.accessPolicy.privatePaths).toEqual(expect.arrayContaining([directory, '/state/glyph/trace.log']));
   });
   it('prints usage help without starting a terminal session', async () => {
     const cli = prepareCli({ argv: ['--help'] });
@@ -119,14 +116,12 @@ describe('glyph command line', () => {
           privatePaths: expect.arrayContaining([
             stateDirectory,
             traceFile,
+            process.env.GLYPH_USER_DIRECTORY!,
             join(process.env.GLYPH_USER_DIRECTORY!, 'rules'),
           ]),
         }),
-        privatePaths: expect.any(Function),
       },
     ]);
-    const privatePaths = (launcher!.args[0] as { privatePaths: () => readonly string[] }).privatePaths;
-    expect(privatePaths()).toEqual([]);
     const [registry] = cli.instances('ToolRegistry');
     expect(registry?.args).toEqual([
       ['ProjectToolRuntime', 'WebToolRuntime', 'ProposeQuestionToolRuntime', 'ShellToolRuntime'],

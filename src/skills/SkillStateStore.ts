@@ -20,7 +20,11 @@ export class SkillPreferenceCommitUncertain extends Error {
     super('The skill preference write needs recovery. Check the user preferences and refresh Skills.', { cause });
   }
 }
-/** User-owned lifecycle preferences, keyed by stable package identity across workspace reloads. */
+/**
+ * Persists user-owned lifecycle preferences under the physical directory selected by the startup profile.
+ * The host supplies its profile-bound metadata port so reads and updates recheck that selection. The
+ * preference maps are keyed by stable package identity and shared by the catalogs in this host.
+ */
 export class SkillStateStore {
   private serialized?: string;
   private readonly listeners = new Set<() => void>();

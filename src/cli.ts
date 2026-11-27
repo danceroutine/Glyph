@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { existsSync } from 'node:fs';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { WebToolRuntime } from './web/WebToolRuntime.ts';
 import { AuthorizedWebTransport } from './web/AuthorizedWebTransport.ts';
@@ -107,7 +106,12 @@ async function main(): Promise<void> {
     )
   )
     throw new ConfigurationError('Glyph state, trace, and native-worker paths must not be the project root.');
-  const access = new WorkspaceContentAccess(profile, () => hostPrivate, installation);
+  const access = new WorkspaceContentAccess(
+    profile,
+    () => hostPrivate,
+    installation,
+    projectContext.roots.map(root => root.path),
+  );
   const { workspace, selectedFiles, pathIndex } = await createProjectRuntime(
     projectContext,
     configuration.stateDirectory,
@@ -129,7 +133,6 @@ async function main(): Promise<void> {
       workspaceRoots: projectContext.roots.map(root => root.path),
       stateDirectory: configuration.stateDirectory,
       protectedPaths: [packageRoot, indexExecutable, shellSandboxExecutable],
-      privatePaths: () => (existsSync(profile.path) ? [profile.path] : []),
       accessPolicy: access.shell,
     }),
   );

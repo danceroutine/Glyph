@@ -16,7 +16,7 @@ process belong at the adapter.
 | Admit a window to mutate a workspace                                            | `WorkspaceOwnershipRegistry` and the desktop host                                        | When admitting the connection and when dispatching or completing work on its behalf              |
 | Authorize a shell command and launch it                                         | `ShellApprovalPolicy` and the configured `ShellProcessLauncher`                          | Match the command and working directory for approval, then enforce the granted profile at launch |
 
-The desktop factory pins the personal Glyph store's physical location at startup.
+Both the desktop host and CLI pin the personal Glyph store's physical location at startup.
 The startup profile verifies that identity on access. Ordinary edits to a rule
 or skill in the admitted directory remain visible. A profile symlink retarget
 leaves the running host on its original directory. Replacing the pinned object
@@ -61,10 +61,12 @@ A file a human deliberately attaches is an explicit input to that request.
 Keep its provenance. Automatic expansion of a folder, search hits, and later
 tool reads each have their own workspace access requirements.
 
-Native search and the shell run outside the JavaScript process. Pass the host's
-policy to their adapters. An OS sandbox is established at launch. For an
-intentional move of private storage, stop existing commands that could reach the
-new location, including detached commands, before switching the boundary.
+Native search and restricted shell commands run outside the JavaScript process.
+Pass the host's policy to their adapters. The shell view reserves the physical
+profile and the staging directory of each attached workspace, including paths
+that may be created later. The native helper applies those reservations when
+the process starts. To switch profiles, stop commands that could reach the new
+location, including detached commands, and restart the host.
 
 ## Extending access
 

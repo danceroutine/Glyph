@@ -15,15 +15,17 @@ export interface NativeShellSandboxLauncherOptions {
   readonly workspaceRoots: readonly string[];
   readonly stateDirectory: string;
   readonly protectedPaths?: readonly string[];
-  /** Host metadata that must be neither readable nor writable by sandboxed commands. */
-  readonly privatePaths?: readonly string[] | (() => readonly string[]);
   readonly environment?: NodeJS.ProcessEnv;
   readonly accessPolicy: WorkspaceAccessPolicy;
 }
 
 type SpawnProcess = (command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess;
 
-/** Runs approved commands through the native fail-closed sandbox boundary. */
+/**
+ * Enforces the execution profile chosen by the shell authorizer. For a restricted command, snapshot the
+ * host's shell policy, check it again immediately before spawn, and let the native helper establish the
+ * OS sandbox for the child. A command explicitly approved for full access starts outside that sandbox.
+ */
 export class NativeShellSandboxLauncher implements ShellProcessLauncher {
   constructor(
     private readonly options: NativeShellSandboxLauncherOptions,
@@ -57,8 +59,6 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
     const operation = accessPolicy.beginOperation();
     const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
     const stores = (this.options.contentStores ?? pnpmContentStore)(environment);
-    const privatePaths =
-      typeof this.options.privatePaths === 'function' ? this.options.privatePaths() : (this.options.privatePaths ?? []);
     const arguments_ = [
       '--profile',
       authorization.sandboxProfile === ShellSandboxProfile.READ_ONLY ? 'read-only' : 'workspace-write',
@@ -69,7 +69,7 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
       '--workspace-root',
       workspaceRoot,
       ...(this.options.protectedPaths ?? []).flatMap(path => ['--protected-path', path]),
-      ...[...new Set([...operation.privatePaths, ...privatePaths])].flatMap(path => ['--private-path', path]),
+      ...operation.privatePaths.flatMap(path => ['--private-path', path]),
       ...(authorization.readOnlyPaths ?? []).flatMap(path => ['--read-only-path', path]),
       ...externalShellContentStores(stores, this.options.workspaceRoots).flatMap(store => [
         '--content-store',

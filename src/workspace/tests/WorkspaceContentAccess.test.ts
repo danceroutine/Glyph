@@ -26,7 +26,8 @@ describe(WorkspaceContentAccess, () => {
       await writeFile(join(root, file), 'body');
     }
     let privatePaths = [state];
-    const policy = new WorkspaceContentAccess(profile, () => privatePaths, []);
+    const policy = new WorkspaceContentAccess(profile, () => privatePaths, [], [root]);
+    expect(policy.shell.privatePaths).toEqual(expect.arrayContaining([profile.path, join(root, '.skill-staging')]));
     const binaryPath = resolve('target/release/glyph-context-index');
     const physicalAccess = new NativeFilesystemMetadata(binaryPath);
     const access = new WorkspaceRootAccess(policy.project, root, true);

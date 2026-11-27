@@ -52,12 +52,16 @@ describe(NativeShellSandboxLauncher, () => {
         );
         const launcher = new NativeShellSandboxLauncher(
           {
-            accessPolicy: new WorkspaceAccessPolicy({}, ['/project/mandatory']),
+            accessPolicy: new WorkspaceAccessPolicy(
+              {},
+              dynamic
+                ? () => ['/project/mandatory', '/project/.skill-staging']
+                : ['/project/mandatory', '/project/.skill-staging'],
+            ),
             binaryPath: '/bin/glyph-shell-sandbox',
             workspaceRoots: ['/project', '/second'],
             stateDirectory: '/state',
             protectedPaths: ['/project/worker'],
-            privatePaths: dynamic ? () => ['/project/.skill-staging'] : ['/project/.skill-staging'],
             environment: {
               HOME: '/home/person',
               OPENAI_API_KEY: 'not-for-the-child',

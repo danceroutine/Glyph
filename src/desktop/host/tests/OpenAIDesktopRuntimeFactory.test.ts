@@ -414,9 +414,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           emit: () => {},
         };
         runtime = await factory.create(input);
-        const privatePaths = captured.sandboxOptions.at(-1)!.privatePaths;
-        if (typeof privatePaths !== 'function') throw new Error('Expected dynamic host metadata masks');
-        expect(privatePaths()).toContain(join(directory, 'trace.log'));
+        expect(captured.sandboxOptions.at(-1)!.accessPolicy.privatePaths).toContain(join(directory, 'trace.log'));
         expect((await runtime.snapshot()).chats.map(chat => chat.id)).toEqual(['saved-chat']);
         expect((await runtime.snapshot()).proposals.map(value => value.id)).toEqual([proposal.id]);
         if (!trusted) await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
@@ -873,7 +871,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         'First root guidance.',
         'Second root guidance.',
       ]);
-      const propose = registry!.tools.find(tool => tool.namespace === 'skills' && tool.name === 'propose_change')!;
+      const propose = registry.tools.find(tool => tool.namespace === 'skills' && tool.name === 'propose_change')!;
       const input = JSON.stringify({ target_id: user.id, replace_id: null, remove_id: installed.id, draft: null });
       const context = {
         turnId,
@@ -969,10 +967,8 @@ describe(OpenAIDesktopRuntimeFactory, () => {
           return { operationId: request.operationId, ok: true, packageClean: true, workingCopiesClean: true };
         throw new Error('Only skill working-copy checks are expected');
       });
-      const privatePaths = captured.sandboxOptions[0]!.privatePaths;
-      if (typeof privatePaths !== 'function') throw new Error('Expected dynamic host metadata masks');
       const targets = (await runtime.snapshot()).skillTargets!;
-      expect(privatePaths()).toContain(fixture.userDirectory);
+      expect(captured.sandboxOptions[0]!.accessPolicy.privatePaths).toContain(fixture.userDirectory);
       for (const [index, target] of targets.entries()) {
         const draft = aSkillDraft('Reviewed factory workflow', `workflow-${index}`);
         await runtime.handle({
@@ -1034,7 +1030,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await runtime.handle({ type: Command.REFRESH_CONTEXT_CATALOGS });
 
       await catalogs[0]!.refreshIndexes();
-      const propose = toolSource!.tools.find(tool => tool.namespace === 'skills' && tool.name === 'propose_change')!;
+      const propose = toolSource.tools.find(tool => tool.namespace === 'skills' && tool.name === 'propose_change')!;
       const broker = captured.brokers[0]!.broker;
       const pending = broker.run({ chatId: 'chat', runId: 'run' }, () =>
         propose.execute(
@@ -1066,7 +1062,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const approvalBoundary = vi
         .spyOn(WebApprovalService.prototype, 'request')
         .mockRejectedValueOnce(new Error('Denied before network access'));
-      const fetch = toolSource!.tools.find(tool => tool.namespace === 'web' && tool.name === 'web_fetch')!;
+      const fetch = toolSource.tools.find(tool => tool.namespace === 'web' && tool.name === 'web_fetch')!;
       expect(
         JSON.parse(
           await fetch.execute(JSON.stringify({ url: 'http://127.0.0.1/private' }), new AbortController().signal, {}),
@@ -1170,16 +1166,16 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       } as const;
       await expect(client.request(text)).resolves.toMatchObject({ snapshot: { path: 'file.txt' } });
       expect(request).toHaveBeenLastCalledWith(factoryIdentity, text, undefined);
-      const rename = fileMutation({
+      const renameRequest = fileMutation({
         kind: GlyphFileMutationKind.RENAME,
         path: 'file.txt',
         target: 'renamed.txt',
         expectedContentRevision: 'revision',
         expectedToken: { workspaceGeneration: 'g', resource: 'file:///file.txt', incarnation: 'i', version: 1 },
       });
-      await expect(client.request(rename)).resolves.toMatchObject({ snapshot: { path: 'renamed.txt' } });
+      await expect(client.request(renameRequest)).resolves.toMatchObject({ snapshot: { path: 'renamed.txt' } });
       expect(validate).toHaveBeenLastCalledWith('renamed.txt', true);
-      expect(request).toHaveBeenLastCalledWith(factoryIdentity, rename, undefined);
+      expect(request).toHaveBeenLastCalledWith(factoryIdentity, renameRequest, undefined);
       const create = fileMutation({
         kind: GlyphFileMutationKind.CREATE,
         path: 'new.txt',
@@ -1557,9 +1553,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         if (root === second) {
           expect(captured.sandboxOptions).toHaveLength(3);
           for (const launcher of captured.sandboxOptions) {
-            const masks = launcher.privatePaths;
-            expect(typeof masks === 'function' && masks()).toContain(join(first, '.glyph'));
-            expect(typeof masks === 'function' && masks()).not.toContain(join(second, '.glyph'));
+            const masks = launcher.accessPolicy.privatePaths;
+            expect(masks).toContain(join(first, '.glyph'));
+            expect(masks).not.toContain(join(second, '.glyph'));
           }
           await runtime.handle({
             type: Command.SET_SKILL_ENABLED,
@@ -2366,10 +2362,10 @@ it('keeps an admitted physical profile private while its files are temporarily a
   vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
   await fixture.create([await fixture.folder('project')]);
   await rm(fixture.userDirectory, { recursive: true, force: true });
-  const paths = captured.sandboxOptions[0]!.privatePaths;
-  expect(typeof paths === 'function' && paths()).toContain(fixture.userDirectory);
+  const policy = captured.sandboxOptions[0]!.accessPolicy;
+  expect(policy.privatePaths).toContain(fixture.userDirectory);
   await mkdir(fixture.userDirectory, { recursive: true });
-  expect(typeof paths === 'function' && paths()).toContain(fixture.userDirectory);
+  expect(policy.privatePaths).toContain(fixture.userDirectory);
 });
 
 it('keeps the startup boundaries across a profile alias change during an editor read', async () => {
