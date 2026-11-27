@@ -1488,6 +1488,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         await writeFile(join(root, 'context.md'), 'Project context');
       }
       await symlink(join(first, '.glyph'), profile);
+      await fixture.create([first], undefined, false);
       const old = 'glyph_project_rule:.glyph/rules/shared.mdc';
       for (const root of [first, second]) {
         if (root === second) {
@@ -1502,6 +1503,13 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         const sources = snapshot.instructionSources!;
         const user = sources.find(source => source.path.endsWith('shared.mdc'))!;
         if (root === second) {
+          expect(captured.sandboxOptions).toHaveLength(3);
+          for (const launcher of captured.sandboxOptions) {
+            const masks = launcher.privatePaths;
+            expect(typeof masks === 'function' && masks()).toEqual(
+              expect.arrayContaining([join(first, '.glyph'), join(second, '.glyph')]),
+            );
+          }
           await runtime.handle({
             type: Command.SET_SKILL_ENABLED,
             skillId: snapshot.skills![0]!.id,
@@ -2196,11 +2204,11 @@ async function factoryFixture(
       for (const [file, text] of Object.entries(files)) await writeFile(join(path, file), text);
       return path;
     },
-    async create(paths: readonly string[], emit: (event: GlyphHostEvent) => void = () => {}) {
+    async create(paths: readonly string[], emit: (event: GlyphHostEvent) => void = () => {}, trusted = true) {
       const runtime = await factory.create({
         identity: factoryIdentity,
         roots: paths.map(path => ({ name: basename(path), canonicalPath: path, uri: `file://${path}` })),
-        trusted: true,
+        trusted,
         emit,
       });
       runtimes.push(runtime);

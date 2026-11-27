@@ -636,12 +636,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         protectedPaths: [artifactRoot],
         privatePaths: () => [
           configuration.traceFile,
+          ...this.userRuleIndexes.keys(),
           ...(input.trusted
             ? [
-                ...parts.map(part => join(part.disk.root, '.skill-staging')),
                 canonicalUserDirectory,
-                this.userDirectory,
-              ].filter(path => existsSync(path))
+                ...[this.userDirectory, ...parts.map(part => join(part.disk.root, '.skill-staging'))].filter(path =>
+                  existsSync(path),
+                ),
+              ]
             : []),
         ],
         accessPolicy: policy,
