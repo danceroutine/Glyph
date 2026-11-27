@@ -1271,7 +1271,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(discovered).toHaveLength(1);
       expect(discovered[0]).toMatchObject({ name: 'demo', origin: { scope: 'user' } });
       const previous = new ProjectSkillIdentity(isolatedUserDirectory, '.glyph').forDirectory('.glyph/skills/demo');
-      expect(runtime.resolveSkillReference(previous)).toBe(discovered[0]!.id);
+      const selected = discovered[0]!;
+      expect(runtime.resolveSkillReference(previous)).toBe(selected.id);
+      expect(runtime.resolveSkillReference(selected.id, selected.uri)).toBe(selected.id);
+      expect(runtime.resolveSkillReference('absent', selected.uri)).toBeUndefined();
+      expect(runtime.resolveSkillReference(selected.id, pathToFileURL(join(profile, 'other.md')).href)).toBeUndefined();
     });
 
     it('retains a physical skill ID and offers it once through overlapping and aliased folders', async () => {
