@@ -2268,3 +2268,14 @@ function chatSummary(overrides: Partial<ChatSessionSummary> = {}): ChatSessionSu
     ...overrides,
   };
 }
+
+it('keeps an admitted physical profile private while its files are temporarily absent', async () => {
+  const fixture = await factoryFixture();
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  await fixture.create([await fixture.folder('project')]);
+  await rm(fixture.userDirectory, { recursive: true, force: true });
+  const paths = captured.sandboxOptions[0]!.privatePaths;
+  expect(typeof paths === 'function' && paths()).toContain(fixture.userDirectory);
+  await mkdir(fixture.userDirectory, { recursive: true });
+  expect(typeof paths === 'function' && paths()).toContain(fixture.userDirectory);
+});
