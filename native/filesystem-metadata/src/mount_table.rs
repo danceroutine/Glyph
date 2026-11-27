@@ -152,6 +152,43 @@ impl<'a> MountTable<'a> {
 mod tests {
     use super::*;
     #[test]
+    fn projects_directory_file_and_descendant_mounts_on_their_own_devices() {
+        let table = MountTable::parse(
+            b"1 1 0:1 / /
+2 1 0:1 /host/tree /views/tree
+3 1 0:1 /host/tree/file /views/file
+4 2 0:2 / /views/tree/nested
+5 1 0:2 /piece /views/nested-piece
+6 1 0:3 / /unrelated",
+        )
+        .unwrap();
+        let views = |path: &str, descendants| {
+            let mut output = BTreeSet::new();
+            table.aliases(Path::new(path), descendants, &mut output);
+            output
+        };
+        let names = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<BTreeSet<_>>();
+        assert_eq!(
+            views("/views/tree/file", false),
+            names(&["/host/tree/file", "/views/tree/file", "/views/file"])
+        );
+        assert_eq!(
+            views("/views/tree", true),
+            names(&[
+                "/host/tree",
+                "/views/tree",
+                "/views/file",
+                "/views/tree/nested",
+                "/views/nested-piece"
+            ])
+        );
+        assert_eq!(
+            views("/views/tree", false),
+            names(&["/host/tree", "/views/tree"])
+        );
+    }
+
+    #[test]
     fn reads_mountinfo_pathnames_losslessly_and_rejects_malformed_tables() {
         assert_eq!(
             mount_path(br"/a\011b\012c\040d\134e").unwrap(),

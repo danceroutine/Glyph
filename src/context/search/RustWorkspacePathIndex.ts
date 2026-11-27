@@ -165,10 +165,11 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     this.policyRevision = accessPolicy.revision;
     const parsed = rustWorkspacePathIndexOptionsSchema.parse(rawOptions);
     this.explicitExcludedPaths = parsed.excludedPaths;
-    const projected = accessPolicy.exclusionsFor(parsed.root, parsed.caseSensitive);
+    const projected = accessPolicy.exclusionsFor(parsed.root, parsed.caseSensitive, 'native');
     this.options = {
       ...parsed,
       ...accessPolicy.toJSON(),
+      ignoredDirectories: [...accessPolicy.configuredIgnoredDirectories],
       ...(accessPolicy.privatePaths.length > 0 ? { privatePaths: [...accessPolicy.privatePaths] } : {}),
       excludedPaths: [...new Set([...parsed.excludedPaths, ...projected.excludedPaths])],
       ...(projected.privateRoot ? { excludeRoot: true } : {}),
@@ -337,7 +338,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     this.fail(new Error('Workspace private paths changed. Retry the request.'));
     this.initializing = undefined;
     this.policyRevision = this.accessPolicy.revision;
-    const projected = this.accessPolicy.exclusionsFor(this.options.root, this.options.caseSensitive);
+    const projected = this.accessPolicy.exclusionsFor(this.options.root, this.options.caseSensitive, 'native');
     this.options.excludedPaths = [...new Set([...this.explicitExcludedPaths, ...projected.excludedPaths])];
     this.options.privatePaths = [...this.accessPolicy.privatePaths];
     if (projected.privateRoot) this.options.excludeRoot = true;
