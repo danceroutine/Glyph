@@ -15,6 +15,8 @@ export class SkillCatalog {
       equivalents(path: string): string[];
       prepare?(paths: readonly string[]): void;
     },
+    /** Refresh the host's physical user-store aliases before any provider enumerates package candidates. */
+    private readonly beforeDiscovery?: () => void,
   ) {
     this.byId = new Map(providers.map(provider => [provider.id, provider]));
     if (this.byId.size !== providers.length) throw new Error('Skill provider IDs must be unique.');
@@ -30,6 +32,7 @@ export class SkillCatalog {
   }
   async refresh(signal?: AbortSignal): Promise<readonly SkillDescriptor[]> {
     const generation = ++this.generation;
+    this.beforeDiscovery?.();
     const discovered = (
       await Promise.all(
         this.providers.map(async provider => {

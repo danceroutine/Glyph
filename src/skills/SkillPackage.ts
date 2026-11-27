@@ -9,6 +9,7 @@ import { parseSkillManifest } from './SkillManifest.ts';
 /** Immutable package revision pinned when a skill first activates. Resources are disclosed individually. */
 export interface SkillPackageFile {
   readonly bytes: Uint8Array;
+  /** Disk descriptor identity used to enroll the captured revision under the package's source authority. */
   readonly identity?: string;
   readonly revision: string;
   readonly mode: number;

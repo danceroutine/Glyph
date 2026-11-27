@@ -170,6 +170,7 @@ describe('Skill turn limits and tool authority', () => {
       new SkillContextContributor(catalog).beginTurn({ turnId: 'missing', attachmentPaths: [], skillIds: ['missing'] }),
     ).rejects.toThrow('Selected skill is unavailable');
     const session = new SkillTurnContext('model', [], [], catalog);
+    expect(session.disclosurePins({ schema: 'glyph.agent-instructions.v1', sources: [] })).toEqual([]);
     expect(await session.activateSource('missing', 'model', 'Not advertised')).toBeUndefined();
   });
 
@@ -239,6 +240,22 @@ describe('Skill turn limits and tool authority', () => {
     const duplicate = session.activateSource(descriptor.id, 'model', 'Task');
     expect((await first)?.skills).toHaveLength(1);
     expect(await duplicate).toBeUndefined();
+  });
+  it('withholds the read when its active package is replaced during admission', async () => {
+    const source = aSkillDescriptor();
+    const original = aSkillPackage(source, 'original', { 'note.txt': Buffer.from('private note') });
+    const replacement = aSkillPackage(source);
+    const contribution = vi
+      .fn()
+      .mockReturnValueOnce({ activePackage: () => original })
+      .mockReturnValue({ activePackage: () => replacement });
+    const runtime = new SkillToolRuntime({ activateSource: vi.fn(), contribution });
+    await expect(
+      runtime.tools[1]!.execute(JSON.stringify({ id: source.id, path: 'note.txt' }), new AbortController().signal, {
+        turnId: 'turn',
+      }),
+    ).rejects.toThrow('activation changed');
+    expect(original.resources()).toEqual([]);
   });
   it('rejects missing turn authority, unknown sessions, invalid inputs, and unadvertised activation', async () => {
     const runtime = new SkillToolRuntime({ activateSource: vi.fn(async () => undefined), contribution: vi.fn() });
