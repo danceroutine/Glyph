@@ -18,7 +18,7 @@ import {
   writeFile,
   type FileHandle,
 } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, matchesGlob, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
@@ -62,7 +62,11 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
     this.root = resolve(root);
     this.caseSensitive = caseSensitive ?? workspaceCaseSensitivity(this.root);
-    const projected = accessPolicy.exclusionsFor(this.root, this.caseSensitive);
+    const projected = accessPolicy.exclusionsFor(
+      this.root,
+      this.caseSensitive,
+      physicalAccess ? 'native' : 'standalone',
+    );
     this.privateRoot = projected.privateRoot && !allowPrivateRoot;
     this.options = {
       ...(physicalAccess ? { physicalAccess } : {}),
@@ -75,9 +79,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
 
   normalizePath(input: string): string {
     const normalized = normalizeProjectPath(this.root, input);
+    let path = this.root;
     if (
       this.privateRoot ||
-      normalized.split('/').some(part => this.isIgnoredDirectory(part)) ||
+      normalized.split('/').some(part => {
+        path = join(path, part);
+        return this.isIgnoredDirectory(part, path);
+      }) ||
       this.isExcluded(normalized)
     ) {
       throw new EditError(EditFailureReason.UNSUPPORTED, 'That path is excluded from project access.', {
@@ -157,13 +165,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         }
         const path = relative(root, absolute).split(sep).join('/');
         if (entry.isDirectory()) {
-          if (!this.isIgnoredDirectory(entry.name) && !this.isExcludedPath(path)) await visit(absolute);
+          if (!this.isIgnoredDirectory(entry.name, absolute) && !this.isExcludedPath(path)) await visit(absolute);
           if (truncated) return;
         } else if (entry.isFile()) {
           const pathWithinTarget = relative(searchRoot, absolute).split(sep).join('/');
           const matchCandidate = this.caseSensitive ? pathWithinTarget : pathWithinTarget.toLowerCase();
           if (
-            !this.isIgnoredDirectory(entry.name) &&
+            !this.isIgnoredDirectory(entry.name, absolute) &&
             !this.isExcluded(path) &&
             matchesGlob(matchCandidate, matchPattern)
           ) {
@@ -562,8 +570,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return this.options.accessPolicy.isSensitiveFileName(path.split('/').at(-1) ?? '', this.caseSensitive);
   }
 
-  private isIgnoredDirectory(name: string): boolean {
-    return this.options.accessPolicy.isIgnoredDirectory(name, this.caseSensitive);
+  private isIgnoredDirectory(name: string, path: string): boolean {
+    return this.options.accessPolicy.isIgnoredDirectory(
+      name,
+      this.caseSensitive,
+      path,
+      this.options.physicalAccess !== undefined,
+    );
   }
 
   private isExcludedPath(path: string): boolean {

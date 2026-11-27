@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 
 describe(WorkspaceAccessPolicy, () => {
@@ -36,6 +39,25 @@ describe(WorkspaceAccessPolicy, () => {
     expect(policy.isIgnoredDirectory('DIST', false)).toBe(true);
     expect(policy.isIgnoredDirectory('.skill-staging', true)).toBe(true);
     expect(new WorkspaceAccessPolicy({}, ['/']).exclusionsFor('/nested', true).privateRoot).toBe(true);
+  });
+
+  it('uses actual containing-directory aliases independently of configurable filename ignores', () => {
+    const root = mkdtempSync(join(tmpdir(), 'glyph-private-name-'));
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+    const policy = new WorkspaceAccessPolicy();
+    const name = '.SKILL-STAGING';
+    const path = join(root, name);
+    expect(policy.isIgnoredDirectory(name, false, path, true)).toBe(false);
+    const prospective = policy.isIgnoredDirectory(name, false, path);
+    mkdirSync(path);
+    const aliases = existsSync(join(root, '.skill-staging'));
+    expect(prospective).toBe(aliases);
+    expect(policy.isIgnoredDirectory(name, !aliases, path)).toBe(aliases);
+    expect(policy.exclusionsFor(path, !aliases, 'native').privateRoot).toBe(aliases);
+    expect(
+      new WorkspaceAccessPolicy({ ignoredDirectories: ['.skill-staging'] }).isIgnoredDirectory(name, false, path),
+    ).toBe(true);
+    expect(policy.configuredIgnoredDirectories).not.toContain('.skill-staging');
   });
 
   describe(WorkspaceAccessPolicy.prototype.isSensitiveFileName, () => {
