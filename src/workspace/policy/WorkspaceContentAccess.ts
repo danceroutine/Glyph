@@ -9,9 +9,13 @@ import type { StartupUserProfile } from './StartupUserProfile.ts';
  * The user catalog verifies the selected physical profile at the start and end of each operation.
  */
 export class WorkspaceContentAccess {
+  /** Automatic discovery, references and project tools use this view. */
   readonly project: WorkspaceAccessPolicy;
+  /** The sandbox launcher projects these reservations into its OS process profile. */
   readonly shell: WorkspaceAccessPolicy;
+  /** Read the exact file a human chose. Directory expansion goes through project discovery. */
   readonly selectedFile: WorkspaceAccessPolicy;
+  /** Read personal rules and skills through their scoped providers against the verified startup profile. */
   readonly userCatalog: WorkspaceAccessPolicy;
 
   constructor(profile: StartupUserProfile, hostPrivate: () => readonly string[], installation: readonly string[]) {
