@@ -30,6 +30,7 @@ export interface GlyphDesktopWorkspaceRuntime {
     command: GlyphRuntimeCommand,
     context: {
       readonly windowId?: string;
+      /** Revoked by the host when this attachment loses authority. Pass it through to deferred effects. */
       readonly signal: AbortSignal;
       readonly emit: (event: GlyphHostEvent) => void;
     },
