@@ -75,10 +75,10 @@ describe(RustWorkspacePathIndex, () => {
       try {
         await index.initialize();
         const result = index.glob('**', { limit: 10 });
-        const request = workers[0]!.requests.at(-1)!;
+        const original = workers[0]!.requests.at(-1)!;
         paths = ['/project/secret'];
         workers[0]!.stdout.write(
-          JSON.stringify({ version: 1, id: request.id, result: { files: ['secret'], truncated: false } }) + '\n',
+          JSON.stringify({ version: 1, id: original.id, result: { files: ['secret'], truncated: false } }) + '\n',
         );
         await expect(result).rejects.toThrow('private paths changed');
         await expect(index.searchContents('text', { outputMode: 'content' })).rejects.toThrow('private paths changed');
@@ -86,6 +86,59 @@ describe(RustWorkspacePathIndex, () => {
       } finally {
         await index.dispose();
       }
+    });
+
+    it.each(['initialize', 'refresh'] as const)(
+      'discards a decoded %s result if the replacement worker fails initialization',
+      async method => {
+        let paths: string[] = [];
+        const workers: FakeWorker[] = [];
+        const index = new RustWorkspacePathIndex(
+          { binaryPath: '/fixture', root: '/project', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+          () => {
+            const worker = new FakeWorker(request =>
+              request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE,
+            );
+            workers.push(worker);
+            return worker;
+          },
+        );
+        onTestFinished(() => index.dispose());
+        const reply = (worker: FakeWorker, result: Record<string, unknown>) => {
+          worker.stdout.write(JSON.stringify({ version: 1, id: worker.requests.at(-1)!.id, ...result }) + '\n');
+        };
+        if (method === 'refresh') {
+          const initial = index.initialize();
+          reply(workers[0]!, { result: indexState(1) });
+          await initial;
+        }
+        const old = index[method]();
+        reply(workers[0]!, { result: indexState(2) });
+        paths = ['/project/new'];
+        const replacement = index.initialize();
+        reply(workers[1]!, { error: { code: 'INITIALIZATION_FAILED', message: 'temporarily unavailable' } });
+        const [oldResult, replacementResult] = await Promise.allSettled([old, replacement]);
+        expect(oldResult).toMatchObject({ status: 'rejected' });
+        expect(replacementResult).toMatchObject({ status: 'rejected', reason: { message: 'temporarily unavailable' } });
+        const retry = index.initialize();
+        expect(workers[1]!.requests.map(request => request.method)).toEqual(['initialize', 'initialize']);
+        reply(workers[1]!, { result: indexState(3) });
+        await expect(retry).resolves.toEqual(indexState(3));
+      },
+    );
+
+    it('checks a newly admitted policy before caching an initialization response', async () => {
+      let paths: string[] = [];
+      const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));
+      const index = new RustWorkspacePathIndex(
+        { binaryPath: '/fixture', root: '/project', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+        () => worker,
+      );
+      onTestFinished(() => index.dispose());
+      const pending = index.initialize();
+      worker.stdout.write(JSON.stringify({ version: 1, id: worker.requests[0]!.id, result: indexState(2) }) + '\n');
+      paths = ['/project/new'];
+      await expect(pending).rejects.toThrow('changed');
     });
 
     it('does not let a superseded initialization clear or publish its replacement', async () => {
