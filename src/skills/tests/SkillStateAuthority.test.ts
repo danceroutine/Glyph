@@ -11,7 +11,7 @@ async function fixture() {
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const path = join(root, 'skill-state.json');
   await writeFile(path, JSON.stringify({ enabled: { example: false }, installations: {} }), { mode: 0o600 });
-  const state = new SkillStateStore(new FileSystemWorkspaceTextStore(root), testFilesystemMetadata);
+  const state = new SkillStateStore(root, testFilesystemMetadata);
   return { root, path, state };
 }
 
@@ -55,11 +55,11 @@ describe(SkillStateStore, () => {
   it('rejects a foreign-owned preference file inside an admitted owner-controlled directory', async () => {
     const { root, path } = await fixture();
     const disk = new FileSystemWorkspaceTextStore(root);
-    const state = new SkillStateStore(disk, testFilesystemMetadata);
+    const state = new SkillStateStore(disk.root, testFilesystemMetadata);
     await state.initialize();
     const uid = (await stat(path)).uid;
-    const readOptional = disk.readOptional.bind(disk);
-    vi.spyOn(disk, 'readOptional').mockImplementation(async (...args) => {
+    const readOptional = state.preferences.read.bind(state.preferences);
+    vi.spyOn(state.preferences, 'read').mockImplementation(async (...args) => {
       const current = vi.spyOn(process, 'getuid').mockReturnValue(uid + 1);
       try {
         return await readOptional(...args);
@@ -95,7 +95,7 @@ describe(SkillStateStore, () => {
         if ((await handle.stat()).ino === inode) await handle.chmod(0o666);
       }),
     };
-    const state = new SkillStateStore(new FileSystemWorkspaceTextStore(root), metadata);
+    const state = new SkillStateStore(root, metadata);
     await expect(state.initialize()).rejects.toThrow('preferences');
     expect(state.enabled.size).toBe(0);
     expect((await stat(path)).mode & 0o777).toBe(0o666);

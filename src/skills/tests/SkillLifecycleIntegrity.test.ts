@@ -43,7 +43,7 @@ it('binds equal-size binary updates, owner permissions and the physical target t
   const exact = await manager.prepare(skill.origin.id, replacement, skill.id);
   await manager.apply(exact.id);
   expect((await stat(join(root, 'skills/example/assets/image.bin'))).mode & 0o777).toBe(0o700);
-  const state = new SkillStateStore(store, testFilesystemMetadata);
+  const state = new SkillStateStore(store.root, testFilesystemMetadata);
   await state.initialize();
   expect(state.installations.get(skill.id)?.revision).toBe(exact.revision);
 });
@@ -145,9 +145,9 @@ it('rejects stale removals when an indexed directory has vanished', async () => 
   await expect(manager.prepareRemoval(skill.id)).rejects.toThrow('missing');
 });
 it('fails closed on malformed preferences, accepts repairs, and only publishes acknowledged writes', async () => {
-  const { root, store, state } = await aSkillLifecycle();
+  const { root, state } = await aSkillLifecycle();
   await state.setEnabled('one', false);
-  const actual = store.replace.bind(store);
+  const actual = state.preferences.replace.bind(state.preferences);
   let release!: () => void;
   const hold = new Promise<void>(accept => {
     release = accept;
@@ -156,7 +156,7 @@ it('fails closed on malformed preferences, accepts repairs, and only publishes a
   const started = new Promise<void>(resolve => {
     confirm = resolve;
   });
-  vi.spyOn(store, 'replace').mockImplementationOnce(async (...args) => {
+  vi.spyOn(state.preferences, 'replace').mockImplementationOnce(async (...args) => {
     confirm();
     await hold;
     return actual(...args);
@@ -318,31 +318,34 @@ it('preserves the journal on uncertainty or post-commit changes, and refuses sta
   await expect(manager.apply(change.id)).rejects.toThrow('Published files changed');
   record.mockRestore();
   await expect(manager.recover()).rejects.toThrow('Published files changed');
-  const separate = new SkillPackageManager([location], catalog, new SkillStateStore(store, testFilesystemMetadata));
+  const separate = new SkillPackageManager(
+    [location],
+    catalog,
+    new SkillStateStore(store.root, testFilesystemMetadata),
+  );
   await rm(join(root, skill.directory), { recursive: true });
   const journal = new SkillTransactionJournal(root, testFilesystemMetadata);
   await journal.finish(change.id);
   await expect(separate.setEnabled(skill.id, true)).rejects.toThrow('missing');
 });
 it('reconciles failed preference acknowledgements and reports unreadable or undurable outcomes', async () => {
-  const { state, store, root } = await aSkillLifecycle();
+  const { state, root } = await aSkillLifecycle();
   await state.setEnabled('one', true);
-  const replace = store.replace.bind(store);
-  vi.spyOn(store, 'replace').mockImplementationOnce(async (...args) => {
+  const replace = state.preferences.replace.bind(state.preferences);
+  vi.spyOn(state.preferences, 'replace').mockImplementationOnce(async (...args) => {
     await replace(...args);
     throw new Error('Lost acknowledgement');
   });
   await state.setEnabled('one', false);
   expect(state.enabled.get('one')).toBe(false);
-  vi.spyOn(store, 'replace').mockImplementationOnce(async () => {
-    vi.spyOn(store, 'readOptional').mockRejectedValueOnce(new Error('Unreadable'));
+  vi.spyOn(state.preferences, 'replace').mockImplementationOnce(async () => {
+    vi.spyOn(state.preferences, 'read').mockRejectedValueOnce(new Error('Unreadable'));
     throw new Error('Uncertain write');
   });
   await expect(state.setEnabled('one', true)).rejects.toThrow('needs recovery');
-  vi.spyOn(store, 'replace').mockImplementationOnce(async (...args) => {
-    const result = await replace(...args);
+  vi.spyOn(state.preferences, 'replace').mockImplementationOnce(async (...args) => {
+    await replace(...args);
     await rm(join(root, 'skill-state.json'));
-    return result;
   });
   await expect(state.setEnabled('one', true)).rejects.toThrow('needs recovery');
   expect(state.enabled.get('one')).toBe(false);

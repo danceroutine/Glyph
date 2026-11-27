@@ -1,6 +1,7 @@
-import { lstat, opendir } from 'node:fs/promises';
+import { lstat, opendir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { readHostFile } from './readHostFile.ts';
+import { fileRevision, packageRevision, type SkillFileIdentity } from './skillPackageRevision.ts';
 import { optionalStat } from './SkillPackageStorage.ts';
 /** Bounded physical inventory detects omitted sensitive files and unsupported nodes before a directory swap. */
 export async function inventoryPackage(root: string, signal?: AbortSignal) {
@@ -45,17 +46,20 @@ export async function readDirectoryModes(directories: readonly string[], resolve
   return modes;
 }
 
-export async function readPackageFiles(root: string, paths: readonly string[], signal?: AbortSignal) {
-  // The transaction owner verifies published trees and private rollback copies through the same file checks.
-  const store = new FileSystemWorkspaceTextStore(root, { allowPrivateRoot: true });
-  const files = new Map<string, Awaited<ReturnType<typeof store.readBytes>>>();
+/** Hash the files selected by a lifecycle transaction in its guarded target or rollback directory.
+ * Only revisions and modes leave this operation. Source and catalog readers use their own agent-facing authority. */
+export async function diskRevision(root: string, treeVersion?: 2): Promise<string | null> {
+  if (!(await optionalStat(root))) return null;
+  const { files: paths, directories } = await inventoryPackage(root);
+  const physical = await realpath(root);
+  const modes = treeVersion && (await readDirectoryModes(directories, async path => join(physical, path)));
+  const files = new Map<string, SkillFileIdentity>();
   let bytes = 0;
   for (const path of paths) {
-    signal?.throwIfAborted();
-    const file = await store.readBytes(path, { maxBytes: 1024 * 1024 });
+    const file = await readHostFile(join(physical, path), 1024 * 1024);
     bytes += file.bytes.length;
     if (bytes > 8 * 1024 * 1024) throw new Error('Skill package exceeds 8 MiB.');
-    files.set(path, file);
+    files.set(path, { revision: fileRevision(file.bytes), mode: file.mode });
   }
-  return files;
+  return packageRevision(files, modes);
 }

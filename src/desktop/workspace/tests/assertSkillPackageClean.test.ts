@@ -147,3 +147,21 @@ it('sends each recipient its physical mount route and rechecks mount changes bef
   registry.mockReturnValueOnce([peer]).mockReturnValueOnce([{ ...peer, physicalPackageUri: 'file:///other/one' }]);
   await expect(check()).rejects.toThrow('windows changed');
 });
+
+it('requires another working-copy check when an owning editor route changes while replies are pending', async () => {
+  let routes = ['file:///logical/first'];
+  const request: EditorRpcRouter['request'] = async (_editor, input) => {
+    routes = ['file:///logical/second'];
+    return { operationId: 'operationId' in input ? input.operationId : '', ok: true, packageClean: true };
+  };
+  await expect(
+    assertSkillPackageClean(
+      { request, trustedSkillEditors: () => [] },
+      identity,
+      'project',
+      '/physical/package',
+      'file:///logical/package',
+      () => routes,
+    ),
+  ).rejects.toThrow('routes changed');
+});

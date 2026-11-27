@@ -11,7 +11,7 @@ import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 const [root, scenario] = process.argv.slice(2);
 const store = new FileSystemWorkspaceTextStore(root);
 const testFilesystemMetadata = new NativeFilesystemMetadata(resolve('target/release/glyph-context-index'));
-const state = new SkillStateStore(store, testFilesystemMetadata);
+const state = new SkillStateStore(store.root, testFilesystemMetadata);
 await state.initialize();
 const location = {
   id: 'user:glyph',

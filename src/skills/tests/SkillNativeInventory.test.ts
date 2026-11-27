@@ -42,10 +42,12 @@ describe('Skill package inventory boundaries', () => {
     await writeFile(join(root, 'assets/image'), 'image');
     native.listDirectories.mockResolvedValueOnce(['assets', 'templates']);
     native.glob.mockResolvedValueOnce({ files: ['SKILL.md', 'assets/image'], truncated: false });
-    const draft = await new SkillPackageSourceReader('native', [], testFilesystemMetadata).read(
-      { kind: 'local', path: root },
-      new AbortController().signal,
-    );
+    const draft = await new SkillPackageSourceReader(
+      'native',
+      [],
+      testFilesystemMetadata,
+      new WorkspaceAccessPolicy(),
+    ).read({ kind: 'local', path: root }, new AbortController().signal);
     expect(draft.files().has('SKILL.md')).toBe(true);
     expect([...draft.packageDirectories().keys()]).toEqual(['assets', 'templates']);
     expect(native.refresh.mock.invocationCallOrder[0]).toBeLessThan(native.glob.mock.invocationCallOrder[0]!);
@@ -54,7 +56,10 @@ describe('Skill package inventory boundaries', () => {
     await symlink(root, linked);
     onTestFinished(() => rm(linked));
     await expect(
-      new SkillPackageSourceReader('native', [], testFilesystemMetadata).read({ kind: 'local', path: linked }),
+      new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
+        kind: 'local',
+        path: linked,
+      }),
     ).rejects.toThrow('symlink');
   });
   it('checks a local resource against the host policy even when a stale index supplies its path', async () => {
@@ -65,7 +70,7 @@ describe('Skill package inventory boundaries', () => {
     await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nExample');
     await writeFile(join(root, 'trace'), 'fixture');
     const policy = new WorkspaceAccessPolicy({}, [join(root, 'trace')]);
-    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, [], policy);
+    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, policy, []);
     native.glob.mockResolvedValueOnce({ files: ['SKILL.md', 'trace'], truncated: false });
     await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('excluded');
   });
@@ -78,7 +83,7 @@ describe('Skill package inventory boundaries', () => {
     await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nExample');
     let paths: string[] = [];
     const policy = new WorkspaceAccessPolicy({}, () => paths);
-    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, [], policy);
+    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, policy, []);
     const listing = { files: ['SKILL.md'], truncated: false };
     native.glob.mockImplementationOnce(async () => {
       paths = [join(root, 'future-private')];
@@ -130,8 +135,8 @@ describe('Skill package inventory boundaries', () => {
       'native',
       [],
       metadata,
-      [],
       new WorkspaceAccessPolicy({}, privatePaths),
+      [],
     );
     const draft = await reader.read({ kind: 'local', path: root });
     const { manager, location, store } = await aSkillLifecycle();
@@ -151,7 +156,10 @@ describe('Skill package inventory boundaries', () => {
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     native.refresh.mockResolvedValueOnce({ truncated: true });
     await expect(
-      new SkillPackageSourceReader('native', [], testFilesystemMetadata).read({ kind: 'local', path: root }),
+      new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
+        kind: 'local',
+        path: root,
+      }),
     ).rejects.toThrow('file budget');
     expect(native.glob).not.toHaveBeenCalled();
     expect(native.dispose).toHaveBeenCalledOnce();
@@ -163,7 +171,10 @@ describe('Skill package inventory boundaries', () => {
     await Promise.all(files.map(path => writeFile(join(root, path), Buffer.alloc(1024 * 1024))));
     native.glob.mockResolvedValueOnce({ files, truncated: false });
     await expect(
-      new SkillPackageSourceReader('native', [], testFilesystemMetadata).read({ kind: 'local', path: root }),
+      new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
+        kind: 'local',
+        path: root,
+      }),
     ).rejects.toThrow('8 MiB');
     expect(native.dispose).toHaveBeenCalledOnce();
   });
@@ -191,7 +202,12 @@ describe('Skill package inventory boundaries', () => {
   it('rejects an index that becomes truncated between reconciliation and the exact glob request', async () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-skill-inventory-'));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
-    const reader = new SkillPackageSourceReader('injected-native-index', [], testFilesystemMetadata);
+    const reader = new SkillPackageSourceReader(
+      'injected-native-index',
+      [],
+      testFilesystemMetadata,
+      new WorkspaceAccessPolicy(),
+    );
     await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('file budget');
     expect(native.dispose).toHaveBeenCalledOnce();
   });
@@ -220,7 +236,10 @@ it('rejects local packages when the physical inventory contains omitted files or
     native.refresh.mockResolvedValueOnce({ truncated: false });
     native.glob.mockResolvedValueOnce({ files, truncated: false });
     await expect(
-      new SkillPackageSourceReader('native', [], testFilesystemMetadata).read({ kind: 'local', path: root }),
+      new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
+        kind: 'local',
+        path: root,
+      }),
     ).rejects.toThrow('unindexed');
   }
 });
@@ -232,7 +251,7 @@ it('refuses an excluded empty local directory and a native candidate that turned
   onTestFinished(() => rm(parent, { recursive: true, force: true }));
   await writeFile(join(root, 'SKILL.md'), 'manifest');
   native.glob.mockResolvedValue({ files: ['SKILL.md'], truncated: false });
-  const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata);
+  const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy());
   await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('unindexed');
   native.listDirectories.mockResolvedValueOnce(['SKILL.md']);
   await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('directory changed');

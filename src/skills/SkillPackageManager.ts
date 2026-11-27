@@ -19,7 +19,7 @@ import { SkillPackageDraft, type SkillSourceAccess } from './SkillPackageDraft.t
 import type { SkillPackageFile } from './SkillPackage.ts';
 import { packageRevision, fileDirectories } from './skillPackageRevision.ts';
 import { skillPackageId } from './skillPackageId.ts';
-import { inventoryPackage, readDirectoryModes, readPackageFiles } from './skillPackageInventory.ts';
+import { inventoryPackage, readDirectoryModes, diskRevision } from './skillPackageInventory.ts';
 import { optionalStat, privateSkillDirectory, withSkillLock } from './SkillPackageStorage.ts';
 import { SkillTransactionJournal, type SkillTransaction } from './SkillTransactionJournal.ts';
 
@@ -123,12 +123,6 @@ function compareDirectories(before: ReadonlyMap<string, number>, after: Readonly
       ...(afterMode === undefined ? {} : { afterMode }),
     } as const;
   });
-}
-async function diskRevision(directory: string, treeVersion?: 2): Promise<string | null> {
-  if (!(await optionalStat(directory))) return null;
-  const { files, directories } = await inventoryPackage(directory);
-  const modes = treeVersion && (await readDirectoryModes(directories, async path => join(directory, path)));
-  return packageRevision(await readPackageFiles(directory, files), modes);
 }
 /** Enumerate the parent directories that publishing the package would create. */
 async function missingParents(target: string): Promise<string[]> {

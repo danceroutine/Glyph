@@ -1,3 +1,4 @@
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
@@ -32,6 +33,7 @@ async function fixture() {
     resolve('target/release/glyph-context-index'),
     [],
     testFilesystemMetadata,
+    new WorkspaceAccessPolicy(),
   );
   return { root, directory, reader };
 }
