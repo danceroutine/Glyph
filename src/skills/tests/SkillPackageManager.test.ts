@@ -94,7 +94,13 @@ describe(SkillPackageManager, () => {
       { name: 'Assets', path: join(root, 'skills/example/assets') },
       { name: 'Alias', path: root },
     ]);
-    const manager = new SkillPackageManager([location], catalog, state, undefined, routes);
+    const manager = new SkillPackageManager(
+      [{ ...location, sourcePathAliases: path => [path] }],
+      catalog,
+      state,
+      undefined,
+      routes,
+    );
     const preview = await manager.prepareRemoval(skill.id);
     expect(preview.destination.scope).toBe('user');
     expect(preview.createdParentDirectories).toEqual([]);
@@ -195,7 +201,7 @@ describe(SkillPackageManager, () => {
   it('rejects collisions, stale previews, wrong targets, and symlinked resources', async () => {
     const { root, manager, install } = await aSkillLifecycle();
     const skill = await install();
-    await expect(manager.prepare(skill.origin.id, aSkillDraft())).rejects.toThrow('already occupies');
+    await expect(manager.prepare(skill.origin.id, aSkillDraft())).rejects.toThrow('Select Update');
     await expect(manager.prepare('unknown', aSkillDraft())).rejects.toThrow('cannot be managed');
     await expect(manager.prepare(skill.origin.id, aSkillDraft('Other', 'other'), skill.id)).rejects.toThrow(
       'selected installed',
@@ -223,7 +229,9 @@ describe(SkillPackageManager, () => {
     controller.abort(new Error('Cancelled'));
     await expect(manager.apply(preview.id, controller.signal)).rejects.toThrow('Cancelled');
     await mkdir(join(root, 'skills/example'), { recursive: true });
-    await expect(manager.prepare(provider.id, aSkillDraft())).rejects.toThrow('already occupies');
+    await expect(manager.prepare(provider.id, aSkillDraft())).rejects.toThrow('Move it or choose');
+    await writeFile(join(root, 'skills/example/notes.md'), 'Keep this file');
+    await expect(manager.prepare(provider.id, aSkillDraft())).rejects.toThrow('Move it or choose');
   });
 });
 

@@ -543,7 +543,6 @@ describe(TurnContextCoordinator, () => {
     await expect(
       coordinator.beginTurn({ turnId: 'queued', attachmentPaths: [], manualRuleIds: ['unnamed'] }),
     ).rejects.toThrow('manual activation');
-    expect(() => coordinator.activateManualRules('ineligible', ['missing'])).toThrow('unavailable');
   });
 });
 

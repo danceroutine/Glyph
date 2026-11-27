@@ -77,6 +77,10 @@ class ClaudeShapedAdapter implements AgentModelAdapter<ClaudeTurn> {
     );
   }
 
+  projectTurn(turn: ClaudeTurn, projection: AgentHistoryProjection): ClaudeTurn {
+    return { ...turn, messages: messagesFrom(this.projectHistory(claudeState(turn.messages), projection)) };
+  }
+
   recoverInterruptedToolCalls(state: ChatProviderState) {
     const messages = messagesFrom(state);
     const settled = new Set(
@@ -244,6 +248,39 @@ describe(AgentRuntime, () => {
       onTurnAdmitted: admitted,
     });
     expect(admitted).toHaveBeenCalledOnce();
+  });
+  it('projects retired context from a Claude-shaped live tool result while preserving the call and signed reasoning', async () => {
+    const adapter = new ClaudeShapedAdapter();
+    const contexts = new TurnContextCoordinator([new SkillContextContributor(new SkillCatalog([]))]);
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10000 },
+      mockTools(async () => {
+        contexts.contribution('retired', 'skills')!.retireSource!('retired-skill');
+        return JSON.stringify({
+          content: 'tool result',
+          instructionContext: {
+            schema: 'glyph.agent-instructions.v1',
+            sources: [],
+            skillCandidates: [{ id: 'retired-skill', description: 'retired metadata' }],
+          },
+        });
+      }),
+      undefined,
+      contexts,
+    );
+    await runtime.send(
+      { text: 'Read', attachments: [], turnId: 'retired' },
+      {
+        signal: new AbortController().signal,
+        onText: () => {},
+      },
+    );
+    expect(adapter.requests[1]?.messages.at(-1)?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'toolu_1', content: JSON.stringify({ content: 'tool result' }) },
+    ]);
+    expect(JSON.stringify(adapter.requests[1])).toContain('signed-thinking');
+    expect(JSON.stringify(adapter.requests[1])).not.toContain('retired metadata');
   });
   it('requires live source authority after any provider prepares its request and before its sender runs', async () => {
     const contexts = new TurnContextCoordinator(new AgentInstructionCatalog([]));

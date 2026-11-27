@@ -14,6 +14,11 @@ export interface TurnContextInput {
 export interface TurnContextContribution {
   /** The selected source origins for one delta, or every origin replayed in the current provider input. */
   disclosurePins?(context?: TurnContextEnvelope): readonly SourcePin[];
+  /** End use of a source superseded by this turn's approved mutation, retaining its historical provenance. */
+  retireSource?(id: string): void;
+  /** Filter superseded material from earlier advertisements, activations and tool results. Publish a new
+   * function for each changed policy so a prepared request can detect retirement before transport. */
+  readonly replayFilter?: (context: TurnContextEnvelope) => TurnContextEnvelope | undefined;
   initialEnvelope(): TurnContextEnvelope;
   snapshot(): TurnContextSnapshot;
   disclosePaths?(paths: readonly string[]): TurnContextEnvelope | undefined;

@@ -1,5 +1,5 @@
 /**
- * Runtime-owned transformation from live conversation content to durable history.
+ * Runtime-owned transformation of context envelopes for replay or durable history.
  * Adapters locate these fields in their protocol records and preserve all other
  * content, ordering, call identities, and opaque provider state without interpreting it.
  */

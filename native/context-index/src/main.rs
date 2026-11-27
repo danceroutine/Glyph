@@ -4,10 +4,23 @@ mod source_origins;
 #[cfg(target_os = "linux")]
 fn source_path_aliases() -> std::io::Result<()> {
     use std::path::PathBuf;
-    let (path, descendants): (PathBuf, bool) = serde_json::from_reader(std::io::stdin().lock())?;
-    let table = std::fs::read("/proc/self/mountinfo")?;
-    let aliases = glyph_filesystem_metadata::mount_table::MountTable::parse(&table)?
-        .visible_aliases(&path, descendants)?;
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Paths {
+        One(PathBuf),
+        Many(Vec<PathBuf>),
+    }
+    let (paths, descendants): (Paths, bool) = serde_json::from_reader(std::io::stdin().lock())?;
+    let paths = match paths {
+        Paths::One(path) => vec![path],
+        Paths::Many(paths) => paths,
+    };
+    let mountinfo = std::fs::read("/proc/self/mountinfo")?;
+    let table = glyph_filesystem_metadata::mount_table::MountTable::parse(&mountinfo)?;
+    let mut aliases = std::collections::BTreeSet::new();
+    for path in paths {
+        aliases.extend(table.visible_aliases(&path, descendants)?);
+    }
     serde_json::to_writer(std::io::stdout().lock(), &aliases)?;
     Ok(())
 }

@@ -74,7 +74,10 @@ export class SkillLifecycleToolRuntime implements ToolSource {
             if (instructionContext) return proposalInstructionContext(instructionContext);
             if (!(await approve(preview, signal))) return JSON.stringify({ applied: false, denied: true });
             signal.throwIfAborted();
+            const retired = change.remove_id ?? change.replace_id;
+            const skills = turns.contribution(context.turnId, 'skills');
             const result = await manager.apply(preview.id, signal);
+            if (retired) skills?.retireSource?.(retired);
             return JSON.stringify({
               ...result,
               name: preview.name,

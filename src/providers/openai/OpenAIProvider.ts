@@ -53,7 +53,11 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
   }
 
   projectHistory(state: ChatProviderState, projection: AgentHistoryProjection): ChatProviderState {
-    const history = historyFrom(state).flatMap((item): ResponseInputItem[] => {
+    return stateFrom(this.projectTurn({ input: historyFrom(state) }, projection).input);
+  }
+
+  projectTurn(turn: OpenAITurn, projection: AgentHistoryProjection): OpenAITurn {
+    const input = turn.input.flatMap((item): ResponseInputItem[] => {
       switch (item.type) {
         case 'function_call_output':
         case 'custom_tool_call_output':
@@ -71,7 +75,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
       }
       return [item];
     });
-    return stateFrom(history);
+    return { ...turn, input };
   }
 
   recoverInterruptedToolCalls(state: ChatProviderState) {

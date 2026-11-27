@@ -1,3 +1,5 @@
+import { join, relative } from 'node:path';
+import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { describe, expect, it, vi } from 'vitest';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
@@ -105,48 +107,67 @@ describe(SkillLifecycleToolRuntime, () => {
     expect(manager.apply).toHaveBeenCalledOnce();
     expect(manager.discard).toHaveBeenCalledTimes(2);
   });
-  it('discloses a populated directory’s literal rule before approving its package', async () => {
-    const { location, catalog, state } = await aSkillLifecycle();
-    const manager = new SkillPackageManager([{ ...location, scope: 'project' }], catalog, state);
-    const target = 'skills/example/references';
-    const turns = new TurnContextCoordinator(
-      new AgentInstructionCatalog([
-        {
-          discover: async () => [
-            {
-              id: 'directory',
-              label: 'directory',
-              kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
-              path: '.glyph/rules/directory.md',
-              scope: '.',
-              content: 'Review directory changes',
-              revision: 'one',
-              status: AgentInstructionSourceStatus.ACTIVE,
-              activation: AgentInstructionActivationMode.FILE_PATTERN,
-              globs: ['skills/example', target],
-            },
-          ],
-        },
-      ]),
-    );
-    const { approve, context, signal, runner } = fixture();
-    await turns.beginTurn({ turnId: context.turnId, attachmentPaths: [] });
-    const tool = new SkillLifecycleToolRuntime(manager, approve, turns, runner as never).tools[0]!;
-    const input = JSON.stringify({
-      target_id: location.id,
-      replace_id: null,
-      remove_id: null,
-      draft: aSkillDraft().toJSON(),
-    });
-    const first = JSON.parse(await tool.execute(input, signal, context));
-    expect(first).toMatchObject({
-      status: 'INSTRUCTION_CONTEXT_REQUIRED',
-      instructionContext: { sources: [{ id: 'directory' }], activations: [{ paths: ['skills/example', target] }] },
-    });
-    expect(approve).not.toHaveBeenCalled();
-    expect(JSON.parse(await tool.execute(input, signal, context))).toMatchObject({ applied: true });
-    expect(approve).toHaveBeenCalledOnce();
-  });
+  it.each(['project', 'user'] as const)(
+    'discloses directory and prospective file rules before approving a %s package',
+    async scope => {
+      const { root, location, catalog, state } = await aSkillLifecycle();
+      const project = scope === 'project' ? root : join(root, 'workspace');
+      const mount = join(project, 'mounted');
+      const single = vi.fn((path: string) => [path]);
+      const batch = vi.fn((paths: readonly string[]) =>
+        paths.flatMap(path => [path, join(mount, relative(join(root, 'skills'), path))]),
+      );
+      const manager = new SkillPackageManager(
+        [{ ...location, scope, ...(scope === 'user' && { sourcePathAliases: Object.assign(single, { batch }) }) }],
+        catalog,
+        state,
+        undefined,
+        new WorkspaceSourceRoutes([{ name: 'workspace', path: project }]),
+      );
+      const directory = scope === 'project' ? 'skills/example' : 'mounted/example';
+      const target = directory + '/references';
+      const manifest = directory + '/SKILL.md';
+      const turns = new TurnContextCoordinator(
+        new AgentInstructionCatalog([
+          {
+            discover: async () => [
+              {
+                id: 'directory',
+                label: 'directory',
+                kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+                path: '.glyph/rules/directory.md',
+                scope: '.',
+                content: 'Review directory changes',
+                revision: 'one',
+                status: AgentInstructionSourceStatus.ACTIVE,
+                activation: AgentInstructionActivationMode.FILE_PATTERN,
+                globs: [directory, target, manifest],
+              },
+            ],
+          },
+        ]),
+      );
+      const { approve, context, signal, runner } = fixture();
+      await turns.beginTurn({ turnId: context.turnId, attachmentPaths: [] });
+      const tool = new SkillLifecycleToolRuntime(manager, approve, turns, runner as never).tools[0]!;
+      const input = JSON.stringify({
+        target_id: location.id,
+        replace_id: null,
+        remove_id: null,
+        draft: aSkillDraft().toJSON(),
+      });
+      const first = JSON.parse(await tool.execute(input, signal, context));
+      expect(first).toMatchObject({
+        status: 'INSTRUCTION_CONTEXT_REQUIRED',
+        instructionContext: { sources: [{ id: 'directory' }], activations: [{ paths: [directory, manifest, target] }] },
+      });
+      expect(approve).not.toHaveBeenCalled();
+      expect(batch).toHaveBeenCalledTimes(scope === 'user' ? 1 : 0);
+      expect(single).not.toHaveBeenCalled();
+      expect(JSON.parse(await tool.execute(input, signal, context))).toMatchObject({ applied: true });
+      expect(approve).toHaveBeenCalledOnce();
+    },
+  );
   it('discards the pending preview if instruction disclosure fails before review', async () => {
     const { manager, approve, turns, tool, context, signal } = fixture();
     manager.workspacePaths.mockReturnValue(['src/.glyph/skills/example/SKILL.md']);
