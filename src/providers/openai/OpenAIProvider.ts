@@ -414,13 +414,16 @@ function toUserInput(request: ChatRequest): ResponseInputItem {
   if (request.attachments.length === 0) return { role: 'user', content: request.text };
   const context = JSON.stringify({
     schema: 'glyph.workspace-context.v1',
-    files: request.attachments.map(attachment => ({
-      path: attachment.path,
-      revision: attachment.revision,
-      byteOrderMark: attachment.byteOrderMark,
-      ...(attachment.source ? { source: attachment.source } : {}),
-      text: attachment.text,
-    })),
+    files: request.attachments.map(attachment => {
+      const { folderListing: _listing, projectFile: _projectFile, ...source } = attachment.source ?? {};
+      return {
+        path: attachment.path,
+        revision: attachment.revision,
+        byteOrderMark: attachment.byteOrderMark,
+        ...(attachment.source && { source }),
+        text: attachment.text,
+      };
+    }),
   });
   return {
     role: 'user',

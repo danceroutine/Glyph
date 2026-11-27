@@ -1,6 +1,7 @@
 import { describe, expect, beforeEach, it, onTestFinished, vi, type Mock } from 'vitest';
 import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Deferred } from '#src/shared/Deferred.js';
 import { tmpdir } from 'node:os';
 vi.mock('#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.ts', () => ({
   isGlyphRequestEnvelope: vi.fn(),
@@ -77,6 +78,65 @@ describe(GlyphDesktopHost, () => {
     await fixture.receive('next', owner, 'revoke', { ...attach, trusted: false });
     expect(next.aborted).toBe(true);
     expect(first.aborted).toBe(true);
+  });
+
+  it('returns attachment results only to the requesting trusted window and discards revoked lookups', async () => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-window-attach-')));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const alias = join(directory, 'alias');
+    const actual = join(directory, 'root');
+    await mkdir(actual);
+    await symlink(actual, alias);
+    const attach = {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      roots: [{ name: 'project', canonicalPath: actual, uri: 'file://' + actual }],
+      trusted: true,
+    } as const;
+    const command = {
+      type: GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE,
+      lookupId: 'folder',
+      resource: { uri: 'file://' + alias, path: '.', folder: true },
+    } as const;
+    const listing = { files: ['allowed.md'], truncated: false };
+    const resolve = vi.fn(async () => listing);
+    Object.assign(fixture.runtime, { attachmentAccess: { resolve } });
+    for (const [id, identity] of [
+      ['owner', owner],
+      ['peer', peer],
+    ] as const) {
+      fixture.connect(id, identity);
+      await fixture.receive(
+        id,
+        identity,
+        'attach-' + id,
+        id === 'owner'
+          ? attach
+          : { ...attach, roots: [{ name: 'project', canonicalPath: alias, uri: 'file://' + alias }] },
+      );
+    }
+    await fixture.receive('peer', peer, 'resolve', command);
+    expect(resolve).toHaveBeenCalledWith({ ...command.resource, uri: 'file://' + actual }, expect.any(AbortSignal));
+    const resolved = { type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED, lookupId: 'folder', listing };
+    expect(fixture.events('peer').at(-2)?.event).toEqual(resolved);
+    expect(fixture.events('owner').map(entry => entry.event)).not.toContainEqual(resolved);
+    await fixture.receive('peer', peer, 'bad', { ...command, lookupId: '' });
+    expect(fixture.events('peer').at(-1)?.event.type).toBe(GlyphHostEventType.ERROR);
+    const pending = new Deferred<typeof listing>();
+    resolve.mockImplementationOnce(() => pending.promise);
+    const lookup = fixture.receive('peer', peer, 'pending', command);
+    await vi.waitFor(() => {
+      expect(resolve).toHaveBeenCalledTimes(2);
+    });
+    await fixture.host.disconnect('peer');
+    pending.resolve(listing);
+    await lookup;
+    expect(fixture.events('peer').filter(entry => entry.event.type === resolved.type)).toHaveLength(1);
+    await fixture.receive('owner', owner, 'downgrade', { ...attach, trusted: false });
+    await fixture.receive('owner', owner, 'denied', command);
+    expect(fixture.events('owner').at(-1)?.event.type).toBe(GlyphHostEventType.ERROR);
+    expect(resolve).toHaveBeenCalledTimes(2);
   });
 
   it('returns rule identity lookups only to their authorized attached window', async () => {

@@ -917,6 +917,40 @@ describe(OpenAIProvider, () => {
       ]);
     });
 
+    it('sends the captured folder text and its provenance without duplicating internal admission metadata', async () => {
+      const { provider, requests } = harness([() => sse([completed])]);
+      const source = { kind: 'folder' as const, uri: 'file:///project/src', version: 0, revision: 'v1' };
+      await provider.send(
+        {
+          text: 'Inspect these names',
+          attachments: [
+            {
+              path: 'src',
+              revision: 'v1',
+              byteOrderMark: false,
+              byteLength: 8,
+              text: 'snapshot',
+              source: { ...source, folderListing: { files: ['a.ts'], truncated: false }, projectFile: true },
+            },
+          ],
+        },
+        options(),
+      );
+      const input = requests[0]?.input as { content: { text: string }[] }[];
+      expect(JSON.parse(input[0]!.content[0]!.text)).toEqual({
+        schema: 'glyph.workspace-context.v1',
+        files: [
+          {
+            path: 'src',
+            revision: 'v1',
+            byteOrderMark: false,
+            text: 'snapshot',
+            source,
+          },
+        ],
+      });
+    });
+
     it('keeps attached workspace snapshots separate from the visible user text', async () => {
       const { provider, requests } = harness([() => sse([completed])]);
 

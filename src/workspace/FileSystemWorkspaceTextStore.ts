@@ -111,17 +111,11 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  /** Standalone disk enumeration for callers without a native catalog. Production tool and catalog queries use the
-   * root's shared native index to apply ignore rules and avoid a filesystem inspection process for each entry. */
-  async list(
-    maxFiles: number,
-    globPattern = '**/*',
-    targetDirectory?: string,
-    signal?: AbortSignal,
-  ): Promise<{ files: string[]; truncated: boolean }> {
-    const operation = this.options.access.beginOperation();
-    signal?.throwIfAborted();
-    if (operation.privateRoot) return { files: [], truncated: false };
+  /** Admit one directory for an index or filesystem listing, including the attached root. */
+  async inspectDirectory(targetDirectory?: string): Promise<{ root: string; searchRoot: string }> {
+    const operation = this.beginOperation();
+    if (operation.privateRoot)
+      throw new EditError(EditFailureReason.UNSUPPORTED, 'That directory is excluded from project access.');
     const root = await realpath(this.root);
     const normalizedTarget = targetDirectory === undefined ? undefined : this.normalizePath(targetDirectory);
     if (normalizedTarget !== undefined && normalizedTarget !== '')
@@ -135,6 +129,22 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         path: normalizedTarget ?? '.',
       });
     }
+    operation.assertCurrent();
+    return { root, searchRoot };
+  }
+
+  /** Standalone disk enumeration for callers without a native catalog. Production tool and catalog queries use the
+   * root's shared native index to apply ignore rules and avoid a filesystem inspection process for each entry. */
+  async list(
+    maxFiles: number,
+    globPattern = '**/*',
+    targetDirectory?: string,
+    signal?: AbortSignal,
+  ): Promise<{ files: string[]; truncated: boolean }> {
+    const operation = this.options.access.beginOperation();
+    signal?.throwIfAborted();
+    if (operation.privateRoot) return { files: [], truncated: false };
+    const { root, searchRoot } = await this.inspectDirectory(targetDirectory);
     const normalizedPattern = globPattern.startsWith('**/') ? globPattern : `**/${globPattern}`;
     const matchPattern = this.caseSensitive ? normalizedPattern : normalizedPattern.toLowerCase();
     const files: string[] = [];
