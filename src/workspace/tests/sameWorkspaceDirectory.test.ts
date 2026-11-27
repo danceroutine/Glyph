@@ -46,7 +46,7 @@ it('distinguishes missing, inaccessible, and distinct entries whose spellings co
 
 it('checks repeated catalog directory spellings once per synchronous batch', async () => {
   const identity = new WorkspaceDirectoryIdentity('/root/SKILLS', false);
-  const lstat = vi.spyOn(fs, 'lstatSync').mockReturnValue(undefined as never);
+  const lstat = vi.spyOn(fs, 'lstatSync').mockReturnValue(undefined);
   try {
     expect(identity.matches('/root/skills')).toBe(true);
     expect(identity.matches('/root/skills')).toBe(true);
