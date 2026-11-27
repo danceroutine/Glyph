@@ -40,7 +40,13 @@ export class SkillPreferenceFile {
     await this.metadata.inspect(handle, 'replaceable');
   }
 
-  async replace(previous: Snapshot, text: string, stage: string, checkDirectories: () => Promise<void>): Promise<void> {
+  async replace(
+    previous: Snapshot,
+    text: string,
+    stage: string,
+    checkDirectories: () => Promise<void>,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
     const temporary = join(stage, '.' + randomUUID() + '.glyph.tmp');
     const handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, previous.mode);
     try {
@@ -66,6 +72,7 @@ export class SkillPreferenceFile {
         current.mode !== previous.mode
       )
         throw new Error('Skill preferences changed before publication.');
+      signal?.throwIfAborted();
       await rename(temporary, this.path);
     } finally {
       await rm(temporary, { force: true });

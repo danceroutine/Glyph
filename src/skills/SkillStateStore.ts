@@ -67,10 +67,15 @@ export class SkillStateStore {
       }
     });
   }
-  setEnabled(id: string, enabled: boolean, verifySource?: () => Promise<void>): Promise<void> {
-    return this.update(next => {
-      next.enabled[id] = enabled;
-    }, verifySource);
+  /** A user toggle carries its owner's signal through lock acquisition and the final atomic file publication. */
+  setEnabled(id: string, enabled: boolean, signal: AbortSignal, verifySource?: () => Promise<void>): Promise<void> {
+    return this.update(
+      next => {
+        next.enabled[id] = enabled;
+      },
+      verifySource,
+      signal,
+    );
   }
   record(id: string, source: string, revision: string): Promise<void> {
     return this.update(next => {
@@ -83,70 +88,83 @@ export class SkillStateStore {
       delete next.installations[id];
     });
   }
-  private async update(change: (data: Preferences) => void, verifySource?: () => Promise<void>): Promise<void> {
+  private async update(
+    change: (data: Preferences) => void,
+    verifySource?: () => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted();
     await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
-    await withSkillLock(this.metadata, this.userDirectory, 'preferences', async () => {
-      await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
-      const previous = await this.readPreferences();
-      await verifySource?.();
-      const next = parsePreferences(previous?.text);
-      change(next);
-      const text = JSON.stringify(next, null, 2);
-      const destination = this.preferences.path;
-      const parent = dirname(destination);
-      const stage = join(parent, '.skill-staging');
-      const checkDirectories = async () => {
-        await inspectOwnerControlledDirectory(this.metadata, parent);
-        await inspectPrivateDirectory(this.metadata, stage);
-      };
-      await checkDirectories();
+    await withSkillLock(
+      this.metadata,
+      this.userDirectory,
+      'preferences',
+      async () => {
+        await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);
+        const previous = await this.readPreferences();
+        await verifySource?.();
+        const next = parsePreferences(previous?.text);
+        change(next);
+        const text = JSON.stringify(next, null, 2);
+        const destination = this.preferences.path;
+        const parent = dirname(destination);
+        const stage = join(parent, '.skill-staging');
+        const checkDirectories = async () => {
+          await inspectOwnerControlledDirectory(this.metadata, parent);
+          await inspectPrivateDirectory(this.metadata, stage);
+        };
+        await checkDirectories();
 
-      try {
-        if (previous) await this.preferences.replace(previous, text, stage, checkDirectories);
-        else {
-          // An interrupted first write must leave either a complete JSON document or an absent preference file.
-          const temporary = join(stage, randomUUID() + '.json');
-          try {
-            const handle = await open(temporary, 'wx', 0o600);
-            try {
-              await this.metadata.inspect(handle, 'replaceable');
-              await handle.writeFile(text);
-              await handle.sync();
-            } finally {
-              await handle.close();
-            }
-            await checkDirectories();
-            await inspectFileMetadata(this.metadata, temporary, 'replaceable');
-            await link(temporary, destination);
-          } finally {
-            await rm(temporary, { force: true });
-          }
-        }
-      } catch (error) {
-        // A filesystem acknowledgement can fail after publication. Reconcile before returning a failed commit.
-        let observed: string | undefined;
         try {
-          observed = (await this.readPreferences())?.text;
+          if (previous) await this.preferences.replace(previous, text, stage, checkDirectories, signal);
+          else {
+            // An interrupted first write must leave either a complete JSON document or an absent preference file.
+            const temporary = join(stage, randomUUID() + '.json');
+            try {
+              const handle = await open(temporary, 'wx', 0o600);
+              try {
+                await this.metadata.inspect(handle, 'replaceable');
+                await handle.writeFile(text);
+                await handle.sync();
+              } finally {
+                await handle.close();
+              }
+              await checkDirectories();
+              await inspectFileMetadata(this.metadata, temporary, 'replaceable');
+              signal?.throwIfAborted();
+              await link(temporary, destination);
+            } finally {
+              await rm(temporary, { force: true });
+            }
+          }
+        } catch (error) {
+          if (signal?.aborted && error === signal.reason) throw error;
+          // A filesystem acknowledgement can fail after publication. Reconcile before returning a failed commit.
+          let observed: string | undefined;
+          try {
+            observed = (await this.readPreferences())?.text;
+          } catch (cause) {
+            throw new SkillPreferenceCommitUncertain(cause);
+          }
+          if (observed !== text) throw error;
+        }
+        try {
+          await inspectOwnerControlledDirectory(this.metadata, parent);
+          const handle = await open(destination, 'r');
+          try {
+            await this.preferences.inspect(handle);
+            await handle.sync();
+          } finally {
+            await handle.close();
+          }
+          await syncDirectory(dirname(destination));
         } catch (cause) {
           throw new SkillPreferenceCommitUncertain(cause);
         }
-        if (observed !== text) throw error;
-      }
-      try {
-        await inspectOwnerControlledDirectory(this.metadata, parent);
-        const handle = await open(destination, 'r');
-        try {
-          await this.preferences.inspect(handle);
-          await handle.sync();
-        } finally {
-          await handle.close();
-        }
-        await syncDirectory(dirname(destination));
-      } catch (cause) {
-        throw new SkillPreferenceCommitUncertain(cause);
-      }
-      this.publish(next);
-    });
+        this.publish(next);
+      },
+      signal,
+    );
   }
   private async readPreferences() {
     await inspectOwnerControlledDirectory(this.metadata, this.userDirectory);

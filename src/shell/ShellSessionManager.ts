@@ -185,7 +185,7 @@ export class ShellSessionManager implements ShellSessionRegistry {
       : await this.workingDirectories.resolve(options.workingDirectory);
     const checkApproval = await program?.assertAuthority();
     checkApproval?.();
-    const authorization = await this.authorizer.authorize(command, workingDirectory, options.signal, {
+    const authorization = await this.authorizer.authorize(program ?? command, workingDirectory, options.signal, {
       background: options.background === true,
       existingTerminal: existing !== undefined,
       ...(options.transient ? { transient: true } : {}),

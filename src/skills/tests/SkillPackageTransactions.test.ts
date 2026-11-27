@@ -208,13 +208,13 @@ it('preserves the previous package and rejects provenance when published bytes d
 
 it('publishes a replacement preference through a temporary inside the protected profile directory', async () => {
   const { root, state, store } = await aSkillLifecycle();
-  await state.setEnabled('user-skill', false);
+  await state.setEnabled('user-skill', false, new AbortController().signal);
   const renamed: string[] = [];
   vi.mocked(fs.rename).mockImplementation(async (before, after) => {
     if (String(after) === join(root, 'skill-state.json')) renamed.push(String(before));
     await actual.rename(before, after);
   });
-  await state.setEnabled('user-skill', true);
+  await state.setEnabled('user-skill', true, new AbortController().signal);
   const latest = await store.read('skill-state.json');
   await expect(
     store.replace('skill-state.json', latest.revision, 'other', false, { temporaryDirectory: join(root, '..') }),

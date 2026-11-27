@@ -281,17 +281,19 @@ export class SkillPackageManager {
       };
     }
   }
-  async setEnabled(id: string, enabled: boolean): Promise<void> {
+  /** Change a preference on behalf of the issuing window. Its command lifetime follows the write to disk. */
+  async setEnabled(id: string, enabled: boolean, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
     if (this.ensureReady) await this.ensureReady();
     const skill = this.catalog.skills.find(skill => skill.id === id && skill.status === 'active');
     if (!skill) throw new Error('Skill is unavailable.');
     const location = this.locations.find(item => item.id === skill.origin.id);
     if (location)
-      await this.state.setEnabled(id, enabled, async () => {
+      await this.state.setEnabled(id, enabled, signal, async () => {
         if (!(await location.store.exists(skill.directory)))
           throw new Error('The installed skill is missing. Refresh Settings.');
       });
-    else await this.state.setEnabled(id, enabled);
+    else await this.state.setEnabled(id, enabled, signal);
     await this.catalog.refresh();
   }
   /** Journal keys identify the installation location. A project that contains the personal store can still

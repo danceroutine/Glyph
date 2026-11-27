@@ -1,3 +1,5 @@
+import { Deferred } from '#src/shared/Deferred.js';
+import { ShellProgram } from '#src/shell/ShellProgram.js';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -184,6 +186,36 @@ describe(ShellCommandAuthorizer, () => {
       await expect(authorizer.authorize('echo test', '/project', controller.signal)).rejects.toThrow(
         'Cancelled while loading.',
       );
+    });
+
+    it('withholds an expired script preview when another chat releases the approval queue', async () => {
+      const choice = new Deferred<ShellPermissionDecision>();
+      const presented = new Deferred<void>();
+      const presentShellPermission = vi.fn(() => {
+        presented.resolve();
+        return choice.promise;
+      });
+      const authorizer = new ShellCommandAuthorizer('project', store(), { presentShellPermission });
+      const first = authorizer.authorize('echo first', '/project', signal());
+      await presented.promise;
+      const owner = new AbortController();
+      const program = new ShellProgram(
+        process.execPath,
+        [],
+        'Selected script',
+        async () => () => owner.signal.throwIfAborted(),
+      );
+      const queued = authorizer.authorize(program, '/project', signal(), {
+        transient: true,
+        background: false,
+        existingTerminal: false,
+      });
+      const rejected = expect(queued).rejects.toThrow('Script source revoked');
+      owner.abort(new Error('Script source revoked'));
+      choice.resolve(ShellPermissionDecision.ALLOW_ONCE);
+      await first;
+      await rejected;
+      expect(presentShellPermission).toHaveBeenCalledOnce();
     });
 
     it('skips a cancelled queued command after another request grants full access', async () => {

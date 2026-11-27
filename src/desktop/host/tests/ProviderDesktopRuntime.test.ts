@@ -1,3 +1,4 @@
+import { withSkillLock } from '#src/skills/SkillPackageStorage.js';
 import { testSkillSource } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
@@ -4936,6 +4937,21 @@ describe('Skill lifecycle host commands', () => {
     onTestFinished(() => harness.runtime.dispose());
     return { ...lifecycle, ...harness, sources };
   }
+  it('cancels a queued profile preference write when its window disconnects', async () => {
+    const { runtime, state, install } = await setup();
+    const skill = await install();
+    const stored = (await state.preferences.read())?.text;
+    const setEnabled = vi.spyOn(state, 'setEnabled');
+    await withSkillLock(state.metadata, state.userDirectory, 'preferences', async () => {
+      const pending = runtime.handle({ type: Command.SET_SKILL_ENABLED, skillId: skill.id, enabled: false });
+      const rejected = expect(pending).rejects.toThrow();
+      await vi.waitFor(() => expect(setEnabled).toHaveBeenCalledOnce());
+      await runtime.connectionLost('owner');
+      await rejected;
+    });
+    expect((await state.preferences.read())?.text).toBe(stored);
+    expect(state.enabled.has(skill.id)).toBe(false);
+  });
   it('previews exact bytes, applies the token, persists enablement, and previews removal', async () => {
     const { runtime, manager, provider, catalog, state, sources } = await setup();
     vi.spyOn(sources, 'read').mockResolvedValue(aSkillDraft());
