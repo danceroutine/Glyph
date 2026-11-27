@@ -88,13 +88,13 @@ vi.mock('#src/context/search/RustWorkspacePathIndex.js', async importOriginal =>
   return {
     ...actual,
     RustWorkspacePathIndex: class extends actual.RustWorkspacePathIndex {
-      static override async filesystemCaseSensitive(_binary: string, root: string) {
-        return new FileSystemWorkspaceTextStore(root).caseSensitive;
-      }
       constructor(...arguments_: ConstructorParameters<typeof actual.RustWorkspacePathIndex>) {
         super(...arguments_);
         captured.indexOptions.push(arguments_[0]);
         captured.indexes.push(this);
+      }
+      static override async filesystemCaseSensitive(_binary: string, root: string) {
+        return new FileSystemWorkspaceTextStore(root).caseSensitive;
       }
     },
   };
@@ -980,6 +980,41 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(diskList).not.toHaveBeenCalled();
     });
 
+    it('uses project reference routes and checks user editor working copies before publishing Settings changes', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const root = await fixture.folder('project', { 'guide.md': 'Guidance' });
+      await mkdir(join(root, '.glyph/rules'), { recursive: true });
+      await writeFile(join(root, '.glyph/rules/project.mdc'), '---\nreferences: [guide.md]\n---\nBody');
+      vi.spyOn(RustWorkspacePathIndex, 'filesystemCaseSensitive')
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error('unavailable user store'));
+      useFilesystemIndex();
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({
+        root,
+        fileCount: 0,
+        fromCache: false,
+        truncated: false,
+        durationMilliseconds: 0,
+      });
+      const request = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_owner, rpc) => ({
+        operationId: 'operationId' in rpc ? rpc.operationId : '',
+        ok: true,
+        workingCopiesClean: true,
+      }));
+      const runtime = await fixture.create([root]);
+      expect((await runtime.snapshot()).instructionSources).toContainEqual(
+        expect.objectContaining({ referenceResources: [{ uri: 'file://' + root + '/guide.md', caseSensitive: true }] }),
+      );
+      await runtime.handle({
+        type: GlyphWorkbenchCommandType.CREATE_USER_RULE,
+        name: 'New rule',
+        activation: 'manual',
+      });
+      expect(
+        request.mock.calls.filter(([, rpc]) => rpc.type === GlyphEditorRequestType.CHECK_USER_WORKING_COPIES),
+      ).toHaveLength(2);
+    });
     it('routes catalog reads across roots and rejects snapshots for another file', async () => {
       const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
