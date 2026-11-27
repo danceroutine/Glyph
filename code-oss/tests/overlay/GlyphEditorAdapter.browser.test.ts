@@ -1654,13 +1654,14 @@ describe('skill package working-copy checks', () => {
     services.pendingCopies.splice(0);
     services.pendingCopies.push({ resource: URI.file(project + '/new.txt') });
     await expect(adapter.handle(request)).resolves.toMatchObject({ packageClean: false });
-    services.fileService.realpath.mockRejectedValue(
+    services.fileService.realpath.mockRejectedValue(new Error('ENOENT: realpath failed after removal'));
+    services.fileService.stat.mockRejectedValueOnce(
       new FileOperationError('Removed', FileOperationResult.FILE_NOT_FOUND),
     );
     expect((await adapter.handle(request)).packageClean).toBe(false);
-    services.fileService.exists.mockResolvedValueOnce(true);
     expect((await adapter.handle(request)).ok).toBe(false);
     services.fileService.realpath.mockRejectedValueOnce(new Error('Unknown working-copy root'));
+    services.fileService.stat.mockRejectedValueOnce(new Error('Cannot inspect the physical package'));
     expect((await adapter.handle(request)).ok).toBe(false);
     services.fileService.realpath.mockResolvedValue(undefined);
     await expect(adapter.handle(request)).resolves.toMatchObject({ ok: false });

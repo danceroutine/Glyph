@@ -784,8 +784,11 @@ export class GlyphEditorAdapter extends Disposable {
         const expected = URI.parse(request.physicalPackageUri, true);
         const root = await this.fileService.realpath(owner.uri).catch(async (error: unknown) => {
           // A removal can delete an attached package root while its editor still owns dirty copies.
-          if (this.errorCode(error) !== GlyphDesktopErrorCode.NOT_FOUND || (await this.fileService.exists(expected)))
-            throw error;
+          const missing = await this.fileService.stat(expected).then(
+            () => false,
+            (cause: unknown) => this.errorCode(cause) === GlyphDesktopErrorCode.NOT_FOUND,
+          );
+          if (!missing) throw error;
           return this.verifiedSkillRoots.get(owner.uri.toString());
         });
         if (!root) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
