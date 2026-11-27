@@ -309,7 +309,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           'Replacement cannot preserve the existing ownership and permissions.',
           { path },
         );
-      await options?.beforeReplace?.();
+      await options?.beforeReplace?.(temporary);
       await rename(temporary, absolute);
     } catch (error) {
       throw classifyPathError(error, path);

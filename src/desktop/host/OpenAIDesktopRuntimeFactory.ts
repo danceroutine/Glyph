@@ -77,6 +77,7 @@ import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleI
 import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { RuleToolRuntime } from '#src/instructions/rules/RuleToolRuntime.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { UserAgentRuleManager } from '#src/instructions/rules/UserAgentRuleManager.js';
 import { listUserRuleFiles } from '#src/instructions/rules/listUserRuleFiles.js';
 
@@ -129,6 +130,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const native = join(artifactRoot, 'native', `${process.platform}-${process.arch}`);
     const suffix = process.platform === 'win32' ? '.exe' : '';
     const indexExecutable = join(native, `glyph-context-index${suffix}`);
+    const filesystemMetadata = new NativeFilesystemMetadata(indexExecutable);
     const sandboxExecutable = join(native, `glyph-shell-sandbox${suffix}`);
     assertShellRuntimePathIsolation(
       roots.map(workspaceRoot => workspaceRoot.path),
@@ -338,15 +340,20 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         paths,
       );
       turnContexts = new TurnContextCoordinator(instructionCatalog);
-      userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex, filename =>
-        assertUserWorkingCopiesClean(
-          this.editors,
-          input.identity,
-          'rule',
-          filename,
-          userRuleStore.caseSensitive,
-          join(userRuleRoot, 'rules', filename),
-        ),
+      userRules = new UserAgentRuleManager(
+        userRuleStore,
+        instructionCatalog,
+        userRuleIndex,
+        filesystemMetadata,
+        filename =>
+          assertUserWorkingCopiesClean(
+            this.editors,
+            input.identity,
+            'rule',
+            filename,
+            userRuleStore.caseSensitive,
+            join(userRuleRoot, 'rules', filename),
+          ),
       );
     }
     const reviews = new ProposalReviewManager(
