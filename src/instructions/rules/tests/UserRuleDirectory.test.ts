@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { UserRuleDirectory } from '../UserRuleDirectory.ts';
-import { InstructionPaths } from '../../InstructionPaths.ts';
-import { AgentInstructionSourceKind } from '../../AgentInstructionSource.ts';
+import { UserRuleDirectory } from '#src/instructions/rules/UserRuleDirectory.js';
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
+import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 describe(UserRuleDirectory, () => {
   it('associates the most specific eligible project scope with direct user-owned rule files', () => {

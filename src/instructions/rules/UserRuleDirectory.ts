@@ -1,6 +1,6 @@
 import { basename, dirname, join, posix, relative, sep } from 'node:path';
-import { AgentInstructionSourceKind } from '../AgentInstructionSource.ts';
-import type { InstructionPaths } from '../InstructionPaths.ts';
+import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
+import type { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 
 /** The profile owns rules even when a workspace also exposes the same native or compatibility directory. */
 export class UserRuleDirectory {
