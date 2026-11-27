@@ -1,5 +1,38 @@
 //! Descriptor-bound inspection for private storage and mode-only filesystem replacements.
 use std::io;
+use std::path::Path;
+
+/// Resolve a non-ASCII directory spelling against its actual parent. Distinct names on
+/// case-sensitive volumes remain usable, including when a neighboring directory uses case folding.
+pub fn aliases_name(path: &Path, reserved: &str) -> bool {
+    if path
+        .file_name()
+        .is_none_or(|name| name.as_encoded_bytes().is_ascii())
+    {
+        return false;
+    }
+    let candidate = path.with_file_name(reserved);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // Metadata lookup never follows a symbolic link or opens an untrusted FIFO.
+        let original = std::fs::symlink_metadata(path);
+        let comparison = std::fs::symlink_metadata(candidate);
+        match (original, comparison) {
+            (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+            (_, Err(error)) if error.kind() == io::ErrorKind::NotFound => false,
+            _ => true,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        path.canonicalize().is_ok_and(|original| {
+            candidate
+                .canonicalize()
+                .is_ok_and(|other| other == original)
+        })
+    }
+}
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn assert_replaceable(fd: impl std::os::fd::AsFd) -> io::Result<()> {
@@ -25,6 +58,9 @@ fn inspect(fd: impl std::os::fd::AsFd, replacement: bool) -> io::Result<()> {
             || stat.st_flags & 0x001e_0086 != 0
             || darwin_acl(std::os::fd::AsRawFd::as_raw_fd(&fd))?
     };
+    #[cfg(target_os = "linux")]
+    let special =
+        special || (replacement && linux_replacement_flags(rustix::fs::ioctl_getflags(fd))?);
     if special || has_unsupported_xattrs(fd, replacement)? {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -33,6 +69,22 @@ fn inspect(fd: impl std::os::fd::AsFd, replacement: bool) -> io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_replacement_flags(flags: rustix::io::Result<rustix::fs::IFlags>) -> io::Result<bool> {
+    // Some filesystems, including tmpfs versions without inode-flag support, have no flags to preserve.
+    let flags = match flags {
+        Ok(flags) => flags,
+        Err(rustix::io::Errno::NOTTY | rustix::io::Errno::NOTSUP) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    // Directory indexing, huge files, extents, EA storage, blocks beyond EOF and inline data
+    // describe the kernel's storage layout. The filesystem assigns these to the new inode.
+    // Other flags can encode user policy, including NODUMP, encryption, verity and case folding.
+    const STORAGE_LAYOUT: u32 =
+        0x0000_1000 | 0x0004_0000 | 0x0008_0000 | 0x0020_0000 | 0x0040_0000 | 0x1000_0000;
+    Ok(flags.bits() & !STORAGE_LAYOUT != 0)
 }
 
 /// A direct child and its parent must both permit staging outside the destination directory.
@@ -103,6 +155,42 @@ fn xattr_length(result: rustix::io::Result<usize>) -> io::Result<usize> {
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
+    #[test]
+    fn compares_existing_name_aliases_without_conflating_distinct_records() {
+        let base = tempfile::tempdir().unwrap();
+        let entry = base.path().join("ſtored");
+        let reserved = base.path().join("reserved");
+        std::fs::write(&entry, "").unwrap();
+        assert!(!aliases_name(&entry, "missing"));
+        std::fs::write(&reserved, "").unwrap();
+        assert!(!aliases_name(&entry, "reserved"));
+        std::fs::hard_link(&entry, base.path().join("same")).unwrap();
+        assert!(aliases_name(&entry, "same"));
+        assert!(!aliases_name(&reserved, "reserved"));
+        assert!(aliases_name(&base.path().join("miſsing"), "reserved"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inspects_user_controlled_linux_flags_before_mode_only_replacement() {
+        use rustix::fs::{ioctl_getflags, ioctl_setflags, IFlags};
+        use rustix::io::Errno;
+        assert!(!linux_replacement_flags(Err(Errno::NOTTY)).unwrap());
+        assert!(!linux_replacement_flags(Err(Errno::NOTSUP)).unwrap());
+        assert!(linux_replacement_flags(Err(Errno::IO)).is_err());
+        assert!(!linux_replacement_flags(Ok(IFlags::from_bits_retain(0x80000))).unwrap());
+        assert!(linux_replacement_flags(Ok(IFlags::NODUMP)).unwrap());
+        assert!(linux_replacement_flags(Ok(IFlags::from_bits_retain(0x4000_0000))).unwrap());
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let original = ioctl_getflags(&file).unwrap();
+        ioctl_setflags(&file, original | IFlags::NODUMP).unwrap();
+        assert_access_metadata(&file).unwrap();
+        assert_eq!(
+            assert_replaceable(&file).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn rejects_mode_only_replacement_of_files_and_folders_with_user_flags() {

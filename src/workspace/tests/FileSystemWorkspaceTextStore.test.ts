@@ -6,6 +6,7 @@ import {
   mkdtemp,
   open,
   readFile,
+  readdir,
   realpath,
   rm,
   rmdir,
@@ -473,6 +474,60 @@ describe(FileSystemWorkspaceTextStore, () => {
   });
 
   describe(FileSystemWorkspaceTextStore.prototype.create, () => {
+    it('admits an empty private descriptor before writing and preserves an existing destination', async () => {
+      const root = await workspaceRoot('workspace-inspected-create-');
+      const store = new FileSystemWorkspaceTextStore(root);
+      const filename = join(root, 'new.txt');
+      const inspect = vi.fn(async (handle: FileHandle) => {
+        const info = await handle.stat();
+        expect(info.size).toBe(0);
+        expect(info.mode & 0o777).toBe(0o600);
+        expect(await readdir(root)).toEqual([expect.stringMatching(/\.glyph\.tmp$/u)]);
+      });
+      const beforePublish = async () => {
+        const [staged] = await readdir(root);
+        expect(await readFile(join(root, staged!), 'utf8')).toBe('fixture');
+        await writeFile(filename, 'collaborator', { flag: 'wx' });
+      };
+      await expect(
+        store.create('new.txt', 'fixture', false, 0o600, { inspectBeforeWrite: inspect, beforePublish }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      expect(inspect).toHaveBeenCalledOnce();
+      expect(await readdir(root)).toEqual(['new.txt']);
+      expect(await readFile(filename, 'utf8')).toBe('collaborator');
+    });
+
+    it('removes only the staged inode owned by this create when admission or publication fails', async () => {
+      const root = await workspaceRoot('workspace-create-ownership-');
+      const store = new FileSystemWorkspaceTextStore(root);
+      for (const change of ['removed', 'replaced', 'unreadable'] as const) {
+        let stagedPath: string;
+        const beforePublish = async () => {
+          const [name] = await readdir(root);
+          stagedPath = join(root, name!);
+          await unlink(stagedPath);
+          if (change === 'replaced') await writeFile(stagedPath, 'other file');
+          if (change === 'unreadable') vi.mocked(lstat).mockRejectedValueOnce(filesystemError('EACCES'));
+        };
+        const options = { beforePublish, inspectBeforeWrite: async () => {} };
+        await expect(store.create('new.txt', 'reviewed', false, 0o600, options)).rejects.toThrow(
+          change === 'unreadable' ? 'EACCES' : 'changed before publication',
+        );
+        if (change === 'replaced') {
+          expect(await readFile(stagedPath!, 'utf8')).toBe('other file');
+          await unlink(stagedPath!);
+        }
+        expect(await readdir(root)).toEqual([]);
+      }
+      const target = join(root, 'new.txt');
+      await expect(
+        store.create('new.txt', 'reviewed', false, 0o600, {
+          beforePublish: async () => writeFile(target, 'external'),
+        }),
+      ).rejects.toMatchObject({ reason: EditFailureReason.STALE });
+      expect(await readFile(target, 'utf8')).toBe('external');
+    });
+
     it('reports an existing target as stale', async () => {
       const root = await workspaceRoot('workspace-create-exists-');
       await writeFile(join(root, 'file.txt'), 'collaborator');

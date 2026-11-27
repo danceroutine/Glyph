@@ -64,6 +64,8 @@ pub(crate) struct InitializeParams {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IndexPolicy {
+    #[serde(skip)]
+    root: PathBuf,
     ignored_directories: Vec<String>,
     sensitive_file_names: Vec<String>,
     sensitive_file_prefixes: Vec<String>,
@@ -77,7 +79,7 @@ struct IndexPolicy {
 }
 
 impl IndexPolicy {
-    fn new(params: &InitializeParams, case_sensitive: bool) -> Self {
+    fn new(params: &InitializeParams, case_sensitive: bool, root: &Path) -> Self {
         // Normalize policy and candidates alike; walking, watch updates, and
         // cache validation must agree with the workspace reader's case policy.
         let normalize = |values: &[String]| -> Vec<String> {
@@ -93,13 +95,14 @@ impl IndexPolicy {
                 .collect()
         };
         Self {
+            root: root.to_owned(),
             ignored_directories: normalize(&params.ignored_directories),
             sensitive_file_names: normalize(&params.sensitive_file_names),
             sensitive_file_prefixes: normalize(&params.sensitive_file_prefixes),
             sensitive_file_extensions: normalize(&params.sensitive_file_extensions),
             allowed_file_names: normalize(&params.allowed_file_names),
             excluded_paths: normalize(&params.excluded_paths),
-            exclude_root: params.exclude_root,
+            exclude_root: params.exclude_root || root.ancestors().any(private_alias),
             respect_git_ignore: params.respect_git_ignore,
             max_files: params.max_files,
             case_sensitive,
@@ -141,7 +144,10 @@ impl IndexPolicy {
     }
 
     fn excludes(&self, relative_path: &str) -> bool {
-        if self.exclude_root {
+        if self.exclude_root
+            || (!relative_path.is_ascii()
+                && self.root.join(relative_path).ancestors().any(private_alias))
+        {
             return true;
         }
         let folded;
@@ -391,7 +397,7 @@ impl ContextIndexService {
             Some(value) => value,
             None => filesystem_case_sensitive(&root)?,
         };
-        let policy = IndexPolicy::new(&params, case_sensitive);
+        let policy = IndexPolicy::new(&params, case_sensitive, &root);
         policy.validate()?;
         if params
             .cache_path
@@ -1016,6 +1022,10 @@ fn is_cache_artifact(path: &Path, cache_path: &Path) -> bool {
             })
 }
 
+fn private_alias(path: &Path) -> bool {
+    glyph_filesystem_metadata::aliases_name(path, ".skill-staging")
+}
+
 /// Share ignore-file, directory exclusion, and link semantics with the resident catalog.
 fn workspace_walk(root: &Path, policy: &IndexPolicy) -> WalkBuilder {
     let ignored: HashSet<_> = policy.ignored_directories.iter().cloned().collect();
@@ -1036,13 +1046,15 @@ fn workspace_walk(root: &Path, policy: &IndexPolicy) -> WalkBuilder {
             if !is_directory {
                 return true;
             }
-            if entry.file_name().to_str().is_some_and(|name| {
-                if case_sensitive {
-                    ignored.contains(name)
-                } else {
-                    ignored.contains(&name.to_lowercase())
-                }
-            }) {
+            if private_alias(entry.path())
+                || entry.file_name().to_str().is_some_and(|name| {
+                    if case_sensitive {
+                        ignored.contains(name)
+                    } else {
+                        ignored.contains(&name.to_lowercase())
+                    }
+                })
+            {
                 return false;
             }
             normalize_relative_path(&filter_root, entry.path()).is_none_or(|relative| {

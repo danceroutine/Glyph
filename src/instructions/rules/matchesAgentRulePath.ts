@@ -1,5 +1,8 @@
+import { normalizeVolumeName, type FilesystemNamePolicy } from '#src/workspace/FilesystemNamePolicy.js';
 import type { AgentInstructionSource } from '#src/instructions/AgentInstructionSource.js';
 import { defaultInstructionPaths, type InstructionPaths } from '#src/instructions/InstructionPaths.js';
+
+type GlobNamePolicy = Partial<Pick<FilesystemNamePolicy, 'normalizesUnicode' | 'foldsUnicode'>>;
 
 interface GlobMatcher {
   test(path: string, budget?: RuleGlobBudget): boolean;
@@ -20,11 +23,11 @@ export class RuleGlobBudget {
     return stored;
   }
 
-  matches(pattern: string, path: string, sensitive: boolean, original = pattern): boolean {
-    const key = JSON.stringify([sensitive, pattern]);
+  matches(pattern: string, path: string, sensitive: boolean, policy?: GlobNamePolicy): boolean {
+    const key = JSON.stringify([sensitive, policy?.normalizesUnicode, policy?.foldsUnicode, pattern]);
     let evaluation = this.patterns.get(key);
     if (!evaluation) {
-      evaluation = { matcher: globExpression(pattern, sensitive, original), results: new Map() };
+      evaluation = { matcher: globExpression(pattern, sensitive, policy), results: new Map() };
       this.patterns.set(key, evaluation);
     }
     const cached = evaluation.results.get(path);
@@ -55,13 +58,13 @@ export function matchesAgentRulePath(
   return routes.some(route => {
     const relative = paths.relativeToScope(source.scope, route);
     const owner = source.scope === '.' ? route : source.scope;
-    const normalized = (value: string) => paths.routes?.normalizeName(owner, value) ?? value;
+    const policy = paths.routes?.namePolicy(owner);
     return source.globs?.some(pattern => {
       const sensitive = paths.caseSensitive(owner);
-      const stored = pattern.includes('?') ? budget.storedSpelling(route, paths) : route;
-      const matched =
-        (pattern.includes('?') && budget.matches(pattern, paths.relativeToScope(source.scope, stored), sensitive)) ||
-        budget.matches(normalized(pattern), normalized(relative), sensitive, pattern);
+      const candidate = pattern.includes('?')
+        ? paths.relativeToScope(source.scope, budget.storedSpelling(route, paths))
+        : relative;
+      const matched = budget.matches(pattern, candidate, sensitive, policy);
       if (!matched || !paths.routes) return matched;
       const components = pattern.split('/');
       const wildcard = components.findIndex(component => /[?*]/u.test(component));
@@ -74,43 +77,74 @@ export function matchesAgentRulePath(
   });
 }
 
-/** Each token visits each path position at most once, including consecutive wildcards. */
-export function globExpression(pattern: string, sensitive = true, original = pattern): GlobMatcher {
+/**
+ * Wildcards advance between stored Unicode scalars. A literal run may span a different number of
+ * scalars in the pattern and the file (for example, SS and ß on a folding volume).
+ */
+export function globExpression(pattern: string, sensitive = true, policy?: GlobNamePolicy): GlobMatcher {
   if (
     !pattern ||
-    original.length > 512 ||
+    pattern.length > 512 ||
     pattern.startsWith('/') ||
     pattern.includes('..') ||
     /[\\[\]{}()!]/u.test(pattern)
   )
     throw new Error(`Invalid rule glob: ${pattern || '(empty)'}`);
-  const normalized = sensitive ? pattern : pattern.toLowerCase();
-  if (!/[?*]/u.test(normalized))
+  const key = (value: string) => {
+    const normalized = normalizeVolumeName(value, policy);
+    return sensitive ? normalized : normalized.toLowerCase();
+  };
+  if (!/[?*]/u.test(pattern)) {
+    const literal = key(pattern);
     return {
       test(path, budget) {
         budget?.spend(path.length + 1);
-        return normalized === (sensitive ? path : path.toLowerCase());
+        return literal === key(path);
       },
     };
-  const tokens = normalized.match(/\*\*\/|\*\*|[\s\S]/gu)!;
-  const literalPrefix = tokens
-    .slice(
-      0,
-      tokens.findIndex(token => isWildcardToken(token)),
-    )
-    .join('');
-  const suffix = tokens.slice(tokens.findLastIndex(token => isWildcardToken(token)) + 1).join('');
+  }
+  const countsStoredCharacters = pattern.includes('?');
+  const tokenPattern = countsStoredCharacters ? pattern : key(pattern);
+  const tokens = tokenPattern.match(/\*\*\/|\*\*|[?*]|[^?*]+/gu)!.map(token => {
+    const literal = key(token);
+    return { token, literal, width: literal.normalize('NFD').length };
+  });
   return {
-    test(path, budget) {
-      const normalizedPath = sensitive ? path : path.toLowerCase();
-      budget?.spend(normalizedPath.length + 1);
-      if (!normalizedPath.startsWith(literalPrefix) || !normalizedPath.endsWith(suffix)) return false;
-      budget?.spend(tokens.length * (normalizedPath.length + 1));
-      const characters = Array.from(normalizedPath);
+    test(storedPath, budget) {
+      // Star-only patterns retain their ordinary volume-normalized matching. A question mark requires stored boundaries.
+      const path = countsStoredCharacters ? storedPath : key(storedPath);
+      budget?.spend(path.length + 1);
+      const characters = Array.from(path);
+      const offsets = [0];
+      const widths = [0];
+      const boundaries = new Map([[0, 0]]);
+      // Canonical decomposition preserves total width across composition and reordering.
+      // Index by that width, then compare the complete candidate run under the actual volume policy.
+      for (const [index, character] of characters.entries()) {
+        offsets.push(offsets[index]! + character.length);
+        const width = widths[index]! + key(character).normalize('NFD').length;
+        widths.push(width);
+        boundaries.set(width, index + 1);
+      }
+      const equalsRun = (start: number, end: number, literal: string) => {
+        budget?.spend(offsets[end]! - offsets[start]!);
+        return key(path.slice(offsets[start], offsets[end])) === literal;
+      };
+      const first = tokens[0]!;
+      if (!/[?*]/u.test(first.token)) {
+        const end = boundaries.get(first.width);
+        if (end === undefined || !equalsRun(0, end, first.literal)) return false;
+      }
+      const last = tokens.at(-1)!;
+      if (!/[?*]/u.test(last.token)) {
+        const start = boundaries.get(widths[characters.length]! - last.width);
+        if (start === undefined || !equalsRun(start, characters.length, last.literal)) return false;
+      }
+      budget?.spend(tokens.length * (characters.length + 1));
       let previous = new Uint8Array(characters.length + 1);
       let next = new Uint8Array(previous.length);
       previous[0] = 1;
-      for (const token of tokens) {
+      for (const { token, literal, width } of tokens) {
         const star = token === '*' || token === '**';
         next[0] = star || token === '**/' ? previous[0]! : 0;
         let prefix = false;
@@ -120,15 +154,15 @@ export function globExpression(pattern: string, sensitive = true, original = pat
           if (token === '**/') next[index] = Number(previous[index] === 1 || (char === '/' && prefix));
           else if (star)
             next[index] = Number(previous[index] === 1 || (next[index - 1] === 1 && (token === '**' || char !== '/')));
-          else next[index] = Number(previous[index - 1] === 1 && (token === '?' ? char !== '/' : token === char));
+          else if (token === '?') next[index] = Number(previous[index - 1] === 1 && char !== '/');
+          else {
+            const start = boundaries.get(widths[index]! - width);
+            next[index] = Number(start !== undefined && previous[start] === 1 && equalsRun(start, index, literal));
+          }
         }
         [previous, next] = [next, previous];
       }
       return previous[characters.length] === 1;
     },
   };
-}
-
-function isWildcardToken(token: string): boolean {
-  return token.includes('*') || token === '?';
 }

@@ -3,6 +3,9 @@ import { z } from 'zod';
 import type { WorkspaceAccessPolicyOptions } from './WorkspaceAccessPolicyOptions.ts';
 
 const skillStagingDirectory = '.skill-staging';
+function isStagingDirectory(component: string, caseSensitive: boolean): boolean {
+  return caseSensitive ? component === skillStagingDirectory : /^\.skill-(?:st|ﬅ|ﬆ)aging$/iu.test(component);
+}
 
 const defaults = {
   ignoredDirectories: ['.artifacts', '.code-oss', '.git', '.next', 'coverage', 'dist', 'node_modules', 'target'],
@@ -54,7 +57,7 @@ export class WorkspaceAccessPolicy {
       return caseSensitive ? normalized : normalized.toLowerCase();
     };
     const rootKey = key(root);
-    let privateRoot = rootKey.split('/').includes(skillStagingDirectory);
+    let privateRoot = rootKey.split('/').some(part => isStagingDirectory(part, caseSensitive));
     const excludedPaths: string[] = [];
     for (const path of this.privatePaths) {
       const pathKey = key(path);
@@ -63,6 +66,13 @@ export class WorkspaceAccessPolicy {
       else if (relative !== '..' && !relative.startsWith('../')) excludedPaths.push(relative);
     }
     return { privateRoot, excludedPaths };
+  }
+
+  isIgnoredDirectory(name: string, caseSensitive: boolean): boolean {
+    if (isStagingDirectory(name, caseSensitive)) return true;
+    return this.ignoredDirectories.some(value =>
+      caseSensitive ? value === name : value.toLowerCase() === name.toLowerCase(),
+    );
   }
 
   isSensitiveFileName(name: string, caseSensitive = true): boolean {

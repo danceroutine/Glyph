@@ -273,7 +273,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     text: string,
     byteOrderMark: boolean,
     mode = 0o644,
-    options?: WorkspaceMutationOptions,
+    options?: WorkspaceMutationOptions & { readonly inspectBeforeWrite?: (file: FileHandle) => Promise<void> },
   ): Promise<WorkspaceTextSnapshot> {
     assertSupportedText(text, input);
     const path = this.normalizePath(input);
@@ -281,14 +281,42 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const absolute = resolve(this.root, path);
     const created = await this.createParents(dirname(absolute));
     try {
-      await options?.beforePublish?.();
-      const handle = await open(absolute, 'wx', mode);
-      try {
-        await handle.writeFile(toBytes(text, byteOrderMark));
-      } finally {
-        await handle.close();
+      if (options?.inspectBeforeWrite) {
+        // Inherit metadata from the destination directory, admit the empty inode, then publish without overwriting.
+        const staged = resolve(dirname(absolute), `.${randomUUID()}.glyph.tmp`);
+        const handle = await open(staged, 'wx', mode);
+        try {
+          const identity = await handle.stat({ bigint: true });
+          const ownsStagedEntry = async () => {
+            const entry = await lstat(staged, { bigint: true }).catch(error => {
+              if (errorCodeOf(error) === 'ENOENT') return undefined;
+              throw error;
+            });
+            return entry?.dev === identity.dev && entry.ino === identity.ino;
+          };
+          try {
+            await handle.chmod(mode);
+            await options.inspectBeforeWrite(handle);
+            await handle.writeFile(toBytes(text, byteOrderMark));
+            await options.beforePublish?.();
+            if (!(await ownsStagedEntry())) throw new Error('The staged create file changed before publication.');
+            await link(staged, absolute);
+          } finally {
+            if (await ownsStagedEntry()) await unlink(staged);
+          }
+        } finally {
+          await handle.close();
+        }
+      } else {
+        await options?.beforePublish?.();
+        const handle = await open(absolute, 'wx', mode);
+        try {
+          await handle.chmod(mode);
+          await handle.writeFile(toBytes(text, byteOrderMark));
+        } finally {
+          await handle.close();
+        }
       }
-      await chmod(absolute, mode);
     } catch (error) {
       await rollbackDirectories(created);
       if (errorCodeOf(error) === 'EEXIST') {
@@ -501,9 +529,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   private isIgnoredDirectory(name: string): boolean {
-    return this.options.accessPolicy.ignoredDirectories.some(value =>
-      this.caseSensitive ? value === name : value.toLowerCase() === name.toLowerCase(),
-    );
+    return this.options.accessPolicy.isIgnoredDirectory(name, this.caseSensitive);
   }
 
   private isExcludedPath(path: string): boolean {
