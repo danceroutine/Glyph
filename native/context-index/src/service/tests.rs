@@ -1990,3 +1990,27 @@ fn package_listing_rechecks_the_current_private_authority_of_resident_paths() {
         .files
         .is_empty());
 }
+
+#[test]
+fn explicit_exclusions_follow_the_filesystem_containing_the_file() {
+    let root = tempdir().unwrap();
+    let canonical = root.path().canonicalize().unwrap();
+    let private = canonical.join("record");
+    let sibling = canonical.join("Record");
+    fs::write(&private, "fixture").unwrap();
+    fs::write(&sibling, "ordinary").unwrap();
+    let mut configuration = params(&canonical);
+    configuration.case_sensitive = Some(false);
+    configuration.private_paths = vec![private.clone()];
+    configuration.excluded_paths = vec!["record".into()];
+    let result = scan_paths(
+        &canonical,
+        &fixture_policy(&configuration),
+        None,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(!result.paths.iter().any(|name| name == "record"));
+    let distinct = crate::service::filesystem_casing::detect(&canonical).unwrap();
+    assert_eq!(result.paths.iter().any(|name| name == "Record"), distinct);
+}

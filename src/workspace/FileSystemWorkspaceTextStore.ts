@@ -586,9 +586,10 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   }
 
   private isExcludedPath(path: string): boolean {
-    const candidate = this.caseSensitive ? path : path.toLowerCase();
+    const literal = this.caseSensitive || this.options.physicalAccess !== undefined;
+    const candidate = literal ? path : path.toLowerCase();
     return this.options.excludedPaths.some(excludedPath => {
-      const excluded = this.caseSensitive ? excludedPath : excludedPath.toLowerCase();
+      const excluded = literal ? excludedPath : excludedPath.toLowerCase();
       return candidate === excluded || candidate.startsWith(`${excluded}/`);
     });
   }

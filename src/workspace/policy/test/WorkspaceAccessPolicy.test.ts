@@ -20,7 +20,7 @@ describe(WorkspaceAccessPolicy, () => {
     const policy = new WorkspaceAccessPolicy({}, ['/Project/Profile/skill-state.json', '/Project/private']);
     expect(policy.exclusionsFor('/project', false)).toEqual({
       privateRoot: false,
-      excludedPaths: ['profile/skill-state.json', 'private'],
+      excludedPaths: ['Profile/skill-state.json', 'private'],
     });
     expect(policy.exclusionsFor('/project', true)).toEqual({ privateRoot: false, excludedPaths: [] });
     expect(policy.exclusionsFor('/Project/private', true).privateRoot).toBe(true);

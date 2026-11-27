@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { EditError } from '#src/editing/errors/EditError.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 
@@ -119,6 +120,24 @@ describe(FileSystemWorkspaceTextStore, () => {
     await expect(staticDisk.validateAccess('guide', true)).rejects.toThrow('package review');
     expect(await readFile(join(root, 'guide'), 'utf8')).toBe('readable');
   });
+
+  it('leaves alternate project spellings to the owning physical filesystem', async () => {
+    const root = await realpath(await workspaceRoot('glyph-ordinary-sibling-'));
+    const privatePath = join(root, 'record');
+    await writeFile(join(root, 'Record'), 'ordinary');
+    const policy = new WorkspaceAccessPolicy({}, [privatePath]);
+    const physicalAccess = {
+      assertWorkspacePath: vi.fn(async (path: string) => {
+        if (path === privatePath) throw new Error('private');
+      }),
+    };
+    const disk = new FileSystemWorkspaceTextStore(root, { caseSensitive: false, accessPolicy: policy, physicalAccess });
+    expect(disk.normalizePath('Record')).toBe('Record');
+    await disk.validateAccess('Record');
+    expect(physicalAccess.assertWorkspacePath.mock.calls[0]?.[0]).toBe(join(root, 'Record'));
+    expect(() => disk.normalizePath('record')).toThrow('excluded');
+  });
+
   it('checks ownership, current mode, and host access controls on the completed staging file', async () => {
     const root = await workspaceRoot('glyph-workspace-replacement-');
     const disk = new FileSystemWorkspaceTextStore(root);
