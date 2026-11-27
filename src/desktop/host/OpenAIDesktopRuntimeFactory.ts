@@ -59,7 +59,7 @@ import { ShellCommandAuthorizer } from '#src/shell/ShellCommandAuthorizer.js';
 import { ShellSessionManager } from '#src/shell/ShellSessionManager.js';
 import { ShellWorkingDirectoryResolver } from '#src/shell/ShellWorkingDirectoryResolver.js';
 import { NativeShellSandboxLauncher } from '#src/shell/NativeShellSandboxLauncher.js';
-import { assertShellRuntimePathIsolation } from '#src/shell/ShellRuntimePathPolicy.js';
+import { assertShellRuntimePathIsolation, resolveAvailableIdentity } from '#src/shell/ShellRuntimePathPolicy.js';
 import { ShellToolRuntime } from '#src/shell/ShellToolRuntime.js';
 import { ToolRegistry } from '#src/tools/ToolRegistry.js';
 import { TodoToolRuntime } from '#src/todos/TodoToolRuntime.js';
@@ -282,8 +282,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         return { ...listed, files: routes.uniqueFiles(listed.files) };
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
-      await mkdir(join(this.userDirectory, 'rules'), { recursive: true });
-      const userRuleRoot = await realpath(this.userDirectory);
+      const userRuleRoot = resolveAvailableIdentity(this.userDirectory);
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
       const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
@@ -308,6 +307,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             },
             async maxFiles => {
               // The index root must obey the store's no-symlink rule too, not just its children.
+              await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
               await userRuleStore.canonicalPath('rules');
               return listUserRuleFiles(userRuleIndex, maxFiles);
             },
