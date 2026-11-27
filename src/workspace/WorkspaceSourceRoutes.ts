@@ -1,4 +1,4 @@
-import { normalizeVolumeName } from './FilesystemNamePolicy.ts';
+import { normalizeVolumeName, type FilesystemNamePolicy } from './FilesystemNamePolicy.ts';
 import fs, { realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -36,8 +36,11 @@ export class WorkspaceSourceRoutes {
 
   /** Apply only the routed volume's normalization policy. Logical root labels are exact. */
   normalizeName(route: string, value: string): string {
-    const root = this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === route.split('/')[0]);
-    return normalizeVolumeName(value, root);
+    return normalizeVolumeName(value, this.namePolicy(route));
+  }
+
+  namePolicy(route: string): Readonly<Partial<FilesystemNamePolicy>> | undefined {
+    return this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === route.split('/')[0]);
   }
 
   /** A single-character glob counts characters in the directory entry's stored spelling. */
@@ -45,7 +48,7 @@ export class WorkspaceSourceRoutes {
     const parts = route.split('/');
     const root = this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === parts[0]);
     const physical = this.physicalPath(route);
-    if (!root?.foldsUnicode || !physical) return route;
+    if (!root?.normalizesUnicode || !physical) return route;
     const tail: string[] = [];
     let prefix = physical;
     const boundary = join(root.path, '.');
