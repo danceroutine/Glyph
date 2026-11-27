@@ -376,7 +376,16 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ? { ...dirty[0]!, snapshot: { ...dirty[0]!.snapshot!, path: request.path } }
           : responses[0]!;
       });
-      return { name: workspaceRoot.name, workspace, selectedFiles, selectedDisk, catalog, disk, index, namePolicy: namePolicies[i]! };
+      return {
+        name: workspaceRoot.name,
+        workspace,
+        selectedFiles,
+        selectedDisk,
+        catalog,
+        disk,
+        index,
+        namePolicy: namePolicies[i]!,
+      };
     });
     const routes = new WorkspaceSourceRoutes(
       parts.map((part, index) => ({
