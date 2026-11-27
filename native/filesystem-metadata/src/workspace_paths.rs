@@ -412,6 +412,7 @@ mod tests {
         }
         fs::create_dir(root.join("130")).unwrap();
         assert!(WorkspacePaths::current(&[root.join("0")]).is_err());
+        assert!(WorkspacePaths::current(&[root.join("0/..")]).is_err());
         fs::write(root.join("ordinary"), b"file").unwrap();
         assert!(WorkspacePaths::current(&[root.join("ordinary/child")]).is_err());
     }

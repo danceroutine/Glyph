@@ -554,7 +554,7 @@ describe(FileSystemWorkspaceTextStore, () => {
     });
 
     it('applies exclusions with exact case when case sensitive', async () => {
-      const root = await workspaceRoot('workspace-list-case-sensitive-');
+      const root = await realpath(await workspaceRoot('workspace-list-case-sensitive-'));
       await mkdir(join(root, 'Private'));
       await writeFile(join(root, 'Private', 'kept.ts'), 'kept');
       const sensitive = fixtureWorkspace(root, { caseSensitive: true, excludedPaths: ['private'] });
@@ -566,6 +566,22 @@ describe(FileSystemWorkspaceTextStore, () => {
   });
 
   describe(FileSystemWorkspaceTextStore.prototype.create, () => {
+    it('withdraws an ordinary staged create before publishing its name when its caller loses authority', async () => {
+      const root = await workspaceRoot('workspace-create-revoked-');
+      const store = fixtureWorkspace(root);
+      const command = new AbortController();
+      await expect(
+        store.create('draft.md', 'original', false, 0o644, {
+          signal: command.signal,
+          beforePublish: async () => {
+            expect(await readdir(root)).not.toContain('draft.md');
+            command.abort(new Error('The command was revoked.'));
+          },
+        }),
+      ).rejects.toThrow('The command was revoked.');
+      expect(await readdir(root)).toEqual([]);
+    });
+
     it('admits an empty private descriptor before writing and preserves an existing destination', async () => {
       const root = await workspaceRoot('workspace-inspected-create-');
       const store = fixtureWorkspace(root);
