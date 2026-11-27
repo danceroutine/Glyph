@@ -22,7 +22,15 @@ export function withRuleEnabled(text: string, enabled: boolean): string {
     return ['---', line, '---', text].join(eol);
   }
   const { eol, metadata, closing } = frontmatter;
-  const field = /(?:^|(?<=\n))enabled:[^\r\n]*/u;
-  const next = field.test(metadata) ? metadata.replace(field, line) : `${metadata}${line}${eol}`;
+  const field = /(?:^|(?<=\n))enabled:([^\r\n]*)/u;
+  const next = field.test(metadata)
+    ? metadata.replace(field, (_field, raw: string) => {
+        const comment = raw.search(/(?:^|\s)#/u);
+        const scalar = (comment < 0 ? raw : raw.slice(0, comment)).trim();
+        if (scalar) return 'enabled:' + raw.replace(scalar, String(enabled));
+        // An empty boolean inherits the default. Insert its value ahead of the existing comment.
+        return line + (raw.startsWith('#') ? ' ' : '') + raw;
+      })
+    : `${metadata}${line}${eol}`;
   return `---${eol}${next}${closing}`;
 }
