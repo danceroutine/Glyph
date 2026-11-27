@@ -1340,9 +1340,9 @@ fn confines_personal_sources_and_keeps_ordinary_project_files_available() {
         .any(|arg| arg == rules.join("selected").as_os_str()));
     // The toolchain alias resolves into the workspace. The upper sandbox omits
     // a raw mount of that location and exposes ordinary files through its workspace view.
-    assert!(!mounts.windows(3).any(|args| {
-        args[0] == "--ro-bind" && args[2] == home.join(".cargo/bin").as_os_str()
-    }));
+    assert!(!mounts
+        .windows(3)
+        .any(|args| { args[0] == "--ro-bind" && args[2] == home.join(".cargo/bin").as_os_str() }));
     let mut inside = request(SandboxProfile::ReadOnly, &rules, &state);
     inside.private_paths = vec![rules.clone()];
     assert!(prepare_request(inside).is_err());
