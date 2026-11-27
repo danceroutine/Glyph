@@ -49,7 +49,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   }));
   vi.doMock('#src/desktop/workspace/EditorRpcRouter.js', () => ({
     EditorRpcRouter: class {
-      constructor(readonly trustedUserEditors: (identity: unknown) => unknown) {
+      constructor(readonly trustedUserEditors: (identity: unknown, sourcePath: string) => unknown) {
         editors.constructed(this);
       }
       connect(...arguments_: unknown[]): unknown {
@@ -189,8 +189,8 @@ describe('utilityMain', () => {
     const { loaded, host, editors, openai, scripted, deterministic } = startUtilityHost();
     await loaded;
     const router = editors.constructed.mock.calls[0]![0];
-    expect(router.trustedUserEditors({ windowId: 'owner' })).toEqual([]);
-    expect(host.trustedUserEditors).toHaveBeenCalledWith({ windowId: 'owner' });
+    expect(router.trustedUserEditors({ windowId: 'owner' }, '/profile/rules/example.mdc')).toEqual([]);
+    expect(host.trustedUserEditors).toHaveBeenCalledWith({ windowId: 'owner' }, '/profile/rules/example.mdc');
     const factory = openai.constructed.mock.calls[0]?.[0];
     expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(
       factory,
