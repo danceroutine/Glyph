@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { AgentMode } from '#src/chat/AgentMode.js';
 import { mkdtemp, rename, writeFile } from 'node:fs/promises';
@@ -450,6 +451,29 @@ describe(OpenAIProvider, () => {
     expect(requests).toHaveLength(0);
     allowed = true;
     await provider.send('Third', options());
+    expect(requests).toHaveLength(1);
+  });
+
+  it('revalidates derived attachments after request tracing and before the HTTP transport reads them', async () => {
+    const disclosure = new WorkspaceDisclosure();
+    let visible = true;
+    disclosure.revalidate(async () => {
+      if (!visible) throw new Error('Folder selection changed');
+      return () => {};
+    });
+    const { provider, requests } = harness([() => sse([completed])]);
+    const capture = { text: 'Explain this folder', attachments: [], disclosure };
+    await expect(
+      provider.send(capture, {
+        ...options(),
+        onTrace: event => {
+          if (event.kind === 'request.body') visible = false;
+        },
+      }),
+    ).rejects.toThrow();
+    expect(requests).toHaveLength(0);
+    visible = true;
+    await provider.send(capture, options());
     expect(requests).toHaveLength(1);
   });
 

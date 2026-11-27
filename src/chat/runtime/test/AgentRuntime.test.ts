@@ -356,14 +356,15 @@ describe(AgentRuntime, () => {
   it.each([false, true])(
     'keeps a pending workspace result out of replay until delivery (revoked: %s)',
     async revoked => {
-      const adapter = new ClaudeShapedAdapter();
+      const adapter = new TwoToolClaudeAdapter();
       let allowed = true;
       const prepare = adapter.prepareStep.bind(adapter);
       adapter.prepareStep = async (turn, context) => {
         if (context.round === 2 && revoked) allowed = false;
         return prepare(turn, context);
       };
-      const source = mockTools(async (_name, _input, _signal, context) => {
+      const source = mockTools(async (name, _input, _signal, context) => {
+        if (name === 'second_tool') return 'separate completed operation';
         context?.retainResultAccess?.(() => {
           if (!allowed) throw new Error('Workspace changed');
         });
@@ -380,6 +381,7 @@ describe(AgentRuntime, () => {
       });
       if (revoked) await expect(turn).rejects.toThrow('Workspace changed');
       else await turn;
+      expect(JSON.stringify(checkpoints)).toContain('separate completed operation');
       expect(JSON.stringify(checkpoints)).not.toContain('selected file contents');
       expect(JSON.stringify(runtime.exportState()).includes('selected file contents')).toBe(!revoked);
       expect(JSON.stringify(adapter.requests).includes('selected file contents')).toBe(!revoked);
