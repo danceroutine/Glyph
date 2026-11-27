@@ -1732,6 +1732,36 @@ describe('skill package working-copy checks', () => {
     expect(services.fileService.readFile).not.toHaveBeenCalled();
     expect(services.textModelService.createModelReference).not.toHaveBeenCalled();
   });
+  it.each([undefined, '/configured-profile'])(
+    'uses the local user package root for recovery before targets arrive (configured directory %s)',
+    async configured => {
+      const original = env['GLYPH_USER_DIRECTORY'];
+      onTestFinished(() => {
+        if (original === undefined) delete env['GLYPH_USER_DIRECTORY'];
+        else env['GLYPH_USER_DIRECTORY'] = original;
+      });
+      if (configured) env['GLYPH_USER_DIRECTORY'] = configured;
+      else delete env['GLYPH_USER_DIRECTORY'];
+
+      const services = editorServices();
+      const adapter = createAdapter(services);
+      const directory = (configured ?? '/local-home/.glyph') + '/skills/example';
+      const request = (path: string) =>
+        adapter.handle({
+          type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES,
+          operationId: 'recovery',
+          scope: 'user',
+          directoryUri: URI.file(path).toString(),
+        });
+      await expect(request(directory)).resolves.toMatchObject({ ok: true, packageClean: true });
+      services.pendingCopies.push({ resource: URI.file(directory + '/SKILL.md') });
+      await expect(request(directory)).resolves.toMatchObject({ ok: true, packageClean: false });
+      const other = configured ? '/local-home/.glyph' : '/configured-profile';
+      await expect(request(other + '/skills/example')).resolves.toMatchObject(
+        failure(GlyphDesktopErrorCode.UNAUTHORIZED),
+      );
+    },
+  );
   it('checks only the approved user target and rejects foreign roots, traversal, and untrusted requests', async () => {
     const services = editorServices();
     const adapter = createAdapter(services);
