@@ -460,6 +460,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 'skill',
                 basename(path),
                 userRuleStore.caseSensitive,
+                path,
               ),
             store: userRuleStore,
             workspace: userRuleStore,
@@ -520,7 +521,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         new SkillContextContributor(skills),
       ]);
       userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex, filename =>
-        assertUserWorkingCopiesClean(this.editors, input.identity, 'rule', filename, userRuleStore.caseSensitive),
+        assertUserWorkingCopiesClean(
+          this.editors,
+          input.identity,
+          'rule',
+          filename,
+          userRuleStore.caseSensitive,
+          join(userRuleRoot, 'rules', filename),
+        ),
       );
     }
     const reviews = new ProposalReviewManager(

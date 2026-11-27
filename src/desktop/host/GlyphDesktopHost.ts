@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { projectIntersection } from '#src/workspace/WorkspaceSourceRoutes.js';
+import { sep } from 'node:path';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphCommandResultHostEvent } from '#src/desktop/protocol/events/GlyphCommandResultHostEvent.js';
 import type { GlyphErrorHostEvent } from '#src/desktop/protocol/events/GlyphErrorHostEvent.js';
@@ -121,10 +122,32 @@ export class GlyphDesktopHost {
   /** A trusted editor may still own user-file buffers while reconnecting or sharing another runtime. */
   trustedUserEditors(
     owner: GlyphConnectionIdentity,
+    sourcePath?: string,
   ): readonly { identity: GlyphConnectionIdentity; connectionId: string }[] {
     const peers = [];
     for (const peer of this.sessions.values()) {
-      if (connectionKey(peer.identity) === connectionKey(owner) || !peer.trusted) continue;
+      if (!peer.trusted) continue;
+      for (const root of peer.roots) {
+        const current = physicalRoot(root);
+        const observed = peer.physicalRoots.get(root)!;
+        if (
+          [...observed].some(
+            previous =>
+              previous !== current &&
+              !(
+                current === undefined &&
+                sourcePath &&
+                !existsSync(sourcePath) &&
+                (previous === sourcePath || previous.startsWith(sourcePath + sep))
+              ),
+          )
+        )
+          throw new Error(
+            'A trusted editor folder was removed or retargeted. Save or close its files before changing user instructions.',
+          );
+        if (current !== undefined) observed.add(current);
+      }
+      if (connectionKey(peer.identity) === connectionKey(owner)) continue;
       const connectionId = [...this.connections].find(([, current]) => current === peer)?.[0];
       if (!connectionId || !peer.authorityKnown || peer.pendingAttachments > 0)
         throw new Error('Another trusted Glyph window is reconnecting. Retry the change after it reconnects.');
@@ -327,7 +350,6 @@ export class GlyphDesktopHost {
         return [root, new Set(physical === undefined ? [] : [physical])];
       }),
     );
-    connection.authorityKnown = true;
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {
