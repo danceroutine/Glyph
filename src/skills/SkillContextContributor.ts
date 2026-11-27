@@ -1,3 +1,4 @@
+import { authorizeSources, enrollSources, type SourcePin } from '#src/workspace/SourceDisclosure.js';
 import type { TurnContextEnvelope, TurnContextSnapshot } from '#src/context/turns/TurnContextEnvelope.js';
 import type {
   TurnContextContribution,
@@ -16,7 +17,8 @@ export class SkillContextContributor implements TurnContextContributor {
     const sources = await this.catalog.refresh(signal);
     const descriptors = sources.filter(skill => skill.enabled && skill.status === 'active');
     const candidates = this.catalog.applicableSkills(descriptors, input.attachmentPaths);
-    const session = new SkillTurnContext(input.turnId, descriptors, candidates, this.catalog, sources);
+    const origins = await enrollSources(descriptors, signal);
+    const session = new SkillTurnContext(input.turnId, descriptors, candidates, this.catalog, sources, origins);
     try {
       await session.initialize(input.skillIds ?? [], signal);
     } catch (error) {
@@ -41,12 +43,28 @@ export class SkillTurnContext implements TurnContextContribution {
     initial: readonly SkillDescriptor[],
     private readonly catalog: SkillCatalog,
     private readonly sources = descriptors,
+    private readonly origins: ReadonlyMap<string, readonly SourcePin[]> = new Map(),
   ) {
     this.initialCandidates = this.offerCandidates(initial);
   }
   async initialize(ids: readonly string[], signal?: AbortSignal): Promise<void> {
     const activation = await this.activateManualSkills(ids, 'Selected by the user', signal);
     this.initialSkills = activation?.skills ?? [];
+  }
+  /** Collect the discovered manifest for advertisements and only the pinned package files
+   * actually entering the provider input. Unopened resources remain outside each disclosure. */
+  disclosurePins(context?: TurnContextEnvelope): SourcePin[] {
+    const candidates = context ? (context.skillCandidates ?? []) : this.advertised.values();
+    const result = [...candidates].flatMap(candidate => this.origins.get(candidate.id) ?? []);
+    const ids = context ? (context.skills ?? []).map(skill => skill.descriptor.id) : this.packages.keys();
+    for (const id of ids) {
+      const active = this.packages.get(id)!.package;
+      result.push(
+        ...(this.origins.get(id) ?? []),
+        ...active.disclosurePins(context ? [] : active.resources().map(resource => resource.path)),
+      );
+    }
+    return result;
   }
   initialEnvelope(): TurnContextEnvelope {
     return {
@@ -203,7 +221,11 @@ export class SkillTurnContext implements TurnContextContribution {
         throw new Error('Skill instructions exceed the 64 KiB activation budget.');
       packages.push(pinned);
     }
-    signal?.throwIfAborted();
+    const check = await authorizeSources(
+      packages.flatMap(pkg => [...(this.origins.get(pkg.descriptor.id) ?? []), ...pkg.disclosurePins()]),
+      signal,
+    );
+    check();
     if (this.released) throw new Error('Skill turn ended during activation.');
     const skills = packages.map(pinned => {
       const descriptor = pinned.descriptor;

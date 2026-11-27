@@ -9,32 +9,32 @@ import { aWorkspaceTextSnapshot } from '#src/workspace/tests/fixtures/aWorkspace
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import { aSkillDescriptor, aSkillPackage } from './fixtures/aSkillDescriptor.ts';
 
-describe('Skill package boundaries', () => {
-  it.each(['../outside', '/outside', 'dir\\outside', 'bad\0path', ''])('rejects resource path %j', path => {
-    expect(() => aSkillPackage().readResource(path)).toThrow('inside');
+describe('Skill package boundaries', async () => {
+  it.each(['../outside', '/outside', 'dir\\outside', 'bad\0path', ''])('rejects resource path %j', async path => {
+    await expect(aSkillPackage().readResource(path)).rejects.toThrow('inside');
   });
-  it('rejects oversized disclosure before recording it as used', () => {
+  it('rejects oversized disclosure before recording it as used', async () => {
     const snapshot = aSkillPackage(aSkillDescriptor(), 'Body', { 'large.md': Buffer.alloc(64 * 1024 + 1, 65) });
-    expect(() => snapshot.readResource('large.md')).toThrow('budget');
+    await expect(snapshot.readResource('large.md')).rejects.toThrow('budget');
     expect(snapshot.resources()).toEqual([]);
     const nul = aSkillPackage(aSkillDescriptor(), 'Body', { nul: Buffer.from([0, 1]) });
-    expect(nul.readResource('nul').encoding).toBe('base64');
+    expect((await nul.readResource('nul')).encoding).toBe('base64');
   });
-  it('discloses UTF-8 resource bytes including the leading byte-order mark', () => {
+  it('discloses UTF-8 resource bytes including the leading byte-order mark', async () => {
     const source = '\uFEFFprint("example")\n';
     const bytes = Buffer.from(source);
     const snapshot = aSkillPackage(aSkillDescriptor(), 'Body', { 'script.py': bytes });
-    const result = snapshot.readResource('script.py');
+    const result = await snapshot.readResource('script.py');
     expect(result.encoding).toBe('utf8');
     expect(Buffer.from(result.content)).toEqual(bytes);
     expect(snapshot.resources()).toEqual([result]);
   });
-  it('keeps resource inspection separate from recorded model disclosures', () => {
+  it('keeps resource inspection separate from recorded model disclosures', async () => {
     const snapshot = aSkillPackage(aSkillDescriptor(), 'Body', { 'script.sh': Buffer.from('exit 0') });
     const inspected = snapshot.inspectResource('script.sh');
     expect(inspected.content).toBe('exit 0');
     expect(snapshot.resources()).toEqual([]);
-    expect(snapshot.readResource('script.sh')).toEqual(inspected);
+    expect(await snapshot.readResource('script.sh')).toEqual(inspected);
     expect(snapshot.resources()).toEqual([inspected]);
   });
   it('checks containment before reading and enforces manifest, file-count, and aggregate limits', async () => {

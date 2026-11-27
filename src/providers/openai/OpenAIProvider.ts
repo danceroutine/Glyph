@@ -153,6 +153,17 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
       // Preserve opaque reasoning state for stateless multi-turn reasoning models.
       include: ['reasoning.encrypted_content'],
     } satisfies ResponseCreateParamsStreaming;
+    const check = await context.authorizeDisclosure?.();
+    if (check) {
+      check();
+      // Credential resolution and SDK retries are asynchronous. The request-local client verifies
+      // trust and policy again when the SDK is about to invoke its configured HTTP transport.
+      const send = client.fetchWithTimeout.bind(client);
+      client.fetchWithTimeout = (...args) => {
+        check();
+        return send(...args);
+      };
+    }
     context.trace('request.body', request, context.round);
     const {
       data: stream,

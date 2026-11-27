@@ -182,8 +182,10 @@ export class SkillCatalog {
         : {}),
       enabled: skill.status === 'active' && (this.enabled.get(skill.id) ?? skill.enabled),
     }));
-    if (JSON.stringify(projected) !== JSON.stringify(this.current)) {
-      this.current = projected;
+    // Source identities can change while the public settings metadata stays identical.
+    const changed = JSON.stringify(projected) !== JSON.stringify(this.current);
+    this.current = projected;
+    if (changed) {
       for (const listener of this.listeners) listener();
     }
   }

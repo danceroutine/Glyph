@@ -111,9 +111,10 @@ Every directive and context line is exact; no fuzzy matching occurs. Successful 
           throw new Error(`Unknown project tool: ${name}`);
       }
       const instructionContext = context?.turnId
-        ? this.turnContexts?.disclosePaths(
+        ? await this.turnContexts?.disclosePaths(
             context.turnId,
             proposal.files.flatMap(file => [...new Set([file.sourcePath, file.targetPath])]),
+            signal,
           )
         : undefined;
       if (instructionContext) return proposalInstructionContext(instructionContext);

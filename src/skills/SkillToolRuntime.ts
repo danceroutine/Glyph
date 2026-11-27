@@ -63,7 +63,11 @@ export class SkillToolRuntime implements ToolSource {
           if (!context.turnId) throw new Error('Skill resources require an active turn.');
           const selected = resourceSchema.parse(JSON.parse(input));
           const session = turns.contribution(context.turnId, 'skills');
-          const resource = activeSkillPackage(session, selected.id).readResource(selected.path);
+          const pinned = activeSkillPackage(session, selected.id);
+          const resource = await pinned.readResource(selected.path, signal, () => {
+            if (activeSkillPackage(turns.contribution(context.turnId!, 'skills'), selected.id) !== pinned)
+              throw new Error('Skill activation changed during the resource read.');
+          });
           return JSON.stringify({
             read: true,
             instructionContext: prepareModelContext({

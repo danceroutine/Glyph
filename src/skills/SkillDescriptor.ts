@@ -1,3 +1,5 @@
+import type { SourceOrigin } from '#src/workspace/SourceDisclosure.js';
+
 /** A discovery location supplied by a compatibility provider, independent of the package format. */
 export interface SkillOrigin {
   readonly id: string;
@@ -7,7 +9,7 @@ export interface SkillOrigin {
 }
 
 /** Renderer-safe metadata. Discovery never publishes package bodies or resource contents. */
-export interface SkillDescriptor {
+export interface SkillDescriptor extends SourceOrigin {
   readonly id: string;
   readonly origin: SkillOrigin;
   readonly path: string;

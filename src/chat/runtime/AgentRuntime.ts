@@ -135,6 +135,9 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       signal,
       turnId,
       round,
+      ...(this.turnContexts?.authorizeDisclosure
+        ? { authorizeDisclosure: () => this.turnContexts!.authorizeDisclosure(turnId, signal) }
+        : {}),
       mode: AgentMode.resolve(mode),
       ...(boundaryInstructions ? { instructionContext: boundaryInstructions } : {}),
       onText: options.onText,
