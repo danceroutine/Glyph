@@ -2018,3 +2018,33 @@ fn explicit_exclusions_follow_the_filesystem_containing_the_file() {
     let distinct = crate::service::filesystem_casing::detect(&canonical).unwrap();
     assert_eq!(result.paths.iter().any(|name| name == "Record"), distinct);
 }
+
+#[test]
+fn returns_only_physically_visible_stored_packages_and_manifests_from_the_index() {
+    let root = tempdir().unwrap();
+    let canonical = root.path().canonicalize().unwrap();
+    let entries = ["a/SKILL.md", "b/SKILL.md", "c/SKILL.md", "c/asset.txt"];
+    for relative in entries {
+        let file = canonical.join(relative);
+        create_dir_all(file.parent().unwrap()).unwrap();
+        write(file, "fixture").unwrap();
+    }
+    let mut config = params(&canonical);
+    config.private_paths = vec![canonical.join("a"), canonical.join("c/SKILL.md")];
+    let mut service = ContextIndexService::new();
+    service.initialize(config).unwrap();
+    // A resident listing may predate the current authority. Recheck every contributing entry.
+    initialized(&service)
+        .known_paths
+        .write()
+        .unwrap()
+        .extend(entries.map(String::from));
+    let result = serde_json::to_value(service.list_skill_packages(None).unwrap()).unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "packages": [{"directory":"b","manifest":"b/SKILL.md"},{"directory":"c","manifest":null}],
+            "truncated":false
+        })
+    );
+}
