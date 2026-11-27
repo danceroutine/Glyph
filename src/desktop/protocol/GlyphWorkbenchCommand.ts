@@ -5,7 +5,7 @@ import type { GlyphPlanRecord } from './events/GlyphPlanRecord.ts';
 import type { GlyphTurnOptions } from './events/GlyphAnnotation.ts';
 import type { GlyphApprovalDecision } from './GlyphApprovalDecision.ts';
 import type { GlyphWorkspaceRoot } from './connection/GlyphWorkspaceRoot.ts';
-import type { GlyphContextAttachment } from './connection/GlyphContextAttachment.ts';
+import type { GlyphAttachmentResource, GlyphContextAttachment } from './connection/GlyphContextAttachment.ts';
 
 /** Discriminants for commands sent from the workbench to the utility host. */
 export enum GlyphWorkbenchCommandType {
@@ -43,6 +43,7 @@ export enum GlyphWorkbenchCommandType {
   REJECT_PROPOSAL_ITEM = 'reject_proposal_item',
   WRITE_SHELL_INPUT = 'write_shell_input',
   STOP_SHELL_SESSION = 'stop_shell_session',
+  RESOLVE_ATTACHMENT_RESOURCE = 'resolve_attachment_resource',
   RESOLVE_RULE_REFERENCE = 'resolve_rule_reference',
   REFRESH_CONTEXT_CATALOGS = 'refresh_context_catalogs',
   REQUEST_SNAPSHOT = 'request_snapshot',
@@ -54,6 +55,11 @@ export enum GlyphWorkbenchCommandType {
  * through MessagePort without coupling either process to the other's classes.
  */
 export type GlyphWorkbenchCommand =
+  | {
+      readonly type: GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE;
+      readonly lookupId: string;
+      readonly resource: GlyphAttachmentResource;
+    }
   | {
       readonly type: GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE;
       readonly lookupId: string;

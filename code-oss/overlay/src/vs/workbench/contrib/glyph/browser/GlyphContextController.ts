@@ -6,7 +6,7 @@ import { GlyphIdeContext } from './GlyphIdeContext.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { basename, dirname, ExtUri, extUri, extUriIgnorePathCase } from '#vs/base/common/resources.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
-import { formatFolderContextOutline } from '#glyph/workbench/formatFolderContextOutline.js';
+import { formatFolderAttachment } from '#glyph/workbench/formatFolderContextOutline.js';
 import { GlyphContextAttachmentKind } from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import { GlyphContextCandidateKind } from '#glyph/workbench/GlyphContextActions.js';
 import type { GlyphAttachmentPreview } from '#glyph/protocol/events/GlyphAttachmentPreview.js';
@@ -27,7 +27,11 @@ import { IFileDialogService } from '#vs/platform/dialogs/common/dialogs.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { GlyphContextError } from './GlyphContextError.js';
 import { GlyphDesktopErrorCode } from '#glyph/protocol/GlyphDesktopError.js';
-import type { GlyphContextAttachment } from '#glyph/protocol/connection/GlyphContextAttachment.js';
+import type {
+  GlyphAttachmentResource,
+  GlyphContextAttachment,
+  GlyphFolderListing,
+} from '#glyph/protocol/connection/GlyphContextAttachment.js';
 import type { GlyphContextActions, GlyphContextCandidate } from '#glyph/workbench/GlyphContextActions.js';
 import type { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
 import type { GlyphEditorAdapter } from './GlyphEditorAdapter.js';
@@ -52,6 +56,9 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     private readonly adapter: GlyphEditorAdapter,
     private readonly composer: () => GlyphComposerState,
     private readonly instructionSources: () => readonly GlyphInstructionSource[],
+    private readonly resolveAttachmentResource: (
+      resource: GlyphAttachmentResource,
+    ) => Promise<GlyphFolderListing | undefined>,
     @IEditorService private readonly editors: IEditorService,
     @ICodeEditorService codeEditors: ICodeEditorService,
     @IModelService private readonly models: IModelService,
@@ -65,7 +72,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     @IInstantiationService instantiation: IInstantiationService,
   ) {
     super();
-    this.ide = instantiation.createInstance(GlyphIdeContext, adapter);
+    this.ide = instantiation.createInstance(GlyphIdeContext, adapter, resolveAttachmentResource);
     const watch = (editor: ICodeEditor) =>
       this._register(
         editor.onDidFocusEditorText(() => {
@@ -212,6 +219,15 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     }
     const control = this.editors.activeTextEditorControl;
     const side = isDiffEditor(control) ? (editor === control.getOriginalEditor() ? 'original' : 'modified') : undefined;
+    const version = model.getVersionId();
+    const resource = { uri: model.uri.toString(), path: this.adapter.contextPath(model.uri), folder: false };
+    if (model.uri.scheme === 'file') await this.resolveAttachmentResource(resource);
+    this.assertTrusted();
+    if (model.isDisposed() || model.getVersionId() !== version)
+      throw new GlyphContextError(
+        GlyphDesktopErrorCode.STALE_DOCUMENT,
+        'The selection changed before it could be captured. Select the passage again.',
+      );
     const attachments = await Promise.all(
       selections.map(selection =>
         this.adapter.captureContext(model, {
@@ -220,6 +236,8 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         }),
       ),
     );
+    if (model.uri.scheme === 'file') await this.resolveAttachmentResource(resource);
+    this.assertTrusted();
     composer.insertAttachments(attachments.map(attachment => ({ ...attachment, ...(side ? { side } : {}) })));
   }
   async searchFiles(query: string): Promise<readonly GlyphContextCandidate[]> {
@@ -368,16 +386,19 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
         'Only workspace folders can be attached.',
       );
-    const path = this.adapter.contextPath(uri) || '.';
+    const path = this.adapter.contextPath(uri).replace(/\/$/u, '') || '.';
     const stat = await this.files.stat(uri);
-    if (!stat.isDirectory || stat.isSymbolicLink)
+    if (!stat.isDirectory || (stat.isSymbolicLink && !this.resourceIdentity.isEqual(uri, workspaceFolder.uri)))
       throw new GlyphContextError(
         GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
         'Choose a workspace folder, not a symbolic link.',
       );
     let ancestor = dirname(uri);
     while (ancestor.path.length >= workspaceFolder.uri.path.length && ancestor.toString() !== uri.toString()) {
-      if ((await this.files.stat(ancestor)).isSymbolicLink)
+      if (
+        (await this.files.stat(ancestor)).isSymbolicLink &&
+        !this.resourceIdentity.isEqual(ancestor, workspaceFolder.uri)
+      )
         throw new GlyphContextError(
           GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
           'Folder context cannot traverse symbolic links.',
@@ -387,16 +408,9 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       if (parent.path === ancestor.path) break;
       ancestor = parent;
     }
-    const result = await this.search.fileSearch({
-      type: QueryType.File,
-      folderQueries: [{ folder: uri, ignoreSymlinks: true }],
-      maxResults: 1000,
-    });
-    const prefix = `${uri.path.replace(/\/$/u, '')}/`;
-    const paths = result.results
-      .filter(match => match.resource.path.startsWith(prefix))
-      .map(match => match.resource.path.slice(prefix.length));
-    const text = `Directory tree: ${path}\n(Search-visible paths; file contents are not included.)\n\n${formatFolderContextOutline(paths, result.limitHit)}`;
+    const listing = await this.resolveAttachmentResource({ uri: value, path, folder: true });
+    if (!listing) throw new Error('Folder context is unavailable.');
+    const text = formatFolderAttachment(path, listing.files, listing.truncated);
     const bytes = new TextEncoder().encode(text);
     if (bytes.byteLength > 512 * 1024)
       throw new GlyphContextError(
@@ -407,9 +421,17 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     const contentRevision = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
     this.assertTrusted();
     const currentWorkspaceFolder = this.workspace.getWorkspaceFolder(uri);
-    if (!currentWorkspaceFolder || (this.adapter.contextPath(uri) || '.') !== path)
+    if (!currentWorkspaceFolder || (this.adapter.contextPath(uri).replace(/\/$/u, '') || '.') !== path)
       throw new GlyphContextError(GlyphDesktopErrorCode.STALE_DOCUMENT, 'The workspace changed during capture.');
-    return { id: generateUuid(), kind: GlyphContextAttachmentKind.FOLDER, uri: value, path, text, contentRevision };
+    return {
+      id: generateUuid(),
+      kind: GlyphContextAttachmentKind.FOLDER,
+      uri: value,
+      path,
+      text,
+      folderListing: listing,
+      contentRevision,
+    };
   }
   async refreshAttachment(attachment: GlyphContextAttachment): Promise<GlyphContextAttachment> {
     if (attachment.kind === GlyphContextAttachmentKind.RULE) {
@@ -488,7 +510,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         ...capture,
         unavailable: 'Source folder was removed. Remove this attachment or add its folder again before sending.',
       };
-    return { ...capture, path: this.adapter.contextPath(uri) || '.' };
+    return { ...capture, path: this.adapter.contextPath(uri).replace(/\/$/u, '') || '.' };
   }
   async openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void> {
     if (attachment.uri?.startsWith('glyph-rule:'))
@@ -647,11 +669,21 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   private async withModel<T>(value: string, capture: (model: ITextModel) => Promise<T>): Promise<T> {
     this.assertTrusted();
     const uri = URI.parse(value);
-    this.adapter.contextPath(uri);
+    const path = this.adapter.contextPath(uri);
+    const admit = async () => {
+      if (uri.scheme === 'file') await this.resolveAttachmentResource({ uri: value, path, folder: false });
+      this.assertTrusted();
+    };
+    await admit();
+    const captureModel = async (model: ITextModel) => {
+      const result = await capture(model);
+      await admit();
+      return result;
+    };
     if (uri.scheme === 'file' && !(await this.files.exists(uri)))
       throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'The source file has been deleted.');
     const existing = this.models.getModel(uri);
-    if (existing) return capture(existing);
+    if (existing) return captureModel(existing);
     if (uri.scheme !== 'file')
       throw new GlyphContextError(GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE, 'This resource cannot be attached.');
     const stat = await this.files.stat(uri);
@@ -662,7 +694,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       );
     const reference = await this.resolver.createModelReference(uri);
     try {
-      return await capture(reference.object.textEditorModel);
+      return await captureModel(reference.object.textEditorModel);
     } finally {
       reference.dispose();
     }

@@ -692,6 +692,7 @@ describe(GlyphAgentReviewPane, () => {
     await expect(capture()).resolves.toEqual([
       {
         kind: GlyphContextAttachmentKind.DIFF,
+        projectFile: true,
         uri: 'file:///repo/src/gone.ts',
         path: 'src/gone.ts',
         text: 'diff gone',

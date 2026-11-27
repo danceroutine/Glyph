@@ -1,5 +1,5 @@
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
-import type { GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
+import { GlyphHostEventType, type GlyphHostEvent } from '#src/desktop/protocol/events/GlyphHostEvent.js';
 import type { GlyphHostEventEnvelope } from '#src/desktop/protocol/events/GlyphHostEventEnvelope.js';
 import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#src/desktop/protocol/GlyphDesktopProtocolVersion.js';
 
@@ -45,7 +45,9 @@ export class HostEventJournal {
       sequence: ++this.sequence,
       event,
     };
-    this.events.push(envelope);
+    // Lookup results belong to a live capture. A reconnecting renderer must request fresh authorization.
+    if (event.type === GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED) this.discard();
+    else this.events.push(envelope);
     if (this.events.length > this.capacity) this.events.shift();
     return envelope;
   }

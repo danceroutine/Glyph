@@ -172,6 +172,11 @@ vi.mock('#vs/workbench/contrib/glyph/browser/GlyphContextController.js', () => (
       readonly editor: unknown,
       readonly composer: () => unknown,
       readonly instructionSources: () => unknown,
+      readonly resolveAttachmentResource: (resource: {
+        uri: string;
+        path: string;
+        folder: boolean;
+      }) => Promise<unknown>,
     ) {}
   },
 }));
@@ -489,6 +494,39 @@ describe(NativeGlyphWorkbenchService, () => {
   });
 
   describe('host events', () => {
+    it('accepts a folder listing only for its lookup and attached workspace', async () => {
+      const { service, host, changeFolders } = await workbench();
+      const context = service.context as unknown as {
+        resolveAttachmentResource(resource: { uri: string; path: string; folder: boolean }): Promise<unknown>;
+      };
+      const lookup = () => context.resolveAttachmentResource({ uri: 'file:///project', path: '.', folder: true });
+      const listener = vi.fn();
+      service.onDidChangeState(listener);
+      host.handler = command => {
+        if (command.type !== GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE) return;
+        emit(host, {
+          type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
+          lookupId: 'unrelated',
+          listing: { files: ['other'], truncated: false },
+        });
+      };
+      await expect(lookup()).rejects.toThrow('could not resolve');
+      host.handler = command => {
+        if (command.type === GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE)
+          emit(host, {
+            type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
+            lookupId: command.lookupId,
+            listing: { files: ['selected'], truncated: false },
+          });
+      };
+      await expect(lookup()).resolves.toEqual({ files: ['selected'], truncated: false });
+      expect(listener).not.toHaveBeenCalled();
+      host.handler = () => {
+        changeFolders([folder('other')]);
+      };
+      await expect(lookup()).rejects.toThrow();
+    });
+
     it('correlates a targeted historical rule lookup with the attached workspace generation', async () => {
       const { host, context, changeFolders } = await workbench();
       const resolve = context.setInstructionRefresh.mock.calls[0][2] as (id: string) => Promise<string | undefined>;

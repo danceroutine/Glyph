@@ -1,3 +1,5 @@
+import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
+import { DesktopAttachmentAccess } from '../DesktopAttachmentAccess.ts';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
@@ -202,6 +204,7 @@ async function fixture(
     dispose: vi.fn(async () => {}),
   };
   runtime = new ProviderDesktopRuntime({
+    attachmentAccess: fixtureAttachmentAccess(),
     glyph,
     interactions,
     shellSessions: shells,
@@ -1231,6 +1234,7 @@ describe(ProviderDesktopRuntime, () => {
         },
       ]);
       const restored = new ProviderDesktopRuntime({
+        attachmentAccess: fixtureAttachmentAccess(),
         glyph: harness.glyph,
         interactions: new DesktopInteractionBroker(() => {}),
         shellSessions: harness.shells,
@@ -2085,6 +2089,23 @@ describe(ProviderDesktopRuntime, () => {
         await expect(harness.runtime.handle({ type: Command.START_AGENT_REVIEW, review, model })).rejects.toThrow(
           'The selected account cannot run reviews.',
         );
+        const privateReview = {
+          ...review,
+          files: [
+            {
+              path: 'a.ts',
+              uri: 'file:///elsewhere/a.ts',
+              before: 'old',
+              after: 'new',
+              revision: 'v1',
+              contextText: 'frozen diff',
+            },
+          ],
+        };
+        await expect(
+          harness.runtime.handle({ type: Command.START_AGENT_REVIEW, review: privateReview, model }),
+        ).rejects.toThrow('declared workspace path');
+        expect(agentReviews.start).not.toHaveBeenCalled();
         await harness.runtime.handle({ type: Command.START_AGENT_REVIEW, review, model });
         expect(agentReviews.start).toHaveBeenCalledExactlyOnceWith(review, model);
       } finally {
@@ -2224,7 +2245,10 @@ describe(ProviderDesktopRuntime, () => {
           },
         ],
       });
-      const harness = await fixture(async () => {}, 'owner', undefined, { records: [record] });
+      const harness = await fixture(async () => {}, 'owner', undefined, {
+        records: [record],
+        referenceResources: path => [{ uri: 'file:///project/' + path, caseSensitive: true }],
+      });
       try {
         await harness.runtime.handle({ type: Command.RESTORE_CHECKPOINT, chatId: record.id, turnId: 'second' });
         expect(harness.events.findLast(event => event.type === GlyphHostEventType.CHAT_RESTORED)).toEqual({
@@ -2237,7 +2261,7 @@ describe(ProviderDesktopRuntime, () => {
             attachments: [
               {
                 kind: GlyphContextAttachmentKind.FILE,
-                uri: 'plain.ts',
+                uri: 'file:///project/plain.ts',
                 path: 'plain.ts',
                 text: 'plain',
                 contentRevision: 'r1',
@@ -2595,8 +2619,8 @@ describe(ProviderDesktopRuntime, () => {
               range,
               side: 'modified',
             },
-            { ...capture, path: 'b.ts', sourceVersion: 4 },
-            { ...capture, path: 'c.ts', kind: GlyphContextAttachmentKind.FILE },
+            { ...capture, uri: 'file:///project/b.ts', path: 'b.ts', sourceVersion: 4 },
+            { ...capture, uri: 'file:///project/c.ts', path: 'c.ts', kind: GlyphContextAttachmentKind.FILE },
           ],
         });
         await vi.waitFor(async () => {
@@ -2604,13 +2628,13 @@ describe(ProviderDesktopRuntime, () => {
         });
         expect((await harness.runtime.snapshot()).runs[0]?.attachments).toEqual([
           { uri: capture.uri, path: 'a.ts', text: 'abc', revision: 'content', range, side: 'modified' },
-          { uri: capture.uri, path: 'b.ts', text: 'abc', revision: 'content' },
-          { uri: capture.uri, path: 'c.ts', text: 'abc', revision: 'content' },
+          { uri: 'file:///project/b.ts', path: 'b.ts', text: 'abc', revision: 'content' },
+          { uri: 'file:///project/c.ts', path: 'c.ts', text: 'abc', revision: 'content' },
         ]);
         expect(harness.saved.get(harness.chatId)?.transcript[0]?.attachments?.map(value => value.source)).toEqual([
           { kind: 'selection', uri: capture.uri, version: 7, revision: 'source', range, side: 'modified' },
-          { kind: 'selection', uri: capture.uri, version: 4, revision: 'content' },
-          { kind: 'file', uri: capture.uri, version: 0, revision: 'content' },
+          { kind: 'selection', uri: 'file:///project/b.ts', version: 4, revision: 'content' },
+          { kind: 'file', uri: 'file:///project/c.ts', version: 0, revision: 'content' },
         ]);
       } finally {
         await harness.runtime.dispose();
@@ -2754,6 +2778,41 @@ describe(ProviderDesktopRuntime, () => {
         expect(run).not.toHaveProperty('checkpointTurnId');
         expect(run.context).toEqual({ sources: [], activations: [], candidates: [] });
       } finally {
+        await harness.runtime.dispose();
+      }
+    });
+
+    it('keeps rejected captures out of run and steering events and provider requests', async () => {
+      const gate = deferredVoid();
+      const entered = deferredVoid();
+      const provider = vi.fn(async () => {
+        entered.resolve();
+        await gate.promise;
+      });
+      const harness = await fixture(provider);
+      try {
+        const send = { type: Command.SEND, chatId: harness.chatId, runId: 'run', text: 'Start' } as const;
+        const attachment = {
+          kind: GlyphContextAttachmentKind.SELECTION,
+          uri: 'file:///elsewhere/secret',
+          path: 'a.ts',
+          text: 'private frozen bytes',
+          contentRevision: 'v1',
+        };
+        await expect(harness.runtime.handle({ ...send, attachments: [attachment] })).rejects.toThrow(
+          'declared workspace path',
+        );
+        expect((await harness.runtime.snapshot()).runs).toEqual([]);
+        expect(provider).not.toHaveBeenCalled();
+        await harness.runtime.handle({ ...send, attachments: [] });
+        await entered.promise;
+        await expect(
+          harness.runtime.handle({ ...send, type: Command.STEER, messageId: 'steer', attachments: [attachment] }),
+        ).rejects.toThrow('declared workspace path');
+        expect((await harness.runtime.snapshot()).runs[0]?.steering ?? []).toEqual([]);
+        expect(JSON.stringify(harness.events)).not.toContain(attachment.text);
+      } finally {
+        gate.resolve();
         await harness.runtime.dispose();
       }
     });
@@ -4696,3 +4755,25 @@ describe('goal continuation', () => {
     }
   });
 });
+
+function fixtureAttachmentAccess() {
+  const binding = WorkspaceRootAccess.forMetadataProbe('/project');
+  const beginOperation = () => binding.beginOperation();
+  const access = new DesktopAttachmentAccess(
+    { referenceResources: path => [{ uri: new URL(path, 'file:///project/').href, caseSensitive: true }] },
+    [
+      {
+        name: 'project',
+        selectedDisk: { beginOperation, validateAccess: async () => {} },
+        disk: {
+          beginOperation,
+          validateAccess: async () => {},
+          inspectDirectory: async () => ({ root: '/project', searchRoot: '/project' }),
+        },
+        index: { glob: async () => ({ files: [], truncated: false }) },
+      },
+    ],
+    () => () => {},
+  );
+  return access;
+}

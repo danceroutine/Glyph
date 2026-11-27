@@ -1,6 +1,9 @@
 import { WindowCommandAuthority } from './WindowCommandAuthority.ts';
 import { randomUUID } from 'node:crypto';
-import { sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { getGlyphWorkspaceRootId } from '#src/desktop/protocol/connection/getGlyphWorkspaceRootId.js';
+import type { GlyphAttachmentResource } from '#src/desktop/protocol/connection/GlyphContextAttachment.js';
 import { existsSync, realpathSync } from 'node:fs';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphCommandResultHostEvent } from '#src/desktop/protocol/events/GlyphCommandResultHostEvent.js';
@@ -402,7 +405,9 @@ export class GlyphDesktopHost {
     }
     if (
       !connection.trusted &&
-      (isMutationCommand(command) || command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE)
+      (isMutationCommand(command) ||
+        command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE ||
+        command.type === GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE)
     ) {
       return [
         toErrorGlyphHostEvent({
@@ -433,6 +438,39 @@ export class GlyphDesktopHost {
           code: GlyphDesktopErrorCode.HOST_UNAVAILABLE,
         }),
       ];
+    if (command.type === GlyphWorkbenchCommandType.RESOLVE_ATTACHMENT_RESOURCE) {
+      const { resource, lookupId } = command;
+      if (
+        !record.runtime.attachmentAccess ||
+        typeof lookupId !== 'string' ||
+        !lookupId ||
+        lookupId.length > 64 ||
+        !resource ||
+        typeof resource.path !== 'string' ||
+        !resource.path ||
+        resource.path.length > 32768 ||
+        typeof resource.uri !== 'string' ||
+        resource.uri.length > 32768 ||
+        (resource.projectFile !== undefined && typeof resource.projectFile !== 'boolean') ||
+        typeof resource.folder !== 'boolean'
+      )
+        throw new Error('Invalid or unavailable attachment resource.');
+      const signal = connection.commands.signal;
+      const owner = this.sessions.get(connectionKey({ ...connection.identity, windowId: record.ownerWindowId }));
+      const resolveResource = () => (connection.readOnly ? resourceForOwner(resource, connection, owner) : resource);
+      const listing = await record.runtime.attachmentAccess.resolve(resolveResource(), signal);
+      if (connection.readOnly) resolveResource();
+      signal.throwIfAborted();
+      this.assertCurrentConnection(connection);
+      if (this.runtimes.get(getWorkspaceKey(connection.identity)) !== record || !connection.ready)
+        throw new Error('The workspace detached during attachment capture.');
+      this.send(connection, {
+        type: GlyphHostEventType.ATTACHMENT_RESOURCE_RESOLVED,
+        lookupId,
+        ...(listing ? { listing } : {}),
+      });
+      return [toCommandResultGlyphHostEvent(requestId)];
+    }
     if (command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE) {
       if (
         typeof command.lookupId !== 'string' ||
@@ -571,6 +609,37 @@ export class GlyphDesktopHost {
     if (!connection) throw new Error(`Unknown desktop connection: ${connectionId}`);
     return connection;
   }
+}
+
+/** A second editor can open the same roots under different names or selected symlinks. */
+function resourceForOwner(
+  resource: GlyphAttachmentResource,
+  peer: Connection,
+  owner: Connection | undefined,
+): GlyphAttachmentResource {
+  const [name, ...parts] = resource.path.split('/');
+  const peerRoot =
+    peer.roots.length === 1
+      ? peer.roots[0]
+      : peer.roots.find(root => getGlyphWorkspaceRootId(root, peer.roots) === name);
+  const physical = peerRoot && physicalRoot(peerRoot);
+  const observed = peerRoot && peer.physicalRoots.get(peerRoot);
+  if (!physical || !observed?.has(physical) || observed.size !== 1 || !owner)
+    throw new Error('The selected attachment workspace folder changed.');
+  const ownerRoot = owner.roots.find(root => owner.physicalRoots.get(root)?.has(physical));
+  if (!ownerRoot || physicalRoot(ownerRoot) !== physical)
+    throw new Error('The selected attachment workspace folder changed.');
+  const local = peer.roots.length === 1 ? resource.path : parts.join('/');
+  if (local.split('/').includes('..') || local.includes('\\')) throw new Error('Invalid attachment workspace path.');
+  const selected = fileURLToPath(resource.uri);
+  const path = join(physical, local);
+  if (relative(join(peerRoot.canonicalPath, local), selected) !== '' && relative(path, selected) !== '')
+    throw new Error('The selected attachment does not belong to the declared workspace path.');
+  const route =
+    owner.roots.length === 1
+      ? local || '.'
+      : [getGlyphWorkspaceRootId(ownerRoot, owner.roots), local].filter(part => part && part !== '.').join('/');
+  return { ...resource, uri: pathToFileURL(path).href, path: route };
 }
 
 function physicalRoot(root: GlyphWorkspaceRoot): string | undefined {

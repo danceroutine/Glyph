@@ -29,9 +29,10 @@ interface Stat {
 
 function codeEditor(model: { uri: URI } | null, selections: Selection[] | null = [new Selection(1, 1, 1, 5)]) {
   const focus = new Emitter<void>();
+  const document = model && { getVersionId: () => 1, isDisposed: () => false, ...model };
   return {
     getEditorType: () => EditorType.ICodeEditor,
-    getModel: () => model,
+    getModel: () => document,
     getSelections: () => selections,
     onDidFocusEditorText: focus.event,
     focus: () => {
@@ -77,6 +78,10 @@ function controllerServices() {
     stats,
     editorAdded,
     composer,
+    resolveAttachment: vi.fn(async (): Promise<{ files: string[]; truncated: boolean } | undefined> => ({
+      files: [],
+      truncated: false,
+    })),
     instructionSources: [] as {
       id: string;
       path: string;
@@ -161,6 +166,7 @@ function createController(services: ControllerServices) {
     services.adapter as never,
     () => services.composer as never,
     () => services.instructionSources as never,
+    services.resolveAttachment,
     services.editors as never,
     { listCodeEditors: () => services.codeEditorList, onCodeEditorAdd: services.editorAdded.event } as never,
     services.modelService as never,
@@ -531,6 +537,37 @@ describe(GlyphContextController, () => {
       ]);
     });
 
+    it('preserves the original selection version while waiting for host authorization', async () => {
+      const services = controllerServices();
+      let version = 1;
+      const model = { uri: URI.file('/workspace/a.ts'), getVersionId: () => version };
+      services.editors.activeTextEditorControl = codeEditor(model);
+      services.resolveAttachment.mockImplementationOnce(async () => {
+        version++;
+        return undefined;
+      });
+      await expect(createController(services).attachSelection()).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.STALE_DOCUMENT,
+      });
+      expect(services.adapter.captureContext).not.toHaveBeenCalled();
+      expect(services.composer.insertAttachments).not.toHaveBeenCalled();
+    });
+
+    it('checks the file before reading a selection and again before adding the snapshot to the composer', async () => {
+      const services = controllerServices();
+      services.editors.activeTextEditorControl = codeEditor({ uri: URI.file('/workspace/a.ts') }, [
+        new Selection(1, 1, 1, 3),
+      ]);
+      services.resolveAttachment.mockRejectedValueOnce(new Error('private file'));
+      const controller = createController(services);
+      await expect(controller.attachSelection()).rejects.toThrow('private file');
+      expect(services.adapter.captureContext).not.toHaveBeenCalled();
+      services.resolveAttachment.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('access changed'));
+      await expect(controller.attachSelection()).rejects.toThrow('access changed');
+      expect(services.adapter.captureContext).toHaveBeenCalledOnce();
+      expect(services.composer.insertAttachments).not.toHaveBeenCalled();
+    });
+
     it('attaches every highlighted range of a plain editor', async () => {
       const services = controllerServices();
       services.editors.activeTextEditorControl = codeEditor({ uri: URI.file('/workspace/a.ts') }, [
@@ -841,13 +878,9 @@ describe(GlyphContextController, () => {
     it('captures the search-visible outline of a nested folder', async () => {
       const services = controllerServices();
       services.stats.set('/workspace/src/deep', { isDirectory: true });
-      services.search.fileSearch.mockResolvedValue({
-        results: [
-          { resource: URI.file('/workspace/src/deep/a.ts') },
-          { resource: URI.file('/workspace/src/deep/inner/b.ts') },
-          { resource: URI.file('/workspace/src/deeper.ts') },
-        ],
-        limitHit: true,
+      services.resolveAttachment.mockResolvedValue({
+        files: ['a.ts', 'inner/b.ts'],
+        truncated: true,
       });
       const attachment = await createController(services).captureFolder('file:///workspace/src/deep');
       expect(attachment).toMatchObject({
@@ -856,6 +889,12 @@ describe(GlyphContextController, () => {
         path: 'src/deep',
         text: `Directory tree: src/deep\n(Search-visible paths; file contents are not included.)\n\n${formatFolderContextOutline(['a.ts', 'inner/b.ts'], true)}`,
       });
+      expect(services.resolveAttachment).toHaveBeenCalledWith({
+        uri: 'file:///workspace/src/deep',
+        path: 'src/deep',
+        folder: true,
+      });
+      expect(services.search.fileSearch).not.toHaveBeenCalled();
       expect(services.files.stat.mock.calls.map(([uri]) => uri.path)).toEqual([
         '/workspace/src/deep',
         '/workspace/src',
@@ -877,6 +916,21 @@ describe(GlyphContextController, () => {
       services.folders.splice(0, 1, { name: '', uri: URI.file('/workspace') });
       services.stats.set('/workspace', { isDirectory: true });
       expect(await createController(services).captureFolder('file:///workspace')).toMatchObject({ path: '.' });
+    });
+
+    it('routes the selected multi-root folder by its root ID, including a workspace selected through a symlink', async () => {
+      const services = controllerServices();
+      services.folders.push({ name: 'other', uri: URI.file('/other') });
+      const root = services.folders[0];
+      services.stats.set(root.uri.path, { isDirectory: true, isSymbolicLink: true });
+      services.resolveAttachment.mockResolvedValueOnce({ files: ['a.ts'], truncated: false });
+      const capture = await createController(services).captureFolder(root.uri.toString());
+      expect(services.resolveAttachment).toHaveBeenCalledWith({
+        uri: root.uri.toString(),
+        path: root.name,
+        folder: true,
+      });
+      expect(capture).toMatchObject({ path: root.name, folderListing: { files: ['a.ts'], truncated: false } });
     });
 
     it('refuses folders that are not on disk', async () => {
@@ -937,10 +991,9 @@ describe(GlyphContextController, () => {
     it('refuses an outline larger than the attachment limit', async () => {
       const services = controllerServices();
       services.stats.set('/workspace/src', { isDirectory: true });
-      services.search.fileSearch.mockResolvedValue({
-        results: Array.from({ length: 1000 }, (_, index) => ({
-          resource: URI.file(`/workspace/src/${String(index).padStart(600, '0')}.ts`),
-        })),
+      services.resolveAttachment.mockResolvedValue({
+        files: Array.from({ length: 1000 }, (_, index) => String(index).padStart(600, '0') + '.ts'),
+        truncated: false,
       });
       await expect(createController(services).captureFolder('file:///workspace/src')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.READ_LIMIT_EXCEEDED,
@@ -950,9 +1003,9 @@ describe(GlyphContextController, () => {
     it('refuses a capture whose workspace path changed meanwhile', async () => {
       const services = controllerServices();
       services.stats.set('/workspace/src', { isDirectory: true });
-      services.search.fileSearch.mockImplementation(async () => {
+      services.resolveAttachment.mockImplementation(async () => {
         services.folders.splice(0, 1, { name: 'other', uri: URI.file('/workspace/src') });
-        return { results: [] };
+        return { files: [], truncated: false };
       });
       await expect(createController(services).captureFolder('file:///workspace/src')).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.STALE_DOCUMENT,
@@ -962,9 +1015,9 @@ describe(GlyphContextController, () => {
     it('refuses a capture whose workspace folder disappeared meanwhile', async () => {
       const services = controllerServices();
       services.stats.set('/workspace/src', { isDirectory: true });
-      services.search.fileSearch.mockImplementation(async () => {
+      services.resolveAttachment.mockImplementation(async () => {
         services.folders.splice(0);
-        return { results: [] };
+        return { files: [], truncated: false };
       });
 
       await expect(createController(services).captureFolder('file:///workspace/src')).rejects.toMatchObject({
