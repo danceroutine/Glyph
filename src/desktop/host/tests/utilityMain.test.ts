@@ -206,8 +206,8 @@ describe('utilityMain', () => {
     const { loaded, host, editors, openai, scripted, deterministic } = startUtilityHost();
     await loaded;
     const router = editors.constructed.mock.calls[0]![0];
-    expect(router.trustedUserEditors({ windowId: 'owner' })).toEqual([]);
-    expect(host.trustedUserEditors).toHaveBeenCalledWith({ windowId: 'owner' });
+    expect(router.trustedUserEditors({ windowId: 'owner' }, '/profile/rules/example.mdc')).toEqual([]);
+    expect(host.trustedUserEditors).toHaveBeenCalledWith({ windowId: 'owner' }, '/profile/rules/example.mdc');
     const factory = openai.constructed.mock.calls[0]?.[0];
     expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(
       factory,
