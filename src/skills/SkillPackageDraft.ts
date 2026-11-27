@@ -36,7 +36,13 @@ export type SkillPackageDraftInput = z.input<typeof importedDraft>;
 /** Revalidates a local import's physical read authority at preview and publication. Each successful check covers that
  * operation. The manager repeats it immediately before disclosing a preview or publishing reviewed bytes. */
 export interface SkillSourceAccess {
+  retain(): Promise<PendingSkillSourceAccess>;
+}
+
+/** Live authority retained for one pending local import. The manager releases it on every terminal path. */
+export interface PendingSkillSourceAccess {
   assertCurrent(): Promise<void>;
+  release(): void;
 }
 
 /** Complete immutable candidate package. Its revision binds previews and approvals to every reviewed byte. */

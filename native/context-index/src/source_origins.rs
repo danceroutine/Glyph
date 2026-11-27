@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 struct Request {
     paths: Vec<PathBuf>,
     private_paths: Vec<PathBuf>,
+    #[serde(default)]
+    directories: bool,
 }
 
 #[derive(Serialize)]
@@ -86,7 +88,11 @@ pub fn inspect() -> io::Result<()> {
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&path)?;
         let meta = file.metadata()?;
-        if !meta.is_file() || meta.nlink() != 1 {
+        if if req.directories {
+            !meta.is_dir()
+        } else {
+            !meta.is_file() || meta.nlink() != 1
+        } {
             return Err(denied());
         }
         let (dev, ino) = (meta.dev().to_string(), meta.ino().to_string());
@@ -94,7 +100,11 @@ pub fn inspect() -> io::Result<()> {
         let canonical = fs::canonicalize(&path)?;
         let mut hash = Sha256::new();
         hash.update(directory_origin(
-            canonical.parent().ok_or_else(denied)?,
+            if req.directories {
+                &canonical
+            } else {
+                canonical.parent().ok_or_else(denied)?
+            },
             &mut directories,
         )?);
         hash.update(meta.dev().to_le_bytes());
@@ -107,5 +117,19 @@ pub fn inspect() -> io::Result<()> {
     }
     authority.finish_batch()?;
     serde_json::to_writer(io::stdout().lock(), &sources)?;
+    Ok(())
+}
+
+/// Runs only in the short-lived inspector process. An unlinked APFS directory can retain nlink=2, but
+/// a current working directory has no physical pathname after unlink. A renamed directory still has one.
+pub fn assert_unlinked_directory() -> io::Result<()> {
+    // SAFETY: fchdir accepts a borrowed integer descriptor and returns a status without retaining memory.
+    if unsafe { libc::fchdir(libc::STDIN_FILENO) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if !std::env::current_dir().is_err_and(|error| error.kind() == io::ErrorKind::NotFound) {
+        return Err(denied());
+    }
+    println!("verified");
     Ok(())
 }

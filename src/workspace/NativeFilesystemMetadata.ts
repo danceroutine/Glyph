@@ -14,11 +14,18 @@ import type { HostFilesystemAuthority } from './HostFilesystemAuthority.ts';
  * metadata inspection passes that handle directly to the inspector. Both
  * results describe the operation in progress and expire when its target changes.
  */
-export class NativeFilesystemMetadata implements FilesystemMetadata, HostFilesystemAuthority, WorkspacePathAccess, SourceOriginReader {
+export class NativeFilesystemMetadata
+  implements FilesystemMetadata, HostFilesystemAuthority, WorkspacePathAccess, SourceOriginReader
+{
   constructor(private readonly executable: string) {}
 
   /** Inspect all source routes in a single native request, using the caller's operation reservations. */
-  async sourceOrigins(paths: readonly string[], privatePaths: readonly string[], signal?: AbortSignal) {
+  async sourceOrigins(
+    paths: readonly string[],
+    privatePaths: readonly string[],
+    signal?: AbortSignal,
+    directories = false,
+  ) {
     signal?.throwIfAborted();
     if (paths.length === 0) return [];
     const output = await new Promise<string>((resolve, reject) => {
@@ -29,7 +36,7 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, HostFilesys
         (error, stdout) => (error ? reject(error) : resolve(stdout)),
       );
       child.stdin!.on('error', reject);
-      child.stdin!.end(JSON.stringify({ paths, privatePaths }));
+      child.stdin!.end(JSON.stringify({ paths, privatePaths, ...(directories ? { directories } : {}) }));
     });
     return z
       .array(
@@ -37,6 +44,16 @@ export class NativeFilesystemMetadata implements FilesystemMetadata, HostFilesys
       )
       .length(paths.length)
       .parse(JSON.parse(output));
+  }
+
+  /** Verify that an approved source was actually unlinked. A renamed or inaccessible directory fails this check. */
+  async assertUnlinkedDirectory(descriptor: number): Promise<void> {
+    const child = spawn(this.executable, ['--assert-unlinked-directory'], {
+      stdio: [descriptor, 'pipe', 'ignore'],
+      timeout: 5000,
+      env: {},
+    });
+    await this.acknowledge(child, 'The imported source directory moved. Preview the source again.');
   }
 
   async assertWorkspacePath(

@@ -88,6 +88,8 @@ fn main() {
         #[cfg(target_os = "linux")]
         Some("--source-path-aliases") => source_path_aliases(),
         #[cfg(unix)]
+        Some("--assert-unlinked-directory") => source_origins::assert_unlinked_directory(),
+        #[cfg(unix)]
         Some("--source-origins") => source_origins::inspect(),
         Some("--assert-workspace-path") => inspect_workspace_path(),
         Some("--assert-access-metadata") => inspect(false),

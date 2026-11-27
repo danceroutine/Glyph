@@ -15,7 +15,7 @@ import type { SkillCatalog } from './SkillCatalog.ts';
 import { SkillPreferenceCommitUncertain, type SkillStateStore } from './SkillStateStore.ts';
 import type { SkillPreview, SkillPreviewFile, SkillPreviewFileInfo } from './SkillLifecycle.ts';
 import { installedPackageModes } from './installedPackageModes.ts';
-import { SkillPackageDraft, type SkillSourceAccess } from './SkillPackageDraft.ts';
+import { SkillPackageDraft, type PendingSkillSourceAccess } from './SkillPackageDraft.ts';
 import type { SkillPackageFile } from './SkillPackage.ts';
 import { packageRevision, fileDirectories } from './skillPackageRevision.ts';
 import { skillPackageId } from './skillPackageId.ts';
@@ -52,7 +52,7 @@ interface PackageTree {
   directories: ReadonlyMap<string, number>;
 }
 interface Pending {
-  readonly sourceAccess: SkillSourceAccess | undefined;
+  readonly sourceAccess: PendingSkillSourceAccess | undefined;
   readonly preview: SkillPreview & {
     directories: NonNullable<SkillPreview['directories']>;
     createdParentDirectories: readonly string[];
@@ -214,7 +214,11 @@ export class SkillPackageManager {
     return this.remember(location, descriptor.directory, before);
   }
   discard(id: string): void {
+    this.pending.get(id)?.sourceAccess?.release();
     this.pending.delete(id);
+  }
+  dispose(): void {
+    for (const id of this.pending.keys()) this.discard(id);
   }
   hasPreview(id: string): boolean {
     return this.pending.has(id);
@@ -232,18 +236,26 @@ export class SkillPackageManager {
   async apply(id: string, signal?: AbortSignal): Promise<{ applied: true; refreshError?: string }> {
     const change = this.requirePreview(id);
     this.pending.delete(id);
-    signal?.throwIfAborted();
-    if (this.ensureReady) await this.ensureReady();
-    const cleaned = await withSkillLock(
-      this.state.metadata,
-      change.location.store.root,
-      'destination',
-      async () => {
-        await this.recoverLocation(change.location, await change.location.store.resolvePath(change.location.directory));
-        return this.withPackageScope(change.location, change.directory, () => this.commit(change, signal), signal);
-      },
-      signal,
-    );
+    let cleaned: boolean;
+    try {
+      signal?.throwIfAborted();
+      if (this.ensureReady) await this.ensureReady();
+      cleaned = await withSkillLock(
+        this.state.metadata,
+        change.location.store.root,
+        'destination',
+        async () => {
+          await this.recoverLocation(
+            change.location,
+            await change.location.store.resolvePath(change.location.directory),
+          );
+          return this.withPackageScope(change.location, change.directory, () => this.commit(change, signal), signal);
+        },
+        signal,
+      );
+    } finally {
+      change.sourceAccess?.release();
+    }
     try {
       await this.catalog.refresh();
       return cleaned
@@ -329,10 +341,13 @@ export class SkillPackageManager {
       files: compareFiles(before.files, after ?? new Map()),
       directories: compareDirectories(before.directories, directories),
     };
-    if (this.pending.size >= 32) throw new Error('Too many pending skill previews. Finish or discard a preview first.');
-    await draft?.sourceAccess?.assertCurrent();
+    const sourceAccess = await draft?.sourceAccess?.retain();
+    if (this.pending.size >= 32) {
+      sourceAccess?.release();
+      throw new Error('Too many pending skill previews. Finish or discard a preview first.');
+    }
     this.pending.set(preview.id, {
-      sourceAccess: draft?.sourceAccess,
+      sourceAccess,
       preview,
       location,
       directory,

@@ -300,7 +300,10 @@ impl WorkspacePaths {
         if self.current_at_completion() {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::PermissionDenied, "Workspace access changed."))
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Workspace access changed.",
+            ))
         }
     }
 }

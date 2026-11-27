@@ -1,8 +1,10 @@
+import { LocalSkillSourceAuthority } from './LocalSkillSourceAuthority.ts';
+import type { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { outsideWorkspace } from '#src/shell/TrustedHostExecutable.js';
 import { SkillRepositoryGit } from './SkillRepositoryGit.ts';
 import { indexedPackageDirectories, type SkillFileIndex } from './listSkillPackageFiles.ts';
 import { inventoryPackage } from './skillPackageInventory.ts';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { mkdir, mkdtemp, rm, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
@@ -38,7 +40,10 @@ export type OpenLocalSkillSource = (root: string) => {
 export class SkillPackageSourceReader {
   constructor(
     private readonly openLocal: OpenLocalSkillSource,
-    private readonly metadata: FilesystemMetadata & HostFilesystemAuthority & WorkspacePathAccess,
+    private readonly metadata: FilesystemMetadata &
+      HostFilesystemAuthority &
+      WorkspacePathAccess &
+      Pick<NativeFilesystemMetadata, 'sourceOrigins' | 'assertUnlinkedDirectory'>,
     private readonly accessPolicy: WorkspaceAccessPolicy,
     private readonly hostWorkspaceRoots: HostWorkspaceRoots,
   ) {}
@@ -62,6 +67,12 @@ export class SkillPackageSourceReader {
       await assertSourceCurrent();
       if ((await lstat(root)).isSymbolicLink()) throw new Error('Skill sources cannot be symlinked directories.');
       await inspectFileMetadata(this.metadata, root, 'replaceable');
+      const directories = await this.metadata.sourceOrigins(
+        [dirname(root), root],
+        this.accessPolicy.privatePaths,
+        signal,
+        true,
+      );
       const { store, index } = this.openLocal(root);
       try {
         const state = await index.refresh(signal);
@@ -83,10 +94,12 @@ export class SkillPackageSourceReader {
         const manifest = await optionalStat(join(root, 'SKILL.md'));
         const manifestIdentity = manifest && `${manifest.dev}:${manifest.ino}`;
         const files = [];
+        const reads = new Map<string, string>();
         let bytes = 0;
         for (const path of list.files) {
           signal?.throwIfAborted();
           const file = await store.readBytes(path, { maxBytes: 1024 * 1024, metadata: this.metadata });
+          reads.set(join(root, path), file.identity);
           bytes += file.bytes.byteLength;
           if (bytes > 8 * 1024 * 1024) throw new Error('Skill source exceeds 8 MiB.');
           files.push({
@@ -104,7 +117,15 @@ export class SkillPackageSourceReader {
             files,
             directories: [...modes].map(([path, mode]) => ({ path, mode })),
           },
-          { assertCurrent: assertSourceCurrent },
+          await LocalSkillSourceAuthority.capture(
+            this.metadata,
+            this.accessPolicy,
+            root,
+            directories,
+            reads,
+            assertSourceCurrent,
+            signal,
+          ),
         );
       } finally {
         await index.dispose();

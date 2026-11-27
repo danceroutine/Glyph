@@ -1,3 +1,4 @@
+import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
 import { pathToFileURL } from 'node:url';
 import { inventoryPackage } from '#src/skills/skillPackageInventory.js';
@@ -82,6 +83,9 @@ const captured = vi.hoisted(() => ({
 const openWorkspaceMutations = NativeWorkspaceMutations.open;
 let isolatedUserDirectory: string;
 beforeEach(async () => {
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'sourceOrigins').mockImplementation(
+    testFilesystemMetadata.sourceOrigins,
+  );
   vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
   vi.spyOn(NativeFilesystemMetadata.prototype, 'assertHostPaths').mockResolvedValue(undefined);
   vi.spyOn(NativeFilesystemMetadata.prototype, 'assertWorkspacePath').mockResolvedValue(undefined);

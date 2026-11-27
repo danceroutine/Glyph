@@ -325,3 +325,42 @@ fn pins_source_locations_across_regular_saves_and_checks_current_reservations() 
     fs::hard_link(&file, &other).unwrap();
     assert!(!inspect(&[&file], &[]).status.success());
 }
+
+#[cfg(unix)]
+#[test]
+fn distinguishes_removed_and_renamed_import_sources_and_pins_their_parent() {
+    use std::fs::{self, File};
+    let base = tempfile::tempdir().unwrap();
+    let parent = base.path().canonicalize().unwrap();
+    let directory = parent.join("source");
+    fs::create_dir(&directory).unwrap();
+    let held = File::open(&directory).unwrap();
+    let inspect = |file: File| {
+        Command::new(env!("CARGO_BIN_EXE_glyph-context-index"))
+            .arg("--assert-unlinked-directory")
+            .stdin(file)
+            .output()
+            .unwrap()
+    };
+    assert!(!inspect(held.try_clone().unwrap()).status.success());
+    let moved = parent.join("moved");
+    fs::rename(&directory, &moved).unwrap();
+    assert!(!inspect(held.try_clone().unwrap()).status.success());
+    fs::remove_dir(&moved).unwrap();
+    assert!(inspect(held).status.success());
+    let ordinary = parent.join("ordinary");
+    fs::write(&ordinary, b"fixture").unwrap();
+    assert!(!inspect(File::open(&ordinary).unwrap()).status.success());
+    let directories = serde_json::json!({"paths":[parent], "privatePaths":[], "directories":true});
+    assert!(run_with_input(&directories.to_string(), |cmd| {
+        cmd.arg("--source-origins");
+    })
+    .status
+    .success());
+    let files = serde_json::json!({"paths":[ordinary], "privatePaths":[], "directories":true});
+    assert!(!run_with_input(&files.to_string(), |cmd| {
+        cmd.arg("--source-origins");
+    })
+    .status
+    .success());
+}

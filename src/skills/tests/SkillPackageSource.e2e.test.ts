@@ -1,3 +1,4 @@
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { SkillPackageSourceReader } from '../SkillPackageSource.ts';
 import { testSkillSource, testPackageIndex } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
@@ -33,7 +34,7 @@ async function fixture() {
   const reader = testSkillSource(
     resolve('target/release/glyph-context-index'),
     [],
-    testFilesystemMetadata,
+    new NativeFilesystemMetadata(resolve('target/release/glyph-context-index')),
     new WorkspaceAccessPolicy(),
   );
   return { root, directory, reader };

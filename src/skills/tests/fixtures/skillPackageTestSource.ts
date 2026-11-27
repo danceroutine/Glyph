@@ -21,7 +21,10 @@ export function testPackageIndex(binaryPath: string, accessPolicy = new Workspac
 export function testSkillSource(
   binaryPath: string,
   workspaceRoots: readonly string[],
-  metadata: Pick<NativeFilesystemMetadata, 'assertWorkspacePath' | 'assertHostPaths' | 'inspect'>,
+  metadata: Pick<
+    NativeFilesystemMetadata,
+    'assertWorkspacePath' | 'assertHostPaths' | 'inspect' | 'sourceOrigins' | 'assertUnlinkedDirectory'
+  >,
   policy: WorkspaceAccessPolicy,
   hostWorkspaceRoots: HostWorkspaceRoots = workspaceRoots,
 ): SkillPackageSourceReader {

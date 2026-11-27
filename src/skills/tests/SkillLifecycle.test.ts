@@ -2,7 +2,7 @@ import { testPackageMutations } from './fixtures/testPackageMutations.ts';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import type { ShellProgram } from '#src/shell/ShellProgram.js';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -88,7 +88,7 @@ describe(SkillPackageDraft, () => {
 });
 describe(SkillStateStore, () => {
   it('serializes preference writes, merges disk state, and rolls back memory after a write failure', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'glyph-skill-state-'));
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-skill-state-')));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     const store = new FileSystemWorkspaceTextStore(root);
     const first = new SkillStateStore(store.root, testFilesystemMetadata);
