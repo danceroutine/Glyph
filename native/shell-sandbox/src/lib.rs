@@ -31,7 +31,7 @@ impl SandboxProfile {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SandboxRequest {
     pub profile: SandboxProfile,
     pub working_directory: PathBuf,
@@ -320,27 +320,27 @@ pub fn prepare_request(mut request: SandboxRequest) -> Result<SandboxRequest, Sa
     Ok(request)
 }
 
-#[cfg(any(target_os = "linux", all(test, unix)))]
-fn managed_directory(path: &Path) -> bool {
+fn named(path: &Path, reserved: &str) -> bool {
     path.file_name()
-        .is_some_and(|name| name.eq_ignore_ascii_case("skills"))
+        .is_some_and(|name| name.eq_ignore_ascii_case(reserved))
+        || glyph_filesystem_metadata::aliases_name(path, reserved)
+}
+
+fn managed_directory(path: &Path) -> bool {
+    named(path, "skills")
         && path
             .parent()
-            .and_then(Path::file_name)
-            .is_some_and(|parent| {
-                parent.eq_ignore_ascii_case(".glyph") || parent.eq_ignore_ascii_case(".cursor")
-            })
+            .is_some_and(|parent| named(parent, ".glyph") || named(parent, ".cursor"))
 }
 
 const SKILL_EXECUTION_DIRECTORY: &str = ".glyph-skill-run";
 
-fn private_name(name: &OsStr) -> bool {
-    name.eq_ignore_ascii_case(".skill-staging")
-        || name.eq_ignore_ascii_case(SKILL_EXECUTION_DIRECTORY)
+fn private_directory(path: &Path) -> bool {
+    named(path, ".skill-staging") || named(path, SKILL_EXECUTION_DIRECTORY)
 }
 
 fn private_component(path: &Path) -> bool {
-    path.iter().any(private_name)
+    path.ancestors().any(private_directory)
 }
 
 /// A host-admitted script run can expose its own files. Any surrounding transaction or run remains private.
@@ -431,6 +431,10 @@ fn repository_metadata_paths(
         return Ok(paths);
     }
     visit_workspace(root, policy, &mut |path, file_type| {
+        if managed_directory(path) {
+            paths.push(path.to_owned());
+            return Ok(false);
+        }
         if path.file_name() != Some(OsStr::new(".git")) {
             return Ok(file_type.is_dir());
         }
@@ -479,7 +483,10 @@ fn workspace_sensitive_paths(request: &SandboxRequest) -> Result<Vec<PathBuf>, S
             continue;
         }
         visit_workspace(root, &request.workspace_policy, &mut |path, file_type| {
-            if file_type.is_file() && is_sensitive_workspace_file(path, &request.workspace_policy) {
+            if private_directory(path)
+                || (file_type.is_file()
+                    && is_sensitive_workspace_file(path, &request.workspace_policy))
+            {
                 paths.push(path.to_owned());
             }
             Ok(file_type.is_dir())
@@ -663,7 +670,9 @@ pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
     fn run(request: &SandboxRequest, home: Option<&Path>) -> Result<ExitStatus, SandboxError> {
         let executable = linux::bubblewrap_executable()?;
         let mut mounts = kernel_workspace::KernelWorkspace::open(request)?;
-        let arguments = linux::arguments(request, home, &mut mounts)?;
+        let mut request = request.clone();
+        mount_aliases::protect(&mut request, home, &std::fs::read("/proc/self/mountinfo")?)?;
+        let arguments = linux::arguments(&request, home, &mut mounts)?;
         Ok(std::process::Command::new(executable)
             .args(arguments)
             .args(&request.command)
@@ -756,7 +765,7 @@ pub mod macos {
         }
         for path in super::workspace_sensitive_paths(request)? {
             policy.push_str(&format!(
-                "(deny file-read* file-write* (literal {}))\n",
+                "(deny file-read* file-write* file-test-existence (subpath {}))\n",
                 seatbelt_string(&path)
             ));
         }
@@ -778,6 +787,8 @@ pub mod macos {
             "(deny file-read* file-test-existence (require-all {}))\n",
             restrictions.join(" ")
         ));
+        #[cfg(target_os = "macos")]
+        super::macos_names::extend(&mut policy, request)?;
         // An independently opened workspace can install a skill below any previously ordinary directory.
         // Seatbelt evaluates rename at the directory being moved, so guard directory identities directly.
         for root in &request.workspace_roots {
@@ -842,7 +853,7 @@ pub mod macos {
         paths
     }
 
-    fn seatbelt_string(path: &Path) -> String {
+    pub(super) fn seatbelt_string(path: &Path) -> String {
         let value = path.to_string_lossy();
         let mut escaped = String::with_capacity(value.len() + 2);
         escaped.push('"');
@@ -876,6 +887,10 @@ pub mod macos {
 mod content_store;
 #[cfg(target_os = "linux")]
 mod kernel_workspace;
+#[cfg(target_os = "macos")]
+mod macos_names;
+#[cfg(target_os = "linux")]
+mod mount_aliases;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 mod projection;
 

@@ -1054,6 +1054,11 @@ fn is_cache_artifact(path: &Path, cache_path: &Path) -> bool {
             })
 }
 
+fn private_alias(path: &Path) -> bool {
+    glyph_filesystem_metadata::aliases_name(path, ".skill-staging")
+        || glyph_filesystem_metadata::aliases_name(path, ".glyph-skill-run")
+}
+
 /// Share ignore-file, directory exclusion, and link semantics with the resident catalog.
 fn workspace_walk(root: &Path, policy: &IndexPolicy) -> WalkBuilder {
     let ignored: HashSet<_> = policy.ignored_directories.iter().cloned().collect();

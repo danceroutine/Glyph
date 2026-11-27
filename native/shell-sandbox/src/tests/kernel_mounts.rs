@@ -112,3 +112,26 @@ fn workspace_bindings_pin_the_file_and_enforce_the_selected_write_permission() {
     assert_eq!(fs::read(&writable_source).unwrap(), b"saved edit");
     unmount(&writable_target, UnmountFlags::empty()).unwrap();
 }
+
+#[test]
+fn restore_directory_mode_copies_permissions_from_the_opened_directory() {
+    let base = tempfile::tempdir().unwrap();
+    let root = base.path().join("project");
+    let folder = root.join("templates");
+    fs::create_dir_all(&folder).unwrap();
+    let request =
+        crate::tests::request(SandboxProfile::ReadOnly, &root, &base.path().join("state"));
+    let mut view = workspace(base.path(), &request);
+    fs::create_dir(view.target(&folder)).unwrap();
+    let handle = fs::File::open(&folder).unwrap();
+    handle
+        .set_permissions(fs::Permissions::from_mode(0o750))
+        .unwrap();
+    (&mut view)
+        .restore_directory_mode(&folder, &handle.into())
+        .unwrap();
+    assert_eq!(
+        fs::metadata(view.target(&folder)).unwrap().mode() & 0o777,
+        0o750
+    );
+}

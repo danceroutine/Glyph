@@ -18,6 +18,11 @@ describe(WorkspaceAccessPolicy, () => {
     expect(policy.exclusionsFor('/Project/.glyph-ſkill-run', false).privateRoot).toBe(true);
     expect(policy.isIgnoredDirectory('.glyph-ſkill-run', false)).toBe(true);
     expect(policy.isIgnoredDirectory('.glyph-ſkill-run', true)).toBe(false);
+    for (const spelling of ['.ſkill-ﬅaging', '.sKill-ﬆaging']) {
+      expect(policy.exclusionsFor('/Project/' + spelling, false).privateRoot).toBe(true);
+      expect(policy.isIgnoredDirectory(spelling, false)).toBe(true);
+      expect(policy.isIgnoredDirectory(spelling, true)).toBe(false);
+    }
     expect(policy.isIgnoredDirectory('DIST', false)).toBe(true);
     expect(new WorkspaceAccessPolicy({}, ['/']).exclusionsFor('/nested', true).privateRoot).toBe(true);
   });
