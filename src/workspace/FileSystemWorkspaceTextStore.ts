@@ -1,3 +1,4 @@
+import { workspaceCaseSensitivity } from './workspaceCaseSensitivity.ts';
 import { WorkspaceTextDecodingError } from './WorkspaceTextDecodingError.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -58,7 +59,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     const { caseSensitive, excludedPaths, accessPolicy, allowPrivateRoot } =
       fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
     this.root = resolve(root);
-    this.caseSensitive = caseSensitive ?? (process.platform !== 'win32' && process.platform !== 'darwin');
+    this.caseSensitive = caseSensitive ?? workspaceCaseSensitivity(this.root);
     const projected = accessPolicy.exclusionsFor(this.root, this.caseSensitive);
     this.privateRoot = projected.privateRoot && !allowPrivateRoot;
     this.options = {
@@ -267,13 +268,20 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  async create(input: string, text: string, byteOrderMark: boolean, mode = 0o644): Promise<WorkspaceTextSnapshot> {
+  async create(
+    input: string,
+    text: string,
+    byteOrderMark: boolean,
+    mode = 0o644,
+    options?: WorkspaceMutationOptions,
+  ): Promise<WorkspaceTextSnapshot> {
     assertSupportedText(text, input);
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const absolute = resolve(this.root, path);
     const created = await this.createParents(dirname(absolute));
     try {
+      await options?.beforePublish?.();
       const handle = await open(absolute, 'wx', mode);
       try {
         await handle.writeFile(toBytes(text, byteOrderMark));
@@ -322,7 +330,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           'Replacement cannot preserve the existing ownership and permissions.',
           { path },
         );
-      await options?.beforeReplace?.();
+      await options?.beforeReplace?.(temporary);
       await rename(temporary, absolute);
     } catch (error) {
       throw classifyPathError(error, path);
@@ -370,6 +378,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   async delete(input: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void> {
     const path = this.normalizePath(input);
     await this.assertRevision(path, expectedRevision, options);
+    await options?.beforePublish?.();
     try {
       await unlink(resolve(this.root, path));
     } catch (error) {

@@ -7,6 +7,8 @@ import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvid
 import { SkillContextContributor } from '#src/skills/SkillContextContributor.js';
 import { SkillToolRuntime } from '#src/skills/SkillToolRuntime.js';
 import { InstructionContextContributor } from '#src/context/turns/InstructionContextContributor.js';
+import { filesystemPolicyDirectory, workspaceCaseSensitivity } from '#src/workspace/workspaceCaseSensitivity.js';
+import { assertUserWorkingCopiesClean } from '#src/desktop/workspace/assertUserWorkingCopiesClean.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import { SqliteAgentReviewStore } from '#src/reviewing/SqliteAgentReviewStore.js';
@@ -84,6 +86,7 @@ import { AgentRuleInstructionProvider } from '#src/instructions/rules/AgentRuleI
 import { AgentInstructionSourceKind } from '#src/instructions/AgentInstructionSource.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import { RuleToolRuntime } from '#src/instructions/rules/RuleToolRuntime.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { UserAgentRuleManager } from '#src/instructions/rules/UserAgentRuleManager.js';
 import { listUserRuleFiles } from '#src/instructions/rules/listUserRuleFiles.js';
 
@@ -137,6 +140,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const native = join(artifactRoot, 'native', `${process.platform}-${process.arch}`);
     const suffix = process.platform === 'win32' ? '.exe' : '';
     const indexExecutable = join(native, `glyph-context-index${suffix}`);
+    const filesystemMetadata = new NativeFilesystemMetadata(indexExecutable);
     const sandboxExecutable = join(native, `glyph-shell-sandbox${suffix}`);
     assertShellRuntimePathIsolation(
       roots.map(workspaceRoot => workspaceRoot.path),
@@ -145,14 +149,21 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     );
     const policy = new WorkspaceAccessPolicy();
     const logger = new FileLogger(configuration.traceFile);
-    const parts = roots.map(workspaceRoot => {
+    const casing = await Promise.all(
+      roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
+    );
+    const parts = roots.map((workspaceRoot, i) => {
       const excludedPaths = [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(target => {
         const path = relative(workspaceRoot.path, target);
         return path && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
           ? [path.split(sep).join('/')]
           : [];
       });
-      const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, { accessPolicy: policy, excludedPaths });
+      const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, {
+        caseSensitive: casing[i]!,
+        accessPolicy: policy,
+        excludedPaths,
+      });
       const index: RustWorkspacePathIndex = new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
         root: workspaceRoot.path,
@@ -229,6 +240,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               operationId: randomUUID(),
               path: route,
               physicalUri: pathToFileURL(join(disk.root, request.path)).toString(),
+              caseSensitive: disk.caseSensitive,
             });
             if (!response.ok) throw new Error(response.error?.message ?? 'The editor catalog snapshot is unavailable.');
             if (response.snapshot && response.snapshot.path !== route)
@@ -246,7 +258,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       return { name: workspaceRoot.name, workspace, catalog, disk, index };
     });
     const routes = new WorkspaceSourceRoutes(
-      parts.map(part => ({ name: part.name, path: part.disk.root, caseSensitive: part.disk.caseSensitive })),
+      parts.map((part, index) => ({
+        name: part.name,
+        path: part.disk.root,
+        caseSensitive: part.disk.caseSensitive,
+        uri: input.roots[index]!.uri,
+      })),
     );
     const workspace =
       roots.length === 1
@@ -284,11 +301,26 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
       const userRuleRoot = resolveAvailableIdentity(this.userDirectory);
-      const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
+      const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
+        caseSensitive: await RustWorkspacePathIndex.filesystemCaseSensitive(
+          indexExecutable,
+          filesystemPolicyDirectory(userRuleRoot),
+        ).catch(() => workspaceCaseSensitivity(userRuleRoot)),
+      });
+      // Agent-facing sources cannot acquire the host's preference and credential authority.
+      const userInstructionPolicy = new WorkspaceAccessPolicy(
+        {},
+        [configuration.stateDirectory, configuration.traceFile, artifactRoot].map(resolveAvailableIdentity),
+      );
+      const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
+        accessPolicy: userInstructionPolicy,
+        caseSensitive: userRuleStore.caseSensitive,
+      });
       const userRuleIndex = (this.userRuleIndex ??= new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
         root: join(userRuleRoot, 'rules'),
         caseSensitive: userRuleStore.caseSensitive,
+        accessPolicy: userInstructionPolicy,
         // User-owned rules retain their existing behavior regardless of home-directory Git ignores.
         respectGitIgnore: false,
       }));
@@ -299,7 +331,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       instructionCatalog = new AgentInstructionCatalog(
         [
           new AgentRuleInstructionProvider(
-            userRuleStore,
+            userInstructionStore,
             {
               kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
               directory: '.',
@@ -309,7 +341,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             async maxFiles => {
               // The index root must obey the store's no-symlink rule too, not just its children.
               await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
-              await userRuleStore.canonicalPath('rules');
+              await userInstructionStore.canonicalPath('rules');
               return listUserRuleFiles(userRuleIndex, maxFiles);
             },
           ),
@@ -337,6 +369,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const userSkillIndex = (this.userSkillIndex ??= new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
         root: skillRoot,
+        accessPolicy: userInstructionPolicy,
         caseSensitive: userRuleStore.caseSensitive,
         respectGitIgnore: false,
       }));
@@ -345,14 +378,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         directory: 'skills',
         matchesLegacyId: (directory, previousId, budget) =>
           userSkillDirectory.matchesProjectReference(directory, previousId, budget),
-        workspace: userRuleStore,
+        workspace: userInstructionStore,
         captureFiles: (directory, signal) =>
-          listSkillPackageFiles(userRuleStore, directory, indexExecutable, false, signal),
-        binaryStore: userRuleStore,
+          listSkillPackageFiles(userInstructionStore, directory, indexExecutable, false, signal, userInstructionPolicy),
+        binaryStore: userInstructionStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
         listFiles: async signal => {
           await mkdir(skillRoot, { recursive: true });
-          await userRuleStore.canonicalPath('skills');
+          await userInstructionStore.canonicalPath('skills');
           const result = await userSkillIndex.glob('**/*', { limit: 10_000, ...(signal ? { signal } : {}) });
           return { ...result, files: result.files.map(path => `skills/${path}`) };
         },
@@ -400,7 +433,21 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         new InstructionContextContributor(instructionCatalog),
         new SkillContextContributor(skills),
       ]);
-      userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex);
+      userRules = new UserAgentRuleManager(
+        userRuleStore,
+        instructionCatalog,
+        userRuleIndex,
+        filesystemMetadata,
+        filename =>
+          assertUserWorkingCopiesClean(
+            this.editors,
+            input.identity,
+            'rule',
+            filename,
+            userRuleStore.caseSensitive,
+            join(userRuleRoot, 'rules', filename),
+          ),
+      );
     }
     const reviews = new ProposalReviewManager(
       workspace,
@@ -585,7 +632,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       agentReviews,
       interactions,
       shellSessions: shells,
-      ...(instructionCatalog ? { instructionCatalog } : {}),
+      ...(instructionCatalog
+        ? { instructionCatalog, referenceResources: (path: string) => routes.referenceResources(path) }
+        : {}),
       ...(skills ? { skills } : {}),
       refreshCatalogs: async signal => {
         await Promise.all([instructionCatalog?.refresh(signal), skills?.refresh(signal)]);

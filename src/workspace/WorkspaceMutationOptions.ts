@@ -6,7 +6,9 @@ export interface WorkspaceMutationOptions {
   readonly undoGroupId?: string;
   /** Save the edited working copy so commands see the applied change on disk. */
   readonly save?: boolean;
+  /** Check working-copy state immediately before creating or deleting a file. */
+  readonly beforePublish?: () => Promise<void>;
   /** Recheck host-owned metadata immediately before publishing a staged filesystem replacement. */
-  readonly beforeReplace?: () => Promise<void>;
+  readonly beforeReplace?: (stagedPath: string) => Promise<void>;
   readonly interruptedRename?: NonNullable<WorkspaceReadOptions['interruptedRename']>;
 }

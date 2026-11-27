@@ -6,7 +6,7 @@ import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.
 import type { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import type { QuestionForm } from '#src/interaction/questions/QuestionForm.js';
 import type { QuestionFormResult } from '#src/interaction/questions/QuestionFormResult.js';
-import { Deferred } from './Deferred.ts';
+import { Deferred } from '#src/shared/Deferred.js';
 import { PromptRecord } from '#src/terminal/ui/prompt/PromptRecord.presentational.js';
 import type { PromptRequest } from '#src/terminal/ui/prompt/PromptRequest.js';
 import type { UserPromptDraft } from '#src/terminal/ui/prompt/UserPromptDraft.js';

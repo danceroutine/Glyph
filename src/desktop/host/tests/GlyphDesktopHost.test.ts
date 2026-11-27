@@ -1,4 +1,7 @@
 import { describe, expect, beforeEach, it, onTestFinished, vi, type Mock } from 'vitest';
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 vi.mock('#src/desktop/protocol/typeguards/isGlyphRequestEnvelope.ts', () => ({
   isGlyphRequestEnvelope: vi.fn(),
 }));
@@ -80,6 +83,81 @@ describe(GlyphDesktopHost, () => {
     });
     await fixture.receive('owner', owner, 'restricted', command);
     expect(fixture.events('owner').at(-1)?.event).toMatchObject({ type: GlyphHostEventType.ERROR });
+  });
+
+  it('keeps user-file checks conservative when owner or peer folder aliases change', async () => {
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-user-root-')));
+    const fixture = new HostFixture();
+    onTestFinished(async () => {
+      await fixture.host.dispose();
+      await rm(directory, { recursive: true, force: true });
+    });
+    const project = join(directory, 'project');
+    const profile = join(directory, 'profile');
+    const replacement = join(directory, 'replacement');
+    const alias = join(directory, 'alias');
+    for (const path of [project, profile, replacement]) await mkdir(path);
+    await symlink(profile, alias);
+    const other = { ...peer, workspaceId: 'other' };
+    fixture.connect('owner', owner);
+    fixture.connect('peer', other);
+    const attach = (path: string) => ({
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE as const,
+      trusted: true,
+      roots: [{ name: 'folder', canonicalPath: path, uri: `file://${path}` }],
+    });
+    await fixture.receive('owner', owner, 'attach-owner', attach(project));
+    await fixture.receive('peer', other, 'attach-peer', attach(alias));
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([{ identity: other, connectionId: 'peer' }]);
+    await rm(alias);
+    await symlink(replacement, alias);
+    expect(() => fixture.host.trustedUserEditors(owner, profile)).toThrow('retargeted');
+    await rm(alias);
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('removed');
+    await symlink(profile, alias);
+    await rm(project, { recursive: true });
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('removed');
+    expect(() => fixture.host.trustedUserEditors(owner, join(directory, 'absent'))).toThrow('removed');
+    expect(() => fixture.host.trustedUserEditors(owner, directory)).toThrow('removed');
+    expect(fixture.host.trustedUserEditors(owner, project)).toEqual([{ identity: other, connectionId: 'peer' }]);
+  });
+
+  it('allows clean checks after an intended package removal deletes an attached subtree', async () => {
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-user-removal-')));
+    const fixture = new HostFixture();
+    onTestFinished(async () => {
+      await fixture.host.dispose();
+      await rm(directory, { recursive: true, force: true });
+    });
+    const packagePath = join(directory, 'package');
+    const references = join(packagePath, 'references');
+    await mkdir(references, { recursive: true });
+    fixture.connect('owner', owner);
+    await fixture.receive('owner', owner, 'attach', {
+      type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE,
+      trusted: true,
+      roots: [{ name: 'references', canonicalPath: references, uri: `file://${references}` }],
+    });
+    await rm(packagePath, { recursive: true });
+    expect(fixture.host.trustedUserEditors(owner, packagePath)).toEqual([]);
+  });
+  it('checks trusted user working-copy peers including disconnected or reconnecting windows', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE as const, roots, trusted: true };
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([]);
+    await fixture.receive('owner', owner, 'owner-attach', attach);
+    await fixture.receive('peer', peer, 'peer-attach', attach);
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([{ identity: peer, connectionId: 'peer' }]);
+    await fixture.host.disconnect('peer');
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('reconnecting');
+    fixture.connect('new', peer);
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('reconnecting');
+    const pending = fixture.receive('new', peer, 'peer-reattach', attach);
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('reconnecting');
+    await pending;
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([{ identity: peer, connectionId: 'new' }]);
     await fixture.host.dispose();
   });
   it.each([false, true])(

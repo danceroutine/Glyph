@@ -9,6 +9,10 @@ import type { GlyphTextRange } from '#glyph/protocol/connection/GlyphTextRange.j
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
 import { Progress } from '#vs/platform/progress/common/progress.js';
 import { BulkTextEdits } from '#vs/workbench/contrib/bulkEdit/browser/bulkTextEdits.js';
+import { env } from '#vs/base/common/process.js';
+import { extUri, extUriIgnorePathCase } from '#vs/base/common/resources.js';
+import { IWorkingCopyService } from '#vs/workbench/services/workingCopy/common/workingCopyService.js';
+import { IPathService } from '#vs/platform/path/common/pathService.js';
 import { URI } from '#vs/base/common/uri.js';
 import { getGlyphWorkspaceRootId } from '#glyph/protocol/connection/getGlyphWorkspaceRootId.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
@@ -75,6 +79,8 @@ export class GlyphEditorAdapter extends Disposable {
     @IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
     @IUserDataProfileService private readonly userDataProfileService: IUserDataProfileService,
     @IInstantiationService private readonly instantiationService: IInstantiationService,
+    @IWorkingCopyService private readonly workingCopyService: IWorkingCopyService,
+    @IPathService private readonly pathService: IPathService,
   ) {
     super();
     this.workspaceBinding = this.currentWorkspaceBinding();
@@ -115,6 +121,8 @@ export class GlyphEditorAdapter extends Disposable {
       if (!this.trustService.isWorkspaceTrusted())
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       switch (request.type) {
+        case GlyphEditorRequestType.CHECK_USER_WORKING_COPIES:
+          return { operationId, ok: true, workingCopiesClean: await this.userWorkingCopiesClean(request) };
         case GlyphEditorRequestType.EXISTS:
           return { operationId, ok: true, exists: await this.exists(request.path) };
         case GlyphEditorRequestType.READ_SNAPSHOT:
@@ -122,23 +130,25 @@ export class GlyphEditorAdapter extends Disposable {
         case GlyphEditorRequestType.READ_OPEN_SNAPSHOT: {
           const resource = this.resolve(request.path);
           const physical = request.physicalUri ? URI.parse(request.physicalUri, true) : resource;
-          const candidates = this.uriIdentityService.extUri.isEqual(resource, physical)
-            ? [resource]
-            : [resource, physical];
-          const dirty = candidates.filter(
-            candidate => this.textFileService.isDirty(candidate) && this.modelService.getModel(candidate),
-          );
+          const identity =
+            request.caseSensitive === undefined
+              ? this.uriIdentityService.extUri
+              : request.caseSensitive
+                ? extUri
+                : extUriIgnorePathCase;
+          const candidates = identity.isEqual(resource, physical) ? [resource] : [resource, physical];
+          const dirty = candidates.flatMap(candidate => {
+            if (!this.textFileService.isDirty(candidate)) return [];
+            const model = this.modelService.getModel(candidate);
+            return model && identity.isEqual(candidate, model.uri) ? [model] : [];
+          });
           if (
             dirty.length > 0 &&
             request.physicalUri &&
-            (await this.fileService.realpath(resource))?.toString() !== physical.toString()
+            !identity.isEqual(await this.fileService.realpath(resource), physical)
           )
             throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-          const snapshots = await Promise.all(
-            dirty.map(candidate =>
-              this.snapshot(request.path, this.modelService.getModel(candidate)!, request.maxBytes),
-            ),
-          );
+          const snapshots = await Promise.all(dirty.map(model => this.snapshot(request.path, model, request.maxBytes)));
           if (new Set(snapshots.map(snapshot => snapshot.contentRevision)).size > 1)
             throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
           return { operationId, ok: true, ...(snapshots[0] ? { snapshot: snapshots[0] } : {}) };
@@ -808,6 +818,44 @@ export class GlyphEditorAdapter extends Disposable {
       }
     }
     return GlyphDesktopErrorCode.INTERNAL;
+  }
+
+  /** Resolve only registered folder aliases and the configured user directory. Dirty models need no content read. */
+  private async userWorkingCopiesClean(
+    request: Extract<GlyphEditorRequest, { type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES }>,
+  ): Promise<boolean> {
+    const { kind, name, caseSensitive } = request;
+    if (!name || name === '.' || name === '..' || /[/\\\0]/u.test(name) || (kind === 'rule' && !/\.mdc$/iu.test(name)))
+      throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNAUTHORIZED);
+    const dirty = this.workingCopyService.dirtyWorkingCopies.flatMap(({ resource }) => {
+      if (resource.scheme === 'untitled' && this.textFileService.untitled.isUntitledWithAssociatedResource(resource))
+        return [resource.with({ scheme: 'file' })];
+      return resource.scheme === 'file' ? [resource] : [];
+    });
+    if (!dirty.length) return true;
+    const configured = env['GLYPH_USER_DIRECTORY'];
+    const profile = configured
+      ? URI.file(configured)
+      : URI.joinPath(this.pathService.userHome({ preferLocal: true }), '.glyph');
+    const identity = caseSensitive ? extUri : extUriIgnorePathCase;
+    const target = (root: URI) => URI.joinPath(root, kind === 'rule' ? 'rules' : 'skills', name);
+    const contains = (directory: URI, resource: URI) =>
+      kind === 'rule' ? identity.isEqual(resource, directory) : identity.isEqualOrParent(resource, directory);
+    if (dirty.some(resource => contains(target(profile), resource))) return false;
+    const canonical = await this.fileService.realpath(profile);
+    if (!canonical) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+    const physical = target(canonical);
+    if (dirty.some(resource => contains(physical, resource))) return false;
+    for (const folder of this.workspaceContextService.getWorkspace().folders) {
+      if (folder.uri.scheme !== 'file') continue;
+      const owned = dirty.filter(resource => identity.isEqualOrParent(resource, folder.uri));
+      if (!owned.length) continue;
+      const root = await this.fileService.realpath(folder.uri);
+      if (!root) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+      if (owned.some(resource => contains(physical, URI.joinPath(root, identity.relativePath(folder.uri, resource)!))))
+        return false;
+    }
+    return true;
   }
 
   private resolve(path: string): URI {

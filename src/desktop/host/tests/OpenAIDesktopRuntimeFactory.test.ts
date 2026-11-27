@@ -2,8 +2,9 @@ import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { skillPackageId } from '#src/skills/skillPackageId.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
+import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
-import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -95,6 +96,9 @@ vi.mock('#src/context/search/RustWorkspacePathIndex.js', async importOriginal =>
   return {
     ...actual,
     RustWorkspacePathIndex: class extends actual.RustWorkspacePathIndex {
+      static override async filesystemCaseSensitive(_binary: string, root: string) {
+        return new FileSystemWorkspaceTextStore(root).caseSensitive;
+      }
       constructor(...arguments_: ConstructorParameters<typeof actual.RustWorkspacePathIndex>) {
         super(...arguments_);
         captured.indexOptions.push(arguments_[0]);
@@ -210,6 +214,7 @@ vi.mock('#src/providers/openai/OpenAIProviderFactory.js', async importOriginal =
 
 let isolatedUserDirectory: string;
 beforeEach(async () => {
+  vi.spyOn(NativeFilesystemMetadata.prototype, 'inspect').mockResolvedValue(undefined);
   isolatedUserDirectory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-user-')));
   onTestFinished(async () => {
     await rm(isolatedUserDirectory, { recursive: true, force: true });
@@ -944,6 +949,68 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       );
     });
 
+    it.each([false, true])('excludes host state and traces from user references with aliased state %s', async alias => {
+      const state = join(isolatedUserDirectory, 'private-state');
+      const trace = join(isolatedUserDirectory, 'trace.log');
+      await mkdir(state);
+      await writeFile(join(state, 'secret.md'), 'PRIVATE STATE CONTENT');
+      await writeFile(trace, 'PRIVATE TRACE CONTENT');
+      const stateAlias = join(isolatedUserDirectory, 'state-alias');
+      if (alias) await symlink(state, stateAlias);
+      const fixture = await factoryFixture({
+        userDirectory: isolatedUserDirectory,
+        stateDirectory: alias ? stateAlias : state,
+        traceFile: trace,
+      });
+      const rules = join(isolatedUserDirectory, 'rules');
+      await mkdir(rules);
+      for (const [name, reference] of [
+        ['state', 'private-state/secret.md'],
+        ['trace', 'trace.log'],
+        ['public', 'notes.md'],
+      ])
+        await writeFile(join(rules, `${name}.mdc`), `---\nreferences: [${reference}]\nalwaysApply: true\n---\nRule`);
+      await writeFile(join(isolatedUserDirectory, 'notes.md'), 'PUBLIC REFERENCE');
+      useFilesystemIndex();
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'assertReplaceableMetadata').mockResolvedValue();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_owner, request) => {
+        if (request.type !== GlyphEditorRequestType.CHECK_USER_WORKING_COPIES)
+          throw new Error('Expected a user-rule working-copy check');
+        return { operationId: request.operationId, ok: true, workingCopiesClean: true };
+      });
+      vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({
+        root: rules,
+        fileCount: 3,
+        fromCache: false,
+        truncated: false,
+        durationMilliseconds: 0,
+      });
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const runtime = await fixture.create([await fixture.folder('project')]);
+      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      const snapshot = await runtime.snapshot();
+      expect(snapshot.instructionSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: '~/.glyph/rules/state.mdc', status: 'error' }),
+          expect.objectContaining({ path: '~/.glyph/rules/trace.mdc', status: 'error' }),
+          expect.objectContaining({
+            path: '~/.glyph/rules/public.mdc',
+            status: 'active',
+            content: expect.stringContaining('PUBLIC REFERENCE'),
+          }),
+        ]),
+      );
+      expect(JSON.stringify(snapshot.instructionSources)).not.toMatch(/PRIVATE (STATE|TRACE) CONTENT/u);
+      const source = snapshot.instructionSources!.find(source => source.path === '~/.glyph/rules/public.mdc')!;
+      await runtime.handle({
+        type: GlyphWorkbenchCommandType.SET_USER_RULE_ENABLED,
+        path: 'rules/public.mdc',
+        expectedRevision: source.managementRevision!,
+        enabled: false,
+      });
+      expect(await readFile(join(rules, 'public.mdc'), 'utf8')).toContain('enabled: false');
+    });
+
     it('keeps an unavailable user rule location separate and retries after repair', async () => {
       const fixture = await factoryFixture({ userDirectory: isolatedUserDirectory });
       const root = await fixture.folder('project');
@@ -1495,11 +1562,18 @@ function useFilesystemIndex(): void {
   });
 }
 
-async function factoryFixture(options: { readonly transport?: typeof fetch; readonly userDirectory?: string } = {}) {
+async function factoryFixture(
+  options: {
+    readonly transport?: typeof fetch;
+    readonly userDirectory?: string;
+    readonly stateDirectory?: string;
+    readonly traceFile?: string;
+  } = {},
+) {
   for (const values of Object.values(captured)) values.length = 0;
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-')));
-  vi.stubEnv('GLYPH_CONFIG_DIR', join(directory, 'state'));
-  vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
+  vi.stubEnv('GLYPH_CONFIG_DIR', options.stateDirectory ?? join(directory, 'state'));
+  vi.stubEnv('CHAT_TRACE_FILE', options.traceFile ?? join(directory, 'trace.log'));
   const initialize = vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
   const editors = new EditorRpcRouter();
   const userDirectory = options.userDirectory ?? join(directory, 'user');

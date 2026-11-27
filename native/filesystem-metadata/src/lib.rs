@@ -1,8 +1,18 @@
-//! Access-control metadata that mode-only filesystem replacements cannot reproduce.
+//! Descriptor-bound inspection for private storage and mode-only filesystem replacements.
 use std::io;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn assert_replaceable(fd: impl std::os::fd::AsFd) -> io::Result<()> {
+    inspect(fd, true)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub fn assert_access_metadata(fd: impl std::os::fd::AsFd) -> io::Result<()> {
+    inspect(fd, false)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn inspect(fd: impl std::os::fd::AsFd, replacement: bool) -> io::Result<()> {
     let fd = fd.as_fd();
     let stat = rustix::fs::fstat(fd)?;
     let special = stat.st_mode & 0o7000 != 0;
@@ -13,10 +23,10 @@ pub fn assert_replaceable(fd: impl std::os::fd::AsFd) -> io::Result<()> {
             || stat.st_flags & 0x001e_0086 != 0
             || darwin_acl(std::os::fd::AsRawFd::as_raw_fd(&fd))?
     };
-    if special || has_access_xattrs(fd)? {
+    if special || has_unsupported_xattrs(fd, replacement)? {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "The existing access-control metadata cannot be preserved by this replacement.",
+            "Unsupported extended data or access-control metadata on the opened filesystem object.",
         ))
     } else {
         Ok(())
@@ -27,7 +37,7 @@ pub fn assert_replaceable(fd: impl std::os::fd::AsFd) -> io::Result<()> {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn assert_child_replaceable(parent: &std::fs::File, name: &str) -> io::Result<()> {
     use rustix::fs::{openat, Mode, OFlags};
-    assert_replaceable(parent)?;
+    assert_access_metadata(parent)?;
     let child = openat(
         parent,
         name,
@@ -59,12 +69,18 @@ fn darwin_acl(fd: i32) -> io::Result<bool> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn has_access_xattrs(fd: std::os::fd::BorrowedFd) -> io::Result<bool> {
+fn has_unsupported_xattrs(fd: std::os::fd::BorrowedFd, replacement: bool) -> io::Result<bool> {
     let mut names = vec![0; 65_536];
     let length = xattr_length(rustix::fs::flistxattr(fd, &mut names[..]))?;
     Ok(names[..length].split(|byte| *byte == 0).any(|name| {
+        // Darwin independently assigns this kernel-managed provenance attribute to newly created inodes.
+        // All user-supplied attributes, including resource forks, must survive replacement or stop it.
+        let protected_data = replacement
+            && !name.is_empty()
+            && !(cfg!(target_os = "macos") && name == b"com.apple.provenance");
         // POSIX access/default ACLs, capability and security-module labels, and Darwin access controls.
-        name.starts_with(b"system.")
+        protected_data
+            || name.starts_with(b"system.")
             || name.starts_with(b"security.")
             || matches!(
                 name,
@@ -104,6 +120,21 @@ mod tests {
         )
         .unwrap();
         assert!(assert_replaceable(&labelled).is_err());
+        assert!(assert_access_metadata(&labelled).is_err());
+        let data = tempfile::NamedTempFile::new().unwrap();
+        #[cfg(target_os = "macos")]
+        let attribute = c"com.apple.ResourceFork";
+        #[cfg(target_os = "linux")]
+        let attribute = c"user.record";
+        rustix::fs::fsetxattr(
+            &data,
+            attribute,
+            b"secondary stream",
+            rustix::fs::XattrFlags::empty(),
+        )
+        .unwrap();
+        assert_access_metadata(&data).unwrap();
+        assert!(assert_replaceable(&data).is_err());
         let fixture = tempfile::NamedTempFile::new().unwrap();
         assert_replaceable(&fixture).unwrap();
         #[cfg(target_os = "macos")]

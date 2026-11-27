@@ -1,3 +1,4 @@
+import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -30,6 +31,28 @@ async function fixture() {
 }
 
 describe(AgentRuleInstructionProvider, () => {
+  it.each(['rules', 'agents'])('charges malformed file bytes to the %s discovery allowance', async family => {
+    const { root, workspace } = await fixture();
+    const files =
+      family === 'rules' ? ['.glyph/rules/bad.mdc', '.glyph/rules/good.mdc'] : ['AGENTS.md', 'packages/AGENTS.md'];
+    await writeFile(join(root, files[0]!), Buffer.alloc(8, 255));
+    await writeFile(join(root, files[1]!), 'ok');
+    const list = async () => ({ files, truncated: false });
+    const provider =
+      family === 'rules'
+        ? new AgentRuleInstructionProvider(
+            workspace,
+            { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', maxDiscoveryBytes: 8 },
+            list,
+          )
+        : new AgentsMdInstructionProvider(workspace, { maxDiscoveryBytes: 8 }, list);
+    const sources = await provider.discover();
+    expect(sources.map(source => source.message)).toEqual([
+      expect.stringContaining('UTF-8'),
+      expect.stringContaining('budget exhausted'),
+    ]);
+  });
+
   it.each([true, false])('matches the user rules directory using its filesystem case policy (%s)', async sensitive => {
     const workspace = {
       caseSensitive: sensitive,

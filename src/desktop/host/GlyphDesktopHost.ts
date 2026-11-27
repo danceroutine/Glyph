@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { sep } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphCommandResultHostEvent } from '#src/desktop/protocol/events/GlyphCommandResultHostEvent.js';
 import type { GlyphErrorHostEvent } from '#src/desktop/protocol/events/GlyphErrorHostEvent.js';
@@ -28,12 +30,14 @@ interface Connection {
   readonly journal: HostEventJournal;
   readonly requests: RequestDeduplicator<readonly GlyphHostEvent[]>;
   send: ((event: ReturnType<HostEventJournal['append']>) => void) | undefined;
+  authorityKnown: boolean;
   attached: boolean;
   ready: boolean;
   canReplay: boolean;
   trusted: boolean;
   readOnly: boolean;
   roots: readonly GlyphWorkspaceRoot[];
+  physicalRoots: Map<GlyphWorkspaceRoot, Set<string>>;
   attachmentQueue: Promise<void>;
   pendingAttachments: number;
 }
@@ -66,6 +70,43 @@ export class GlyphDesktopHost {
     this.generation = generation;
   }
 
+  /** A trusted editor may still own user-file buffers while reconnecting or sharing another runtime. */
+  trustedUserEditors(
+    owner: GlyphConnectionIdentity,
+    sourcePath?: string,
+  ): readonly { identity: GlyphConnectionIdentity; connectionId: string }[] {
+    const peers = [];
+    for (const peer of this.sessions.values()) {
+      if (!peer.trusted) continue;
+      for (const root of peer.roots) {
+        const current = physicalRoot(root);
+        const observed = peer.physicalRoots.get(root)!;
+        if (
+          [...observed].some(
+            previous =>
+              previous !== current &&
+              !(
+                current === undefined &&
+                sourcePath &&
+                !existsSync(sourcePath) &&
+                (previous === sourcePath || previous.startsWith(sourcePath + sep))
+              ),
+          )
+        )
+          throw new Error(
+            'A trusted editor folder was removed or retargeted. Save or close its files before changing user instructions.',
+          );
+        if (current !== undefined) observed.add(current);
+      }
+      if (connectionKey(peer.identity) === connectionKey(owner)) continue;
+      const connectionId = [...this.connections].find(([, current]) => current === peer)?.[0];
+      if (!connectionId || !peer.authorityKnown || peer.pendingAttachments > 0)
+        throw new Error('Another trusted Glyph window is reconnecting. Retry the change after it reconnects.');
+      peers.push({ identity: peer.identity, connectionId });
+    }
+    return peers;
+  }
+
   connect(connectionId: string, identity: GlyphConnectionIdentity, send: Exclude<Connection['send'], undefined>): void {
     if (this.disposed) throw new Error('The Glyph desktop host has stopped.');
     if (this.connections.has(connectionId)) throw new Error(`Connection ${connectionId} is already registered.`);
@@ -78,17 +119,20 @@ export class GlyphDesktopHost {
         send: undefined,
         journal: new HostEventJournal(this.generation),
         requests: new RequestDeduplicator(),
+        authorityKnown: false,
         attached: false,
         ready: false,
         canReplay: false,
         trusted: false,
         readOnly: true,
         roots: [],
+        physicalRoots: new Map(),
         attachmentQueue: Promise.resolve(),
         pendingAttachments: 0,
       };
       this.sessions.set(key, connection);
     }
+    connection.authorityKnown = false;
     connection.send = send;
     clearTimeout(this.disconnectTimers.get(connection));
     this.disconnectTimers.delete(connection);
@@ -244,6 +288,15 @@ export class GlyphDesktopHost {
     const stopping = this.runtimeStops.get(key);
     if (stopping) await stopping;
     this.assertCurrentConnection(connection);
+    connection.authorityKnown = true;
+    connection.trusted = command.trusted;
+    connection.roots = command.roots;
+    connection.physicalRoots = new Map(
+      command.roots.map(root => {
+        const physical = physicalRoot(root);
+        return [root, new Set(physical === undefined ? [] : [physical])];
+      }),
+    );
     const ownership = this.ownership.acquire(connection.identity, command.roots);
     let record = this.runtimes.get(key);
     if (!record) {
@@ -483,6 +536,14 @@ export class GlyphDesktopHost {
     const connection = this.connections.get(connectionId);
     if (!connection) throw new Error(`Unknown desktop connection: ${connectionId}`);
     return connection;
+  }
+}
+
+function physicalRoot(root: GlyphWorkspaceRoot): string | undefined {
+  try {
+    return realpathSync(root.canonicalPath);
+  } catch {
+    return undefined;
   }
 }
 

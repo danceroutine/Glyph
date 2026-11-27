@@ -4,11 +4,26 @@ import { defaultInstructionPaths, type InstructionPaths } from '#src/instruction
 interface GlobMatcher {
   test(path: string, budget?: RuleGlobBudget): boolean;
 }
-const compiledSources = new WeakMap<AgentInstructionSource, Map<boolean, readonly GlobMatcher[]>>();
 
 /** Bound the aggregate cost of evaluating all file-pattern rules for one disclosure. */
 export class RuleGlobBudget {
   private remaining = 4_000_000;
+
+  private readonly patterns = new Map<string, { matcher: GlobMatcher; results: Map<string, boolean> }>();
+
+  matches(pattern: string, path: string, sensitive: boolean): boolean {
+    const key = JSON.stringify([sensitive, pattern]);
+    let evaluation = this.patterns.get(key);
+    if (!evaluation) {
+      evaluation = { matcher: globExpression(pattern, sensitive), results: new Map() };
+      this.patterns.set(key, evaluation);
+    }
+    const cached = evaluation.results.get(path);
+    if (cached !== undefined) return cached;
+    const matched = evaluation.matcher.test(path, this);
+    evaluation.results.set(path, matched);
+    return matched;
+  }
 
   spend(work: number): void {
     this.remaining -= work;
@@ -27,15 +42,11 @@ export function matchesAgentRulePath(
   budget = new RuleGlobBudget(),
 ): boolean {
   if (!paths.contains(source.scope, path)) return false;
-  budget.spend(path.length + 1);
-  const relative = paths.relativeToScope(source.scope, path);
-  const sensitive = paths.caseSensitive(path);
-  const cache = compiledSources.get(source) ?? new Map<boolean, readonly GlobMatcher[]>();
-  const matchers =
-    cache.get(sensitive) ?? [...new Set(source.globs ?? [])].map(pattern => globExpression(pattern, sensitive));
-  cache.set(sensitive, matchers);
-  compiledSources.set(source, cache);
-  return matchers.some(matcher => matcher.test(relative, budget));
+  const routes = source.scope === '.' ? paths.equivalents(path) : [path];
+  return routes.some(route => {
+    const relative = paths.relativeToScope(source.scope, route);
+    return source.globs?.some(pattern => budget.matches(pattern, relative, paths.caseSensitive(route)));
+  });
 }
 
 /** Each token visits each path position at most once, including consecutive wildcards. */

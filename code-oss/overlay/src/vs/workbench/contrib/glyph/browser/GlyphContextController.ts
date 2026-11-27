@@ -5,7 +5,7 @@ import { RunOnceScheduler } from '#vs/base/common/async.js';
 import { DisposableStore, DisposableMap, MutableDisposable, type IDisposable } from '#vs/base/common/lifecycle.js';
 import { GlyphIdeContext } from './GlyphIdeContext.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
-import { basename, dirname, ExtUri } from '#vs/base/common/resources.js';
+import { basename, dirname, ExtUri, extUri, extUriIgnorePathCase } from '#vs/base/common/resources.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import { formatFolderContextOutline } from '#glyph/workbench/formatFolderContextOutline.js';
 import { GlyphContextAttachmentKind } from '#glyph/protocol/connection/GlyphContextAttachment.js';
@@ -110,6 +110,10 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       /\/AGENTS\.md$/iu.test(uri.path) ||
       this.instructionSources().some(instruction => {
         if (instruction.uri === uri.toString()) return true;
+        if (instruction.referenceResources)
+          return instruction.referenceResources.some(reference =>
+            (reference.caseSensitive ? extUri : extUriIgnorePathCase).isEqual(uri, URI.parse(reference.uri)),
+          );
         if (!instruction.references?.length) return false;
         if (instruction.kind === 'glyph_user_rule') return false;
         try {
@@ -165,6 +169,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     if (this.trust.isWorkspaceTrusted()) {
       for (const root of this.instructionRoots()) roots.set(root, basename(URI.parse(root)) !== 'skill-state.json');
       for (const source of this.instructionSources()) {
+        for (const reference of source.referenceResources ?? []) roots.set(reference.uri, false);
         if (source.kind !== 'glyph_user_rule' || !source.uri || !source.references?.length) continue;
         // The authorized user store owns paths relative to its .glyph directory.
         const uri = source.uri;
@@ -624,7 +629,9 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       const projectAnchor = current.toString() === root.toString() && source.kind !== 'glyph_user_rule';
       if (
         (stat.isSymbolicLink && !(projectAnchor && source.uri)) ||
-        (projectAnchor && source.uri && !(await this.matchesPhysicalSource(resource, source.uri))) ||
+        (projectAnchor &&
+          source.uri &&
+          !(await this.matchesPhysicalSource(resource, source.uri, source.caseSensitive))) ||
         (current === resource ? !stat.isFile : !stat.isDirectory)
       )
         throw unavailableInstruction();
@@ -636,8 +643,10 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     await this.editors.openEditor({ resource, options: { pinned: true } });
   }
 
-  private async matchesPhysicalSource(resource: URI, expected: string) {
-    return this.resourceIdentity.isEqual(await this.files.realpath(resource), URI.parse(expected));
+  private async matchesPhysicalSource(resource: URI, expected: string, caseSensitive?: boolean) {
+    const identity =
+      caseSensitive === undefined ? this.resourceIdentity : caseSensitive ? extUri : extUriIgnorePathCase;
+    return identity.isEqual(await this.files.realpath(resource), URI.parse(expected));
   }
 
   private projectSourceRoot(segments: string[]): URI {

@@ -1,3 +1,4 @@
+import type { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
 import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 
@@ -8,10 +9,12 @@ export async function listSkillPackageFiles(
   binaryPath: string,
   respectGitIgnore: boolean,
   signal?: AbortSignal,
+  accessPolicy?: WorkspaceAccessPolicy,
 ) {
   const root = await workspace.resolvePath(directory);
   const index = new RustWorkspacePathIndex({
     root,
+    ...(accessPolicy ? { accessPolicy } : {}),
     binaryPath,
     caseSensitive: workspace.caseSensitive,
     maxFiles: 257,

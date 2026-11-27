@@ -31,6 +31,7 @@ interface AgentRuntimeConfiguration {
 
 /** Provider-independent turn lifecycle, tool loop, cancellation, and state transaction. */
 export class AgentRuntime<TTurn> implements ChatProvider {
+  readonly reportsTurnAdmission = true;
   private readonly historyRetention = new AgentHistoryRetention();
   private state: ChatProviderState;
   private busy = false;
@@ -75,6 +76,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     inputRequest: ChatRequestInput,
     options: {
       signal: AbortSignal;
+      onTurnAdmitted?: () => void;
       onText: (delta: string) => void;
       /** Drain accepted instructions at a safe boundary; close acceptance when a final step has none. */
       takeSteering?: (finishing: boolean) => readonly ChatRequest[];
@@ -175,6 +177,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       );
       admittedContext = turnContext !== undefined;
       boundaryInstructions = prepareModelContext(turnContext?.initialEnvelope());
+      options.onTurnAdmitted?.();
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
       boundaryInstructions = undefined;
       let totalUsage: Usage | null = null;
