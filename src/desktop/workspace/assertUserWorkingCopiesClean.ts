@@ -1,3 +1,4 @@
+import type { FilesystemNamePolicy } from '#src/workspace/FilesystemNamePolicy.js';
 import { resolveAvailableIdentity } from '#src/shell/ShellRuntimePathPolicy.js';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -11,7 +12,7 @@ export async function assertUserWorkingCopiesClean(
   owner: GlyphConnectionIdentity,
   kind: 'rule' | 'skill',
   name: string,
-  caseSensitive: boolean,
+  namePolicy: FilesystemNamePolicy,
   sourcePath?: string,
   configuredProfile?: string,
 ): Promise<void> {
@@ -31,7 +32,8 @@ export async function assertUserWorkingCopiesClean(
         operationId,
         kind,
         name,
-        caseSensitive,
+        caseSensitive: namePolicy.caseSensitive,
+        namePolicy,
       });
       if (!result.ok || result.operationId !== operationId || result.workingCopiesClean !== true)
         throw new Error(

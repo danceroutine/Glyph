@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
@@ -1041,7 +1042,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
         .mockResolvedValue({ files: [], truncated: false });
       vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => ({
         ...editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance'),
-        snapshot: { ...editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance').snapshot!, dirty: true },
+        snapshot: {
+          ...editorResponse(request, 'AGENTS.md', 'Unsaved editor guidance').snapshot!,
+          uri: pathToFileURL(join(root, 'AGENTS.md')).href,
+          dirty: true,
+        },
       }));
       const runtime = await fixture.create([root]);
       const snapshot = await runtime.snapshot();

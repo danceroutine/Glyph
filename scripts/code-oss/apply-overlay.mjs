@@ -37,6 +37,7 @@ for (const name of ['AgentMode.ts', 'ChatTurnOptions.ts']) {
 for (const [directory, file] of [
   ['reviewing', 'AgentReview.ts'],
   ['instructions', 'resolveInstructionId.ts'],
+  ['workspace', 'FilesystemNamePolicy.ts'],
 ]) {
   const target = join(sourceRoot, 'src', 'vs', 'platform', 'glyph', directory);
   await mkdir(target, { recursive: true });

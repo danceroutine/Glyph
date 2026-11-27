@@ -1,3 +1,6 @@
+import { stat } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { WorkspaceReadFailure } from '#src/workspace/WorkspaceReadFailure.js';
 import { randomUUID } from 'node:crypto';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
@@ -46,6 +49,13 @@ export function createCatalogWorkspace(
       if (!snapshot) return { ...after, bytesRead: completedBytes };
       if (snapshot.path !== path || !snapshot.dirty)
         throw new Error('The editor returned an invalid catalog snapshot.');
+      // Code OSS can preserve an alias spelling in realpath. Compare actual files before using live guidance.
+      const [modelFile, sourceFile] = await Promise.all([
+        stat(fileURLToPath(snapshot.uri), { bigint: true }),
+        stat(join(disk.root, path), { bigint: true }),
+      ]);
+      if (modelFile.dev !== sourceFile.dev || modelFile.ino !== sourceFile.ino)
+        throw new Error('The dirty editor model belongs to a different instruction file.');
       return {
         ...after,
         bytesRead: completedBytes,
