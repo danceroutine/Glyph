@@ -1,3 +1,4 @@
+import { workspaceReadFailureBytes } from '#src/workspace/WorkspaceReadFailure.js';
 import type { InstructionFileListing } from './listInstructionFilesAcrossRoots.ts';
 import { defaultInstructionPaths, type InstructionPaths } from './InstructionPaths.ts';
 import { posix } from 'node:path';
@@ -88,6 +89,7 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
           revision: snapshot.revision,
         });
       } catch (error) {
+        remainingBytes -= workspaceReadFailureBytes(error);
         signal?.throwIfAborted();
         sources.push({
           ...base(),

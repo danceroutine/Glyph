@@ -267,13 +267,20 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  async create(input: string, text: string, byteOrderMark: boolean, mode = 0o644): Promise<WorkspaceTextSnapshot> {
+  async create(
+    input: string,
+    text: string,
+    byteOrderMark: boolean,
+    mode = 0o644,
+    options?: WorkspaceMutationOptions,
+  ): Promise<WorkspaceTextSnapshot> {
     assertSupportedText(text, input);
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const absolute = resolve(this.root, path);
     const created = await this.createParents(dirname(absolute));
     try {
+      await options?.beforePublish?.();
       const handle = await open(absolute, 'wx', mode);
       try {
         await handle.writeFile(toBytes(text, byteOrderMark));
@@ -375,6 +382,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   async delete(input: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void> {
     const path = this.normalizePath(input);
     await this.assertRevision(path, expectedRevision, options);
+    await options?.beforePublish?.();
     try {
       await unlink(resolve(this.root, path));
     } catch (error) {
@@ -589,7 +597,7 @@ function assertInsideRoot(root: string, candidate: string, path: string): void {
 /** Reject unsupported bytes before creating directories or opening a write handle. */
 function assertSupportedText(text: string, path: string): void {
   if (text.includes('\0'))
-    throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
+    throw new WorkspaceTextDecodingError(path, 'Binary/NUL files are not supported.', bytes.length);
   // In Unicode mode valid pairs are one code point and do not match. UTF-8
   // encoding must never silently replace a reviewed lone surrogate with U+FFFD.
   if (/[\uD800-\uDFFF]/u.test(text)) {

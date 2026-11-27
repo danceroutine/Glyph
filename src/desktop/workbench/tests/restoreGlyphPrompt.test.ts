@@ -211,3 +211,11 @@ it('restores only exact, ordered and bounded local draft selections', () => {
   for (const corrupt of [undefined, Array.from({ length: 257 }, () => valid)])
     expect(restoreGlyphDraftReferences(text, corrupt, () => 'badge').parts).toEqual([{ type: 'text', text }]);
 });
+
+it('preserves accepted rule names across draft restoration', () => {
+  const label = 'rule'.repeat(350);
+  const text = '/' + label;
+  const ref = { kind: 'rule', sourceId: 'rule', revision: 'rev', label, from: 0, to: text.length };
+  const restored = restoreGlyphDraftReferences(text, [ref], () => 'badge');
+  expect(restored.parts).toMatchObject([{ type: 'attachment', attachment: { ruleId: 'rule', path: label } }]);
+});

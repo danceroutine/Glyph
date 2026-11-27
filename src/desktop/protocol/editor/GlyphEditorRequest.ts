@@ -4,6 +4,7 @@ import type { GlyphWorkingCopySearchOptions } from './GlyphWorkingCopySearchOpti
 
 /** Operations the utility host may ask the live Code OSS editor to perform. */
 export enum GlyphEditorRequestType {
+  CHECK_USER_WORKING_COPIES = 'check_user_working_copies',
   EXISTS = 'exists',
   READ_SNAPSHOT = 'read_snapshot',
   READ_OPEN_SNAPSHOT = 'read_open_snapshot',
@@ -32,6 +33,13 @@ export type GlyphEditorRequest =
       readonly peerWorkspaceIntersection?: true;
       readonly directoryUri: string;
       readonly physicalPackageUri?: string;
+    }
+  | {
+      readonly type: GlyphEditorRequestType.CHECK_USER_WORKING_COPIES;
+      readonly operationId: string;
+      readonly kind: 'rule' | 'skill';
+      readonly name: string;
+      readonly caseSensitive: boolean;
     }
   | { readonly type: GlyphEditorRequestType.EXISTS; readonly operationId: string; readonly path: string }
   | {

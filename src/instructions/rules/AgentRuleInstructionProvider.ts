@@ -1,3 +1,4 @@
+import { workspaceReadFailureBytes } from '#src/workspace/WorkspaceReadFailure.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
@@ -218,16 +219,23 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
       ? await this.workspace.readOptional(path, { maxBytes }).catch(async (error: unknown) => {
           // A bounded read checks store policy and file identity, including link restrictions,
           // before reporting a size limit. Track only an authorized name when its contents fail.
+          budget.readBytes -= workspaceReadFailureBytes(error);
           const canWatch =
             error instanceof WorkspaceReadLimitError ||
             (await this.workspace.readOptional(path, { maxBytes: 0 }).then(
               () => true,
-              (cause: unknown) => cause instanceof WorkspaceReadLimitError,
+              (cause: unknown) => {
+                budget.readBytes -= workspaceReadFailureBytes(cause);
+                return cause instanceof WorkspaceReadLimitError;
+              },
             ));
           if (canWatch) dependencies.add(path);
           throw error;
         })
-      : await this.workspace.read(path, { maxBytes });
+      : await this.workspace.read(path, { maxBytes }).catch((error: unknown) => {
+          budget.readBytes -= workspaceReadFailureBytes(error);
+          throw error;
+        });
     dependencies?.add(path);
     if (!snapshot) throw new Error(`Missing rule reference: ${path}`);
     budget.readBytes -= snapshot.byteLength ?? Buffer.byteLength(snapshot.text);

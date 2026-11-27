@@ -81,3 +81,15 @@ it.each([undefined, 'Editor unavailable'])('fails closed on editor errors (%s)',
   });
   await expect(workspace.read('AGENTS.md')).rejects.toThrow(message ?? 'catalog snapshot is unavailable');
 });
+
+it('charges disk bytes already consumed if an editor check or follow-up decoding fails', async () => {
+  const { workspace, request, root } = await fixture();
+  request.mockRejectedValueOnce('lost');
+  await expect(workspace.read('AGENTS.md')).rejects.toMatchObject({ message: 'lost', bytesRead: 4 });
+  request.mockImplementationOnce(async () => {
+    await writeFile(join(root, 'AGENTS.md'), Buffer.alloc(7, 255));
+    return { operationId: 'read', ok: true };
+  });
+  await expect(workspace.read('AGENTS.md')).rejects.toMatchObject({ bytesRead: 11 });
+  await expect(workspace.read('AGENTS.md', { maxBytes: 3 })).rejects.toMatchObject({ bytesRead: 0 });
+});

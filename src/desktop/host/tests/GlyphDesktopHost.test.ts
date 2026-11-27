@@ -298,6 +298,25 @@ describe(GlyphDesktopHost, () => {
     ).toBe(false);
     await fixture.host.dispose();
   });
+  it('checks trusted user working-copy peers including disconnected or reconnecting windows', async () => {
+    const fixture = new HostFixture();
+    fixture.connect('owner', owner);
+    fixture.connect('peer', peer);
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE as const, roots, trusted: true };
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([]);
+    await fixture.receive('owner', owner, 'owner-attach', attach);
+    await fixture.receive('peer', peer, 'peer-attach', attach);
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([{ identity: peer, connectionId: 'peer' }]);
+    await fixture.host.disconnect('peer');
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('reconnecting');
+    fixture.connect('new', peer);
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('reconnecting');
+    const pending = fixture.receive('new', peer, 'peer-reattach', attach);
+    expect(() => fixture.host.trustedUserEditors(owner)).toThrow('reconnecting');
+    await pending;
+    expect(fixture.host.trustedUserEditors(owner)).toEqual([{ identity: peer, connectionId: 'new' }]);
+    await fixture.host.dispose();
+  });
   it.each([false, true])(
     'requires peers to match the owning runtime trust (%s) before sharing snapshots or events',
     async trusted => {

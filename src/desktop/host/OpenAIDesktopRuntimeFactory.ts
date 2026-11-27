@@ -1,6 +1,7 @@
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { projectIntersection, WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
+import { assertUserWorkingCopiesClean } from '#src/desktop/workspace/assertUserWorkingCopiesClean.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { SkillProjectMutationPolicy } from '#src/skills/SkillProjectMutationPolicy.js';
 import { existsSync } from 'node:fs';
@@ -511,7 +512,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         new InstructionContextContributor(instructionCatalog),
         new SkillContextContributor(skills),
       ]);
-      userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex);
+      userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex, filename =>
+        assertUserWorkingCopiesClean(this.editors, input.identity, 'rule', filename, userRuleStore.caseSensitive),
+      );
     }
     const reviews = new ProposalReviewManager(
       workspace,
