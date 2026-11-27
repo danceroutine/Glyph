@@ -99,8 +99,19 @@ it('admits a stored Unicode lookalike to text reads and broad search only when t
   const index = new RustWorkspacePathIndex({ root, binaryPath, caseSensitive: store.caseSensitive });
   try {
     const expected = same ? [] : [relative];
-    await expect(store.list(10)).resolves.toMatchObject({ files: expected });
-    await expect(index.glob('**/*', { limit: 10 })).resolves.toMatchObject({ files: expected });
+    await expect(store.list(10, spelling + '/*')).resolves.toMatchObject({ files: expected });
+    await expect(
+      index.searchContents('synthetic marker', {
+        outputMode: 'files_with_matches',
+        patternKind: 'literal',
+        caseSensitive: true,
+        linesBefore: 0,
+        linesAfter: 0,
+        multiline: false,
+        offset: 0,
+        limit: 10,
+      }),
+    ).resolves.toMatchObject({ files: expected });
     if (same) await expect(store.read(relative)).rejects.toThrow('excluded');
     else await expect(store.read(relative)).resolves.toMatchObject({ text: 'synthetic marker' });
   } finally {
