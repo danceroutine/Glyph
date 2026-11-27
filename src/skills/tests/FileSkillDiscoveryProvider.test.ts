@@ -64,8 +64,8 @@ describe(FileSkillDiscoveryProvider, () => {
     const fixture = await skillFixture();
     const composed = 'café',
       decomposed = composed.normalize('NFD');
-    const path = composed + '/.glyph/skills/example/SKILL.md';
-    await fixture.write(path, manifest());
+    const manifestPath = composed + '/.glyph/skills/example/SKILL.md';
+    await fixture.write(manifestPath, manifest());
     for (const normalizesUnicode of [false, true]) {
       const routes = new WorkspaceSourceRoutes([{ name: 'project', path: fixture.root, normalizesUnicode }]);
       const paths = new InstructionPaths(fixture.store.caseSensitive, routes);
@@ -74,7 +74,7 @@ describe(FileSkillDiscoveryProvider, () => {
         directory: '.glyph/skills',
         scopePathKey: paths.key.bind(paths),
         workspace: fixture.store,
-        listFiles: async () => ({ files: [path], truncated: false }),
+        listFiles: async () => ({ files: [manifestPath], truncated: false }),
         uriForPath: path => path,
         refreshIndex: fixture.refreshIndex,
       });

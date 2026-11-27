@@ -344,7 +344,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
       if (name.startsWith(normalized)) return 1;
       return name.includes(normalized) ? 2 : 3;
     };
-    return [...rules, ...skills].sort((left, right) => rank(left) - rank(right)).slice(0, 50);
+    return [...rules, ...skills].toSorted((left, right) => rank(left) - rank(right)).slice(0, 50);
   }
   async selectFiles(): Promise<readonly GlyphContextAttachment[]> {
     this.assertTrusted();
