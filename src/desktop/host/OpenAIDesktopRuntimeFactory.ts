@@ -343,7 +343,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const userSkills = new FileSkillDiscoveryProvider({
         origin: { id: 'user:glyph', label: 'User skill', scope: 'user', compatibility: 'glyph' },
         directory: 'skills',
-        matchesLegacyId: (directory, id, budget) => userSkillDirectory.matchesProjectReference(directory, id, budget),
+        matchesLegacyId: (directory, previousId, budget) =>
+          userSkillDirectory.matchesProjectReference(directory, previousId, budget),
         workspace: userRuleStore,
         captureFiles: (directory, signal) =>
           listSkillPackageFiles(userRuleStore, directory, indexExecutable, false, signal),
