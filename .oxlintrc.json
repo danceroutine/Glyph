@@ -1,6 +1,10 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "jsPlugins": ["eslint-plugin-perfectionist", "./scripts/lint/storybook-order.mjs"],
+  "jsPlugins": [
+    "eslint-plugin-perfectionist",
+    "./scripts/lint/storybook-order.mjs",
+    "./scripts/lint/workspace-access.mjs"
+  ],
   "env": {
     "node": true
   },
@@ -145,6 +149,10 @@
   },
   "overrides": [
     {
+      "files": ["src/**/*", "code-oss/ui/**/*", "code-oss/overlay/src/vs/workbench/contrib/glyph/**/*"],
+      "rules": { "glyph-access/mediated-workspace-access": "error" }
+    },
+    {
       "files": ["**/*.stories.ts", "**/*.stories.tsx", "**/*.stories.js", "**/*.stories.jsx"],
       "rules": {
         "glyph-storybook/declaration-order": "error"
@@ -153,6 +161,7 @@
     {
       "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs", "**/test/**", "**/tests/**"],
       "rules": {
+        "glyph-access/mediated-workspace-access": "off",
         "typescript/unbound-method": "off",
         "unicorn/prefer-event-target": "off",
         "typescript/only-throw-error": "off",

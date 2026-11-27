@@ -1,4 +1,8 @@
-/** Filename comparisons supported by the probed filesystem. */
+/**
+ * Describes how one directory compares entry names. Use the policy of each
+ * containing directory when following a path across volumes. Matching two
+ * spellings identifies a possible alias for the physical authority to check.
+ */
 export interface FilesystemNamePolicy {
   readonly caseSensitive: boolean;
   readonly normalizesUnicode: boolean;
