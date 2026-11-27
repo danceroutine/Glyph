@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, readFile, symlink, stat } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -105,16 +106,17 @@ it.describe('Dirty physical skill package names', () => {
             : join(glyph.workspace, '.glyph', 'skills');
         const target = join(store, 'ss', 'SKILL.md');
         const alias = join(store, 'ß', 'SKILL.md');
-        const manifest = '---\nname: ss\ndescription: Reviewed filename fixture\n---\nOriginal skill body';
+        const savedManifest = '---\nname: ss\ndescription: Reviewed filename fixture\n---\nOriginal skill body';
         await mkdir(dirname(target), { recursive: true });
-        await writeFile(target, manifest);
+        await writeFile(target, savedManifest);
         // On a sensitive filesystem the other spelling is a separate package.
         await mkdir(dirname(alias), { recursive: true });
-        await writeFile(alias, '---\nname: different\ndescription: Independent spelling\n---\nIndependent skill body', {
-          flag: 'wx',
-        }).catch(error => {
-          if (error.code !== 'EEXIST') throw error;
-        });
+        if (!existsSync(alias))
+          await writeFile(
+            alias,
+            '---\nname: different\ndescription: Independent spelling\n---\nIndependent skill body',
+            { flag: 'wx' },
+          );
         const [stored, opened] = await Promise.all([stat(target, { bigint: true }), stat(alias, { bigint: true })]);
         const sameFile = stored.dev === opened.dev && stored.ino === opened.ino;
         const original = await readFile(alias, 'utf8');
@@ -146,7 +148,7 @@ it.describe('Dirty physical skill package names', () => {
         await preview.getByRole('button', { name: 'Apply remove', exact: true }).click();
         if (sameFile) {
           await expect(skills.getByRole('alert')).toContainText(/save|discard/iu);
-          expect(await readFile(target, 'utf8')).toBe(manifest);
+          expect(await readFile(target, 'utf8')).toBe(savedManifest);
         } else {
           await expect(row).toHaveCount(0);
           await expect(readFile(target)).rejects.toMatchObject({ code: 'ENOENT' });
