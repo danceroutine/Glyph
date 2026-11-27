@@ -129,7 +129,7 @@ it('rejects changed directory permissions after preview without replacing the in
   const directory = join(root, skill.directory, 'references');
   const update = await manager.prepare(skill.origin.id, aSkillDraft('Updated'), skill.id);
   await chmod(directory, 0o711);
-  await expect(manager.apply(update.id)).rejects.toThrow('access metadata changed');
+  await expect(manager.apply(update.id)).rejects.toThrow('changed after preview');
   expect((await stat(directory)).mode & 0o777).toBe(0o711);
   expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
 });

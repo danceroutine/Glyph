@@ -236,7 +236,7 @@ it('propagates directory-mode inspection failures before moving the original', a
     skill.id,
   );
   vi.mocked(fs.lstat).mockImplementation((path, options) => {
-    if (String(path) === join(root, skill.directory, 'new-branch'))
+    if (String(path) === join(root, skill.directory))
       return Promise.reject(Object.assign(new Error('Mode unavailable'), { code: 'EACCES' }));
     return actual.lstat(path, options);
   });

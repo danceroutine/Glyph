@@ -1,3 +1,4 @@
+import { packageRevision } from '#src/skills/skillPackageRevision.js';
 import { chmod, readFile, writeFile, mkdir, rename, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -197,6 +198,7 @@ it('recovers only authenticated committed publications and preserves changed ass
   const id = randomUUID(),
     stage = join(root, '.skill-staging', id);
   const record = {
+    treeVersion: 2 as const,
     id,
     root: await store.resolvePath('skills'),
     location: location.id,
@@ -237,6 +239,7 @@ it('preserves uncertain originals and distinguishes independent identical packag
   const id = randomUUID(),
     stage = join(root, '.skill-staging', id);
   const record = {
+    treeVersion: 2 as const,
     id,
     root: await store.resolvePath('skills'),
     location: location.id,
@@ -391,4 +394,26 @@ it('manages nested project markers with their physical spelling and keeps user i
   await expect(sensitive.prepareRemoval(skill.id)).rejects.toThrow('outside its managed location');
   await projectManager.apply(review.id);
   await expect(stat(join(root, directory))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('recovers a published package with the file-only revision recorded by an earlier journal', async () => {
+  const { root, location, store, state, manager, install } = await aSkillLifecycle();
+  const skill = await install();
+  await mkdir(join(root, skill.directory, 'templates'));
+  const id = randomUUID();
+  const legacy = packageRevision(aSkillDraft().packageFiles());
+  await new SkillTransactionJournal(root).write({
+    id,
+    root: await store.resolvePath('skills'),
+    location: location.id,
+    directory: skill.directory,
+    skillId: skill.id,
+    expected: null,
+    replacement: legacy,
+    source: 'Prior release',
+    published: true,
+    retired: false,
+  });
+  await manager.recover();
+  expect(state.installations.get(skill.id)).toEqual({ source: 'Prior release', revision: legacy });
 });

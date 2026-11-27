@@ -69,7 +69,7 @@ export function GlyphApprovalCard({
               <code>{escapeDisplayControls(skillChange.destination.path, true)}</code>
             </p>
           )}
-          <GlyphSkillFileComparison files={skillChange.files} />
+          <GlyphSkillFileComparison {...skillChange} />
         </div>
       ) : (
         <pre class={styles.command}>{escapeDisplayControls(request.command ?? request.detail)}</pre>

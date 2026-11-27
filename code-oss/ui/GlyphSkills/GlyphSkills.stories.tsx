@@ -86,6 +86,7 @@ export const ReviewUpdate: Story = {
         name: 'review',
         source: 'https://example.test/skills@pinned-commit:review',
         revision: 'a45f094d1e',
+        directories: [{ path: 'templates/attachments', status: 'added', afterMode: 0o750 }],
         files: [
           {
             path: 'SKILL.md',

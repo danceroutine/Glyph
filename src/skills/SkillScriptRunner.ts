@@ -79,11 +79,16 @@ export class SkillScriptRunner {
     const directory = await mkdtemp(join(stagingRoot, 'glyph-skill-run-'));
     await chmod(directory, 0o700);
     try {
-      for (const [file, content] of files) {
+      const stagePath = (entry: string) => {
         signal.throwIfAborted();
-        if (file.split('/').some(part => !part || part === '.' || part === '..') || /[\\\0:]/u.test(file))
+        if (entry.split('/').some(part => !part || part === '.' || part === '..') || /[\\\0:]/u.test(entry))
           throw new Error('Pinned package contains an invalid resource path.');
-        const destination = join(directory, file);
+        return join(directory, entry);
+      };
+      for (const folder of skill.packageDirectories().keys())
+        await mkdir(stagePath(folder), { recursive: true, mode: 0o700 });
+      for (const [file, content] of files) {
+        const destination = stagePath(file);
         await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
         await writeFile(destination, content.bytes, { flag: 'wx', mode: content.mode & 0o111 ? 0o500 : 0o400 });
       }

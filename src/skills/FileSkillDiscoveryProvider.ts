@@ -20,9 +20,12 @@ export interface SkillDiscoveryLocation {
   readonly workspace: WorkspaceTextStore;
   readonly binaryStore?: Pick<FileSystemWorkspaceTextStore, 'readBytes'> &
     Partial<Pick<FileSystemWorkspaceTextStore, 'resolvePath'>>;
-  readonly listFiles: (
-    signal?: AbortSignal,
-  ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+  readonly listFiles: (signal?: AbortSignal) => Promise<{
+    readonly files: readonly string[];
+    readonly truncated: boolean;
+    readonly directories?: ReadonlyMap<string, number>;
+  }>;
+  readonly includeDirectory?: (directory: string) => boolean;
   readonly packageId?: (directory: string) => string;
   readonly matchesLegacyId?: (directory: string, id: string, budget: { remaining: number }) => boolean;
   readonly uriForPath: (path: string) => string;
@@ -30,7 +33,11 @@ export interface SkillDiscoveryLocation {
   readonly captureFiles?: (
     directory: string,
     signal?: AbortSignal,
-  ) => Promise<{ readonly files: readonly string[]; readonly truncated: boolean }>;
+  ) => Promise<{
+    readonly files: readonly string[];
+    readonly truncated: boolean;
+    readonly directories?: ReadonlyMap<string, number>;
+  }>;
   readonly refreshIndex: () => Promise<void>;
 }
 
@@ -146,7 +153,9 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
         };
       }
     };
-    const ordered = [...directories.values()].toSorted((left, right) => left.directory.localeCompare(right.directory));
+    const ordered = [...directories.values()]
+      .filter(entry => this.location.includeDirectory?.(entry.directory) !== false)
+      .toSorted((left, right) => left.directory.localeCompare(right.directory));
     const descriptors: SkillDescriptor[] = [];
     for (let offset = 0; offset < ordered.length;) {
       const width = Math.min(8, Math.max(1, Math.floor(remainingBytes / maxManifestBytes)));
@@ -164,7 +173,10 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
       const listed = await (this.location.captureFiles?.(descriptor.directory, signal) ??
         this.location.listFiles(signal));
       if (listed.truncated) throw new Error('Skill package inventory is incomplete.');
-      return listed.files.filter(path => path.startsWith(descriptor.directory + '/')).toSorted();
+      return {
+        paths: listed.files.filter(path => path.startsWith(descriptor.directory + '/')).toSorted(),
+        directories: listed.directories,
+      };
     };
     const directory = await this.location.binaryStore?.resolvePath?.(descriptor.directory);
     // Replacing the package directory changes its filesystem identity even when a manifest is identical.
@@ -174,13 +186,14 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
       return [stat.dev, stat.ino, stat.birthtimeNs, stat.ctimeNs].join('/');
     };
     const initialGeneration = await generation();
-    const paths = await inventory();
+    const { paths, directories } = await inventory();
     const snapshot = await captureSkillPackage(
       descriptor,
       this.location.workspace,
       paths,
       signal,
       this.location.binaryStore,
+      directories,
     );
     if (reconcile) await reconcile();
     // Re-read every authorized file and both inventory boundaries before admitting this revision.
@@ -194,8 +207,8 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
     const finalPaths = await inventory();
     if (
       initialGeneration !== (await generation()) ||
-      packageRevision(verified) !== snapshot.revision ||
-      JSON.stringify(paths) !== JSON.stringify(finalPaths)
+      packageRevision(verified, finalPaths.directories) !== snapshot.revision ||
+      JSON.stringify(paths) !== JSON.stringify(finalPaths.paths)
     )
       throw new Error('The skill changed during capture. Refresh and activate it again.');
     return snapshot;

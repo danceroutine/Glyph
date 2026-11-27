@@ -18,9 +18,20 @@ const styles = {
   after: css({ background: 'var(--vscode-diffEditor-insertedTextBackground)' }),
 };
 /** Shared file comparison for Settings previews and one-shot agent package approvals. */
-export function GlyphSkillFileComparison({ files }: { readonly files: GlyphSkillPreview['files'] }) {
+export function GlyphSkillFileComparison({ files, directories }: Pick<GlyphSkillPreview, 'files' | 'directories'>) {
   return (
     <div>
+      {directories?.map(directory => (
+        <div class={styles.file} key={directory.path}>
+          {escapeDisplayControls(directory.path, true)}/ <small>({directory.status})</small>
+          {directory.beforeMode !== undefined && (
+            <p>Before · directory · mode {directory.beforeMode.toString(8).padStart(4, '0')}</p>
+          )}
+          {directory.afterMode !== undefined && (
+            <p>After · directory · mode {directory.afterMode.toString(8).padStart(4, '0')}</p>
+          )}
+        </div>
+      ))}
       {files.map(file => (
         <details class={styles.file} key={file.path} open={file.path === 'SKILL.md'}>
           <summary>

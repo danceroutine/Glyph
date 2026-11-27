@@ -1,5 +1,9 @@
+import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
+import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
+import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
+import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -91,7 +95,6 @@ describe(SkillPackageSourceReader, () => {
 it('reconciles a selected package after resources change and bounds discovery to 257 files', async () => {
   const { root, directory, reader } = await fixture();
   const { FileSystemWorkspaceTextStore } = await import('#src/workspace/FileSystemWorkspaceTextStore.js');
-  const { listSkillPackageFiles } = await import('#src/skills/listSkillPackageFiles.js');
   const store = new FileSystemWorkspaceTextStore(root);
   const binary = resolve('target/release/glyph-context-index');
   const signal = new AbortController().signal;
@@ -153,4 +156,54 @@ it('captures executable permissions from local and Git source packages', async (
     url: 'https://skills.invalid/source.git',
   });
   expect(captured.packageFiles().get('helper')?.mode).toBe(0o755);
+});
+
+it('retains empty template branches through local import, exact native publication, activation and an unchanged update', async () => {
+  const { directory, reader } = await fixture();
+  await mkdir(join(directory, 'templates/skeleton/empty'), { recursive: true });
+  await chmod(join(directory, 'templates/skeleton/empty'), 0o750);
+  await chmod(join(directory, 'templates'), 0o751);
+  await writeFile(join(directory, 'templates/readme'), 'Instructions');
+  const { manager, catalog, location, store } = await aSkillLifecycle(root =>
+    NativeWorkspaceMutations.open(resolve('target/release/glyph-workspace-mutations'), root),
+  );
+  const draft = await reader.read({ kind: 'local', path: directory });
+  expect(draft.packageDirectories().get('templates/skeleton/empty')).toBe(0o750);
+  expect(draft.packageDirectories().get('templates')).toBe(0o751);
+  const preview = await manager.prepare(location.id, draft);
+  expect(preview.directories).toContainEqual({ path: 'templates/skeleton/empty', status: 'added', afterMode: 0o750 });
+  await rm(directory, { recursive: true });
+  await manager.apply(preview.id);
+  const skill = catalog.skills[0]!;
+  const installed = await store.resolvePath(skill.directory);
+  const reimport = await reader.read({ kind: 'local', path: installed });
+  const update = await manager.prepare(location.id, reimport, skill.id);
+  expect(update.directories?.every(entry => entry.status === 'unchanged')).toBe(true);
+  expect(update.revision).toBe(preview.revision);
+  await manager.apply(update.id);
+  expect((await lstat(join(installed, 'templates/skeleton/empty'))).mode & 0o777).toBe(0o750);
+  expect((await lstat(join(installed, 'templates'))).mode & 0o777).toBe(0o751);
+  const scoped = new FileSkillDiscoveryProvider({
+    origin: skill.origin,
+    directory: location.directory,
+    workspace: store,
+    binaryStore: store,
+    listFiles: location.listFiles,
+    uriForPath: path => path,
+    refreshIndex: location.refreshIndex,
+    captureFiles: (packagePath, signal) =>
+      listSkillPackageFiles(store, packagePath, resolve('target/release/glyph-context-index'), false, signal),
+  });
+  const pinned = await scoped.capture(skill);
+  expect(pinned.revision).toBe(update.revision);
+  expect(pinned.packageDirectories()).toEqual(reimport.packageDirectories());
+  const removal = await manager.prepareRemoval(skill.id);
+  expect(removal.directories).toContainEqual({
+    path: 'templates/skeleton/empty',
+    status: 'removed',
+    beforeMode: 0o750,
+  });
+  await mkdir(join(installed, 'templates/skeleton/empty/new'));
+  await expect(manager.apply(removal.id)).rejects.toThrow('changed after preview');
+  expect((await lstat(join(installed, 'templates/skeleton/empty/new'))).isDirectory()).toBe(true);
 });

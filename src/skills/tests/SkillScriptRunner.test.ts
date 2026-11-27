@@ -31,12 +31,13 @@ it('runs secondary-root packages in their owning root using private, immutable r
   const f = await fixture();
   const files = new Map(f.skill.packageFiles());
   files.set('helper', { ...files.get('helper')!, mode: 0o755 });
-  const skill = new SkillPackage(f.skill.descriptor, f.skill.body, files);
+  const skill = new SkillPackage(f.skill.descriptor, f.skill.body, files, new Map([['templates/empty', 0o750]]));
   const staged: string[] = [];
   const execute = vi.fn<ShellSessionManager['executeProgram']>(async (_command, options) => {
     expect(options).toMatchObject({ workingDirectory: 'B', transient: true, background: false });
     const directory = options.readOnlyPaths![0]!;
     staged.push(directory);
+    expect((await stat(join(directory, 'templates/empty'))).isDirectory()).toBe(true);
     expect(f.roots.every(root => !directory.startsWith(root.directory + '/'))).toBe(true);
     expect((await stat(directory)).mode & 0o777).toBe(0o700);
     expect((await stat(join(directory, 'helper'))).mode & 0o777).toBe(0o500);

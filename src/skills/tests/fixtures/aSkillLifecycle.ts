@@ -1,3 +1,4 @@
+import { inventoryPackage, readDirectoryModes } from '#src/skills/skillPackageInventory.js';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,11 +39,16 @@ export async function aSkillLifecycle(
   await state.initialize();
   const listFiles = () => store.list(10000, 'skills/**/*');
   const refreshIndex = vi.fn(async () => {});
+  const listPackageDirectories = async (directory: string) => {
+    const { directories } = await inventoryPackage(join(root, directory));
+    return readDirectoryModes(directories, path => store.resolvePath(directory + '/' + path));
+  };
   const provider = new FileSkillDiscoveryProvider({
     origin: { id: 'user:glyph', label: 'User', scope: 'user', compatibility: 'glyph' },
     directory: 'skills',
     workspace: store,
     binaryStore: store,
+    captureFiles: async directory => ({ ...(await listFiles()), directories: await listPackageDirectories(directory) }),
     listFiles,
     refreshIndex,
     uriForPath: path => `file://${root}/${path}`,
@@ -55,6 +61,7 @@ export async function aSkillLifecycle(
     store,
     workspace: store,
     mutations: await openMutations(root),
+    listPackageDirectories,
     directory: 'skills',
     listFiles,
     refreshIndex,

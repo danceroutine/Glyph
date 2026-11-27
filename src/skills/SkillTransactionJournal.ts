@@ -10,6 +10,7 @@ const entrySchema = z
     location: z.string(),
     directory: z.string(),
     skillId: z.string(),
+    treeVersion: z.literal(2).optional(),
     expected: z.string().nullable(),
     replacement: z.string().nullable(),
     expectedMetadata: z.hash('sha256').optional(),

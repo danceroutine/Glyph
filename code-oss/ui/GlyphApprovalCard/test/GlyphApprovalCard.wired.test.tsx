@@ -30,6 +30,10 @@ describe(WiredGlyphApprovalCard, () => {
             name: 'example',
             source: 'Agent proposal',
             revision: 'revision',
+            directories: [
+              { path: 'empty', status: 'added', afterMode: 0o750 },
+              { path: 'old', status: 'removed', beforeMode: 0o700 },
+            ],
             files: [
               { path: 'SKILL.md', status: 'added', after: 'Reviewed instructions' },
               { path: 'removed', status: 'removed', before: 'Old contents' },
@@ -52,6 +56,8 @@ describe(WiredGlyphApprovalCard, () => {
       'Reviewed instructions',
     );
     expect(screen.getByText('/project/.glyph/skills/review')).toBeDefined();
+    expect(screen.getByText('After · directory · mode 0750')).toBeDefined();
+    expect(screen.getByText('Before · directory · mode 0700')).toBeDefined();
     expect(screen.getByText('reviewed-binary-sha')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Always Run' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: label }));

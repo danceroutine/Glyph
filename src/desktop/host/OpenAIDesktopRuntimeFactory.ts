@@ -1,3 +1,4 @@
+import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { projectIntersection, WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
@@ -37,7 +38,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import { mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join, relative, isAbsolute, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
@@ -296,11 +297,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         return { ...listed, files: routes.uniqueFiles(listed.files) };
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
-      const userRuleRoot = resolveAvailableIdentity(this.userDirectory);
+      const userRuleRoot = canonicalUserDirectory;
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
       const mutationRoots = new Map(
         await Promise.all(
-          [...new Set([userRuleStore.root, ...parts.map(part => part.disk.root)])].map(
+          [...new Set(parts.map(part => part.disk.root))].map(
             async physicalRoot =>
               [physicalRoot, await NativeWorkspaceMutations.open(workspaceMutationsExecutable, physicalRoot)] as const,
           ),
@@ -368,8 +369,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         ],
         paths,
       );
-      const skillRoot = join(userRuleRoot, 'skills');
-      await mkdir(skillRoot, { recursive: true });
+      const userSkillDirectory = new UserSkillDirectory(userRuleRoot, userRuleStore.caseSensitive);
+      const skillRoot = userSkillDirectory.path;
       const userSkillIndex = (this.userSkillIndex ??= new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
         root: skillRoot,
@@ -380,12 +381,15 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const userSkills = new FileSkillDiscoveryProvider({
         origin: { id: 'user:glyph', label: 'User skill', scope: 'user', compatibility: 'glyph' },
         directory: 'skills',
+        matchesLegacyId: (directory, previousId, budget) =>
+          userSkillDirectory.matchesProjectReference(directory, previousId, budget),
         captureFiles: (directory, signal) =>
           listSkillPackageFiles(userInstructionStore, directory, indexExecutable, false, signal),
         workspace: userInstructionStore,
         binaryStore: userInstructionStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
         listFiles: async signal => {
+          await mkdir(skillRoot, { recursive: true });
           await userInstructionStore.canonicalPath('skills');
           const result = await userSkillIndex.glob('**/*', { limit: 10_000, ...(signal ? { signal } : {}) });
           return { ...result, files: result.files.map(path => `skills/${path}`) };
@@ -395,7 +399,21 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         },
       });
       const skillState = (this.skillState ??= new SkillStateStore(userRuleStore));
-      const ensureSkillsReady = () => skillState.initialize();
+      let userMutations = mutationRoots.get(userRuleRoot);
+      let openingUserMutations: Promise<NativeWorkspaceMutations> | undefined;
+      const ensureSkillsReady = async () => {
+        if (!userMutations) {
+          await mkdir(userRuleRoot, { recursive: true });
+          userMutations = await (openingUserMutations ??= NativeWorkspaceMutations.open(
+            workspaceMutationsExecutable,
+            userRuleRoot,
+          ).catch(error => {
+            openingUserMutations = undefined;
+            throw error;
+          }));
+        }
+        await skillState.initialize();
+      };
       const skillIdentities = new Map<string, ProjectSkillIdentity>();
       skills = new SkillCatalog(
         [
@@ -405,6 +423,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               const identity = new ProjectSkillIdentity(part.disk.root, location);
               skillIdentities.set(identity.originId, identity);
               return new FileSkillDiscoveryProvider({
+                includeDirectory: directory => !userSkillDirectory.ownsStore(dirname(join(part.disk.root, directory))),
                 packageId: directory => identity.forDirectory(directory),
                 matchesLegacyId: (directory, previousId, budget) =>
                   identity.matchesLegacyId(directory, previousId, budget),
@@ -440,6 +459,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           skillState.migratePackageIds(
             new Map(
               descriptors.flatMap(skill => {
+                if (skill.origin.id === userSkills.id && skill.directory)
+                  return [[skill.id, userSkillDirectory.previousPackageIds(skill.directory)] as const];
                 const identity = skillIdentities.get(skill.origin.id);
                 return identity && skill.directory ? [[skill.id, identity.legacyIds(skill.directory)] as const] : [];
               }),
@@ -452,7 +473,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             id: 'user:glyph',
             label: 'User skills',
             scope: 'user',
-            mutations: mutationRoots.get(userRuleStore.root)!,
+            get mutations() {
+              return userMutations!;
+            },
             assertClean: path =>
               assertUserWorkingCopiesClean(
                 this.editors,
@@ -469,6 +492,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               const result = await userSkillIndex.glob('**/*', { limit: 10000 });
               return { ...result, files: result.files.map(path => `skills/${path}`) };
             },
+            listPackageDirectories: async directory =>
+              (await listSkillPackageFiles(userRuleStore, directory, indexExecutable, false)).directories,
             refreshIndex: async () => {
               await userSkillIndex.refresh();
             },
@@ -480,6 +505,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               packageId: (directory: string) => identity.forDirectory(directory),
               label: `${part.name} project skills`,
               scope: 'project' as const,
+              updateOnly: userSkillDirectory.ownsStore(join(part.disk.root, '.glyph/skills')),
               ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
               mutations: mutationRoots.get(part.disk.root)!,
               assertClean: (path: string) => {
@@ -506,6 +532,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               workspace: part.workspace,
               directory: '.glyph/skills',
               listFiles: () => part.index.glob('**/.glyph/skills/**/*', { limit: 10000 }),
+              listPackageDirectories: async (directory: string) =>
+                (await listSkillPackageFiles(part.disk, directory, indexExecutable, true)).directories,
               refreshIndex: async () => {
                 await part.index.refresh();
               },

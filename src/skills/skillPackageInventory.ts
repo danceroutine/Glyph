@@ -1,12 +1,13 @@
-import { opendir } from 'node:fs/promises';
+import { lstat, opendir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { optionalStat } from './SkillPackageStorage.ts';
 /** Bounded physical inventory detects omitted sensitive files and unsupported nodes before a directory swap. */
-export async function inventoryFiles(root: string, signal?: AbortSignal): Promise<string[]> {
-  const result: string[] = [];
+export async function inventoryPackage(root: string, signal?: AbortSignal) {
+  const files: string[] = [];
+  const directories: string[] = [];
   const rootStat = await optionalStat(root);
-  if (!rootStat) return result;
+  if (!rootStat) return { files, directories };
   if (!rootStat.isDirectory()) throw new Error('Skill package must be a real directory.');
   let nodes = 0;
   const visit = async (directory: string, prefix: string, depth: number): Promise<void> => {
@@ -16,15 +17,32 @@ export async function inventoryFiles(root: string, signal?: AbortSignal): Promis
     for await (const entry of entries) {
       if (++nodes > 8450) throw new Error('Skill package exceeds its directory budget.');
       const path = prefix ? prefix + '/' + entry.name : entry.name;
-      if (entry.isDirectory()) await visit(join(directory, entry.name), path, depth + 1);
-      else if (entry.isFile()) {
-        result.push(path);
-        if (result.length > 256) throw new Error('Skill package exceeds 256 files.');
+      if (entry.isDirectory()) {
+        directories.push(path);
+        await visit(join(directory, entry.name), path, depth + 1);
+      } else if (entry.isFile()) {
+        files.push(path);
+        if (files.length > 256) throw new Error('Skill package exceeds 256 files.');
       } else throw new Error('Skill packages cannot contain symlinks or special files.');
     }
   };
   await visit(root, '', 0);
-  return result;
+  return { files, directories };
+}
+
+export async function inventoryFiles(root: string, signal?: AbortSignal): Promise<string[]> {
+  return (await inventoryPackage(root, signal)).files;
+}
+
+/** Read access modes only after authorizing package-relative directory names. */
+export async function readDirectoryModes(directories: readonly string[], resolve: (path: string) => Promise<string>) {
+  const modes = new Map<string, number>();
+  for (const path of directories) {
+    const stat = await lstat(await resolve(path));
+    if (!stat.isDirectory()) throw new Error('The skill directory changed. Review the package again.');
+    modes.set(path, stat.mode & 0o777);
+  }
+  return modes;
 }
 
 export async function readPackageFiles(root: string, paths: readonly string[], signal?: AbortSignal) {

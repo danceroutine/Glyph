@@ -10,17 +10,20 @@ import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
 const native = vi.hoisted(() => ({
   refresh: vi.fn(async () => ({ truncated: false })),
   glob: vi.fn<() => Promise<{ files: string[]; truncated: boolean }>>(async () => ({ files: [], truncated: true })),
+  listDirectories: vi.fn<() => Promise<string[]>>(async () => []),
   dispose: vi.fn(async () => {}),
 }));
 beforeEach(() => {
   native.refresh.mockReset().mockResolvedValue({ truncated: false });
   native.glob.mockReset().mockResolvedValue({ files: [], truncated: true });
+  native.listDirectories.mockReset().mockResolvedValue([]);
   native.dispose.mockClear();
 });
 vi.mock('#src/context/search/RustWorkspacePathIndex.js', () => ({
   RustWorkspacePathIndex: class {
     refresh = native.refresh;
     glob = native.glob;
+    listDirectories = native.listDirectories;
     dispose = native.dispose;
   },
 }));
@@ -31,12 +34,17 @@ describe('Skill package inventory boundaries', () => {
     await mkdir(root);
     onTestFinished(() => rm(temporary, { recursive: true, force: true }));
     await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nInstructions');
-    native.glob.mockResolvedValueOnce({ files: ['SKILL.md'], truncated: false });
+    await mkdir(join(root, 'assets'));
+    await mkdir(join(root, 'templates'));
+    await writeFile(join(root, 'assets/image'), 'image');
+    native.listDirectories.mockResolvedValueOnce(['assets', 'templates']);
+    native.glob.mockResolvedValueOnce({ files: ['SKILL.md', 'assets/image'], truncated: false });
     const draft = await new SkillPackageSourceReader('native').read(
       { kind: 'local', path: root },
       new AbortController().signal,
     );
     expect(draft.files().has('SKILL.md')).toBe(true);
+    expect([...draft.packageDirectories().keys()]).toEqual(['assets', 'templates']);
     expect(native.refresh.mock.invocationCallOrder[0]).toBeLessThan(native.glob.mock.invocationCallOrder[0]!);
     expect(native.dispose).toHaveBeenCalledOnce();
     const linked = `${root}-link`;
@@ -71,10 +79,15 @@ describe('Skill package inventory boundaries', () => {
     native.glob.mockResolvedValueOnce({ files: ['SKILL.md'], truncated: false });
     expect(await listSkillPackageFiles(workspace, 'example', 'native', false, new AbortController().signal)).toEqual({
       files: ['example/SKILL.md'],
+      directories: new Map(),
       truncated: false,
     });
     native.refresh.mockResolvedValueOnce({ truncated: true });
-    expect(await listSkillPackageFiles(workspace, 'example', 'native', true)).toEqual({ files: [], truncated: true });
+    expect(await listSkillPackageFiles(workspace, 'example', 'native', true)).toEqual({
+      files: [],
+      directories: new Map(),
+      truncated: true,
+    });
     native.glob.mockResolvedValueOnce({ files: ['new-resource'], truncated: false });
     expect((await listSkillPackageFiles(workspace, 'example', 'native', true)).files).toEqual(['example/new-resource']);
     native.refresh.mockRejectedValueOnce(new Error('Index unavailable'));
@@ -116,4 +129,17 @@ it('rejects local packages when the physical inventory contains omitted files or
       'unindexed',
     );
   }
+});
+
+it('refuses an excluded empty local directory and a native candidate that turned into a file', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'glyph-empty-source-'));
+  const root = join(parent, 'example');
+  await mkdir(join(root, 'hidden'), { recursive: true });
+  onTestFinished(() => rm(parent, { recursive: true, force: true }));
+  await writeFile(join(root, 'SKILL.md'), 'manifest');
+  native.glob.mockResolvedValue({ files: ['SKILL.md'], truncated: false });
+  const reader = new SkillPackageSourceReader('native');
+  await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('unindexed');
+  native.listDirectories.mockResolvedValueOnce(['SKILL.md']);
+  await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('directory changed');
 });

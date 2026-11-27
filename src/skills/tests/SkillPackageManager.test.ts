@@ -209,3 +209,63 @@ it('enforces the managed directory boundary even for a misconfigured provider', 
     await expect(manager.prepareRemoval(skill.id)).rejects.toThrow();
   }
 });
+
+it('reviews directory modes and file-to-directory transitions, and rejects unauthorized tree entries', async () => {
+  const { root, manager, location, catalog, state } = await aSkillLifecycle();
+  const input = aSkillDraft().toJSON();
+  const draft = (directories: readonly { path: string; mode?: number }[], files = input.files) =>
+    new SkillPackageDraft({ ...input, files, directories });
+  const install = await manager.prepare(
+    location.id,
+    draft([{ path: 'templates/empty', mode: 0o750 }, { path: 'vacant' }]),
+  );
+  await manager.apply(install.id);
+  const skill = catalog.skills[0]!;
+  const next = draft(
+    [
+      { path: 'templates', mode: 0o750 },
+      { path: 'assets', mode: 0o700 },
+    ],
+    [
+      ...input.files.filter(file => !file.path.startsWith('assets/')),
+      { path: 'templates/empty/file', content: 'new', encoding: 'utf8' },
+    ],
+  );
+  const project = new SkillPackageManager([{ ...location, scope: 'project' }], catalog, state);
+  const update = await project.prepare(location.id, next, skill.id);
+  expect(update.directories).toEqual(
+    expect.arrayContaining([
+      { path: 'assets', status: 'unchanged', beforeMode: 0o700, afterMode: 0o700 },
+      { path: 'templates/empty', status: 'unchanged', beforeMode: 0o750, afterMode: 0o750 },
+      { path: 'vacant', status: 'removed', beforeMode: 0o700 },
+    ]),
+  );
+  expect(project.workspacePaths(update.id)).toContain('skills/example/vacant');
+  await project.apply(update.id);
+  const changed = await manager.prepare(location.id, draft([{ path: 'templates/empty', mode: 0o700 }]), skill.id);
+  expect(changed.directories).toContainEqual({
+    path: 'templates/empty',
+    status: 'modified',
+    beforeMode: 0o750,
+    afterMode: 0o700,
+  });
+  await manager.apply(changed.id);
+  await mkdir(join(root, 'skills/example/excluded'));
+  const filtered = vi.spyOn(location, 'listPackageDirectories').mockResolvedValue(new Map());
+  await expect(manager.prepareRemoval(skill.id)).rejects.toThrow('unauthorized directories');
+  filtered.mockRestore();
+  const { listPackageDirectories: _, ...unindexed } = location;
+  await expect(new SkillPackageManager([unindexed], catalog, state).prepareRemoval(skill.id)).rejects.toThrow(
+    'unauthorized directories',
+  );
+});
+it('validates bounded directory paths, collision aliases and defensive draft roundtrips', () => {
+  const input = aSkillDraft().toJSON();
+  const draft = (paths: string[]) => new SkillPackageDraft({ ...input, directories: paths.map(path => ({ path })) });
+  for (const paths of [['../outside'], ['x', 'X'], ['nested', 'nested'], ['SKILL.md/sub'], ['a/'.repeat(32) + 'a']])
+    expect(() => draft(paths)).toThrow();
+  expect(() => draft(Array.from({ length: 4200 }, (_, i) => i + '/nested/empty'))).toThrow('directory budget');
+  const branch = draft(['new/nested']);
+  expect(new SkillPackageDraft(branch.toJSON()).revision).toBe(branch.revision);
+  expect(branch.revision).not.toBe(aSkillDraft().revision);
+});

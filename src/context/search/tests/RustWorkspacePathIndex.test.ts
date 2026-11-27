@@ -564,6 +564,19 @@ describe(RustWorkspacePathIndex, () => {
     expect(worker.requests.at(-1)?.params).toBe('rule.mdc');
   });
 
+  it('returns authorized directory names from its initialized native package index', async () => {
+    const worker = new FakeWorker(request =>
+      request.method === 'initialize'
+        ? indexState(0)
+        : request.method === 'listDirectories'
+          ? ['empty']
+          : { shutdown: true },
+    );
+    const index = new RustWorkspacePathIndex({ binaryPath: '/bin/index', root: '/package' }, () => worker);
+    onTestFinished(() => index.dispose());
+    expect(await index.listDirectories()).toEqual(['empty']);
+    expect(worker.requests.at(-1)?.method).toBe('listDirectories');
+  });
   describe(RustWorkspacePathIndex.prototype.filterPaths, () => {
     it('initializes once and then intersects candidate paths with the catalog', async () => {
       const worker = new FakeWorker(request => {
