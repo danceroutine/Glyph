@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { AgentModeID } from '#src/chat/AgentMode.js';
 import type { Tool } from '#src/tools/Tool.js';
 import { z } from 'zod';
@@ -185,23 +186,31 @@ export class ProjectAccess {
     signal?: AbortSignal,
     context?: ToolExecutionContext,
   ): Promise<string> {
+    const access = new WorkspaceDisclosure();
+    const deliver = (value: object) => {
+      signal?.throwIfAborted();
+      access.assertCurrent();
+      if (access.hasSources) context?.retainResultAccess?.(access.assertCurrent);
+      return JSON.stringify(value);
+    };
     try {
       switch (isEnumValue(ProjectToolName, name) ? name : undefined) {
         case ProjectToolName.LIST_FILES:
-          return JSON.stringify(
-            await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments)), signal),
+          return deliver(
+            await this.listFiles(listProjectFilesArguments.parse(JSON.parse(rawArguments)), access, signal),
           );
         case ProjectToolName.READ_FILE: {
           const arguments_ = readProjectFileArguments.parse(JSON.parse(rawArguments));
-          const result = await this.readFile(arguments_);
-          return await this.withInstructions(result, [result.path], context, signal);
+          const result = await this.readFile(arguments_, access);
+          return deliver(await this.withInstructions(result, [result.path], context, signal));
         }
         case ProjectToolName.SEARCH_CONTENTS: {
           const result = await this.searchContents(
             resolvedSearchProjectContentsArguments.parse(JSON.parse(rawArguments)),
+            access,
             signal,
           );
-          return await this.withInstructions(result, searchResultPaths(result), context, signal);
+          return deliver(await this.withInstructions(result, searchResultPaths(result), context, signal));
         }
         default:
           throw new Error(`Unknown project tool: ${name}`);
@@ -231,21 +240,23 @@ export class ProjectAccess {
     paths: readonly string[],
     context?: ToolExecutionContext,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<object> {
     const instructions = context?.turnId
       ? await this.turnContexts?.disclosePaths(context.turnId, paths, signal)
       : undefined;
-    return JSON.stringify(instructions ? { ...result, instructionContext: instructions } : result);
+    return instructions ? { ...result, instructionContext: instructions } : result;
   }
 
   private async searchContents(
     { pattern, options }: z.output<typeof resolvedSearchProjectContentsArguments>,
+    access: WorkspaceDisclosure,
     signal?: AbortSignal,
   ) {
     const pathIndex = this.pathIndex;
     if (!pathIndex.searchContents) throw new Error('Native project content search is unavailable.');
     return pathIndex.searchContents(pattern, {
       ...options,
+      retainAccess: access.retain,
       path: options.path === null ? null : this.workspace.normalizePath(options.path),
       signal,
     });
@@ -253,18 +264,23 @@ export class ProjectAccess {
 
   private async listFiles(
     { glob_pattern: globPattern, target_directory: targetDirectory }: z.infer<typeof listProjectFilesArguments>,
+    access: WorkspaceDisclosure,
     signal?: AbortSignal,
   ): Promise<{ files: string[]; truncated: boolean }> {
     signal?.throwIfAborted();
     const normalizedTarget = targetDirectory === null ? undefined : this.workspace.normalizePath(targetDirectory);
     return this.pathIndex.glob(globPattern, {
+      retainAccess: access.retain,
       ...(normalizedTarget === undefined ? {} : { targetDirectory: normalizedTarget }),
       limit: this.options.maxFiles,
       ...(signal ? { signal } : {}),
     });
   }
 
-  private async readFile({ path, start_line: requestedStart, end_line: requestedEnd }: ReadArguments): Promise<{
+  private async readFile(
+    { path, start_line: requestedStart, end_line: requestedEnd }: ReadArguments,
+    access: WorkspaceDisclosure,
+  ): Promise<{
     path: string;
     startLine: number;
     endLine: number;
@@ -277,7 +293,10 @@ export class ProjectAccess {
     lines: { number: number; content: string; lineEnding: '' | '\n' | '\r\n' | '\r' }[];
   }> {
     const startLine = requestedStart ?? 1;
-    const snapshot = await this.workspace.read(path, { maxBytes: this.options.maxFileBytes });
+    const snapshot = await this.workspace.read(path, {
+      maxBytes: this.options.maxFileBytes,
+      retainAccess: access.retain,
+    });
     // Follow-up: read oversized files incrementally so line-range requests do not load the whole file.
     if (snapshot.byteLength > this.options.maxFileBytes) {
       throw new Error(`File exceeds the ${this.options.maxFileBytes}-byte read limit.`);

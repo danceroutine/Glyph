@@ -12,7 +12,11 @@ export interface EditorWorkspaceClient {
     mutation?: boolean,
     onManagedPathAdmitted?: (physicalPath: string) => void,
   ): Promise<string>;
-  request(request: GlyphEditorRequest, signal?: AbortSignal): Promise<GlyphEditorResponse>;
+  request(
+    request: GlyphEditorRequest,
+    signal?: AbortSignal,
+    retainAccess?: (check: () => void) => void,
+  ): Promise<GlyphEditorResponse>;
   listPaths(
     maxFiles: number,
     globPattern?: string,

@@ -70,8 +70,19 @@ a tool or worker is running, the adapter must withhold it. An unrelated edit
 should leave the identity of a still-authorized source usable.
 
 A file a human deliberately attaches is an explicit input to that request.
-Keep its provenance. Automatic expansion of a folder, search hits, and later
-tool reads each have their own workspace access requirements.
+The CLI keeps every selected root live until the entire attachment batch reaches the
+model. Desktop Send, Steer and Git review carry the originating window signal through
+queues and provider preparation. A Git comparison contributes the routed paths of
+both sides to scoped instruction selection. The captured before and after text,
+including explicit selections and unsaved edits, stays at the selected revision.
+
+`WorkspaceDisclosure` retains the access checks returned by the stores and indexes
+that supplied the result. The agent checks them after asynchronous instruction lookup
+and provider preparation. Folder outlines and comparison resources repeat their live
+checks at model handoff, including transport retries. Before the provider receives a protected read, a recovery
+checkpoint records its completion and lets the next turn read it again. Steering with
+undelivered captures enters provider history after the handoff. These checks belong to the
+current turn and stay in host memory.
 
 Native search and restricted shell commands run outside the JavaScript process.
 Pass the host's policy to their adapters. The shell view reserves the physical

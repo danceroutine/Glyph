@@ -70,7 +70,13 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
 
   async glob(
     pattern: string,
-    options: { targetDirectory?: string; rootFilesOnly?: boolean; limit: number; signal?: AbortSignal },
+    options: {
+      targetDirectory?: string;
+      rootFilesOnly?: boolean;
+      limit: number;
+      signal?: AbortSignal;
+      retainAccess?: (check: () => void) => void;
+    },
   ): Promise<WorkspacePathGlobResult> {
     const target =
       options.targetDirectory !== undefined && options.targetDirectory !== ''
@@ -99,11 +105,12 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
       truncated ||= result.truncated;
     }
     assertResultsCurrent(guards, options.signal);
+    for (const check of guards) options.retainAccess?.(check);
     return { files, truncated };
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
-    const { signal, ...serializableOptions } = options;
+    const { signal, retainAccess, ...serializableOptions } = options;
     const resolved = workspaceContentSearchOptionsSchema.parse(serializableOptions);
     const path = resolved.path !== null && resolved.path !== '' ? this.routePath(resolved.path) : undefined;
     const fileGlob =
@@ -200,6 +207,7 @@ export class MultiRootWorkspacePathIndex implements WorkspacePathIndex {
       nextOffset: hasContinuation && canContinue ? nextOffset : null,
     };
     assertResultsCurrent(guards, signal);
+    for (const check of guards) retainAccess?.(check);
     switch (resolved.outputMode) {
       case 'content':
         return { outputMode: 'content', matches: selected.filter(entry => isContentMatch(entry)), ...metadata };

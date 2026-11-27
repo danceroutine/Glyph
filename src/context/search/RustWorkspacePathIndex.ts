@@ -267,7 +267,13 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
 
   async glob(
     pattern: string,
-    options: { targetDirectory?: string; rootFilesOnly?: boolean; limit: number; signal?: AbortSignal },
+    options: {
+      targetDirectory?: string;
+      rootFilesOnly?: boolean;
+      limit: number;
+      signal?: AbortSignal;
+      retainAccess?: (check: () => void) => void;
+    },
   ): Promise<WorkspacePathGlobResult> {
     const operation = this.access.beginOperation();
     this.synchronizePolicy();
@@ -285,6 +291,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
       ),
     );
     operation.assertCurrent();
+    options.retainAccess?.(operation.assertCurrent);
     return result;
   }
 
@@ -300,7 +307,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
   }
 
   async searchContents(pattern: string, options: WorkspaceContentSearchOptions): Promise<WorkspaceContentSearchResult> {
-    const { signal, ...serializableOptions } = options;
+    const { signal, retainAccess, ...serializableOptions } = options;
     const resolvedOptions = workspaceContentSearchOptionsSchema.parse(serializableOptions);
     const operation = this.access.beginOperation();
     this.synchronizePolicy();
@@ -313,6 +320,7 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
       throw new Error('Editor search snapshots exceed the native request budget. Narrow the open working set.');
     const result = contentSearchResultSchema.parse(await this.request(PathIndexMethod.CONTENT_SEARCH, params, signal));
     operation.assertCurrent();
+    retainAccess?.(operation.assertCurrent);
     return result;
   }
 

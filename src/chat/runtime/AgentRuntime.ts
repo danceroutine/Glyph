@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import {
   prepareModelContext,
   type ModelTurnContext,
@@ -89,6 +90,9 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     },
   ): Promise<TurnResult> {
     const request = toChatRequest(inputRequest);
+    const toolAccess = new WorkspaceDisclosure();
+    const disclosures = new Set<WorkspaceDisclosure>([toolAccess]);
+    if (request.disclosure) disclosures.add(request.disclosure);
     const turnId = request.turnId ?? randomUUID();
     const metadata = chatTurnOptionsSchema.parse({
       ...(request.mode !== undefined ? { mode: request.mode } : {}),
@@ -177,14 +181,24 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       );
       admittedContext = turnContext !== undefined;
       boundaryInstructions = prepareModelContext(turnContext?.initialEnvelope());
+      (await request.disclosure?.authorize(signal))?.();
       options.onTurnAdmitted?.();
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
       boundaryInstructions = undefined;
       let totalUsage: Usage | null = null;
       let usageIncomplete = false;
       let round = 0;
+      let pendingWorkspaceInput = request.disclosure?.hasSources ?? false;
+      const checkpointSteering = async (current: TTurn) => {
+        // Until a provider has received these bytes, recovery must keep the last delivered input.
+        if (pendingWorkspaceInput) return;
+        this.state = this.persistentState(this.adapter.snapshot(current));
+        hasToolCheckpoint = true;
+        await options.onStateCheckpoint?.(structuredClone(this.state));
+      };
       const applySteering = async (steeringRequest: ChatRequest): Promise<boolean> => {
         try {
+          (await steeringRequest.disclosure?.authorize(signal))?.();
           boundaryInstructions = prepareModelContext(await this.steeringInstructions(turnId, steeringRequest, signal));
         } catch (error) {
           if (signal.aborted) throw signal.reason;
@@ -195,6 +209,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         }
         try {
           turn = await this.adapter.steerTurn(turn!, modelInput(steeringRequest), context(round));
+          if (steeringRequest.disclosure) {
+            disclosures.add(steeringRequest.disclosure);
+            pendingWorkspaceInput ||= steeringRequest.disclosure.hasSources;
+          }
         } finally {
           boundaryInstructions = undefined;
         }
@@ -204,17 +222,26 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
           if (!(await applySteering(steering))) continue;
-          this.state = this.persistentState(this.adapter.snapshot(turn));
-          hasToolCheckpoint = true;
-          await options.onStateCheckpoint?.(structuredClone(this.state));
+          await checkpointSteering(turn);
         }
         round += 1;
         const replay = turnContext?.prepareReplay();
         if (replay?.filter) turn = this.adapter.projectTurn(turn, new AgentHistoryRetention(replay.filter));
         const send = await this.adapter.prepareStep(turn, context(round));
-        const assertCurrent = await this.turnContexts?.authorizeDisclosure(turnId, signal, replay);
-        assertCurrent?.();
-        const step = await send(assertCurrent);
+        const authorize = async () => {
+          const checks = await Promise.all([
+            this.turnContexts?.authorizeDisclosure(turnId, signal, replay),
+            ...[...disclosures].filter(value => value.hasSources).map(value => value.authorize(signal)),
+          ]);
+          return () => {
+            signal.throwIfAborted();
+            for (const check of checks) check?.();
+          };
+        };
+        const assertCurrent = await authorize();
+        assertCurrent();
+        const step = await send(assertCurrent, authorize);
+        pendingWorkspaceInput = false;
         turn = step.turn;
         usageIncomplete ||= step.usage === null;
         totalUsage = addUsage(totalUsage, step.usage);
@@ -230,9 +257,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
             if (appliedSteering) break;
           }
           if (appliedSteering) {
-            this.state = this.persistentState(this.adapter.snapshot(turn));
-            hasToolCheckpoint = true;
-            await options.onStateCheckpoint?.(structuredClone(this.state));
+            await checkpointSteering(turn);
             continue;
           }
           if (!step.hasVisibleOutput) {
@@ -257,6 +282,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
 
         const roundMode = mode;
         const toolRound = round;
+        const workspaceResults = new Set<string>();
         const interruptions: unknown[] = signal.aborted ? [signal.reason] : [];
         const results = signal.aborted
           ? step.toolCalls.map(call => ({
@@ -277,6 +303,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                     turnId,
                     mode: roundMode,
                     onModeChanged: setMode,
+                    retainResultAccess: check => {
+                      workspaceResults.add(call.id);
+                      toolAccess.retain(check);
+                    },
                   },
                   onActivity: reportToolActivity,
                   trace: (kind, data) => {
@@ -288,8 +318,25 @@ export class AgentRuntime<TTurn> implements ChatProvider {
               }),
             );
         if (signal.aborted) interruptions.push(signal.reason);
-        turn = this.adapter.appendToolResults(turn, results);
-        this.state = this.persistentState(this.adapter.snapshot(turn));
+        // Preserve the outcome of every tool, including unrelated writes. A read which has not
+        // reached the model can be performed again after recovery under the new turn's authority.
+        const live = this.adapter.appendToolResults(turn, results);
+        pendingWorkspaceInput = workspaceResults.size > 0;
+        const checkpoint = pendingWorkspaceInput
+          ? this.adapter.appendToolResults(
+              turn,
+              results.map(result =>
+                workspaceResults.has(result.call.id)
+                  ? {
+                      ...result,
+                      output: JSON.stringify({ status: 'Read completed. Read again for current workspace contents.' }),
+                    }
+                  : result,
+              ),
+            )
+          : live;
+        turn = live;
+        this.state = this.persistentState(this.adapter.snapshot(checkpoint));
         await options.onStateCheckpoint?.(structuredClone(this.state));
         trace('tool.outcomes_checkpointed', { callIds: results.map(result => result.call.id) }, round);
         if (interruptions.length > 0) throw interruptions[0];
@@ -382,7 +429,7 @@ function redactedHeaders(headers: Headers): Record<string, string> {
 }
 
 /** Steering uses the same validation and source-content framing as an initial prompt. */
-function modelInput(request: ChatRequest): ChatRequest {
+function modelInput({ disclosure: _disclosure, ...request }: ChatRequest): ChatRequest {
   const metadata = chatTurnOptionsSchema.parse({
     ...(request.mode !== undefined ? { mode: request.mode } : {}),
     ...(request.annotations ? { annotations: request.annotations } : {}),
@@ -408,7 +455,8 @@ export { toolInterruptionOutput as toolInterruptionOutput__TESTING_ONLY, errorDe
 
 /** Terminal and test display labels do not identify filesystem scopes. Legacy captures remain file-backed. */
 function attachmentPaths(request: ChatRequest): readonly string[] {
-  return request.attachments
+  const paths = request.attachments
     .filter(attachment => attachment.source?.kind !== 'terminal' && attachment.source?.kind !== 'test')
     .map(attachment => attachment.path);
+  return [...new Set([...paths, ...(request.disclosure?.additionalPaths ?? [])])];
 }

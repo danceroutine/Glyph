@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { withSkillLock } from '#src/skills/SkillPackageStorage.js';
 import { testSkillSource } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
@@ -2249,7 +2250,12 @@ describe(ProviderDesktopRuntime, () => {
         ).rejects.toThrow('declared workspace path');
         expect(agentReviews.start).not.toHaveBeenCalled();
         await harness.runtime.handle({ type: Command.START_AGENT_REVIEW, review, model });
-        expect(agentReviews.start).toHaveBeenCalledExactlyOnceWith(review, model);
+        expect(agentReviews.start).toHaveBeenCalledExactlyOnceWith(
+          review,
+          model,
+          expect.any(AbortSignal),
+          expect.any(WorkspaceDisclosure),
+        );
       } finally {
         await harness.runtime.dispose();
       }

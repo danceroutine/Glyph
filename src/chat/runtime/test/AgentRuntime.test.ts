@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { ChatSteeringQueue } from '#src/chat/ChatSteeringQueue.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
@@ -311,6 +312,79 @@ describe(AgentRuntime, () => {
     expect(check).toHaveBeenCalledOnce();
     expect(adapter.requests).toEqual([]);
   });
+
+  it.each(['send', 'steer'] as const)('checks %s attachments after provider preparation', async phase => {
+    const disclosure = new WorkspaceDisclosure();
+    let available = true;
+    disclosure.retain(() => {
+      if (!available) throw new Error('Workspace changed');
+    });
+    disclosure.additionalPaths.add('old/renamed.md');
+    const coordinator = new TurnContextCoordinator(new AgentInstructionCatalog([]));
+    const begin = vi.spyOn(coordinator, 'beginTurn');
+    const adapter = new ClaudeShapedAdapter();
+    const prepare = adapter.prepareStep.bind(adapter);
+    adapter.prepareStep = async (turn, context) => {
+      available = false;
+      return prepare(turn, context);
+    };
+    const runtime = new AgentRuntime(
+      adapter,
+      { timeoutMs: 10_000 },
+      mockTools(async () => ''),
+      undefined,
+      coordinator,
+    );
+    const capture = { text: 'review', attachments: [], disclosure };
+    const pending = phase === 'steer' ? [capture] : [];
+    await expect(
+      runtime.send(phase === 'send' ? capture : 'start', {
+        signal: new AbortController().signal,
+        onText: () => {},
+        takeSteering: () => pending.splice(0),
+      }),
+    ).rejects.toThrow('Workspace changed');
+    expect(adapter.requests).toEqual([]);
+    expect(JSON.stringify(runtime.exportState())).not.toContain('review');
+    if (phase === 'send')
+      expect(begin).toHaveBeenCalledWith(
+        expect.objectContaining({ attachmentPaths: ['old/renamed.md'] }),
+        expect.any(AbortSignal),
+      );
+  });
+
+  it.each([false, true])(
+    'keeps a pending workspace result out of replay until delivery (revoked: %s)',
+    async revoked => {
+      const adapter = new ClaudeShapedAdapter();
+      let allowed = true;
+      const prepare = adapter.prepareStep.bind(adapter);
+      adapter.prepareStep = async (turn, context) => {
+        if (context.round === 2 && revoked) allowed = false;
+        return prepare(turn, context);
+      };
+      const source = mockTools(async (_name, _input, _signal, context) => {
+        context?.retainResultAccess?.(() => {
+          if (!allowed) throw new Error('Workspace changed');
+        });
+        return 'selected file contents';
+      });
+      const checkpoints: ChatProviderState[] = [];
+      const runtime = new AgentRuntime(adapter, { timeoutMs: 10_000 }, source);
+      const turn = runtime.send('start', {
+        signal: new AbortController().signal,
+        onText: () => {},
+        onStateCheckpoint: state => {
+          checkpoints.push(state);
+        },
+      });
+      if (revoked) await expect(turn).rejects.toThrow('Workspace changed');
+      else await turn;
+      expect(JSON.stringify(checkpoints)).not.toContain('selected file contents');
+      expect(JSON.stringify(runtime.exportState()).includes('selected file contents')).toBe(!revoked);
+      expect(JSON.stringify(adapter.requests).includes('selected file contents')).toBe(!revoked);
+    },
+  );
 
   it('releases its own failed turn while preserving an already admitted turn with the same id', async () => {
     const contexts = new TurnContextCoordinator(new AgentInstructionCatalog([]));

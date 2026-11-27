@@ -269,6 +269,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
           path,
         });
       }
+      options.retainAccess?.(operation.assertCurrent);
       return {
         path,
         bytes,

@@ -1,5 +1,7 @@
 /** Bounds bytes before an adapter allocates, decodes, hashes, or transfers file contents. */
 export interface WorkspaceReadOptions {
+  /** Composed reads retain the source root and reservations through delivery. */
+  readonly retainAccess?: (check: () => void) => void;
   readonly maxBytes?: number;
   /** Remaining physical I/O allowance for an operation that verifies a snapshot with multiple disk reads. */
   readonly physicalByteBudget?: number;

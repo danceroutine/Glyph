@@ -74,11 +74,13 @@ export interface AgentModelAdapter<TTurn> {
   steerTurn(turn: TTurn, request: ChatRequest, context: AgentTurnContext): Promise<TTurn>;
   /** Prepare credentials and other asynchronous transport state before the runtime authorizes the
    * model request. Only the returned sender may trace or transmit protected input. It invokes the
-   * supplied synchronous guard again at its transport handoff, including any retries. */
+   * supplied synchronous guard at handoff. After asynchronous transport preparation or a retry,
+   * obtain a fresh guard and invoke it immediately before transport. */
   prepareStep(
     turn: TTurn,
     context: AgentTurnContext,
-  ): Promise<(assertCurrent?: () => void) => Promise<AgentTurnStep<TTurn>>>;
+  ): Promise<(assertCurrent?: () => void, authorize?: () => Promise<() => void>) => Promise<AgentTurnStep<TTurn>>>;
+  /** Return a new turn containing the outcomes, preserving the prior turn for recovery projection. */
   appendToolResults(turn: TTurn, results: readonly AgentToolResult[]): TTurn;
   /** Snapshot live wire state. The runtime projects it into durable history before storing or publishing it. */
   snapshot(turn: TTurn): ChatProviderState;
