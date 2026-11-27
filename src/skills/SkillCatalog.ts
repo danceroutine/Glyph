@@ -8,7 +8,7 @@ export class SkillCatalog {
   private published = 0;
   private discovered: readonly SkillDescriptor[] = [];
   private current: readonly SkillDescriptor[] = [];
-  private readonly unsubscribePreferences: (() => void) | undefined;
+  private unsubscribePreferences: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
   constructor(
     private readonly providers: readonly SkillDiscoveryProvider[],
@@ -16,17 +16,15 @@ export class SkillCatalog {
     private readonly installations: ReadonlyMap<string, { source: string; revision: string }> = new Map(),
     private readonly ensureReady?: () => Promise<void>,
     private readonly ensureLocation?: (originId: string, directory?: string) => Promise<void>,
-    observePreferences?: (listener: () => void) => () => void,
+    private observePreferences?: (listener: () => void) => () => void,
     private readonly workspaceRoutes?: { equivalents(path: string): string[] },
     private readonly migratePreferences?: (skills: readonly SkillDescriptor[]) => Promise<void>,
   ) {
     this.byId = new Map(providers.map(provider => [provider.id, provider]));
     if (this.byId.size !== providers.length) throw new Error('Skill provider IDs must be unique.');
-    this.unsubscribePreferences = observePreferences?.(() => {
-      this.refreshPreferences();
-    });
   }
   dispose(): void {
+    this.observePreferences = undefined;
     this.unsubscribePreferences?.();
   }
   get skills(): readonly SkillDescriptor[] {
@@ -39,6 +37,11 @@ export class SkillCatalog {
     };
   }
   async refresh(signal?: AbortSignal): Promise<readonly SkillDescriptor[]> {
+    // A catalog starts observing its shared profile when it first acquires workspace data.
+    if (this.observePreferences) {
+      this.unsubscribePreferences = this.observePreferences(() => this.refreshPreferences());
+      this.observePreferences = undefined;
+    }
     const generation = ++this.generation;
     let unavailable: { cause: unknown } | undefined;
     try {

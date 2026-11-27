@@ -1,3 +1,4 @@
+import { sameWorkspaceDirectory } from '#src/workspace/sameWorkspaceDirectory.js';
 import { inspectPrivateDirectory } from '#src/workspace/privateStorageMetadata.js';
 import { SkillProjectMutationPolicy } from './SkillProjectMutationPolicy.ts';
 import { pathToFileURL } from 'node:url';
@@ -280,12 +281,17 @@ export class SkillPackageManager {
     return location;
   }
   private async target(location: SkillPackageLocation, directory: string) {
-    const key = (path: string) => (location.store.caseSensitive ? path : path.toLowerCase());
-    const parent = key(posix.dirname(directory));
-    const marker = key(location.directory);
+    if (location.store.normalizePath(directory) !== directory)
+      throw new Error('Skill directory is outside its managed location.');
+    const parent = posix.dirname(directory);
+    const scope = parent.split('/').slice(0, -location.directory.split('/').length).join('/');
     if (
-      location.store.normalizePath(directory) !== directory ||
-      !(parent === marker || (location.scope === 'project' && parent.endsWith('/' + marker)))
+      (scope !== '' && location.scope !== 'project') ||
+      !sameWorkspaceDirectory(
+        join(location.store.root, parent),
+        join(location.store.root, scope, location.directory),
+        location.store.caseSensitive,
+      )
     )
       throw new Error('Skill directory is outside its managed location.');
     return location.store.resolvePath(directory);

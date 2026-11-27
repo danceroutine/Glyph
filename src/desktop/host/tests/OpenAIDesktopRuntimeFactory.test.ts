@@ -1,3 +1,4 @@
+import { SkillStateStore } from '#src/skills/SkillStateStore.js';
 import { pathToFileURL } from 'node:url';
 import { inventoryPackage } from '#src/skills/skillPackageInventory.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
@@ -2133,7 +2134,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const root = await fixture.folder('workspace');
       fixture.initialize.mockRejectedValueOnce(new Error('Index failed'));
       const shells = vi.spyOn(ShellSessionManager.prototype, 'dispose');
+      const observe = vi.spyOn(SkillStateStore.prototype, 'onDidChange');
       await expect(fixture.create([root])).rejects.toThrow('Index failed');
+      expect(observe).not.toHaveBeenCalled();
       expect(shells).toHaveBeenCalledOnce();
     });
 
@@ -2144,7 +2147,9 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       const reviews = vi.spyOn(AgentReviewService.prototype, 'dispose');
       const shells = vi.spyOn(ShellSessionManager.prototype, 'dispose');
       const glyph = vi.spyOn(GlyphService.prototype, 'dispose');
+      const observe = vi.spyOn(SkillStateStore.prototype, 'onDidChange');
       await expect(fixture.create([root])).rejects.toThrow('Review store failed');
+      expect(observe).not.toHaveBeenCalled();
       expect(reviews).toHaveBeenCalledOnce();
       expect(shells).toHaveBeenCalledOnce();
       expect(glyph).toHaveBeenCalledOnce();
