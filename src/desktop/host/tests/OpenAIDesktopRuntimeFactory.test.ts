@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { skillPackageId } from '#src/skills/skillPackageId.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
