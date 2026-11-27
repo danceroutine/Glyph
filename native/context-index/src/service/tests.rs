@@ -162,7 +162,11 @@ fn shutdown_during_catalog_io_does_not_publish_the_new_snapshot() {
 }
 
 fn fixture_policy(params: &InitializeParams) -> IndexPolicy {
-    IndexPolicy::new(params, params.case_sensitive.unwrap())
+    IndexPolicy::new(
+        params,
+        params.case_sensitive.unwrap(),
+        Path::new(&params.root),
+    )
 }
 
 #[test]
@@ -1813,4 +1817,25 @@ fn direct_root_globs_exclude_private_roots_cache_files_and_reject_unreadable_ign
     assert_eq!(other.glob(query()).unwrap().files, ["AGENTS.md"]);
     write(root.path().join(".gitignore"), "[z-a]\n").unwrap();
     assert!(other.glob(query()).is_err());
+}
+
+#[test]
+fn private_directory_uses_the_entries_actual_filename_equivalence() {
+    let base = tempdir().unwrap();
+    let stored = base.path().join(".ſkill-staging");
+    create_dir_all(&stored).unwrap();
+    write(stored.join("fixture.txt"), "fixture").unwrap();
+    let equivalent = base.path().join(".skill-staging").is_dir();
+    let mut configuration = params(base.path());
+    configuration.respect_git_ignore = false;
+    let policy = fixture_policy(&configuration);
+    assert_eq!(policy.excludes(".ſkill-staging/fixture.txt"), equivalent);
+    assert_eq!(
+        workspace_walk(base.path(), &policy)
+            .build()
+            .flatten()
+            .any(|entry| entry.file_name() == "fixture.txt"),
+        !equivalent
+    );
+    assert_eq!(fixture_policy(&params(&stored)).exclude_root, equivalent);
 }
