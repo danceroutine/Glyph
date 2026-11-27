@@ -18,7 +18,7 @@ async function fixture() {
 }
 it('uses authorized disk snapshots without asking the editor to open or retain a model', async () => {
   const { disk, request, workspace } = await fixture();
-  expect(await workspace.read('AGENTS.md')).toEqual(await disk.read('AGENTS.md'));
+  expect(await workspace.read('AGENTS.md')).toEqual({ ...(await disk.read('AGENTS.md')), bytesRead: 8 });
   expect(request.mock.calls).toHaveLength(1);
   expect(await workspace.readOptional('missing')).toBeUndefined();
   await expect(workspace.read('missing')).rejects.toThrow();
@@ -45,6 +45,7 @@ it('preserves dirty text while retaining the verified physical file identity and
   });
   expect(await workspace.read('./AGENTS.md', { maxBytes: 64 })).toEqual({
     ...file,
+    bytesRead: 8,
     text: 'Unsaved',
     byteOrderMark: true,
     revision: 'dirty-revision',
@@ -92,4 +93,15 @@ it('charges disk bytes already consumed if an editor check or follow-up decoding
   });
   await expect(workspace.read('AGENTS.md')).rejects.toMatchObject({ bytesRead: 11 });
   await expect(workspace.read('AGENTS.md', { maxBytes: 3 })).rejects.toMatchObject({ bytesRead: 0 });
+});
+
+it('reserves physical bytes for both verifications independently of the editor snapshot limit', async () => {
+  const { disk, workspace, request } = await fixture();
+  const read = vi.spyOn(disk, 'read');
+  expect(await workspace.read('AGENTS.md', { physicalByteBudget: 8 })).toMatchObject({ bytesRead: 8 });
+  expect(read.mock.calls.map(([, options]) => options?.maxBytes)).toEqual([4, 4]);
+  await expect(workspace.readOptional('AGENTS.md', { maxBytes: 64, physicalByteBudget: 7 })).rejects.toMatchObject({
+    bytesRead: 0,
+  });
+  expect(request).toHaveBeenCalledTimes(1);
 });

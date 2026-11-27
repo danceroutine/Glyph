@@ -141,6 +141,7 @@ export class GlyphWorkbenchProjection {
         if (event.requestId === undefined || event.requestId === '') this.diagnostics.push(event.error.message);
         break;
       }
+      case GlyphHostEventType.RULE_REFERENCE_RESOLVED:
       case GlyphHostEventType.COMMAND_RESULT:
       case GlyphHostEventType.SKILL_REFERENCE_RESOLVED:
       case GlyphHostEventType.PROPOSAL_PREVIEW:

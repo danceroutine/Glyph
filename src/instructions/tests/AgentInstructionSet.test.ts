@@ -19,6 +19,25 @@ function anInstructionSource(overrides: Partial<AgentInstructionSource> = {}): A
 }
 
 describe(AgentInstructionSet, () => {
+  it('retains native precedence and host aliases on the user-owned physical rule', () => {
+    const user = anInstructionSource({
+      id: 'user',
+      name: 'One',
+      kind: AgentInstructionSourceKind.GLYPH_USER_RULE,
+      projectAlias: { id: 'old-native', kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, scope: 'packages' },
+    });
+    const compatibility = anInstructionSource({
+      id: 'cursor',
+      kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
+      name: 'One',
+      scope: 'packages',
+    });
+    const set = new AgentInstructionSet([compatibility, user]);
+    expect(set.sources).toHaveLength(1);
+    expect(set.sources[0]).toMatchObject({ id: 'user', legacyIds: ['old-native'] });
+    expect(set.sources[0]!.projectAlias).toBeUndefined();
+  });
+
   it('preserves family precedence within scope buckets and isolates returned arrays', () => {
     const root = anInstructionSource();
     const guidance = anInstructionSource({ id: 'guidance', scope: 'src', path: 'src/AGENTS.md' });

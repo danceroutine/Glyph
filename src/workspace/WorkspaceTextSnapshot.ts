@@ -42,6 +42,8 @@ export interface WorkspaceTextSnapshot {
    * Carrying the encoded size spares callers from re-encoding large files just to check a limit.
    */
   readonly byteLength: number;
+  /** Disk bytes consumed by a composed read, including verification of an editor-backed snapshot. */
+  readonly bytesRead?: number;
   /**
    * The file's permission bits. Carried along so a rewrite preserves them (writing through a temporary file
    * would otherwise reset them) and so reverting a delete restores, for example, an executable script as

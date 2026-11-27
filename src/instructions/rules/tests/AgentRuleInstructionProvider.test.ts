@@ -1,3 +1,4 @@
+import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { AgentsMdInstructionProvider } from '#src/instructions/AgentsMdInstructionProvider.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -51,6 +52,43 @@ describe(AgentRuleInstructionProvider, () => {
       expect.stringContaining('UTF-8'),
       expect.stringContaining('budget exhausted'),
     ]);
+  });
+
+  it.each(['rules', 'agents'])('charges the two verified disk reads when a dirty %s file is shorter', async family => {
+    const { root, workspace: disk } = await fixture();
+    const files =
+      family === 'rules' ? ['.glyph/rules/a.mdc', '.glyph/rules/b.mdc'] : ['AGENTS.md', 'packages/AGENTS.md'];
+    for (const path of files) await writeFile(join(root, path), '1234');
+    const request = vi.fn(async ({ path, operationId }: { path: string; operationId: string }) => ({
+      operationId,
+      ok: true,
+      snapshot: {
+        path,
+        uri: 'file:///' + path,
+        text: 'x',
+        byteOrderMark: false,
+        contentRevision: 'live',
+        byteLength: 1,
+        mode: 0o600,
+        identity: 'editor',
+        dirty: true,
+        token: { workspaceGeneration: 'g', resource: 'r', incarnation: 'i', version: 1 },
+      },
+    }));
+    const workspace = createCatalogWorkspace(disk, disk, request);
+    const list = async () => ({ files, truncated: false });
+    const provider =
+      family === 'rules'
+        ? new AgentRuleInstructionProvider(
+            workspace,
+            { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph', maxDiscoveryBytes: 8 },
+            list,
+          )
+        : new AgentsMdInstructionProvider(workspace, { maxDiscoveryBytes: 8 }, list);
+    const sources = await provider.discover();
+    expect(sources.map(source => source.status)).toEqual(['active', 'error']);
+    expect(sources[1]!.message).toContain('budget exhausted');
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it.each([true, false])('matches the user rules directory using its filesystem case policy (%s)', async sensitive => {
@@ -452,7 +490,10 @@ describe(AgentRuleInstructionProvider, () => {
     );
 
     const discovered = await provider.discover();
-    expect(workspace.readOptional).toHaveBeenCalledWith('packages/api/docs.md', { maxBytes: 64 * 1024 });
+    expect(workspace.readOptional).toHaveBeenCalledWith('packages/api/docs.md', {
+      maxBytes: 64 * 1024,
+      physicalByteBudget: expect.any(Number),
+    });
     expect(discovered).toEqual([
       expect.objectContaining({ scope: 'packages/api', references: ['packages/api/docs.md'] }),
       expect.objectContaining({ message: 'Rule discovery exceeded the 10000-file limit.' }),
