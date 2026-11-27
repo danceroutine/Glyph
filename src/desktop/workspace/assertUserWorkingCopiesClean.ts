@@ -10,8 +10,9 @@ export async function assertUserWorkingCopiesClean(
   kind: 'rule' | 'skill',
   name: string,
   caseSensitive: boolean,
+  sourcePath?: string,
 ): Promise<void> {
-  const peers = editors.trustedUserEditors(owner);
+  const peers = editors.trustedUserEditors(owner, sourcePath);
   await Promise.all(
     [owner, ...peers.map(peer => peer.identity)].map(async identity => {
       const operationId = randomUUID();
@@ -28,7 +29,7 @@ export async function assertUserWorkingCopiesClean(
         );
     }),
   );
-  const current = editors.trustedUserEditors(owner);
+  const current = editors.trustedUserEditors(owner, sourcePath);
   if (
     current.length !== peers.length ||
     current.some(peer => !peers.some(previous => previous.connectionId === peer.connectionId))

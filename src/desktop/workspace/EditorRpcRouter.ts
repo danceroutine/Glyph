@@ -17,6 +17,7 @@ export class EditorRpcRouter {
   constructor(
     readonly trustedUserEditors: (
       owner: GlyphConnectionIdentity,
+      sourcePath?: string,
     ) => readonly { identity: GlyphConnectionIdentity; connectionId: string }[] = () => [],
   ) {}
 

@@ -339,7 +339,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       );
       turnContexts = new TurnContextCoordinator(instructionCatalog);
       userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex, filename =>
-        assertUserWorkingCopiesClean(this.editors, input.identity, 'rule', filename, userRuleStore.caseSensitive),
+        assertUserWorkingCopiesClean(
+          this.editors,
+          input.identity,
+          'rule',
+          filename,
+          userRuleStore.caseSensitive,
+          join(userRuleRoot, 'rules', filename),
+        ),
       );
     }
     const reviews = new ProposalReviewManager(
