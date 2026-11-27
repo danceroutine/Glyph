@@ -11,7 +11,10 @@ export class SkillCatalog {
   constructor(
     private readonly providers: readonly SkillDiscoveryProvider[],
     private readonly enabled: ReadonlyMap<string, boolean> = new Map(),
-    private readonly workspaceRoutes?: { equivalents(path: string): string[] },
+    private readonly workspaceRoutes?: {
+      equivalents(path: string): string[];
+      prepare?(paths: readonly string[]): void;
+    },
   ) {
     this.byId = new Map(providers.map(provider => [provider.id, provider]));
     if (this.byId.size !== providers.length) throw new Error('Skill provider IDs must be unique.');
@@ -95,6 +98,8 @@ export class SkillCatalog {
 
   /** Match one batch of paths against each provider's scope hierarchy, retaining catalog precedence. */
   applicableSkills(skills: readonly SkillDescriptor[], paths: readonly string[]): readonly SkillDescriptor[] {
+    if (paths.length === 0) return skills.filter(skill => skill.scope === '.');
+    this.workspaceRoutes?.prepare?.([...new Set([...paths, ...skills.map(skill => skill.scope)])]);
     let routes: Set<string> | undefined;
     const byOrigin = new Map<string, { ancestors: Set<string>; scopes: Map<string, boolean> }>();
     return skills.filter(skill => {
