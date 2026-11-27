@@ -23,7 +23,7 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
     constructed:
       vi.fn<
         (
-          router: { trustedUserEditors: (identity: unknown, sourcePath?: string) => unknown },
+          router: { trustedUserEditors: (identity: unknown, sourcePath: string) => unknown },
           projectPeers: (owner: GlyphConnectionIdentity, projectDirectory?: string) => unknown,
         ) => void
       >(),
