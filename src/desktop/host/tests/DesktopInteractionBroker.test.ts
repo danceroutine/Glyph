@@ -56,6 +56,8 @@ describe(DesktopInteractionBroker, () => {
         expect(event.approval.detail).toContain('/user/skills/example');
         expect(event.approval.detail).toContain('reviewed-digest');
         expect(event.approval.detail).toContain('(removed)');
+        expect(event.approval.detail).not.toContain('Reviewed instructions');
+        expect(event.approval.detail).not.toContain('Old contents');
         expect(() => {
           broker.answer({
             ...identity,

@@ -282,16 +282,17 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
         {management?.preview && (
           <section aria-label="Skill change preview" class={styles.preview}>
             <h3>
-              {management.preview.action} {management.preview.name}
+              {management.preview.action} {escapeDisplayControls(management.preview.name, true)}
             </h3>
             <p class={styles.metadata}>
-              {management.preview.source} · {management.preview.revision.slice(0, 12)}
+              {escapeDisplayControls(management.preview.source, true)} · {management.preview.revision.slice(0, 12)}
             </p>
             {management.preview.destination && (
               <p>
-                Destination ({management.preview.destination.scope}) · {management.preview.destination.label}
+                Destination ({management.preview.destination.scope}) ·{' '}
+                {escapeDisplayControls(management.preview.destination.label, true)}
                 <br />
-                <code>{management.preview.destination.path}</code>
+                <code>{escapeDisplayControls(management.preview.destination.path, true)}</code>
               </p>
             )}
             <GlyphSkillFileComparison files={management.preview.files} />
@@ -421,3 +422,4 @@ export function GlyphSkills({ skills, query = '', edit, management }: GlyphSkill
     </section>
   );
 }
+import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';

@@ -85,6 +85,28 @@ describe('Skill management', () => {
       discard: vi.fn(async () => {}),
     };
   }
+  it('reveals directional controls and filename line breaks while preserving the exact reviewed data', () => {
+    const path = 'report\u202Ejs\n.txt';
+    const source = 'مرحبا\nconst value = "\u2066hidden";';
+    const preview = {
+      id: 'preview',
+      targetId: 'project',
+      action: 'install' as const,
+      name: 'review',
+      source: 'Local\u202Epackage',
+      revision: 'exact-revision',
+      destination: { scope: 'project' as const, label: 'Project', path: '/project/skills/review' },
+      files: [{ path, status: 'added' as const, after: source }],
+    };
+    render(<GlyphSkills skills={[]} edit={vi.fn()} management={{ ...actions(), preview }} />);
+    expect(screen.getByText('report\\u202Ejs\\u000A.txt')).toBeDefined();
+    expect(screen.getByText(/Local\\u202Epackage/u)).toBeDefined();
+    expect(screen.getByLabelText('After report\\u202Ejs\\u000A.txt').textContent).toBe(
+      'مرحبا\nconst value = "\\u2066hidden";',
+    );
+    expect(preview.files[0]?.after).toBe(source);
+    expect(preview.files[0]?.path).toBe(path);
+  });
   it('previews a draft with the selected scope and delegates enablement, local update, and removal', async () => {
     const management = actions();
     render(<GlyphSkills skills={[skill]} edit={vi.fn()} management={management} />);

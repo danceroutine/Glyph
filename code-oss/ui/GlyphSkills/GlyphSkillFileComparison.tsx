@@ -1,4 +1,5 @@
 import type { GlyphSkillPreview } from '#src/desktop/protocol/events/GlyphSkillManagement.js';
+import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';
 import { GlyphFileIcon } from '#code-oss/ui/GlyphFileIcon/GlyphFileIcon.tsx';
 import { css, tokens } from '#code-oss/ui/design-system/index.ts';
 
@@ -25,7 +26,7 @@ export function GlyphSkillFileComparison({ files }: { readonly files: GlyphSkill
           <summary>
             <span class={styles.path}>
               <GlyphFileIcon path={file.path} />
-              {file.path} {file.status && <small>({file.status})</small>}
+              {escapeDisplayControls(file.path, true)} {file.status && <small>({file.status})</small>}
             </span>
           </summary>
           {(['beforeInfo', 'afterInfo'] as const).map(side => {
@@ -42,13 +43,19 @@ export function GlyphSkillFileComparison({ files }: { readonly files: GlyphSkill
             );
           })}
           {file.before !== undefined && (
-            <pre class={`${styles.contents} ${styles.before}`} aria-label={`Before ${file.path}`}>
-              {file.before}
+            <pre
+              class={`${styles.contents} ${styles.before}`}
+              aria-label={`Before ${escapeDisplayControls(file.path, true)}`}
+            >
+              {escapeDisplayControls(file.before)}
             </pre>
           )}
           {file.after !== undefined && (
-            <pre class={`${styles.contents} ${styles.after}`} aria-label={`After ${file.path}`}>
-              {file.after}
+            <pre
+              class={`${styles.contents} ${styles.after}`}
+              aria-label={`After ${escapeDisplayControls(file.path, true)}`}
+            >
+              {escapeDisplayControls(file.after)}
             </pre>
           )}
         </details>

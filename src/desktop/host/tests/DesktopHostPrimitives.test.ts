@@ -145,6 +145,31 @@ describe(getWorkspaceKey, () => {
 });
 
 describe(HostEventJournal, () => {
+  it('bounds retained UTF-8 bytes and falls back to a snapshot after oversized live events', () => {
+    const journal = new HostEventJournal('generation', 512, 700);
+    const normal = {
+      type: GlyphHostEventType.HOST_STATUS,
+      status: GlyphHostStatus.READY,
+      message: 'x'.repeat(100),
+    } as const;
+    journal.append(first, normal);
+    journal.append(first, normal);
+    journal.append(first, normal);
+    expect(journal.after(0)).toBeUndefined();
+    expect(journal.after(2)?.map(event => event.sequence)).toEqual([3]);
+    const large = journal.append(first, { ...normal, message: 'large preview'.repeat(1000) });
+    expect(large.event).toMatchObject({ message: 'large preview'.repeat(1000) });
+    expect(journal.after(3)).toBeUndefined();
+    expect(journal.after(4)).toEqual([]);
+    journal.append(first, normal);
+    expect(journal.after(4)?.map(event => event.sequence)).toEqual([5]);
+    journal.discard();
+    journal.append(first, normal);
+    expect(journal.after(5)?.map(event => event.sequence)).toEqual([6]);
+  });
+  it.each([0, -1, 1.5, Number.NaN])('rejects a byte capacity of %s', byteCapacity => {
+    expect(() => new HostEventJournal('generation', 512, byteCapacity)).toThrow('byte capacity must be positive');
+  });
   it('maintains a bounded sequence watermark and reports replay gaps', () => {
     const journal = new HostEventJournal('generation', 2);
     journal.append(first, { type: GlyphHostEventType.HOST_STATUS, status: GlyphHostStatus.READY });

@@ -107,3 +107,21 @@ export const RefreshNotice: Story = {
     },
   },
 };
+
+export const VisibleControlCharacters: Story = {
+  args: {
+    management: {
+      ...management,
+      preview: {
+        id: 'controls',
+        action: 'install',
+        targetId: 'project',
+        name: 'review',
+        source: 'Local package\u202Efrom disk',
+        revision: 'reviewed-bytes',
+        destination: { label: 'Project skills', scope: 'project', path: '/app/.glyph/skills/review' },
+        files: [{ path: 'report\u202Ejs\n.txt', status: 'added', after: '# مرحبا\nconst value = "\u2066hidden";' }],
+      },
+    },
+  },
+};

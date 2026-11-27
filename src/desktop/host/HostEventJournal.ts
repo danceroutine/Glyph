@@ -10,13 +10,17 @@ import { GLYPH_DESKTOP_PROTOCOL_VERSION } from '#src/desktop/protocol/GlyphDeskt
  */
 export class HostEventJournal {
   private sequence = 0;
-  private readonly events: GlyphHostEventEnvelope[] = [];
+  private retainedBytes = 0;
+  private readonly events: { readonly envelope: GlyphHostEventEnvelope; readonly bytes: number }[] = [];
 
   constructor(
     readonly hostGeneration: string,
     private readonly capacity = 512,
+    private readonly byteCapacity = 8 * 1024 * 1024,
   ) {
     if (!Number.isInteger(capacity) || capacity < 1) throw new Error('Event journal capacity must be positive.');
+    if (!Number.isSafeInteger(byteCapacity) || byteCapacity < 1)
+      throw new Error('Event journal byte capacity must be positive.');
   }
 
   /** Highest sequence issued, including events that have aged out of the buffer. */
@@ -27,6 +31,7 @@ export class HostEventJournal {
   /** Revokes replay from the previous attachment authority while preserving monotonic sequence numbers. */
   discard(): void {
     this.events.length = 0;
+    this.retainedBytes = 0;
   }
 
   /**
@@ -45,8 +50,17 @@ export class HostEventJournal {
       sequence: ++this.sequence,
       event,
     };
-    this.events.push(envelope);
-    if (this.events.length > this.capacity) this.events.shift();
+    const bytes = Buffer.byteLength(JSON.stringify(envelope));
+    if (bytes > this.byteCapacity) {
+      // The live recipient still receives the complete event. Reconnect uses the current snapshot,
+      // which owns the latest preview, rather than retaining superseded package comparisons.
+      this.discard();
+      return envelope;
+    }
+    this.events.push({ envelope, bytes });
+    this.retainedBytes += bytes;
+    while (this.events.length > this.capacity || this.retainedBytes > this.byteCapacity)
+      this.retainedBytes -= this.events.shift()!.bytes;
     return envelope;
   }
 
@@ -56,8 +70,8 @@ export class HostEventJournal {
    */
   after(sequence: number): readonly GlyphHostEventEnvelope[] | undefined {
     if (sequence === this.sequence) return [];
-    const oldest = this.events[0]?.sequence ?? this.sequence + 1;
+    const oldest = this.events[0]?.envelope.sequence ?? this.sequence + 1;
     if (sequence < oldest - 1 || sequence > this.sequence) return undefined;
-    return this.events.filter(event => event.sequence > sequence);
+    return this.events.filter(({ envelope }) => envelope.sequence > sequence).map(({ envelope }) => envelope);
   }
 }

@@ -51,7 +51,7 @@ export function GlyphApprovalCard({
     >
       <header class={shared.header}>
         <Icon size={16} aria-hidden="true" />
-        <h3>{request.title}</h3>
+        <h3>{escapeDisplayControls(request.title, true)}</h3>
         <span class={shared.detail}>Pending approval</span>
       </header>
       {goal ? (
@@ -59,19 +59,20 @@ export function GlyphApprovalCard({
       ) : skillChange ? (
         <div class={styles.command}>
           <p>
-            {skillChange.source} · {skillChange.revision.slice(0, 12)}
+            {escapeDisplayControls(skillChange.source, true)} · {skillChange.revision.slice(0, 12)}
           </p>
           {skillChange.destination && (
             <p>
-              Destination ({skillChange.destination.scope}) · {skillChange.destination.label}
+              Destination ({skillChange.destination.scope}) ·{' '}
+              {escapeDisplayControls(skillChange.destination.label, true)}
               <br />
-              <code>{skillChange.destination.path}</code>
+              <code>{escapeDisplayControls(skillChange.destination.path, true)}</code>
             </p>
           )}
           <GlyphSkillFileComparison files={skillChange.files} />
         </div>
       ) : (
-        <pre class={styles.command}>{request.command ?? request.detail}</pre>
+        <pre class={styles.command}>{escapeDisplayControls(request.command ?? request.detail)}</pre>
       )}
       {goal && (
         <p class={`${shared.detail} ${styles.detail}`}>
@@ -125,3 +126,4 @@ export function GlyphApprovalCard({
     </section>
   );
 }
+import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';

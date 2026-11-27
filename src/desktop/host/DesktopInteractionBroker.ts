@@ -153,35 +153,17 @@ export class DesktopInteractionBroker implements QuestionPresenter, ShellPermiss
     const identity = this.requireRun();
     const policy = new SkillChangeApprovalPolicy();
     const detail = [
-      preview.source,
+      escapeDisplayControls(preview.source, true),
       'Revision: ' + preview.revision,
-      'Destination (' + preview.destination.scope + '): ' + preview.destination.label,
-      preview.destination.path,
+      'Destination (' + preview.destination.scope + '): ' + escapeDisplayControls(preview.destination.label, true),
+      escapeDisplayControls(preview.destination.path, true),
+      `${preview.files.length} files. Review the complete file comparisons below.`,
       ...preview.files.map(file =>
         [
-          file.path + ' (' + file.status + ')',
-          ...(
-            [
-              ['Before', file.beforeInfo],
-              ['After', file.afterInfo],
-            ] as const
-          ).flatMap(([label, info]) =>
-            info
-              ? [
-                  label +
-                    ': ' +
-                    info.encoding +
-                    ', ' +
-                    info.size +
-                    ' bytes, mode ' +
-                    info.mode.toString(8) +
-                    ', SHA-256 ' +
-                    info.digest,
-                ]
-              : [],
+          `${escapeDisplayControls(file.path, true)} (${file.status})`,
+          ...[file.beforeInfo, file.afterInfo].flatMap(info =>
+            info ? [`${info.encoding}, ${info.size} bytes, mode ${info.mode.toString(8)}, SHA-256 ${info.digest}`] : [],
           ),
-          ...(file.before === undefined ? [] : [file.before]),
-          ...(file.after === undefined ? [] : [file.after]),
         ].join('\n'),
       ),
     ].join('\n');
@@ -418,3 +400,4 @@ const modeSwapPolicySchema = z
     timeoutSeconds: z.number().int().min(5).max(300).default(15),
   })
   .strict();
+import { escapeDisplayControls } from '#src/shared/presentation/escapeDisplayControls.js';
