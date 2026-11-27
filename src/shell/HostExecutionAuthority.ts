@@ -34,11 +34,16 @@ export class HostExecutionAuthority {
     return this.admit(trustedHostExecutable(name, this.workspaceRoots));
   }
 
-  async validate(): Promise<void> {
+  /** Verify the physical paths and return a final root check for synchronous process handoff. */
+  async validate(): Promise<() => void> {
     const roots = [...this.workspaceRoots];
     for (const path of this.paths) outsideWorkspace(path, roots);
     await this.host.assertHostPaths([...this.paths], roots);
-    if (roots.join('\0') !== this.workspaceRoots.join('\0'))
-      throw new Error('Attached workspace authority changed while validating host execution. Retry the preview.');
+    const assertCurrent = () => {
+      if (roots.join('\0') !== this.workspaceRoots.join('\0'))
+        throw new Error('Attached workspace authority changed while validating host execution. Retry the preview.');
+    };
+    assertCurrent();
+    return assertCurrent;
   }
 }
