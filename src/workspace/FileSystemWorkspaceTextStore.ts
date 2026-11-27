@@ -73,14 +73,6 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     };
   }
 
-  private async assertPhysicalAccess(absolute: string, handle?: FileHandle): Promise<void> {
-    await this.options.physicalAccess?.assertWorkspacePath(
-      absolute,
-      [...this.options.accessPolicy.privatePaths, ...this.options.excludedPaths.map(path => resolve(this.root, path))],
-      handle ? { handle } : undefined,
-    );
-  }
-
   normalizePath(input: string): string {
     const normalized = normalizeProjectPath(this.root, input);
     if (
@@ -426,6 +418,14 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     } catch (error) {
       throw classifyPathError(error, path);
     }
+  }
+
+  private async assertPhysicalAccess(absolute: string, handle?: FileHandle): Promise<void> {
+    await this.options.physicalAccess?.assertWorkspacePath(
+      absolute,
+      [...this.options.accessPolicy.privatePaths, ...this.options.excludedPaths.map(path => resolve(this.root, path))],
+      handle ? { handle } : undefined,
+    );
   }
 
   private async inspectReadPath(input: string, checkpoint?: WorkspaceReadOptions['interruptedRename']) {
