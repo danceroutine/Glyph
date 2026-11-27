@@ -199,12 +199,9 @@ describe(ShellCommandAuthorizer, () => {
       const first = authorizer.authorize('echo first', '/project', signal());
       await presented.promise;
       const owner = new AbortController();
-      const program = new ShellProgram(
-        process.execPath,
-        [],
-        'Selected script',
-        async () => () => owner.signal.throwIfAborted(),
-      );
+      const program = new ShellProgram(process.execPath, [], 'Selected script', async () => () => {
+        owner.signal.throwIfAborted();
+      });
       const queued = authorizer.authorize(program, '/project', signal(), {
         transient: true,
         background: false,
@@ -216,6 +213,35 @@ describe(ShellCommandAuthorizer, () => {
       await first;
       await rejected;
       expect(presentShellPermission).toHaveBeenCalledOnce();
+    });
+
+    it('withholds a script preview when its request ends during the source check and presents the next request', async () => {
+      const checking = new Deferred<void>();
+      const checked = new Deferred<void>();
+      const handoff = vi.fn();
+      const program = new ShellProgram(process.execPath, ['selected'], 'Selected script', async () => {
+        checking.resolve();
+        await checked.promise;
+        return handoff;
+      });
+      const presentShellPermission = vi
+        .fn<ShellPermissionPresenter['presentShellPermission']>()
+        .mockResolvedValue(ShellPermissionDecision.ALLOW_ONCE);
+      const authorizer = new ShellCommandAuthorizer('project', store(), { presentShellPermission });
+      const owner = new AbortController();
+      const cancelled = expect(authorizer.authorize(program, '/project', owner.signal)).rejects.toThrow('Turn ended');
+      await checking.promise;
+      owner.abort(new Error('Turn ended'));
+      checked.resolve();
+      await cancelled;
+      await flushQueue();
+      expect(handoff).not.toHaveBeenCalled();
+      expect(presentShellPermission).not.toHaveBeenCalled();
+
+      const next = new ShellProgram(process.execPath, ['next'], 'Next script');
+      await authorizer.authorize(next, '/project', signal());
+      expect(presentShellPermission).toHaveBeenCalledOnce();
+      expect(presentShellPermission.mock.calls[0]![0].command).toBe(next.display);
     });
 
     it('skips a cancelled queued command after another request grants full access', async () => {
