@@ -1415,7 +1415,7 @@ describe(GlyphEditorAdapter, () => {
       const adapter = createAdapter(services);
       const before = await adapter.read('a.ts');
       services.state.trusted = false;
-      await expect(adapter.apply(textMutation(before, 'changed'))).rejects.toMatchObject({
+      await expect(adapter.apply(textMutation(before, 'changed'), async () => {})).rejects.toMatchObject({
         code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
       });
       expect(services.bulkEditService.apply).not.toHaveBeenCalled();
@@ -1434,6 +1434,38 @@ describe(GlyphEditorAdapter, () => {
         failure(GlyphDesktopErrorCode.STALE_DOCUMENT),
       );
       expect(services.bulkEditService.apply).not.toHaveBeenCalled();
+    });
+
+    it('keeps the working copy untouched if trust changes during the host check for a text edit', async () => {
+      const services = editorServices();
+      services.open('a.ts', 'text');
+      const adapter = createAdapter(services);
+      const before = await adapter.read('a.ts');
+      const check = async () => {
+        services.state.trusted = false;
+      };
+
+      await expect(adapter.apply(textMutation(before, 'changed'), check)).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.STALE_DOCUMENT,
+      });
+      expect(services.bulkEditService.apply).not.toHaveBeenCalled();
+    });
+
+    it('keeps an applied edit unsaved if trust changes during the host check for its save', async () => {
+      const services = editorServices();
+      services.open('a.ts', 'text');
+      const adapter = createAdapter(services);
+      const before = await adapter.read('a.ts');
+      await applyText(adapter, textMutation(before, 'changed'));
+      const check = async () => {
+        services.state.trusted = false;
+      };
+
+      await expect(adapter.apply(textMutation(before, 'changed', { save: true }), check)).rejects.toMatchObject({
+        code: GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE,
+      });
+      expect(services.textFileService.save).not.toHaveBeenCalled();
+      expect(services.textFileService.isDirty(URI.file('/workspace/a.ts'))).toBe(true);
     });
 
     it('applies an EOL-only conversion', async () => {
