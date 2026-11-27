@@ -141,6 +141,13 @@ vi.mock('#src/context/search/RustWorkspacePathIndex.js', async importOriginal =>
         captured.indexOptions.push(arguments_[0]);
         captured.indexes.push(this);
       }
+      static override async filesystemNamePolicy(binary: string, root: string) {
+        return {
+          caseSensitive: await this.filesystemCaseSensitive(binary, root),
+          foldsUnicode: false,
+          normalizesUnicode: false,
+        };
+      }
       static override async filesystemCaseSensitive(_binary: string, root: string) {
         return new FileSystemWorkspaceTextStore(root).caseSensitive;
       }

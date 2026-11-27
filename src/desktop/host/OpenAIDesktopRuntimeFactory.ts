@@ -162,8 +162,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const canonicalUserDirectory = resolveAvailableIdentity(this.userDirectory);
     const policy = new WorkspaceAccessPolicy({}, [join(canonicalUserDirectory, 'skill-state.json')]);
     const logger = new FileLogger(configuration.traceFile);
-    const casing = await Promise.all(
-      roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, workspaceRoot.path)),
+    const namePolicies = await Promise.all(
+      roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemNamePolicy(indexExecutable, workspaceRoot.path)),
     );
     const parts = roots.map((workspaceRoot, i) => {
       const excludedPaths = [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(target => {
@@ -173,7 +173,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           : [];
       });
       const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, {
-        caseSensitive: casing[i]!,
+        caseSensitive: namePolicies[i]!.caseSensitive,
         accessPolicy: policy,
         excludedPaths,
       });
@@ -275,6 +275,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         name: part.name,
         path: part.disk.root,
         caseSensitive: part.disk.caseSensitive,
+        normalizesUnicode: namePolicies[index]!.normalizesUnicode,
+        foldsUnicode: namePolicies[index]!.foldsUnicode,
         uri: input.roots[index]!.uri,
       })),
     );
@@ -465,6 +467,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               skillIdentities.set(identity.originId, identity);
               return new FileSkillDiscoveryProvider({
                 includeDirectory: directory => !userSkillDirectory.ownsStore(dirname(join(part.disk.root, directory))),
+                scopePathKey: paths.key.bind(paths),
                 packageId: directory => identity.forDirectory(directory),
                 matchesLegacyId: (directory, previousId, budget) =>
                   identity.matchesLegacyId(directory, previousId, budget),

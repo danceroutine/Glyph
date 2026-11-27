@@ -1,3 +1,5 @@
+import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
+import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { WorkspaceReadFailure } from '#src/workspace/WorkspaceReadFailure.js';
 import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -57,6 +59,32 @@ describe(FileSkillDiscoveryProvider, () => {
       refreshIndex: async () => {},
     });
     expect(provider.scopePathKey('Src/Index')).toBe('src/index');
+  });
+  it('uses the owning volume’s filename policy for nested skill advertisements', async () => {
+    const fixture = await skillFixture();
+    const composed = 'café',
+      decomposed = composed.normalize('NFD');
+    const manifestPath = composed + '/.glyph/skills/example/SKILL.md';
+    await fixture.write(manifestPath, manifest());
+    for (const normalizesUnicode of [false, true]) {
+      const routes = new WorkspaceSourceRoutes([{ name: 'project', path: fixture.root, normalizesUnicode }]);
+      const paths = new InstructionPaths(fixture.store.caseSensitive, routes);
+      const provider = new FileSkillDiscoveryProvider({
+        origin: { id: 'project', label: 'Project', scope: 'project', compatibility: 'glyph' },
+        directory: '.glyph/skills',
+        scopePathKey: paths.key.bind(paths),
+        workspace: fixture.store,
+        listFiles: async () => ({ files: [manifestPath], truncated: false }),
+        uriForPath: path => path,
+        refreshIndex: fixture.refreshIndex,
+      });
+      const catalog = new SkillCatalog([provider], undefined, routes);
+      const turn = await new SkillContextContributor(catalog).beginTurn({ turnId: 't', attachmentPaths: [] });
+      expect(turn.disclosePaths([decomposed + '/file'])?.skillCandidates?.length).toBe(
+        normalizesUnicode ? 1 : undefined,
+      );
+      expect(turn.disclosePaths([composed + '/file'])?.skillCandidates?.length).toBe(normalizesUnicode ? undefined : 1);
+    }
   });
   it('discovers a larger catalog with bounded simultaneous metadata reads', async () => {
     const fixture = await skillFixture();

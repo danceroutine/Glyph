@@ -315,7 +315,6 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         const name = rule.name ?? rule.path.split('/').at(-1)!;
         return `${name} ${rule.description ?? ''} ${rule.path}`.toLowerCase().includes(normalized);
       })
-      .slice(0, 50)
       .map(rule => {
         const name = rule.name ?? rule.path.split('/').at(-1)!;
         return {
@@ -345,7 +344,13 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         skillId: skill.id,
         ...(skill.revision ? { revision: skill.revision } : {}),
       }));
-    return [...rules, ...skills].slice(0, 50);
+    const rank = (candidate: { name: string }) => {
+      const name = candidate.name.toLowerCase();
+      if (name === normalized) return 0;
+      if (name.startsWith(normalized)) return 1;
+      return name.includes(normalized) ? 2 : 3;
+    };
+    return [...rules, ...skills].toSorted((left, right) => rank(left) - rank(right)).slice(0, 50);
   }
   async selectFiles(): Promise<readonly GlyphContextAttachment[]> {
     this.assertTrusted();

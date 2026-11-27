@@ -40,6 +40,7 @@ struct RequestEnvelope {
 enum Request {
     Initialize(InitializeParams),
     FilesystemCaseSensitive(String),
+    FilesystemNamePolicy(String),
     Search(SearchParams),
     Glob(GlobParams),
     FilterPaths(Vec<String>),
@@ -280,6 +281,13 @@ fn service_loop(
             WorkItem::Request(decoded) => {
                 let id = Some(decoded.id.clone());
                 match decoded.request {
+                    Request::FilesystemNamePolicy(root) => (
+                        result_response(
+                            id,
+                            crate::service::filesystem_name_policy(std::path::Path::new(&root)),
+                        ),
+                        false,
+                    ),
                     Request::FilesystemCaseSensitive(root) => (
                         result_response(
                             id,
@@ -410,6 +418,11 @@ fn decode_request(line: &[u8]) -> Result<DecodedRequest, (Option<RequestId>, Ser
     }
 
     let request = match envelope.method.as_str() {
+        "filesystemNamePolicy" => Request::FilesystemNamePolicy(decode_params(
+            "filesystemNamePolicy",
+            envelope.params,
+            Some(envelope.id.clone()),
+        )?),
         "filesystemCaseSensitive" => Request::FilesystemCaseSensitive(decode_params(
             "filesystemCaseSensitive",
             envelope.params,

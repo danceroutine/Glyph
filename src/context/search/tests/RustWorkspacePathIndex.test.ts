@@ -21,6 +21,14 @@ describe(RustWorkspacePathIndex, () => {
         expect(worker.requests.map(request => request.method)).toEqual(['filesystemCaseSensitive', 'shutdown']);
       }
     });
+    it('obtains both filename policies from the native volume before indexing', async () => {
+      const value = { caseSensitive: true, foldsUnicode: false, normalizesUnicode: true };
+      const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : value));
+      await expect(RustWorkspacePathIndex.filesystemNamePolicy('/fixture', '/volume', () => worker)).resolves.toEqual(
+        value,
+      );
+      expect(worker.requests.map(request => request.method)).toEqual(['filesystemNamePolicy', 'shutdown']);
+    });
     it('sends relative host exclusions and explicitly marks directly attached private roots', async () => {
       for (const [root, expected] of [
         ['/project', { excludedPaths: ['public/cache', 'profile/skill-state.json'] }],

@@ -14,6 +14,7 @@ import { parseSkillManifest } from './SkillManifest.ts';
 export interface SkillDiscoveryLocation {
   readonly origin: SkillOrigin;
   readonly scopePrefix?: string;
+  readonly scopePathKey?: (path: string) => string;
   /** Store-relative directory. Nested occurrences are allowed for project locations. */
   readonly directory: string;
   readonly workspace: WorkspaceTextStore;
@@ -60,6 +61,7 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
   }
 
   scopePathKey(path: string): string {
+    if (this.location.scopePathKey) return this.location.scopePathKey(path);
     if (this.location.workspace.caseSensitive) return path;
     if (!this.location.scopePrefix) return path.toLowerCase();
     const [root, ...relative] = path.split('/');

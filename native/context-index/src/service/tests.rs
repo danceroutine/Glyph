@@ -194,6 +194,54 @@ fn inspects_the_actual_directory_when_no_case_policy_is_specified() {
     }
 }
 
+#[test]
+fn name_policy_matches_composed_and_decomposed_directory_entries() {
+    let root = tempdir().unwrap();
+    let composed = root.path().join("café");
+    let decomposed = root.path().join("cafe\u{301}");
+    fs::create_dir(&composed).unwrap();
+    let policy = filesystem_name_policy(root.path()).unwrap();
+    assert_eq!(policy.normalizes_unicode, decomposed.is_dir());
+    if !policy.normalizes_unicode {
+        fs::create_dir(&decomposed).unwrap();
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            fs::metadata(composed).unwrap().ino() == fs::metadata(decomposed).unwrap().ino(),
+            policy.normalizes_unicode
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        for (a, b) in [("σ", "ς"), ("ſ", "s"), ("ß", "SS"), ("ﬀ", "ff")] {
+            let a = root.path().join(a);
+            let b = root.path().join(b);
+            fs::create_dir(&a).unwrap();
+            if policy.folds_unicode {
+                assert_eq!(
+                    fs::metadata(&a).unwrap().ino(),
+                    fs::metadata(&b).unwrap().ino()
+                );
+            } else if policy.case_sensitive {
+                fs::create_dir(&b).unwrap();
+                assert_ne!(
+                    fs::metadata(&a).unwrap().ino(),
+                    fs::metadata(&b).unwrap().ino()
+                );
+            }
+        }
+    }
+    assert!(filesystem_name_policy(&root.path().join("absent")).is_err());
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    assert!(filesystem_casing::unicode_policy(&root.path().join("absent")).is_err());
+    #[cfg(target_os = "macos")]
+    assert!(filesystem_casing::normalizing_volume(-1).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn an_unreadable_case_policy_prevents_initialization_and_allows_a_retry() {

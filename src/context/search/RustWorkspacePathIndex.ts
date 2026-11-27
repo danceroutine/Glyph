@@ -26,6 +26,7 @@ const MAXIMUM_ERROR_OUTPUT = 8_192;
 
 enum PathIndexMethod {
   FILESYSTEM_CASE_SENSITIVE = 'filesystemCaseSensitive',
+  FILESYSTEM_NAME_POLICY = 'filesystemNamePolicy',
   INITIALIZE = 'initialize',
   SEARCH = 'search',
   GLOB = 'glob',
@@ -178,6 +179,17 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     const probe = new RustWorkspacePathIndex({ binaryPath, root, caseSensitive: true }, processFactory);
     try {
       return z.boolean().parse(await probe.request(PathIndexMethod.FILESYSTEM_CASE_SENSITIVE, root));
+    } finally {
+      await probe.dispose();
+    }
+  }
+
+  static async filesystemNamePolicy(binaryPath: string, root: string, processFactory: ProcessFactory = startProcess) {
+    const probe = new RustWorkspacePathIndex({ binaryPath, root, caseSensitive: true }, processFactory);
+    try {
+      return z
+        .object({ caseSensitive: z.boolean(), normalizesUnicode: z.boolean(), foldsUnicode: z.boolean() })
+        .parse(await probe.request(PathIndexMethod.FILESYSTEM_NAME_POLICY, root));
     } finally {
       await probe.dispose();
     }

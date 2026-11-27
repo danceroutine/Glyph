@@ -46,10 +46,15 @@ export class InstructionPaths {
   }
 
   key(path: string): string {
-    if (this.caseSensitive(path)) return path;
-    if (typeof this.casing === 'boolean') return path.toLowerCase();
-    const [root, ...segments] = path.split('/');
-    return [root, ...segments.map(segment => segment.toLowerCase())].join('/');
+    const confirmed = this.routes?.scopeKey(path, this.caseSensitive(path));
+    if (confirmed !== undefined) return confirmed;
+    const relativeKey = (value: string) => {
+      const normalized = this.routes?.normalizeName(path, value) ?? value;
+      return this.caseSensitive(path) ? normalized : normalized.toLowerCase();
+    };
+    if (typeof this.casing === 'boolean') return relativeKey(path);
+    const slash = path.indexOf('/');
+    return slash < 0 ? path : path.slice(0, slash + 1) + relativeKey(path.slice(slash + 1));
   }
 
   contains(scope: string, path: string): boolean {
