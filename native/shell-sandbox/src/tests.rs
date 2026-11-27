@@ -1103,11 +1103,17 @@ fn confines_personal_sources_and_keeps_ordinary_project_files_available() {
         "(deny file-read* file-write* file-test-existence (subpath \"{}\"))",
         rules.display()
     )));
-    let mounts = linux::bubblewrap_arguments(&prepared, None).unwrap();
+    let home = base.join("home");
+    fs::create_dir_all(home.join(".cargo")).unwrap();
+    std::os::unix::fs::symlink(&profile, home.join(".cargo/bin")).unwrap();
+    let mounts = linux::bubblewrap_arguments(&prepared, Some(&home)).unwrap();
     assert!(mounts.iter().any(|arg| arg == ordinary.as_os_str()));
     assert!(!mounts
         .iter()
         .any(|arg| arg == rules.join("selected").as_os_str()));
+    assert!(mounts
+        .windows(2)
+        .any(|pair| pair[0] == "--tmpfs" && pair[1] == home.join(".cargo/bin/rules").as_os_str()));
     let mut inside = request(SandboxProfile::ReadOnly, &rules, &state);
     inside.private_paths = vec![rules.clone()];
     assert!(prepare_request(inside).is_err());

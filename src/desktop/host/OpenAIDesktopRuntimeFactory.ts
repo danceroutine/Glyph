@@ -438,7 +438,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           ),
         ],
         paths,
-        () => userRuleDirectory.refresh(),
+        () => {
+          userRuleDirectory.refresh();
+        },
       );
       turnContexts = new TurnContextCoordinator(instructionCatalog);
       userRules = new UserAgentRuleManager(
@@ -456,7 +458,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             join(userRuleRoot, 'rules', filename),
             this.profile.path,
           ),
-        () => this.profile.ensureDirectory(),
+        () => {
+          this.profile.ensureDirectory();
+        },
       );
     }
     const reviews = new ProposalReviewManager(

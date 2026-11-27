@@ -114,6 +114,9 @@ describe(DeterministicDesktopRuntimeFactory, () => {
         workspaceRoots: ['/project'],
         stateDirectory: expect.stringContaining('glyph-desktop-probe-'),
         protectedPaths: [repositoryRoot],
+        accessPolicy: expect.objectContaining({
+          privatePaths: expect.arrayContaining([expect.stringContaining('glyph-desktop-probe-')]),
+        }),
       });
       expect(native.launch).toHaveBeenCalledExactlyOnceWith('true', '/project', {
         sandboxProfile: ShellSandboxProfile.READ_ONLY,

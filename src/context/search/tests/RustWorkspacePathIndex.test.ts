@@ -130,6 +130,48 @@ describe(RustWorkspacePathIndex, () => {
       },
     );
 
+    it('withholds a decoded result when the host reserves it before delivery', async () => {
+      let paths: string[] = [];
+      const worker = new FakeWorker(req =>
+        req.method === 'initialize' ? indexState(1) : req.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE,
+      );
+      const index = fixtureIndex(
+        { root: '/project', binaryPath: '/fixture', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+        () => worker,
+      );
+      onTestFinished(() => index.dispose());
+      await index.initialize();
+      const result = index.glob('**', { limit: 2 });
+      worker.stdout.write(
+        JSON.stringify({
+          version: 1,
+          id: worker.requests.at(-1)!.id,
+          result: { files: ['receipt'], truncated: false },
+        }) + '\n',
+      );
+      paths = ['/project/receipt'];
+      await expect(result).rejects.toThrow('access changed');
+    });
+
+    it('rejects a staged query if policy changes as its request parameters are read', async () => {
+      let paths: string[] = [];
+      const worker = new FakeWorker(req => (req.method === 'initialize' ? indexState(1) : { shutdown: true }));
+      const index = fixtureIndex(
+        { root: '/project', binaryPath: '/fixture', accessPolicy: new WorkspaceAccessPolicy({}, () => paths) },
+        () => worker,
+      );
+      await index.initialize();
+      await expect(
+        index.search('name', {
+          get generation() {
+            paths = ['/new'];
+            return 1;
+          },
+        }),
+      ).rejects.toThrow('private paths changed');
+      expect(worker.requests.map(r => r.method)).toEqual(['initialize']);
+      await index.dispose();
+    });
     it('checks a newly admitted policy before caching an initialization response', async () => {
       let paths: string[] = [];
       const worker = new FakeWorker(request => (request.method === 'shutdown' ? { shutdown: true } : NO_RESPONSE));

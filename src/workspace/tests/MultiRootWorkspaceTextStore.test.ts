@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProjectContext } from '#src/project/context/ProjectContext.js';
 import { ProjectContextKind } from '#src/project/context/ProjectContextKind.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { MultiRootWorkspaceTextStore } from '#src/workspace/MultiRootWorkspaceTextStore.js';
 import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';

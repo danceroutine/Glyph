@@ -164,7 +164,7 @@ async function probePackagedRuntime(workspaceRoot: string): Promise<void> {
       workspaceRoots: [workspaceRoot],
       stateDirectory,
       protectedPaths: [artifactRoot],
-      accessPolicy: new WorkspaceAccessPolicy({}, [stateDirectory, artifactRoot]),
+      accessPolicy: new WorkspaceAccessPolicy({}, [stateDirectory]),
     }).launch('true', workspaceRoot, { sandboxProfile: ShellSandboxProfile.READ_ONLY });
     child.stdin?.end();
     await childResult(child);

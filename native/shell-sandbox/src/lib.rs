@@ -544,7 +544,7 @@ pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
 pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
     let home_directory = std::env::var_os("HOME").and_then(|path| fs::canonicalize(path).ok());
     let executable = linux::bubblewrap_executable()?;
-    let mut mounts = kernel_workspace::KernelWorkspace::open()?;
+    let mut mounts = kernel_workspace::KernelWorkspace::default();
     let arguments = linux::arguments(request, home_directory.as_deref(), &mut mounts)?;
     Command::new(executable)
         .args(arguments)
@@ -824,7 +824,9 @@ pub mod linux {
             "/tmp",
         ]);
 
-        for path in [
+        let mut private =
+            std::collections::BTreeSet::from_iter(request.private_paths.iter().cloned());
+        let runtime_paths = [
             "/usr",
             "/bin",
             "/sbin",
@@ -833,17 +835,27 @@ pub mod linux {
             "/etc",
             "/opt",
             "/nix/store",
-        ] {
-            let path = Path::new(path);
-            if path.exists() {
-                push_path_mount(&mut arguments, "--ro-bind", path, path);
+        ];
+        let runtime_paths = runtime_paths
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .chain(super::home_toolchain_paths(home_directory));
+        for grant in runtime_paths.filter(|path| path.exists()) {
+            let physical = std::fs::canonicalize(&grant)?;
+            if request
+                .private_paths
+                .iter()
+                .any(|reserved| physical.starts_with(reserved))
+            {
+                continue;
             }
-        }
-
-        for path in super::home_toolchain_paths(home_directory) {
-            if path.exists() {
-                push_path_mount(&mut arguments, "--ro-bind", &path, &path);
+            // Each runtime alias grants a separate visible path. Mask its private descendants at that spelling.
+            for reserved in &request.private_paths {
+                if let Ok(suffix) = reserved.strip_prefix(&physical) {
+                    private.insert(grant.join(suffix));
+                }
             }
+            push_path_mount(&mut arguments, "--ro-bind", &grant, &grant);
         }
 
         let mut view = WorkspaceView::new(mounts);
@@ -931,7 +943,7 @@ pub mod linux {
                 push_path_mount(&mut arguments, "--ro-bind", Path::new("/dev/null"), &path);
             }
         }
-        for path in &request.private_paths {
+        for path in &private {
             if projected.iter().any(|root| path.starts_with(root))
                 || path.starts_with(&request.state_directory)
             {

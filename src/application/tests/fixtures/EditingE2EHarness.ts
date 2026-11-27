@@ -13,7 +13,6 @@ import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManage
 import type { EditingConfiguration } from '#src/editing/configuration/EditingConfiguration.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
 import { JsDiffTextDiffer } from '#src/editing/documents/JsDiffTextDiffer.js';
-import { ProjectAccess } from '#src/project/ProjectAccess.js';
 import { ProjectToolRuntime } from '#src/project/ProjectToolRuntime.js';
 import { ProjectAgentInstructions } from '#src/project/prompts/ProjectAgentInstructions.js';
 import { OpenAIProvider } from '#src/providers/openai/OpenAIProvider.js';

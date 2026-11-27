@@ -8,7 +8,6 @@ import { EditFailureReason } from '#src/editing/errors/EditFailureReason.js';
 import { EditOperation } from '#src/editing/proposals/EditOperation.js';
 import { ProposalReviewManager } from '#src/editing/reviews/ProposalReviewManager.js';
 import { FileProposalReviewStore } from '#src/editing/reviews/persistence/FileProposalReviewStore.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { EditingE2EHarness } from './fixtures/EditingE2EHarness.ts';
 import { ScriptedOpenAIResponsesFixture } from './fixtures/ScriptedOpenAIResponsesFixture.ts';
 import { ToolInputKind } from '#src/tools/ToolInputKind.js';
