@@ -36,8 +36,11 @@ export class AgentInstructionSet {
     );
     for (const source of sources) {
       const alias = source.projectAlias;
-      if (alias?.kind === AgentInstructionSourceKind.GLYPH_PROJECT_RULE)
-        native.add(compatibilityKey(source, paths.key(alias.scope)));
+      if (alias)
+        for (const location of [alias, ...(alias.additionalScopes ?? [])]) {
+          if (location.kind === AgentInstructionSourceKind.GLYPH_PROJECT_RULE)
+            native.add(compatibilityKey(source, paths.key(location.scope)));
+        }
     }
     const depth = new Map(
       [...new Set(sources.map(source => source.scope))].map(scope => [

@@ -1,3 +1,5 @@
+import type { SourcePathAliases } from '#src/workspace/SourcePathAliases.js';
+import { pathToFileURL } from 'node:url';
 import type { FilesystemNamePolicy } from '#src/workspace/FilesystemNamePolicy.js';
 import { resolveAvailableIdentity } from '#src/shell/ShellRuntimePathPolicy.js';
 import { dirname } from 'node:path';
@@ -15,6 +17,8 @@ export async function assertUserWorkingCopiesClean(
   namePolicy: FilesystemNamePolicy,
   sourcePath?: string,
   configuredProfile?: string,
+  sourceAliases?: SourcePathAliases,
+  retainedAliases: readonly string[] = [],
 ): Promise<void> {
   const verifyProfile = () => {
     if (configuredProfile && sourcePath && resolveAvailableIdentity(configuredProfile) !== dirname(dirname(sourcePath)))
@@ -23,6 +27,13 @@ export async function assertUserWorkingCopiesClean(
       );
   };
   verifyProfile();
+  const aliases = () =>
+    sourcePath && sourceAliases
+      ? [...new Set([...sourceAliases(sourcePath, kind === 'skill'), ...retainedAliases])].map(path =>
+          pathToFileURL(path).toString(),
+        )
+      : undefined;
+  const sourceUris = aliases();
   const peers = editors.trustedUserEditors(owner, sourcePath);
   await Promise.all(
     [owner, ...peers.map(peer => peer.identity)].map(async identity => {
@@ -34,6 +45,7 @@ export async function assertUserWorkingCopiesClean(
         name,
         caseSensitive: namePolicy.caseSensitive,
         namePolicy,
+        ...(sourceUris ? { sourceUris } : {}),
       });
       if (!result.ok || result.operationId !== operationId || result.workingCopiesClean !== true)
         throw new Error(
@@ -44,6 +56,7 @@ export async function assertUserWorkingCopiesClean(
   verifyProfile();
   const current = editors.trustedUserEditors(owner, sourcePath);
   if (
+    JSON.stringify(aliases()) !== JSON.stringify(sourceUris) ||
     current.length !== peers.length ||
     current.some(peer => !peers.some(previous => previous.connectionId === peer.connectionId))
   )
