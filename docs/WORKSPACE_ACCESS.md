@@ -15,6 +15,21 @@ process belong at the adapter.
 | Admit a window to mutate a workspace                                            | `WorkspaceOwnershipRegistry` and the desktop host               | When admitting the connection and when dispatching or completing work on its behalf              |
 | Authorize a shell command and launch it                                         | `ShellApprovalPolicy` and the configured `ShellProcessLauncher` | Match the command and working directory for approval, then enforce the granted profile at launch |
 
+## Composing a host
+
+Select the consumer's policy through `WorkspaceContentAccess` at the CLI or
+desktop composition root. Its project, shell, selected-file and user-catalog
+views share the host's reservations. Bind the chosen policy to the attached
+directory with `WorkspaceRootAccess`. The disk store and path index use that
+root's projection. The operation's `assertCurrent` check belongs immediately
+before returning an asynchronous result or performing a write.
+
+For a rule or instruction supplied to a model, carry the identity observed by
+the authorized read. `NativePinnedSourceAuthority` checks the physical origins
+in a batch. The provider's final synchronous guard checks trust, cancellation
+and the private-path generation at the moment of delivery. Keeping the body
+selected for the turn lets ordinary content edits take effect on the next turn.
+
 ## Choosing the boundary
 
 A normalized path is an address. A revision identifies reviewed content. An
