@@ -45,9 +45,10 @@ export function matchesAgentRulePath(
   const routes = source.scope === '.' ? paths.equivalents(path) : [path];
   return routes.some(route => {
     const relative = paths.relativeToScope(source.scope, route);
-    const normalized = (value: string) => paths.routes?.normalizeName(route, value) ?? value;
+    const owner = source.scope === '.' ? route : source.scope;
+    const normalized = (value: string) => paths.routes?.normalizeName(owner, value) ?? value;
     return source.globs?.some(pattern =>
-      budget.matches(normalized(pattern), normalized(relative), paths.caseSensitive(route)),
+      budget.matches(normalized(pattern), normalized(relative), paths.caseSensitive(owner)),
     );
   });
 }
