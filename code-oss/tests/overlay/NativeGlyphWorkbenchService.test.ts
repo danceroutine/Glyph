@@ -445,6 +445,10 @@ describe(NativeGlyphWorkbenchService, () => {
       referenceSpans: [{ ...reference, from: 10, to: 15 }],
     });
     expect(later.types()).toContain(GlyphWorkbenchCommandType.CREATE_GOAL);
+    const truncated = await workbench();
+    await expect(
+      truncated.service.send('/goal', [], { ...options, referenceSpans: [{ ...reference, to: 50 }] }),
+    ).rejects.toThrow('Usage:');
     const stale = await workbench();
     await expect(
       stale.service.send('/goal', [], { ...options, referenceSpans: [{ ...reference, label: 'other' }] }),
