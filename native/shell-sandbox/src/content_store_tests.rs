@@ -59,8 +59,15 @@ fn store_authority_excludes_workspace_private_symlink_and_writable_roots() {
         invalid.executable_suffix = suffix.into();
         request.content_stores.push(invalid);
     }
-    request.content_stores.push(store(files));
-    assert_eq!(VerifiedStores::open(&request).stores.len(), 1);
+    request.content_stores.push(store(files.clone()));
+    let mut stores = VerifiedStores::open(&request);
+    assert_eq!(stores.stores.len(), 1);
+    stores.retain_admitted(&request);
+    assert_eq!(stores.stores.len(), 1);
+    fs::rename(&files, base.join("old-store")).unwrap();
+    fs::create_dir(&files).unwrap();
+    stores.retain_admitted(&request);
+    assert!(stores.stores.is_empty());
 }
 
 #[test]

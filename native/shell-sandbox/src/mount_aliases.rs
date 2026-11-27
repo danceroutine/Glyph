@@ -5,7 +5,7 @@ use super::{
 };
 use glyph_filesystem_metadata::mount_table::MountTable;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub(super) fn protect(
     request: &mut SandboxRequest,
@@ -60,6 +60,27 @@ pub(super) fn protect(
             "A sandbox root aliases private host storage.".into(),
         ));
     }
+    // A content store authenticates indexed hard links. Only external host trees may supply
+    // that authority, including after a descendant is mounted under a workspace.
+    let mut store_exclusions = hidden.clone();
+    store_exclusions.extend(protected.iter().cloned());
+    for root in request
+        .workspace_roots
+        .iter()
+        .chain([&request.state_directory])
+    {
+        mounts.aliases(root, true, &mut store_exclusions);
+    }
+    store_exclusions.extend(home_sensitive_paths(home));
+    request.content_stores.retain(|store| {
+        let mut views = BTreeSet::new();
+        mounts.aliases(&store.root, true, &mut views);
+        !views.iter().any(|view| {
+            store_exclusions
+                .iter()
+                .any(|excluded| view.starts_with(excluded) || excluded.starts_with(view))
+        })
+    });
     request.private_paths = hidden.into_iter().collect();
     request.protected_paths = protected.into_iter().collect();
     Ok(())
@@ -70,6 +91,7 @@ mod tests {
     use super::*;
     use crate::SandboxProfile;
     use std::fs;
+    use std::path::PathBuf;
 
     #[test]
     fn projects_explicit_paths_through_file_directory_and_ancestor_aliases() {
@@ -90,7 +112,16 @@ mod tests {
 8 1 0:1 /repo/.skill-staging/entry /project/transaction
 9 1 0:3 / /state/nested-volume
 10 1 0:3 /sub /project/volume-alias";
+        for name in ["/host", "/ordinary/store"] {
+            request.content_stores.push(crate::ContentStore {
+                root: name.into(),
+                layout: crate::ContentStoreLayout::Sha512Prefix2,
+                executable_suffix: String::new(),
+            });
+        }
         protect(&mut request, None, table).unwrap();
+        assert_eq!(request.content_stores.len(), 1);
+        assert_eq!(request.content_stores[0].root, Path::new("/ordinary/store"));
         for hidden in [
             "/project/single",
             "/project/config/trace",

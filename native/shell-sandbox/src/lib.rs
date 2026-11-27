@@ -433,7 +433,6 @@ fn repository_metadata_paths(
     visit_workspace(root, policy, &mut |path, file_type| {
         if managed_directory(path) {
             paths.push(path.to_owned());
-            return Ok(false);
         }
         if path.file_name() != Some(OsStr::new(".git")) {
             return Ok(file_type.is_dir());
@@ -669,9 +668,8 @@ pub fn execute(request: &SandboxRequest) -> Result<ExitStatus, SandboxError> {
     let home_directory = std::env::var_os("HOME").and_then(|path| fs::canonicalize(path).ok());
     fn run(request: &SandboxRequest, home: Option<&Path>) -> Result<ExitStatus, SandboxError> {
         let executable = linux::bubblewrap_executable()?;
-        let mut mounts = kernel_workspace::KernelWorkspace::open(request)?;
         let mut request = request.clone();
-        mount_aliases::protect(&mut request, home, &std::fs::read("/proc/self/mountinfo")?)?;
+        let mut mounts = kernel_workspace::KernelWorkspace::open(&mut request, home)?;
         let arguments = linux::arguments(&request, home, &mut mounts)?;
         Ok(std::process::Command::new(executable)
             .args(arguments)

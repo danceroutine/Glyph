@@ -26,25 +26,31 @@ pub(super) struct KernelWorkspace {
 }
 
 impl KernelWorkspace {
-    pub(super) fn open(request: &super::SandboxRequest) -> io::Result<Self> {
-        let stores = super::content_store::VerifiedStores::open(request);
-        let original = capabilities(None)?.effective;
+    pub(super) fn open(
+        request: &mut super::SandboxRequest,
+        home: Option<&Path>,
+    ) -> Result<Self, super::SandboxError> {
+        let mut stores = super::content_store::VerifiedStores::open(request);
+        let original = capabilities(None).map_err(io::Error::from)?.effective;
         let uid = getuid().as_raw();
         let gid = getgid().as_raw();
         // The standalone helper enters fresh user and mount namespaces. Its file descriptor table stays shared.
-        unsafe { unshare_unsafe(UnshareFlags::NEWUSER | UnshareFlags::NEWNS) }?;
+        unsafe { unshare_unsafe(UnshareFlags::NEWUSER | UnshareFlags::NEWNS) }
+            .map_err(io::Error::from)?;
         fs::write("/proc/self/setgroups", "deny")?;
         fs::write("/proc/self/uid_map", format!("{uid} {uid} 1\n"))?;
         fs::write("/proc/self/gid_map", format!("{gid} {gid} 1\n"))?;
         // A new user namespace grants DAC overrides even for an unprivileged owner. Source descriptors
         // and private runtime copies must retain the original caller's file access.
         let gained = (CapabilitySet::DAC_OVERRIDE | CapabilitySet::DAC_READ_SEARCH) - original;
-        let mut caps = capabilities(None)?;
+        let mut caps = capabilities(None).map_err(io::Error::from)?;
         caps.effective.remove(gained);
         caps.permitted.remove(gained);
-        set_capabilities(None, caps)?;
+        set_capabilities(None, caps).map_err(io::Error::from)?;
         let propagation = MountPropagationFlags::REC | MountPropagationFlags::PRIVATE;
-        mount_change("/", propagation)?;
+        mount_change("/", propagation).map_err(io::Error::from)?;
+        super::mount_aliases::protect(request, home, &fs::read("/proc/self/mountinfo")?)?;
+        stores.retain_admitted(request);
         let scratch = tempfile::Builder::new()
             .prefix("glyph-shell-view-")
             .tempdir_in("/tmp")?;

@@ -6,14 +6,20 @@ use rustix::process::getuid;
 use sha2::{Digest, Sha512};
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Component, Path};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::{Component, Path, PathBuf};
 
 const MAX_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_REQUEST_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+struct OpenedStore {
+    root: PathBuf,
+    directory: File,
+    executable_suffix: String,
+}
+
 pub(super) struct VerifiedStores {
-    stores: Vec<(OwnedFd, String)>,
+    stores: Vec<OpenedStore>,
     remaining_bytes: Option<u64>,
 }
 
@@ -46,6 +52,21 @@ impl VerifiedStores {
         }
     }
 
+    /// Host ownership was checked before user IDs were mapped into the new namespace.
+    /// Keep that exact inode only when the frozen mount layout still admits its path.
+    pub(super) fn retain_admitted(&mut self, request: &SandboxRequest) {
+        self.stores.retain(|store| {
+            request
+                .content_stores
+                .iter()
+                .any(|allowed| allowed.root == store.root)
+                && store.directory.metadata().is_ok_and(|before| {
+                    std::fs::symlink_metadata(&store.root)
+                        .is_ok_and(|now| now.dev() == before.dev() && now.ino() == before.ino())
+                })
+        });
+    }
+
     pub(super) fn copy_object(&mut self, candidate: &OwnedFd, target: &Path) -> io::Result<()> {
         if self.stores.is_empty() {
             return Ok(());
@@ -74,13 +95,14 @@ impl VerifiedStores {
         let digest = format!("{:x}", Sha512::digest(&bytes));
         let (shard, name) = digest.split_at(2);
         let executable = source.st_mode & 0o111 != 0;
-        for (store, suffix) in &self.stores {
+        for store in &self.stores {
+            let suffix = &store.executable_suffix;
             let filename = if executable {
                 format!("{name}{suffix}")
             } else {
                 name.to_owned()
             };
-            if trusted_object(store, shard, &filename, &source) {
+            if trusted_object(&store.directory, shard, &filename, &source) {
                 // The mount namespace owns this tmpfs. Its root is sealed read-only before launch.
                 let mut copy = File::create_new(target)?;
                 copy.write_all(&bytes)?;
@@ -97,7 +119,7 @@ fn trusted_entry(stat: &Stat) -> bool {
     stat.st_uid == getuid().as_raw() && stat.st_mode & 0o022 == 0
 }
 
-fn trusted_object(store: &OwnedFd, shard: &str, filename: &str, source: &Stat) -> bool {
+fn trusted_object(store: &File, shard: &str, filename: &str, source: &Stat) -> bool {
     let Some(directory) = openat(store, shard, directory_flags(), Mode::empty())
         .ok()
         .filter(|dir| fstat(dir).is_ok_and(|stat| trusted_entry(&stat)))
@@ -119,7 +141,7 @@ fn directory_flags() -> OFlags {
     OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
 }
 
-fn open_store(store: &ContentStore) -> Option<(OwnedFd, String)> {
+fn open_store(store: &ContentStore) -> Option<OpenedStore> {
     let ContentStoreLayout::Sha512Prefix2 = store.layout;
     if !store.root.is_absolute()
         || store.executable_suffix.len() > 32
@@ -145,7 +167,11 @@ fn open_store(store: &ContentStore) -> Option<(OwnedFd, String)> {
             return None;
         }
     }
-    trusted_entry(&fstat(&dir).ok()?).then(|| (dir, store.executable_suffix.clone()))
+    trusted_entry(&fstat(&dir).ok()?).then(|| OpenedStore {
+        root: store.root.clone(),
+        directory: dir.into(),
+        executable_suffix: store.executable_suffix.clone(),
+    })
 }
 
 #[cfg(test)]

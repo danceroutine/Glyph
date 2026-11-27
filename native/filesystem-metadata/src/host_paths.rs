@@ -106,10 +106,8 @@ mod unix {
         let final_id = final_meta.as_ref().map(id);
         unchanged(final_id, existing(fs::metadata(path))?.as_ref().map(id))?;
         for (name, expected) in &observed {
-            unchanged(
-                *expected,
-                existing(fs::symlink_metadata(name))?.as_ref().map(id),
-            )?;
+            let current = existing(fs::symlink_metadata(name))?.as_ref().map(id);
+            unchanged(*expected, current)?;
         }
         let directory = final_meta.as_ref().is_some_and(fs::Metadata::is_dir);
         if let Some(meta) = final_meta {

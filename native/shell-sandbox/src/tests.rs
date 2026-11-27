@@ -394,6 +394,7 @@ fn seatbelt_policy_is_deny_default_and_preserves_read_only_boundaries() {
     create_dir(&temporary).expect("temporary");
     create_dir(&home).expect("home");
     create_dir(root.join(".git")).expect("git metadata");
+    std::fs::create_dir_all(root.join(".glyph/skills")).unwrap();
     write(root.join(".env"), "synthetic canary").expect("workspace secret");
     write(root.join(".git-credentials"), "synthetic canary").expect("workspace credentials");
     create_dir(root.join("nested")).expect("nested directory");
