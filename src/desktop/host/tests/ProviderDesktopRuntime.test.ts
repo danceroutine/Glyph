@@ -645,6 +645,59 @@ it('keeps ordinary saved chat visible after trust revocation without privileged 
 });
 
 describe(ProviderDesktopRuntime, () => {
+  it.each([false, true])(
+    'acknowledges the exact provider admission boundary before completing the turn (admitted=%s)',
+    async accepted => {
+      const entered = deferredVoid();
+      const prepare = deferredVoid();
+      const finish = deferredVoid();
+      const harness = await fixture(
+        async options => {
+          entered.resolve();
+          await prepare.promise;
+          if (!accepted) throw new Error('Selected manual rule is unavailable');
+          options.onTurnAdmitted!();
+          await finish.promise;
+          throw new Error('Provider disconnected');
+        },
+        'owner',
+        undefined,
+        { reportsTurnAdmission: true },
+      );
+      try {
+        const send = harness.runtime.handle({
+          type: Command.SEND,
+          chatId: harness.chatId,
+          runId: 'pending',
+          text: 'Keep this',
+          attachments: [],
+        });
+        await entered.promise;
+        const steer = harness.runtime.handle({
+          type: Command.STEER,
+          chatId: harness.chatId,
+          runId: 'pending',
+          messageId: 'later',
+          text: 'Later',
+          attachments: [],
+        });
+        const checked = accepted
+          ? Promise.all([send, steer])
+          : Promise.all([expect(send).rejects.toThrow('unavailable'), expect(steer).rejects.toThrow('unavailable')]);
+        prepare.resolve();
+        await checked;
+        expect((await harness.runtime.snapshot()).runs[0]?.steering?.length ?? 0).toBe(accepted ? 1 : 0);
+        finish.resolve();
+        await vi.waitFor(async () => {
+          expect((await harness.runtime.snapshot()).runs[0]?.status).toBe('failed');
+        });
+      } finally {
+        prepare.resolve();
+        finish.resolve();
+        await harness.runtime.dispose();
+      }
+    },
+  );
   it('routes steering to its exact active run, persists it, and rejects a stale target without a competing send', async () => {
     const gate = deferredVoid();
     const entered = deferredVoid();

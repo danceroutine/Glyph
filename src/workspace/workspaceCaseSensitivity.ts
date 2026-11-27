@@ -22,10 +22,14 @@ export function workspaceCaseSensitivity(root: string): boolean {
   try {
     const entries = opendirSync(directory);
     try {
+      const names = new Set<string>();
       for (let count = 0; count < 64; count++) {
         const entry = entries.readSync();
         if (!entry) break;
-        const sensitive = compareName(directory, entry.name);
+        names.add(entry.name);
+      }
+      for (const name of names) {
+        const sensitive = compareName(directory, name, names);
         if (sensitive !== undefined) return sensitive;
       }
     } finally {
@@ -43,13 +47,17 @@ export function workspaceCaseSensitivity(root: string): boolean {
   return process.platform !== 'win32' && process.platform !== 'darwin';
 }
 
-function compareName(directory: string, name: string) {
+function compareName(directory: string, name: string, siblings?: ReadonlySet<string>) {
   const other = name.replace(/[a-zA-Z]/u, letter =>
     letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase(),
   );
   if (other === name) return undefined;
+  if (siblings?.has(other)) return true;
   const alternative = lstatSync(join(directory, other), { throwIfNoEntry: false, bigint: true });
   if (!alternative) return true;
   const actual = lstatSync(join(directory, name), { throwIfNoEntry: false, bigint: true });
-  return !actual || actual.dev !== alternative.dev || actual.ino !== alternative.ino;
+  if (!actual) return undefined;
+  if (actual.dev !== alternative.dev || actual.ino !== alternative.ino) return true;
+  // Two independently listed hardlinks on a case-sensitive filesystem can name the same inode.
+  return actual.nlink === 1n || actual.isDirectory() ? false : undefined;
 }

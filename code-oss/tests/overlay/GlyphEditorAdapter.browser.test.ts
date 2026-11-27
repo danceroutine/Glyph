@@ -1789,6 +1789,16 @@ it('accepts dirty text only from the matching filesystem spelling', async () => 
 
 it('checks exact rules and complete skill packages across configured, physical, attached and associated-untitled routes', async () => {
   const services = editorServices();
+  const original = env['GLYPH_USER_DIRECTORY'];
+  delete env['GLYPH_USER_DIRECTORY'];
+  onTestFinished(() => {
+    if (original === undefined) delete env['GLYPH_USER_DIRECTORY'];
+    else env['GLYPH_USER_DIRECTORY'] = original;
+  });
+  services.workspace.folders.unshift(
+    { name: 'remote', uri: URI.parse('remote:/workspace') },
+    { name: 'another', uri: URI.file('/other') },
+  );
   const adapter = createAdapter(services);
   const copies = services.pendingCopies;
   services.fileService.realpath.mockImplementation(async resource => {
@@ -1827,10 +1837,10 @@ it('checks exact rules and complete skill packages across configured, physical, 
   );
   expect((await check('skill', 'pkg')).workingCopiesClean).toBe(true);
   copies.push({ resource: URI.file('/workspace/other') });
-  services.workspace.folders.unshift(
-    { name: 'remote', uri: URI.parse('remote:/workspace') },
-    { name: 'another', uri: URI.file('/other') },
-  );
+  env['GLYPH_USER_DIRECTORY'] = '/configured';
+  copies.push({ resource: URI.file('/configured/rules/x.mdc') });
+  expect((await check('rule', 'x.mdc')).workingCopiesClean).toBe(false);
+  delete env['GLYPH_USER_DIRECTORY'];
   services.fileService.realpath.mockResolvedValueOnce(undefined);
   expect((await check('skill', 'pkg')).ok).toBe(false);
   services.fileService.realpath.mockResolvedValueOnce(URI.file('/volume/profile')).mockResolvedValueOnce(undefined);

@@ -13,18 +13,25 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   const host = {
     constructed: vi.fn(),
     trustedSkillEditors: vi.fn((_owner: GlyphConnectionIdentity, _projectDirectory?: string) => []),
+    trustedUserEditors: vi.fn(() => []),
     connect: vi.fn(),
     receive: vi.fn(async (_connectionId: string, _envelope: unknown) => {}),
     disconnect: vi.fn(async (_connectionId: string) => {}),
     dispose: vi.fn(async () => {}),
   };
-  const editors = { constructed: vi.fn(), connect: vi.fn(), receive: vi.fn(), disconnect: vi.fn() };
+  const editors = {
+    constructed: vi.fn<({ trustedUserEditors }: { trustedUserEditors: (identity: unknown) => unknown }) => void>(),
+    connect: vi.fn(),
+    receive: vi.fn(),
+    disconnect: vi.fn(),
+  };
   const openai = { constructed: vi.fn(), dispose: vi.fn(async () => {}) };
   const deterministic = { constructed: vi.fn() };
   const scripted = { constructed: vi.fn(), fetch: vi.fn() };
   vi.doMock('#src/desktop/host/GlyphDesktopHost.js', () => ({
     GlyphDesktopHost: class {
       readonly generation = 'generation';
+      readonly trustedUserEditors = host.trustedUserEditors;
       constructor(factory: unknown) {
         host.constructed(factory);
       }
@@ -49,7 +56,10 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   }));
   vi.doMock('#src/desktop/workspace/EditorRpcRouter.js', () => ({
     EditorRpcRouter: class {
-      constructor(peers: (owner: GlyphConnectionIdentity) => unknown) {
+      constructor(
+        peers: (owner: GlyphConnectionIdentity) => unknown,
+        readonly trustedUserEditors: (identity: unknown, sourcePath?: string) => unknown,
+      ) {
         editors.constructed(this, peers);
       }
       connect(...arguments_: unknown[]): unknown {
@@ -189,7 +199,9 @@ describe('utilityMain', () => {
   it('serves workspaces through the OpenAI runtime by default', async () => {
     const { loaded, host, editors, openai, scripted, deterministic } = startUtilityHost();
     await loaded;
-    const router = editors.constructed.mock.calls[0]?.[0];
+    const router = editors.constructed.mock.calls[0]![0];
+    expect(router.trustedUserEditors({ windowId: 'owner' })).toEqual([]);
+    expect(host.trustedUserEditors).toHaveBeenCalledWith({ windowId: 'owner' });
     const factory = openai.constructed.mock.calls[0]?.[0];
     expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(
       factory,

@@ -14,6 +14,7 @@ describe(EditorRpcRouter, () => {
   });
   it('ignores editor responses from a connection that does not own the operation', async () => {
     const router = new EditorRpcRouter();
+    expect(router.trustedUserEditors(identity)).toEqual([]);
     router.connect('owner', identity, vi.fn());
     const completed = vi.fn();
     const result = router

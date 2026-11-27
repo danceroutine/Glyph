@@ -162,7 +162,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     const policy = new WorkspaceAccessPolicy({}, [join(canonicalUserDirectory, 'skill-state.json')]);
     const logger = new FileLogger(configuration.traceFile);
     const casing = await Promise.all(
-      roots.map(root => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, root.path)),
+      roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, workspaceRoot.path)),
     );
     const parts = roots.map((workspaceRoot, i) => {
       const excludedPaths = [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(target => {
