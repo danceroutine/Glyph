@@ -118,6 +118,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   constructor(
     private readonly options: {
       readonly glyph: GlyphService;
+      readonly releaseWorkspace?: () => void;
       readonly agentReviews?: AgentReviewService;
       readonly interactions: DesktopInteractionBroker;
       readonly shellSessions: Pick<
@@ -256,7 +257,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   /** Settle active operations before closing their shell and persistence dependencies. */
   dispose(): Promise<void> {
-    return (this.disposal ??= this.stop());
+    return (this.disposal ??= this.stop().finally(this.options.releaseWorkspace));
   }
 
   /** Record pending decisions before delivery so reconnect snapshots cannot lose a waiting prompt. */

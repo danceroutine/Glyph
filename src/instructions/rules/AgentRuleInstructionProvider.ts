@@ -102,8 +102,10 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     const dependencies = new Set<string>();
     let sourceRevision: string | undefined;
     let uri: string | undefined;
+    let projectAlias: AgentInstructionSource['projectAlias'];
     try {
       normalized = this.workspace.normalizePath(path);
+      projectAlias = this.options.projectAlias?.(normalized);
       scope = ruleScope(normalized, this.options.directory, this.paths);
       const snapshot = await this.read(normalized, budget);
       signal?.throwIfAborted();
@@ -126,7 +128,8 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
         signal,
       );
       return {
-        ...this.identity(normalized),
+        ...this.paths.sourceIdentity(this.options.kind, normalized),
+        ...(projectAlias ? { projectAlias } : {}),
         kind: this.options.kind,
         label: label(this.options.kind),
         name: name ?? posix.parse(normalized).name,
@@ -155,6 +158,7 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
       signal?.throwIfAborted();
       return {
         ...this.errorSource(normalized, scope, describe(error, 'Rule could not be read.')),
+        ...(projectAlias ? { projectAlias } : {}),
         ...(name ? { name } : {}),
         ...(sourceRevision ? { sourceRevision, revision: sourceRevision } : {}),
         ...(dependencies.size > 0 ? { references: [...dependencies] } : {}),
@@ -267,15 +271,9 @@ export class AgentRuleInstructionProvider implements AgentInstructionSourceProvi
     return snapshot;
   }
 
-  private identity(path: string) {
-    const identity = this.paths.sourceIdentity(this.options.kind, path);
-    const projectAlias = this.options.projectAlias?.(path);
-    return projectAlias ? { ...identity, projectAlias } : identity;
-  }
-
   private errorSource(path: string, scope: string, message: string): AgentInstructionSource {
     return {
-      ...this.identity(path),
+      ...this.paths.sourceIdentity(this.options.kind, path),
       kind: this.options.kind,
       label: label(this.options.kind),
       name: posix.parse(path).name,

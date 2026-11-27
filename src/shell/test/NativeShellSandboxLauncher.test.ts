@@ -10,6 +10,30 @@ vi.mock('node:fs', { spy: true });
 
 describe(NativeShellSandboxLauncher, () => {
   describe(NativeShellSandboxLauncher.prototype.launch, () => {
+    it.each([ShellSandboxProfile.READ_ONLY, ShellSandboxProfile.FULL_ACCESS])(
+      'rechecks a selected root at %s launch',
+      sandboxProfile => {
+        const spawn = vi.fn(() => ({}) as ChildProcess);
+        const verifyWorkspaceRoot = vi.fn(() => {
+          throw new Error('Replaced workspace directory');
+        });
+        const launcher = new NativeShellSandboxLauncher(
+          {
+            binaryPath: '/sandbox',
+            workspaceRoots: ['/work', '/work/nested'],
+            stateDirectory: '/state',
+            accessPolicy: new WorkspaceAccessPolicy(),
+            verifyWorkspaceRoot,
+          },
+          spawn,
+        );
+        expect(() => launcher.launch('pwd', '/work/nested/dir', { sandboxProfile })).toThrow(
+          'Replaced workspace directory',
+        );
+        expect(verifyWorkspaceRoot).toHaveBeenCalledWith('/work/nested');
+        expect(spawn).not.toHaveBeenCalled();
+      },
+    );
     it('routes restricted commands through the helper with a sanitized environment', () => {
       const spawn = vi.fn<(command: string, arguments_: readonly string[], options: SpawnOptions) => ChildProcess>(
         () => ({}) as ChildProcess,

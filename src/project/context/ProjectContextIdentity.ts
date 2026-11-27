@@ -12,9 +12,11 @@ export const ProjectContextIdentity = {
 
   /** Binds persisted mutations to the exact canonical root names and paths they were compiled against. */
   createMutationScope(kind: ProjectContextKind, authority: string, roots: readonly ProjectRoot[]): string {
-    const canonicalRoots = roots.toSorted((left, right) =>
-      left.name === right.name ? compare(left.path, right.path) : compare(left.name, right.name),
-    );
+    const canonicalRoots = roots
+      .map(({ name, path }) => ({ name, path }))
+      .toSorted((left, right) =>
+        left.name === right.name ? compare(left.path, right.path) : compare(left.name, right.name),
+      );
     return createHash('sha256')
       .update(JSON.stringify({ version: 1, kind, authority, roots: canonicalRoots }))
       .digest('hex');
