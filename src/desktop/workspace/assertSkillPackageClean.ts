@@ -12,6 +12,7 @@ export async function assertSkillPackageClean(
   scope: 'user' | 'project',
   absolutePackageDirectory: string,
   logicalProjectDirectoryUri?: string,
+  ownerIntersections: readonly string[] = [],
 ): Promise<void> {
   if (!isAbsolute(absolutePackageDirectory))
     throw new Error('Skill working-copy checks require an absolute package directory.');
@@ -20,6 +21,7 @@ export async function assertSkillPackageClean(
     scope === 'user'
       ? editors.trustedSkillEditors(identity)
       : editors.trustedSkillEditors(identity, absolutePackageDirectory);
+  const physicalPackageUri = pathToFileURL(absolutePackageDirectory).toString();
   const operationId = randomUUID();
   const checks = [
     {
@@ -35,9 +37,21 @@ export async function assertSkillPackageClean(
               operationId,
               type: CHECK_SKILL_WORKING_COPIES,
               scope,
-              directoryUri: logicalProjectDirectoryUri ?? pathToFileURL(absolutePackageDirectory).toString(),
+              directoryUri: logicalProjectDirectoryUri ?? physicalPackageUri,
+              physicalPackageUri,
             } as const),
     },
+    ...ownerIntersections.map(directoryUri => ({
+      identity,
+      request: {
+        type: CHECK_SKILL_WORKING_COPIES,
+        operationId: randomUUID(),
+        scope: 'project',
+        peerWorkspaceIntersection: true,
+        directoryUri,
+        physicalPackageUri,
+      } as const,
+    })),
     ...peers.map(peer => ({
       identity: peer.identity,
       request:
@@ -47,6 +61,7 @@ export async function assertSkillPackageClean(
               type: CHECK_SKILL_WORKING_COPIES,
               scope,
               peerWorkspaceIntersection: true,
+              physicalPackageUri,
               directoryUri:
                 peer.directoryUri ??
                 (() => {

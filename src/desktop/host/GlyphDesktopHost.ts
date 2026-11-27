@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { existsSync, realpathSync } from 'node:fs';
+import { projectIntersection } from '#src/workspace/WorkspaceSourceRoutes.js';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import type { GlyphCommandResultHostEvent } from '#src/desktop/protocol/events/GlyphCommandResultHostEvent.js';
 import type { GlyphErrorHostEvent } from '#src/desktop/protocol/events/GlyphErrorHostEvent.js';
@@ -87,6 +86,16 @@ export class GlyphDesktopHost {
           const current = physicalRoot(root);
           const observed = peer.physicalRoots.get(root)!;
           if (current !== undefined) observed.add(current);
+          // After removing a package, a peer attached inside it still owns its logical working-copy URIs.
+          if (
+            current === undefined &&
+            observed.size > 0 &&
+            !existsSync(projectDirectory) &&
+            [...observed].every(physical => projectIntersection(root, physical, projectDirectory) === root.uri)
+          ) {
+            directories.add(root.uri);
+            continue;
+          }
           // A disappearing or retargeted alias can still own dirty working copies under its original URI.
           const lostOverlap = [...observed].some(
             physical => physical !== current && projectIntersection(root, physical, projectDirectory) !== undefined,
@@ -531,18 +540,6 @@ function physicalRoot(root: GlyphWorkspaceRoot): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** The portion of the physical package visible under this peer's logical workspace URI. */
-function projectIntersection(root: GlyphWorkspaceRoot, physical: string, directory: string): string | undefined {
-  const withinRoot = relative(physical, directory);
-  if (isContainedPath(withinRoot)) return pathToFileURL(join(fileURLToPath(root.uri), withinRoot)).toString();
-  if (isContainedPath(relative(directory, physical))) return root.uri;
-  return undefined;
-}
-
-function isContainedPath(path: string): boolean {
-  return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
 function connectionKey(identity: GlyphConnectionIdentity): string {

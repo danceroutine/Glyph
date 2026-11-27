@@ -14,9 +14,10 @@ export class SkillCatalog {
     private readonly enabled: ReadonlyMap<string, boolean> = new Map(),
     private readonly installations: ReadonlyMap<string, { source: string; revision: string }> = new Map(),
     private readonly ensureReady?: () => Promise<void>,
-    private readonly ensureLocation?: (originId: string) => Promise<void>,
+    private readonly ensureLocation?: (originId: string, directory?: string) => Promise<void>,
     observePreferences?: (listener: () => void) => () => void,
     private readonly workspaceRoutes?: { equivalents(path: string): string[] },
+    private readonly migratePreferences?: (skills: readonly SkillDescriptor[]) => Promise<void>,
   ) {
     if (new Set(providers.map(provider => provider.id)).size !== providers.length)
       throw new Error('Skill provider IDs must be unique.');
@@ -83,6 +84,9 @@ export class SkillCatalog {
       const previous = unique.get(skill.id);
       if (!previous || skill.directory.length < previous.directory.length) unique.set(skill.id, skill);
     }
+    if (this.migratePreferences) await this.migratePreferences([...unique.values()]);
+    signal?.throwIfAborted();
+    if (generation < this.published) return this.current;
     this.published = generation;
     this.discovered = [...unique.values()];
     this.refreshPreferences();
@@ -106,7 +110,7 @@ export class SkillCatalog {
       throw new Error('Skill is disabled or unavailable.');
     const provider = this.providers.find(candidate => candidate.id === descriptor.origin.id);
     if (!provider) throw new Error('Skill provider is unavailable.');
-    const reconcile = this.ensureLocation?.bind(this, provider.id);
+    const reconcile = this.ensureLocation?.bind(this, provider.id, descriptor.directory);
     if (reconcile) await reconcile();
     const snapshot = await provider.capture(descriptor, signal, reconcile);
     if (this.enabled.get(descriptor.id) === false) throw new Error('Skill was disabled during capture.');

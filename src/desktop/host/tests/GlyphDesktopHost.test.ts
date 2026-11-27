@@ -1,5 +1,5 @@
 import { describe, expect, beforeEach, it, onTestFinished, vi, type Mock } from 'vitest';
-import { mkdtemp, mkdir, symlink, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, rm, realpath, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -144,6 +144,13 @@ describe(GlyphDesktopHost, () => {
     expect(fixture.host.trustedSkillEditors(owner, physical).map(value => value.directoryUri)).toContain(
       pathToFileURL(unrelated).toString(),
     );
+    // Removed directories no longer resolve, but the connected editor can still own dirty resources there.
+    const moved = join(parent, 'saved-package');
+    await rename(physical, moved);
+    expect(fixture.host.trustedSkillEditors(owner, physical).map(editor => editor.directoryUri)).toContain(
+      pathToFileURL(scripts).toString(),
+    );
+    await rename(moved, physical);
     await rm(scripts);
     await symlink(join(store, 'example-sibling'), scripts);
     expect(fixture.host.trustedSkillEditors(owner, join(parent, 'another-project'))).toEqual([]);

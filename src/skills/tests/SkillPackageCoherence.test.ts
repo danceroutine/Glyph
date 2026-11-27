@@ -264,3 +264,61 @@ it('reconciles an unfinished publication before accepting captured bytes and rec
   });
   await expect(guarded.capture(catalog.skills[0]!)).rejects.toThrow('disabled during capture');
 });
+
+it('serializes a nested destination with its direct project root and preserves another origin’s unfinished publication', async () => {
+  const { root, store, state, location } = await aSkillLifecycle();
+  const inner = join(root, 'app');
+  const directory = 'app/.glyph/skills/example';
+  const physical = join(root, directory);
+  await mkdir(physical, { recursive: true });
+  await writeFile(join(physical, 'SKILL.md'), '---\nname: example\ndescription: Nested example\n---\nBody');
+  const { ProjectSkillIdentity } = await import('#src/skills/ProjectSkillIdentity.js');
+  const { FileSkillDiscoveryProvider } = await import('#src/skills/FileSkillDiscoveryProvider.js');
+  const { withSkillLock } = await import('#src/skills/SkillPackageStorage.js');
+  const { randomUUID } = await import('node:crypto');
+  const identity = new ProjectSkillIdentity(root, '.glyph');
+  const target = {
+    ...location,
+    id: identity.originId,
+    scope: 'project' as const,
+    directory: '.glyph/skills',
+    packageId: (path: string) => identity.forDirectory(path),
+    listFiles: () => store.list(10000, '**/.glyph/skills/**/*'),
+  };
+  const provider = new FileSkillDiscoveryProvider({
+    ...target,
+    origin: { id: target.id, scope: 'project', compatibility: 'glyph', label: 'Outer' },
+    uriForPath: path => 'file://' + join(root, path),
+  });
+  const catalog = new SkillCatalog([provider]);
+  const manager = new SkillPackageManager([target], catalog, state);
+  const [skill] = await catalog.refresh();
+  const preview = await manager.prepareRemoval(skill!.id);
+  await withSkillLock(inner, 'destination', async () => {
+    await expect(manager.apply(preview.id, AbortSignal.timeout(150))).rejects.toThrow(/aborted|timeout/iu);
+  });
+  expect(await store.exists(directory + '/SKILL.md')).toBe(true);
+  const journal = new SkillTransactionJournal(root);
+  const entry = {
+    id: randomUUID(),
+    root: join(inner, '.glyph/skills'),
+    location: new ProjectSkillIdentity(inner, '.glyph').originId,
+    directory: '.glyph/skills/example',
+    skillId: skill!.id,
+    expected: null,
+    replacement: null,
+    source: null,
+    published: false,
+    retired: false,
+  };
+  await journal.write(entry);
+  await expect(manager.prepareRemoval(skill!.id)).rejects.toThrow('original project');
+  await journal.write({ ...entry, retired: true });
+  expect(await journal.hasOtherProjectTransaction(target.id, physical)).toBe(false);
+  await journal.write({ ...entry, directory: '.glyph/skills/different' });
+  expect(await journal.hasOtherProjectTransaction(target.id, physical)).toBe(false);
+  await journal.finish(entry.id);
+  const fresh = await manager.prepareRemoval(skill!.id);
+  await expect(manager.apply(fresh.id)).resolves.toEqual({ applied: true });
+  expect(await store.exists(directory + '/SKILL.md')).toBe(false);
+});

@@ -75,7 +75,9 @@ function editorServices() {
   const dirty = new Set<string>();
   const find = (resource: URI) => models.find(model => model.uri.toString() === resource.toString());
   const inside = (resource: URI) =>
-    workspace.folders.find(folder => extUri.isEqualOrParent(resource, folder.uri)) ?? null;
+    workspace.folders
+      .filter(folder => extUri.isEqualOrParent(resource, folder.uri))
+      .toSorted((a, b) => b.uri.path.length - a.uri.path.length)[0] ?? null;
   const writeText = (edit: ResourceTextEdit, reason: unknown) => {
     const model = find(edit.resource)!;
     const { range, text, eol } = edit.textEdit;
@@ -1633,6 +1635,49 @@ describe('skill package working-copy checks', () => {
       [{ id: 'test-user', scope: 'user', label: 'User skills', uri: URI.file(userRoot).toString() }],
     );
   }
+  it('authorizes the original project when the package is also attached and checks its physical and logical buffers', async () => {
+    const services = editorServices();
+    services.workspace.folders.push({ name: 'package', uri: URI.file(project) });
+    const adapter = createAdapter(services);
+    const physical = '/original/.glyph/skills/example';
+    const request = {
+      type: GlyphEditorRequestType.CHECK_SKILL_WORKING_COPIES as const,
+      operationId: 'scope',
+      scope: 'project' as const,
+      directoryUri: URI.file(project).toString(),
+      physicalPackageUri: URI.file(physical).toString(),
+    };
+    services.fileService.realpath.mockResolvedValue(URI.file(physical));
+    await expect(adapter.handle(request)).resolves.toMatchObject({ packageClean: true });
+    services.pendingCopies.push({ resource: URI.file(physical + '/new.txt') });
+    await expect(adapter.handle(request)).resolves.toMatchObject({ packageClean: false });
+    services.pendingCopies.splice(0);
+    services.pendingCopies.push({ resource: URI.file(project + '/new.txt') });
+    await expect(adapter.handle(request)).resolves.toMatchObject({ packageClean: false });
+    services.fileService.realpath.mockRejectedValue(
+      new FileOperationError('Removed', FileOperationResult.FILE_NOT_FOUND),
+    );
+    expect((await adapter.handle(request)).packageClean).toBe(false);
+    services.fileService.exists.mockResolvedValueOnce(true);
+    expect((await adapter.handle(request)).ok).toBe(false);
+    services.fileService.realpath.mockRejectedValueOnce(new Error('Unknown working-copy root'));
+    expect((await adapter.handle(request)).ok).toBe(false);
+    services.fileService.realpath.mockResolvedValue(undefined);
+    await expect(adapter.handle(request)).resolves.toMatchObject({ ok: false });
+    services.fileService.realpath.mockResolvedValue(URI.file('/unrelated'));
+    await expect(adapter.handle(request)).resolves.toMatchObject({ ok: false });
+    services.fileService.realpath.mockResolvedValue(URI.file(physical + '/scripts'));
+    await expect(adapter.handle({ ...request, peerWorkspaceIntersection: true })).resolves.toMatchObject({
+      packageClean: false,
+    });
+    await expect(
+      adapter.handle({
+        ...request,
+        directoryUri: URI.file(project + '/file').toString(),
+        peerWorkspaceIntersection: true,
+      }),
+    ).resolves.toMatchObject({ ok: false });
+  });
   it('checks unsaved project resources and associated untitled files without opening any document', async () => {
     const services = editorServices();
     const adapter = createAdapter(services);

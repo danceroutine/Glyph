@@ -1,5 +1,5 @@
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
-import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
+import { projectIntersection, WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { SkillProjectMutationPolicy } from '#src/skills/SkillProjectMutationPolicy.js';
@@ -380,12 +380,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       });
       const skillState = (this.skillState ??= new SkillStateStore(userRuleStore));
       const ensureSkillsReady = () => skillState.initialize();
+      const skillIdentities = new Map<string, ProjectSkillIdentity>();
       skills = new SkillCatalog(
         [
           userSkills,
           ...physicalParts.flatMap(part =>
             ['.glyph', '.cursor'].map(location => {
               const identity = new ProjectSkillIdentity(part.disk.root, location);
+              skillIdentities.set(identity.originId, identity);
               return new FileSkillDiscoveryProvider({
                 packageId: directory => identity.forDirectory(directory),
                 origin: {
@@ -413,9 +415,18 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         skillState.enabled,
         skillState.installations,
         ensureSkillsReady,
-        originId => skillManager!.recover(originId),
+        (originId, directory) => skillManager!.recover(originId, directory),
         skillState.onDidChange.bind(skillState),
         routes,
+        descriptors =>
+          skillState.migratePackageIds(
+            new Map(
+              descriptors.flatMap(skill => {
+                const identity = skillIdentities.get(skill.origin.id);
+                return identity && skill.directory ? [[skill.id, identity.legacyIds(skill.directory)] as const] : [];
+              }),
+            ),
+          ),
       );
       skillManager = new SkillPackageManager(
         [
@@ -436,29 +447,44 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               await userSkillIndex.refresh();
             },
           },
-          ...parts.map(part => ({
-            id: `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:.glyph`,
-            label: `${part.name} project skills`,
-            scope: 'project' as const,
-            ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
-            mutations: mutationRoots.get(part.disk.root)!,
-            assertClean: (path: string) => {
-              const logicalRoot = input.roots.find(
-                candidate => getGlyphWorkspaceRootId(candidate, input.roots) === part.name,
-              )!;
-              const logicalDirectory = pathToFileURL(
-                join(fileURLToPath(logicalRoot.uri), relative(part.disk.root, path)),
-              ).toString();
-              return assertSkillPackageClean(this.editors, input.identity, 'project', path, logicalDirectory);
-            },
-            store: part.disk,
-            workspace: part.workspace,
-            directory: '.glyph/skills',
-            listFiles: () => part.index.glob('**/.glyph/skills/**/*', { limit: 10000 }),
-            refreshIndex: async () => {
-              await part.index.refresh();
-            },
-          })),
+          ...physicalParts.map(part => {
+            const identity = new ProjectSkillIdentity(part.disk.root, '.glyph');
+            return {
+              id: identity.originId,
+              packageId: (directory: string) => identity.forDirectory(directory),
+              label: `${part.name} project skills`,
+              scope: 'project' as const,
+              ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
+              mutations: mutationRoots.get(part.disk.root)!,
+              assertClean: (path: string) => {
+                const logicalRoot = input.roots.find(
+                  candidate => getGlyphWorkspaceRootId(candidate, input.roots) === part.name,
+                )!;
+                const logicalDirectory = pathToFileURL(
+                  join(fileURLToPath(logicalRoot.uri), relative(part.disk.root, path)),
+                ).toString();
+                const intersections = input.roots.flatMap((attached, rootIndex) => {
+                  const uri = projectIntersection(attached, roots[rootIndex]!.path, path);
+                  return uri && uri !== logicalDirectory ? [uri] : [];
+                });
+                return assertSkillPackageClean(
+                  this.editors,
+                  input.identity,
+                  'project',
+                  path,
+                  logicalDirectory,
+                  intersections,
+                );
+              },
+              store: part.disk,
+              workspace: part.workspace,
+              directory: '.glyph/skills',
+              listFiles: () => part.index.glob('**/.glyph/skills/**/*', { limit: 10000 }),
+              refreshIndex: async () => {
+                await part.index.refresh();
+              },
+            };
+          }),
         ],
         skills,
         skillState,
@@ -568,8 +594,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                     directory: part.disk.root,
                     workingDirectory: parts.length > 1 ? part.name : '.',
                     originIds: ['.glyph', '.cursor'].map(
-                      location =>
-                        `project:${createHash('sha256').update(part.disk.root).digest('hex').slice(0, 16)}:${location}`,
+                      location => new ProjectSkillIdentity(part.disk.root, location).originId,
                     ),
                   })),
                 ),

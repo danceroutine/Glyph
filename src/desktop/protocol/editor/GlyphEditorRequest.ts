@@ -31,6 +31,7 @@ export type GlyphEditorRequest =
       /** The host resolved this project-package intersection against the peer's physical workspace roots. */
       readonly peerWorkspaceIntersection?: true;
       readonly directoryUri: string;
+      readonly physicalPackageUri?: string;
     }
   | { readonly type: GlyphEditorRequestType.EXISTS; readonly operationId: string; readonly path: string }
   | {

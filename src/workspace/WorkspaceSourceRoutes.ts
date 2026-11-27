@@ -1,3 +1,4 @@
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 /** A physical workspace root can have several editor routes, including routes through an enclosing root. */
@@ -41,6 +42,13 @@ export class WorkspaceSourceRoutes {
     if (this.roots.length === 1) return [route, this.roots[0]!.name + '/' + route];
     return [...new Set(this.equivalents(route).flatMap(path => [path, path.split('/').slice(1).join('/')]))];
   }
+}
+
+/** Intersection of a physical package with a registered editor root, expressed in that editor's URI space. */
+export function projectIntersection(root: { uri: string }, physical: string, directory: string): string | undefined {
+  const within = relative(physical, directory);
+  if (contained(within)) return pathToFileURL(join(fileURLToPath(root.uri), within)).toString();
+  return contained(relative(directory, physical)) ? root.uri : undefined;
 }
 
 function contained(path: string) {
