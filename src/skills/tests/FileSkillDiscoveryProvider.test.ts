@@ -66,7 +66,9 @@ describe(FileSkillDiscoveryProvider, () => {
       decomposed = composed.normalize('NFD');
     const manifestPath = composed + '/.glyph/skills/example/SKILL.md';
     await fixture.write(manifestPath, manifest());
+    const sameDirectoryEntry = await fixture.store.exists(decomposed + '/.glyph/skills/example/SKILL.md');
     for (const normalizesUnicode of [false, true]) {
+      const sharesScope = normalizesUnicode && sameDirectoryEntry;
       const routes = new WorkspaceSourceRoutes([{ name: 'project', path: fixture.root, normalizesUnicode }]);
       const paths = new InstructionPaths(fixture.store.caseSensitive, routes);
       const provider = new FileSkillDiscoveryProvider({
@@ -80,10 +82,8 @@ describe(FileSkillDiscoveryProvider, () => {
       });
       const catalog = new SkillCatalog([provider], undefined, routes);
       const turn = await new SkillContextContributor(catalog).beginTurn({ turnId: 't', attachmentPaths: [] });
-      expect(turn.disclosePaths([decomposed + '/file'])?.skillCandidates?.length).toBe(
-        normalizesUnicode ? 1 : undefined,
-      );
-      expect(turn.disclosePaths([composed + '/file'])?.skillCandidates?.length).toBe(normalizesUnicode ? undefined : 1);
+      expect(turn.disclosePaths([decomposed + '/file'])?.skillCandidates?.length).toBe(sharesScope ? 1 : undefined);
+      expect(turn.disclosePaths([composed + '/file'])?.skillCandidates?.length).toBe(sharesScope ? undefined : 1);
     }
   });
   it('discovers a larger catalog with bounded simultaneous metadata reads', async () => {
