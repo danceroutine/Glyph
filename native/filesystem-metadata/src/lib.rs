@@ -1,4 +1,9 @@
 //! Descriptor-bound inspection for private storage and mode-only filesystem replacements.
+#[cfg(target_os = "linux")]
+pub mod mount_table;
+
+mod host_paths;
+pub use host_paths::assert_host_paths;
 use std::io;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]

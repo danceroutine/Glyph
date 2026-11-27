@@ -158,3 +158,27 @@ fn verifies_metadata_for_inherited_descriptors() {
         assert_eq!(result.stdout, b"verified\n");
     }
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn verifies_host_path_authority_for_complete_and_bounded_frames() {
+    let root = tempfile::tempdir().unwrap();
+    let input = serde_json::json!({"paths":[root.path().join("future")],"workspaceRoots":[root.path().join("workspace")]}).to_string();
+    let send = |input: &str| {
+        run_with_input(input, |cmd| {
+            cmd.arg("--assert-host-paths");
+        })
+    };
+    let result = send(&input);
+    assert!(result.status.success());
+    assert_eq!(result.stdout, b"verified\n");
+    for invalid in [
+        "{}".to_owned(),
+        " ".repeat(2 * 1024 * 1024 + 1),
+        serde_json::json!({"paths":[root.path()],"workspaceRoots":[root.path()]}).to_string(),
+    ] {
+        let result = send(&invalid);
+        assert!(!result.status.success());
+        assert!(result.stdout.is_empty());
+    }
+}

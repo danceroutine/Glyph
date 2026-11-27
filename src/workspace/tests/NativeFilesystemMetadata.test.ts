@@ -26,3 +26,21 @@ it('passes an open descriptor and requires the native inspection acknowledgement
   );
   await backend.inspect(handle, 'replaceable');
 });
+
+it('requires the native host path check to acknowledge the requested paths and every workspace root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'glyph-host-authority-'));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const executable = join(root, 'inspector');
+  const authority = new NativeFilesystemMetadata(executable);
+  const check = () => authority.assertHostPaths(['/host/file'], ['/project']);
+  await expect(check()).rejects.toThrow();
+  await writeFile(executable, '#!/bin/sh\n/bin/cat >/dev/null\nexit 1\n', { mode: 0o700 });
+  await expect(check()).rejects.toThrow('host filesystem authority');
+  await writeFile(
+    executable,
+    `#!/bin/sh
+[ "$1" = "--assert-host-paths" ] && [ "$(/bin/cat)" = '{"paths":["/host/file"],"workspaceRoots":["/project"]}' ] && echo verified
+`,
+  );
+  await check();
+});
