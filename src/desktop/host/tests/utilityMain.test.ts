@@ -18,7 +18,10 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
     dispose: vi.fn(async () => {}),
   };
   const editors = {
-    constructed: vi.fn<({ trustedUserEditors }: { trustedUserEditors: (identity: unknown) => unknown }) => void>(),
+    constructed:
+      vi.fn<
+        ({ trustedUserEditors }: { trustedUserEditors: (identity: unknown, sourcePath: string) => unknown }) => void
+      >(),
     connect: vi.fn(),
     receive: vi.fn(),
     disconnect: vi.fn(),
