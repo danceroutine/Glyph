@@ -31,7 +31,7 @@ Workspace folder names route editor operations. Project rule and guidance IDs id
 
 Automatic reads verify the disk file and consult already-open dirty documents through the logical and physical URIs. Matching edits supply the live body. Conflicting unsaved revisions surface an error so the user can save or discard the conflicting text. [Desktop catalog composition](../src/desktop/host/OpenAIDesktopRuntimeFactory.ts)
 
-User rules share a Rust index rooted at `~/.glyph/rules` across trusted runtimes. A fresh direct-child query applies the limit to matching `.mdc` files. Nested matches cannot displace a direct user rule. This directory uses the native access and link policies with Git-ignore filtering disabled. The user store reads bodies and explicit references relative to the configured Glyph user directory. [User-rule listing](../src/instructions/rules/listUserRuleFiles.ts)
+User rules share a Rust index rooted at `~/.glyph/rules` across trusted runtimes. A fresh direct-child query applies the limit to matching `.mdc` files. Nested matches cannot displace a direct user rule. This directory uses the native access and link policies with Git-ignore filtering disabled. The agent-facing store resolves bodies and explicit references relative to the configured Glyph user directory. Its access policy excludes host state, traces, packaged artifacts and private profile preferences. If the user rule or skill directory is unavailable, its catalog reports the location error and retries on refresh. The workspace can still attach and admit turns with its required repository guidance. [User-rule listing](../src/instructions/rules/listUserRuleFiles.ts)
 
 Composition orders sources by scope depth, then by source family, then by path. `.` has depth zero. At equal depth, the family order is user rules, Cursor-compatible rules, Glyph project rules, and `AGENTS.md`. Later entries have higher intended precedence. The model uses this order to interpret guidance. Filesystem authority comes from the host and the user’s permissions.
 
@@ -87,17 +87,21 @@ Instruction discovery has a 10,000-file listing allowance per family, with manda
 
 ```mermaid
 sequenceDiagram
+    participant Composer
     participant Run as Agent runtime
     participant Turn as Turn coordinator
     participant Sources as Catalogs and contributors
     participant Adapter as Provider adapter
     participant Model
 
+    Composer->>Run: Submit the document and its selections
     Run->>Turn: Begin with paths and explicit selections
     Turn->>Sources: Refresh and freeze turn sources
     Sources->>Sources: Check root and attachment guidance
     break Required guidance or selection unavailable
         Sources-->>Run: Stop admission and report the error
+        Run-->>Composer: Reject the submission before contacting the model
+        Composer->>Composer: Restore the document or retain it with unsent drafts
     end
     Sources->>Sources: Activate eligible sources and mark bodies seen
     Sources-->>Turn: Initial bodies and candidate metadata
@@ -185,7 +189,7 @@ sequenceDiagram
 
 The slash picker searches manual rules and skills. `@` searches files and folders. Selecting a result inserts a badge whose visible text can be identical to typed prose. Glyph tracks its kind, ID, label, captured revision and exact span in the text. Turn options carry up to 32 rule IDs and 32 skill IDs, each up to 500 characters. File attachments keep their own spans. [Prompt capture](../src/desktop/workbench/GlyphComposerState.ts) · [Turn option bounds](../src/chat/ChatTurnOptionsSchema.ts)
 
-Reloading a new-chat draft restores each saved badge only when its fields are bounded, its span is ordered and the text at that span exactly matches the recorded slash label. Plain-text drafts stay plain text. For queued messages from earlier versions, Glyph uses saved selection IDs and an unambiguous matching label to recover a badge in place. Submission resolves selections against the current catalog. A missing, ambiguous or ineligible manual selection stops admission until the selection is updated. Earlier path-based rule IDs resolve only when they identify a single current rule. Steering uses the running turn’s frozen catalog and disclosure ledger. [Rule ID resolution](../src/instructions/resolveInstructionId.ts) · [Draft restoration](../src/desktop/workbench/restoreGlyphPrompt.ts)
+Reloading a new-chat draft restores each saved badge only when its fields are bounded, its span is ordered and the text at that span exactly matches the recorded slash label. Plain-text drafts stay plain text. For queued messages from earlier versions, Glyph uses saved selection IDs and an unambiguous matching label to recover a badge in place. Submission resolves selections against the current catalog. When a missing, ambiguous or ineligible selection stops admission before the provider starts, the composer restores the submitted text, badges and attachments for editing. If the user has started another draft, that draft stays in the composer and the submitted document is available among the unsent drafts. Earlier path-based rule IDs resolve only when they identify a single current rule. Steering uses the running turn’s frozen catalog and disclosure ledger. [Rule ID resolution](../src/instructions/resolveInstructionId.ts) · [Draft restoration](../src/desktop/workbench/restoreGlyphPrompt.ts)
 
 ## How model-selected rules work
 
@@ -267,7 +271,8 @@ sequenceDiagram
 
     User->>UI: Create, enable, disable or delete
     UI->>Manager: Send action through workspace host
-    Manager->>Store: Acquire private writer lock
+    Manager->>Store: Check private directory access and acquire writer lock
+    Manager->>UI: Check working copies before changing an existing rule
     opt Enable or disable
         Manager->>Store: Check revision, size and access metadata
     end
@@ -279,13 +284,13 @@ sequenceDiagram
 
 Creation collects the conditions for the chosen activation mode and writes a new direct `rules/*.mdc` child. Create, enable, disable and delete share a private SQLite writer lock under `.skill-staging/user-rules.sqlite`. Processes using the same user directory serialize their mutations and check the reviewed file revision while holding the lock. Closing the SQLite connection or exiting the process releases the lock. Project reads, indexing and sandboxed commands exclude the reserved state. [UserAgentRuleManager](../src/instructions/rules/UserAgentRuleManager.ts) · [Private file lock](../src/workspace/withPrivateFileLock.ts)
 
-Enablement preserves the byte-order mark and counts it toward the 64 KiB encoded limit. The rule manager requires a filesystem authority that checks the opened file and its parent before staging and again immediately before replacement. Publication also checks ownership, group and permission bits against the staged file. A POSIX access or default ACL, a macOS extended ACL, an access-control attribute, special permission bits, or a protected macOS flag such as immutable or append-only can prevent replacement. Settings retains the original when its access policy cannot be preserved. For a project rule or guidance file, **Open current file** verifies the physical source and opens its registered logical editor URI. A retargeted root or a symlink inserted below it makes navigation unavailable. [Native metadata checks](../native/filesystem-metadata/src/lib.rs) · [Workspace replacement](../src/workspace/FileSystemWorkspaceTextStore.ts) · [Editor navigation](../code-oss/overlay/src/vs/workbench/contrib/glyph/browser/GlyphContextController.ts)
+Enablement preserves the byte-order mark and counts it toward the 64 KiB encoded limit. The rule manager checks for unsaved edits through trusted editor routes before changing an existing rule. Its filesystem authority checks the opened original, its parent and the finished replacement before publication. Publication also checks ownership, group and permission bits against the staged file. A POSIX access or default ACL, a macOS extended ACL, an access-control attribute, special permission bits, or a protected macOS flag such as immutable or append-only can prevent replacement. A data-bearing extended attribute, including a macOS resource fork, also stops replacement so the original data remains available. For a project rule or guidance file, **Open current file** verifies the physical source and opens its registered logical editor URI. A retargeted root or a symlink inserted below it makes navigation unavailable. [Native metadata checks](../native/filesystem-metadata/src/lib.rs) · [Workspace replacement](../src/workspace/FileSystemWorkspaceTextStore.ts) · [Editor navigation](../code-oss/overlay/src/vs/workbench/contrib/glyph/browser/GlyphContextController.ts)
 
 ## Skill discovery and activation
 
 Skills are packages containing `SKILL.md` and optional references, scripts, and assets. Project discovery uses the existing Rust indexes for `.glyph/skills` and the compatible `.cursor/skills` location. User discovery uses a separate, shared Rust index rooted at `~/.glyph/skills`. Discovery and activation meet at a provider interface. A future Claude-style location can add a provider while sharing the existing activation and resource-read flow. [SkillDiscoveryProvider](../src/skills/SkillDiscoveryProvider.ts)
 
-Each discovery location reads up to 256 KiB per manifest within an 8 MiB allowance per discovery. The provider charges bytes actually consumed, including bytes read before a decoding or growth error, and returns unused reservations. Package identity is anchored to the physical scope that contains `.glyph/skills` or `.cursor/skills` and the package directory. A nested package discovered through two attached roots has one catalog entry, with the most specific discoverer as its owner. Same-name packages in different physical locations or compatibility directories keep separate IDs. **Edit** opens the manifest through its registered logical editor URI. [Manifest discovery](../src/skills/FileSkillDiscoveryProvider.ts) · [Project package identity](../src/skills/ProjectSkillIdentity.ts) · [Catalog](../src/skills/SkillCatalog.ts)
+Each discovery location reads up to 256 KiB per manifest within an 8 MiB allowance per discovery. The provider charges bytes actually consumed, including bytes read before a decoding or growth error, and returns unused reservations. Package identity is anchored to the physical scope that contains `.glyph/skills` or `.cursor/skills` and the package directory. A nested package discovered through two attached roots has one catalog entry, with the most specific discoverer as its owner. If the configured user skills directory also appears at a project’s native or compatibility location, the user store owns the shared installation. Settings offers one enablement choice and one update or removal route for it. Same-name packages in distinct physical directories keep separate IDs. **Edit** opens the manifest through its registered logical editor URI. [Manifest discovery](../src/skills/FileSkillDiscoveryProvider.ts) · [Project package identity](../src/skills/ProjectSkillIdentity.ts) · [Catalog](../src/skills/SkillCatalog.ts)
 
 For an older nested skill reference, the trusted workspace host resolves one supplied ID. It first checks the current ID, then can verify an earlier plain or hashed ID against physical package locations. The lookup shares a 32,768-probe allowance across packages and historical ancestors. An ambiguous or incomplete match leaves the reference unresolved. Only the requesting renderer receives the canonical ID, and it checks its workspace binding again before using the result. [Skill catalog](../src/skills/SkillCatalog.ts)
 
@@ -293,21 +298,21 @@ Restoring a checkpoint translates recognized IDs in the selection and its saved 
 
 [TurnContextCoordinator](../src/context/turns/TurnContextCoordinator.ts) prepares independent instruction and skill contributors for the same logical turn. Manual skill selections load during preparation. The model can select an advertised package with `skills.activate`, supplying its stable ID and a relevance explanation. Nested project candidates become visible when their scope participates through an attachment or file access. The catalog advertises up to 50 candidates within a cumulative 32 KiB per turn. Explicit user selections can address eligible packages beyond that subset. Once a body has been disclosed, the turn recognizes the descriptor on later file access through any equivalent route. A mutation in that scope can proceed without a handoff for the same package.
 
-Activation captures a bounded package snapshot in the host. It verifies the directory generation, complete inventory and file revisions across two reads, then reconciles the selected revision before admission. This captures resource bytes, including binary assets, to keep later reads on the same package revision even if files change on disk. Activation sends the instruction body and its manifest metadata to the model. `skills.read_resource` subsequently discloses an individual resource from that snapshot and records its revision in provenance. Reference prose is never recursively expanded into the model request. Reading a script returns its content. Execution uses the separate `skills.run_script` tool and the owning chat’s shell authorization boundary.
+Activation captures a bounded package snapshot in the host. Across two reads it verifies the package directory’s identity, file contents and modes, and the names and modes of admitted child directories. Empty template directories participate in the revision even when the manifest and every resource file are unchanged. Later reads use the pinned resource bytes, including binary assets. Activation sends the instruction body and its manifest metadata to the model. `skills.read_resource` subsequently discloses an individual resource from that snapshot and records its revision in provenance. Reference prose is never recursively expanded into the model request. Reading a script returns its content. Execution uses the separate `skills.run_script` tool and the owning chat’s shell authorization boundary.
 
-The snapshot permits at most 256 files, 1 MiB per file, and 8 MiB in aggregate. An activated instruction body and each disclosed resource have separate 64 KiB limits. Oversized or unavailable content produces an error rather than truncated guidance. Each turn permits at most 32 active skill packages. Rule and AGENTS.md disclosure has its own cumulative 512 KiB turn budget.
+A package tree can contain up to 8,450 file and directory entries and 32 levels of child directories. The snapshot permits at most 256 files, 1 MiB per file, and 8 MiB in aggregate. An activated instruction body and each disclosed resource have separate 64 KiB limits. Oversized or unavailable content produces an error rather than truncated guidance. Each turn permits at most 32 active skill packages. Rule and AGENTS.md disclosure has its own cumulative 512 KiB turn budget.
 
 Activated packages and resources appear in “Context used” and are validated when the transcript is persisted. Their bodies are retained as provenance while the shared history-retention policy removes host envelopes from replayed conversation state. Completing the workflow is a separate outcome from recording which guidance the turn used.
 
 ## Installing and managing skills
 
-Settings → Skills lets the user choose a user or project installation target, create a package, import a local directory, or select an HTTPS repository and commit or tag. **Preview package** shows the complete file comparison before application. Local sources are read through a Rust index scoped to the selected package. The preview identifies the requested repository URL and the commit Git resolved. User-configured Git mirrors and credential helpers can participate in the fetch. Glyph uses a trusted Git installation to read objects at that commit with checkout and hooks disabled. Both sources preserve binary assets and pass the same metadata, path, file-count, and byte-budget validation. Saving valid manifest metadata in the native editor makes the package available to discovery.
+Settings → Skills lets the user choose a user or project installation target, create a package, import a local directory, or select an HTTPS repository and commit or tag. **Preview package** shows file and directory changes before application. A folder row shows its status and the octal permission mode before and after the change. Removing an empty template directory therefore appears in review even when every file stays the same. Local sources are read through a Rust index scoped to the selected package. The preview identifies the requested repository URL and the commit Git resolved. User-configured Git mirrors and credential helpers can participate in the fetch. Glyph uses a trusted Git installation to read objects at that commit with checkout and hooks disabled. Both sources preserve binary assets and empty directories. Local imports retain child-directory modes subject to existing access restrictions at the destination. A Git import reads the directory entries stored in the selected tree. The destination controls the installed package root’s permissions. Saving valid manifest metadata in the native editor makes the package available to discovery.
 
-A preview token binds the captured bytes, the physical destination and the installed revision. Applying an update or removal checks the complete inventory, editor working copies and access metadata. A fingerprint covers the ordered entries, their types, permission bits, owners and groups, including empty directories. Unsupported ACLs, access-related attributes or protected flags stop the operation. A change to a file’s permissions, UID or GID can invalidate a preview even when its content digest still matches. [Package draft](../src/skills/SkillPackageDraft.ts) · [Package manager](../src/skills/SkillPackageManager.ts) · [Native mutation authority](../src/workspace/NativeWorkspaceMutations.ts)
+A preview token binds the proposed file bytes and modes, child directories and their modes, physical destination, and installed revision. Applying an update or removal checks the complete inventory, editor working copies and access metadata. A fingerprint covers the ordered entries, their types, permission bits, owners and groups, including empty directories. Unsupported ACLs, data-bearing extended attributes, access-related attributes and protected flags stop replacement. For example, a macOS file with a resource fork retains its original inode and contents. A change to a file’s permissions, UID or GID can invalidate a preview even when its content digest still matches. [Package draft](../src/skills/SkillPackageDraft.ts) · [Package manager](../src/skills/SkillPackageManager.ts) · [Native mutation authority](../src/workspace/NativeWorkspaceMutations.ts)
 
-Before publication, the manager locks the attached physical root and then the owning project scope when the package belongs to a nested project. Parent-folder and direct-folder callers coordinate on the same destination across processes and profiles. The native helper stages and renames relative to verified directory descriptors. The manager rechecks the candidate, destination, parent and retained backup as applicable. A host-owned journal records content revisions and metadata fingerprints so recovery can validate or restore the reviewed tree. An unfinished change for the same destination under another origin in the current profile requires recovery through the original project. If recovery cannot prove which tree it may retire, it preserves the backup and reports its location. A successful mutation followed by a catalog delivery failure asks the user to refresh. [Transaction journal](../src/skills/SkillTransactionJournal.ts)
+Before publication, the manager locks the attached physical root and then the owning project scope when the package belongs to a nested project. Parent-folder and direct-folder callers coordinate on the same destination across processes and profiles. The native helper stages and renames relative to verified directory descriptors. The manager rechecks the candidate, destination, parent and retained backup as applicable. A host-owned journal records package revisions and metadata fingerprints so recovery can validate or restore the reviewed tree. Recovery verifies older journals with the file-only revision format used when those transactions began. An unfinished change for the same destination under another origin in the current profile requires recovery through the original project. If recovery cannot prove which tree it may retire, it preserves the backup and reports its location. A successful mutation followed by a catalog delivery failure asks the user to refresh. [Transaction journal](../src/skills/SkillTransactionJournal.ts)
 
-The profile stores enablement and installation provenance in `~/.glyph/skill-state.json`. Enabling or disabling a skill uses the profile preference lock and checks that a managed source still exists. A readable, read-only package can retain its own enablement preference. During discovery, older ancestor-based records migrate to the canonical package ID. Existing canonical values take precedence. If only older enablement records exist and disagree, the package stays disabled. The installation source and reviewed revision follow the same package across workspace routes. [SkillStateStore](../src/skills/SkillStateStore.ts)
+The profile stores enablement and installation provenance in `~/.glyph/skill-state.json`. Enabling or disabling a skill uses the profile preference lock and checks that a managed source still exists. A readable, read-only package can retain its own enablement preference. Before changing the preference file, Glyph verifies its parent, private staging directory and any existing preference file. Locks, journals, staged packages and backups use current-user-owned directories whose access checks include mode 0700 and the absence of extended ACLs. During discovery, older ancestor-based records migrate to the canonical package ID. Earlier project IDs for installations now owned by the user store migrate to that user package’s ID. Existing canonical values take precedence. If only older enablement records exist and disagree, the package stays disabled. The installation source and reviewed revision follow the same package across workspace routes. [SkillStateStore](../src/skills/SkillStateStore.ts)
 
 Runtimes in one host share committed preferences, and other processes watch the state file. An unreadable preference file makes skills unavailable until a successful refresh. Passive discovery runs recovery only for origins with pending transactions. Cleanup of a retired backup can retry after commit. The project access policy reserves transaction staging and profile state for the host. `GLYPH_USER_DIRECTORY` relocates the user directory for managed installations and disposable profiles.
 
@@ -321,24 +326,24 @@ sequenceDiagram
 
     User->>UI: Select source and target
     UI->>Host: Request preview
-    Host->>Host: Capture bounded source bytes
-    Host->>Manager: Compare draft with destination
-    Manager-->>UI: Token, revision and comparisons
+    Host->>Host: Capture bounded files, directory paths and modes
+    Host->>Manager: Compare captured tree with its owning destination
+    Manager-->>UI: Token, revision, file and folder comparisons
     User->>UI: Apply preview
     UI->>Manager: Send token through host
     Manager->>Store: Lock destination and recheck metadata
-    Manager->>Store: Stage, check editors and publish
+    Manager->>Store: Stage the reviewed tree, check editors and publish
     Manager->>Store: Commit profile and retire backup
     Manager-->>UI: Refreshed catalog or refresh message
 ```
 
 ## Agent-proposed package changes
 
-`skills.propose_change` lets an agent propose a complete skill package or select an installed package for removal. For a project package, Glyph checks every path in the preview against the turn’s repository instructions, including files an update or removal would delete. The installed destination determines the workspace root. If a nested `AGENTS.md` or file-pattern rule applies for the first time, Glyph discards that preview and returns the guidance to the model. The model can revise and resubmit its proposal. This exchange stays out of tool activity and the approval UI. A turn that already has the applicable guidance proceeds directly to review. User-profile packages proceed to review independently of project paths.
+`skills.propose_change` lets an agent propose a complete skill package or select an installed package for removal. For a project package, Glyph checks every path in the preview against the turn’s repository instructions, including files and empty directory branches an update or removal would delete. The installed destination determines the workspace root. If a nested `AGENTS.md` or file-pattern rule applies for the first time, Glyph discards that preview and returns the guidance to the model. The model can revise and resubmit its proposal. This exchange stays out of tool activity and the approval UI. A turn that already has the applicable guidance proceeds directly to review. User-profile packages proceed to review independently of project paths.
 
 Before preview and during publication, Glyph asks the owner and every trusted window whose root intersects the package to check dirty working copies, including associated untitled files. The check covers logical aliases, the verified physical destination and roots attached inside the package. After removal, a previously verified root can still own a dirty document. Once the physical destination is confirmed absent, Glyph checks that window’s last verified route. User-package checks cover trusted windows sharing the user store. A conflict or an unavailable required editor blocks the operation. [Working-copy checks](../src/desktop/workspace/assertSkillPackageClean.ts)
 
-The one-shot approval belongs to the requesting run. It shows the physical destination, scope, origin, revision and complete file comparisons with changed digests and modes. Settings and approval views display invisible control and direction characters as visible escapes in names, paths and comparisons. Multiline text keeps its tabs and line breaks. This formatting affects only presentation. Content digests, captured bytes and the applied package remain identical to the reviewed preview. Denial or cancellation discards the token. Approval uses the same checks and rollback path as Settings. [Approval broker](../src/desktop/host/DesktopInteractionBroker.ts) · [Display escaping](../src/shared/presentation/escapeDisplayControls.ts)
+The one-shot approval belongs to the requesting run. It shows the physical destination, scope, origin and package revision. File comparisons include digests and modes. Directory comparisons show added, removed or retained paths and their modes. Settings and approval views display invisible control and direction characters as visible escapes in names, paths and comparisons. Multiline text keeps its tabs and line breaks. This formatting affects only presentation. Content digests, captured bytes and the applied package remain identical to the reviewed preview. Denial or cancellation discards the token. Approval uses the same checks and rollback path as Settings. [Approval broker](../src/desktop/host/DesktopInteractionBroker.ts) · [Display escaping](../src/shared/presentation/escapeDisplayControls.ts)
 
 ```mermaid
 sequenceDiagram
@@ -351,7 +356,7 @@ sequenceDiagram
     loop Until the turn has the applicable instructions
         Model->>Tool: Propose a complete package or an installed package removal
         Tool->>Manager: Capture immutable preview
-        Manager-->>Tool: Token, destination, revision, and file comparisons
+        Manager-->>Tool: Token, destination, revision, file and folder comparisons
         opt Project package
             Tool->>Turn: Disclose instructions for all preview paths in the owning root
             Turn-->>Tool: Newly applicable guidance, if any
@@ -362,7 +367,7 @@ sequenceDiagram
         end
     end
     Tool->>Broker: Request one-shot package approval
-    Broker-->>User: Show reviewed files and revision
+    Broker-->>User: Show reviewed files, folders and package revision
     alt User approves
         User->>Broker: Apply change
         Broker-->>Tool: Authorized one-shot decision
@@ -377,7 +382,7 @@ sequenceDiagram
 
 ## Running bundled scripts
 
-`skills.run_script` requires an activated package and a script beneath `scripts/`. The host selects `sh`, `python3` or `node` from a trusted installation outside the workspace, checks the resource path and declared tool constraints, and stages the pinned package in a private temporary directory outside every workspace root. The sandbox receives read-only access to those files, with execute permission retained for executable resources. Project skills run in their owning workspace root. User skills require an explicit `workspace_root_id` when several roots are available. [Script runner](../src/skills/SkillScriptRunner.ts)
+`skills.run_script` requires an activated package and a script beneath `scripts/`. The host selects `sh`, `python3` or `node` from a trusted installation outside the workspace, checks the resource path and declared tool constraints, and stages the pinned package in a private temporary directory outside every workspace root. The sandbox receives read-only access to the staged tree, including empty directories, with execute permission retained for executable resources. Project skills run in their owning workspace root. User skills require an explicit `workspace_root_id` when several roots are available. [Script runner](../src/skills/SkillScriptRunner.ts)
 
 The host passes a `ShellProgram` containing the resolved absolute interpreter and an immutable argument vector. The launcher invokes that executable directly with each argument as a separate value, bypassing the user’s configured shell. The approval shows those argument boundaries, the interpreter, the script body and the package revision. Compatibility prose accompanies the review as package guidance. A missing interpreter or nonzero exit yields a failed tool activity, with the exit status shown before verbose output. [ShellProgram](../src/shell/ShellProgram.ts) · [Shell session manager](../src/shell/ShellSessionManager.ts)
 
@@ -405,10 +410,10 @@ sequenceDiagram
     participant Shell as Shell session manager
     actor User
     Model->>Turn: Activate selected package
-    Turn->>Turn: Reconcile selected package inventory and pin bytes
+    Turn->>Turn: Reconcile and pin files, directory entries and modes
     Model->>Runner: run_script with package ID, path, and arguments
     Runner->>Turn: Retrieve active pinned package
-    Runner->>Runner: Resolve trusted interpreter and stage pinned resources
+    Runner->>Runner: Resolve trusted interpreter and stage the pinned directory tree
     Runner->>Shell: Execute interpreter and argument vector with owning turn signal
     Shell-->>User: Show interpreter, script and revision for one-shot approval
     User->>Shell: Approve or deny this invocation
