@@ -1,4 +1,6 @@
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest';
+import type { GlyphDesktopClient } from '#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js';
+import { GlyphEditorRequestType } from '#glyph/protocol/editor/GlyphEditorRequest.js';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import {
   GlyphContextAttachmentKind,
@@ -33,6 +35,7 @@ import { aGlyphRunProjection } from '#src/desktop/tests/fixtures/aGlyphRunProjec
 
 type Command = GlyphWorkbenchCommand & Record<string, unknown>;
 type Handler = (command: Command, host: FakeHost) => unknown;
+type EditorRequestHandler = ConstructorParameters<typeof GlyphDesktopClient>[0];
 
 interface FakeHost {
   state: GlyphDesktopSnapshot;
@@ -48,7 +51,7 @@ interface FakeHost {
   readonly request: Mock;
   readonly detachWorkspace: Mock;
   readonly dispose: Mock;
-  readonly handleEditorRequest: unknown;
+  readonly handleEditorRequest: EditorRequestHandler;
 }
 
 const doubles = vi.hoisted(() => ({ hosts: [] as unknown[] }));
@@ -94,7 +97,7 @@ vi.mock('#vs/workbench/contrib/glyph/electron-browser/GlyphDesktopClient.js', as
       this.attachment = undefined;
     });
     readonly dispose = vi.fn();
-    constructor(readonly handleEditorRequest: unknown) {
+    constructor(readonly handleEditorRequest: EditorRequestHandler) {
       doubles.hosts.push(this);
     }
     snapshot() {
@@ -503,13 +506,10 @@ describe(NativeGlyphWorkbenchService, () => {
   it('wires editor and composer context callbacks into the desktop adapters', async () => {
     const skillTargets = [{ id: 'project', label: 'Project', uri: 'file:///project/.glyph/skills' }];
     const { service, host, editor, context } = await workbench({ extra: { skillTargets } });
-    const request = { requestId: 'read', type: 'read' };
+    const request = { operationId: 'read', type: GlyphEditorRequestType.READ_SNAPSHOT, path: 'notes.md' } as const;
     const checkMutation = vi.fn(async () => {});
 
-    await (host.handleEditorRequest as (value: unknown, check: () => Promise<void>) => Promise<unknown>)(
-      request,
-      checkMutation,
-    );
+    await host.handleEditorRequest(request, checkMutation);
 
     expect(editor.handle).toHaveBeenCalledWith(request, skillTargets, checkMutation);
     expect((context.composer as unknown as () => unknown)()).toBe(service.composer);
