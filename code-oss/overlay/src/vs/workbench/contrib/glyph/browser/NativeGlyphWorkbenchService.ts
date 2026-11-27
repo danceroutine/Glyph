@@ -1292,7 +1292,10 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     // run guard so the composer retains a prompt submitted after invalidation.
     this.assertSessionBinding();
     const prompt = text.trim();
-    const objective = options.planBuild ? undefined : parseGoalCommand(prompt);
+    const leadingReference = options.referenceSpans?.some(
+      span => span.from === 0 && prompt.slice(0, span.to) === '/' + span.label,
+    );
+    const objective = options.planBuild || leadingReference ? undefined : parseGoalCommand(prompt);
     if (objective === '') throw new Error(GOAL_COMMAND_USAGE);
     if (
       !prompt ||

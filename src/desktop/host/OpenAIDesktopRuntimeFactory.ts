@@ -149,8 +149,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     );
     const policy = new WorkspaceAccessPolicy();
     const logger = new FileLogger(configuration.traceFile);
-    const casing = await Promise.all(
-      roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemCaseSensitive(indexExecutable, workspaceRoot.path)),
+    const namePolicies = await Promise.all(
+      roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemNamePolicy(indexExecutable, workspaceRoot.path)),
     );
     const parts = roots.map((workspaceRoot, i) => {
       const excludedPaths = [configuration.stateDirectory, configuration.traceFile, artifactRoot].flatMap(target => {
@@ -160,7 +160,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
           : [];
       });
       const disk = new FileSystemWorkspaceTextStore(workspaceRoot.path, {
-        caseSensitive: casing[i]!,
+        caseSensitive: namePolicies[i]!.caseSensitive,
         accessPolicy: policy,
         excludedPaths,
       });
@@ -262,6 +262,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         name: part.name,
         path: part.disk.root,
         caseSensitive: part.disk.caseSensitive,
+        normalizesUnicode: namePolicies[index]!.normalizesUnicode,
         uri: input.roots[index]!.uri,
       })),
     );
