@@ -39,7 +39,9 @@ export class SkillCatalog {
   async refresh(signal?: AbortSignal): Promise<readonly SkillDescriptor[]> {
     // A catalog starts observing its shared profile when it first acquires workspace data.
     if (this.observePreferences) {
-      this.unsubscribePreferences = this.observePreferences(() => this.refreshPreferences());
+      this.unsubscribePreferences = this.observePreferences(() => {
+        this.refreshPreferences();
+      });
       this.observePreferences = undefined;
     }
     const generation = ++this.generation;
