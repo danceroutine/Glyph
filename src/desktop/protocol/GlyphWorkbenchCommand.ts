@@ -59,6 +59,7 @@ export type GlyphWorkbenchCommand =
       readonly type: GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE;
       readonly lookupId: string;
       readonly skillId: string;
+      readonly manifestUri?: string;
     }
   | {
       readonly type: GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE;

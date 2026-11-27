@@ -166,7 +166,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.context.setSkillSources(
       () => this.state.skills ?? [],
       undefined,
-      id => this.resolveHistoricalSkill(id),
+      (id, manifestUri) => this.resolveHistoricalSkill(id, manifestUri),
     );
     this.context.setInstructionRefresh(
       invalidate => this.refreshInstructionSources(invalidate),
@@ -1186,7 +1186,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     }
   }
 
-  private async resolveHistoricalSkill(skillId: string): Promise<string | undefined> {
+  private async resolveHistoricalSkill(skillId: string, manifestUri?: string): Promise<string | undefined> {
     const revision = this.workspaceRevision;
     const lookupId = generateUuid();
     let current: string | undefined;
@@ -1195,7 +1195,12 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         current = event.skillId;
     });
     try {
-      await this.request({ type: GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE, lookupId, skillId });
+      await this.request({
+        type: GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE,
+        lookupId,
+        skillId,
+        ...(manifestUri !== undefined ? { manifestUri } : {}),
+      });
       this.assertWorkspaceRevision(revision);
       return current;
     } finally {
