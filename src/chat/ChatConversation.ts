@@ -73,7 +73,9 @@ export class ChatConversation {
     let failure: unknown;
 
     try {
+      if (!this.provider.reportsTurnAdmission) response.onTurnAdmitted?.();
       result = await this.provider.send(request, {
+        ...(response.onTurnAdmitted ? { onTurnAdmitted: response.onTurnAdmitted } : {}),
         signal,
         onText: value => {
           response.push({ type: ChatResponsePartType.TEXT, value });

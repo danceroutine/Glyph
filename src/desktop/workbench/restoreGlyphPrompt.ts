@@ -93,7 +93,7 @@ export function restoreGlyphDraftReferences(text: string, saved: unknown, create
         !isRecord(ref) ||
         ref.kind !== 'rule' ||
         !boundedField(ref.sourceId, 500) ||
-        !boundedField(ref.label, 1000) ||
+        !boundedField(ref.label, 64 * 1024) ||
         !boundedField(ref.revision, 500) ||
         typeof ref.from !== 'number' ||
         !Number.isSafeInteger(ref.from) ||

@@ -1,3 +1,4 @@
+import { WorkspaceTextDecodingError } from './WorkspaceTextDecodingError.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import {
@@ -246,13 +247,20 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  async create(input: string, text: string, byteOrderMark: boolean, mode = 0o644): Promise<WorkspaceTextSnapshot> {
+  async create(
+    input: string,
+    text: string,
+    byteOrderMark: boolean,
+    mode = 0o644,
+    options?: WorkspaceMutationOptions,
+  ): Promise<WorkspaceTextSnapshot> {
     assertSupportedText(text, input);
     const path = this.normalizePath(input);
     await this.assertNoSymlinkSegments(path, true);
     const absolute = resolve(this.root, path);
     const created = await this.createParents(dirname(absolute));
     try {
+      await options?.beforePublish?.();
       const handle = await open(absolute, 'wx', mode);
       try {
         await handle.writeFile(toBytes(text, byteOrderMark));
@@ -349,6 +357,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
   async delete(input: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void> {
     const path = this.normalizePath(input);
     await this.assertRevision(path, expectedRevision, options);
+    await options?.beforePublish?.();
     try {
       await unlink(resolve(this.root, path));
     } catch (error) {
@@ -393,10 +402,10 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       const { bytesRead } = await handle.read(buffer);
       if (bytesRead === 0) return Buffer.concat(chunks, length);
       length += bytesRead;
-      if (length > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, length);
+      if (length > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, length, length);
       chunks.push(buffer.subarray(0, bytesRead));
     }
-    throw new WorkspaceReadLimitError(path, maxBytes, length);
+    throw new WorkspaceReadLimitError(path, maxBytes, length, length);
   }
 
   private async assertRevision(
@@ -526,7 +535,7 @@ function assertAllowedLinks(
 
 function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string): WorkspaceTextSnapshot {
   if (bytes.includes(0))
-    throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
+    throw new WorkspaceTextDecodingError(path, 'Binary/NUL files are not supported.', bytes.length);
   const byteOrderMark = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   const content = byteOrderMark ? bytes.subarray(3) : bytes;
   let text: string;
@@ -534,7 +543,7 @@ function toSnapshot(path: string, bytes: Buffer, mode: number, identity: string)
     // The encoding marker was removed above; a second U+FEFF is document text.
     text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
   } catch (error) {
-    throw new EditError(EditFailureReason.UNSUPPORTED, 'File is not valid UTF-8.', { path }, { cause: error });
+    throw new WorkspaceTextDecodingError(path, 'File is not valid UTF-8.', bytes.length, { cause: error });
   }
   return {
     path,
@@ -557,7 +566,7 @@ function assertInsideRoot(root: string, candidate: string, path: string): void {
 /** Reject unsupported bytes before creating directories or opening a write handle. */
 function assertSupportedText(text: string, path: string): void {
   if (text.includes('\0'))
-    throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
+    throw new WorkspaceTextDecodingError(path, 'Binary/NUL files are not supported.', bytes.length);
   // In Unicode mode valid pairs are one code point and do not match. UTF-8
   // encoding must never silently replace a reviewed lone surrogate with U+FFFD.
   if (/[\uD800-\uDFFF]/u.test(text)) {

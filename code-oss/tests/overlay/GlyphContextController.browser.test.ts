@@ -86,6 +86,7 @@ function controllerServices() {
       revision?: string;
       managementRevision?: string;
       references?: readonly string[];
+      referenceResources?: readonly { uri: string; caseSensitive: boolean }[];
       uri?: string;
       kind?: string;
     }[],
@@ -247,6 +248,35 @@ describe(GlyphContextController, () => {
     }
   });
 
+  it('refreshes a repaired reference through its attached nested alias or physical URI', async () => {
+    vi.useFakeTimers();
+    const services = controllerServices();
+    const controller = createController(services);
+    const refresh = vi.fn(async () => {});
+    try {
+      services.instructionSources.push({
+        id: 'rule',
+        path: 'Outer/.glyph/rules/r.mdc',
+        status: 'error',
+        references: ['Outer/sub/shared.md'],
+        referenceResources: [
+          { uri: 'file:///alias/shared.md', caseSensitive: false },
+          { uri: 'file:///volume/sub/shared.md', caseSensitive: true },
+        ],
+      });
+      controller.setInstructionRefresh(refresh);
+      controller.notifyInstructionsChanged();
+      for (const path of ['/alias/SHARED.md', '/volume/sub/shared.md']) {
+        services.fileChanges.fire([{ resource: URI.file(path), type: 1 }]);
+        await vi.advanceTimersByTimeAsync(1300);
+      }
+      expect(refresh).toHaveBeenCalledTimes(4);
+      expect(services.files.watch).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
   it('observes differently cased reference creations on insensitive roots without conflating root IDs', async () => {
     vi.useFakeTimers();
     const services = controllerServices();

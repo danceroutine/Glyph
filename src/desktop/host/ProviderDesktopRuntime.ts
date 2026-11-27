@@ -1,3 +1,4 @@
+import { Deferred } from '#src/shared/Deferred.js';
 import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
@@ -68,6 +69,7 @@ const TOOL_ACTIVITY_PHASE_TO_GLYPH_TOOL_ACTIVITY_STATUS = {
 } as const satisfies Record<ToolActivityPhase, GlyphToolActivityStatus>;
 
 interface ActiveRun {
+  readonly admission?: Promise<void>;
   readonly steering: ChatSteeringQueue;
   readonly controller: AbortController;
   readonly completion: Promise<void>;
@@ -124,6 +126,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         | 'peekPendingWake'
       >;
       readonly refreshCatalogs?: (signal: AbortSignal) => Promise<void>;
+      readonly referenceResources?: (path: string) => NonNullable<GlyphInstructionSource['referenceResources']>;
       readonly instructionWatchRoots?: readonly string[];
       readonly instructionCatalog?: Pick<AgentInstructionCatalog, 'sources' | 'refresh' | 'onDidChange'>;
       readonly userRules?: UserAgentRuleManager;
@@ -152,7 +155,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
     });
     this.unsubscribeInstructions = options.instructionCatalog?.onDidChange(sources => {
-      this.publish({ type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED, sources: toInstructionSources(sources) });
+      this.publish({
+        type: GlyphHostEventType.INSTRUCTION_SOURCES_CHANGED,
+        sources: toInstructionSources(sources, false, options.referenceResources),
+      });
     });
   }
 
@@ -166,7 +172,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     return {
       agentReviews: this.options.agentReviews?.reviews ?? [],
       ...(this.options.instructionWatchRoots ? { instructionWatchRoots: this.options.instructionWatchRoots } : {}),
-      ...(instructionSources ? { instructionSources: toInstructionSources(instructionSources) } : {}),
+      ...(instructionSources
+        ? { instructionSources: toInstructionSources(instructionSources, false, this.options.referenceResources) }
+        : {}),
       ...(this.options.userRules?.directoryUri ? { userRulesDirectoryUri: this.options.userRules.directoryUri } : {}),
       accounts: this.options.glyph.accounts,
       models: this.models,
@@ -497,6 +505,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         const session = this.session(command.chatId);
         const controller = new AbortController();
         const steering = new ChatSteeringQueue();
+        const admission = new Deferred<void>();
         // Defer execution one microtask so cancellation can always find its controller.
         const completion = Promise.resolve().then(() =>
           this.send(
@@ -510,9 +519,17 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
             session,
             controller.signal,
             steering,
+            undefined,
+            admission,
           ),
         );
-        this.active.set(command.chatId, { controller, completion, runId: command.runId, steering });
+        this.active.set(command.chatId, {
+          controller,
+          completion,
+          runId: command.runId,
+          steering,
+          admission: admission.promise,
+        });
         void completion
           .finally(() => {
             this.finishRun(command.chatId, steering);
@@ -522,7 +539,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
             for (const chat of await glyph.finishPlanBuildRun(command.chatId, command.runId))
               this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
           });
-        return;
+        return admission.promise;
       }
       case GlyphWorkbenchCommandType.CREATE_GOAL: {
         const session = this.session(command.chatId);
@@ -554,6 +571,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       case GlyphWorkbenchCommandType.STEER: {
         const options = chatTurnOptionsSchema.parse(command.options ?? {});
         const active = this.active.get(command.chatId);
+        if (active?.runId === command.runId && active.admission) await active.admission;
         const run = this.runs.get(command.runId);
         if (!active || active.runId !== command.runId || active.controller.signal.aborted || !run)
           throw new ProtocolError('There is no active response to steer.');
@@ -804,8 +822,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     signal: AbortSignal,
     steering: ChatSteeringQueue,
     contextEvent?: { readonly context: ChatContextEvent },
+    admission?: Deferred<void>,
   ): Promise<void> {
-    const outcome = await this.runTurn(command, session, signal, steering, contextEvent);
+    const outcome = await this.runTurn(command, session, signal, steering, contextEvent, admission);
     await this.settleGoal(session, command.runId, outcome);
   }
 
@@ -815,6 +834,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     signal: AbortSignal,
     steering: ChatSteeringQueue,
     shellEvent?: { readonly context: ChatContextEvent },
+    admission?: Deferred<void>,
   ): Promise<RunOutcome> {
     this.setRun({
       chatId: command.chatId,
@@ -872,6 +892,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
             attachments: toRequestAttachments(command.attachments),
           },
           {
+            ...(admission ? { onTurnAdmitted: admission.resolve } : {}),
             push: part => {
               this.response(command.runId, part);
             },
@@ -882,6 +903,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           steering,
         ),
       );
+      admission?.resolve();
       // The turn keeps its frozen instruction snapshot, while Settings and the next turn
       // should observe rule files that this turn may have created, renamed, or removed.
       await this.options.instructionCatalog?.refresh().catch(() => {});
@@ -904,6 +926,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat: session.summary });
       return signal.aborted ? 'cancelled' : 'completed';
     } catch (error) {
+      const message = this.options.glyph.redact(error instanceof Error ? error.message : String(error));
+      admission?.reject(new Error(message));
       if (shellEvent && this.pendingShellEvents.has(shellEvent.context.id)) {
         this.deferredShellEvents.add(shellEvent.context.id);
       }
@@ -913,7 +937,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       this.setRun({
         ...settled,
         status: signal.aborted ? GlyphRunStatus.CANCELLED : GlyphRunStatus.FAILED,
-        terminalMessage: this.options.glyph.redact(error instanceof Error ? error.message : String(error)),
+        terminalMessage: message,
       });
       return signal.aborted ? 'cancelled' : 'failed';
     }
@@ -1356,6 +1380,7 @@ function toRequestAttachments(attachments: readonly GlyphContextAttachment[]): C
 function toInstructionSources(
   sources: readonly AgentInstructionSource[],
   historical = false,
+  referenceResources?: (path: string) => NonNullable<GlyphInstructionSource['referenceResources']>,
 ): readonly GlyphInstructionSource[] {
   return sources.map(source => ({
     id: source.id,
@@ -1371,6 +1396,9 @@ function toInstructionSources(
     ...(source.globs === undefined ? {} : { globs: source.globs }),
     ...(source.enabled === undefined ? {} : { enabled: source.enabled }),
     ...(source.references === undefined ? {} : { references: source.references }),
+    ...(referenceResources && source.kind !== AgentInstructionSourceKind.GLYPH_USER_RULE && source.references?.length
+      ? { referenceResources: source.references.flatMap(path => referenceResources(path)) }
+      : {}),
     ...(source.revision === undefined ? {} : { revision: source.revision }),
     ...((historical || source.kind === AgentInstructionSourceKind.GLYPH_USER_RULE) && source.content !== undefined
       ? { content: source.content }

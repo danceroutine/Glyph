@@ -1,4 +1,5 @@
 import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
+import { assertUserWorkingCopiesClean } from '#src/desktop/workspace/assertUserWorkingCopiesClean.js';
 import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWorkspace.js';
 import { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import { SqliteAgentReviewStore } from '#src/reviewing/SqliteAgentReviewStore.js';
@@ -237,7 +238,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       return { name: workspaceRoot.name, workspace, catalog, disk, index };
     });
     const routes = new WorkspaceSourceRoutes(
-      parts.map(part => ({ name: part.name, path: part.disk.root, caseSensitive: part.disk.caseSensitive })),
+      parts.map((part, index) => ({
+        name: part.name,
+        path: part.disk.root,
+        caseSensitive: part.disk.caseSensitive,
+        uri: input.roots[index]!.uri,
+      })),
     );
     const workspace =
       roots.length === 1
@@ -332,7 +338,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         paths,
       );
       turnContexts = new TurnContextCoordinator(instructionCatalog);
-      userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex);
+      userRules = new UserAgentRuleManager(userRuleStore, instructionCatalog, userRuleIndex, filename =>
+        assertUserWorkingCopiesClean(this.editors, input.identity, 'rule', filename, userRuleStore.caseSensitive),
+      );
     }
     const reviews = new ProposalReviewManager(
       workspace,
@@ -514,7 +522,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       agentReviews,
       interactions,
       shellSessions: shells,
-      ...(instructionCatalog ? { instructionCatalog } : {}),
+      ...(instructionCatalog
+        ? { instructionCatalog, referenceResources: (path: string) => routes.referenceResources(path) }
+        : {}),
       refreshCatalogs: async signal => {
         await instructionCatalog?.refresh(signal);
       },
