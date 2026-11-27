@@ -32,15 +32,6 @@ export class UserSkillDirectory {
     return false;
   }
 
-  private *projectRoutes(directory: string) {
-    for (const entry of this.store.projectEntries(basename(directory))) {
-      const location = this.store.projectMarker(entry);
-      if (!location) continue;
-      const root = dirname(dirname(dirname(entry)));
-      yield { identity: new ProjectSkillIdentity(root, location), route: relative(root, entry).split(sep).join('/') };
-    }
-  }
-
   previousPackageIds(directory: string): readonly string[] {
     return [
       ...new Set(
@@ -50,5 +41,14 @@ export class UserSkillDirectory {
         ]),
       ),
     ];
+  }
+
+  private *projectRoutes(directory: string) {
+    for (const entry of this.store.projectEntries(basename(directory))) {
+      const location = this.store.projectMarker(entry);
+      if (!location) continue;
+      const root = dirname(dirname(dirname(entry)));
+      yield { identity: new ProjectSkillIdentity(root, location), route: relative(root, entry).split(sep).join('/') };
+    }
   }
 }

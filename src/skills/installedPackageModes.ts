@@ -10,7 +10,7 @@ export async function installedPackageModes(
 ) {
   const files = new Map(before.files);
   const directories = new Map(before.directories);
-  if (!files.size) return { files, directories };
+  if (files.size === 0) return { files, directories };
   const identity = async (name: string) => {
     const stat = await lstat(join(root, name), { bigint: true }).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
