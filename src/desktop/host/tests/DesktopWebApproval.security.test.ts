@@ -67,6 +67,10 @@ describe('security: production desktop web consent', () => {
     await mkdir(changedRoot);
     vi.stubEnv('GLYPH_CONFIG_DIR', state);
     vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
+    vi.spyOn(RustWorkspacePathIndex, 'filesystemNamePolicy').mockResolvedValue({
+      caseSensitive: true,
+      normalizesUnicode: false,
+    });
     vi.spyOn(RustWorkspacePathIndex, 'filesystemCaseSensitive').mockResolvedValue(true);
     vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
     const exchange = vi.fn(async () => new Response('fixture page', { headers: { 'content-type': 'text/plain' } }));

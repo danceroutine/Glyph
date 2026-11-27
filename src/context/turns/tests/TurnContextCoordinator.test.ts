@@ -4,6 +4,7 @@ import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import { TurnContextSession } from '#src/context/turns/TurnContextSession.js';
 import { describe, expect, it, vi } from 'vitest';
+import { WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
 import { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
@@ -99,6 +100,99 @@ describe(TurnContextCoordinator, () => {
       sources: expect.arrayContaining([expect.objectContaining({ id: 'model', revision: 'one' })]),
     });
     expect(coordinator.snapshot('turn')).toBeUndefined();
+  });
+
+  it('fits optional advertisements around required sources and activates only the offered candidates', async () => {
+    const model = (id: string, size: number) => ({
+      ...source(id, AgentInstructionSourceKind.GLYPH_PROJECT_RULE, '.', AgentInstructionActivationMode.MODEL),
+      description: 'x'.repeat(size),
+    });
+    const many = Array.from({ length: 255 }, (_, index) => model('large-' + index, 2000));
+    const start = async (id: string, list: AgentInstructionSource[]) => {
+      const coordinator = new TurnContextCoordinator({ refresh: async () => list } as never);
+      const turn = await coordinator.beginTurn({ turnId: id, attachmentPaths: [] });
+      return { turn, coordinator };
+    };
+    const mandatory = { ...sources[0]!, content: 'a'.repeat(510 * 1024) };
+    const { turn, coordinator } = await start('bytes', [mandatory, ...many, model('small', 8)]);
+    const initial = turn.initialEnvelope();
+    expect(initial.sources).toMatchObject([{ id: mandatory.id }]);
+    expect(initial.candidates?.map(candidate => candidate.id)).toEqual(['small']);
+    expect(coordinator.activateRule('bytes', 'large-0')).toBeUndefined();
+    expect(coordinator.disclosePaths('bytes', ['file'])).toBeUndefined();
+    expect(coordinator.activateRule('bytes', 'small')?.sources[0]?.id).toBe('small');
+    const bounded = await start('advertised-bytes', many);
+    expect(Buffer.byteLength(JSON.stringify(bounded.turn.initialEnvelope().candidates))).toBeLessThanOrEqual(32 * 1024);
+    expect(bounded.turn.initialEnvelope().candidates?.length).toBeGreaterThan(0);
+    const count = await start(
+      'count',
+      Array.from({ length: 65 }, (_, index) => model(String(index), 1)),
+    );
+    expect(count.turn.initialEnvelope().candidates).toHaveLength(50);
+    expect(count.coordinator.disclosePaths('count', ['file'])).toBeUndefined();
+  });
+
+  it('selects nested guidance and literal globs for the name policy of each attached volume', async () => {
+    const composed = 'café';
+    const decomposed = composed.normalize('NFD');
+    for (const normalizesUnicode of [false, true]) {
+      const paths = new InstructionPaths(
+        true,
+        new WorkspaceSourceRoutes([{ name: 'project', path: '/root', normalizesUnicode }]),
+      );
+      const list = [
+        source('nested', AgentInstructionSourceKind.AGENTS_MD, composed),
+        source(
+          'glob',
+          AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+          '.',
+          AgentInstructionActivationMode.FILE_PATTERN,
+          [composed + '/**/*.txt'],
+        ),
+      ];
+      const coordinator = new TurnContextCoordinator(
+        new AgentInstructionCatalog([{ discover: async () => list }], paths),
+      );
+      const turn = await coordinator.beginTurn({ turnId: 'unicode', attachmentPaths: [decomposed + '/file.txt'] });
+      expect(
+        turn
+          .initialEnvelope()
+          .sources.map(item => item.id)
+          .toSorted(),
+      ).toEqual(normalizesUnicode ? ['glob', 'nested'] : []);
+      expect(coordinator.disclosePaths('unicode', [composed + '/file.txt'])?.sources.length).toBe(
+        normalizesUnicode ? undefined : 2,
+      );
+    }
+  });
+
+  it('uses a scoped rule’s owning volume when another attached root routes the read', async () => {
+    const routes = new WorkspaceSourceRoutes([
+      { name: 'outer', path: '/workspace' },
+      { name: 'mount', path: '/workspace/mount', normalizesUnicode: true },
+    ]);
+    const paths = new InstructionPaths(
+      new Map([
+        ['outer', true],
+        ['mount', true],
+      ]),
+      routes,
+    );
+    const scoped = source(
+      'scoped',
+      AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      'mount',
+      AgentInstructionActivationMode.FILE_PATTERN,
+      ['café.txt'],
+    );
+    const coordinator = new TurnContextCoordinator(
+      new AgentInstructionCatalog([{ discover: async () => [scoped] }], paths),
+    );
+    const turn = await coordinator.beginTurn({
+      turnId: 'mounted',
+      attachmentPaths: ['outer/mount/' + 'café.txt'.normalize('NFD')],
+    });
+    expect(turn.initialEnvelope().sources.map(item => item.id)).toEqual(['scoped']);
   });
 
   it('starts with AGENTS.md from every attached workspace root and defers other scoped guidance', async () => {
@@ -413,6 +507,24 @@ it('restores every domain after a steering disclosure exceeds the remaining inst
   expect(accepted?.skills?.[0]?.body).toBe('Skill instructions');
   expect(accepted?.skillCandidates?.map(skill => skill.id)).toEqual([nestedSkill.id]);
   expect(accepted?.sources.map(rule => rule.id)).toEqual([nested.id]);
+});
+
+it('restores the byte allowance and eligible IDs together when a steering decision rolls back', () => {
+  const candidate = {
+    ...source('scoped', AgentInstructionSourceKind.GLYPH_PROJECT_RULE, 'src', AgentInstructionActivationMode.MODEL),
+    description: 'x'.repeat(30 * 1024),
+  };
+  const session = new TurnContextSession({
+    turnId: 'steering',
+    attachmentPaths: [],
+    manualRuleIds: [],
+    sources: [candidate],
+  });
+  const rollback = session.checkpointSteering();
+  const first = session.discloseAttachments(['src/a.ts']);
+  expect(first?.candidates).toHaveLength(1);
+  rollback();
+  expect(session.discloseAttachments(['src/b.ts'])).toEqual(first);
 });
 
 it('admits manual instructions through the direct turn session and through coordinated steering', async () => {

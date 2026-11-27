@@ -296,6 +296,47 @@ describe(GlyphContextController, () => {
     controller.dispose();
   });
 
+  it('ranks names across skills and manual rules before limiting the slash picker', async () => {
+    const services = controllerServices();
+    for (let index = 0; index < 51; index++)
+      services.instructionSources.push({
+        id: String(index),
+        name: 'build' + index,
+        description: 'release workflow',
+        path: 'build' + index,
+        activation: 'manual',
+        status: 'active',
+      });
+    for (const name of ['pre-release', 'release-notes', 'release'])
+      services.instructionSources.push({ id: name, name, path: name, activation: 'manual', status: 'active' });
+    const controller = createController(services);
+    controller.setSkillSources(() => [
+      {
+        id: 'skill',
+        uri: 'file:///skills/release/SKILL.md',
+        name: 'Release',
+        description: 'publish',
+        path: 'skills/release/SKILL.md',
+        directory: 'skills/release',
+        scope: '.',
+        origin: { id: 'p', label: 'Project', scope: 'project', compatibility: 'glyph' },
+        status: 'active',
+        enabled: true,
+        allowedTools: [],
+      },
+    ]);
+    const matches = await controller.searchInstructions('RELEASE');
+    expect(matches).toHaveLength(50);
+    expect(matches.slice(0, 5).map(item => item.ruleId ?? item.skillId)).toEqual([
+      'release',
+      'skill',
+      'release-notes',
+      'pre-release',
+      '0',
+    ]);
+    controller.dispose();
+  });
+
   it('looks up the current skill identity and rejects unavailable, removed or linked editor targets', async () => {
     const services = controllerServices();
     const controller = createController(services);
