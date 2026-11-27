@@ -58,7 +58,7 @@ export class SkillTurnContext implements TurnContextContribution {
   }
   disclosePaths(paths: readonly string[]): TurnContextEnvelope | undefined {
     const candidates = this.descriptors.filter(
-      skill => !this.advertised.has(skill.id) && this.catalog.appliesTo(skill, paths),
+      skill => !this.advertised.has(skill.id) && !this.packages.has(skill.id) && this.catalog.appliesTo(skill, paths),
     );
     const advertised = this.offerCandidates(candidates);
     return advertised.length > 0

@@ -1592,3 +1592,78 @@ fn reconciliation_publishes_only_complete_uninterrupted_snapshots() {
         ]
     );
 }
+
+#[test]
+fn direct_root_globs_observe_current_children_and_ignore_policy_with_a_truncated_catalog() {
+    let root = tempdir().unwrap();
+    create_dir_all(root.path().join(".git")).unwrap();
+    create_dir_all(root.path().join("nested")).unwrap();
+    write(root.path().join("one.txt"), "").unwrap();
+    write(root.path().join("two.txt"), "").unwrap();
+    write(root.path().join("nested/AGENTS.md"), "nested").unwrap();
+    let mut config = params(root.path());
+    config.max_files = 1;
+    config.case_sensitive = false;
+    let mut service = ContextIndexService::new();
+    assert!(service.initialize(config).unwrap().truncated);
+    let direct = |pattern: &str| {
+        service.glob(GlobParams {
+            pattern: pattern.into(),
+            target_directory: None,
+            root_files_only: true,
+            limit: 1,
+        })
+    };
+    assert!(direct("AGENTS.md").unwrap().files.is_empty());
+    write(root.path().join("agents.MD"), "root").unwrap();
+    assert_eq!(
+        direct("AGENTS.md").unwrap(),
+        GlobResult {
+            files: vec!["agents.MD".into()],
+            truncated: false
+        }
+    );
+    let txt = direct("*.txt").unwrap();
+    assert_eq!(txt.files, ["one.txt"]);
+    assert!(txt.truncated);
+    write(root.path().join(".gitignore"), "/agents.MD\n").unwrap();
+    assert!(direct("AGENTS.md").unwrap().files.is_empty());
+    write(root.path().join(".gitignore"), "").unwrap();
+    std::fs::remove_file(root.path().join("agents.MD")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        root.path().join("nested/AGENTS.md"),
+        root.path().join("AGENTS.md"),
+    )
+    .unwrap();
+    assert!(direct("AGENTS.md").unwrap().files.is_empty());
+    assert!(direct("[").is_err());
+    std::fs::remove_dir_all(root.path()).unwrap();
+    assert!(direct("AGENTS.md").is_err());
+}
+
+#[test]
+fn direct_root_globs_exclude_private_roots_cache_files_and_reject_unreadable_ignore_rules() {
+    let root = tempdir().unwrap();
+    create_dir_all(root.path().join(".git")).unwrap();
+    write(root.path().join("AGENTS.md"), "guidance").unwrap();
+    let query = || GlobParams {
+        pattern: "*".into(),
+        target_directory: None,
+        root_files_only: true,
+        limit: 32,
+    };
+    let mut service = ContextIndexService::new();
+    let mut config = params(root.path());
+    config.exclude_root = true;
+    service.initialize(config).unwrap();
+    assert!(service.glob(query()).unwrap().files.is_empty());
+    service.shutdown();
+    let mut other = ContextIndexService::new();
+    let mut config = params(root.path());
+    config.cache_path = Some(root.path().canonicalize().unwrap().join("cache.json"));
+    other.initialize(config).unwrap();
+    assert_eq!(other.glob(query()).unwrap().files, ["AGENTS.md"]);
+    write(root.path().join(".gitignore"), "[z-a]\n").unwrap();
+    assert!(other.glob(query()).is_err());
+}

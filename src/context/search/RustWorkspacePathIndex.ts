@@ -29,6 +29,7 @@ enum PathIndexMethod {
   SEARCH = 'search',
   GLOB = 'glob',
   FILTER_PATHS = 'filterPaths',
+  ASSERT_REPLACEABLE_METADATA = 'assertReplaceableMetadata',
   CONTENT_SEARCH = 'contentSearch',
   CANCEL = 'cancel',
   REFRESH = 'refresh',
@@ -230,6 +231,12 @@ export class RustWorkspacePathIndex implements WorkspacePathIndex {
     if (Buffer.byteLength(JSON.stringify(params)) > 900 * 1024)
       throw new Error('Editor search snapshots exceed the native request budget. Narrow the open working set.');
     return contentSearchResultSchema.parse(await this.request(PathIndexMethod.CONTENT_SEARCH, params, signal));
+  }
+
+  /** Ensures mode-only replacement can preserve access controls on the file in this directory. */
+  async assertReplaceableMetadata(name: string): Promise<void> {
+    await this.initialize();
+    z.null().parse(await this.request(PathIndexMethod.ASSERT_REPLACEABLE_METADATA, name));
   }
 
   /** Metadata-only intersection with the catalog, including ignore and sensitive-file exclusions. */

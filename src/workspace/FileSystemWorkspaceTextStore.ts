@@ -1,3 +1,4 @@
+import { WorkspaceTextDecodingError } from './WorkspaceTextDecodingError.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import {
@@ -176,7 +177,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     input: string,
     options: WorkspaceReadOptions = {},
   ): Promise<{ path: string; bytes: Buffer; mode: number; identity: string; revision: string }> {
-    const { path, resolvedFile, identity } = await this.inspectReadPath(input);
+    const { path, resolvedFile, identity } = await this.inspectReadPath(input, options.interruptedRename);
     // Inspection and open are separate operations. Do not follow a replacement
     // link or block opening a replacement FIFO before descriptor validation.
     const flags =
@@ -202,6 +203,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       if (!info.isFile()) {
         throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
       }
+      assertAllowedLinks(info.nlink, identity, path, options.interruptedRename);
       if (`${info.dev}:${info.ino}` !== identity) {
         throw new EditError(EditFailureReason.STALE, 'The file changed while opening it for reading.', { path });
       }
@@ -211,12 +213,18 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
         options.maxBytes === undefined
           ? await handle.readFile()
           : await this.readBounded(handle, path, options.maxBytes, info.size);
+      const revision = createHash('sha256').update(bytes).digest('hex');
+      if (info.nlink !== 1 && revision !== options.interruptedRename!.revision) {
+        throw new EditError(EditFailureReason.STALE, 'The interrupted rename no longer contains the reviewed bytes.', {
+          path,
+        });
+      }
       return {
         path,
         bytes,
         mode: info.mode & 0o777,
         identity,
-        revision: createHash('sha256').update(bytes).digest('hex'),
+        revision,
       };
     } finally {
       await handle.close();
@@ -312,6 +320,14 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       await writeFile(temporary, toBytes(text, byteOrderMark), { flag: 'wx', mode: current.mode });
       await chmod(temporary, current.mode);
       await this.assertRevision(path, expectedRevision);
+      const [source, staged] = await Promise.all([lstat(absolute), lstat(temporary)]);
+      if (source.uid !== staged.uid || source.gid !== staged.gid || (source.mode & 0o7777) !== (staged.mode & 0o7777))
+        throw new EditError(
+          EditFailureReason.UNSUPPORTED,
+          'Replacement cannot preserve the existing ownership and permissions.',
+          { path },
+        );
+      await options?.beforeReplace?.();
       await rename(temporary, absolute);
     } catch (error) {
       throw classifyPathError(error, path);
@@ -356,9 +372,9 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     return this.read(target);
   }
 
-  async delete(input: string, expectedRevision: string): Promise<void> {
+  async delete(input: string, expectedRevision: string, options?: WorkspaceMutationOptions): Promise<void> {
     const path = this.normalizePath(input);
-    await this.assertRevision(path, expectedRevision);
+    await this.assertRevision(path, expectedRevision, options);
     try {
       await unlink(resolve(this.root, path));
     } catch (error) {
@@ -366,7 +382,7 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
     }
   }
 
-  private async inspectReadPath(input: string) {
+  private async inspectReadPath(input: string, checkpoint?: WorkspaceReadOptions['interruptedRename']) {
     const path = this.normalizePath(input);
     try {
       await this.assertNoSymlinkSegments(path, false);
@@ -377,11 +393,13 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       if (!linkStat.isFile())
         throw new EditError(EditFailureReason.UNSUPPORTED, 'Path does not refer to a regular file.', { path });
       const resolvedRoot = await realpath(this.root);
+      const identity = `${linkStat.dev}:${linkStat.ino}`;
+      assertAllowedLinks(linkStat.nlink, identity, path, checkpoint);
       const resolvedFile = await realpath(absolute);
       assertInsideRoot(resolvedRoot, resolvedFile, path);
       // Check the filesystem's spelling too: aliases must not bypass the policy.
       this.normalizePath(relative(resolvedRoot, resolvedFile));
-      return { path, resolvedFile, identity: `${linkStat.dev}:${linkStat.ino}` };
+      return { path, resolvedFile, identity };
     } catch (error) {
       // An ancestor can change after its earlier inspection. Preserve that as
       // an unsupported resource, never as proof of an absent child or a delete.
@@ -401,14 +419,18 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       const { bytesRead } = await handle.read(buffer);
       if (bytesRead === 0) return Buffer.concat(chunks, length);
       length += bytesRead;
-      if (length > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, length);
+      if (length > maxBytes) throw new WorkspaceReadLimitError(path, maxBytes, length, length);
       chunks.push(buffer.subarray(0, bytesRead));
     }
-    throw new WorkspaceReadLimitError(path, maxBytes, length);
+    throw new WorkspaceReadLimitError(path, maxBytes, length, length);
   }
 
-  private async assertRevision(path: string, expected: string): Promise<WorkspaceTextSnapshot> {
-    const current = await this.readOptional(path);
+  private async assertRevision(
+    path: string,
+    expected: string,
+    options?: WorkspaceReadOptions,
+  ): Promise<WorkspaceTextSnapshot> {
+    const current = await this.readOptional(path, options);
     if (!current || current.revision !== expected) {
       throw new EditError(EditFailureReason.STALE, 'The file changed after the proposal was staged.', {
         path,
@@ -516,6 +538,18 @@ function classifyPathError(error: unknown, path: string): unknown {
   return new EditError(EditFailureReason.UNSUPPORTED, 'A parent path is not a directory.', { path }, { cause: error });
 }
 
+function assertAllowedLinks(
+  count: number,
+  identity: string,
+  path: string,
+  checkpoint?: WorkspaceReadOptions['interruptedRename'],
+): void {
+  if (count !== 1 && !(count === 2 && checkpoint?.identity === identity))
+    throw new EditError(EditFailureReason.UNSUPPORTED, 'Unverified hard links are excluded from project access.', {
+      path,
+    });
+}
+
 function toSnapshot(
   path: string,
   bytes: Buffer,
@@ -524,7 +558,7 @@ function toSnapshot(
   revision = createHash('sha256').update(bytes).digest('hex'),
 ): WorkspaceTextSnapshot {
   if (bytes.includes(0))
-    throw new EditError(EditFailureReason.UNSUPPORTED, 'Binary/NUL files are not supported.', { path });
+    throw new WorkspaceTextDecodingError(path, 'Binary/NUL files are not supported.', bytes.length);
   const byteOrderMark = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
   const content = byteOrderMark ? bytes.subarray(3) : bytes;
   let text: string;
@@ -532,7 +566,7 @@ function toSnapshot(
     // The encoding marker was removed above; a second U+FEFF is document text.
     text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
   } catch (error) {
-    throw new EditError(EditFailureReason.UNSUPPORTED, 'File is not valid UTF-8.', { path }, { cause: error });
+    throw new WorkspaceTextDecodingError(path, 'File is not valid UTF-8.', bytes.length, { cause: error });
   }
   return {
     path,

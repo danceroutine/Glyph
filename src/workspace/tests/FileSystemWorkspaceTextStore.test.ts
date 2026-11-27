@@ -51,6 +51,55 @@ async function actualFileSystem() {
 }
 
 describe(FileSystemWorkspaceTextStore, () => {
+  it('checks ownership, current mode, and host access controls on the completed staging file', async () => {
+    const root = await workspaceRoot('glyph-workspace-replacement-');
+    const disk = new FileSystemWorkspaceTextStore(root);
+    const target = join(root, 'rule.mdc');
+    await writeFile(target, 'before', { mode: 0o600 });
+    const snapshot = await disk.read('rule.mdc');
+    const failure = new Error('Metadata changed');
+    await expect(
+      disk.replace('rule.mdc', snapshot.revision, 'after', false, {
+        beforeReplace: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    for (const difference of [{ uid: -1 }, { gid: -1 }, { mode: 0o100400 }]) {
+      const actual = await actualFileSystem();
+      vi.mocked(lstat).mockImplementation((async (path: string) => {
+        const info = await actual.lstat(path);
+        return path.endsWith('.glyph.tmp') ? Object.assign(info, difference) : info;
+      }) as typeof lstat);
+      await expect(disk.replace('rule.mdc', snapshot.revision, 'after', false)).rejects.toMatchObject({
+        reason: EditFailureReason.UNSUPPORTED,
+      });
+    }
+    expect(await readFile(target, 'utf8')).toBe('before');
+  });
+  it('admits only the checkpointed inode and reviewed content during interrupted rename recovery', async () => {
+    const root = await workspaceRoot('glyph-workspace-links-');
+    const disk = new FileSystemWorkspaceTextStore(root);
+    await writeFile(join(root, 'source'), 'reviewed');
+    const { identity, revision } = await disk.read('source');
+    await link(join(root, 'source'), join(root, 'second'));
+    await expect(disk.read('second')).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    await expect(disk.validateAccess('second')).rejects.toMatchObject({ reason: EditFailureReason.UNSUPPORTED });
+    await expect(disk.read('second', { interruptedRename: { identity: 'different', revision } })).rejects.toMatchObject(
+      { reason: EditFailureReason.UNSUPPORTED },
+    );
+    await expect(disk.read('second', { interruptedRename: { identity, revision } })).resolves.toMatchObject({
+      text: 'reviewed',
+    });
+    await writeFile(join(root, 'source'), 'changed');
+    await expect(disk.read('second', { interruptedRename: { identity, revision } })).rejects.toMatchObject({
+      reason: EditFailureReason.STALE,
+    });
+    await link(join(root, 'source'), join(root, 'third'));
+    await expect(disk.read('second', { interruptedRename: { identity, revision } })).rejects.toMatchObject({
+      reason: EditFailureReason.UNSUPPORTED,
+    });
+  });
   it.each(['\uD800', '\uDC00', 'folder/\uD800.txt', 'folder/\uDC00.txt'])(
     'rejects malformed Unicode path %j before resolving a filesystem key',
     async path => {

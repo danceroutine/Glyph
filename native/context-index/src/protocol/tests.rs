@@ -329,6 +329,7 @@ fn decodes_each_method_and_rejects_invalid_parameters_with_the_request_id() {
     for method in [
         "initialize",
         "search",
+        "assertReplaceableMetadata",
         "filterPaths",
         "glob",
         "contentSearch",
@@ -1019,4 +1020,24 @@ fn shutdown_and_input_eof_cancel_and_join_pending_panicked_searches() {
             "a failed shutdown must not emit success"
         );
     }
+}
+
+#[test]
+fn checks_direct_file_replacement_metadata_through_the_protocol() {
+    let project = project_with_needle();
+    let (sender, responses, worker) = start_service(0, Default::default());
+    for (id, req, expected) in [
+        (1, Request::AssertReplaceableMetadata("notes.txt".into()), false),
+        (2, initialize_request(project.path()), true),
+        (3, Request::AssertReplaceableMetadata("../notes.txt".into()), false),
+        (4, Request::AssertReplaceableMetadata("missing".into()), false),
+        (5, decode_request(br#"{"version":1,"id":5,"method":"assertReplaceableMetadata","params":"notes.txt"}"#).unwrap().request, true),
+        (6, Request::Shutdown, true),
+    ] {
+        sender.send(work(id,req)).unwrap();
+        let answer = encoded(responses.recv().unwrap());
+        assert_eq!(answer.get("result").is_some(), expected, "{answer}");
+    }
+    drop(sender);
+    worker.join().unwrap().unwrap();
 }

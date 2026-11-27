@@ -1,19 +1,27 @@
+import { withPrivateFileLock } from '#src/workspace/withPrivateFileLock.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { MAX_AGENT_RULE_BYTES, parseAgentRuleFile } from './parseAgentRuleFile.ts';
 import { withRuleEnabled } from './ruleFrontmatter.ts';
 import type { AgentInstructionCatalog } from '#src/instructions/AgentInstructionCatalog.js';
-import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
-import type { WorkspacePathIndex } from '#src/context/search/WorkspacePathIndex.js';
+import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+
+interface UserRuleFileAuthority {
+  refresh(): Promise<unknown>;
+  assertReplaceableMetadata(filename: string): Promise<void>;
+}
 
 export type UserAgentRuleActivation = 'always' | 'file_pattern' | 'model' | 'manual';
 
 /** Revision-guarded lifecycle operations for rules owned by the current user. */
 export class UserAgentRuleManager {
   constructor(
-    private readonly workspace: WorkspaceTextStore,
+    private readonly workspace: Pick<
+      FileSystemWorkspaceTextStore,
+      'root' | 'caseSensitive' | 'read' | 'create' | 'delete' | 'normalizePath' | 'replace'
+    >,
     private readonly catalog: Pick<AgentInstructionCatalog, 'refresh'>,
-    private readonly pathIndex?: Pick<WorkspacePathIndex, 'refresh'>,
+    private readonly files: UserRuleFileAuthority,
   ) {}
 
   get directoryUri(): string {
@@ -46,32 +54,39 @@ export class UserAgentRuleManager {
     const text = ['---', ...metadata, '---', '', 'Describe the rule here.', ''].join('\n');
     if (Buffer.byteLength(text) > MAX_AGENT_RULE_BYTES) throw new Error('User rules can contain at most 64 KiB.');
     parseAgentRuleFile(text);
-    await this.workspace.create(path, text, false);
+    await this.mutate(() => this.workspace.create(path, text, false));
     await this.refreshDiscovery();
   }
 
   async setEnabled(path: string, expectedRevision: string, enabled: boolean): Promise<void> {
     const normalized = this.rulePath(path);
-    const current = await this.workspace.read(normalized);
-    if (current.revision !== expectedRevision) throw new Error('The rule changed. Refresh Settings and try again.');
-    await this.workspace.replace(
-      normalized,
-      expectedRevision,
-      withRuleEnabled(current.text, enabled),
-      current.byteOrderMark,
-    );
+    await this.mutate(async () => {
+      const current = await this.workspace.read(normalized, { maxBytes: MAX_AGENT_RULE_BYTES });
+      if (current.revision !== expectedRevision) throw new Error('The rule changed. Refresh Settings and try again.');
+      const text = withRuleEnabled(current.text, enabled);
+      if (Buffer.byteLength(text) + (current.byteOrderMark ? 3 : 0) > MAX_AGENT_RULE_BYTES)
+        throw new Error('User rules can contain at most 64 KiB. Shorten the rule before changing its enablement.');
+      const beforeReplace = () => this.files.assertReplaceableMetadata(normalized.slice('rules/'.length));
+      await beforeReplace();
+      await this.workspace.replace(normalized, expectedRevision, text, current.byteOrderMark, { beforeReplace });
+    });
     await this.refreshDiscovery();
   }
 
   async remove(path: string, expectedRevision: string): Promise<void> {
-    await this.workspace.delete(this.rulePath(path), expectedRevision);
+    const normalized = this.rulePath(path);
+    await this.mutate(() => this.workspace.delete(normalized, expectedRevision));
     await this.refreshDiscovery();
+  }
+
+  private mutate<T>(work: () => Promise<T>): Promise<T> {
+    return withPrivateFileLock(join(this.workspace.root, '.skill-staging', 'user-rules.sqlite'), work);
   }
 
   /** Publish managed mutations immediately, without waiting for native watcher reconciliation. */
   private async refreshDiscovery(): Promise<void> {
     try {
-      await this.pathIndex?.refresh();
+      await this.files.refresh();
       await this.catalog.refresh();
     } catch (error) {
       throw new Error(

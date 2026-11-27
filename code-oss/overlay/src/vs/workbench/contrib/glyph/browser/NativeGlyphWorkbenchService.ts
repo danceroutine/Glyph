@@ -8,7 +8,7 @@ import { GlyphFollowUpBehavior } from '#glyph/workbench/GlyphFollowUpBehavior.js
 import { IClipboardService } from '#vs/platform/clipboard/common/clipboardService.js';
 import { AgentModeID } from '#glyph/protocol/index.js';
 import { IConfigurationService } from '#vs/platform/configuration/common/configuration.js';
-import { restoreGlyphPrompt } from '#glyph/workbench/restoreGlyphPrompt.js';
+import { restoreGlyphDraftReferences, restoreGlyphPrompt } from '#glyph/workbench/restoreGlyphPrompt.js';
 import type { GlyphPlanRecord } from '#glyph/protocol/events/GlyphPlanRecord.js';
 import type { GlyphPlanProgress } from '#glyph/protocol/events/GlyphPlanProgress.js';
 import { GlyphPlanPromptIntent, toGlyphPlanPrompt } from '#glyph/workbench/GlyphPlanPrompt.js';
@@ -25,7 +25,7 @@ import type { GlyphApprovalDecision } from '#glyph/protocol/GlyphApprovalDecisio
 import { IStorageService, StorageScope, StorageTarget } from '#vs/platform/storage/common/storage.js';
 import type { GlyphModelSummary } from '#glyph/protocol/events/GlyphModelSummary.js';
 import { Emitter } from '#vs/base/common/event.js';
-import { GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
+import { captureGlyphPrompt, GlyphComposerState } from '#glyph/workbench/GlyphComposerState.js';
 import { Disposable } from '#vs/base/common/lifecycle.js';
 import { generateUuid } from '#vs/base/common/uuid.js';
 import { IInstantiationService } from '#vs/platform/instantiation/common/instantiation.js';
@@ -67,7 +67,9 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   private openChatIds: string[] = [];
   private archivedChatIds: string[] = [];
   private pinnedChatIds: string[] = [];
-  private newChatDraft: { readonly text: string; readonly createdAt: string } | undefined;
+  private newChatDraft:
+    | { readonly text: string; readonly createdAt: string; readonly references?: GlyphTurnOptions['referenceSpans'] }
+    | undefined;
   private pendingRunId: string | undefined;
   private pendingCreation: string | undefined;
   private draftAccount: { readonly provider: string; readonly id: string } | undefined;
@@ -139,7 +141,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       const saved = this.storageService.getObject<object>(`glyph.${key}`, StorageScope.WORKSPACE);
       this[key] = Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : [];
     }
-    const savedDraft = this.storageService.getObject<{ text?: unknown; createdAt?: unknown }>(
+    const savedDraft = this.storageService.getObject<{ text?: unknown; createdAt?: unknown; references?: unknown }>(
       'glyph.newChatDraft',
       StorageScope.WORKSPACE,
     );
@@ -147,7 +149,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       this.newChatDraft = { text: savedDraft.text, createdAt: savedDraft.createdAt };
       const composer = this.createComposer();
       this.composers.set('', composer);
-      composer.setDraft(savedDraft.text);
+      composer.setDocument(restoreGlyphDraftReferences(savedDraft.text, savedDraft.references, generateUuid));
     }
     this.profileId = this.userDataProfileService.currentProfile.id;
     this.workspaceBinding = this.currentWorkspaceBinding();
@@ -1070,11 +1072,21 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
   }
 
   private syncNewChatDraft(): boolean {
-    const text = this.composers.get('')?.snapshot.draft ?? '';
+    const snapshot = this.composers.get('')?.snapshot;
+    const text = snapshot?.draft ?? '';
+    const references = snapshot && captureGlyphPrompt(snapshot.document).referenceSpans;
     const next = text.trim()
-      ? { text, createdAt: this.newChatDraft?.createdAt ?? new Date().toISOString() }
+      ? {
+          text,
+          createdAt: this.newChatDraft?.createdAt ?? new Date().toISOString(),
+          ...(references?.length ? { references } : {}),
+        }
       : undefined;
-    if (next?.text === this.newChatDraft?.text) return false;
+    if (
+      next?.text === this.newChatDraft?.text &&
+      JSON.stringify(next?.references) === JSON.stringify(this.newChatDraft?.references)
+    )
+      return false;
     this.newChatDraft = next;
     this.storageService.store('glyph.newChatDraft', next, StorageScope.WORKSPACE, StorageTarget.MACHINE);
     return true;

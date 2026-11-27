@@ -1,3 +1,4 @@
+import { isRecord } from '#src/shared/validators/isRecord.js';
 import type { ChatReferenceSpan, ChatTurnOptions } from '#src/chat/ChatTurnOptions.js';
 import {
   GlyphContextAttachmentKind,
@@ -44,7 +45,17 @@ export function restoreGlyphPrompt(
     ...exact,
     ...legacy.map(ref => ({ ...ref, ...legacyPosition(draft.text, `/${ref.label}`, references) })),
   ];
-  for (const ref of positioned) {
+  return restoreMentions(draft.text, mentions, positioned, options, createId);
+}
+
+function restoreMentions(
+  text: string,
+  mentions: GlyphInlineMention<GlyphContextAttachment>[],
+  references: readonly ChatReferenceSpan[],
+  options: ChatTurnOptions,
+  createId: () => string,
+): GlyphPromptDocument {
+  for (const ref of references) {
     const mention = `/${ref.label}`;
     const attachment: GlyphContextAttachment = {
       id: createId(),
@@ -58,7 +69,7 @@ export function restoreGlyphPrompt(
     };
     mentions.push({ attachment, mention, span: ref });
   }
-  const parts = placeGlyphMentions(draft.text, mentions);
+  const parts = placeGlyphMentions(text, mentions);
   const end = parts.reduce((size, part) => size + (part.type === 'text' ? part.text.length : 1), 0);
   return { parts, from: end, to: end, options };
 }
@@ -73,4 +84,42 @@ function legacyPosition(text: string, mention: string, references: readonly Refe
     (end === text.length || /\s/u.test(text[end]!)) &&
     references.filter(ref => `/${ref.label}` === mention).length === 1;
   return { from: unique ? from : -1, to: unique ? from + mention.length : -1 };
+}
+
+/** Restore only bounded badges whose positions and text agree with the locally saved draft. */
+export function restoreGlyphDraftReferences(text: string, saved: unknown, createId: () => string): GlyphPromptDocument {
+  const referenceSpans: ChatReferenceSpan[] = [];
+  if (Array.isArray(saved) && saved.length <= Math.max(256, Math.floor(text.length / 2))) {
+    let end = 0;
+    const entries: readonly unknown[] = saved;
+    for (const ref of entries) {
+      if (
+        !isRecord(ref) ||
+        (ref.kind !== 'rule' && ref.kind !== 'skill') ||
+        !boundedField(ref.sourceId, 500) ||
+        !boundedField(ref.label, 1000) ||
+        !boundedField(ref.revision, 500) ||
+        typeof ref.from !== 'number' ||
+        !Number.isSafeInteger(ref.from) ||
+        ref.from < end ||
+        ref.to !== ref.from + ref.label.length + 1 ||
+        text.slice(ref.from, ref.to) !== '/' + ref.label
+      )
+        continue;
+      referenceSpans.push({
+        kind: ref.kind,
+        sourceId: ref.sourceId,
+        label: ref.label,
+        revision: ref.revision,
+        from: ref.from,
+        to: ref.to,
+      });
+      end = ref.to;
+    }
+  }
+  return restoreMentions(text, [], referenceSpans, {}, createId);
+}
+
+function boundedField(value: unknown, limit: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= limit;
 }

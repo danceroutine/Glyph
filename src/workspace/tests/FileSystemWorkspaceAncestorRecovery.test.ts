@@ -186,6 +186,7 @@ function virtualWorkspace() {
     if (node === undefined) throw Object.assign(new Error('Missing path'), { code: 'ENOENT' });
     return {
       dev: 7,
+      nlink: 1,
       ino: path.length,
       mode: 0o100644,
       size: node?.length ?? 0,

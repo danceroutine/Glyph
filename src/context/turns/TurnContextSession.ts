@@ -9,7 +9,7 @@ import {
   type AgentInstructionSource,
 } from '#src/instructions/AgentInstructionSource.js';
 import { resolveInstructionId } from '#src/instructions/resolveInstructionId.js';
-import { AgentInstructionSet } from '#src/instructions/AgentInstructionSet.js';
+import { AgentInstructionSet, isUnavailableGuidance } from '#src/instructions/AgentInstructionSet.js';
 import { defaultInstructionPaths, type InstructionPaths } from '#src/instructions/InstructionPaths.js';
 import { matchesAgentRulePath, RuleGlobBudget } from '#src/instructions/rules/matchesAgentRulePath.js';
 
@@ -40,11 +40,7 @@ export class TurnContextSession {
     this.scopeIndex = input.scopeIndex ?? new AgentInstructionSet(input.sources, this.paths);
     this.precedence = new Map(input.sources.map((source, index) => [source, index]));
     const unreadable = input.sources.find(
-      source =>
-        source.kind === AgentInstructionSourceKind.AGENTS_MD &&
-        source.status === AgentInstructionSourceStatus.ERROR &&
-        this.paths.isWorkspaceRoot(source.scope) &&
-        (source.id === `agents_md:${source.path}` || source.legacyIds?.includes(`agents_md:${source.path}`)),
+      source => isUnavailableGuidance(source) && this.paths.isWorkspaceRoot(source.scope),
     );
     if (unreadable)
       throw new Error(
@@ -192,7 +188,13 @@ export class TurnContextSession {
     upfront: readonly AgentInstructionSource[] = [],
   ): readonly AgentInstructionSource[] {
     const applicable = new Set([...this.scopeIndex.forPath('.'), ...upfront]);
-    for (const path of paths) for (const source of this.scopeIndex.forPath(path)) applicable.add(source);
+    for (const path of paths) {
+      for (const source of this.scopeIndex.forPath(path, true)) {
+        if (isUnavailableGuidance(source))
+          throw new Error(`Required instruction ${source.path} could not be loaded. ${source.message ?? ''}`.trimEnd());
+        applicable.add(source);
+      }
+    }
     return [...applicable].toSorted((a, b) => this.precedence.get(a)! - this.precedence.get(b)!);
   }
 

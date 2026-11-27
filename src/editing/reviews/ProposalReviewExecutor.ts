@@ -1,3 +1,5 @@
+import type { WorkspaceReadOptions } from '#src/workspace/WorkspaceReadOptions.js';
+import { WorkspaceMutationConsistency } from '#src/workspace/WorkspaceMutationConsistency.js';
 import type { Logger } from '#src/observability/Logger.js';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
 import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
@@ -469,11 +471,22 @@ export class ProposalReviewExecutor {
       if (!(await this.synchronizeNewFile(file))) file.applicability = EditApplicabilityState.STALE;
       return;
     }
+    const applying =
+      file.applyingItemId !== null && file.applyingItemId !== ''
+        ? file.items.find(item => item.id === file.applyingItemId)
+        : undefined;
+    const interruptedRename =
+      applying?.kind === EditReviewItemKind.RENAME &&
+      file.current &&
+      this.workspace.mutationConsistency === WorkspaceMutationConsistency.BEST_EFFORT_FILESYSTEM
+        ? { identity: file.current.identity, revision: file.current.revision }
+        : undefined;
+    const readOptions = { maxBytes: this.maxAllowableReadBytes, ...(interruptedRename ? { interruptedRename } : {}) };
     let current: FileEditPlan['current'] | undefined;
     try {
       // This runs for every queued file at startup. Bound each read so one huge replacement file cannot
       // exhaust memory before the user even sees the queue.
-      current = await this.workspace.readOptional(file.currentPath, { maxBytes: this.maxAllowableReadBytes });
+      current = await this.workspace.readOptional(file.currentPath, readOptions);
     } catch (error) {
       if (!isUnreviewableSnapshot(error)) throw error;
       // A path replaced by a directory, binary file, or disallowed resource is
@@ -488,12 +501,8 @@ export class ProposalReviewExecutor {
     // An interrupted write may have landed. Check for that before treating the difference as outside edits.
     // Otherwise our own change would look foreign and mark the file stale, or a landed acceptance would stay
     // pending and be applied a second time.
-    const applying =
-      file.applyingItemId !== null && file.applyingItemId !== ''
-        ? file.items.find(item => item.id === file.applyingItemId)
-        : undefined;
     if (applying) {
-      const recovered = await this.reconcileApplying(review, file, applying, current);
+      const recovered = await this.reconcileApplying(review, file, applying, current, readOptions);
       if (recovered) return;
     }
     // The write did not land, or could not be proven to. Treat the disk as authoritative and try to carry the
@@ -512,12 +521,13 @@ export class ProposalReviewExecutor {
     file: FileEditPlan,
     item: FileEditPlan['items'][number],
     current: FileEditPlan['current'] | undefined,
+    readOptions: WorkspaceReadOptions,
   ): Promise<boolean> {
     let after = current ?? null;
     if (item.kind === EditReviewItemKind.RENAME) {
       let target: FileEditPlan['current'];
       try {
-        target = (await this.workspace.readOptional(file.targetPath, { maxBytes: this.maxAllowableReadBytes })) ?? null;
+        target = (await this.workspace.readOptional(file.targetPath, readOptions)) ?? null;
       } catch (error) {
         if (!isUnreviewableSnapshot(error)) throw error;
         // An unreadable destination cannot prove the rename completed. Retain
@@ -529,7 +539,11 @@ export class ProposalReviewExecutor {
       if (current && target && current.identity === target.identity && current.revision === file.currentRevision) {
         const operationId = `${review.id}:${file.id}:${item.id}:rename_cleanup`;
         try {
-          await this.workspace.delete(file.currentPath, current.revision, { operationId, undoGroupId: operationId });
+          await this.workspace.delete(file.currentPath, current.revision, {
+            operationId,
+            undoGroupId: operationId,
+            ...readOptions,
+          });
         } catch (error) {
           const sourceVanished =
             typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';

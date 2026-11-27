@@ -543,6 +543,38 @@ impl ContextIndexService {
         ))
     }
 
+    /// The initialized authority is a single user-rule directory; only its immediate files can be replaced.
+    pub(crate) fn assert_replaceable_metadata(&self, name: String) -> Result<(), ServiceError> {
+        let initialized = self
+            .initialized
+            .as_ref()
+            .ok_or_else(ServiceError::not_initialized)?;
+        if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+            return Err(ServiceError::invalid_request(
+                "Expected one direct filename.",
+            ));
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+                .open(&initialized.root)
+                .and_then(|parent| {
+                    glyph_filesystem_metadata::assert_child_replaceable(&parent, &name)
+                })
+                .map_err(|error| ServiceError::internal(error.to_string()))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = initialized;
+            Err(ServiceError::internal(
+                "Access-control metadata inspection is unavailable.",
+            ))
+        }
+    }
+
     pub(crate) fn filter_paths(&self, paths: Vec<String>) -> Result<Vec<String>, ServiceError> {
         if paths.len() > 2_000
             || paths
@@ -601,6 +633,9 @@ impl ContextIndexService {
             .initialized
             .as_ref()
             .ok_or_else(ServiceError::not_initialized)?;
+        if params.root_files_only && params.target_directory.is_none() {
+            return glob_root_files(initialized, &params);
+        }
         let paths = initialized
             .known_paths
             .read()
@@ -977,18 +1012,8 @@ fn is_cache_artifact(path: &Path, cache_path: &Path) -> bool {
             })
 }
 
-fn scan_paths(
-    root: &Path,
-    policy: &IndexPolicy,
-    cache_path: Option<&Path>,
-    stop: &AtomicBool,
-) -> Result<ScanResult, ServiceError> {
-    if policy.exclude_root {
-        return Ok(ScanResult {
-            paths: Vec::new(),
-            truncated: false,
-        });
-    }
+/// Share ignore-file, directory exclusion, and link semantics with the resident catalog.
+fn workspace_walk(root: &Path, policy: &IndexPolicy) -> WalkBuilder {
     let ignored: HashSet<_> = policy.ignored_directories.iter().cloned().collect();
     let excluded_paths = policy.excluded_paths.clone();
     let filter_root = root.to_path_buf();
@@ -1027,6 +1052,67 @@ fn scan_paths(
                     .any(|excluded| path_is_excluded(&normalized, excluded))
             })
         });
+
+    builder
+}
+
+/// Read only direct children, independently of watcher lag, warm caches and nested index limits.
+fn glob_root_files(
+    initialized: &InitializedIndex,
+    params: &GlobParams,
+) -> Result<GlobResult, ServiceError> {
+    let matcher =
+        crate::path_glob::compile_matcher(&params.pattern, initialized.policy.case_sensitive)
+            .map_err(ServiceError::invalid_request)?;
+    let mut files = BTreeSet::new();
+    let mut truncated = false;
+    if !initialized.policy.exclude_root {
+        let mut walk = workspace_walk(&initialized.root, &initialized.policy);
+        for entry in walk.max_depth(Some(1)).build() {
+            let entry = entry.map_err(|error| ServiceError::internal(error.to_string()))?;
+            if let Some(error) = entry.error() {
+                return Err(ServiceError::internal(error.to_string()));
+            }
+            if !entry.file_type().is_some_and(|kind| kind.is_file())
+                || initialized
+                    .cache_path
+                    .as_deref()
+                    .is_some_and(|path| is_cache_artifact(entry.path(), path))
+            {
+                continue;
+            }
+            if let Some(name) = entry
+                .file_name()
+                .to_str()
+                .filter(|name| matcher.is_match(name) && !initialized.policy.excludes(name))
+            {
+                files.insert(name.to_owned());
+                if files.len() > params.limit as usize {
+                    files.pop_last();
+                    truncated = true;
+                }
+            }
+        }
+    }
+    Ok(GlobResult {
+        files: files.into_iter().collect(),
+        truncated,
+    })
+}
+
+fn scan_paths(
+    root: &Path,
+    policy: &IndexPolicy,
+    cache_path: Option<&Path>,
+    stop: &AtomicBool,
+) -> Result<ScanResult, ServiceError> {
+    if policy.exclude_root {
+        return Ok(ScanResult {
+            paths: Vec::new(),
+            truncated: false,
+        });
+    }
+    let builder = workspace_walk(root, policy);
 
     // WalkParallel::run joins its visitors before returning. Borrow the local
     // accumulator so no shared owner or fallible ownership recovery is needed.

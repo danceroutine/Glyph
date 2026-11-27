@@ -1,12 +1,81 @@
-import { describe, expect, it, vi } from 'vitest';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { AgentInstructionActivationMode } from '#src/instructions/AgentInstructionSource.js';
 import { parseAgentRuleFile } from '#src/instructions/rules/parseAgentRuleFile.js';
 import { UserAgentRuleManager, withEnabled__TESTING_ONLY } from '#src/instructions/rules/UserAgentRuleManager.js';
 
 describe(UserAgentRuleManager, () => {
+  const files = { assertReplaceableMetadata: vi.fn(async () => {}), refresh: vi.fn(async () => {}) };
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'glyph-user-rule-'));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  it('keeps the existing file and revision when an enablement edit would exceed the byte limit', async () => {
+    const workspace = new FileSystemWorkspaceTextStore(root);
+    await mkdir(join(root, 'rules'));
+    const original = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.alloc(65533, 0x61)]);
+    await writeFile(join(root, 'rules/full.mdc'), original);
+    const before = await workspace.read('rules/full.mdc');
+    const manager = new UserAgentRuleManager(workspace, { refresh: async () => [] }, files);
+    await expect(manager.setEnabled('rules/full.mdc', before.revision, false)).rejects.toThrow('64 KiB');
+    expect(await readFile(join(root, 'rules/full.mdc'))).toEqual(original);
+  });
+
+  it('rejects an ACL change between preflight and publication while preserving the current rule', async () => {
+    const workspace = new FileSystemWorkspaceTextStore(root);
+    const original = await workspace.create('rules/secure.mdc', 'Protected', false);
+    const check = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('ACL changed'));
+    const index = { assertReplaceableMetadata: check, refresh: vi.fn() };
+    const manager = new UserAgentRuleManager(workspace, { refresh: async () => [] }, index);
+    await expect(manager.setEnabled(original.path, original.revision, false)).rejects.toThrow('ACL changed');
+    expect(check.mock.calls).toEqual([['secure.mdc'], ['secure.mdc']]);
+    expect((await workspace.read(original.path)).revision).toBe(original.revision);
+    expect(index.refresh).not.toHaveBeenCalled();
+  });
+  it('keeps the user-rule lock private when a workspace contains the user directory or directly attaches its staging directory', async () => {
+    const profile = join(root, 'profile');
+    const workspace = new FileSystemWorkspaceTextStore(profile);
+    const manager = new UserAgentRuleManager(workspace, { refresh: async () => [] }, files);
+    await manager.create('Protected', 'manual');
+    const staging = join(profile, '.skill-staging');
+    const lock = 'user-rules.sqlite';
+    expect(await readFile(join(staging, lock))).toHaveLength(0);
+    for (const [attachedRoot, name] of [
+      [root, 'profile/.skill-staging/' + lock],
+      [staging, lock],
+    ] as const) {
+      const project = new FileSystemWorkspaceTextStore(attachedRoot);
+      await expect(project.delete(name, 'stale')).rejects.toThrow('excluded');
+      await expect(project.create(name, 'replacement', true)).rejects.toThrow('excluded');
+      expect((await project.list(20)).files).not.toContain(name);
+    }
+  });
+
+  it('serializes competing settings callers and rejects the losing reviewed revision', async () => {
+    const workspace = new FileSystemWorkspaceTextStore(root);
+    await workspace.create('rules/shared.mdc', 'Initial', false);
+    const { revision } = await workspace.read('rules/shared.mdc');
+    const managers = [true, false].map(
+      () => new UserAgentRuleManager(new FileSystemWorkspaceTextStore(root), { refresh: async () => [] }, files),
+    );
+    const result = await Promise.allSettled(
+      managers.map((manager, i) => manager.setEnabled('rules/shared.mdc', revision, i === 0)),
+    );
+    expect(result.map(item => item.status).toSorted()).toEqual(['fulfilled', 'rejected']);
+    expect(result.find(item => item.status === 'rejected')).toMatchObject({
+      reason: expect.objectContaining({ message: expect.stringContaining('The rule changed') }),
+    });
+  });
   it('reconciles indexed paths before publishing the catalog after every successful mutation', async () => {
     const events: string[] = [];
     const workspace = {
+      root,
       create: vi.fn(async () => {
         events.push('create');
       }),
@@ -20,6 +89,7 @@ describe(UserAgentRuleManager, () => {
       normalizePath: (path: string) => path,
     };
     const index = {
+      assertReplaceableMetadata: vi.fn(async () => {}),
       refresh: vi.fn(async () => {
         events.push('index');
         return { root: '/rules', fileCount: 1, fromCache: false, truncated: false, durationMilliseconds: 0 };
@@ -50,7 +120,7 @@ describe(UserAgentRuleManager, () => {
   it('creates a safe user rule and refreshes discovery', async () => {
     const create = vi.fn(async (_path: string, _content: string, _overwrite: boolean) => ({}));
     const refresh = vi.fn(async () => []);
-    const manager = new UserAgentRuleManager({ create } as never, { refresh });
+    const manager = new UserAgentRuleManager({ root, create } as never, { refresh }, files);
     await manager.create('TypeScript Safety', AgentInstructionActivationMode.MODEL, 'TypeScript code review');
     expect(create).toHaveBeenCalledWith(
       'rules/typescript-safety.mdc',
@@ -62,7 +132,7 @@ describe(UserAgentRuleManager, () => {
 
   it('validates and round-trips conditional metadata before creating a file', async () => {
     const create = vi.fn(async (_path: string, _text: string) => ({}));
-    const manager = new UserAgentRuleManager({ create } as never, { refresh: vi.fn(async () => []) });
+    const manager = new UserAgentRuleManager({ root, create } as never, { refresh: vi.fn(async () => []) }, files);
     await expect(manager.create('Test', 'model')).rejects.toThrow('description');
     await expect(manager.create('Test', 'file_pattern', '  ')).rejects.toThrow('glob');
     await expect(manager.create('Test', 'file_pattern', '../outside')).rejects.toThrow('Invalid rule glob');
@@ -100,7 +170,7 @@ describe(UserAgentRuleManager, () => {
 
   it('validates names and preserves a bounded safe slug', async () => {
     const create = vi.fn(async (_path: string, _content: string, _overwrite: boolean) => ({}));
-    const manager = new UserAgentRuleManager({ create } as never, { refresh: vi.fn(async () => []) });
+    const manager = new UserAgentRuleManager({ root, create } as never, { refresh: vi.fn(async () => []) }, files);
     await expect(manager.create('   ', AgentInstructionActivationMode.MANUAL)).rejects.toThrow('cannot be empty');
     await expect(manager.create('---', AgentInstructionActivationMode.MANUAL)).rejects.toThrow(
       'must contain a letter or number',
@@ -115,10 +185,18 @@ describe(UserAgentRuleManager, () => {
     const remove = vi.fn(async () => ({}));
     const normalizePath = vi.fn((path: string) => path.replace('~/.glyph/', ''));
     const refresh = vi.fn(async () => []);
-    const manager = new UserAgentRuleManager({ read, replace, delete: remove, normalizePath } as never, { refresh });
+    const manager = new UserAgentRuleManager(
+      { root, read, replace, delete: remove, normalizePath } as never,
+      {
+        refresh,
+      },
+      files,
+    );
 
     await manager.setEnabled('~/.glyph/rules/test.mdc', 'one', false);
-    expect(replace).toHaveBeenCalledWith('rules/test.mdc', 'one', '---\nname: Test\nenabled: false\n---\nBody', null);
+    expect(replace).toHaveBeenCalledWith('rules/test.mdc', 'one', '---\nname: Test\nenabled: false\n---\nBody', null, {
+      beforeReplace: expect.any(Function),
+    });
     await manager.remove('rules/test.mdc', 'one');
     expect(remove).toHaveBeenCalledWith('rules/test.mdc', 'one');
     expect(refresh).toHaveBeenCalledTimes(2);
@@ -131,8 +209,9 @@ describe(UserAgentRuleManager, () => {
     for (const caseSensitive of [true, false]) {
       const remove = vi.fn(async () => {});
       const manager = new UserAgentRuleManager(
-        { caseSensitive, normalizePath: (path: string) => path, delete: remove } as never,
+        { root, caseSensitive, normalizePath: (path: string) => path, delete: remove } as never,
         { refresh: async () => [] },
+        files,
       );
       const operation = manager.remove('RULES/STYLE.MDC', 'one');
       if (caseSensitive) await expect(operation).rejects.toThrow('Only user rules');

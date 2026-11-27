@@ -376,7 +376,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         GlyphDesktopErrorCode.UNSUPPORTED_RESOURCE,
         'Only workspace folders can be attached.',
       );
-    const path = this.adapter.contextPath(uri) || workspaceFolder.name || '.';
+    const path = this.adapter.contextPath(uri) || '.';
     const stat = await this.files.stat(uri);
     if (!stat.isDirectory || stat.isSymbolicLink)
       throw new GlyphContextError(
@@ -415,7 +415,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     const contentRevision = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
     this.assertTrusted();
     const currentWorkspaceFolder = this.workspace.getWorkspaceFolder(uri);
-    if (!currentWorkspaceFolder || (this.adapter.contextPath(uri) || currentWorkspaceFolder.name || '.') !== path)
+    if (!currentWorkspaceFolder || (this.adapter.contextPath(uri) || '.') !== path)
       throw new GlyphContextError(GlyphDesktopErrorCode.STALE_DOCUMENT, 'The workspace changed during capture.');
     return { id: generateUuid(), kind: GlyphContextAttachmentKind.FOLDER, uri: value, path, text, contentRevision };
   }
@@ -517,7 +517,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
         ...capture,
         unavailable: 'Source folder was removed. Remove this attachment or add its folder again before sending.',
       };
-    return { ...capture, path: this.adapter.contextPath(uri) };
+    return { ...capture, path: this.adapter.contextPath(uri) || '.' };
   }
   async openAttachment(attachment: Pick<GlyphAttachmentPreview, 'path' | 'uri' | 'range'>): Promise<void> {
     if (attachment.uri?.startsWith('glyph-skill:')) return this.openSkill(attachment.uri);

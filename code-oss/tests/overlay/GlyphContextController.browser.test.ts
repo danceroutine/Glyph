@@ -441,6 +441,15 @@ describe(GlyphContextController, () => {
     const attachment = { uri: 'glyph-skill:example', path: 'example' };
     await controller.openAttachment(attachment);
     expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(skill.uri);
+    const physical = URI.file('/other/.glyph/skills/example/SKILL.md');
+    services.files.realpath.mockResolvedValueOnce(physical);
+    await expect(controller.openAttachment(attachment)).rejects.toThrow('unavailable');
+    services.files.realpath.mockImplementationOnce(async uri => {
+      services.folders.pop();
+      return uri;
+    });
+    await expect(controller.openAttachment(attachment)).rejects.toThrow('unavailable');
+    expect(services.editors.openEditor).toHaveBeenCalledTimes(1);
     controller.setSkillSources(() => [
       {
         ...skill,
@@ -1109,10 +1118,13 @@ describe(GlyphContextController, () => {
       ]);
     });
 
-    it('names a workspace root after its folder', async () => {
+    it('uses the root scope when capturing or rebinding a named workspace folder', async () => {
       const services = controllerServices();
       services.stats.set('/workspace', { isDirectory: true });
-      expect(await createController(services).captureFolder('file:///workspace')).toMatchObject({ path: 'workspace' });
+      const controller = createController(services);
+      const capture = await controller.captureFolder('file:///workspace');
+      expect(capture.path).toBe('.');
+      expect(controller.rebindAttachment(capture).path).toBe('.');
     });
 
     it('names an unnamed workspace root as the current folder', async () => {

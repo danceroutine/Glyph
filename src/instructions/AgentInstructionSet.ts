@@ -22,7 +22,7 @@ export class AgentInstructionSet {
   readonly sources: readonly AgentInstructionSource[];
   readonly rootGuidance: readonly AgentInstructionSource[];
   private readonly order = new Map<AgentInstructionSource, number>();
-  private readonly activeByScope = new Map<string, AgentInstructionSource[]>();
+  private readonly byScope = new Map<string, AgentInstructionSource[]>();
 
   /** Native project rules shadow same-name Cursor rules only within the same scope. */
   constructor(
@@ -60,11 +60,11 @@ export class AgentInstructionSet {
     );
     for (const [index, source] of this.sources.entries()) {
       this.order.set(source, index);
-      if (source.status !== AgentInstructionSourceStatus.ACTIVE) continue;
+      if (source.status !== AgentInstructionSourceStatus.ACTIVE && !isUnavailableGuidance(source)) continue;
       const scope = paths.key(source.scope);
-      const bucket = this.activeByScope.get(scope);
+      const bucket = this.byScope.get(scope);
       if (bucket) bucket.push(source);
-      else this.activeByScope.set(scope, [source]);
+      else this.byScope.set(scope, [source]);
     }
   }
 
@@ -74,19 +74,31 @@ export class AgentInstructionSet {
    * to the turn context session. Later sources have higher precedence.
    * Visits the ancestor buckets for each equivalent workspace route and orders the matched sources. The returned array does not expose the stored buckets.
    */
-  forPath(path: string): readonly AgentInstructionSource[] {
-    const result = new Set(this.activeByScope.get('.'));
+  forPath(path: string, includeUnavailableGuidance = false): readonly AgentInstructionSource[] {
+    const result = new Set(this.byScope.get('.'));
     for (const route of this.paths.equivalents(path)) {
       let scope = '';
       for (const segment of this.paths.key(route).split('/')) {
         scope = scope ? `${scope}/${segment}` : segment;
         if (scope === '.') continue;
-        const bucket = this.activeByScope.get(scope);
+        const bucket = this.byScope.get(scope);
         if (bucket) for (const source of bucket) result.add(source);
       }
     }
-    return [...result].toSorted((left, right) => this.order.get(left)! - this.order.get(right)!);
+    const ordered = [...result].toSorted((left, right) => this.order.get(left)! - this.order.get(right)!);
+    return includeUnavailableGuidance
+      ? ordered
+      : ordered.filter(source => source.status === AgentInstructionSourceStatus.ACTIVE);
   }
+}
+
+/** A catalog count diagnostic describes partial nested discovery. A failed source or lookup carries mandatory scope. */
+export function isUnavailableGuidance(source: AgentInstructionSource): boolean {
+  return (
+    source.kind === AgentInstructionSourceKind.AGENTS_MD &&
+    source.status === AgentInstructionSourceStatus.ERROR &&
+    source.id !== 'agents_md:discovery-limit'
+  );
 }
 
 function compatibilityKey(source: AgentInstructionSource, scope: string): string {

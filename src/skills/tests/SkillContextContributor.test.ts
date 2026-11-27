@@ -143,7 +143,8 @@ describe(SkillContextContributor, () => {
     expect(await session.activateSource(fresh.id, 'model', 'Not advertised')).toBeUndefined();
     const delta = await steer([first.id, fresh.id, fresh.id]);
     expect(delta?.skills?.map(skill => skill.descriptor.id)).toEqual([fresh.id]);
-    expect(delta?.skillCandidates?.map(skill => skill.id)).toEqual([fresh.id]);
+    expect(delta?.skillCandidates).toBeUndefined();
+    expect(session.disclosePaths(['nested/another'])).toBeUndefined();
     expect(session.initialEnvelope().skills?.map(skill => skill.descriptor.id)).toEqual([first.id]);
     expect(await steer([fresh.id])).toBeUndefined();
     expect(await session.steer({ turnId: 'steering', attachmentPaths: [] })).toBeUndefined();

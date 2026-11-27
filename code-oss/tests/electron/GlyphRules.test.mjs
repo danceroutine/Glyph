@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
@@ -62,6 +62,27 @@ it.describe('agent rules', () => {
     expect(JSON.stringify(initialContext(next))).not.toContain('TYPESCRIPT BODY');
   });
 
+  it(
+    'blocks only operations under an unreadable nested AGENTS.md',
+    isolatedLaunch('exercises unreadable nested guidance'),
+    async ({ glyph, provider }) => {
+      await mkdir(join(glyph.workspace, 'private-scope'));
+      await writeFile(join(glyph.workspace, 'private-scope/AGENTS.md'), 'G'.repeat(65537));
+      await writeFile(join(glyph.workspace, 'private-scope/source.txt'), 'Protected content');
+      await glyph.reload();
+      const [read, edit, other] = await runTools(glyph, provider, [
+        call('read_project_file', { path: 'private-scope/source.txt', start_line: null, end_line: null }),
+        call('propose_edits', { files: [structured('CREATE', 'private-scope/new.txt', null, null, 'new')] }),
+        call('read_project_file', { path: 'notes.txt', start_line: null, end_line: null }),
+      ]);
+      for (const result of [read, edit])
+        expect(result).toMatchObject({ error: { message: expect.stringContaining('private-scope/AGENTS.md') } });
+      expect(JSON.stringify(read)).not.toContain('Protected content');
+      expect(JSON.stringify(other)).toContain('plain');
+      await expect(readFile(join(glyph.workspace, 'private-scope/new.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
   it('lets the model activate a description-selected rule through the bounded rule tool', async ({
     glyph,
     provider,
@@ -87,6 +108,20 @@ it.describe('agent rules', () => {
     if (typeof output !== 'string') throw new Error('The rule activation tool did not return output.');
     expect(toolResultSchema.parse(JSON.parse(output)).instructionContext?.sources[0]?.content).toBe('MODEL BODY');
   });
+
+  it(
+    'preserves a selected manual rule through a new-chat draft reload',
+    isolatedLaunch('reloads a new-chat draft'),
+    async ({ glyph, provider }) => {
+      await glyph.composer.fill('Use /Man');
+      await glyph.page.getByRole('option', { name: /Manual Rule/u }).click();
+      await glyph.reload();
+      provider.enqueue({ chunks: ['Applied.'] });
+      await glyph.sendButton.click();
+      await expect.poll(() => provider.requests.length).toBe(1);
+      expect(JSON.stringify(provider.requests[0].body.input)).toContain('MANUAL BODY');
+    },
+  );
 
   it('applies a manual rule only after the user selects its context badge', async ({ glyph, provider }) => {
     const skipped = await sendText(glyph, provider, 'No manual rule.', 'Skipped.');

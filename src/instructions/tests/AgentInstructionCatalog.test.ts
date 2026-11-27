@@ -32,6 +32,24 @@ async function fixture() {
 }
 
 describe(AgentInstructionCatalog, () => {
+  it('retains each indeterminate root while reading the healthy source', async () => {
+    const provider = new AgentsMdInstructionProvider(
+      {
+        normalizePath: (path: string) => path,
+        read: async () => ({ text: 'healthy', revision: '1', byteLength: 7 }),
+      } as never,
+      {},
+      async () => ({
+        files: ['one/AGENTS.md'],
+        truncated: false,
+        failures: [{ path: 'two/AGENTS.md', message: 'Unknown index state' }],
+      }),
+    );
+    expect(await provider.discover()).toEqual([
+      expect.objectContaining({ path: 'one/AGENTS.md', content: 'healthy' }),
+      expect.objectContaining({ path: 'two/AGENTS.md', scope: 'two', status: 'error', message: 'Unknown index state' }),
+    ]);
+  });
   it('spends the read budget on each root before nested guidance', async () => {
     const workspace = {
       normalizePath: (path: string) => path,

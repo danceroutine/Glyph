@@ -1241,7 +1241,7 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect(glob).toHaveBeenCalledTimes(8);
       expect(glob.mock.calls).toEqual(
         expect.arrayContaining([
-          ['*.mdc', { limit: 10_000 }],
+          ['*.mdc', { limit: 10_000, rootFilesOnly: true }],
           ['AGENTS.md', { limit: 1, rootFilesOnly: true }],
           ['**/?*/AGENTS.md', { limit: 9_999 }],
           ['**/.glyph/rules/*.mdc', { limit: 10_000 }],
@@ -1284,6 +1284,83 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       ]);
     });
 
+    it('retains mandatory and manual instruction identity when an alias becomes a second workspace route', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      const rpc = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        return { operationId: request.operationId, ok: true };
+      });
+      const root = await fixture.folder('actual', { 'AGENTS.md': 'Required body' });
+      await mkdir(join(root, '.glyph/rules'), { recursive: true });
+      await writeFile(join(root, '.glyph/rules/manual.mdc'), '---\nactivation: manual\n---\nManual body');
+      const alias = join(dirname(root), 'alias');
+      await symlink(root, alias);
+      const first = await (await fixture.create([root])).snapshot();
+      const joined = await fixture.create([root, alias]);
+      const current = await joined.snapshot();
+      expect(current.instructionSources!.map(source => source.id)).toEqual(
+        first.instructionSources!.map(source => source.id),
+      );
+      const turn = await captured.providerFactories.at(-1)![4]!.beginTurn({
+        turnId: 'legacy',
+        attachmentPaths: [],
+        manualRuleIds: ['glyph_project_rule:.glyph/rules/manual.mdc'],
+      });
+      expect(turn.initialEnvelope().sources.map(source => source.content)).toEqual(['Manual body', 'Required body']);
+      rpc.mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        if (request.path.endsWith('AGENTS.md')) return editorResponse(request, request.path, request.path);
+        return {
+          operationId: request.operationId,
+          ok: false,
+          error: { code: GlyphDesktopErrorCode.INVALID_REQUEST, message: 'Editor disconnected', retryable: true },
+        };
+      });
+      expect((await joined.snapshot()).instructionSources!.map(source => source.message)).toEqual(
+        expect.arrayContaining(['Editor disconnected', expect.stringContaining('conflicting unsaved edits')]),
+      );
+      rpc.mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a metadata query');
+        return { operationId: request.operationId, ok: false };
+      });
+      expect((await joined.snapshot()).instructionSources![0]!.message).toContain('catalog snapshot is unavailable');
+    });
+    it('retains a physical skill ID and offers it once through overlapping and aliased folders', async () => {
+      const fixture = await factoryFixture();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => ({
+        operationId: 'mutation' in request ? request.mutation.operationId : request.operationId,
+        ok: true,
+      }));
+      const outer = await fixture.folder('outer');
+      const inner = join(outer, 'inner');
+      const directory = join(inner, '.glyph/skills/workflow');
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        join(directory, 'SKILL.md'),
+        '---\nname: workflow\ndescription: test workflow\n---\nWorkflow body',
+      );
+      const alias = join(dirname(outer), 'alias');
+      await symlink(outer, alias);
+
+      const original = (await (await fixture.create([outer])).snapshot()).skills!;
+      expect(original).toMatchObject([{ name: 'workflow', scope: 'inner' }]);
+      for (const folders of [
+        [outer, inner, alias],
+        [inner, alias, outer],
+      ]) {
+        const skills = (await (await fixture.create(folders)).snapshot()).skills!;
+        expect(skills).toMatchObject([{ id: original[0]!.id, name: 'workflow', scope: 'inner' }]);
+        const turn = await captured.providerFactories.at(-1)![4]!.beginTurn({
+          turnId: 'skill-scope',
+          attachmentPaths: ['alias/inner/src/file.ts'],
+        });
+        expect(turn.initialEnvelope().skillCandidates?.map(skill => skill.id)).toEqual([original[0]!.id]);
+      }
+    });
     it('refreshes and captures user and project skills through their owning indexes', async () => {
       const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);

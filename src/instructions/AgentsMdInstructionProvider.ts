@@ -1,3 +1,4 @@
+import type { InstructionFileListing } from './listInstructionFilesAcrossRoots.ts';
 import { defaultInstructionPaths, type InstructionPaths } from './InstructionPaths.ts';
 import { posix } from 'node:path';
 import type { WorkspaceTextStore } from '#src/workspace/WorkspaceTextStore.js';
@@ -22,16 +23,15 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
       readonly maxBytes?: number;
       readonly maxDiscoveryBytes?: number;
     } = {},
-    private readonly listFiles: (
-      maxFiles: number,
-      globPattern: string,
-    ) => Promise<{ files: string[]; truncated: boolean }> = (maxFiles, globPattern) =>
-      workspace.list(maxFiles, globPattern),
+    private readonly listFiles: (maxFiles: number, globPattern: string) => Promise<InstructionFileListing> = (
+      maxFiles,
+      globPattern,
+    ) => workspace.list(maxFiles, globPattern),
   ) {}
 
   async discover(signal?: AbortSignal): Promise<readonly AgentInstructionSource[]> {
     signal?.throwIfAborted();
-    let listed: { files: string[]; truncated: boolean };
+    let listed: InstructionFileListing;
     try {
       listed = await this.listFiles(this.options.maxFiles ?? DEFAULT_MAX_FILES, '**/AGENTS.md');
     } catch (error) {
@@ -49,7 +49,15 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
       ];
     }
     signal?.throwIfAborted();
-    const sources: AgentInstructionSource[] = [];
+    const sources: AgentInstructionSource[] = (listed.failures ?? []).map(({ path, message }) => ({
+      id: `${AgentInstructionSourceKind.AGENTS_MD}:discovery-error:${path}`,
+      kind: AgentInstructionSourceKind.AGENTS_MD,
+      label: 'AGENTS.md discovery',
+      path,
+      scope: instructionScope(path),
+      status: AgentInstructionSourceStatus.ERROR,
+      message,
+    }));
     let remainingBytes = this.options.maxDiscoveryBytes ?? 8 * 1024 * 1024;
     for (const path of listed.files.toSorted((a, b) => a.split('/').length - b.split('/').length)) {
       signal?.throwIfAborted();

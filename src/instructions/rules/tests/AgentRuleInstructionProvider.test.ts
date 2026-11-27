@@ -1,3 +1,4 @@
+import { WorkspaceReadLimitError } from '#src/workspace/WorkspaceReadLimitError.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,6 +61,29 @@ describe(AgentRuleInstructionProvider, () => {
         references: ['missing.md'],
         message: expect.stringContaining('Missing rule reference'),
       });
+  });
+
+  it('watches an authorized reference even when its content read fails, while rejecting forbidden aliases', async () => {
+    const limit = new WorkspaceReadLimitError('guide.md', 10, 20);
+    const readOptional = vi.fn().mockRejectedValueOnce(limit);
+    const workspace = {
+      normalizePath: (path: string) => path,
+      read: async () => ({ text: '---\nreferences: [guide.md]\n---\nMain', revision: '1' }),
+      readOptional,
+    };
+    const rules = new AgentRuleInstructionProvider(
+      workspace as never,
+      { kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE, directory: '.glyph' },
+      async () => ({ files: ['.glyph/rules/base.mdc'], truncated: false }),
+    );
+    expect((await rules.discover())[0]).toMatchObject({ references: ['guide.md'], message: limit.message });
+    for (const next of [() => Promise.resolve(undefined), () => Promise.reject(limit)]) {
+      readOptional.mockRejectedValueOnce(new Error('Decode failed')).mockImplementationOnce(next);
+      expect((await rules.discover())[0]).toMatchObject({ references: ['guide.md'], message: 'Decode failed' });
+      expect(readOptional).toHaveBeenLastCalledWith('guide.md', { maxBytes: 0 });
+    }
+    readOptional.mockRejectedValue(new Error('Linked file is not eligible'));
+    expect((await rules.discover())[0]?.references).toBeUndefined();
   });
 
   it('retains parsed identity and prevents another root from supplying a referenced file', async () => {
