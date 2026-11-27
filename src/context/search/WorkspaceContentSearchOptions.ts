@@ -23,5 +23,6 @@ export const workspaceContentSearchOptionsSchema = z
 
 /** Serializable content-search inputs plus host-local cancellation. */
 export type WorkspaceContentSearchOptions = z.input<typeof workspaceContentSearchOptionsSchema> & {
+  readonly retainAccess?: (check: () => void) => void;
   readonly signal?: AbortSignal | undefined;
 };

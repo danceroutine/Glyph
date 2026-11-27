@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { WorkspaceRootAccess } from '#src/workspace/policy/WorkspaceRootAccess.js';
 import { DesktopAttachmentAccess } from '../DesktopAttachmentAccess.ts';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
@@ -2107,7 +2108,12 @@ describe(ProviderDesktopRuntime, () => {
         ).rejects.toThrow('declared workspace path');
         expect(agentReviews.start).not.toHaveBeenCalled();
         await harness.runtime.handle({ type: Command.START_AGENT_REVIEW, review, model });
-        expect(agentReviews.start).toHaveBeenCalledExactlyOnceWith(review, model);
+        expect(agentReviews.start).toHaveBeenCalledExactlyOnceWith(
+          review,
+          model,
+          expect.any(AbortSignal),
+          expect.any(WorkspaceDisclosure),
+        );
       } finally {
         await harness.runtime.dispose();
       }

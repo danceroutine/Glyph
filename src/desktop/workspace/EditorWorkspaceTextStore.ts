@@ -72,12 +72,17 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
 
   async read(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot> {
     const path = this.normalizePath(input);
-    const response = await this.client.request({
-      type: GlyphEditorRequestType.READ_SNAPSHOT,
-      operationId: randomUUID(),
-      path,
-      ...options,
-    });
+    const { retainAccess, ...limits } = options;
+    const response = await this.client.request(
+      {
+        type: GlyphEditorRequestType.READ_SNAPSHOT,
+        operationId: randomUUID(),
+        path,
+        ...limits,
+      },
+      undefined,
+      retainAccess,
+    );
     const snapshot = requireSnapshot(response, path);
     return this.remember(snapshot);
   }
@@ -98,12 +103,17 @@ export class EditorWorkspaceTextStore implements WorkspaceTextStore {
 
   async readOptional(input: string, options: WorkspaceReadOptions = {}): Promise<WorkspaceTextSnapshot | undefined> {
     const path = this.normalizePath(input);
-    const response = await this.client.request({
-      type: GlyphEditorRequestType.READ_SNAPSHOT,
-      operationId: randomUUID(),
-      path,
-      ...options,
-    });
+    const { retainAccess, ...limits } = options;
+    const response = await this.client.request(
+      {
+        type: GlyphEditorRequestType.READ_SNAPSHOT,
+        operationId: randomUUID(),
+        path,
+        ...limits,
+      },
+      undefined,
+      retainAccess,
+    );
     if (!response.ok && response.error?.code === GlyphDesktopErrorCode.NOT_FOUND) return undefined;
     return this.remember(requireSnapshot(response, path));
   }

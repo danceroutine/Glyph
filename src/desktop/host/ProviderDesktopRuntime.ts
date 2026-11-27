@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { Deferred } from '#src/shared/Deferred.js';
 import { resolveInstructionId } from '#src/instructions/resolveInstructionId.js';
 import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
@@ -356,9 +357,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         if (!this.options.agentReviews) throw new Error('Agent review is unavailable.');
         const account = this.account(command.model.accountProvider, command.model.accountId);
         if (!glyph.hasInferenceAccess(account)) throw new Error('The selected account cannot run reviews.');
-        const models = await glyph.listModels(account, this.discovery.signal);
+        const models = await glyph.listModels(account, commandSignal);
         if (!models.some(model => model.slug === command.model.model))
           throw new Error('The selected review model is unavailable.');
+        const disclosure = new WorkspaceDisclosure();
         await this.options.attachmentAccess.admit(
           command.review.files.map(file => ({
             kind: GlyphContextAttachmentKind.DIFF,
@@ -369,9 +371,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
             projectFile: true,
           })),
           commandSignal,
+          disclosure,
         );
         commandSignal.throwIfAborted();
-        await this.options.agentReviews.start(command.review, command.model);
+        await this.options.agentReviews.start(command.review, command.model, commandSignal, disclosure);
         return;
       }
       case GlyphWorkbenchCommandType.CANCEL_AGENT_REVIEW:
@@ -559,8 +562,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       }
       case GlyphWorkbenchCommandType.SEND: {
         chatTurnOptionsSchema.parse(command.options ?? {});
+        const disclosure = new WorkspaceDisclosure();
         if (command.attachments.length > 0)
-          await this.options.attachmentAccess.admit(command.attachments, commandSignal);
+          await this.options.attachmentAccess.admit(command.attachments, commandSignal, disclosure);
         commandSignal.throwIfAborted();
         if (this.active.has(command.chatId) || this.historyChanges.has(command.chatId))
           throw new ProtocolError('This chat already has an active run or history change.');
@@ -574,13 +578,14 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           this.send(
             {
               ...command,
+              disclosure,
               options: {
                 ...command.options,
                 mode: command.options?.mode ?? session.summary.mode,
               },
             },
             session,
-            controller.signal,
+            AbortSignal.any([controller.signal, commandSignal]),
             steering,
             undefined,
             admission,
@@ -637,7 +642,8 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         const attachments = command.attachments;
         const active = this.active.get(command.chatId);
         if (active?.runId === command.runId && active.admission) await active.admission;
-        if (attachments.length > 0) await this.options.attachmentAccess.admit(attachments, commandSignal);
+        const disclosure = new WorkspaceDisclosure();
+        if (attachments.length > 0) await this.options.attachmentAccess.admit(attachments, commandSignal, disclosure);
         commandSignal.throwIfAborted();
         const run = this.runs.get(command.runId);
         if (
@@ -649,7 +655,12 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
         )
           throw new ProtocolError('There is no active response to steer.');
         active.steering.add(
-          { text: command.text, ...options, attachments: toRequestAttachments(attachments) },
+          {
+            text: command.text,
+            ...options,
+            attachments: toRequestAttachments(attachments),
+            ...(disclosure.hasSources && { disclosure }),
+          },
           {
             id: command.messageId,
             text: command.text,
@@ -883,7 +894,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
 
   /** Keep provider streaming behind the application service while retaining a recoverable desktop projection. */
   private async send(
-    command: Extract<GlyphRuntimeCommand, { type: GlyphWorkbenchCommandType.SEND }>,
+    command: Extract<GlyphRuntimeCommand, { type: GlyphWorkbenchCommandType.SEND }> & {
+      readonly disclosure?: WorkspaceDisclosure;
+    },
     session: ChatSession,
     signal: AbortSignal,
     steering: ChatSteeringQueue,
@@ -895,7 +908,9 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
   }
 
   private async runTurn(
-    command: Extract<GlyphRuntimeCommand, { type: GlyphWorkbenchCommandType.SEND }>,
+    command: Extract<GlyphRuntimeCommand, { type: GlyphWorkbenchCommandType.SEND }> & {
+      readonly disclosure?: WorkspaceDisclosure;
+    },
     session: ChatSession,
     signal: AbortSignal,
     steering: ChatSteeringQueue,
@@ -948,7 +963,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
           this.publish({ type: GlyphHostEventType.CHAT_UPDATED, chat });
         signal.throwIfAborted();
       }
-      if (command.attachments.length > 0) await this.options.attachmentAccess.admit(command.attachments, signal);
+      (await command.disclosure?.authorize(signal))?.();
       signal.throwIfAborted();
       // Bind tool prompts to this exact run so another chat cannot answer them.
       await this.options.interactions.run(command, () =>
@@ -958,6 +973,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
             ...command.options,
             turnId: command.runId,
             attachments: toRequestAttachments(command.attachments),
+            ...(command.disclosure?.hasSources && { disclosure: command.disclosure }),
           },
           {
             ...(admission ? { onTurnAdmitted: admission.resolve } : {}),

@@ -3,6 +3,8 @@ import type { AgentModeID } from '#src/chat/AgentMode.js';
 export interface ToolExecutionContext {
   /** Host-generated logical turn identity shared by every tool round in one response. */
   readonly turnId?: string;
+  /** Keep the contributing workspace roots current when delivering this tool result to the model. */
+  readonly retainResultAccess?: (check: () => void) => void;
   readonly executionId?: string;
   readonly mode?: AgentModeID;
   /** Only the approved mode-switch tool invokes this host-owned transition. */

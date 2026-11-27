@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import type { AgentInstructionContext } from '#src/instructions/AgentInstructionSource.js';
 import type { TurnContextCoordinator } from '#src/context/turns/TurnContextCoordinator.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
@@ -84,6 +85,9 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     },
   ): Promise<TurnResult> {
     const request = toChatRequest(inputRequest);
+    const toolAccess = new WorkspaceDisclosure();
+    const disclosures = new Set<WorkspaceDisclosure>([toolAccess]);
+    if (request.disclosure) disclosures.add(request.disclosure);
     const turnId = request.turnId ?? randomUUID();
     const metadata = chatTurnOptionsSchema.parse({
       ...(request.mode !== undefined ? { mode: request.mode } : {}),
@@ -163,13 +167,14 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       const turnContext = await this.turnContexts?.beginTurn(
         {
           turnId,
-          attachmentPaths: request.attachments.map(attachment => attachment.path),
+          attachmentPaths: attachmentPaths(request),
           manualRuleIds: request.manualRuleIds ?? [],
         },
         signal,
       );
       admittedContext = turnContext !== undefined;
       boundaryInstructions = turnContext?.initialEnvelope();
+      (await request.disclosure?.authorize(signal))?.();
       options.onTurnAdmitted?.();
       turn = await this.adapter.beginTurn(this.state, modelRequest, context(0));
       boundaryInstructions = undefined;
@@ -179,6 +184,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
       for (;;) {
         signal.throwIfAborted();
         for (const steering of options.takeSteering?.(false) ?? []) {
+          if (steering.disclosure) {
+            (await steering.disclosure.authorize(signal))();
+            disclosures.add(steering.disclosure);
+          }
           boundaryInstructions = await this.steeringInstructions(turnId, steering, signal);
           turn = await this.adapter.steerTurn(turn, modelInput(steering), context(round));
           this.state = this.persistentState(this.adapter.snapshot(turn));
@@ -187,9 +196,19 @@ export class AgentRuntime<TTurn> implements ChatProvider {
         }
         round += 1;
         const send = await this.adapter.prepareStep(turn, context(round));
-        const assertCurrent = await this.turnContexts?.authorizeDisclosure?.(turnId, signal);
-        assertCurrent?.();
-        const step = await send(assertCurrent);
+        const authorize = async () => {
+          const checks = await Promise.all([
+            this.turnContexts?.authorizeDisclosure?.(turnId, signal),
+            ...[...disclosures].filter(value => value.hasSources).map(value => value.authorize(signal)),
+          ]);
+          return () => {
+            signal.throwIfAborted();
+            for (const check of checks) check?.();
+          };
+        };
+        const assertCurrent = await authorize();
+        assertCurrent();
+        const step = await send(assertCurrent, authorize);
         turn = step.turn;
         usageIncomplete ||= step.usage === null;
         totalUsage = addUsage(totalUsage, step.usage);
@@ -197,6 +216,10 @@ export class AgentRuntime<TTurn> implements ChatProvider {
           const steering = options.takeSteering?.(true) ?? [];
           if (steering.length > 0) {
             for (const instruction of steering) {
+              if (instruction.disclosure) {
+                (await instruction.disclosure.authorize(signal))();
+                disclosures.add(instruction.disclosure);
+              }
               boundaryInstructions = await this.steeringInstructions(turnId, instruction, signal);
               turn = await this.adapter.steerTurn(turn, modelInput(instruction), context(round));
             }
@@ -247,6 +270,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
                     turnId,
                     mode: roundMode,
                     onModeChanged: setMode,
+                    retainResultAccess: toolAccess.retain,
                   },
                   onActivity: reportToolActivity,
                   trace: (kind, data) => {
@@ -290,11 +314,7 @@ export class AgentRuntime<TTurn> implements ChatProvider {
     signal: AbortSignal,
   ): Promise<AgentInstructionContext | undefined> {
     const contexts = [
-      await this.turnContexts?.discloseAttachments(
-        turnId,
-        request.attachments.map(attachment => attachment.path),
-        signal,
-      ),
+      await this.turnContexts?.discloseAttachments(turnId, attachmentPaths(request), signal),
       await this.turnContexts?.activateManualRules(turnId, request.manualRuleIds ?? [], signal),
     ].filter((value): value is AgentInstructionContext => value !== undefined);
     if (contexts.length === 0) return undefined;
@@ -358,7 +378,7 @@ function redactedHeaders(headers: Headers): Record<string, string> {
 }
 
 /** Steering uses the same validation and source-content framing as an initial prompt. */
-function modelInput(request: ChatRequest): ChatRequest {
+function modelInput({ disclosure: _disclosure, ...request }: ChatRequest): ChatRequest {
   const metadata = chatTurnOptionsSchema.parse({
     ...(request.mode !== undefined ? { mode: request.mode } : {}),
     ...(request.annotations ? { annotations: request.annotations } : {}),
@@ -378,6 +398,15 @@ function modelInput(request: ChatRequest): ChatRequest {
       .filter(Boolean)
       .join('\n\n'),
   };
+}
+
+function attachmentPaths(request: ChatRequest): readonly string[] {
+  return [
+    ...new Set([
+      ...request.attachments.map(attachment => attachment.path),
+      ...(request.disclosure?.additionalPaths ?? []),
+    ]),
+  ];
 }
 
 export { toolInterruptionOutput as toolInterruptionOutput__TESTING_ONLY, errorDetails as errorDetails__TESTING_ONLY };

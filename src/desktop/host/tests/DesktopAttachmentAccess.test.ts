@@ -1,3 +1,4 @@
+import { WorkspaceDisclosure } from '#src/workspace/WorkspaceDisclosure.js';
 import { WorkspaceRootSelections } from '#src/workspace/WorkspaceRootSelections.js';
 import { Deferred } from '#src/shared/Deferred.js';
 import { link, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -96,7 +97,9 @@ describe(DesktopAttachmentAccess, () => {
     });
     await expect(access.resolve(resource('personal/rules', true), signal)).rejects.toThrow();
     const outline = { ...frozen, ...folder, kind: Kind.FOLDER, text: formatFolderAttachment('.', [visible], false) };
-    await expect(access.admit([outline, { ...outline, folderListing: listing! }], signal)).resolves.toBeUndefined();
+    const disclosure = new WorkspaceDisclosure();
+    await access.admit([outline, { ...outline, folderListing: listing! }], signal, disclosure);
+    (await disclosure.authorize(signal))();
     await expect(
       access.admit([{ ...outline, text: formatFolderAttachment('.', [state], false) }], signal),
     ).rejects.toThrow('folder contents');
@@ -109,6 +112,7 @@ describe(DesktopAttachmentAccess, () => {
     await index.refresh();
     await expect(access.admit([outline], signal)).resolves.toBeUndefined();
     privatePaths.push(join(root, visible));
+    await expect(disclosure.authorize(signal)).rejects.toThrow('Workspace access changed');
     await expect(access.admit([{ ...outline, folderListing: listing! }], signal)).rejects.toThrow('folder contents');
     await expect(access.admit([frozen], signal)).rejects.toThrow();
   });
@@ -191,9 +195,12 @@ describe(DesktopAttachmentAccess, () => {
     await expect(access.admit([{ ...review(file.uri), text: 'Review snapshot' }], signal)).resolves.toBeUndefined();
     const history = (path: string, submoduleOf?: string) =>
       'git:/old?' + encodeURIComponent(JSON.stringify({ path, submoduleOf, ref: 'HEAD' }));
-    await expect(
-      access.admit([review(history(join(other, 'child', 'old.md'), other))], signal),
-    ).resolves.toBeUndefined();
+    const disclosure = new WorkspaceDisclosure();
+    await access.admit([review(history(join(other, 'child', 'old.md'), other))], signal, disclosure);
+    expect([...disclosure.additionalPaths]).toEqual(['two/child/old.md']);
+    (await disclosure.authorize(signal))();
+    owner.validateAccess.mockRejectedValueOnce(new Error('The comparison resource is unavailable.'));
+    await expect(disclosure.authorize(signal)).rejects.toThrow('comparison resource');
     expect(owner.validateAccess).toHaveBeenCalledWith('child/old.md');
     for (const source of [
       'https://example.test/file',
