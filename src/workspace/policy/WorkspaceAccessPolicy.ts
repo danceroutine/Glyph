@@ -46,7 +46,8 @@ const schema = z
  */
 export class WorkspaceAccessPolicy {
   readonly ignoredDirectories: readonly string[];
-  private readonly configuredIgnores: readonly string[];
+  /** User-configured name filters. Native services enforce mandatory private locations separately. */
+  readonly configuredIgnoredDirectories: readonly string[];
   readonly sensitiveFileNames: readonly string[];
   readonly sensitiveFilePrefixes: readonly string[];
   readonly sensitiveFileExtensions: readonly string[];
@@ -61,8 +62,8 @@ export class WorkspaceAccessPolicy {
   ) {
     const resolved = schema.parse(options);
     // Transaction journals, locks and rollback copies remain host-private under customized policies too.
-    this.configuredIgnores = resolved.ignoredDirectories;
-    this.ignoredDirectories = [...new Set([...this.configuredIgnores, ...privateDirectories])];
+    this.configuredIgnoredDirectories = resolved.ignoredDirectories;
+    this.ignoredDirectories = [...new Set([...this.configuredIgnoredDirectories, ...privateDirectories])];
     this.sensitiveFileNames = resolved.sensitiveFileNames;
     this.sensitiveFilePrefixes = resolved.sensitiveFilePrefixes;
     this.sensitiveFileExtensions = resolved.sensitiveFileExtensions;
@@ -92,8 +93,7 @@ export class WorkspaceAccessPolicy {
   exclusionsFor(
     root: string,
     caseSensitive: boolean,
-    inspectNames = false,
-    physicalGuard = false,
+    filesystem?: 'standalone' | 'native',
   ): { privateRoot: boolean; excludedPaths: string[] } {
     const key = (path: string): string => {
       const normalized = resolve(path).split(sep).join('/');
@@ -102,7 +102,7 @@ export class WorkspaceAccessPolicy {
     const rootKey = key(root);
     let privateRoot = false;
     for (let path = resolve(root); path !== dirname(path); path = dirname(path)) {
-      if (isPrivateDirectory(basename(path), caseSensitive, inspectNames ? path : undefined, physicalGuard))
+      if (isPrivateDirectory(basename(path), caseSensitive, filesystem ? path : undefined, filesystem === 'native'))
         privateRoot = true;
     }
     const excludedPaths: string[] = [];
@@ -120,7 +120,7 @@ export class WorkspaceAccessPolicy {
 
   isIgnoredDirectory(name: string, caseSensitive: boolean, path?: string, physicalGuard = false): boolean {
     if (isPrivateDirectory(name, caseSensitive, path, physicalGuard)) return true;
-    return this.configuredIgnores.some(value =>
+    return this.configuredIgnoredDirectories.some(value =>
       caseSensitive ? value === name : value.toLowerCase() === name.toLowerCase(),
     );
   }
@@ -136,9 +136,9 @@ export class WorkspaceAccessPolicy {
     );
   }
 
-  toJSON(includePrivateDirectories = true): Required<WorkspaceAccessPolicyOptions> {
+  toJSON(): Required<WorkspaceAccessPolicyOptions> {
     return {
-      ignoredDirectories: [...(includePrivateDirectories ? this.ignoredDirectories : this.configuredIgnores)],
+      ignoredDirectories: [...this.ignoredDirectories],
       sensitiveFileNames: [...this.sensitiveFileNames],
       sensitiveFilePrefixes: [...this.sensitiveFilePrefixes],
       sensitiveFileExtensions: [...this.sensitiveFileExtensions],

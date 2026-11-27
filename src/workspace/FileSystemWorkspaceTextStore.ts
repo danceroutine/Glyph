@@ -62,7 +62,11 @@ export class FileSystemWorkspaceTextStore implements WorkspaceTextStore {
       fileSystemWorkspaceTextStoreOptionsSchema.parse(options);
     this.root = resolve(root);
     this.caseSensitive = caseSensitive ?? workspaceCaseSensitivity(this.root);
-    const projected = accessPolicy.exclusionsFor(this.root, this.caseSensitive, true, physicalAccess !== undefined);
+    const projected = accessPolicy.exclusionsFor(
+      this.root,
+      this.caseSensitive,
+      physicalAccess ? 'native' : 'standalone',
+    );
     this.privateRoot = projected.privateRoot && !allowPrivateRoot;
     this.options = {
       ...(physicalAccess ? { physicalAccess } : {}),
