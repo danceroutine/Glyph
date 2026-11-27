@@ -1,3 +1,4 @@
+import { testSkillSource, testPackageIndex } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
@@ -6,7 +7,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
-import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import { FileSkillDiscoveryProvider } from '#src/skills/FileSkillDiscoveryProvider.js';
 import { aSkillDescriptor } from './fixtures/aSkillDescriptor.ts';
 import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
@@ -42,12 +42,10 @@ describe('Skill package inventory boundaries', () => {
     await writeFile(join(root, 'assets/image'), 'image');
     native.listDirectories.mockResolvedValueOnce(['assets', 'templates']);
     native.glob.mockResolvedValueOnce({ files: ['SKILL.md', 'assets/image'], truncated: false });
-    const draft = await new SkillPackageSourceReader(
-      'native',
-      [],
-      testFilesystemMetadata,
-      new WorkspaceAccessPolicy(),
-    ).read({ kind: 'local', path: root }, new AbortController().signal);
+    const draft = await testSkillSource('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read(
+      { kind: 'local', path: root },
+      new AbortController().signal,
+    );
     expect(draft.files().has('SKILL.md')).toBe(true);
     expect([...draft.packageDirectories().keys()]).toEqual(['assets', 'templates']);
     expect(native.refresh.mock.invocationCallOrder[0]).toBeLessThan(native.glob.mock.invocationCallOrder[0]!);
@@ -56,7 +54,7 @@ describe('Skill package inventory boundaries', () => {
     await symlink(root, linked);
     onTestFinished(() => rm(linked));
     await expect(
-      new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
+      testSkillSource('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
         kind: 'local',
         path: linked,
       }),
@@ -70,7 +68,7 @@ describe('Skill package inventory boundaries', () => {
     await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nExample');
     await writeFile(join(root, 'trace'), 'fixture');
     const policy = new WorkspaceAccessPolicy({}, [join(root, 'trace')]);
-    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, policy, []);
+    const reader = testSkillSource('native', [], testFilesystemMetadata, policy, []);
     native.glob.mockResolvedValueOnce({ files: ['SKILL.md', 'trace'], truncated: false });
     await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('excluded');
   });
@@ -83,7 +81,7 @@ describe('Skill package inventory boundaries', () => {
     await writeFile(join(root, 'SKILL.md'), '---\nname: example\ndescription: Fixture\n---\nExample');
     let paths: string[] = [];
     const policy = new WorkspaceAccessPolicy({}, () => paths);
-    const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, policy, []);
+    const reader = testSkillSource('native', [], testFilesystemMetadata, policy, []);
     const listing = { files: ['SKILL.md'], truncated: false };
     native.glob.mockImplementationOnce(async () => {
       paths = [join(root, 'future-private')];
@@ -131,13 +129,7 @@ describe('Skill package inventory boundaries', () => {
       }),
     };
     native.glob.mockResolvedValue({ files: ['SKILL.md'], truncated: false });
-    const reader = new SkillPackageSourceReader(
-      'native',
-      [],
-      metadata,
-      new WorkspaceAccessPolicy({}, privatePaths),
-      [],
-    );
+    const reader = testSkillSource('native', [], metadata, new WorkspaceAccessPolicy({}, privatePaths), []);
     const draft = await reader.read({ kind: 'local', path: root });
     const { manager, location, store } = await aSkillLifecycle();
     const preview = await manager.prepare(location.id, draft);
@@ -156,7 +148,7 @@ describe('Skill package inventory boundaries', () => {
     onTestFinished(() => rm(root, { recursive: true, force: true }));
     native.refresh.mockResolvedValueOnce({ truncated: true });
     await expect(
-      new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
+      testSkillSource('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
         kind: 'local',
         path: root,
       }),
@@ -171,7 +163,7 @@ describe('Skill package inventory boundaries', () => {
     await Promise.all(files.map(path => writeFile(join(root, path), Buffer.alloc(1024 * 1024))));
     native.glob.mockResolvedValueOnce({ files, truncated: false });
     await expect(
-      new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
+      testSkillSource('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
         kind: 'local',
         path: root,
       }),
@@ -182,32 +174,39 @@ describe('Skill package inventory boundaries', () => {
     const workspace = new FileSystemWorkspaceTextStore('/workspace');
     vi.spyOn(workspace, 'resolvePath').mockResolvedValue('/workspace/example');
     native.glob.mockResolvedValueOnce({ files: ['SKILL.md'], truncated: false });
-    expect(await listSkillPackageFiles(workspace, 'example', 'native', false, new AbortController().signal)).toEqual({
+    expect(
+      await listSkillPackageFiles(
+        workspace,
+        'example',
+        testPackageIndex('native'),
+        false,
+        new AbortController().signal,
+      ),
+    ).toEqual({
       files: ['example/SKILL.md'],
       directories: new Map(),
       truncated: false,
     });
     native.refresh.mockResolvedValueOnce({ truncated: true });
-    expect(await listSkillPackageFiles(workspace, 'example', 'native', true)).toEqual({
+    expect(await listSkillPackageFiles(workspace, 'example', testPackageIndex('native'), true)).toEqual({
       files: [],
       directories: new Map(),
       truncated: true,
     });
     native.glob.mockResolvedValueOnce({ files: ['new-resource'], truncated: false });
-    expect((await listSkillPackageFiles(workspace, 'example', 'native', true)).files).toEqual(['example/new-resource']);
+    expect((await listSkillPackageFiles(workspace, 'example', testPackageIndex('native'), true)).files).toEqual([
+      'example/new-resource',
+    ]);
     native.refresh.mockRejectedValueOnce(new Error('Index unavailable'));
-    await expect(listSkillPackageFiles(workspace, 'example', 'native', true)).rejects.toThrow('Index unavailable');
+    await expect(listSkillPackageFiles(workspace, 'example', testPackageIndex('native'), true)).rejects.toThrow(
+      'Index unavailable',
+    );
     expect(native.dispose).toHaveBeenCalledTimes(4);
   });
   it('rejects an index that becomes truncated between reconciliation and the exact glob request', async () => {
     const root = await mkdtemp(join(tmpdir(), 'glyph-skill-inventory-'));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
-    const reader = new SkillPackageSourceReader(
-      'injected-native-index',
-      [],
-      testFilesystemMetadata,
-      new WorkspaceAccessPolicy(),
-    );
+    const reader = testSkillSource('injected-native-index', [], testFilesystemMetadata, new WorkspaceAccessPolicy());
     await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('file budget');
     expect(native.dispose).toHaveBeenCalledOnce();
   });
@@ -236,7 +235,7 @@ it('rejects local packages when the physical inventory contains omitted files or
     native.refresh.mockResolvedValueOnce({ truncated: false });
     native.glob.mockResolvedValueOnce({ files, truncated: false });
     await expect(
-      new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
+      testSkillSource('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy()).read({
         kind: 'local',
         path: root,
       }),
@@ -251,7 +250,7 @@ it('refuses an excluded empty local directory and a native candidate that turned
   onTestFinished(() => rm(parent, { recursive: true, force: true }));
   await writeFile(join(root, 'SKILL.md'), 'manifest');
   native.glob.mockResolvedValue({ files: ['SKILL.md'], truncated: false });
-  const reader = new SkillPackageSourceReader('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy());
+  const reader = testSkillSource('native', [], testFilesystemMetadata, new WorkspaceAccessPolicy());
   await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('unindexed');
   native.listDirectories.mockResolvedValueOnce(['SKILL.md']);
   await expect(reader.read({ kind: 'local', path: root })).rejects.toThrow('directory changed');

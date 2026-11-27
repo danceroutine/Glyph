@@ -9,7 +9,7 @@ import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { skillPackageId } from '#src/skills/skillPackageId.js';
 import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile, realpath, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -2377,4 +2377,49 @@ it('creates a new profile with owner-only access even under a group-writable pro
   } finally {
     process.umask(mask);
   }
+});
+
+it('previews local skill bytes through the private policy chosen for this host', async () => {
+  const fixture = await factoryFixture();
+  useFilesystemIndex();
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  vi.spyOn(RustWorkspacePathIndex.prototype, 'refresh').mockResolvedValue({ truncated: false } as never);
+  vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+    if (request.type !== GlyphEditorRequestType.CHECK_USER_WORKING_COPIES) throw new Error('Unexpected editor request');
+    return { operationId: request.operationId, ok: true, workingCopiesClean: true };
+  });
+  const root = await fixture.folder('project');
+  const source = await fixture.folder('example', {
+    'SKILL.md': '---\nname: example\ndescription: Fixture\n---\nExample',
+  });
+  const runtime = await fixture.create([root]);
+  await runtime.handle({
+    type: Command.PREVIEW_SKILL,
+    targetId: 'user:glyph',
+    source: { kind: 'local', path: source },
+  });
+  const index = captured.indexOptions.find(value => value.root === source)!;
+  expect(index.accessPolicy).toBe(captured.indexOptions[0]!.accessPolicy);
+  expect(NativeFilesystemMetadata.prototype.assertHostPaths).toHaveBeenCalledWith(
+    [source],
+    expect.arrayContaining([join(fixture.userDirectory, 'skill-state.json')]),
+  );
+});
+
+it('withholds replacement profile content and refuses to recreate a removed pinned directory', async () => {
+  const fixture = await factoryFixture();
+  useFilesystemIndex();
+  vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+  const runtime = await fixture.create([await fixture.folder('project')]);
+  await runtime.snapshot();
+  await rename(fixture.userDirectory, fixture.userDirectory + '-old');
+  const create = () => runtime.handle({ type: Command.CREATE_USER_RULE, name: 'First', activation: 'manual' });
+  await expect(create()).rejects.toThrow('removed or replaced');
+  await expect(stat(fixture.userDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+  await mkdir(join(fixture.userDirectory, 'rules'), { recursive: true });
+  await writeFile(join(fixture.userDirectory, 'rules/other.mdc'), 'Replacement profile');
+  const snapshot = await runtime.snapshot();
+  expect(snapshot.instructionSources?.some(source => source.path.endsWith('other.mdc'))).toBe(false);
+  await expect(create()).rejects.toThrow('removed or replaced');
+  await expect(stat(join(fixture.userDirectory, '.skill-staging'))).rejects.toMatchObject({ code: 'ENOENT' });
 });

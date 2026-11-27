@@ -1,3 +1,4 @@
+import { testSkillSource } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { writeFile } from 'node:fs/promises';
@@ -6,7 +7,6 @@ import { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { aSkillDescriptor, aSkillPackage } from '#src/skills/tests/fixtures/aSkillDescriptor.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
 import { aSkillDraft, aSkillLifecycle } from '#src/skills/tests/fixtures/aSkillLifecycle.js';
-import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import type { ChatRequest } from '#src/chat/ChatRequest.js';
 import type { ShellSessionSnapshot } from '#src/shell/ShellSessionSnapshot.js';
 import { ShellSessionStatus } from '#src/shell/ShellSessionStatus.js';
@@ -4927,7 +4927,7 @@ describe('Skill lifecycle host commands', () => {
   });
   async function setup() {
     const lifecycle = await aSkillLifecycle();
-    const sources = new SkillPackageSourceReader('unused', [], testFilesystemMetadata, new WorkspaceAccessPolicy());
+    const sources = testSkillSource('unused', [], testFilesystemMetadata, new WorkspaceAccessPolicy());
     const harness = await fixture(async () => {}, 'owner', undefined, {
       skillManager: lifecycle.manager,
       skillCatalog: lifecycle.catalog,

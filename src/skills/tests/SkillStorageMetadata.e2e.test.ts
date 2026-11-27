@@ -1,10 +1,10 @@
+import { testSkillSource } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, it, onTestFinished, vi } from 'vitest';
-import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import { SkillPackage } from '#src/skills/SkillPackage.js';
 import { SkillScriptRunner } from '#src/skills/SkillScriptRunner.js';
 import { aSkillPackage } from './fixtures/aSkillDescriptor.ts';
@@ -30,7 +30,7 @@ it.skipIf(process.platform !== 'darwin')(
     const asset = join(root, 'asset');
     await writeFile(asset, '');
     await writeFile(join(asset, '..namedfork/rsrc'), 'secondary bytes');
-    const reader = new SkillPackageSourceReader(
+    const reader = testSkillSource(
       resolve('target/release/glyph-context-index'),
       [],
       metadata,
@@ -67,7 +67,7 @@ it.skipIf(process.platform !== 'darwin')(
       expect(execute).not.toHaveBeenCalled();
       expect(await readdir(temporary)).toEqual([]);
       vi.stubEnv('TMPDIR', temporary);
-      const reader = new SkillPackageSourceReader(
+      const reader = testSkillSource(
         resolve('target/release/glyph-context-index'),
         [workspace],
         metadata,

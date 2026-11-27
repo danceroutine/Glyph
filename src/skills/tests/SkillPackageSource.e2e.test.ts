@@ -1,3 +1,5 @@
+import { SkillPackageSourceReader } from '../SkillPackageSource.ts';
+import { testSkillSource, testPackageIndex } from '#src/skills/tests/fixtures/skillPackageTestSource.js';
 import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { testFilesystemMetadata } from '#src/workspace/tests/fixtures/testFilesystemMetadata.js';
 import { aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
@@ -9,7 +11,6 @@ import { chmod, lstat, mkdir, mkdtemp, rm, writeFile, symlink, rename } from 'no
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 
 const manifest = '---\nname: example\ndescription: Example workflow\n---\nPinned instructions';
 async function fixture() {
@@ -29,7 +30,7 @@ async function fixture() {
   const directory = join(root, 'example');
   await mkdir(directory);
   await writeFile(join(directory, 'SKILL.md'), manifest);
-  const reader = new SkillPackageSourceReader(
+  const reader = testSkillSource(
     resolve('target/release/glyph-context-index'),
     [],
     testFilesystemMetadata,
@@ -178,12 +179,16 @@ it('reconciles a selected package after resources change and bounds discovery to
   const store = new FileSystemWorkspaceTextStore(root);
   const binary = resolve('target/release/glyph-context-index');
   const signal = new AbortController().signal;
-  expect((await listSkillPackageFiles(store, 'example', binary, false, signal)).files).toEqual(['example/SKILL.md']);
+  expect((await listSkillPackageFiles(store, 'example', testPackageIndex(binary), false, signal)).files).toEqual([
+    'example/SKILL.md',
+  ]);
   await writeFile(join(directory, 'new-resource.txt'), 'New resource');
-  expect((await listSkillPackageFiles(store, 'example', binary, true)).files).toContain('example/new-resource.txt');
+  expect((await listSkillPackageFiles(store, 'example', testPackageIndex(binary), true)).files).toContain(
+    'example/new-resource.txt',
+  );
   expect((await reader.read({ kind: 'local', path: directory }, signal)).files().has('new-resource.txt')).toBe(true);
   for (let i = 0; i < 258; i++) await writeFile(join(directory, `file-${i}.txt`), 'Small resource');
-  expect((await listSkillPackageFiles(store, 'example', binary, false)).truncated).toBe(true);
+  expect((await listSkillPackageFiles(store, 'example', testPackageIndex(binary), false)).truncated).toBe(true);
   await expect(reader.read({ kind: 'local', path: directory })).rejects.toThrow('file budget');
 });
 
@@ -272,7 +277,13 @@ it('retains empty template branches through local import, exact native publicati
     uriForPath: path => path,
     refreshIndex: location.refreshIndex,
     captureFiles: (packagePath, signal) =>
-      listSkillPackageFiles(store, packagePath, resolve('target/release/glyph-context-index'), false, signal),
+      listSkillPackageFiles(
+        store,
+        packagePath,
+        testPackageIndex(resolve('target/release/glyph-context-index')),
+        false,
+        signal,
+      ),
   });
   const pinned = await scoped.capture(skill);
   expect(pinned.revision).toBe(update.revision);

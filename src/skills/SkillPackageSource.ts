@@ -1,13 +1,12 @@
 import { outsideWorkspace } from '#src/shell/TrustedHostExecutable.js';
 import { SkillRepositoryGit } from './SkillRepositoryGit.ts';
-import { indexedPackageDirectories } from './listSkillPackageFiles.ts';
+import { indexedPackageDirectories, type SkillFileIndex } from './listSkillPackageFiles.ts';
 import { inventoryPackage } from './skillPackageInventory.ts';
 import { basename, join, resolve } from 'node:path';
 import { mkdir, mkdtemp, rm, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
-import { RustWorkspacePathIndex } from '#src/context/search/RustWorkspacePathIndex.js';
-import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import type { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
 import { SkillPackageDraft } from './SkillPackageDraft.ts';
 import { optionalStat } from './SkillPackageStorage.ts';
 import { inspectFileMetadata, type FilesystemMetadata } from '#src/workspace/FilesystemMetadata.js';
@@ -29,14 +28,19 @@ export const skillPackageSourceSchema = z.discriminatedUnion('kind', [
     .strict(),
 ]);
 export type SkillPackageSource = z.infer<typeof skillPackageSourceSchema>;
+/** The host binds a user-selected local directory to its live private exclusions and physical file authority.
+ * The intake operation owns the bounded index; the returned store authenticates each captured file descriptor. */
+export type OpenLocalSkillSource = (root: string) => {
+  readonly store: Pick<FileSystemWorkspaceTextStore, 'resolvePath' | 'readBytes'>;
+  readonly index: SkillFileIndex;
+};
 /** Reads selected packages without checking out repositories, following symlinks, or executing package code. */
 export class SkillPackageSourceReader {
   constructor(
-    private readonly binaryPath: string,
-    workspaceRoots: readonly string[],
+    private readonly openLocal: OpenLocalSkillSource,
     private readonly metadata: FilesystemMetadata & HostFilesystemAuthority & WorkspacePathAccess,
     private readonly accessPolicy: WorkspaceAccessPolicy,
-    private readonly hostWorkspaceRoots: HostWorkspaceRoots = workspaceRoots,
+    private readonly hostWorkspaceRoots: HostWorkspaceRoots,
   ) {}
   async read(input: SkillPackageSource, signal?: AbortSignal): Promise<SkillPackageDraft> {
     const source = skillPackageSourceSchema.parse(input);
@@ -58,18 +62,7 @@ export class SkillPackageSourceReader {
       await assertSourceCurrent();
       if ((await lstat(root)).isSymbolicLink()) throw new Error('Skill sources cannot be symlinked directories.');
       await inspectFileMetadata(this.metadata, root, 'replaceable');
-      const store = new FileSystemWorkspaceTextStore(root, {
-        accessPolicy: this.accessPolicy,
-        physicalAccess: this.metadata,
-      });
-      const index = new RustWorkspacePathIndex({
-        root,
-        maxFiles: 257,
-        binaryPath: this.binaryPath,
-        caseSensitive: store.caseSensitive,
-        accessPolicy: this.accessPolicy,
-        respectGitIgnore: false,
-      });
+      const { store, index } = this.openLocal(root);
       try {
         const state = await index.refresh(signal);
         if (state.truncated) throw new Error('Skill source exceeds the file budget.');

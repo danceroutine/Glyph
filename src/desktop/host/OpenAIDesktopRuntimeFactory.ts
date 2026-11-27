@@ -11,7 +11,7 @@ import { createCatalogWorkspace } from '#src/desktop/workspace/createCatalogWork
 import { SkillProjectMutationPolicy } from '#src/skills/SkillProjectMutationPolicy.js';
 import { existsSync } from 'node:fs';
 import { assertSkillPackageClean } from '#src/desktop/workspace/assertSkillPackageClean.js';
-import { listSkillPackageFiles } from '#src/skills/listSkillPackageFiles.js';
+import { listSkillPackageFiles, type OpenSkillIndex } from '#src/skills/listSkillPackageFiles.js';
 import { SkillScriptRunner } from '#src/skills/SkillScriptRunner.js';
 import { SkillLifecycleToolRuntime } from '#src/skills/SkillLifecycleToolRuntime.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
@@ -191,6 +191,18 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
     );
     const canonicalUserDirectory = this.profile.path;
     const policy = new WorkspaceAccessPolicy({}, this.privatePaths);
+    const packageIndex =
+      (accessPolicy: WorkspaceAccessPolicy): OpenSkillIndex =>
+      (root, caseSensitive, respectGitIgnore) =>
+        new RustWorkspacePathIndex({
+          root,
+          binaryPath: indexExecutable,
+          accessPolicy,
+          caseSensitive,
+          maxFiles: 257,
+          respectGitIgnore,
+        });
+    const projectPackageIndex = packageIndex(policy);
     const logger = new FileLogger(configuration.traceFile);
     const namePolicies = await Promise.all(
       roots.map(workspaceRoot => RustWorkspacePathIndex.filesystemNamePolicy(indexExecutable, workspaceRoot.path)),
@@ -404,6 +416,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         this.profile.verify();
         return this.privatePaths;
       });
+      const userPackageIndex = packageIndex(userInstructionPolicy);
       const userInstructionStore = new FileSystemWorkspaceTextStore(userRuleRoot, {
         accessPolicy: userInstructionPolicy,
         caseSensitive: profileCaseSensitive,
@@ -488,7 +501,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         matchesLegacyId: (directory, previousId, budget) =>
           userSkillDirectory.matchesProjectReference(directory, previousId, budget),
         captureFiles: (directory, signal) =>
-          listSkillPackageFiles(userInstructionStore, directory, indexExecutable, false, signal, userInstructionPolicy),
+          listSkillPackageFiles(userInstructionStore, directory, userPackageIndex, false, signal),
         workspace: userInstructionStore,
         binaryStore: userInstructionStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
@@ -543,7 +556,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
                 },
                 directory: `${location}/skills`,
                 captureFiles: (directory, signal) =>
-                  listSkillPackageFiles(part.disk, directory, indexExecutable, true, signal),
+                  listSkillPackageFiles(part.disk, directory, projectPackageIndex, true, signal),
                 workspace: part.catalog,
                 binaryStore: part.disk,
                 ...(parts.length > 1 ? { scopePrefix: part.name } : {}),
@@ -607,16 +620,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               return { ...result, files: result.files.map(path => `skills/${path}`) };
             },
             listPackageDirectories: async directory =>
-              (
-                await listSkillPackageFiles(
-                  userInstructionStore,
-                  directory,
-                  indexExecutable,
-                  false,
-                  undefined,
-                  userInstructionPolicy,
-                )
-              ).directories,
+              (await listSkillPackageFiles(userInstructionStore, directory, userPackageIndex, false)).directories,
             refreshIndex: async () => {
               await userSkillIndex.refresh();
             },
@@ -670,7 +674,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               directory: '.glyph/skills',
               listFiles: (directory: string) => part.index.glob('**/*', { targetDirectory: directory, limit: 257 }),
               listPackageDirectories: async (directory: string) =>
-                (await listSkillPackageFiles(part.disk, directory, indexExecutable, true)).directories,
+                (await listSkillPackageFiles(part.disk, directory, projectPackageIndex, true)).directories,
               refreshIndex: async () => {
                 await part.index.refresh();
               },
@@ -942,11 +946,16 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         ? {
             skillManager,
             skillSources: new SkillPackageSourceReader(
-              indexExecutable,
-              roots.map(workspaceRoot => workspaceRoot.path),
+              root => {
+                const store = new FileSystemWorkspaceTextStore(root, {
+                  accessPolicy: policy,
+                  physicalAccess: filesystemMetadata,
+                });
+                return { store, index: projectPackageIndex(root, store.caseSensitive, false) };
+              },
               filesystemMetadata,
               policy,
-              input.hostWorkspaceRoots,
+              input.hostWorkspaceRoots ?? roots.map(workspaceRoot => workspaceRoot.path),
             ),
           }
         : {}),
