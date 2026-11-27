@@ -52,3 +52,23 @@ it('keeps user packages reachable through their former project references across
   expect(distinct.ownsStore('/repo/sub/.glyph/skills')).toBe(false);
   expect(distinct.matchesProjectReference(source, previous, { remaining: 32 })).toBe(false);
 });
+
+it('retains indexed project IDs for a user skill exposed through a differently named mount', async () => {
+  const { mkdtemp, mkdir, symlink, realpath, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-user-skill-alias-')));
+  try {
+    const profile = join(root, 'profile');
+    await mkdir(join(profile, 'skills/one'), { recursive: true });
+    await symlink(profile, join(root, '.glyph'));
+    const alias = join(root, '.glyph', 'skills');
+    const directory = new UserSkillDirectory(profile, true, () => [join(profile, 'skills'), alias]);
+    directory.refresh();
+    expect(directory.ownsPackage(join(alias, 'one'))).toBe(true);
+    const id = new ProjectSkillIdentity(root, '.glyph').forDirectory('.glyph/skills/one');
+    expect(directory.matchesProjectReference('skills/one', id, { remaining: 20 })).toBe(true);
+    expect(directory.matchesProjectReference('skills/two', id, { remaining: 20 })).toBe(false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

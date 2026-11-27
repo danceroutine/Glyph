@@ -1,34 +1,43 @@
-import { sameWorkspaceDirectory, WorkspaceDirectoryIdentity } from '#src/workspace/sameWorkspaceDirectory.js';
-import { basename, dirname, join } from 'node:path';
+import { UserStoreProjectRoutes } from '#src/workspace/UserStoreProjectRoutes.js';
+import type { SourcePathAliases } from '#src/workspace/SourcePathAliases.js';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { ProjectSkillIdentity } from './ProjectSkillIdentity.ts';
 
 /** The configured user store owns its packages through every attached project route. */
 export class UserSkillDirectory {
   readonly path: string;
-  private readonly projectIdentity?: ProjectSkillIdentity;
-  private readonly marker: string;
-  private readonly store: WorkspaceDirectoryIdentity;
+  private readonly store: UserStoreProjectRoutes;
 
-  constructor(userDirectory: string, caseSensitive: boolean) {
+  constructor(userDirectory: string, caseSensitive: boolean, aliases?: SourcePathAliases) {
     this.path = join(userDirectory, 'skills');
-    this.store = new WorkspaceDirectoryIdentity(this.path, caseSensitive);
-    this.marker = basename(userDirectory);
-    const location = ['.glyph', '.cursor'].find(name =>
-      sameWorkspaceDirectory(userDirectory, join(dirname(userDirectory), name), caseSensitive),
-    );
-    if (location) this.projectIdentity = new ProjectSkillIdentity(dirname(userDirectory), location);
+    this.store = new UserStoreProjectRoutes(this.path, caseSensitive, aliases);
+  }
+
+  refresh(): void {
+    this.store.refresh();
   }
 
   ownsStore(directory: string): boolean {
-    return this.store.matches(directory);
+    return this.store.ownsStore(directory);
+  }
+
+  ownsPackage(directory: string): boolean {
+    return this.store.ownsEntry(directory);
   }
 
   matchesProjectReference(directory: string, id: string, budget: { remaining: number }): boolean {
-    if (!this.projectIdentity) return false;
-    const projectDirectory = this.marker + '/' + directory;
-    return (
-      this.projectIdentity.forDirectory(projectDirectory) === id ||
-      this.projectIdentity.matchesLegacyId(projectDirectory, id, budget)
-    );
+    for (const { identity, route } of this.projectRoutes(directory)) {
+      if (identity.forDirectory(route) === id || identity.matchesLegacyId(route, id, budget)) return true;
+    }
+    return false;
+  }
+
+  private *projectRoutes(directory: string) {
+    for (const entry of this.store.projectEntries(basename(directory))) {
+      const location = this.store.projectMarker(entry);
+      if (!location) continue;
+      const root = dirname(dirname(dirname(entry)));
+      yield { identity: new ProjectSkillIdentity(root, location), route: relative(root, entry).split(sep).join('/') };
+    }
   }
 }

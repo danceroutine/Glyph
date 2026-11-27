@@ -123,6 +123,8 @@ describe(GlyphDesktopHost, () => {
       { lookupId: null },
       { lookupId: '' },
       { lookupId: 'a'.repeat(65) },
+      { manifestUri: 12 },
+      { manifestUri: 'a'.repeat(32769) },
       { skillId: null },
       { skillId: '' },
       { skillId: 'a'.repeat(501) },
