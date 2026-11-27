@@ -218,6 +218,7 @@ export class GlyphSession {
         '--force-disable-user-env',
         '--no-cached-data',
         `--user-data-dir=${this.userData}`,
+        `--shared-data-dir=${join(this.sandbox, 'shared-data')}`,
         `--extensions-dir=${join(this.sandbox, 'extensions')}`,
         `--logsPath=${join(this.sandbox, 'logs')}`,
         `--crash-reporter-directory=${join(this.sandbox, 'crashes')}`,
