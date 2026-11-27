@@ -1,3 +1,4 @@
+import { UserSkillDirectory } from '#src/skills/UserSkillDirectory.js';
 import { ProjectSkillIdentity } from '#src/skills/ProjectSkillIdentity.js';
 import { projectIntersection, WorkspaceSourceRoutes } from '#src/workspace/WorkspaceSourceRoutes.js';
 import { NativeWorkspaceMutations } from '#src/workspace/NativeWorkspaceMutations.js';
@@ -36,7 +37,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import { mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, relative, isAbsolute, resolve, sep } from 'node:path';
+import { dirname, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { GlyphService } from '#src/application/GlyphService.js';
 import { ChatSessionManager } from '#src/chat/sessions/ChatSessionManager.js';
@@ -295,8 +296,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         return { ...listed, files: routes.uniqueFiles(listed.files) };
       };
       const projectUri = (path: string) => pathToFileURL(routes.physicalPath(path)!).toString();
-      await mkdir(join(this.userDirectory, 'rules'), { recursive: true });
-      const userRuleRoot = await realpath(this.userDirectory);
+      const userRuleRoot = canonicalUserDirectory;
       const userRuleStore = new FileSystemWorkspaceTextStore(userRuleRoot);
       const mutationRoots = new Map(
         await Promise.all(
@@ -330,6 +330,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             },
             async maxFiles => {
               // The index root must obey the store's no-symlink rule too, not just its children.
+              await mkdir(join(userRuleRoot, 'rules'), { recursive: true });
               await userRuleStore.canonicalPath('rules');
               return listUserRuleFiles(userRuleIndex, maxFiles);
             },
@@ -353,8 +354,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         ],
         paths,
       );
-      const skillRoot = join(userRuleRoot, 'skills');
-      await mkdir(skillRoot, { recursive: true });
+      const userSkillDirectory = new UserSkillDirectory(userRuleRoot, userRuleStore.caseSensitive);
+      const skillRoot = userSkillDirectory.path;
       const userSkillIndex = (this.userSkillIndex ??= new RustWorkspacePathIndex({
         binaryPath: indexExecutable,
         root: skillRoot,
@@ -364,12 +365,14 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       const userSkills = new FileSkillDiscoveryProvider({
         origin: { id: 'user:glyph', label: 'User skill', scope: 'user', compatibility: 'glyph' },
         directory: 'skills',
+        matchesLegacyId: (directory, id, budget) => userSkillDirectory.matchesProjectReference(directory, id, budget),
         captureFiles: (directory, signal) =>
           listSkillPackageFiles(userRuleStore, directory, indexExecutable, false, signal),
         workspace: userRuleStore,
         binaryStore: userRuleStore,
         uriForPath: path => userRuleUri(userRuleRoot, path),
         listFiles: async signal => {
+          await mkdir(skillRoot, { recursive: true });
           await userRuleStore.canonicalPath('skills');
           const result = await userSkillIndex.glob('**/*', { limit: 10_000, ...(signal ? { signal } : {}) });
           return { ...result, files: result.files.map(path => `skills/${path}`) };
@@ -389,6 +392,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               const identity = new ProjectSkillIdentity(part.disk.root, location);
               skillIdentities.set(identity.originId, identity);
               return new FileSkillDiscoveryProvider({
+                includeDirectory: directory => !userSkillDirectory.ownsStore(dirname(join(part.disk.root, directory))),
                 packageId: directory => identity.forDirectory(directory),
                 matchesLegacyId: (directory, previousId, budget) =>
                   identity.matchesLegacyId(directory, previousId, budget),

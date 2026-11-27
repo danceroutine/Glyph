@@ -1216,6 +1216,29 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       );
     });
 
+    it('keeps an unavailable user rule location separate and retries after repair', async () => {
+      const fixture = await factoryFixture({ userDirectory: isolatedUserDirectory });
+      const root = await fixture.folder('project');
+      useFilesystemIndex();
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      const rules = join(isolatedUserDirectory, 'rules');
+      await writeFile(rules, 'occupied');
+      const runtime = await fixture.create([root]);
+      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      expect((await runtime.snapshot()).instructionSources).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: 'glyph_user_rule', status: 'error' })]),
+      );
+      await rm(rules);
+      await mkdir(rules);
+      await writeFile(join(rules, 'restored.mdc'), 'Restored');
+      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      expect((await runtime.snapshot()).instructionSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'glyph_user_rule', status: 'active', content: 'Restored' }),
+        ]),
+      );
+    });
+
     it('discovers project instructions through the native index while reading current editor text', async () => {
       const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
@@ -1330,6 +1353,35 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       });
       expect((await joined.snapshot()).instructionSources![0]!.message).toContain('catalog snapshot is unavailable');
     });
+    it('recovers the user skill store and keeps ownership through a project that contains it', async () => {
+      const profile = join(isolatedUserDirectory, '.glyph');
+      const skills = join(profile, 'skills');
+      await mkdir(profile);
+      await writeFile(skills, 'occupied');
+      const fixture = await factoryFixture({ userDirectory: profile });
+      vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+      useFilesystemIndex();
+      const runtime = await fixture.create([isolatedUserDirectory]);
+      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      expect((await runtime.snapshot()).skills).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ origin: expect.objectContaining({ scope: 'user' }), status: 'discovery-error' }),
+        ]),
+      );
+      await rm(skills);
+      await mkdir(join(skills, 'demo'), { recursive: true });
+      await writeFile(
+        join(skills, 'demo', 'SKILL.md'),
+        '---\nname: demo\ndescription: Shared workflow\n---\nGuidance.',
+      );
+      await runtime.handle({ type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS });
+      const discovered = (await runtime.snapshot()).skills!;
+      expect(discovered).toHaveLength(1);
+      expect(discovered[0]).toMatchObject({ name: 'demo', origin: { scope: 'user' } });
+      const previous = new ProjectSkillIdentity(isolatedUserDirectory, '.glyph').forDirectory('.glyph/skills/demo');
+      expect(runtime.resolveSkillReference(previous)).toBe(discovered[0]!.id);
+    });
+
     it('retains a physical skill ID and offers it once through overlapping and aliased folders', async () => {
       const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
@@ -1843,14 +1895,14 @@ function useFilesystemIndex(): void {
   });
 }
 
-async function factoryFixture(options: { readonly transport?: typeof fetch } = {}) {
+async function factoryFixture(options: { readonly transport?: typeof fetch; readonly userDirectory?: string } = {}) {
   for (const values of Object.values(captured)) values.length = 0;
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'glyph-factory-')));
   vi.stubEnv('GLYPH_CONFIG_DIR', join(directory, 'state'));
   vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
   const initialize = vi.spyOn(GlyphService.prototype, 'initialize').mockResolvedValue();
   const editors = new EditorRpcRouter();
-  const userDirectory = join(directory, 'user');
+  const userDirectory = options.userDirectory ?? join(directory, 'user');
   const factory = new OpenAIDesktopRuntimeFactory(editors, options.transport, userDirectory);
   const runtimes: ProviderDesktopRuntime[] = [];
   onTestFinished(async () => {
