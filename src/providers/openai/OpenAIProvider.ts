@@ -141,7 +141,7 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
 
   async prepareStep(turn: OpenAITurn, context: AgentTurnContext) {
     const client = await this.requestClient(context);
-    return (assertCurrent?: () => void, authorize?: () => Promise<() => void>) =>
+    return (assertCurrent: () => void, authorize: () => Promise<() => void>) =>
       this.streamStep(turn, context, client, assertCurrent, authorize);
   }
 
@@ -162,8 +162,8 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
     turn: OpenAITurn,
     context: AgentTurnContext,
     client: OpenAI,
-    check?: () => void,
-    authorize?: () => Promise<() => void>,
+    check: () => void,
+    authorize: () => Promise<() => void>,
   ): Promise<AgentTurnStep<OpenAITurn>> {
     const request = {
       model: this.model,
@@ -179,17 +179,15 @@ class OpenAIModelAdapter implements AgentModelAdapter<OpenAITurn> {
       // Preserve opaque reasoning state for stateless multi-turn reasoning models.
       include: ['reasoning.encrypted_content'],
     } satisfies ResponseCreateParamsStreaming;
-    if (check) {
-      // Credential resolution and SDK retries are asynchronous. The request-local client verifies
-      // trust and policy again when the SDK is about to invoke its configured HTTP transport.
-      const send = client.fetchWithTimeout.bind(client);
-      client.fetchWithTimeout = async (...args) => {
-        const current = await authorize?.();
-        check();
-        current?.();
-        return send(...args);
-      };
-    }
+    // Credential resolution and SDK retries are asynchronous. The request-local client verifies
+    // trust and policy again when the SDK is about to invoke its configured HTTP transport.
+    const send = client.fetchWithTimeout.bind(client);
+    client.fetchWithTimeout = async (...args) => {
+      const current = await authorize();
+      check();
+      current();
+      return send(...args);
+    };
     context.trace('request.body', request, context.round);
     const {
       data: stream,
