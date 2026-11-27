@@ -253,11 +253,11 @@ function fileMutation(
 }
 
 function applyText(adapter: GlyphEditorAdapter, mutation: GlyphTextMutation) {
-  return adapter.handle({ type: GlyphEditorRequestType.APPLY_TEXT_MUTATION, mutation });
+  return adapter.handle({ type: GlyphEditorRequestType.APPLY_TEXT_MUTATION, mutation }, [], async () => {});
 }
 
 function applyFile(adapter: GlyphEditorAdapter, mutation: GlyphFileMutation) {
-  return adapter.handle({ type: GlyphEditorRequestType.APPLY_FILE_MUTATION, mutation });
+  return adapter.handle({ type: GlyphEditorRequestType.APPLY_FILE_MUTATION, mutation }, [], async () => {});
 }
 
 function readSnapshot(adapter: GlyphEditorAdapter, path: string) {
@@ -1041,6 +1041,30 @@ describe(GlyphEditorAdapter, () => {
       expect(await applyFile(adapter, fileMutation(before, GlyphFileMutationKind.DELETE))).toMatchObject(
         failure(GlyphDesktopErrorCode.STALE_DOCUMENT),
       );
+    });
+
+    it('checks the host grant again after native edit participants finish', async () => {
+      const services = editorServices();
+      services.open('a.ts', 'text');
+      const adapter = createAdapter(services);
+      const before = await adapter.read('a.ts');
+      const request = {
+        type: GlyphEditorRequestType.APPLY_FILE_MUTATION,
+        mutation: fileMutation(before, GlyphFileMutationKind.RENAME, { target: 'b.ts' }),
+      } as const;
+      expect((await adapter.handle(request)).ok).toBe(false);
+      const scope = new AbortController();
+      const check = vi.fn(async () => {
+        scope.signal.throwIfAborted();
+      });
+      services.bulkEditService.apply.mockImplementation(async edits => {
+        scope.abort(new Error('Workspace root changed'));
+        await (edits[0] as ResourceFileEdit & { validate(): Promise<void> }).validate();
+        return { isApplied: true };
+      });
+      expect((await adapter.handle(request, [], check)).ok).toBe(false);
+      expect(check).toHaveBeenCalledTimes(2);
+      expect(services.disk.has('/workspace/b.ts')).toBe(false);
     });
 
     it('renames a file with unsaved changes', async () => {

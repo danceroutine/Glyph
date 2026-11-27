@@ -228,7 +228,9 @@ export class GlyphDesktopHost {
   async receive(connectionId: string, request: unknown): Promise<void> {
     const connection = this.requireConnection(connectionId);
     if (!isGlyphRequestEnvelope(request)) throw new Error('Invalid request envelope.');
-    const result = await connection.requests.run(request.requestId, () => this.execute(connection, request));
+    const transport = connection.commands.transport;
+    const result = await connection.requests.run(request.requestId, () => this.execute(connection, request, transport));
+    if (transport.aborted) return;
     for (const event of result) this.send(connection, event);
   }
 
@@ -236,7 +238,7 @@ export class GlyphDesktopHost {
     const connection = this.connections.get(connectionId);
     if (!connection) return;
     this.connections.delete(connectionId);
-    connection.commands.revoke();
+    connection.commands.disconnect();
     connection.send = undefined;
     connection.ready = false;
     connection.authorityKnown = false;
@@ -258,7 +260,7 @@ export class GlyphDesktopHost {
 
   async dispose(): Promise<void> {
     this.disposed = true;
-    for (const connection of this.sessions.values()) connection.commands.revoke();
+    for (const connection of this.sessions.values()) connection.commands.disconnect();
     for (const timer of this.disconnectTimers.values()) clearTimeout(timer);
     this.disconnectTimers.clear();
     await Promise.allSettled(this.runtimeCreations.values());
@@ -283,7 +285,11 @@ export class GlyphDesktopHost {
     ];
   }
 
-  private async execute(connection: Connection, request: GlyphRequestEnvelope): Promise<readonly GlyphHostEvent[]> {
+  private async execute(
+    connection: Connection,
+    request: GlyphRequestEnvelope,
+    transport: AbortSignal,
+  ): Promise<readonly GlyphHostEvent[]> {
     const authorityError = this.validateAuthority(connection, request);
     if (authorityError !== undefined && authorityError !== '') {
       return [
@@ -315,14 +321,16 @@ export class GlyphDesktopHost {
             JSON.stringify(command.roots) !== JSON.stringify(connection.roots)
           )
             connection.commands.revoke();
-          return await this.transitionAttachment(connection, () => this.attach(connection, request.requestId, command));
+          return await this.transitionAttachment(connection, transport, () =>
+            this.attach(connection, request.requestId, command, transport),
+          );
         }
         case GlyphWorkbenchCommandType.REQUEST_SNAPSHOT:
           await this.publishSnapshot(connection);
           return [toCommandResultGlyphHostEvent(request.requestId)];
         case GlyphWorkbenchCommandType.DETACH:
           connection.commands.revoke();
-          await this.transitionAttachment(connection, () => this.detach(connection));
+          await this.transitionAttachment(connection, transport, () => this.detach(connection));
           return [toCommandResultGlyphHostEvent(request.requestId)];
         default:
           return await this.dispatch(connection, request.requestId, request.command);
@@ -339,9 +347,14 @@ export class GlyphDesktopHost {
   }
 
   /** Serialize trust/ownership changes even when a transport sends overlapping requests. */
-  private async transitionAttachment<T>(connection: Connection, action: () => Promise<T>): Promise<T> {
+  private async transitionAttachment<T>(
+    connection: Connection,
+    transport: AbortSignal,
+    action: () => Promise<T>,
+  ): Promise<T> {
     connection.pendingAttachments++;
     const run = async (): Promise<T> => {
+      transport.throwIfAborted();
       this.assertCurrentConnection(connection);
       return action();
     };
@@ -355,8 +368,10 @@ export class GlyphDesktopHost {
     try {
       return await operation;
     } catch (error) {
-      connection.commands.revoke();
-      connection.ready = false;
+      if (!transport.aborted) {
+        connection.commands.revoke();
+        connection.ready = false;
+      }
       throw error;
     } finally {
       connection.pendingAttachments--;
@@ -373,18 +388,21 @@ export class GlyphDesktopHost {
     connection: Connection,
     requestId: string,
     command: Extract<GlyphWorkbenchCommand, { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE }>,
+    transport: AbortSignal,
   ): Promise<readonly GlyphHostEvent[]> {
-    const transport = connection.send;
     const assertTransport = () => {
+      transport.throwIfAborted();
       this.assertCurrentConnection(connection);
-      if (connection.send !== transport || !transport) throw new Error('Reconnect before attaching the workspace.');
     };
     const key = getWorkspaceKey(connection.identity);
     if (command.trusted !== connection.trusted || JSON.stringify(command.roots) !== JSON.stringify(connection.roots)) {
       connection.journal.discard();
       connection.canReplay = false;
     }
-    if (command.trusted !== connection.trusted && connection.attached) {
+    if (
+      command.trusted !== connection.trusted &&
+      (connection.attached || this.ownership.getOwnerWindowId(connection.identity) === connection.identity.windowId)
+    ) {
       // Trust changes are lifecycle boundaries. Revocation drains tools; a
       // grant must reconcile deferred reviews before authorizing new mutations.
       connection.trusted = false;
@@ -393,7 +411,7 @@ export class GlyphDesktopHost {
     // New authority cannot overlap a previous owner's asynchronous shutdown.
     const stopping = this.runtimeStops.get(key);
     if (stopping) await stopping;
-    this.assertCurrentConnection(connection);
+    assertTransport();
     // Editor working-copy authority also exists in a window whose Glyph session
     // cannot acquire overlapping runtime ownership. Remember its negotiated
     // roots and trust so package publication still checks that editor.
@@ -459,7 +477,7 @@ export class GlyphDesktopHost {
       }
       record = await creating;
     }
-    this.assertCurrentConnection(connection);
+    assertTransport();
     if (record.trusted !== command.trusted) {
       connection.attached = false;
       connection.ready = false;
@@ -484,6 +502,7 @@ export class GlyphDesktopHost {
       return [toCommandResultGlyphHostEvent(requestId)];
     }
     await this.publishSnapshot(connection);
+    transport.throwIfAborted();
     connection.canReplay = true;
     return [toCommandResultGlyphHostEvent(requestId)];
   }

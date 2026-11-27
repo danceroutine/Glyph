@@ -58,6 +58,17 @@ describe(StartupUserProfile, () => {
         return 'discarded';
       }),
     ).rejects.toThrow('removed or replaced');
+    const moved = join(base, 'moved');
+    fs.renameSync(moved, configured);
+    await expect(
+      selected.access(async () => {
+        fs.renameSync(configured, moved);
+        expect(() => selected.verify()).toThrow('removed or replaced');
+        fs.renameSync(moved, configured);
+        return 'discarded';
+      }),
+    ).rejects.toThrow('removed or replaced');
+    await expect(selected.access(async () => 'restored')).resolves.toBe('restored');
   });
 
   it('creates a missing link target beneath the selected ancestor with private permissions', () => {

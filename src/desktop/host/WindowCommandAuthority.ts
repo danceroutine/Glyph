@@ -6,6 +6,20 @@
  */
 export class WindowCommandAuthority {
   private lifetime = new AbortController();
+  private port = new AbortController();
+
+  /** An attach or detach belongs to the transport which submitted it, including while the request is queued. */
+  get transport(): AbortSignal {
+    return this.port.signal;
+  }
+
+  /** A replacement renderer must negotiate its own attachment even when it resumes the same window session. */
+  disconnect(): void {
+    const departed = this.port;
+    this.port = new AbortController();
+    this.revoke();
+    departed.abort(new Error('The workspace connection has ended. Reconnect before attaching.'));
+  }
 
   get signal(): AbortSignal {
     return this.lifetime.signal;

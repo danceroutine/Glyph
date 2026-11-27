@@ -245,6 +245,38 @@ describe(GlyphDesktopHost, () => {
     expect(resolve).toHaveBeenCalledTimes(2);
   });
 
+  it.each([true, false])('a replacement port negotiates its own attachment (trusted %s)', async trusted => {
+    const fixture = new HostFixture();
+    onTestFinished(() => fixture.host.dispose());
+    let initialize!: (runtime: GlyphDesktopWorkspaceRuntime) => void;
+    fixture.factory.create.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          initialize = resolve;
+        }),
+    );
+    fixture.connect('first', owner);
+    const attach = { type: GlyphWorkbenchCommandType.ATTACH_WORKSPACE, roots, trusted: true } as const;
+    const first = fixture.receive('first', owner, 'old-attach', attach);
+    const oldQueued = fixture.receive('first', owner, 'old-detach', { type: GlyphWorkbenchCommandType.DETACH });
+    await fixture.host.disconnect('first');
+    fixture.connect('replacement', owner);
+    initialize(fixture.runtime);
+    await Promise.all([first, oldQueued]);
+    expect(fixture.events('replacement')).toEqual([]);
+    await fixture.receive('replacement', owner, 'early', { type: GlyphWorkbenchCommandType.LIST_CHATS });
+    expect(fixture.runtime.handle).not.toHaveBeenCalled();
+    await fixture.receive('replacement', owner, 'fresh', { ...attach, trusted });
+    expect(fixture.events('replacement').at(-1)?.event).toMatchObject({
+      type: GlyphHostEventType.COMMAND_RESULT,
+      requestId: 'fresh',
+      ok: true,
+    });
+    expect(fixture.events('replacement').some(({ event }) => event.type === GlyphHostEventType.INITIAL_STATE)).toBe(
+      true,
+    );
+  });
+
   it('returns rule identity lookups only to their authorized attached window', async () => {
     const fixture = new HostFixture();
     const command = {

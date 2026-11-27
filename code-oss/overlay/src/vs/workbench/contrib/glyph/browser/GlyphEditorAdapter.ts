@@ -113,6 +113,7 @@ export class GlyphEditorAdapter extends Disposable {
   async handle(
     request: GlyphEditorRequest,
     skillTargets: readonly GlyphSkillTarget[] = [],
+    checkMutation?: () => Promise<void>,
   ): Promise<GlyphEditorResponse> {
     const operationId =
       request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION ||
@@ -178,9 +179,17 @@ export class GlyphEditorAdapter extends Disposable {
           return { operationId, ok: true, ...(snapshots[0] ? { snapshot: snapshots[0] } : {}) };
         }
         case GlyphEditorRequestType.APPLY_FILE_MUTATION:
-          return { operationId, ok: true, ...(await this.applyFile(request.mutation)) };
+          return {
+            operationId,
+            ok: true,
+            ...(await this.applyFile(request.mutation, requireMutationCheck(checkMutation))),
+          };
         case GlyphEditorRequestType.APPLY_TEXT_MUTATION:
-          return { operationId, ok: true, ...(await this.apply(request.mutation)) };
+          return {
+            operationId,
+            ok: true,
+            ...(await this.apply(request.mutation, requireMutationCheck(checkMutation))),
+          };
         case GlyphEditorRequestType.LIST_WORKING_COPIES:
           return { operationId, ok: true, workingCopies: await this.workingCopies() };
         case GlyphEditorRequestType.LIST_WORKING_COPY_PATHS: {
@@ -345,6 +354,7 @@ export class GlyphEditorAdapter extends Disposable {
   /** Structural edits go through native Bulk Edit so Explorer, open editors and Undo stay coordinated. */
   async applyFile(
     mutation: GlyphFileMutation,
+    checkMutation: () => Promise<void>,
   ): Promise<{ snapshot?: GlyphEditorTextSnapshot; receipt: GlyphMutationReceipt }> {
     const targetPath = mutation.kind === GlyphFileMutationKind.RENAME ? mutation.target : mutation.path;
     if (targetPath === undefined || targetPath === '')
@@ -360,7 +370,8 @@ export class GlyphEditorAdapter extends Disposable {
       let snapshot = await this.read(targetPath);
       if (snapshot.contentRevision !== known.afterRevision)
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-      if (mutation.save === true) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
+      if (mutation.save === true)
+        snapshot = await this.saveMutation(targetPath, snapshot.contentRevision, checkMutation);
       return { snapshot, receipt: known };
     }
     const source = this.resolve(mutation.path);
@@ -415,6 +426,7 @@ export class GlyphEditorAdapter extends Disposable {
               maxSize: 2 * 1024 * 1024 + 3,
             });
       edit.validate = async () => {
+        await checkMutation();
         this.assertWorkspaceBinding();
         if (!this.trustService.isWorkspaceTrusted())
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
@@ -489,7 +501,8 @@ export class GlyphEditorAdapter extends Disposable {
         appliedToken: snapshot.token,
       };
       this.receipts.set(mutation.operationId, complete);
-      if (mutation.save === true) snapshot = await this.saveMutation(targetPath, snapshot.contentRevision);
+      if (mutation.save === true)
+        snapshot = await this.saveMutation(targetPath, snapshot.contentRevision, checkMutation);
       return { snapshot, receipt: complete };
     } finally {
       changed?.dispose();
@@ -505,6 +518,7 @@ export class GlyphEditorAdapter extends Disposable {
    */
   async apply(
     mutation: GlyphTextMutation,
+    checkMutation: () => Promise<void>,
   ): Promise<{ snapshot: GlyphEditorTextSnapshot; receipt: GlyphMutationReceipt }> {
     const known = this.receipts.get(mutation.operationId);
     if (known) {
@@ -514,7 +528,7 @@ export class GlyphEditorAdapter extends Disposable {
       if (mutation.save === true) {
         if (snapshot.contentRevision !== known.afterRevision)
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
-        snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision);
+        snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision, checkMutation);
       }
       return { snapshot, receipt: known };
     }
@@ -634,6 +648,10 @@ export class GlyphEditorAdapter extends Disposable {
           reason,
         };
         const apply = async (edits: ResourceTextEdit[]) => {
+          await checkMutation();
+          this.assertWorkspaceBinding();
+          if (!this.trustService.isWorkspaceTrusted() || cancellation.token.isCancellationRequested)
+            throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
           if (!separateEol) return this.bulkEditService.apply(edits, options);
           // BulkEditService only reuses IDs from currently active calls. The
           // native text-edit primitive accepts our actual group across both calls.
@@ -720,7 +738,8 @@ export class GlyphEditorAdapter extends Disposable {
           throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
         }
         let snapshot = await this.snapshot(mutation.path, model);
-        if (mutation.save === true) snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision);
+        if (mutation.save === true)
+          snapshot = await this.saveMutation(mutation.path, snapshot.contentRevision, checkMutation);
         return { snapshot, receipt };
       } finally {
         changed.dispose();
@@ -816,7 +835,12 @@ export class GlyphEditorAdapter extends Disposable {
     });
   }
 
-  private async saveMutation(path: string, expectedRevision: string): Promise<GlyphEditorTextSnapshot> {
+  /** Save only the changed resource; skip formatters that would escape the recorded edit. */
+  private async saveMutation(
+    path: string,
+    expectedRevision: string,
+    checkMutation: () => Promise<void>,
+  ): Promise<GlyphEditorTextSnapshot> {
     this.assertWorkspaceBinding();
     if (!this.trustService.isWorkspaceTrusted())
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
@@ -825,6 +849,10 @@ export class GlyphEditorAdapter extends Disposable {
     if (current.contentRevision !== expectedRevision)
       throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
     if (this.textFileService.isDirty(resource)) {
+      await checkMutation();
+      this.assertWorkspaceBinding();
+      if (!this.trustService.isWorkspaceTrusted())
+        throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.UNTRUSTED_WORKSPACE);
       const saved = await this.textFileService.save(resource, { skipSaveParticipants: true });
       if (!saved || this.textFileService.isDirty(resource))
         throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT, {
@@ -1138,4 +1166,10 @@ function filesystemUriIdentity(
     relativePath: (parent, child) =>
       child.path.split('/').filter(Boolean).slice(parent.path.split('/').filter(Boolean).length).join('/'),
   };
+}
+
+/** A write requires the pending RPC that can recheck the host's pinned root. */
+function requireMutationCheck(check: (() => Promise<void>) | undefined): () => Promise<void> {
+  if (!check) throw new GlyphEditorAdapterError(GlyphDesktopErrorCode.STALE_DOCUMENT);
+  return check;
 }
