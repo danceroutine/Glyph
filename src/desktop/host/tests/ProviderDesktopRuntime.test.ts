@@ -89,6 +89,7 @@ async function fixture(
     readonly skillCatalog?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['skills'];
     readonly refreshCatalogs?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['refreshCatalogs'];
     readonly records?: readonly ChatSessionRecord[];
+    readonly referenceResources?: ConstructorParameters<typeof ProviderDesktopRuntime>[0]['referenceResources'];
     readonly instructionCatalog?: NonNullable<
       ConstructorParameters<typeof ProviderDesktopRuntime>[0]['instructionCatalog']
     >;
@@ -220,6 +221,7 @@ async function fixture(
     ...(extras.trusted === undefined ? {} : { trusted: extras.trusted }),
     ...(extras.agentReviews ? { agentReviews: extras.agentReviews } : {}),
     ...(extras.refreshCatalogs ? { refreshCatalogs: extras.refreshCatalogs } : {}),
+    ...(extras.referenceResources ? { referenceResources: extras.referenceResources } : {}),
     ...(extras.instructionCatalog ? { instructionCatalog: extras.instructionCatalog } : {}),
     ...(extras.userRules ? { userRules: extras.userRules as never } : {}),
     ...(extras.skillManager ? { skillManager: extras.skillManager } : {}),
@@ -384,6 +386,7 @@ it('projects instruction catalog snapshots and live changes without exposing fil
       return unsubscribe;
     }),
   };
+  sources[0] = { ...sources[0]!, references: ['a.md'] };
   const historical = chatRecord({
     transcript: [
       {
@@ -402,10 +405,15 @@ it('projects instruction catalog snapshots and live changes without exposing fil
       },
     ],
   });
-  const harness = await fixture(async () => {}, 'owner', undefined, { instructionCatalog, records: [historical] });
+  const harness = await fixture(async () => {}, 'owner', undefined, {
+    instructionCatalog,
+    referenceResources: path => [{ uri: 'file:///repo/' + path, caseSensitive: true }],
+    records: [historical],
+  });
   try {
     const projected = (await harness.runtime.snapshot()).instructionSources!;
     expect(projected[0]).not.toHaveProperty('content');
+    expect(projected[0]?.referenceResources).toEqual([{ uri: 'file:///repo/a.md', caseSensitive: true }]);
     expect(projected[1]).toMatchObject({ path: 'src/AGENTS.md', message: 'Unreadable' });
     expect(projected[2]).toMatchObject({
       content: 'User body',

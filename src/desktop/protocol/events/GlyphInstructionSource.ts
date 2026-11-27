@@ -11,6 +11,8 @@ export interface GlyphInstructionSource {
   readonly activation?: 'always' | 'file_pattern' | 'model' | 'manual';
   readonly globs?: readonly string[];
   readonly enabled?: boolean;
+  /** Authorized workspace reference URIs through each attached route, used only by the live editor. */
+  readonly referenceResources?: readonly { readonly uri: string; readonly caseSensitive: boolean }[];
   readonly references?: readonly string[];
   readonly revision?: string;
   readonly content?: string;

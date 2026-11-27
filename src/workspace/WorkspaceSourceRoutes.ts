@@ -3,7 +3,9 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 
 /** A physical workspace root can have several editor routes, including routes through an enclosing root. */
 export class WorkspaceSourceRoutes {
-  constructor(private readonly roots: readonly { name: string; path: string; caseSensitive?: boolean }[]) {}
+  constructor(
+    private readonly roots: readonly { name: string; path: string; caseSensitive?: boolean; uri?: string }[],
+  ) {}
 
   physicalPath(route: string) {
     const parts = route.split('/');
@@ -29,6 +31,22 @@ export class WorkspaceSourceRoutes {
       .filter(({ path }) => contained(path))
       .toSorted((a, b) => b.root.path.length - a.root.path.length)
       .map(({ root, spelling }) => (spelling ? root.name + '/' + spelling : root.name));
+  }
+
+  /** Enumerate physical and attached editor URIs for a policy-authorized workspace reference. */
+  referenceResources(route: string): { uri: string; caseSensitive: boolean }[] {
+    const physical = this.physicalPath(route);
+    if (!physical) return [];
+    const resources = new Map<string, boolean>();
+    for (const alias of this.equivalents(route)) {
+      const segments = alias.split('/');
+      const root = this.roots.length === 1 ? this.roots[0]! : this.roots.find(root => root.name === segments[0])!;
+      if (this.roots.length > 1) segments.shift();
+      const sensitive = root.caseSensitive !== false;
+      resources.set(pathToFileURL(physical).href, sensitive);
+      if (root.uri) resources.set(pathToFileURL(join(fileURLToPath(root.uri), ...segments)).href, sensitive);
+    }
+    return [...resources].map(([uri, caseSensitive]) => ({ uri, caseSensitive }));
   }
 
   /** Pick an indexed spelling, retaining required root files ahead of nested files. */

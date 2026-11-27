@@ -137,6 +137,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
       >;
       readonly skills?: SkillCatalog;
       readonly refreshCatalogs?: (signal: AbortSignal) => Promise<void>;
+      readonly referenceResources?: (path: string) => NonNullable<GlyphInstructionSource['referenceResources']>;
       readonly instructionWatchRoots?: readonly string[];
       readonly skillManager?: SkillPackageManager;
       readonly skillSources?: SkillPackageSourceReader;
@@ -1508,6 +1509,9 @@ function toInstructionSources(
     ...(source.globs === undefined ? {} : { globs: source.globs }),
     ...(source.enabled === undefined ? {} : { enabled: source.enabled }),
     ...(source.references === undefined ? {} : { references: source.references }),
+    ...(referenceResources && source.kind !== AgentInstructionSourceKind.GLYPH_USER_RULE && source.references?.length
+      ? { referenceResources: source.references.flatMap(path => referenceResources(path)) }
+      : {}),
     ...(source.revision === undefined ? {} : { revision: source.revision }),
     ...((historical || source.kind === AgentInstructionSourceKind.GLYPH_USER_RULE) && source.content !== undefined
       ? { content: source.content }

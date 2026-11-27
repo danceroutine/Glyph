@@ -270,7 +270,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       return { name: workspaceRoot.name, workspace, catalog, disk, index };
     });
     const routes = new WorkspaceSourceRoutes(
-      parts.map(part => ({ name: part.name, path: part.disk.root, caseSensitive: part.disk.caseSensitive })),
+      parts.map((part, index) => ({
+        name: part.name,
+        path: part.disk.root,
+        caseSensitive: part.disk.caseSensitive,
+        uri: input.roots[index]!.uri,
+      })),
     );
     const workspace =
       roots.length === 1
@@ -797,7 +802,9 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       agentReviews,
       interactions,
       shellSessions: shells,
-      ...(instructionCatalog ? { instructionCatalog } : {}),
+      ...(instructionCatalog
+        ? { instructionCatalog, referenceResources: (path: string) => routes.referenceResources(path) }
+        : {}),
       ...(skills ? { skills } : {}),
       refreshCatalogs: async signal => {
         await Promise.all([instructionCatalog?.refresh(signal), skills?.refresh(signal)]);
