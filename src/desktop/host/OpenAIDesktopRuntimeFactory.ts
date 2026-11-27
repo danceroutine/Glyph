@@ -264,6 +264,7 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
         path: part.disk.root,
         caseSensitive: part.disk.caseSensitive,
         normalizesUnicode: namePolicies[index]!.normalizesUnicode,
+        foldsUnicode: namePolicies[index]!.foldsUnicode,
         uri: input.roots[index]!.uri,
       })),
     );

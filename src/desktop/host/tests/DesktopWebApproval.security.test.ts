@@ -69,6 +69,7 @@ describe('security: production desktop web consent', () => {
     vi.stubEnv('CHAT_TRACE_FILE', join(directory, 'trace.log'));
     vi.spyOn(RustWorkspacePathIndex, 'filesystemNamePolicy').mockResolvedValue({
       caseSensitive: true,
+      foldsUnicode: false,
       normalizesUnicode: false,
     });
     vi.spyOn(RustWorkspacePathIndex, 'filesystemCaseSensitive').mockResolvedValue(true);

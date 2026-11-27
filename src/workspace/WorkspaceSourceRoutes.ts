@@ -9,6 +9,7 @@ export class WorkspaceSourceRoutes {
       path: string;
       caseSensitive?: boolean;
       normalizesUnicode?: boolean;
+      foldsUnicode?: boolean;
       uri?: string;
     }[],
   ) {}
@@ -16,7 +17,7 @@ export class WorkspaceSourceRoutes {
   /** Apply only the routed volume's normalization policy. Logical root labels are exact. */
   normalizeName(route: string, value: string): string {
     const root = this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === route.split('/')[0]);
-    return root?.normalizesUnicode ? value.normalize('NFC') : value;
+    return normalizeVolumeName(value, root);
   }
 
   physicalPath(route: string) {
@@ -35,7 +36,7 @@ export class WorkspaceSourceRoutes {
     return this.roots
       .map(root => {
         const key = (value: string) => {
-          const normalized = root.normalizesUnicode ? value.normalize('NFC') : value;
+          const normalized = normalizeVolumeName(value, root);
           return root.caseSensitive === false ? normalized.toLowerCase() : normalized;
         };
         const path = relative(key(root.path), key(target));
@@ -78,4 +79,15 @@ export class WorkspaceSourceRoutes {
 
 function contained(path: string) {
   return path !== '..' && !path.startsWith('..' + sep) && !isAbsolute(path);
+}
+
+function normalizeVolumeName(value: string, policy?: { normalizesUnicode?: boolean; foldsUnicode?: boolean }): string {
+  if (!policy?.normalizesUnicode) return value;
+  const normalized = value.normalize('NFC');
+  if (!policy.foldsUnicode) return normalized;
+  // Map one scalar at a time so Greek sigma is independent of its word position.
+  // Default Unicode folding preserves dotless i and expands sharp s and ligatures.
+  return Array.from(normalized, char => (char === 'ı' ? char : char.toLowerCase().toUpperCase().toLowerCase()))
+    .join('')
+    .normalize('NFC');
 }
