@@ -126,7 +126,7 @@ it.describe('agent rules', () => {
   it('applies a manual rule only after the user selects its context badge', async ({ glyph, provider }) => {
     const skipped = await sendText(glyph, provider, 'No manual rule.', 'Skipped.');
     expect(JSON.stringify(skipped.body.input)).not.toContain('MANUAL BODY');
-    await glyph.composer.fill('Use @Man');
+    await glyph.composer.fill('Use /Man');
     await glyph.page.getByRole('option', { name: /Manual Rule/u }).click();
     const start = provider.requests.length;
     provider.enqueue({ chunks: ['Applied.'] });
