@@ -129,7 +129,7 @@ async function main(): Promise<void> {
       workspaceRoots: projectContext.roots.map(root => root.path),
       stateDirectory: configuration.stateDirectory,
       protectedPaths: [packageRoot, indexExecutable, shellSandboxExecutable],
-      privatePaths: () => existsSync(profile.path) ? [profile.path] : [],
+      privatePaths: () => (existsSync(profile.path) ? [profile.path] : []),
       accessPolicy: access.shell,
     }),
   );
@@ -261,7 +261,11 @@ async function createProjectRuntime(
   );
   const roots = context.roots.map((root, i) => {
     const access = new WorkspaceRootAccess(policy.project, root.path, casing[i]!);
-    const workspace = new FileSystemWorkspaceTextStore(root.path, { access, physicalAccess, managedDirectories: [join(profilePath, 'skills')] });
+    const workspace = new FileSystemWorkspaceTextStore(root.path, {
+      access,
+      physicalAccess,
+      managedDirectories: [join(profilePath, 'skills')],
+    });
     const selectedFiles = new FileSystemWorkspaceTextStore(root.path, {
       access: new WorkspaceRootAccess(policy.selectedFile, root.path, casing[i]!),
       physicalAccess,

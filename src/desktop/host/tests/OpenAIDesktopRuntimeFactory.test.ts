@@ -2238,7 +2238,9 @@ function useFilesystemIndex(): void {
     const config = captured.indexOptions[captured.indexes.indexOf(this)]!;
     const directories = (await inventoryPackage(config.access.root)).directories;
     return directories.filter(
-      path => !config.access.policy.exclusionsFor(join(config.access.root, path), config.access.caseSensitive ?? true).privateRoot,
+      path =>
+        !config.access.policy.exclusionsFor(join(config.access.root, path), config.access.caseSensitive ?? true)
+          .privateRoot,
     );
   });
   vi.spyOn(RustWorkspacePathIndex.prototype, 'glob').mockImplementation(async function (
@@ -2247,7 +2249,10 @@ function useFilesystemIndex(): void {
     options,
   ) {
     const configuration = captured.indexOptions[captured.indexes.indexOf(this)]!;
-    const store = fixtureWorkspace(configuration.access.root, { accessPolicy: configuration.access.policy, caseSensitive: configuration.access.caseSensitive });
+    const store = fixtureWorkspace(configuration.access.root, {
+      accessPolicy: configuration.access.policy,
+      caseSensitive: configuration.access.caseSensitive,
+    });
     if (!options.rootFilesOnly) return store.list(options.limit, pattern, options.targetDirectory);
     const listed = await store.list(10_000, pattern);
     const direct = listed.files.filter(path => !path.includes('/'));

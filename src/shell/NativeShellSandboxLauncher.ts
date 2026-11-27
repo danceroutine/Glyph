@@ -57,7 +57,8 @@ export class NativeShellSandboxLauncher implements ShellProcessLauncher {
     const operation = accessPolicy.beginOperation();
     const workspaceRoot = mostSpecificWorkspaceRoot(this.options.workspaceRoots, workingDirectory);
     const stores = (this.options.contentStores ?? pnpmContentStore)(environment);
-    const privatePaths = typeof this.options.privatePaths === 'function' ? this.options.privatePaths() : (this.options.privatePaths ?? []);
+    const privatePaths =
+      typeof this.options.privatePaths === 'function' ? this.options.privatePaths() : (this.options.privatePaths ?? []);
     const arguments_ = [
       '--profile',
       authorization.sandboxProfile === ShellSandboxProfile.READ_ONLY ? 'read-only' : 'workspace-write',

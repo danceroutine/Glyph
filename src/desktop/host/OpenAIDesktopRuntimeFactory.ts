@@ -249,7 +249,8 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
       });
       const editorStore = (admitted: FileSystemWorkspaceTextStore) =>
         new EditorWorkspaceTextStore(workspaceRoot.path, admitted.caseSensitive, {
-          canonicalPath: (path, mutation, onManagedPathAdmitted) => admitted.canonicalPath(path, mutation, onManagedPathAdmitted),
+          canonicalPath: (path, mutation, onManagedPathAdmitted) =>
+            admitted.canonicalPath(path, mutation, onManagedPathAdmitted),
           listPaths: (limit, glob = '**/*', targetDirectory, signal) =>
             index.glob(glob, {
               limit,
@@ -262,7 +263,12 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             const path = this.requestPath(request);
             if (path !== undefined && path !== '') {
               if (request.type === GlyphEditorRequestType.EXISTS) await admitted.exists(path);
-              else await admitted.validateAccess(path, request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION || request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION);
+              else
+                await admitted.validateAccess(
+                  path,
+                  request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION ||
+                    request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION,
+                );
             }
             if (
               request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
@@ -287,7 +293,11 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
             operation.assertCurrent();
             const response = await this.editors.request(input.identity, wire, signal);
             if (path !== undefined && path !== '') {
-              await admitted.validateAccess(path, request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION || request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION);
+              await admitted.validateAccess(
+                path,
+                request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION ||
+                  request.type === GlyphEditorRequestType.APPLY_TEXT_MUTATION,
+              );
               if (
                 request.type === GlyphEditorRequestType.APPLY_FILE_MUTATION &&
                 'target' in request.mutation &&
@@ -998,8 +1008,16 @@ export class OpenAIDesktopRuntimeFactory implements GlyphDesktopWorkspaceRuntime
               root => {
                 const sourceAccess = new WorkspaceRootAccess(access.selectedFile, root, workspaceCaseSensitivity(root));
                 return {
-                  store: new FileSystemWorkspaceTextStore(root, { access: sourceAccess, physicalAccess: filesystemMetadata }),
-                  index: new RustWorkspacePathIndex({ access: sourceAccess, binaryPath: indexExecutable, maxFiles: 257, respectGitIgnore: false }),
+                  store: new FileSystemWorkspaceTextStore(root, {
+                    access: sourceAccess,
+                    physicalAccess: filesystemMetadata,
+                  }),
+                  index: new RustWorkspacePathIndex({
+                    access: sourceAccess,
+                    binaryPath: indexExecutable,
+                    maxFiles: 257,
+                    respectGitIgnore: false,
+                  }),
                 };
               },
               filesystemMetadata,
