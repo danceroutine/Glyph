@@ -79,7 +79,7 @@ function changed(): Error {
 function missingComponents(anchor: string, selected: string): string[] {
   const parts: string[] = [];
   for (let path = selected; path !== anchor; path = dirname(path)) parts.push(path);
-  return parts.reverse();
+  return parts.toReversed();
 }
 
 /** Resolve startup symlinks, including a selected link whose target directory has yet to be created. */
