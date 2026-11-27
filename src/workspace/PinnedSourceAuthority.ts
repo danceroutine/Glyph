@@ -11,6 +11,7 @@ export interface PinnedSource {
 
 /** Captures admitted sources in a batch and authorizes each subsequent disclosure under the live host boundary. */
 export interface PinnedSourceAuthority {
+  /** Enroll the paths that contributed bytes. The reader compares each identity with the handle it read. */
   capture(paths: readonly string[], signal?: AbortSignal): Promise<readonly PinnedSource[]>;
   /** Call the returned guard synchronously at transport handoff. Obtain fresh authorization for each disclosure. */
   authorize(pins: readonly PinnedSource[], signal?: AbortSignal): Promise<() => void>;
@@ -25,7 +26,12 @@ export interface SourceOriginReader {
   ): Promise<readonly Omit<PinnedSource, 'path'>[]>;
 }
 
-/** Host-owned authority for sources admitted by one workspace or user catalog and its trust policy. */
+/**
+ * Checks the selected filesystem routes for one workspace or personal catalog. Capture binds a read to its
+ * observed file. At each later disclosure, authorize checks those routes against the current reservations.
+ * Its synchronous guard rechecks trust, cancellation and the policy generation at the final handoff.
+ * A content revision belongs to the rule or skill snapshot and can survive an ordinary edit in place.
+ */
 export class NativePinnedSourceAuthority implements PinnedSourceAuthority {
   constructor(
     private readonly metadata: SourceOriginReader,

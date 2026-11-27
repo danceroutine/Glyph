@@ -8,7 +8,11 @@ import fs, { realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
-/** A physical workspace root can have several editor routes, including routes through an enclosing root. */
+/**
+ * Maps the workspace names used by editors and catalogs to the attached physical roots. Overlapping attachments
+ * can address the same file. Keep the original selection for checks at read and disclosure time, and use the
+ * physical URI to identify the resource in Settings. The consuming store or catalog owns access decisions.
+ */
 export class WorkspaceSourceRoutes {
   private readonly selectedRoots: ReadonlyMap<string, string>;
   private readonly filenameKeys = new Map<string, string>();
