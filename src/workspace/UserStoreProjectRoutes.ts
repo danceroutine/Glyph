@@ -37,7 +37,7 @@ export class UserStoreProjectRoutes {
   ownsEntry(path: string): boolean {
     if (this.ownsStore(dirname(path))) return true;
     const { mounted } = (this.snapshot ??= this.index());
-    if (!mounted.size) return false;
+    if (mounted.size === 0) return false;
     const id = objectId(path);
     if (!id || !mounted.has(id)) return false;
     // A direct mount of one entry can rename it. Inventory the profile once, only when such a mount is observed.
@@ -62,7 +62,7 @@ export class UserStoreProjectRoutes {
       const entry = join(store, name);
       if (sameWorkspaceDirectory(user, entry, this.caseSensitive)) result.add(entry);
     }
-    if (mounted.size) {
+    if (mounted.size > 0) {
       const id = objectId(user);
       if (id)
         for (const route of mounted.get(id) ?? []) {

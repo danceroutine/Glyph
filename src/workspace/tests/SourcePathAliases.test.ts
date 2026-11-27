@@ -8,7 +8,9 @@ import { UserStoreProjectRoutes } from '../UserStoreProjectRoutes.ts';
 
 it('resolves prospective names through their actual parent and rejects an inaccessible directory chain', () => {
   const directory = mkdtempSync(join(tmpdir(), 'glyph-source-paths-'));
-  onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
+  onTestFinished(() => {
+    rmSync(directory, { recursive: true, force: true });
+  });
   const root = storedSourcePath(directory);
   const link = join(root, 'link');
   symlinkSync(root, link);
@@ -30,7 +32,9 @@ it('resolves prospective names through their actual parent and rejects an inacce
 
 it('owns a mounted store or an individual entry and retains its actual project spelling', () => {
   const root = mkdtempSync(join(tmpdir(), 'glyph-user-routes-'));
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+  onTestFinished(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
   const store = join(root, 'profile', 'skills');
   mkdirSync(join(store, 'one'), { recursive: true });
   const project = join(root, '.glyph', 'skills');
@@ -58,7 +62,9 @@ it('owns a mounted store or an individual entry and retains its actual project s
 it('indexes individual mounted entries once and rechecks identity after a source or projected name changes', async () => {
   const { linkSync, renameSync } = await import('node:fs');
   const root = mkdtempSync(join(tmpdir(), 'glyph-mounted-entry-'));
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+  onTestFinished(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
   const directory = join(root, 'rules');
   mkdirSync(directory);
   const user = join(directory, 'a.mdc');
@@ -78,7 +84,9 @@ it('indexes individual mounted entries once and rechecks identity after a source
       ...list(path),
       'removed-between-list-and-stat',
     ]) as typeof fs.readdirSync);
-  onTestFinished(() => read.mockRestore());
+  onTestFinished(() => {
+    read.mockRestore();
+  });
   expect(lookup.ownsEntry(outside)).toBe(true);
   expect(lookup.ownsEntry(second)).toBe(true);
   expect(lookup.projectEntries('a.mdc')).toEqual([user, outside, second]);
@@ -100,7 +108,9 @@ it('indexes individual mounted entries once and rechecks identity after a source
 
 it('rejects a previously equivalent store route after an editor alias is rebound', () => {
   const root = mkdtempSync(join(tmpdir(), 'glyph-user-rebound-'));
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+  onTestFinished(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
   const a = join(root, 'original');
   const b = join(root, 'other');
   const logical = join(root, 'editor');
