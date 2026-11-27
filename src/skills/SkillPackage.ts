@@ -39,7 +39,7 @@ export class SkillPackage {
     if (!file) throw new Error(`Skill resource is missing or unavailable: ${normalized}`);
     let content: string, encoding: 'utf8' | 'base64';
     try {
-      content = new TextDecoder('utf8', { fatal: true }).decode(file.bytes);
+      content = new TextDecoder('utf8', { fatal: true, ignoreBOM: true }).decode(file.bytes);
       encoding = file.bytes.includes(0) ? 'base64' : 'utf8';
     } catch {
       content = '';

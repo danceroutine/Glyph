@@ -20,6 +20,15 @@ describe('Skill package boundaries', () => {
     const nul = aSkillPackage(aSkillDescriptor(), 'Body', { nul: Buffer.from([0, 1]) });
     expect(nul.readResource('nul').encoding).toBe('base64');
   });
+  it('discloses UTF-8 resource bytes including the leading byte-order mark', () => {
+    const source = '\uFEFFprint("example")\n';
+    const bytes = Buffer.from(source);
+    const snapshot = aSkillPackage(aSkillDescriptor(), 'Body', { 'script.py': bytes });
+    const result = snapshot.readResource('script.py');
+    expect(result.encoding).toBe('utf8');
+    expect(Buffer.from(result.content)).toEqual(bytes);
+    expect(snapshot.resources()).toEqual([result]);
+  });
   it('keeps resource inspection separate from recorded model disclosures', () => {
     const snapshot = aSkillPackage(aSkillDescriptor(), 'Body', { 'script.sh': Buffer.from('exit 0') });
     const inspected = snapshot.inspectResource('script.sh');
