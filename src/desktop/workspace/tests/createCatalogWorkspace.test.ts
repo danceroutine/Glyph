@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile, rename } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GlyphDesktopErrorCode } from '#src/desktop/protocol/GlyphDesktopError.js';
@@ -31,7 +32,7 @@ it('preserves dirty text while retaining the verified physical file identity and
     operationId: 'read',
     ok: true,
     snapshot: {
-      uri: 'file:///project/AGENTS.md',
+      uri: pathToFileURL(join(disk.root, 'AGENTS.md')).href,
       path: 'AGENTS.md',
       text: 'Unsaved',
       byteOrderMark: true,
@@ -52,6 +53,12 @@ it('preserves dirty text while retaining the verified physical file identity and
     byteLength: 10,
   });
   expect(request).toHaveBeenCalledWith(expect.objectContaining({ path: 'AGENTS.md', maxBytes: 64 }));
+  await writeFile(join(disk.root, 'other.md'), 'Same bytes');
+  request.mockResolvedValue({
+    ...(await request()),
+    snapshot: { ...(await request()).snapshot!, uri: pathToFileURL(join(disk.root, 'other.md')).href },
+  });
+  await expect(workspace.read('AGENTS.md')).rejects.toThrow('different instruction file');
   request.mockResolvedValue({
     operationId: 'read',
     ok: true,

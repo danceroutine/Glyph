@@ -1,3 +1,4 @@
+import type { FilesystemNamePolicy } from '#src/workspace/FilesystemNamePolicy.js';
 import type { GlyphTextMutation } from './GlyphTextMutation.ts';
 import type { GlyphFileMutation } from './GlyphFileMutation.ts';
 import type { GlyphWorkingCopySearchOptions } from './GlyphWorkingCopySearchOptions.ts';
@@ -34,6 +35,7 @@ export type GlyphEditorRequest =
       readonly kind: 'rule' | 'skill';
       readonly name: string;
       readonly caseSensitive: boolean;
+      readonly namePolicy?: FilesystemNamePolicy;
     }
   | { readonly type: GlyphEditorRequestType.EXISTS; readonly operationId: string; readonly path: string }
   | {
@@ -43,6 +45,7 @@ export type GlyphEditorRequest =
       readonly maxBytes?: number;
       readonly physicalUri?: string;
       readonly caseSensitive?: boolean;
+      readonly namePolicy?: FilesystemNamePolicy;
     }
   | { readonly type: GlyphEditorRequestType.LIST_WORKING_COPIES; readonly operationId: string }
   | { readonly type: GlyphEditorRequestType.LIST_WORKING_COPY_PATHS; readonly operationId: string }

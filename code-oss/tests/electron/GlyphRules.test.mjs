@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { expect, isolatedLaunch, test as it } from './GlyphWorkbench.fixture.mjs';
 import { ScriptedProvider } from './ScriptedProvider.mjs';
@@ -30,7 +32,12 @@ const files = {
 
 it.describe('agent rules', () => {
   it.describe.configure({ mode: 'default' });
-  it.use({ sharedLaunch: true, scriptedProvider: true, workspaceFiles: files });
+  it.use({
+    sharedLaunch: true,
+    scriptedProvider: true,
+    workspaceFiles: files,
+    userSettings: { 'files.autoSave': 'off' },
+  });
 
   it('includes always-on rules, advertises model rules, and identifies used sources in the inspector', async ({
     glyph,
@@ -183,6 +190,67 @@ it.describe('agent rules', () => {
     await expect(glyph.page.getByRole('region', { name: 'Agent Instructions' })).toContainText('Proposed');
   });
 
+  for (const [storedName, editorName, action] of [
+    ['café.mdc', 'cafe\u0301.mdc', 'Disable'],
+    ['ß.mdc', 'SS.mdc', 'Remove'],
+    ['ı.mdc', 'i.mdc', 'Disable'],
+  ]) {
+    it(
+      `checks the dirty native editor before Settings can ${action.toLowerCase()} ${storedName}`,
+      isolatedLaunch('opens a dirty user rule'),
+      async ({ glyph, session }) => {
+        const directory = join(session.sandbox, 'glyph-user', 'rules');
+        const { sameFile, stored, alternate } = await openDirtyRule(glyph, directory, storedName, editorName);
+        await openSettings(glyph);
+        const settings = glyph.page.getByRole('region', { name: 'Agent Instructions' });
+        const row = settings.locator('.instruction-source').filter({ hasText: 'Stored guidance' });
+        await row.getByRole('button', { name: action, exact: true }).click();
+        if (sameFile) {
+          await expect(
+            glyph.page
+              .getByRole('alert')
+              .filter({ hasText: /save or discard unsaved changes/iu })
+              .first(),
+          ).toBeVisible();
+          await expect(row.getByRole('button', { name: action, exact: true })).toBeVisible();
+          expect(await readFile(stored, 'utf8')).toBe(storedRule);
+        } else {
+          if (action === 'Remove') {
+            await expect(row).toHaveCount(0);
+            await expect(readFile(stored)).rejects.toMatchObject({ code: 'ENOENT' });
+          } else {
+            await expect(row.getByRole('button', { name: 'Enable' })).toBeVisible();
+            expect(await readFile(stored, 'utf8')).toContain('enabled: false');
+          }
+          expect(await readFile(alternate, 'utf8')).toBe(siblingRule);
+        }
+        await expect(glyph.page.locator('.part.editor .tab.dirty')).toHaveCount(1);
+      },
+    );
+  }
+
+  for (const [storedName, editorName] of [
+    ['café.mdc', 'cafe\u0301.mdc'],
+    ['ı.mdc', 'i.mdc'],
+  ]) {
+    it(
+      `sends the live project rule from a dirty native editor opened as ${editorName}`,
+      isolatedLaunch('opens a dirty project rule'),
+      async ({ glyph, provider }) => {
+        const directory = join(glyph.workspace, '.glyph', 'rules');
+        const { sameFile, stored, alternate } = await openDirtyRule(glyph, directory, storedName, editorName);
+        const request = await sendText(glyph, provider, 'Read the current project guidance.', 'Done.');
+        const contents = initialContext(request).sources.map(source => source.content);
+        expect(contents.filter(content => content === 'DIRTY RULE BODY')).toHaveLength(1);
+        expect(contents.filter(content => content === 'STORED RULE BODY')).toHaveLength(sameFile ? 0 : 1);
+        expect(contents).not.toContain('SIBLING RULE BODY');
+        expect(await readFile(stored, 'utf8')).toBe(storedRule);
+        expect(await readFile(alternate, 'utf8')).toBe(sameFile ? storedRule : siblingRule);
+        await expect(glyph.page.locator('.part.editor .tab.dirty')).toHaveCount(1);
+      },
+    );
+  }
+
   it(
     'freezes in-flight revisions, reloads without duplicates, and keeps rules below user and host authority',
     isolatedLaunch('reloads rule state'),
@@ -203,6 +271,40 @@ it.describe('agent rules', () => {
   // Rank 22 owns compaction itself; the persisted context snapshot is already versioned for replay.
   it.fixme('retains always-on guidance and reevaluates conditional guidance after context compaction', async () => {});
 });
+
+const storedRule = '---\nname: Stored guidance\nalwaysApply: true\n---\nSTORED RULE BODY';
+const siblingRule = '---\nname: Sibling guidance\nalwaysApply: true\n---\nSIBLING RULE BODY';
+
+/** @param {GlyphWorkbench} glyph @param {string} directory @param {string} storedName @param {string} editorName */
+async function openDirtyRule(glyph, directory, storedName, editorName) {
+  await mkdir(directory, { recursive: true });
+  const stored = join(directory, storedName);
+  const alternate = join(directory, editorName);
+  await writeFile(stored, storedRule, { flag: 'wx' });
+  if (!existsSync(alternate)) await writeFile(alternate, siblingRule, { flag: 'wx' });
+  const [savedEntry, editorEntry] = await Promise.all([
+    stat(stored, { bigint: true }),
+    stat(alternate, { bigint: true }),
+  ]);
+  const sameFile = savedEntry.dev === editorEntry.dev && savedEntry.ino === editorEntry.ino;
+  await glyph.reload();
+  const { page } = glyph;
+  await page.keyboard.press('ControlOrMeta+p');
+  await page.locator('.quick-input-widget input').fill(alternate);
+  await expect(page.locator('.quick-input-list').getByRole('option').first()).toContainText(editorName);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.quick-input-widget')).not.toBeVisible();
+  const editor = page.locator('.editor-instance .monaco-editor[data-uri]').last();
+  const lines = editor.locator('.view-lines');
+  await expect(lines).toContainText(sameFile ? 'STORED RULE BODY' : 'SIBLING RULE BODY');
+  expect(basename(fileURLToPath((await editor.getAttribute('data-uri')) ?? ''))).toBe(editorName);
+  await lines.click({ position: { x: 4, y: 3 } });
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.insertText('---\nname: Dirty guidance\nalwaysApply: true\n---\nDIRTY RULE BODY');
+  await expect(lines).toContainText('DIRTY RULE BODY');
+  await expect(page.locator('.part.editor .tab.dirty')).toHaveCount(1);
+  return { sameFile, stored, alternate };
+}
 
 /** @param {string} name @param {unknown} input @returns {ToolCall} */
 function call(name, input) {
