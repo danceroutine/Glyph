@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import fs from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
   sameWorkspaceDirectory,
@@ -7,9 +7,15 @@ import {
 } from './sameWorkspaceDirectory.ts';
 import { storedSourcePath, type SourcePathAliases } from './SourcePathAliases.ts';
 
+function objectId(path: string): string | undefined {
+  const entry = fs.lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  return entry && `${entry.dev}:${entry.ino}`;
+}
+
 /** Snapshot a user store's visible mount routes once for a catalog listing. Verify each claimed object on use. */
 export class UserStoreProjectRoutes {
-  private aliases: readonly string[] | undefined;
+  private snapshot?: ReturnType<UserStoreProjectRoutes['index']>;
+  private entries: Map<string, string> | undefined;
   private readonly store: WorkspaceDirectoryIdentity;
   constructor(
     private readonly directory: string,
@@ -20,7 +26,8 @@ export class UserStoreProjectRoutes {
   }
 
   refresh(): void {
-    this.aliases = this.resolveAliases(this.directory, true);
+    this.snapshot = this.index();
+    this.entries = undefined;
   }
 
   ownsStore(path: string): boolean {
@@ -29,19 +36,38 @@ export class UserStoreProjectRoutes {
 
   ownsEntry(path: string): boolean {
     if (this.ownsStore(dirname(path))) return true;
-    const aliases = this.visibleRoutes();
-    if (aliases.length <= 1 || !aliases.includes(storedSourcePath(path))) return false;
-    // A mount of one package or rule file has a separate parent and can have a different basename.
-    return readdirSync(this.directory).some(name => sameWorkspaceDirectory(join(this.directory, name), path, true));
+    const { mounted } = (this.snapshot ??= this.index());
+    if (!mounted.size) return false;
+    const id = objectId(path);
+    if (!id || !mounted.has(id)) return false;
+    // A direct mount of one entry can rename it. Inventory the profile once, only when such a mount is observed.
+    if (!this.entries) {
+      const entries = new Map<string, string>();
+      for (const name of fs.readdirSync(this.directory)) {
+        const entry = join(this.directory, name);
+        const key = objectId(entry);
+        if (key) entries.set(key, entry);
+      }
+      this.entries = entries;
+    }
+    const entry = this.entries.get(id);
+    return entry !== undefined && sameWorkspaceDirectory(entry, path, this.caseSensitive);
   }
 
   projectEntries(name: string): string[] {
+    const { stores, mounted } = (this.snapshot ??= this.index());
+    const user = join(this.directory, name);
     const result = new Set<string>();
-    for (const route of this.visibleRoutes()) {
-      if (this.ownsStore(route)) {
-        const entry = join(route, name);
-        if (sameWorkspaceDirectory(join(this.directory, name), entry, this.caseSensitive)) result.add(entry);
-      } else if (sameWorkspaceDirectory(route, join(this.directory, name), this.caseSensitive)) result.add(route);
+    for (const store of stores) {
+      const entry = join(store, name);
+      if (sameWorkspaceDirectory(user, entry, this.caseSensitive)) result.add(entry);
+    }
+    if (mounted.size) {
+      const id = objectId(user);
+      if (id)
+        for (const route of mounted.get(id) ?? []) {
+          if (sameWorkspaceDirectory(user, route, this.caseSensitive)) result.add(route);
+        }
     }
     return [...result];
   }
@@ -56,8 +82,19 @@ export class UserStoreProjectRoutes {
     );
   }
 
-  private visibleRoutes(): readonly string[] {
-    this.aliases ??= this.resolveAliases(this.directory, true);
-    return this.aliases;
+  private index() {
+    const stores: string[] = [];
+    const mounted = new Map<string, string[]>();
+    for (const route of this.resolveAliases(this.directory, true)) {
+      if (this.ownsStore(route)) stores.push(route);
+      else {
+        const id = objectId(route);
+        if (!id) continue;
+        const group = mounted.get(id);
+        if (group) group.push(route);
+        else mounted.set(id, [route]);
+      }
+    }
+    return { stores, mounted };
   }
 }

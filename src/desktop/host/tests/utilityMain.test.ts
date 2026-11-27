@@ -20,7 +20,11 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   const editors = {
     constructed:
       vi.fn<
-        ({ trustedUserEditors }: { trustedUserEditors: (identity: unknown, sourcePath: string) => unknown }) => void
+        ({
+          trustedUserEditors,
+        }: {
+          trustedUserEditors: (identity: unknown, sourcePath: string, aliases?: readonly string[]) => unknown;
+        }) => void
       >(),
     connect: vi.fn(),
     receive: vi.fn(),
@@ -52,7 +56,9 @@ function startUtilityHost(options: { parentPort?: boolean; environment?: Record<
   }));
   vi.doMock('#src/desktop/workspace/EditorRpcRouter.js', () => ({
     EditorRpcRouter: class {
-      constructor(readonly trustedUserEditors: (identity: unknown, sourcePath: string) => unknown) {
+      constructor(
+        readonly trustedUserEditors: (identity: unknown, sourcePath: string, aliases?: readonly string[]) => unknown,
+      ) {
         editors.constructed(this);
       }
       connect(...arguments_: unknown[]): unknown {
@@ -192,8 +198,12 @@ describe('utilityMain', () => {
     const { loaded, host, editors, openai, scripted, deterministic } = startUtilityHost();
     await loaded;
     const router = editors.constructed.mock.calls[0]![0];
-    expect(router.trustedUserEditors({ windowId: 'owner' }, '/profile/rules/example.mdc')).toEqual([]);
-    expect(host.trustedUserEditors).toHaveBeenCalledWith({ windowId: 'owner' }, '/profile/rules/example.mdc');
+    expect(
+      router.trustedUserEditors({ windowId: 'owner' }, '/profile/rules/example.mdc', ['/mounted/example.mdc']),
+    ).toEqual([]);
+    expect(host.trustedUserEditors).toHaveBeenCalledWith({ windowId: 'owner' }, '/profile/rules/example.mdc', [
+      '/mounted/example.mdc',
+    ]);
     const factory = openai.constructed.mock.calls[0]?.[0];
     expect(openai.constructed).toHaveBeenCalledExactlyOnceWith(
       factory,

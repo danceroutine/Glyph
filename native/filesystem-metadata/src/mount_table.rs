@@ -94,6 +94,37 @@ impl<'a> MountTable<'a> {
         }
     }
 
+    /// Editor and catalog routes must identify the visible object. A covered mount record
+    /// can describe an unrelated file now occupying the same namespace pathname.
+    pub fn visible_aliases(&self, path: &Path, descendants: bool) -> io::Result<BTreeSet<PathBuf>> {
+        let mut candidates = BTreeSet::new();
+        self.aliases(path, descendants, &mut candidates);
+        let mut visible = BTreeSet::new();
+        for candidate in candidates {
+            let mut sources = BTreeSet::from([path.to_owned()]);
+            if descendants {
+                self.aliases(&candidate, false, &mut sources);
+            }
+            for source in sources
+                .into_iter()
+                .filter(|source| source.starts_with(path))
+            {
+                for entry in [&source, &candidate] {
+                    if let Err(error) = entry.metadata()
+                        && error.kind() != io::ErrorKind::NotFound
+                    {
+                        return Err(error);
+                    }
+                }
+                if crate::workspace_paths::same_location(&source, &candidate) {
+                    visible.insert(candidate);
+                    break;
+                }
+            }
+        }
+        Ok(visible)
+    }
+
     fn aliases_on_device(&self, path: &Path, descendants: bool, output: &mut BTreeSet<PathBuf>) {
         let mounts = &self.0;
         let owners = || mounts.iter().filter(|mount| path.starts_with(&mount.point));
@@ -138,5 +169,47 @@ mod tests {
         ] {
             assert!(MountTable::parse(table).is_err());
         }
+    }
+    #[test]
+    fn editor_routes_reject_overmounted_objects_and_include_visible_descendant_aliases() {
+        use std::os::unix::ffi::OsStrExt;
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let target = root.join("package");
+        let resource = target.join("guide");
+        let alias = root.join("mounted-guide");
+        let unrelated = root.join("covered-guide");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(&resource, b"guide").unwrap();
+        std::fs::hard_link(&resource, &alias).unwrap();
+        std::fs::write(&unrelated, b"ordinary").unwrap();
+        let records = format!(
+            "1 0 0:1 / / rest\n2 0 0:1 {0} {1} rest\n3 0 0:1 {0} {2} rest\n",
+            resource.display(),
+            alias.display(),
+            unrelated.display()
+        );
+        let table = MountTable::parse(records.as_bytes()).unwrap();
+        assert_eq!(
+            table.visible_aliases(&target, true).unwrap(),
+            BTreeSet::from([target.clone(), alias.clone()])
+        );
+        assert_eq!(
+            table.visible_aliases(&target, false).unwrap(),
+            BTreeSet::from([target.clone()])
+        );
+        // This visible route traverses a non-directory and cannot establish the editor identity.
+        let mut bad = records.into_bytes();
+        bad.extend_from_slice(b"4 0 0:1 ");
+        bad.extend_from_slice(resource.as_os_str().as_bytes());
+        bad.push(b' ');
+        bad.extend_from_slice(alias.join("nested").as_os_str().as_bytes());
+        bad.extend_from_slice(b" rest\n");
+        assert!(
+            MountTable::parse(&bad)
+                .unwrap()
+                .visible_aliases(&target, true)
+                .is_err()
+        );
     }
 }

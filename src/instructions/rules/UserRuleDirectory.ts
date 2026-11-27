@@ -7,14 +7,16 @@ import type { InstructionPaths } from '#src/instructions/InstructionPaths.js';
 /** The profile owns rules even when a workspace also exposes the same native or compatibility directory. */
 export class UserRuleDirectory {
   private readonly store: UserStoreProjectRoutes;
+  private readonly roots: readonly { name: string; path: string }[];
 
   constructor(
     root: string,
     caseSensitive: boolean,
-    private readonly roots: readonly { name: string; path: string }[],
+    roots: readonly { name: string; path: string }[],
     private readonly paths: InstructionPaths,
     aliases?: SourcePathAliases,
   ) {
+    this.roots = roots.toSorted((a, b) => b.path.length - a.path.length);
     this.store = new UserStoreProjectRoutes(join(root, 'rules'), caseSensitive, aliases);
   }
 
@@ -37,12 +39,10 @@ export class UserRuleDirectory {
           ? AgentInstructionSourceKind.GLYPH_PROJECT_RULE
           : AgentInstructionSourceKind.CURSOR_PROJECT_RULE;
       const scope = dirname(dirname(dirname(path)));
-      const project = this.roots
-        .toSorted((a, b) => b.path.length - a.path.length)
-        .find(part => {
-          const tail = relative(part.path, scope);
-          return tail !== '..' && !tail.startsWith('..' + sep) && !isAbsolute(tail);
-        });
+      const project = this.roots.find(part => {
+        const tail = relative(part.path, scope);
+        return tail !== '..' && !tail.startsWith('..' + sep) && !isAbsolute(tail);
+      });
       if (!project) return [];
       const prefix = this.roots.length > 1 ? project.name : '';
       const route = (physical: string) => posix.join(prefix, relative(project.path, physical).split(sep).join('/'));
