@@ -1289,7 +1289,14 @@ mod filesystem_casing {
             .flatten()
             .filter_map(|entry| entry.file_name().into_string().ok())
             .collect();
-        for name in &names {
+        if let Some(value) = observed_names(path, &names) {
+            return Ok(value);
+        }
+        empty_directory(path)
+    }
+
+    pub(super) fn observed_names(path: &Path, names: &[String]) -> Option<bool> {
+        for name in names {
             let Some(position) = name.find(|c: char| c.is_ascii_alphabetic()) else {
                 continue;
             };
@@ -1298,13 +1305,13 @@ mod filesystem_casing {
             other.replace_range(position..position + 1, &(letter as char).to_string());
             // Both spellings being separately listed proves they are distinct names, including hardlinks.
             if names.contains(&other) {
-                return Ok(true);
+                return Some(true);
             }
             if let Some(sensitive) = compare(path, name, &other) {
-                return Ok(sensitive);
+                return Some(sensitive);
             }
         }
-        empty_directory(path)
+        None
     }
 
     #[cfg(unix)]
@@ -1326,14 +1333,30 @@ mod filesystem_casing {
     }
 
     #[cfg(target_os = "linux")]
-    fn empty_directory(path: &Path) -> io::Result<bool> {
+    pub(super) fn empty_directory(path: &Path) -> io::Result<bool> {
         use std::os::fd::AsRawFd;
         let directory = fs::File::open(path)?;
         let mut flags: libc::c_long = 0;
         // ext4 and F2FS expose per-directory casefolding through FS_IOC_GETFLAGS.
         let result =
             unsafe { libc::ioctl(directory.as_raw_fd(), libc::FS_IOC_GETFLAGS, &mut flags) };
-        Ok(result != 0 || flags & 0x4000_0000 == 0)
+        // FAT and exFAT names remain case-insensitive even when the directory has no entries.
+        let filesystem = filesystem_type(directory.as_raw_fd())?;
+        Ok(
+            !matches!(filesystem, 0x4d44 | 0x2011_bab0)
+                && (result != 0 || flags & 0x4000_0000 == 0),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn filesystem_type(fd: libc::c_int) -> io::Result<u64> {
+        let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        if unsafe { libc::fstatfs(fd, filesystem.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // A successful fstatfs initializes the buffer. glibc and musl use different integer types for f_type.
+        #[allow(clippy::unnecessary_cast)]
+        Ok(unsafe { filesystem.assume_init() }.f_type as u64)
     }
 
     #[cfg(not(target_os = "linux"))]
