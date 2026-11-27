@@ -88,6 +88,7 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
     // Bound metadata reads across large native catalogs.
     let remainingBytes = 8 * 1024 * 1024;
     const maxManifestBytes = 256 * 1024;
+    const maxPhysicalBytes = 2 * maxManifestBytes;
     const readDescriptor = async ({
       directory,
       scope,
@@ -112,14 +113,19 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
       try {
         signal?.throwIfAborted();
         if (!indexedPath) throw new Error('Skill package has no indexed SKILL.md.');
-        const maxBytes = Math.min(remainingBytes, maxManifestBytes);
-        if (maxBytes <= 0) throw new Error('Skill metadata exceeds the 8 MiB discovery budget.');
-        remainingBytes -= maxBytes;
-        const snapshot = await this.location.workspace.read(path, { maxBytes }).catch((error: unknown) => {
-          remainingBytes += maxBytes - workspaceReadFailureBytes(error);
-          throw error;
-        });
-        remainingBytes += maxBytes - snapshot.byteLength;
+        const reserved = Math.min(remainingBytes, maxPhysicalBytes);
+        if (reserved <= 0) throw new Error('Skill metadata exceeds the 8 MiB discovery budget.');
+        remainingBytes -= reserved;
+        const snapshot = await this.location.workspace
+          .read(path, {
+            maxBytes: Math.min(reserved, maxManifestBytes),
+            physicalByteBudget: reserved,
+          })
+          .catch((error: unknown) => {
+            remainingBytes += reserved - workspaceReadFailureBytes(error);
+            throw error;
+          });
+        remainingBytes += reserved - Math.max(snapshot.byteLength, snapshot.bytesRead ?? 0);
         uri = this.location.uriForPath(path);
         const manifest = parseSkillManifest(snapshot.text, name);
         return {
@@ -147,7 +153,7 @@ export class FileSkillDiscoveryProvider implements SkillDiscoveryProvider {
       .toSorted((left, right) => left.directory.localeCompare(right.directory));
     const descriptors: SkillDescriptor[] = [];
     for (let offset = 0; offset < ordered.length;) {
-      const width = Math.min(8, Math.max(1, Math.floor(remainingBytes / maxManifestBytes)));
+      const width = Math.min(8, Math.max(1, Math.floor(remainingBytes / maxPhysicalBytes)));
       descriptors.push(
         ...(await Promise.all(ordered.slice(offset, offset + width).map(directory => readDescriptor(directory)))),
       );

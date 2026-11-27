@@ -44,6 +44,7 @@ export enum GlyphWorkbenchCommandType {
   WRITE_SHELL_INPUT = 'write_shell_input',
   STOP_SHELL_SESSION = 'stop_shell_session',
   RESOLVE_SKILL_REFERENCE = 'resolve_skill_reference',
+  RESOLVE_RULE_REFERENCE = 'resolve_rule_reference',
   REFRESH_CONTEXT_CATALOGS = 'refresh_context_catalogs',
   REQUEST_SNAPSHOT = 'request_snapshot',
   DETACH = 'detach',
@@ -58,6 +59,11 @@ export type GlyphWorkbenchCommand =
       readonly type: GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE;
       readonly lookupId: string;
       readonly skillId: string;
+    }
+  | {
+      readonly type: GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE;
+      readonly lookupId: string;
+      readonly ruleId: string;
     }
   | { readonly type: GlyphWorkbenchCommandType.REFRESH_CONTEXT_CATALOGS }
   | {

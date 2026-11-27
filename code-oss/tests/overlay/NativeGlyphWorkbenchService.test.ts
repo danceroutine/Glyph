@@ -468,6 +468,25 @@ describe(NativeGlyphWorkbenchService, () => {
   });
 
   describe('host events', () => {
+    it('correlates a targeted historical rule lookup with the attached workspace generation', async () => {
+      const { host, context, changeFolders } = await workbench();
+      const resolve = context.setInstructionRefresh.mock.calls[0][2] as (id: string) => Promise<string | undefined>;
+      host.handler = command => {
+        if (command.type !== GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE) return;
+        emit(host, { type: GlyphHostEventType.RULE_REFERENCE_RESOLVED, lookupId: 'unrelated', ruleId: 'wrong' });
+        emit(host, {
+          type: GlyphHostEventType.RULE_REFERENCE_RESOLVED,
+          lookupId: command.lookupId,
+          ruleId: 'canonical',
+        });
+      };
+      await expect(resolve('old')).resolves.toBe('canonical');
+      host.handler = () => {
+        changeFolders([folder('other')]);
+      };
+      await expect(resolve('old')).rejects.toThrow();
+    });
+
     it('forwards proposal previews to the review editor without changing state', async () => {
       const { service, host, proposals } = await workbench();
       const listener = vi.fn();

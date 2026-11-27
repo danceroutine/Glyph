@@ -77,10 +77,11 @@ export class AgentsMdInstructionProvider implements AgentInstructionSourceProvid
         normalized = this.workspace.normalizePath(path);
         if (remainingBytes <= 0) throw new Error('Instruction discovery read budget exhausted.');
         const snapshot = await this.workspace.read(normalized, {
+          physicalByteBudget: remainingBytes,
           maxBytes: Math.min(remainingBytes, this.options.maxBytes ?? DEFAULT_MAX_BYTES),
         });
         signal?.throwIfAborted();
-        remainingBytes -= snapshot.byteLength ?? Buffer.byteLength(snapshot.text);
+        remainingBytes -= Math.max(snapshot.bytesRead ?? 0, snapshot.byteLength ?? Buffer.byteLength(snapshot.text));
         sources.push({
           ...base(),
           status: AgentInstructionSourceStatus.ACTIVE,

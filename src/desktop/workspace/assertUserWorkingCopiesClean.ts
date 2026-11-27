@@ -1,3 +1,5 @@
+import { resolveAvailableIdentity } from '#src/shell/ShellRuntimePathPolicy.js';
+import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { GlyphConnectionIdentity } from '#src/desktop/protocol/connection/GlyphConnectionIdentity.js';
 import { GlyphEditorRequestType } from '#src/desktop/protocol/editor/GlyphEditorRequest.js';
@@ -11,7 +13,15 @@ export async function assertUserWorkingCopiesClean(
   name: string,
   caseSensitive: boolean,
   sourcePath?: string,
+  configuredProfile?: string,
 ): Promise<void> {
+  const verifyProfile = () => {
+    if (configuredProfile && sourcePath && resolveAvailableIdentity(configuredProfile) !== dirname(dirname(sourcePath)))
+      throw new Error(
+        'The configured user directory changed. Reopen the workspace before changing these instructions.',
+      );
+  };
+  verifyProfile();
   const peers = editors.trustedUserEditors(owner, sourcePath);
   await Promise.all(
     [owner, ...peers.map(peer => peer.identity)].map(async identity => {
@@ -29,6 +39,7 @@ export async function assertUserWorkingCopiesClean(
         );
     }),
   );
+  verifyProfile();
   const current = editors.trustedUserEditors(owner, sourcePath);
   if (
     current.length !== peers.length ||

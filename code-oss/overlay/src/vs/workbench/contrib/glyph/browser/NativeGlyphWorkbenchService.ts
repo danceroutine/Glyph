@@ -171,6 +171,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
     this.context.setInstructionRefresh(
       invalidate => this.refreshInstructionSources(invalidate),
       () => this.state.instructionWatchRoots ?? [],
+      id => this.resolveHistoricalRule(id),
     );
     this.proposalEditor = this._register(
       instantiationService.createInstance(GlyphProposalEditor, {
@@ -247,6 +248,7 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
         if (this.invalidateChangedSession()) return;
         const event = envelope.event;
         if (event.type === GlyphHostEventType.SKILL_REFERENCE_RESOLVED) return;
+        if (event.type === GlyphHostEventType.RULE_REFERENCE_RESOLVED) return;
         if (event.type === GlyphHostEventType.PROPOSAL_PREVIEW) {
           this.proposalEditor.acceptPreview(event.preview);
           return;
@@ -1164,6 +1166,23 @@ export class NativeGlyphWorkbenchService extends Disposable implements GlyphWork
       !this.projection.state.runs.some(run => run.chatId === this.selectedChatId)
     ) {
       await this.request({ type: GlyphWorkbenchCommandType.OPEN_CHAT, chatId: this.selectedChatId });
+    }
+  }
+
+  private async resolveHistoricalRule(ruleId: string): Promise<string | undefined> {
+    const revision = this.workspaceRevision;
+    const lookupId = generateUuid();
+    let current: string | undefined;
+    const listener = this.client.onDidReceiveEvent(({ event }) => {
+      if (event.type === GlyphHostEventType.RULE_REFERENCE_RESOLVED && event.lookupId === lookupId)
+        current = event.ruleId;
+    });
+    try {
+      await this.request({ type: GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE, lookupId, ruleId });
+      this.assertWorkspaceRevision(revision);
+      return current;
+    } finally {
+      listener.dispose();
     }
   }
 

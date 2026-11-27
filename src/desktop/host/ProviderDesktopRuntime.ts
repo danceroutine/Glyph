@@ -1,6 +1,7 @@
 import type { TurnContextSnapshot } from '#src/context/turns/TurnContextEnvelope.js';
 import type { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { Deferred } from '#src/shared/Deferred.js';
+import { resolveInstructionId } from '#src/instructions/resolveInstructionId.js';
 import { isReviewItemPending } from '#src/editing/reviews/isReviewItemPending.js';
 import type { AgentReviewService } from '#src/reviewing/AgentReviewService.js';
 import type { ShellWakeEvent } from '#src/shell/ShellWakeEvent.js';
@@ -171,6 +172,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     });
   }
 
+  resolveRuleReference(id: string): string | undefined {
+    return resolveInstructionId(this.options.instructionCatalog?.sources ?? [], id)?.id;
+  }
+
   resolveSkillReference(id: string): string | undefined {
     return this.options.skills?.resolveReference(id)?.id;
   }
@@ -312,6 +317,22 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     return summary.goal!;
   }
 
+  private restoredRuleOptions(options: ChatTurnOptions): ChatTurnOptions {
+    if (!options.manualRuleIds?.length) return options;
+    const ids = new Map(options.manualRuleIds.map(id => [id, this.resolveRuleReference(id) ?? id]));
+    return {
+      ...options,
+      manualRuleIds: [...new Set(ids.values())],
+      ...(options.referenceSpans
+        ? {
+            referenceSpans: options.referenceSpans.map(span =>
+              span.kind === 'rule' && ids.has(span.sourceId) ? { ...span, sourceId: ids.get(span.sourceId)! } : span,
+            ),
+          }
+        : {}),
+    };
+  }
+
   private restoredOptions(options: ChatTurnOptions): ChatTurnOptions {
     if (!options.skillIds?.length) return options;
     const ids = new Map(options.skillIds.map(id => [id, this.resolveSkillReference(id) ?? id]));
@@ -443,7 +464,7 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
               runs: [...this.runs.values()].filter(run => run.chatId === source.id),
               draft: {
                 text: turn.userText,
-                ...(turn.options ? { options: this.restoredOptions(turn.options) } : {}),
+                ...(turn.options ? { options: this.restoredOptions(this.restoredRuleOptions(turn.options)) } : {}),
                 attachments: (turn.attachments ?? []).map(attachment => ({
                   kind:
                     Object.values(GlyphContextAttachmentKind).find(kind => kind === attachment.source?.kind) ??
@@ -1432,7 +1453,9 @@ function toInstructionSources(
   return sources.map(source => ({
     id: source.id,
     kind: source.kind,
-    ...(source.legacyIds ? { legacyIds: source.legacyIds } : {}),
+    ...(source.legacyIds && source.kind !== AgentInstructionSourceKind.GLYPH_USER_RULE
+      ? { legacyIds: source.legacyIds }
+      : {}),
     label: source.label,
     path: source.path,
     scope: source.scope,

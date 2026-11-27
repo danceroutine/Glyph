@@ -382,26 +382,28 @@ describe('Skill compatibility location boundaries', () => {
   });
 });
 
-it('bounds aggregate manifest reads and preserves the admitted descriptors and overflow diagnostics', async () => {
+it.each([false, true])('bounds aggregate manifest reads including live verification (dirty=%s)', async dirty => {
   const fixture = await skillFixture();
   const names = Array.from({ length: 34 }, (_, index) => 'example-' + String(index).padStart(2, '0'));
   const reads = vi.spyOn(fixture.store, 'read').mockImplementation(async (path, options) => {
     const name = path.split('/').at(-2)!;
     const text = `---\nname: ${name}\ndescription: Example\n---\nBody`.padEnd(256 * 1024, ' ');
     expect(options?.maxBytes).toBe(Buffer.byteLength(text));
+    if (dirty) expect(options?.physicalByteBudget).toBe(2 * 256 * 1024);
     return {
       path,
       text,
       revision: 'revision',
       byteOrderMark: false,
-      byteLength: Buffer.byteLength(text),
+      byteLength: dirty ? 128 : Buffer.byteLength(text),
+      ...(dirty ? { bytesRead: 2 * 256 * 1024 } : {}),
       mode: 0o644,
       identity: path,
     };
   });
   const found = await fixture.provider(names.map(name => '.glyph/skills/' + name + '/SKILL.md')).discover();
-  expect(reads).toHaveBeenCalledTimes(32);
-  expect(found.filter(skill => skill.status === 'active')).toHaveLength(32);
+  expect(reads).toHaveBeenCalledTimes(dirty ? 16 : 32);
+  expect(found.filter(skill => skill.status === 'active')).toHaveLength(dirty ? 16 : 32);
   expect(found.slice(-2).every(skill => skill.message?.includes('8 MiB'))).toBe(true);
 });
 

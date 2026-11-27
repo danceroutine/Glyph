@@ -374,7 +374,9 @@ export class GlyphDesktopHost {
     }
     if (
       !connection.trusted &&
-      (isMutationCommand(command) || command.type === GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE)
+      (isMutationCommand(command) ||
+        command.type === GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE ||
+        command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE)
     ) {
       return [
         toErrorGlyphHostEvent({
@@ -405,6 +407,24 @@ export class GlyphDesktopHost {
           code: GlyphDesktopErrorCode.HOST_UNAVAILABLE,
         }),
       ];
+    if (command.type === GlyphWorkbenchCommandType.RESOLVE_RULE_REFERENCE) {
+      if (
+        typeof command.lookupId !== 'string' ||
+        !command.lookupId ||
+        command.lookupId.length > 64 ||
+        typeof command.ruleId !== 'string' ||
+        !command.ruleId ||
+        command.ruleId.length > 500
+      )
+        throw new Error('Invalid rule reference lookup.');
+      const ruleId = record.runtime.resolveRuleReference?.(command.ruleId);
+      this.send(connection, {
+        type: GlyphHostEventType.RULE_REFERENCE_RESOLVED,
+        lookupId: command.lookupId,
+        ...(ruleId ? { ruleId } : {}),
+      });
+      return [toCommandResultGlyphHostEvent(requestId)];
+    }
     if (command.type === GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE) {
       if (
         typeof command.lookupId !== 'string' ||
