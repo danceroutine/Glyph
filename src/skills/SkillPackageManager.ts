@@ -199,11 +199,9 @@ export class SkillPackageManager {
     if (!skill) throw new Error('Skill is unavailable.');
     const location = this.locations.find(item => item.id === skill.origin.id);
     if (location)
-      await withSkillLock(location.store.root, 'destination', async () => {
-        await this.recoverLocation(location, await location.store.resolvePath(location.directory));
+      await this.state.setEnabled(id, enabled, async () => {
         if (!(await location.store.exists(skill.directory)))
           throw new Error('The installed skill is missing. Refresh Settings.');
-        await this.state.setEnabled(id, enabled);
       });
     else await this.state.setEnabled(id, enabled);
     await this.catalog.refresh();

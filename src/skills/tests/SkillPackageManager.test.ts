@@ -1,12 +1,40 @@
 import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { SkillStateStore } from '#src/skills/SkillStateStore.js';
-import { mkdir, readFile, writeFile, symlink } from 'node:fs/promises';
+import { FileSystemWorkspaceTextStore } from '#src/workspace/FileSystemWorkspaceTextStore.js';
+import { SkillCatalog } from '#src/skills/SkillCatalog.js';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm as removeDirectory, writeFile, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import { aSkillDraft, aSkillLifecycle } from './fixtures/aSkillLifecycle.ts';
 
 describe(SkillPackageManager, () => {
+  it('changes profile enablement without writing into a read-only project and rejects a removed source', async () => {
+    const { root, location, provider, install } = await aSkillLifecycle();
+    await install();
+    await removeDirectory(join(root, '.skill-staging'), { recursive: true, force: true });
+    const profile = await mkdtemp(join(tmpdir(), 'glyph-readonly-skill-profile-'));
+    onTestFinished(() => removeDirectory(profile, { recursive: true, force: true }));
+    const state = new SkillStateStore(new FileSystemWorkspaceTextStore(profile));
+    const catalog = new SkillCatalog([provider], state.enabled, state.installations, () => state.initialize());
+    await catalog.refresh();
+    const skill = catalog.skills[0]!;
+    const manager = new SkillPackageManager([{ ...location, scope: 'project' }], catalog, state);
+    const before = await readdir(root);
+    await chmod(root, 0o555);
+    try {
+      await manager.setEnabled(skill.id, false);
+      expect(catalog.skills[0]?.enabled).toBe(false);
+      expect(await readdir(root)).toEqual(before);
+      expect(await readFile(join(root, skill.path), 'utf8')).toContain('Reviewed instructions');
+      vi.spyOn(location.store, 'exists').mockResolvedValueOnce(false);
+      await expect(manager.setEnabled(skill.id, true)).rejects.toThrow('installed skill is missing');
+      expect(state.enabled.get(skill.id)).toBe(false);
+    } finally {
+      await chmod(root, 0o755);
+    }
+  });
   it('previews complete packages without writes, installs exact bytes, and retains source/version metadata', async () => {
     const { root, manager, catalog, provider } = await aSkillLifecycle();
     const draft = aSkillDraft();

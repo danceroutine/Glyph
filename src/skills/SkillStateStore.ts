@@ -39,10 +39,10 @@ export class SkillStateStore {
       this.publish(parsePreferences((await this.workspace.readOptional('skill-state.json'))?.text));
     });
   }
-  setEnabled(id: string, enabled: boolean): Promise<void> {
+  setEnabled(id: string, enabled: boolean, verifySource?: () => Promise<void>): Promise<void> {
     return this.update(next => {
       next.enabled[id] = enabled;
-    });
+    }, verifySource);
   }
   record(id: string, source: string, revision: string): Promise<void> {
     return this.update(next => {
@@ -55,9 +55,10 @@ export class SkillStateStore {
       delete next.installations[id];
     });
   }
-  private async update(change: (data: Preferences) => void): Promise<void> {
+  private async update(change: (data: Preferences) => void, verifySource?: () => Promise<void>): Promise<void> {
     await withSkillLock(this.userDirectory, 'preferences', async () => {
       const previous = await this.workspace.readOptional('skill-state.json');
+      await verifySource?.();
       const next = parsePreferences(previous?.text);
       change(next);
       const text = JSON.stringify(next, null, 2);
