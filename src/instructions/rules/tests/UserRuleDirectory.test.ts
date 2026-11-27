@@ -31,3 +31,39 @@ describe(UserRuleDirectory, () => {
     ).toBeUndefined();
   });
 });
+
+it('keeps each independently indexed name of an individual user rule for historical navigation and scope precedence', async () => {
+  const { mkdtemp, mkdir, writeFile, link, rm, realpath } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'glyph-rule-aliases-')));
+  try {
+    const profile = join(root, 'profile');
+    const store = join(profile, 'rules');
+    const source = join(store, 'personal.mdc');
+    const glyph = join(root, 'outer', '.glyph', 'rules', 'one.mdc');
+    const cursor = join(root, 'inner', '.cursor', 'rules', 'two.mdc');
+    for (const directory of [store, join(root, 'outer/.glyph/rules'), join(root, 'inner/.cursor/rules')])
+      await mkdir(directory, { recursive: true });
+    await writeFile(source, 'rule');
+    await link(source, glyph);
+    await link(source, cursor);
+    const roots = [{ name: 'project', path: root }];
+    const paths = new InstructionPaths(true, new WorkspaceSourceRoutes(roots));
+    const directory = new UserRuleDirectory(profile, true, roots, paths, () => [store, glyph, cursor]);
+    directory.refresh();
+    expect(directory.ownsProjectRule('outer/.glyph/rules/one.mdc')).toBe(true);
+    expect(directory.ownsProjectRule('inner/.cursor/rules/two.mdc')).toBe(true);
+    const alias = directory.projectAlias('rules/personal.mdc');
+    expect(alias).toMatchObject({
+      kind: AgentInstructionSourceKind.GLYPH_PROJECT_RULE,
+      scope: 'outer',
+      additionalScopes: [{ kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, scope: 'inner' }],
+    });
+    expect(alias?.legacyIds).toContain(
+      paths.sourceIdentity(AgentInstructionSourceKind.CURSOR_PROJECT_RULE, 'inner/.cursor/rules/two.mdc').id,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

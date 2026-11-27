@@ -65,8 +65,10 @@ fn fails_when_standard_input_cannot_be_read() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .starts_with("glyph-context-index: could not read a protocol request:"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .starts_with("glyph-context-index: could not read a protocol request:")
+    );
 }
 
 #[test]
@@ -112,8 +114,10 @@ fn fails_to_start_when_the_response_writer_thread_cannot_be_created() {
     });
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .starts_with("glyph-context-index: could not start the protocol writer:"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .starts_with("glyph-context-index: could not start the protocol writer:")
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -209,4 +213,18 @@ fn admits_a_workspace_path_and_rechecks_its_opened_identity() {
     let mut stale = request;
     stale["identity"] = serde_json::json!(["0", "0"]);
     assert!(!check(&stale).status.success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reports_the_visible_routes_of_an_editor_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().canonicalize().unwrap();
+    let request = serde_json::json!([path, true]);
+    let result = run_with_input(&request.to_string(), |cmd| {
+        cmd.arg("--source-path-aliases");
+    });
+    assert!(result.status.success());
+    let aliases: Vec<std::path::PathBuf> = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(aliases.contains(&path));
 }

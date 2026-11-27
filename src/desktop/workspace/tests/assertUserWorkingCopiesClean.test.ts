@@ -71,3 +71,28 @@ it('rechecks the configured profile while dirty-editor requests are in flight', 
   await expect(check()).rejects.toThrow('user directory changed');
   expect(request).toHaveBeenCalledTimes(1);
 });
+
+it('checks every mounted user source and rejects a mount change during the editor round trip', async () => {
+  const request = vi.fn(async (_owner: GlyphConnectionIdentity, input: GlyphEditorRequest) => {
+    expect(input).toMatchObject({
+      sourceUris: ['file:///profile/skills/a', 'file:///workspace/alias', 'file:///earlier'],
+    });
+    return { ok: true, operationId: 'operationId' in input ? input.operationId : '', workingCopiesClean: true };
+  });
+  const resolver = vi.fn(() => ['/profile/skills/a', '/workspace/alias']);
+  const run = () =>
+    assertUserWorkingCopiesClean(
+      { request, trustedUserEditors: () => [] },
+      owner,
+      'skill',
+      'a',
+      namePolicy,
+      '/profile/skills/a',
+      undefined,
+      resolver,
+      ['/earlier'],
+    );
+  await run();
+  resolver.mockReturnValueOnce(['/profile/skills/a', '/workspace/alias']).mockReturnValueOnce(['/profile/skills/a']);
+  await expect(run()).rejects.toThrow('changed');
+});

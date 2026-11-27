@@ -502,7 +502,8 @@ describe(GlyphContextController, () => {
       allowedTools: [],
       origin: { id: 'project', label: 'Project', scope: 'project' as const, compatibility: 'glyph' },
     };
-    controller.setSkillSources(() => [skill]);
+    const admit = vi.fn(async (id: string, _resource?: string): Promise<string | undefined> => id);
+    controller.setSkillSources(() => [skill], undefined, admit);
     services.files.stat.mockImplementation(async uri => ({
       isFile: uri.path.endsWith('.md'),
       isDirectory: !uri.path.endsWith('.md'),
@@ -510,23 +511,27 @@ describe(GlyphContextController, () => {
     const attachment = { uri: 'glyph-skill:example', path: 'example' };
     await controller.openAttachment(attachment);
     expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(skill.uri);
-    const physical = URI.file('/other/.glyph/skills/example/SKILL.md');
-    services.files.realpath.mockResolvedValueOnce(physical);
+    expect(admit).toHaveBeenCalledWith(skill.id, skill.uri);
+    admit.mockResolvedValueOnce(undefined);
     await expect(controller.openAttachment(attachment)).rejects.toThrow('unavailable');
-    services.files.realpath.mockImplementationOnce(async uri => {
+    admit.mockImplementationOnce(async id => {
       services.folders.pop();
-      return uri;
+      return id;
     });
     await expect(controller.openAttachment(attachment)).rejects.toThrow('unavailable');
     expect(services.editors.openEditor).toHaveBeenCalledTimes(1);
-    controller.setSkillSources(() => [
-      {
-        ...skill,
-        uri: 'file:///profile/skills/example/SKILL.md',
-        path: 'skills/example/SKILL.md',
-        origin: { ...skill.origin, scope: 'user' },
-      },
-    ]);
+    controller.setSkillSources(
+      () => [
+        {
+          ...skill,
+          uri: 'file:///profile/skills/example/SKILL.md',
+          path: 'skills/example/SKILL.md',
+          origin: { ...skill.origin, scope: 'user' },
+        },
+      ],
+      undefined,
+      admit,
+    );
     await controller.openAttachment(attachment);
     expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(
       'file:///profile/skills/example/SKILL.md',

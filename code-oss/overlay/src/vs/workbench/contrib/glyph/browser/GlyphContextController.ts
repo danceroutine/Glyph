@@ -36,7 +36,7 @@ import type { GlyphInstructionSource } from '#glyph/protocol/events/GlyphInstruc
 
 /** Capture context only from explicit file selection, search, or selected editor text. */
 export class GlyphContextController extends Disposable implements GlyphContextActions {
-  private resolveHistoricalSkill: ((id: string) => Promise<string | undefined>) | undefined;
+  private resolveHistoricalSkill: ((id: string, manifestUri?: string) => Promise<string | undefined>) | undefined;
   private skillSources: () => readonly GlyphSkill[] = () => [];
   private readonly instructionsChanged = this._register(new Emitter<void>());
   private readonly resourceIdentity = new ExtUri(
@@ -81,7 +81,7 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
   setSkillSources(
     source: () => readonly GlyphSkill[],
     refresh?: () => Promise<void>,
-    resolveHistorical?: (id: string) => Promise<string | undefined>,
+    resolveHistorical?: (id: string, manifestUri?: string) => Promise<string | undefined>,
   ): void {
     this.resolveHistoricalSkill = resolveHistorical;
     this.skillSources = source;
@@ -715,14 +715,12 @@ export class GlyphContextController extends Disposable implements GlyphContextAc
     for (let depth = 0; depth <= depthToRoot; depth++) {
       const stat = await this.files.stat(current);
       const anchor = root && depth === depthToRoot;
-      if (
-        (stat.isSymbolicLink && !anchor) ||
-        (anchor && !(await this.matchesPhysicalSource(resource, selectedUri))) ||
-        (depth === 0 ? !stat.isFile : !stat.isDirectory)
-      )
+      if ((stat.isSymbolicLink && !anchor) || (depth === 0 ? !stat.isFile : !stat.isDirectory))
         throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
       current = dirname(current);
     }
+    if ((await this.resolveHistoricalSkill?.(source.id, resource.toString())) !== source.id)
+      throw new GlyphContextError(GlyphDesktopErrorCode.NOT_FOUND, 'This skill is unavailable.');
     this.assertTrusted();
     if (
       (root && !this.workspace.getWorkspace().folders.some(folder => folder.uri.toString() === root.toString())) ||

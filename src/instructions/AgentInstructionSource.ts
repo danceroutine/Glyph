@@ -42,6 +42,7 @@ export interface AgentInstructionSource {
     readonly id: string;
     readonly legacyIds?: readonly string[];
     readonly scope: string;
+    readonly additionalScopes?: readonly { kind: AgentInstructionSourceKind; scope: string }[];
   };
   /** Source family that determines discovery and precedence semantics. */
   readonly kind: AgentInstructionSourceKind;

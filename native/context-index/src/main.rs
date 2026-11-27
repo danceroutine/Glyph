@@ -1,3 +1,19 @@
+#[cfg(target_os = "linux")]
+fn source_path_aliases() -> std::io::Result<()> {
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+    let (path, descendants): (PathBuf, bool) = serde_json::from_reader(std::io::stdin().lock())?;
+    let table = std::fs::read("/proc/self/mountinfo")?;
+    let mut aliases = BTreeSet::new();
+    glyph_filesystem_metadata::mount_table::MountTable::parse(&table)?.aliases(
+        &path,
+        descendants,
+        &mut aliases,
+    );
+    serde_json::to_writer(std::io::stdout().lock(), &aliases)?;
+    Ok(())
+}
+
 fn inspect_workspace_path() -> std::io::Result<()> {
     use std::path::PathBuf;
     #[derive(serde::Deserialize)]
@@ -71,6 +87,8 @@ fn main() {
         .and_then(|arg| arg.to_str())
     {
         Some("--assert-host-paths") => inspect_host_paths(),
+        #[cfg(target_os = "linux")]
+        Some("--source-path-aliases") => source_path_aliases(),
         Some("--assert-workspace-path") => inspect_workspace_path(),
         Some("--assert-access-metadata") => inspect(false),
         Some("--assert-replaceable-metadata") => inspect(true),

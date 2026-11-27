@@ -27,7 +27,7 @@ export type GlyphRuntimeSnapshot = Omit<GlyphDesktopSnapshot, 'ownerWindowId' | 
  */
 export interface GlyphDesktopWorkspaceRuntime {
   snapshot(): Promise<GlyphRuntimeSnapshot>;
-  resolveSkillReference?(id: string): string | undefined;
+  resolveSkillReference?(id: string, manifestUri?: string): string | undefined;
   resolveRuleReference?(id: string): string | undefined;
   handle(
     command: GlyphRuntimeCommand,

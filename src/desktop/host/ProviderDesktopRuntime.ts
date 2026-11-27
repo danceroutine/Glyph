@@ -3,6 +3,7 @@ import { SkillPackageDraft } from '#src/skills/SkillPackageDraft.js';
 import { skillPackageSourceSchema, type SkillPackageSourceReader } from '#src/skills/SkillPackageSource.js';
 import type { SkillPackageManager } from '#src/skills/SkillPackageManager.js';
 import type { SkillPreview } from '#src/skills/SkillLifecycle.js';
+import { matchesSkillManifest } from '#src/skills/matchesSkillManifest.js';
 import type { TurnContextSnapshot } from '#src/context/turns/TurnContextEnvelope.js';
 import type { SkillCatalog } from '#src/skills/SkillCatalog.js';
 import { Deferred } from '#src/shared/Deferred.js';
@@ -187,8 +188,10 @@ export class ProviderDesktopRuntime implements GlyphDesktopWorkspaceRuntime {
     return resolveInstructionId(this.options.instructionCatalog?.sources ?? [], id)?.id;
   }
 
-  resolveSkillReference(id: string): string | undefined {
-    return this.options.skills?.resolveReference(id)?.id;
+  resolveSkillReference(id: string, manifestUri?: string): string | undefined {
+    const skill = this.options.skills?.resolveReference(id);
+    if (manifestUri !== undefined && (!skill || !matchesSkillManifest(skill, manifestUri))) return undefined;
+    return skill?.id;
   }
 
   /** Rebuild reconnect state from live reviews so missed notifications cannot leave stale decisions. */

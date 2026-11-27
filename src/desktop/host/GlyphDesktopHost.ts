@@ -523,10 +523,12 @@ export class GlyphDesktopHost {
         command.lookupId.length > 64 ||
         typeof command.skillId !== 'string' ||
         !command.skillId ||
-        command.skillId.length > 500
+        command.skillId.length > 500 ||
+        (command.manifestUri !== undefined &&
+          (typeof command.manifestUri !== 'string' || command.manifestUri.length > 32768))
       )
         throw new Error('Invalid skill reference lookup.');
-      const skillId = record.runtime.resolveSkillReference?.(command.skillId);
+      const skillId = record.runtime.resolveSkillReference?.(command.skillId, command.manifestUri);
       this.send(connection, {
         type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED,
         lookupId: command.lookupId,
@@ -652,7 +654,7 @@ export class GlyphDesktopHost {
 
 function physicalRoot(root: GlyphWorkspaceRoot): string | undefined {
   try {
-    return realpathSync(root.canonicalPath);
+    return realpathSync.native(root.canonicalPath);
   } catch {
     return undefined;
   }
