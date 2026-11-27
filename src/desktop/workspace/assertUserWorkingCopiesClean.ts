@@ -29,12 +29,11 @@ export async function assertUserWorkingCopiesClean(
   verifyProfile();
   const aliases = () =>
     sourcePath && sourceAliases
-      ? [...new Set([...sourceAliases(sourcePath, kind === 'skill'), ...retainedAliases])].map(path =>
-          pathToFileURL(path).toString(),
-        )
+      ? [...new Set([...sourceAliases(sourcePath, kind === 'skill'), ...retainedAliases])]
       : undefined;
-  const sourceUris = aliases();
-  const peers = editors.trustedUserEditors(owner, sourcePath);
+  const before = aliases();
+  const sourceUris = before?.map(path => pathToFileURL(path).toString());
+  const peers = editors.trustedUserEditors(owner, sourcePath, before);
   await Promise.all(
     [owner, ...peers.map(peer => peer.identity)].map(async identity => {
       const operationId = randomUUID();
@@ -54,9 +53,10 @@ export async function assertUserWorkingCopiesClean(
     }),
   );
   verifyProfile();
-  const current = editors.trustedUserEditors(owner, sourcePath);
+  const after = aliases();
+  const current = editors.trustedUserEditors(owner, sourcePath, after);
   if (
-    JSON.stringify(aliases()) !== JSON.stringify(sourceUris) ||
+    JSON.stringify(after) !== JSON.stringify(before) ||
     current.length !== peers.length ||
     current.some(peer => !peers.some(previous => previous.connectionId === peer.connectionId))
   )

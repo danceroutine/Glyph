@@ -299,7 +299,9 @@ describe(GlyphContextController, () => {
         isDirectory: !resource.path.endsWith('SKILL.md'),
       }));
       if (kind === GlyphContextAttachmentKind.SKILL) {
-        const resolveOld = vi.fn(async (id: string) => (id === 'old' ? source.id : undefined));
+        const resolveOld = vi.fn(async (id: string, manifestUri?: string) =>
+          id === 'old' || (id === source.id && manifestUri === source.uri) ? source.id : undefined,
+        );
         controller.setSkillSources(() => sources, undefined, resolveOld);
         const old = { ...badge, uri: 'glyph-skill:old', skillId: 'old' };
         expect(await controller.checkAttachment(old)).toContain('latest version');
@@ -327,7 +329,7 @@ describe(GlyphContextController, () => {
         const { revision: _revision, ...unversioned } = source;
         controller.setSkillSources(() => [unversioned]);
         expect((await controller.refreshAttachment(badge)).contentRevision).toBe(source.id);
-        controller.setSkillSources(() => sources);
+        controller.setSkillSources(() => sources, undefined, resolveOld);
       }
       await controller.openAttachment(badge);
       expect(services.editors.openEditor.mock.calls.at(-1)?.[0]?.resource?.toString()).toBe(source.uri);

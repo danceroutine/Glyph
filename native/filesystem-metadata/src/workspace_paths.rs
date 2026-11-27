@@ -53,7 +53,7 @@ fn future_name(value: &str, normalizes: bool, fold: bool, sensitive: bool) -> St
     folded.nfc().collect()
 }
 
-fn same_location(left: &Path, right: &Path) -> bool {
+pub(crate) fn same_location(left: &Path, right: &Path) -> bool {
     if same_inode(left, right) {
         return true;
     }

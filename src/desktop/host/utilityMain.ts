@@ -37,7 +37,7 @@ const editors: EditorRpcRouter = new EditorRpcRouter(
     projectDirectory === undefined
       ? host.trustedSkillEditors(owner)
       : host.trustedSkillEditors(owner, projectDirectory, retainedAliases),
-  (owner, sourcePath) => host.trustedUserEditors(owner, sourcePath),
+  (owner, sourcePath, aliases) => host.trustedUserEditors(owner, sourcePath, aliases),
 );
 const transport =
   process.env.GLYPH_DESKTOP_TEST_RUNTIME === 'scripted'

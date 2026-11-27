@@ -18,6 +18,7 @@ describe(UserRuleDirectory, () => {
     expect(directory.ownsProjectRule('a/.glyph/rules/one.mdc')).toBe(false);
     expect(directory.ownsProjectRule('invalid')).toBe(false);
     expect(directory.projectAlias('rules')).toBeUndefined();
+    expect(new UserRuleDirectory('/elsewhere/.glyph', true, roots, paths).projectAlias('rules/a.mdc')).toBeUndefined();
     expect(directory.projectAlias('rules/one.mdc')).toMatchObject({
       kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE,
       scope: 'a',
@@ -60,6 +61,10 @@ it('keeps each independently indexed name of an individual user rule for histori
       scope: 'outer',
       additionalScopes: [{ kind: AgentInstructionSourceKind.CURSOR_PROJECT_RULE, scope: 'inner' }],
     });
+    const plain = new UserRuleDirectory(profile, true, roots, new InstructionPaths(true), () => [store, glyph, cursor]);
+    expect(plain.projectAlias('rules/personal.mdc')?.legacyIds).toEqual([
+      'cursor_project_rule:inner/.cursor/rules/two.mdc',
+    ]);
     expect(alias?.legacyIds).toContain(
       paths.sourceIdentity(AgentInstructionSourceKind.CURSOR_PROJECT_RULE, 'inner/.cursor/rules/two.mdc').id,
     );

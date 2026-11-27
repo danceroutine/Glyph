@@ -1679,7 +1679,11 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       await expect(
         runtime.handle({ type: Command.PREVIEW_SKILL, targetId: prior.originId, draft: aSkillDraft().toJSON() }),
       ).rejects.toThrow('user skill store');
-      expect(runtime.resolveSkillReference(previous)).toBe(discovered[0]!.id);
+      const selected = discovered[0]!;
+      expect(runtime.resolveSkillReference(previous)).toBe(selected.id);
+      expect(runtime.resolveSkillReference(selected.id,selected.uri)).toBe(selected.id);
+      expect(runtime.resolveSkillReference('absent',selected.uri)).toBeUndefined();
+      expect(runtime.resolveSkillReference(selected.id,pathToFileURL(join(profile,'other.md')).href)).toBeUndefined();
     });
 
     it('retains a physical skill ID and offers it once through overlapping and aliased folders', async () => {

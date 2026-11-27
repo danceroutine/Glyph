@@ -720,8 +720,11 @@ describe(NativeGlyphWorkbenchService, () => {
     });
 
     it('correlates a targeted historical skill lookup with the attached workspace generation', async () => {
-      const { host, context, changeFolders } = await workbench();
-      const resolve = context.setSkillSources.mock.calls[0][2] as (id: string) => Promise<string | undefined>;
+      const { host, context, commands, changeFolders } = await workbench();
+      const resolve = context.setSkillSources.mock.calls[0][2] as (
+        id: string,
+        manifestUri?: string,
+      ) => Promise<string | undefined>;
       host.handler = command => {
         if (command.type !== GlyphWorkbenchCommandType.RESOLVE_SKILL_REFERENCE) return;
         emit(host, { type: GlyphHostEventType.SKILL_REFERENCE_RESOLVED, lookupId: 'unrelated', skillId: 'wrong' });
@@ -732,6 +735,10 @@ describe(NativeGlyphWorkbenchService, () => {
         });
       };
       await expect(resolve('old')).resolves.toBe('canonical');
+      const manifestUri = 'file:///workspace/.glyph/skills/work/SKILL.md';
+      await expect(resolve('canonical', manifestUri)).resolves.toBe('canonical');
+      expect(commands().at(-1)).toMatchObject({ skillId: 'canonical', manifestUri });
+
       host.handler = () => {
         changeFolders([folder('other')]);
       };
