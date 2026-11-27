@@ -1,5 +1,6 @@
 import { fixtureWorkspace, fixtureIndex, fixtureProjectAccess } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { WorkspaceAccessPolicy } from '#src/workspace/policy/WorkspaceAccessPolicy.js';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +9,52 @@ import { MultiRootWorkspacePathIndex } from '#src/context/search/MultiRootWorksp
 
 describe(RustWorkspacePathIndex, () => {
   describe('workspace path queries', () => {
+    it('withholds earlier native content hits when another root changes their reservation during the merged search', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'context-index-merged-'));
+      const first = join(directory, 'first');
+      const second = join(directory, 'second');
+      await Promise.all([mkdir(first), mkdir(second)]);
+      await Promise.all([writeFile(join(first, 'one.txt'), 'found'), writeFile(join(second, 'two.txt'), 'found')]);
+      let privatePaths: string[] = [];
+      let reserveEarlier = false;
+      const binaryPath = resolve(
+        'target',
+        'release',
+        process.platform === 'win32' ? 'glyph-context-index.exe' : 'glyph-context-index',
+      );
+      const merged = new MultiRootWorkspacePathIndex('project', [
+        {
+          name: 'first',
+          index: fixtureIndex({
+            root: first,
+            binaryPath,
+            accessPolicy: new WorkspaceAccessPolicy({}, () => privatePaths),
+          }),
+        },
+        {
+          name: 'second',
+          index: fixtureIndex({
+            root: second,
+            binaryPath,
+            readContentOverrides: async () => {
+              if (reserveEarlier) privatePaths = [first];
+              return {};
+            },
+          }),
+        },
+      ]);
+      try {
+        const find = () => merged.searchContents('found', { outputMode: 'files_with_matches', limit: 5 });
+        await expect(find()).resolves.toMatchObject({ files: ['first/one.txt', 'second/two.txt'] });
+        reserveEarlier = true;
+        await expect(find()).rejects.toThrow('Workspace access changed');
+        await expect(find()).resolves.toMatchObject({ files: ['second/two.txt'] });
+      } finally {
+        await merged.dispose();
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
     it('returns escaped context within the multi-root response budget through the real Rust process', async () => {
       const root = await mkdtemp(join(tmpdir(), 'context-index-escaped-'));
       const native = fixtureIndex({

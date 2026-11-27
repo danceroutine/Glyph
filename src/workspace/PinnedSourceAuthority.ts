@@ -19,6 +19,8 @@ export interface PinnedSourceAuthority {
 
 /** Native filesystem metadata for a batch of known file locations under one reservation snapshot. */
 export interface SourceOriginReader {
+  /** Recheck the contributing attached directories after native inspection and at final disclosure. */
+  beginSourceAccess?(paths: readonly string[]): () => void;
   sourceOrigins(
     paths: readonly string[],
     privatePaths: readonly string[],
@@ -56,8 +58,10 @@ export class NativePinnedSourceAuthority implements PinnedSourceAuthority {
 
   private async inspect(paths: readonly string[], signal?: AbortSignal) {
     const operation = this.policy.beginOperation();
+    const checkRoots = this.metadata.beginSourceAccess?.(paths);
     const assertCurrent = () => {
       operation.assertCurrent();
+      checkRoots?.();
       this.assertTrusted();
       signal?.throwIfAborted();
     };

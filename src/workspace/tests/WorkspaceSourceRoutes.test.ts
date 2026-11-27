@@ -48,7 +48,6 @@ it('keeps logical aliases and selects the most specific indexed route for each p
     { ...inner, selectedPath: '/selected' },
     { ...alias, selectedPath: '/secondary' },
   ]);
-  expect(WorkspaceSourceRoutes.selectionGuard('/work', '/work')).toBeUndefined();
   expect(selected.selectedSourcePath('/work/sub/directory/note.md')).toBe('/selected/directory/note.md');
   expect(selected.selectedSourcePath('/work/note.md')).toBe('/work/note.md');
   expect(() => selected.selectedSourcePath('/work-other/note.md')).toThrow('outside');

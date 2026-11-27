@@ -1,9 +1,19 @@
+import { Deferred } from '#src/shared/Deferred.js';
 import { fixtureWorkspace } from '#src/workspace/tests/fixtures/workspaceAccess.js';
 import { pathToFileURL } from 'node:url';
 import { GlyphWorkbenchCommandType } from '#src/desktop/protocol/GlyphWorkbenchCommand.js';
 import { NativeFilesystemMetadata } from '#src/workspace/NativeFilesystemMetadata.js';
 import { GlyphMutationReceiptState } from '#src/desktop/protocol/editor/GlyphMutationReceipt.js';
-import { mkdir, mkdtemp, rm, symlink, writeFile, readFile, realpath } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+  readFile,
+  realpath,
+  rename as renameDirectory,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -1196,34 +1206,86 @@ describe(OpenAIDesktopRuntimeFactory, () => {
       expect((await joined.snapshot()).instructionSources![0]!.message).toContain('catalog snapshot is unavailable');
     });
 
-    it('rechecks a selected project folder alias while retaining the physical Settings URI', async () => {
+    it.each([false, true])(
+      'rechecks a replaced project folder through its selected route (alias %s)',
+      async aliasSelected => {
+        const fixture = await factoryFixture();
+        vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
+        useFilesystemIndex();
+        const rpc = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+          if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a catalog read');
+          return { operationId: request.operationId, ok: true };
+        });
+        const first = await fixture.folder('first', { 'AGENTS.md': 'Original' });
+        const other = await fixture.folder('other', { 'AGENTS.md': 'Replacement' });
+        const alias = join(dirname(first), 'attached');
+        await symlink(first, alias);
+        const runtime = await fixture.create([aliasSelected ? alias : first]);
+        expect((await runtime.snapshot()).instructionSources![0]!.uri).toBe(
+          pathToFileURL(join(first, 'AGENTS.md')).href,
+        );
+        const coordinator = captured.providerFactories.at(-1)![3]!;
+        await coordinator.beginTurn({ turnId: 'attached', attachmentPaths: [] });
+        const allowed = await coordinator.authorizeDisclosure('attached');
+        allowed();
+        const pending = captured.indexOptions[0]!.access.beginOperation();
+        await writeFile(join(first, 'AGENTS.md'), 'Edited in the same directory');
+        allowed();
+        const entered = new Deferred<void>();
+        const release = new Deferred<void>();
+        rpc.mockImplementation(async (_identity, request) => {
+          if (request.type !== GlyphEditorRequestType.READ_SNAPSHOT) throw new Error('Expected a file read');
+          entered.resolve();
+          await release.promise;
+          return editorResponse(request, request.path, 'Pending snapshot');
+        });
+        const read = { type: GlyphEditorRequestType.READ_SNAPSHOT, operationId: 'file', path: 'AGENTS.md' } as const;
+        const pendingRead = captured.editorClients[0]!.request(read);
+        await entered.promise;
+        if (aliasSelected) {
+          await rm(alias);
+          await symlink(other, alias);
+        } else {
+          await renameDirectory(first, first + '-moved');
+          await renameDirectory(other, first);
+        }
+        release.resolve();
+        await expect(pendingRead).rejects.toThrow('workspace folder changed');
+        expect(allowed).toThrow('workspace folder changed');
+        await expect(coordinator.authorizeDisclosure('attached')).rejects.toThrow('workspace folder changed');
+        expect(pending.assertCurrent).toThrow('workspace folder changed');
+        rpc.mockClear();
+        for (const editor of captured.editorClients)
+          await expect(editor.request(read)).rejects.toThrow('workspace folder changed');
+        expect(rpc).not.toHaveBeenCalled();
+      },
+    );
+
+    it('lists independent project guidance when the personal rule store is cyclic and retries after repair', async () => {
+      const rules = join(isolatedUserDirectory, 'rules');
+      await symlink('rules', rules);
       const fixture = await factoryFixture();
       vi.spyOn(GlyphService.prototype, 'listChats').mockReturnValue([]);
       useFilesystemIndex();
-      const rpc = vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
-        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected a catalog read');
+      vi.spyOn(fixture.editors, 'request').mockImplementation(async (_identity, request) => {
+        if (request.type !== GlyphEditorRequestType.READ_OPEN_SNAPSHOT) throw new Error('Expected metadata query');
         return { operationId: request.operationId, ok: true };
       });
-      const first = await fixture.folder('first', { 'AGENTS.md': 'Original' });
-      const other = await fixture.folder('other', { 'AGENTS.md': 'Replacement' });
-      const alias = join(dirname(first), 'attached');
-      await symlink(first, alias);
-      const runtime = await fixture.create([alias]);
-      expect((await runtime.snapshot()).instructionSources![0]!.uri).toBe(pathToFileURL(join(first, 'AGENTS.md')).href);
-      const coordinator = captured.providerFactories.at(-1)![3]!;
-      await coordinator.beginTurn({ turnId: 'attached', attachmentPaths: [] });
-      const allowed = await coordinator.authorizeDisclosure('attached');
-      allowed();
-      const pending = captured.indexOptions[0]!.access.beginOperation();
-      await rm(alias);
-      await symlink(other, alias);
-      await expect(coordinator.authorizeDisclosure('attached')).rejects.toThrow('location changed');
-      expect(pending.assertCurrent).toThrow('workspace folder changed');
-      rpc.mockClear();
-      const read = { type: GlyphEditorRequestType.READ_SNAPSHOT, operationId: 'file', path: 'AGENTS.md' } as const;
-      for (const editor of captured.editorClients)
-        await expect(editor.request(read)).rejects.toThrow('workspace folder changed');
-      expect(rpc).not.toHaveBeenCalled();
+      const root = await fixture.folder('project', { 'AGENTS.md': 'Independent guidance' });
+      const runtime = await fixture.create([root]);
+      const sources = (await runtime.snapshot()).instructionSources!;
+      expect(sources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'AGENTS.md', status: 'active' }),
+          expect.objectContaining({ kind: 'glyph_user_rule', status: 'error' }),
+        ]),
+      );
+      await rm(rules);
+      await mkdir(rules);
+      await writeFile(join(rules, 'recovered.mdc'), 'Recovered rule');
+      expect((await runtime.snapshot()).instructionSources).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'recovered', status: 'active' })]),
+      );
     });
 
     it('uses the physical profile for discovery and resolves a formerly shared project rule only through its user owner', async () => {

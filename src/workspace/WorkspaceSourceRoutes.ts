@@ -14,7 +14,10 @@ import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
  * physical URI to identify the resource in Settings. The consuming store or catalog owns access decisions.
  */
 export class WorkspaceSourceRoutes {
-  private readonly selectedRoots: ReadonlyMap<string, string>;
+  private readonly selectedRoots: ReadonlyMap<
+    string,
+    { path: string; selectedPath?: string; assertCurrent?: () => void }
+  >;
   private readonly filenameKeys = new Map<string, string>();
   private readonly directories?: DirectoryNamePolicies;
   constructor(
@@ -22,6 +25,7 @@ export class WorkspaceSourceRoutes {
       name: string;
       path: string;
       selectedPath?: string;
+      assertCurrent?: () => void;
       caseSensitive?: boolean;
       normalizesUnicode?: boolean;
       foldsUnicode?: boolean;
@@ -30,7 +34,7 @@ export class WorkspaceSourceRoutes {
     readPolicies?: ReadDirectoryNamePolicies,
   ) {
     // Discovery keeps the first attachment when several selected roots resolve to one directory.
-    this.selectedRoots = new Map(roots.toReversed().map(root => [root.path, root.selectedPath ?? root.path]));
+    this.selectedRoots = new Map(roots.toReversed().map(root => [root.path, root]));
     if (readPolicies) {
       this.directories = new DirectoryNamePolicies(readPolicies);
       for (const root of roots) {
@@ -42,14 +46,6 @@ export class WorkspaceSourceRoutes {
           });
       }
     }
-  }
-
-  /** Verify that editor operations through a selected alias still reach the physical root admitted at attachment. */
-  static selectionGuard(selected: string, physical: string): (() => void) | undefined {
-    if (selected === physical) return undefined;
-    return () => {
-      if (realpathSync.native(selected) !== physical) throw new Error('The selected workspace folder changed.');
-    };
   }
 
   /** Prime all component comparisons together; a synchronous disclosure needs at most one metadata batch. */
@@ -170,11 +166,16 @@ export class WorkspaceSourceRoutes {
    * so a later retarget of an attached folder changes its origin. Overlapping roots use the most specific owner.
    */
   selectedSourcePath(path: string): string {
-    for (let parent = dirname(path); ; parent = dirname(parent)) {
-      const selected = this.selectedRoots.get(parent);
-      if (selected !== undefined) return join(selected, relative(parent, path));
-      if (dirname(parent) === parent) throw new Error('The instruction source is outside the attached workspace.');
-    }
+    const root = this.sourceRoot(path);
+    return join(root.selectedPath ?? root.path, relative(root.path, path));
+  }
+
+  /** Retain the selected directories contributing to this disclosure. Recheck them at transport handoff. */
+  beginSourceAccess(paths: readonly string[]): () => void {
+    const roots = new Set(paths.map(path => this.sourceRoot(path)));
+    return () => {
+      for (const root of roots) root.assertCurrent?.();
+    };
   }
 
   /** All qualified routes to the same file, most specific attached root first. */
@@ -234,6 +235,14 @@ export class WorkspaceSourceRoutes {
     if (this.roots.length === 1) return [route, this.roots[0]!.name + '/' + route];
     return [...new Set(this.equivalents(route).flatMap(path => [path, path.split('/').slice(1).join('/')]))];
   }
+  private sourceRoot(path: string) {
+    for (let parent = dirname(path); ; parent = dirname(parent)) {
+      const root = this.selectedRoots.get(parent);
+      if (root) return root;
+      if (dirname(parent) === parent) throw new Error('The instruction source is outside the attached workspace.');
+    }
+  }
+
   private rootFor(route: string) {
     return this.roots.length === 1 ? this.roots[0] : this.roots.find(root => root.name === route.split('/')[0]);
   }

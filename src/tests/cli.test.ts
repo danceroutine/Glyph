@@ -36,6 +36,7 @@ describe('glyph command line', () => {
   });
 
   it('runs a folder project with runtime paths excluded from the workspace', async () => {
+    vi.stubEnv('GLYPH_USER_DIRECTORY', '/home/test/.glyph');
     const root = repositoryRoot;
     const stateDirectory = join(root, '.glyph', 'state');
     const traceFile = '/var/log/glyph/trace.log';
@@ -79,6 +80,7 @@ describe('glyph command line', () => {
     expect(launcher?.args).toEqual([
       {
         binaryPath: join(root, 'target', 'release', 'glyph-shell-sandbox'),
+        verifyWorkspaceRoot: expect.any(Function),
         workspaceRoots: [root],
         stateDirectory,
         protectedPaths: [
@@ -389,6 +391,15 @@ function prepareCli({
     mocked.push(path);
     vi.doMock(path, factory);
   };
+  mock('#src/workspace/WorkspaceRootSelections.js', () => ({
+    WorkspaceRootSelections: class {
+      assertCurrent() {}
+      select(path: string) {
+        return { path, assertCurrent: () => {} };
+      }
+      [Symbol.dispose]() {}
+    },
+  }));
   mock('#src/workspace/policy/StartupUserProfile.js', () => ({
     StartupUserProfile: class {
       readonly path: string;
