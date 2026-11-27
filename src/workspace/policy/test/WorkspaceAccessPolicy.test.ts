@@ -57,11 +57,11 @@ describe(WorkspaceAccessPolicy, () => {
     const aliases = existsSync(join(root, '.skill-staging'));
     expect(prospective).toBe(aliases);
     expect(policy.isIgnoredDirectory(name, !aliases, path)).toBe(aliases);
-    expect(policy.exclusionsFor(path, !aliases, true, true).privateRoot).toBe(aliases);
+    expect(policy.exclusionsFor(path, !aliases, 'native').privateRoot).toBe(aliases);
     expect(
       new WorkspaceAccessPolicy({ ignoredDirectories: ['.skill-staging'] }).isIgnoredDirectory(name, false, path),
     ).toBe(true);
-    expect(policy.toJSON(false).ignoredDirectories).not.toContain('.skill-staging');
+    expect(policy.configuredIgnoredDirectories).not.toContain('.skill-staging');
   });
 
   describe(WorkspaceAccessPolicy.prototype.isSensitiveFileName, () => {

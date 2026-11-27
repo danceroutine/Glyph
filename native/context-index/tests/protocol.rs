@@ -245,7 +245,7 @@ fn checks_bound_private_and_ordinary_trees_through_the_cli() {
         fs::create_dir(&view).unwrap();
         fs::write(source.join("data"), "fixture").unwrap();
         assert!(Command::new("mount")
-            .arg("--bind")
+            .args(["-o", "bind"])
             .arg(&source)
             .arg(&view)
             .status()
